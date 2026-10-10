@@ -1,0 +1,31 @@
+{
+  "name": "@ayvo/ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared React UI components for AYVO OS (Tailwind; shadcn/ui-compatible conventions)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./lib/utils": "./src/lib/utils.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.7.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@ayvo/config": "workspace:*",
+    "@types/react": "^19.3.0",
+    "eslint": "^9.39.5",
+    "react": "^19.3.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  }
+}

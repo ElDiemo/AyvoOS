@@ -1,0 +1,42 @@
+# AYVO OS — Caddy reverse proxy for the DEV preview (ADR 0013).
+# Values come from the server-only env file via deploy/dev/compose.yml; none are committed.
+{
+	# ACME account contact for automatic TLS certificates.
+	email {$ACME_EMAIL}
+}
+
+{$DEV_DOMAIN} {
+	encode zstd gzip
+
+	# Set immediately (not deferred), so they are on every response, including basic_auth's 401
+	# challenge. Keep deletions out of this block: Caddy defers a block that deletes a field, and
+	# deferred operations are not applied to error responses such as that 401.
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+	header -Server
+
+	# The whole preview, including /api, sits behind HTTP Basic Auth. The hash is bcrypt
+	# (`caddy hash-password`); the plaintext password is never stored on the server.
+	basic_auth {
+		{$DEV_BASIC_AUTH_USER} {$DEV_BASIC_AUTH_HASH}
+	}
+
+	# Same-origin API: /api and /api/* go to NestJS with the path forwarded UNCHANGED (no
+	# handle_path, no rewrite). NestJS serves all routes under the /api global prefix.
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy api:4000 {
+			header_down -X-Powered-By
+		}
+	}
+
+	# Everything else is the Next.js app.
+	handle {
+		reverse_proxy web:3000 {
+			header_down -X-Powered-By
+		}
+	}
+}

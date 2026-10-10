@@ -1,0 +1,39 @@
+# Docker build context for apps/*/Dockerfile (context = repository root).
+# Keep secrets, local state and build output out of images.
+
+# secrets & environment — never sent to the Docker daemon
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# VCS, tooling, local state
+.git
+.claude
+**/.turbo
+**/*.log
+**/.DS_Store
+
+# dependencies and build output (rebuilt inside the image)
+**/node_modules
+**/.pnpm-store
+**/dist
+**/.next
+**/out
+**/*.tsbuildinfo
+**/next-env.d.ts
+apps/api/src/generated
+
+# tests output
+**/coverage
+**/test-results
+**/playwright-report
+**/blob-report
+
+# not needed to build the apps
+deploy
+docker
+docs
+scripts

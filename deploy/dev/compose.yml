@@ -1,0 +1,188 @@
+# AYVO OS — DEV preview deployment (https://dev.ayvo.co). ADR 0013.
+#
+# DEV ONLY: never production data or production secrets (ADR 0008).
+# Deploy with scripts/deploy-dev.sh, which reads the server-only env file (never committed).
+# Validate without secrets: pnpm deploy:config
+#
+# Topology:
+#   internet ──80/443──▶ caddy ──/api/*──▶ api ──▶ postgres, redis
+#                              └──other───▶ web ──(server-side)──▶ api
+#
+# Only Caddy publishes host ports. web, api, postgres and redis are reachable only on the
+# internal Docker networks. postgres and redis sit on an internal network with no egress.
+#
+# This project ("ayvo-dev-preview") is separate from the local development infrastructure in
+# docker/compose.yml ("ayvo-dev"): separate containers, networks and data volumes.
+
+name: ayvo-dev-preview
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '5'
+
+x-app: &app
+  restart: unless-stopped
+  logging: *logging
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp' # HTTP/3
+    environment:
+      DEV_DOMAIN: ${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the server env file}
+      DEV_BASIC_AUTH_USER: ${DEV_BASIC_AUTH_USER:?set DEV_BASIC_AUTH_USER in the server env file}
+      DEV_BASIC_AUTH_HASH: ${DEV_BASIC_AUTH_HASH:?set DEV_BASIC_AUTH_HASH in the server env file}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # TLS certificates and ACME account; kept across rebuilds to avoid re-issuance rate limits.
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - edge
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      # Admin API listens on localhost inside the container only.
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:2019/config/']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    <<: *app
+    image: ayvo-dev-preview/web:${AYVO_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    environment:
+      APP_ENV: development
+      # Server-side calls from Next.js go straight to the API over the internal network.
+      API_URL: http://api:4000
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    image: ayvo-dev-preview/api:${AYVO_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      APP_ENV: development
+      API_PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+    networks:
+      - edge
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # One-off migration runner (`prisma migrate deploy`). Not started by `up`; scripts/deploy-dev.sh
+  # runs it explicitly before the new API starts.
+  migrate:
+    image: ayvo-dev-preview/api-migrate:${AYVO_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    profiles:
+      - tools
+    restart: 'no'
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+    volumes:
+      # PostgreSQL 18+ images keep data in a versioned subdirectory of /var/lib/postgresql.
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    # Redis is non-authoritative (ADR 0010); AOF persistence only for convenience.
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  # Caddy ↔ web ↔ api. Normal bridge: Caddy needs egress for ACME certificate issuance.
+  edge:
+  # api/migrate ↔ postgres/redis. No route to the outside world.
+  backend:
+    internal: true
+
+# Explicit names keep the data independent of the Compose project name. Nothing in this repo
+# removes these volumes; scripts/deploy-dev.sh never runs `down -v` or `volume rm`.
+volumes:
+  postgres-data:
+    name: ayvo-dev-preview-postgres-data
+  redis-data:
+    name: ayvo-dev-preview-redis-data
+  caddy-data:
+    name: ayvo-dev-preview-caddy-data
+  caddy-config:
+    name: ayvo-dev-preview-caddy-config

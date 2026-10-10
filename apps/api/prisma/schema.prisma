@@ -1,0 +1,18 @@
+// AYVO OS database schema.
+//
+// PostgreSQL is the source of truth (ADR 0002). Prisma conventions: ADR 0009.
+// Lifecycle history is append-only (ADR 0006).
+//
+// Foundation phase: intentionally NO domain models yet (Bottle, Crate, Hotel,
+// Delivery, Billing, ESG). They are added per docs/014-roadmap.md after review.
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  moduleFormat           = "esm"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
