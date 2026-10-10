@@ -2,3 +2,9 @@
 
 /* Scan shared UI package sources for Tailwind classes. */
 @source '../../../../packages/ui/src';
+
+/* Visible keyboard focus on every interactive element (mouse clicks do not show it). */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+}

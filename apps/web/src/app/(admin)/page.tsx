@@ -1,4 +1,6 @@
 import { StatusBadge } from '@ayvo/ui';
+import Link from 'next/link';
+import { buttonClass } from '@/components/ui';
 import { fetchApiHealth } from '@/lib/api-health';
 import { serverEnv } from '@/lib/env';
 
@@ -9,13 +11,21 @@ export default async function HomePage() {
   const result = await fetchApiHealth(serverEnv.API_URL);
 
   return (
-    <main className="mx-auto flex max-w-2xl flex-col gap-8 px-6 py-16">
+    <div className="mx-auto flex max-w-2xl flex-col gap-8">
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold tracking-tight">AYVO OS</h1>
         <p className="text-stone-600">
-          Operating system for AYVO circular hotel amenities. Foundation phase — no business modules
-          yet.
+          Operating system for AYVO circular hotel amenities. Milestone 1: bottle identities, label
+          templates and label printing.
         </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Link href="/bottles/new" className={buttonClass.primary}>
+            Create bottles
+          </Link>
+          <Link href="/label-templates" className={buttonClass.secondary}>
+            Label templates
+          </Link>
+        </div>
       </header>
 
       <section
@@ -55,6 +65,6 @@ export default async function HomePage() {
           </div>
         )}
       </section>
-    </main>
+    </div>
   );
 }

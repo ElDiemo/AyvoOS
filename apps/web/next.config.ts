@@ -14,6 +14,11 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: resolve(import.meta.dirname, '../..'),
   // @ayvo/ui ships TypeScript source; Next compiles it.
   transpilePackages: ['@ayvo/ui'],
+  experimental: {
+    // Local /api proxy (src/proxy.ts) buffers request bodies; allow artwork uploads up to the
+    // API's own limit (LABEL_ARTWORK_MAX_BYTES, default 10 MiB) plus multipart overhead.
+    proxyClientMaxBodySize: '12mb',
+  },
 };
 
 export default nextConfig;
