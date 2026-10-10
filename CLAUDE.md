@@ -26,8 +26,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   test it.
 - **No CO2e claims** without a documented methodology.
 - **No secrets in git.** Only `.env.example` is committed.
-- **Foundation phase:** do not add domain Prisma models (Bottle, Crate, Hotel, Delivery, Billing,
-  ESG) until the owner approves the corresponding docs.
+- **Domain models need owner approval.** Approved and implemented (Milestone 1, doc 016): Bottle,
+  BottleEvent, BottleCreationBatch, LabelTemplate(+Version/Element), LabelArtwork, LabelPrintJob.
+  Do not add other domain models (Product, FillBatch, Crate, Hotel, Delivery, Billing, ESG) until
+  the owner approves the corresponding docs.
 
 ## Confirmed domain decisions (owner, 2026-10-10)
 
@@ -35,8 +37,26 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   bottles of the same product and size** (ADR 0004).
 - Return crates may be partial, mixed, or contain not-yet-identified bottles (ADR 0004).
 - Bottle **internal ID ≠ public QR identity**. The public QR identity is opaque, practically
-  unguessable, and its URL stays stable for the bottle's physical lifetime (ADR 0005). The exact
-  QR payload/URL format is still open.
+  unguessable, and its URL stays stable for the bottle's physical lifetime (ADR 0005). Production
+  QR URL `https://qr.ayvo.co/<token>`, DEV `https://dev.ayvo.co/q/<token>`; token = 128 random
+  bits, 22 base64url chars (ADR 0014, accepted). The QR encodes only that URL. Hard DEV/production
+  separation: production encodes only `https://qr.ayvo.co`, nothing else ever does; DEV labels
+  carry `DEV - NOT FOR PRODUCTION`. QR size/error correction are **provisional** until the
+  physical test — never hardcode them.
+- Milestone 1 (doc 016): bottle codes `AYV-B-000001`, creation batches `BC-000001` (not fill
+  batches), print jobs `PJ-000001`; registration of 1–1000 bottles is all-or-nothing with one
+  `CREATED` event per bottle; label templates are not products and their versions are immutable
+  (ADR 0015); new batches use only the latest version of an active (non-archived) template;
+  templates are never deleted; one label per PDF page at the exact size, no bleed/crop marks, 100 %
+  scale; no A4 imposition yet. Timestamps UTC, displayed in Europe/Prague.
+- **Milestone 1 is a DEV implementation only.** The single consolidated production-blocker list is
+  in doc 016 ("Production blockers"); never mark QR size, printer output, storage, authentication
+  or production readiness as approved. Basic Auth is DEV-only.
+- `https://qr.ayvo.co` may appear only in `apps/api/src/common/qr-policy.ts`, the matching DB
+  CHECK, their tests and docs — never as a default, preview or UI value (ADR 0014).
+- Label engine vs. bottles: `labels` must not import bottle code (doc 016 "Module structure");
+  registration is idempotent per client `requestId`; template renaming is disabled (prerequisites
+  in doc 016).
 - **RETIRED** is operationally terminal but may be reversed only by an authorized, audited
   correction event. **DISPOSED/DESTROYED** is irreversible (ADR 0011).
 - A **completed reuse cycle** = delivered to a hotel, then returned and individually identified
@@ -67,8 +87,13 @@ Tailwind 4 · Vitest · Playwright.
 
 - `apps/api` — NestJS. ESM: relative imports **must** use the `.js` extension. Prisma schema in
   `apps/api/prisma/schema.prisma`; generated client in `apps/api/src/generated/` (git-ignored,
-  produced by `pnpm db:generate`). Env validated by Zod in `src/config/env.ts`.
-- `apps/web` — Next.js App Router. Server-only env in `src/lib/env.ts`.
+  produced by `pnpm db:generate`). Env validated by Zod in `src/config/env.ts`. Domain modules:
+  `labels` ← `assets` ← `label-production` (doc 016); `storage` = FileStorage abstraction.
+  Routes: `/api/admin/*` (staff) and `/api/public/*` (anonymous passport only).
+- `apps/web` — Next.js App Router. Server-only env in `src/lib/env.ts`. Admin pages in
+  `src/app/(admin)`, public passport in `src/app/q/[token]`. Server components read the API via
+  `lib/api.ts` (API_URL); client components call same-origin `/api` (`lib/client-api.ts`; locally
+  forwarded by `src/proxy.ts`).
 - `packages/types` — Zod schemas shared by API and web (API contracts). Built to `dist/`.
 - `packages/ui` — shared React components; exported as TS source, transpiled by Next.
 - `packages/config` — shared tsconfig and ESLint config.
@@ -82,6 +107,11 @@ Tailwind 4 · Vitest · Playwright.
   import). Tests that bootstrap Nest rely on `unplugin-swc` for decorator metadata.
 - New API contracts go into `packages/types` as Zod schemas; infer types with `z.infer`.
 - New backend domain = new Nest module under `apps/api/src/<module>/` with its own tests.
+- API integration tests (`apps/api/test/*.e2e.test.ts`) run against a real, per-run PostgreSQL
+  database (created, migrated and dropped by `test/support/global-setup.ts`; needs
+  `pnpm infra:up`). Never mock the database for invariants, transactions or concurrency.
+- Playwright (`pnpm test:e2e`, needs `pnpm build`) starts the built API on a fresh `ayvo_e2e`
+  database (port 4100) and the web app on port 3100.
 - Architecture changes need an ADR (`docs/adr/`, next number; supersede, don't rewrite).
 - **CLAUDE.md is the canonical AI instruction file.** Turborepo's auto-generated `AGENTS.md` is
   disabled (`"agentGuidance": false` in `turbo.json`, ADR 0012). Turborepo may differ from your

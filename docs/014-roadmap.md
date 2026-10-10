@@ -2,7 +2,7 @@
 
 This document proposes a phased delivery order for AYVO OS. The ordering is a **proposal requiring confirmation**; each phase starts only after its open business questions are answered.
 
-Status: Draft — Phase 0 complete (2026-10-10)
+Status: Draft — Phase 0 complete; Milestone 1 implemented as DEV-only, in review (2026-10-10)
 
 ## Confirmed requirements
 
@@ -11,7 +11,8 @@ Status: Draft — Phase 0 complete (2026-10-10)
 - Confirmed architecture decisions (2026-10-10) are recorded in the ADRs ([index](adr/README.md)); no staging environment for now; `dev.ayvo.co` is the development preview environment.
 - Carrier integration is not required in the first implementation.
 - Billing is not implemented yet.
-- **Phase 0 (Foundation) is complete** and the DEV preview at `dev.ayvo.co` is deployed _(approved by owner 2026-10-10)_. Business modules are not implemented yet.
+- **Phase 0 (Foundation) is complete** and the DEV preview at `dev.ayvo.co` is deployed _(approved by owner 2026-10-10)_.
+- **Milestone 1 — bottles + label templates + printing v0.1** requested by owner 2026-10-10 and implemented on `feat/bottle-labels-v0.1` (in review): bottle identities with public QR tokens, creation batches, `CREATED` events, label templates with immutable versions and a visual QR designer, print jobs producing one-label-per-page PDFs, minimal public passport ([016](016-bottles-and-labels.md)). **DEV only** — production blockers are listed in [016](016-bottles-and-labels.md#production-blockers). It covers the "bottle identities (QR)" part of Phase 1 and the label printing needed before Phase 2.
 
 ## Proposed phases (requires confirmation)
 
