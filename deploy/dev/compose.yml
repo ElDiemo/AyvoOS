@@ -96,6 +96,13 @@ services:
       API_PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
       REDIS_URL: redis://redis:6379
+      # The QR URL printed on labels from this environment (DEV labels must never go on real
+      # bottles; the production QR host is refused here, ADR 0014).
+      PUBLIC_QR_BASE_URL: https://${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}/q
+      FILE_STORAGE_DIR: /var/lib/ayvo/files
+    volumes:
+      # Label artwork and generated print PDFs (doc 016). The root filesystem stays read-only.
+      - files-data:/var/lib/ayvo/files
     networks:
       - edge
       - backend
@@ -186,3 +193,5 @@ volumes:
     name: ayvo-dev-preview-caddy-data
   caddy-config:
     name: ayvo-dev-preview-caddy-config
+  files-data:
+    name: ayvo-dev-preview-files-data

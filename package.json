@@ -1,7 +1,7 @@
 {
   "name": "ayvo-os",
   "private": true,
-  "description": "AYVO OS — operating system for AYVO circular hotel amenity service",
+  "description": "AYVO OS \u2014 operating system for AYVO circular hotel amenity service",
   "packageManager": "pnpm@12.10.1",
   "engines": {
     "node": ">=24.0.0"
@@ -20,7 +20,8 @@
     "infra:up": "docker compose -f docker/compose.yml --env-file .env up -d",
     "infra:down": "docker compose -f docker/compose.yml --env-file .env down",
     "infra:config": "docker compose -f docker/compose.yml --env-file .env.example config --quiet",
-    "deploy-dev:config": "docker compose -f deploy/dev/compose.yml --env-file .env.example --profile tools config --quiet"
+    "deploy-dev:config": "docker compose -f deploy/dev/compose.yml --env-file .env.example --profile tools config --quiet",
+    "label-artifacts": "pnpm --filter @ayvo/api build && node apps/api/scripts/label-artifacts.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
