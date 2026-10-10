@@ -3,16 +3,305 @@
 // PostgreSQL is the source of truth (ADR 0002). Prisma conventions: ADR 0009.
 // Lifecycle history is append-only (ADR 0006).
 //
-// Foundation phase: intentionally NO domain models yet (Bottle, Crate, Hotel,
-// Delivery, Billing, ESG). They are added per docs/014-roadmap.md after review.
+// Milestone 1 (bottles, label templates, printing v0.1) adds the models below. Crates, products,
+// fill batches, hotels, deliveries, billing and ESG are still NOT modelled.
+//
+// Invariants that Prisma cannot express live as raw SQL in the migrations and are listed in the
+// comments of each model ("DB:"). Data dictionary: docs/015-data-dictionary.md.
 
 generator client {
-  provider               = "prisma-client"
-  output                 = "../src/generated/prisma"
-  moduleFormat           = "esm"
-  importFileExtension    = "js"
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared infrastructure
+// ---------------------------------------------------------------------------------------------
+
+/// Gapless counters for human-readable codes (AYV-B-…, BC-…, PJ-…). A range is allocated with
+/// `UPDATE … SET last_value = last_value + n RETURNING last_value` inside the business
+/// transaction: the row lock serialises concurrent allocations, and a rollback returns the range.
+/// DB: rows are seeded by the migration; CHECK last_value >= 0.
+model CodeCounter {
+  name      String @id
+  lastValue BigInt @default(0) @map("last_value")
+
+  @@map("code_counters")
+}
+
+// ---------------------------------------------------------------------------------------------
+// labels module — label templates, immutable versions, artwork
+// ---------------------------------------------------------------------------------------------
+
+enum LabelArtworkFormat {
+  SVG
+  PNG
+  JPEG
+}
+
+/// Uploaded background artwork. The bytes live in file storage (storageKey), never in PostgreSQL.
+/// DB: immutable (UPDATE/DELETE rejected by trigger).
+model LabelArtwork {
+  id               String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  format           LabelArtworkFormat
+  contentType      String             @map("content_type")
+  byteSize         Int                @map("byte_size")
+  sha256           String             @db.Char(64)
+  /// Server-generated storage key; never derived from the uploaded filename.
+  storageKey       String             @unique @map("storage_key")
+  /// Informational only (sanitised); never used for storage paths.
+  originalFilename String             @map("original_filename")
+  /// Intrinsic proportions of the artwork (pixels for PNG/JPEG, user units for SVG).
+  intrinsicWidth   Float              @map("intrinsic_width")
+  intrinsicHeight  Float              @map("intrinsic_height")
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  versions LabelTemplateVersion[]
+
+  @@map("label_artworks")
+}
+
+/// Logical, reusable label design (e.g. "mydlo1"). Not a Product. Never deleted.
+/// DB: name/id/created_at immutable and DELETE rejected (triggers).
+model LabelTemplate {
+  id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// DB: unique, CHECK name matches ^[a-z0-9][a-z0-9_-]{0,63}$.
+  name       String    @unique
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Archived templates stay available for historical reproduction but cannot be used for new
+  /// creation batches. NULL = active.
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+
+  versions LabelTemplateVersion[]
+
+  @@map("label_templates")
+}
+
+/// Immutable snapshot of a label design. Print output is fully reproducible from a version.
+/// DB: immutable (UPDATE/DELETE rejected by trigger); UNIQUE (template_id, version_number);
+/// CHECK physical size 10–500 mm.
+model LabelTemplateVersion {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  templateId    String   @map("template_id") @db.Uuid
+  versionNumber Int      @map("version_number")
+  widthMm       Decimal  @map("width_mm") @db.Decimal(6, 2)
+  heightMm      Decimal  @map("height_mm") @db.Decimal(6, 2)
+  artworkId     String   @map("artwork_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  template        LabelTemplate          @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  artwork         LabelArtwork           @relation(fields: [artworkId], references: [id], onDelete: Restrict)
+  elements        LabelTemplateElement[]
+  creationBatches BottleCreationBatch[]
+  printJobs       LabelPrintJob[]
+
+  @@unique([templateId, versionNumber])
+  @@map("label_template_versions")
+}
+
+/// Element types a label layout may contain. v0.1 implements QR_CODE only; future types
+/// (BOTTLE_CODE, TEXT, BARCODE, BATCH_CODE) are added to this enum by a later migration.
+enum LabelElementType {
+  QR_CODE
+}
+
+/// One positioned element of a template version, in physical millimetres. Origin: top-left
+/// corner of the label, x to the right, y downwards. For QR_CODE the box includes the quiet zone.
+/// DB: immutable (trigger); CHECK x,y >= 0, width,height > 0; QR_CODE is square; rotation 0 (v0.1).
+model LabelTemplateElement {
+  id          String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  versionId   String           @map("version_id") @db.Uuid
+  type        LabelElementType
+  /// Drawing order within the version (0 = first/bottom).
+  position    Int
+  xMm         Decimal          @map("x_mm") @db.Decimal(6, 2)
+  yMm         Decimal          @map("y_mm") @db.Decimal(6, 2)
+  widthMm     Decimal          @map("width_mm") @db.Decimal(6, 2)
+  heightMm    Decimal          @map("height_mm") @db.Decimal(6, 2)
+  rotationDeg Int              @default(0) @map("rotation_deg")
+  /// Type-specific settings for future element types (validated by Zod in the labels module).
+  properties  Json             @default("{}")
+
+  version LabelTemplateVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+
+  @@unique([versionId, position])
+  @@map("label_template_elements")
+}
+
+// ---------------------------------------------------------------------------------------------
+// assets module — bottles, lifecycle events, creation batches
+// ---------------------------------------------------------------------------------------------
+
+/// Current status of a bottle (current-state column, ADR 0006). v0.1: CREATED only.
+enum BottleStatus {
+  CREATED
+}
+
+/// Lifecycle event types. v0.1: CREATED only; FILLED, ASSIGNED_TO_CRATE, … are added later.
+enum BottleEventType {
+  CREATED
+}
+
+/// A group of physical bottle identities registered in one operation (NOT a fill batch).
+/// DB: immutable (trigger); CHECK quantity 1–1000, quantity_created = quantity_requested,
+/// last_bottle_serial - first_bottle_serial + 1 = quantity_created; code derived from serial.
+model BottleCreationBatch {
+  id                     String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial                 BigInt   @unique
+  /// "BC-000001"
+  code                   String   @unique
+  /// Client-generated idempotency key of the registration request: a retried request with the
+  /// same key returns this batch instead of creating a second one. DB: unique (NULL only for
+  /// rows created before the column existed).
+  clientRequestId        String?  @unique @map("client_request_id") @db.Uuid
+  quantityRequested      Int      @map("quantity_requested")
+  quantityCreated        Int      @map("quantity_created")
+  /// Label template version selected at registration (cross-module FK to labels; integrity only).
+  labelTemplateVersionId String   @map("label_template_version_id") @db.Uuid
+  firstBottleSerial      BigInt   @map("first_bottle_serial")
+  lastBottleSerial       BigInt   @map("last_bottle_serial")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  bottles              Bottle[]
+  events               BottleEvent[]
+  printJobs            LabelPrintJob[]
+
+  @@index([labelTemplateVersionId])
+  @@map("bottle_creation_batches")
+}
+
+/// A physical reusable bottle. Never deleted.
+/// DB: DELETE rejected; identity columns (serial, code, public_token, creation_batch_id,
+/// created_at) immutable (trigger); code derived from serial (CHECK); public_token unique and
+/// 22 URL-safe characters (CHECK).
+model Bottle {
+  id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial          BigInt       @unique
+  /// Human-readable, sequential: "AYV-B-000001". Not a security token.
+  code            String       @unique
+  /// Opaque public QR identity (128 random bits, base64url). Never derived from id or code.
+  publicToken     String       @unique @map("public_token")
+  status          BottleStatus
+  creationBatchId String       @map("creation_batch_id") @db.Uuid
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  creationBatch BottleCreationBatch @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  events        BottleEvent[]
+  printJobItems LabelPrintJobItem[]
+
+  @@index([creationBatchId, serial])
+  @@map("bottles")
+}
+
+/// Append-only lifecycle history (ADR 0006).
+/// DB: UPDATE/DELETE rejected by trigger; at most one CREATED event per bottle (partial unique).
+model BottleEvent {
+  id              String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  bottleId        String          @map("bottle_id") @db.Uuid
+  type            BottleEventType
+  /// When it physically happened vs. when the system recorded it (doc 002, "Time").
+  occurredAt      DateTime        @map("occurred_at") @db.Timestamptz(3)
+  recordedAt      DateTime        @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  /// Acting user. NULL until the identity-access module exists (no authentication in v0.1).
+  actorId         String?         @map("actor_id") @db.Uuid
+  /// Context reference for CREATED events. Later event types add their own nullable references.
+  creationBatchId String?         @map("creation_batch_id") @db.Uuid
+  /// Small event-specific data, validated by Zod in the assets module.
+  payload         Json            @default("{}")
+
+  bottle        Bottle               @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  creationBatch BottleCreationBatch? @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+
+  @@index([bottleId, occurredAt])
+  @@map("bottle_events")
+}
+
+// ---------------------------------------------------------------------------------------------
+// label-production module — print jobs
+// ---------------------------------------------------------------------------------------------
+
+/// Runtime environment that created a print job (APP_ENV). Decides the QR URL policy and the
+/// DEV marker on labels (ADR 0014).
+enum AppEnvironment {
+  development
+  test
+  production
+}
+
+/// QR error correction level used for a print job (ISO/IEC 18004).
+enum QrErrorCorrectionLevel {
+  L
+  M
+  Q
+  H
+}
+
+enum LabelPrintJobStatus {
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
+/// One concrete rendering of labels for a fixed set of bottles with a fixed template version.
+/// Its status is current state (operational job), not bottle lifecycle history.
+/// DB: identity columns immutable (trigger); DELETE rejected; label_count > 0.
+model LabelPrintJob {
+  id                     String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial                 BigInt                 @unique
+  /// "PJ-000001"
+  code                   String                 @unique
+  creationBatchId        String                 @map("creation_batch_id") @db.Uuid
+  labelTemplateVersionId String                 @map("label_template_version_id") @db.Uuid
+  labelCount             Int                    @map("label_count")
+  /// Public QR base URL used for every QR of this job (snapshot, so retries are identical).
+  /// DB: QR environment CHECK by parsed host (production QR host only in production, ADR 0014).
+  publicBaseUrl          String                 @map("public_base_url")
+  /// Environment of the process that created the job.
+  appEnvironment         AppEnvironment         @map("app_environment")
+  /// QR error correction level printed by this job (snapshot of configuration).
+  qrErrorCorrection      QrErrorCorrectionLevel @map("qr_error_correction")
+  status                 LabelPrintJobStatus    @default(PENDING)
+  attempts               Int                    @default(0)
+  createdAt              DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt              DateTime?              @map("started_at") @db.Timestamptz(3)
+  completedAt            DateTime?              @map("completed_at") @db.Timestamptz(3)
+  failedAt               DateTime?              @map("failed_at") @db.Timestamptz(3)
+  /// Safe, user-facing failure summary (no paths, no stack traces).
+  failureReason          String?                @map("failure_reason")
+  fileStorageKey         String?                @map("file_storage_key")
+  fileByteSize           Int?                   @map("file_byte_size")
+  fileSha256             String?                @map("file_sha256") @db.Char(64)
+
+  creationBatch        BottleCreationBatch  @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  items                LabelPrintJobItem[]
+
+  @@index([creationBatchId])
+  @@map("label_print_jobs")
+}
+
+/// The exact bottles of a print job, in page order (page = position + 1).
+/// DB: immutable (trigger); UNIQUE (print_job_id, position) and (print_job_id, bottle_id).
+model LabelPrintJobItem {
+  printJobId String @map("print_job_id") @db.Uuid
+  position   Int
+  bottleId   String @map("bottle_id") @db.Uuid
+  /// The exact URL encoded in this label's QR code (base URL + public token at job creation).
+  qrUrl      String @map("qr_url")
+
+  printJob LabelPrintJob @relation(fields: [printJobId], references: [id], onDelete: Restrict)
+  bottle   Bottle        @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+
+  @@id([printJobId, position])
+  @@unique([printJobId, bottleId])
+  @@index([bottleId])
+  @@map("label_print_job_items")
 }
