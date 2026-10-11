@@ -2,6 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 
 // Dedicated ports, so a running `pnpm dev` (3000/4000, dev database) is never reused by tests.
 const WEB_PORT = 3100;
+/** Session of the e2e operator (all operational roles, MAIN warehouse) — see e2e/auth.setup.ts. */
+export const OPERATOR_STATE = 'e2e/.auth/operator.json';
 const API_PORT = 4100;
 
 export default defineConfig({
@@ -12,7 +14,16 @@ export default defineConfig({
   reporter: 'list',
   timeout: 120_000,
   use: { baseURL: `http://localhost:${WEB_PORT}`, acceptDownloads: true },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    // Signs in through the fake identity provider (APP_ENV=test) and stores the sessions.
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    {
+      name: 'chromium',
+      dependencies: ['setup'],
+      testIgnore: /auth\.setup\.ts/,
+      use: { ...devices['Desktop Chrome'], storageState: OPERATOR_STATE },
+    },
+  ],
   webServer: [
     {
       // Built API on a fresh `ayvo_e2e` database (recreated and migrated on every run).

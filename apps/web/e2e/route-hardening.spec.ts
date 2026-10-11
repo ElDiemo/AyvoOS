@@ -129,7 +129,10 @@ test('legacy batch list URL is a real HTTP redirect that keeps the query', async
   }
 
   // Without client JavaScript: the HTTP redirect alone gets the browser there.
-  const context = await browser.newContext({ javaScriptEnabled: false });
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    storageState: 'e2e/.auth/operator.json',
+  });
   const page = await context.newPage();
   const response = await page.goto('/batches?page=1');
   const hop = await response!.request().redirectedFrom()!.response();
