@@ -17,10 +17,12 @@ interface StoredOutcome {
 }
 
 /**
- * Physical label application (doc 018 §7): the warehouse scan after a printed QR label has been
- * stuck on a new bottle body. One transaction: bottle CREATED → LABELED_EMPTY, LABEL_APPLIED
- * event, LABEL component attachment, and the consumption of exactly one new bottle from the lot
- * the operator selected for the session (never another lot, never a guess).
+ * Physical label application (doc 018 §7, doc 019): the production scan after a printed QR label
+ * has been stuck on a new bottle body. One transaction: bottle CREATED → LABELED_EMPTY,
+ * LABEL_APPLIED event, LABEL component attachment, and the consumption of exactly one new bottle
+ * from the lot the operator selected for the session (never another lot, never a guess). The
+ * session also names the bottle series being labelled; a bottle of another series is refused
+ * (WRONG_SERIES).
  *
  * Lock order: operation request → bottle → balance rows (ascending item, location, lot).
  */
@@ -46,7 +48,7 @@ export class LabelApplicationService {
     const { result, replayed } = await this.operations.run<StoredOutcome>(
       'LABEL_APPLICATION',
       request.requestId,
-      { lotId: request.lotId, url: scan.url },
+      { lotId: request.lotId, seriesCode: request.seriesCode, url: scan.url },
       async (tx) => {
         const bom = await this.inventory.activeBom('LABEL_APPLICATION', tx);
         const lotLines = bom.lines.filter((l) => l.item.lotTracking === 'REQUIRED');
@@ -57,6 +59,15 @@ export class LabelApplicationService {
 
         const bottle = await this.bottles.findByPublicToken(tx, scan.token);
         if (!bottle) throw domainError(422, 'UNKNOWN_LABEL', 'No bottle has this label');
+        // The session's label run: a bottle of another series is never labelled here. The series
+        // of a bottle is immutable, so no lock is needed for this check.
+        if (bottle.creationBatch.code !== request.seriesCode) {
+          throw domainError(
+            422,
+            'WRONG_SERIES',
+            'This bottle does not belong to the series selected for this session',
+          );
+        }
         const label = await this.printJobs.latestCompletedLabel(tx, bottle.id, scan.url);
         if (!label) {
           throw domainError(

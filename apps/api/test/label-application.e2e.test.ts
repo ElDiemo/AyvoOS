@@ -34,7 +34,11 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     expect(lot).toMatchObject({ kind: 'INTERNAL', code: `${receipt.code}/1` });
     const [bottle] = await printedBottles(t, 1);
 
-    const res = await applyLabel(t, { lotId: lot.id, scannedValue: bottle!.url }).expect(200);
+    const res = await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: bottle!.seriesCode,
+      scannedValue: bottle!.url,
+    }).expect(200);
     const result = res.body as LabelApplicationResult;
     expect(result).toMatchObject({
       outcome: 'APPLIED',
@@ -90,17 +94,32 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     const lot = (await receiveBottles(t, 5)).lines[0]!.lot!;
     const [bottle] = await printedBottles(t, 1);
     const requestId = randomUUID();
-    await applyLabel(t, { requestId, lotId: lot.id, scannedValue: bottle!.url }).expect(200);
+    await applyLabel(t, {
+      requestId,
+      lotId: lot.id,
+      seriesCode: bottle!.seriesCode,
+      scannedValue: bottle!.url,
+    }).expect(200);
 
-    const again = (await applyLabel(t, { lotId: lot.id, scannedValue: bottle!.url }).expect(200))
-      .body as LabelApplicationResult;
+    const again = (
+      await applyLabel(t, {
+        lotId: lot.id,
+        seriesCode: bottle!.seriesCode,
+        scannedValue: bottle!.url,
+      }).expect(200)
+    ).body as LabelApplicationResult;
     expect(again).toMatchObject({
       outcome: 'ALREADY_APPLIED',
       replayed: false,
       consumedLot: { id: lot.id },
     });
     const replay = (
-      await applyLabel(t, { requestId, lotId: lot.id, scannedValue: bottle!.url }).expect(200)
+      await applyLabel(t, {
+        requestId,
+        lotId: lot.id,
+        seriesCode: bottle!.seriesCode,
+        scannedValue: bottle!.url,
+      }).expect(200)
     ).body as LabelApplicationResult;
     expect(replay).toMatchObject({ outcome: 'APPLIED', replayed: true });
     expect(await lotOnHand(lot.id)).toBe('4');
@@ -115,6 +134,7 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     const conflict = await applyLabel(t, {
       requestId,
       lotId: otherLot.id,
+      seriesCode: bottle!.seriesCode,
       scannedValue: bottle!.url,
     }).expect(409);
     expect(conflict.body.code).toBe('IDEMPOTENCY_CONFLICT');
@@ -125,7 +145,8 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     const [bottle] = await printedBottles(t, 1);
     const token = bottle!.publicToken;
     const code = async (scannedValue: string) =>
-      (await applyLabel(t, { lotId: lot.id, scannedValue })).body.code as string;
+      (await applyLabel(t, { lotId: lot.id, seriesCode: bottle!.seriesCode, scannedValue })).body
+        .code as string;
 
     expect(await code(token)).toBe('NOT_AYVO_QR'); // raw token
     expect(await code(bottle!.code)).toBe('NOT_AYVO_QR'); // bottle code
@@ -136,9 +157,11 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     expect(await code(`${TEST_QR_BASE_URL}/AAAAAAAAAAAAAAAAAAAAAA`)).toBe('UNKNOWN_LABEL');
     expect(await lotOnHand(lot.id)).toBe('2'); // rejections change nothing
 
-    const res = await applyLabel(t, { lotId: lot.id, scannedValue: `  ${bottle!.url}\r\n` }).expect(
-      200,
-    );
+    const res = await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: bottle!.seriesCode,
+      scannedValue: `  ${bottle!.url}\r\n`,
+    }).expect(200);
     expect(res.body.outcome).toBe('APPLIED');
   });
 
@@ -151,6 +174,7 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     });
     const res = await applyLabel(t, {
       lotId: lot.id,
+      seriesCode: batch.code,
       scannedValue: `${TEST_QR_BASE_URL}/${bottle.publicToken}`,
     }).expect(422);
     expect(res.body).toEqual({
@@ -169,12 +193,17 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     const lot = receipt.lines[0]!.lot!;
     const other = (await receiveBottles(t, 10, { supplierId: supplier.id })).lines[0]!.lot!;
     const [first, second] = await printedBottles(t, 2);
-    await applyLabel(t, { lotId: lot.id, scannedValue: first!.url }).expect(200);
+    await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: first!.seriesCode,
+      scannedValue: first!.url,
+    }).expect(200);
 
     const requestId = randomUUID();
     const exhausted = await applyLabel(t, {
       requestId,
       lotId: lot.id,
+      seriesCode: second!.seriesCode,
       scannedValue: second!.url,
     }).expect(409);
     expect(exhausted.body.code).toBe('LOT_EXHAUSTED');
@@ -188,15 +217,83 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
       .post(`/api/admin/goods-receipts/${receipt.code}/corrections`)
       .send({ requestId: randomUUID(), lineNo: 1, quantityDelta: '1', reason: 'counted one more' })
       .expect(200);
-    const ok = await applyLabel(t, { requestId, lotId: lot.id, scannedValue: second!.url }).expect(
-      200,
-    );
+    const ok = await applyLabel(t, {
+      requestId,
+      lotId: lot.id,
+      seriesCode: second!.seriesCode,
+      scannedValue: second!.url,
+    }).expect(200);
     expect(ok.body).toMatchObject({ outcome: 'APPLIED', consumedLot: { id: lot.id } });
+  });
+
+  it('binds the session to one bottle series: a bottle of another series is refused (WRONG_SERIES)', async () => {
+    const lot = (await receiveBottles(t, 3)).lines[0]!.lot!;
+    const [mine] = await printedBottles(t, 1);
+    const [foreign] = await printedBottles(t, 1);
+    expect(foreign!.seriesCode).not.toBe(mine!.seriesCode);
+
+    const requestId = randomUUID();
+    const wrong = await applyLabel(t, {
+      requestId,
+      lotId: lot.id,
+      seriesCode: mine!.seriesCode,
+      scannedValue: foreign!.url,
+    }).expect(422);
+    expect(wrong.body).toEqual({
+      statusCode: 422,
+      code: 'WRONG_SERIES',
+      message: 'This bottle does not belong to the series selected for this session',
+    });
+    // Nothing happened: no consumption, no event, the bottle is still CREATED.
+    expect(await lotOnHand(lot.id)).toBe('3');
+    expect((await t.prisma.bottle.findUniqueOrThrow({ where: { id: foreign!.id } })).status).toBe(
+      'CREATED',
+    );
+    // A series code that does not exist matches no bottle; a malformed one is a validation error.
+    const unknown = await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: 'BC-999999',
+      scannedValue: mine!.url,
+    }).expect(422);
+    expect(unknown.body.code).toBe('WRONG_SERIES');
+    await applyLabel(t, { lotId: lot.id, seriesCode: 'nonsense', scannedValue: mine!.url }).expect(
+      400,
+    );
+
+    // Rejections are not stored: the same request id with the right series is applied.
+    const ok = await applyLabel(t, {
+      requestId,
+      lotId: lot.id,
+      seriesCode: foreign!.seriesCode,
+      scannedValue: foreign!.url,
+    }).expect(200);
+    expect(ok.body).toMatchObject({ outcome: 'APPLIED', bottle: { code: foreign!.code } });
+    // The series is part of the idempotent payload: the same request id with another series
+    // conflicts instead of replaying.
+    const conflict = await applyLabel(t, {
+      requestId,
+      lotId: lot.id,
+      seriesCode: mine!.seriesCode,
+      scannedValue: foreign!.url,
+    }).expect(409);
+    expect(conflict.body.code).toBe('IDEMPOTENCY_CONFLICT');
+    // An already labelled bottle scanned in a session of another series is WRONG_SERIES too.
+    const again = await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: mine!.seriesCode,
+      scannedValue: foreign!.url,
+    }).expect(422);
+    expect(again.body.code).toBe('WRONG_SERIES');
+    expect(await lotOnHand(lot.id)).toBe('2');
   });
 
   it('refuses a lot that is not a new-bottle lot', async () => {
     const [bottle] = await printedBottles(t, 1);
-    const res = await applyLabel(t, { lotId: randomUUID(), scannedValue: bottle!.url }).expect(422);
+    const res = await applyLabel(t, {
+      lotId: randomUUID(),
+      seriesCode: bottle!.seriesCode,
+      scannedValue: bottle!.url,
+    }).expect(422);
     expect(res.body.code).toBe('WRONG_LOT');
   });
 
@@ -205,7 +302,9 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     const bystander = (await receiveBottles(t, 7)).lines[0]!.lot!;
     const bottles = await printedBottles(t, 50);
     const responses = await Promise.all(
-      bottles.map((b) => applyLabel(t, { lotId: lot.id, scannedValue: b.url })),
+      bottles.map((b) =>
+        applyLabel(t, { lotId: lot.id, seriesCode: b.seriesCode, scannedValue: b.url }),
+      ),
     );
     const outcomes = responses.map((r) => (r.status === 200 ? r.body.outcome : r.body.code));
     expect(outcomes.filter((o) => o === 'APPLIED')).toHaveLength(10);
@@ -233,7 +332,9 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     const lot = (await receiveBottles(t, 5)).lines[0]!.lot!;
     const [bottle] = await printedBottles(t, 1);
     const responses = await Promise.all(
-      Array.from({ length: 20 }, () => applyLabel(t, { lotId: lot.id, scannedValue: bottle!.url })),
+      Array.from({ length: 20 }, () =>
+        applyLabel(t, { lotId: lot.id, seriesCode: bottle!.seriesCode, scannedValue: bottle!.url }),
+      ),
     );
     const outcomes = responses.map((r) => r.body.outcome as string);
     expect(outcomes.filter((o) => o === 'APPLIED')).toHaveLength(1);
@@ -242,10 +343,34 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     expect(await t.prisma.inventoryMovement.count({ where: { lotId: lot.id } })).toBe(2); // receipt + 1
   });
 
+  it('filters the bottle list by status (labels applied or still awaited)', async () => {
+    const lot = (await receiveBottles(t, 2)).lines[0]!.lot!;
+    const [first, second, third] = await printedBottles(t, 3);
+    await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: first!.seriesCode,
+      scannedValue: first!.url,
+    }).expect(200);
+    const list = async (status: string) =>
+      (
+        await http()
+          .get('/api/admin/bottles')
+          .query({ batch: first!.seriesCode, status })
+          .expect(200)
+      ).body as { total: number; items: { code: string }[] };
+    expect((await list('LABELED_EMPTY')).items.map((b) => b.code)).toEqual([first!.code]);
+    expect((await list('CREATED')).items.map((b) => b.code)).toEqual([third!.code, second!.code]);
+    await http().get('/api/admin/bottles').query({ status: 'BROKEN' }).expect(400);
+  });
+
   it('lists recent applications with their lots', async () => {
     const lot = (await receiveBottles(t, 1)).lines[0]!.lot!;
     const [bottle] = await printedBottles(t, 1);
-    await applyLabel(t, { lotId: lot.id, scannedValue: bottle!.url }).expect(200);
+    await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: bottle!.seriesCode,
+      scannedValue: bottle!.url,
+    }).expect(200);
     const recent = (await http().get('/api/admin/label-applications').expect(200)).body as {
       items: { bottleCode: string; lotCode: string }[];
     };

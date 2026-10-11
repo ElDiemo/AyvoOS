@@ -9,16 +9,20 @@ import { applyLabel, printedBottles, receiveBottles } from './support/warehouse-
  */
 describe.skipIf(!hasDatabase)('bottle components (database invariants)', () => {
   let t: TestApp;
-  let applied: { id: string; url: string };
-  let fresh: { id: string; url: string };
-  let other: { id: string; url: string };
+  let applied: { id: string; url: string; seriesCode: string };
+  let fresh: { id: string; url: string; seriesCode: string };
+  let other: { id: string; url: string; seriesCode: string };
 
   beforeAll(async () => {
     t = await createTestApp();
     const lot = (await receiveBottles(t, 3)).lines[0]!.lot!;
     const bottles = await printedBottles(t, 3);
     [applied, fresh, other] = [bottles[0]!, bottles[1]!, bottles[2]!];
-    const res = await applyLabel(t, { lotId: lot.id, scannedValue: applied.url });
+    const res = await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: applied.seriesCode,
+      scannedValue: applied.url,
+    });
     expect(res.status).toBe(200);
   });
   afterAll(() => t?.close());

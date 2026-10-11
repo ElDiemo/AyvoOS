@@ -191,6 +191,7 @@ export class BottlesService {
       };
     }
     if (Object.keys(batchFilter).length > 0) where.creationBatch = batchFilter;
+    if (query.status) where.status = query.status;
 
     const [total, bottles] = await this.prisma.$transaction([
       this.prisma.bottle.count({ where }),
@@ -257,7 +258,7 @@ export class BottlesService {
   findByPublicToken(tx: Prisma.TransactionClient, token: string) {
     return tx.bottle.findUnique({
       where: { publicToken: token },
-      select: { id: true, code: true, status: true },
+      select: { id: true, code: true, status: true, creationBatch: { select: { code: true } } },
     });
   }
 
