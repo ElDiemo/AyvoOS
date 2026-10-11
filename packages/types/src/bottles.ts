@@ -16,10 +16,10 @@ export const bottleCreationBatchCodeSchema = z
 /** Opaque public QR token: 128 random bits, base64url without padding (22 characters). */
 export const publicTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
 
-export const bottleStatusSchema = z.enum(['CREATED']);
+export const bottleStatusSchema = z.enum(['CREATED', 'LABELED_EMPTY']);
 export type BottleStatus = z.infer<typeof bottleStatusSchema>;
 
-export const bottleEventTypeSchema = z.enum(['CREATED']);
+export const bottleEventTypeSchema = z.enum(['CREATED', 'LABEL_APPLIED']);
 export type BottleEventType = z.infer<typeof bottleEventTypeSchema>;
 
 /** POST /api/admin/bottle-registrations */
@@ -66,6 +66,8 @@ export const bottleDetailSchema = bottleSummarySchema.extend({
   publicUrl: z.url(),
   /** Completed reuse cycles (ADR 0011), the same value as the public passport. */
   reuseCycles: z.number().int().nonnegative(),
+  /** When the printed QR label was physically applied (null: identity/label only). */
+  labelAppliedAt: z.iso.datetime().nullable(),
   /** Oldest first. */
   events: z.array(bottleEventSchema),
 });
