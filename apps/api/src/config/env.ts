@@ -44,6 +44,14 @@ export const envSchema = z
       .min(1024)
       .max(50 * 1024 * 1024)
       .default(10 * 1024 * 1024),
+
+    // Upper limit for an uploaded supplier document (PDF, JPEG or PNG), in bytes.
+    SUPPLIER_DOCUMENT_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(50 * 1024 * 1024)
+      .default(20 * 1024 * 1024),
   })
   .transform((env, ctx) => {
     const production = env.APP_ENV === 'production';

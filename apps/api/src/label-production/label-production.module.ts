@@ -13,5 +13,6 @@ import { LabelProductionController } from './label-production.controller.js';
   imports: [AssetsModule, LabelsModule],
   controllers: [LabelProductionController],
   providers: [BottleRegistrationService, LabelPrintJobsService],
+  exports: [LabelPrintJobsService],
 })
 export class LabelProductionModule {}

@@ -1,7 +1,8 @@
 import type { Prisma } from '../generated/prisma/client.js';
 
 /** Names of the rows in `code_counters` (seeded by the migration). */
-export type CodeCounterName = 'bottle' | 'bottle_creation_batch' | 'label_print_job';
+export type CodeCounterName =
+  'bottle' | 'bottle_creation_batch' | 'label_print_job' | 'goods_receipt';
 
 /**
  * Allocates `count` consecutive serials from a gapless counter. Must run inside the business
