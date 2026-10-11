@@ -155,6 +155,13 @@ scripts/deploy-dev.sh
 - **Take the preview offline** without losing data: `$C stop` (never `down -v`).
 - Old image tags and dumps accumulate; prune them manually when no longer needed.
 
+## GitHub automation
+
+Pull requests are created and maintained from this server by the **AYVO Automation** GitHub App
+(installed on the AyvoOS repository only) through `/opt/ayvo/bin/ayvo-gh`; merges need an explicit,
+per-PR owner authorization. Git pushes keep using the SSH remote. Setup, threat model, rotation,
+revocation and removal: [doc 017](017-github-automation.md), [ADR 0018](adr/0018-github-app-automation.md).
+
 ## Proposed production principles (requires confirmation)
 
 - Separate PROD (separate VPS, confirmed) and DEV environments: separate databases, Redis instances, credentials, domains. Staging is explicitly deferred.

@@ -35,6 +35,7 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0011](0011-bottle-terminal-states-and-reuse-cycles.md) | Bottle terminal states and reuse cycles                    | Accepted — confirmed by owner 2026-10-10 |
 | [0012](0012-turborepo-agent-guidance-disabled.md)       | Turborepo agent guidance disabled; CLAUDE.md canonical     | Accepted — confirmed by owner 2026-10-10 |
 | [0013](0013-dev-preview-deployment.md)                  | DEV preview deployment: Caddy, same-origin API, Basic Auth | Accepted — confirmed by owner 2026-10-10 |
+| [0018](0018-github-app-automation.md)                   | GitHub automation through a repository-scoped GitHub App   | Accepted — confirmed by owner 2026-10-11 |
 
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
