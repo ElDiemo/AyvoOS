@@ -101,6 +101,56 @@ Merges always obey GitHub's branch protection, rulesets and required checks: the
 `--admin` (the bypass flag) and any write through `gh api`, and the App has no Administration
 permission, so it cannot change protection rules. Do not add the App to a ruleset's bypass list.
 
+## CI (GitHub Actions)
+
+`.github/workflows/ci.yml` (workflow **CI**) runs on every pull request into `main` and on every
+push to `main`. **CI only checks; it never deploys**, never uses repository secrets, the GitHub App
+key or deployment credentials, and never reaches the DEV preview, production or their databases.
+
+| Check     | Covers                                                                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `quality` | `pnpm install --frozen-lockfile`, `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm build`                                         |
+| `test`    | `pnpm test`: shared types, shared UI, API (unit + integration against PostgreSQL), web unit tests                                          |
+| `e2e`     | `pnpm build` + `pnpm test:e2e`: Playwright (Chromium) against the built API (port 4100, fresh `ayvo_e2e` database) and web app (port 3100) |
+
+- **Disposable infrastructure only:** `test` and `e2e` get their own PostgreSQL 18 and Redis 8
+  service containers, created for the job and destroyed with it (credentials are throw-away
+  values in the workflow, not secrets). A guard step fails the job if a `.env` file exists or the
+  database URL is not the job's own `localhost` service. The test suites create and drop
+  `ayvo_test_<random>` / `ayvo_e2e` databases on that service only.
+- **Versions:** Node from `.nvmrc`, pnpm from `package.json` `packageManager`, frozen lockfile.
+  `turbo.json` passes `AYVO_TEST_DATABASE_URL`, `AYVO_SKIP_DB_TESTS`, `REDIS_URL` (and for e2e `CI`,
+  `PLAYWRIGHT_*`) through Turborepo's strict environment mode.
+- **Token and actions:** `permissions: contents: read`; checkout without persisted credentials;
+  third-party actions pinned to full commit SHAs (version in a comment). Runs of a pull request are
+  cancelled when a newer push arrives; runs on `main` always complete.
+- **Artifacts:** only when `e2e` fails, `playwright-results` (`apps/web/test-results/`, error
+  context per failed test) is uploaded and kept for 7 days. Unit and integration failures are in
+  the job log.
+
+### Required checks
+
+All three — `quality`, `test`, `e2e` — should be required in the **Protect main** ruleset once
+they have passed on the bootstrap pull request: Settings → Rules → Rulesets → Protect main →
+**Require status checks to pass** → add `quality`, `test`, `e2e` (source: GitHub Actions). Keep the
+job names stable; renaming a job silently drops its requirement.
+
+### Investigating a failure
+
+1. `ayvo-gh pr checks <number>` shows which check failed; `ayvo-gh run list` and
+   `ayvo-gh run view <run-id> --log-failed` show the failing step's log (read-only).
+2. For `e2e`, download the `playwright-results` artifact from the run page.
+3. Reproduce locally (DEV server, `pnpm infra:up`): `pnpm format:check`, `pnpm lint`,
+   `pnpm typecheck`, `pnpm build`, `pnpm test`, then `pnpm test:e2e` after a build.
+
+### Workflow files and the App
+
+The App deliberately has **no `Workflows` permission**: it cannot create or change files under
+`.github/workflows/`. Workflow changes reach GitHub through the SSH push, and a pull request that
+adds or changes a workflow file is merged **by the owner in the GitHub UI** (GitHub refuses such a
+merge from an App without `Workflows: write`). All other pull requests can be merged through
+`ayvo-gh` with explicit authorization, as before.
+
 ## Server files
 
 | Path                                           | Mode | Content                                                                           |
