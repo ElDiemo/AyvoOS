@@ -3,8 +3,9 @@
 // PostgreSQL is the source of truth (ADR 0002). Prisma conventions: ADR 0009.
 // Lifecycle history is append-only (ADR 0006).
 //
-// Milestone 1 (bottles, label templates, printing v0.1) adds the models below. Crates, products,
-// fill batches, hotels, deliveries, billing and ESG are still NOT modelled.
+// Milestone 1 (bottles, label templates, printing v0.1) and Milestone 2A (inventory foundation,
+// supplier receiving, physical label application — doc 018) add the models below. Crates,
+// products, fill batches, hotels, deliveries, billing and ESG are still NOT modelled.
 //
 // Invariants that Prisma cannot express live as raw SQL in the migrations and are listed in the
 // comments of each model ("DB:"). Data dictionary: docs/015-data-dictionary.md.
@@ -141,11 +142,15 @@ model LabelTemplateElement {
 /// Current status of a bottle (current-state column, ADR 0006). v0.1: CREATED only.
 enum BottleStatus {
   CREATED
+  /// The printed QR label is physically on the bottle body; the body is empty (doc 018).
+  LABELED_EMPTY
 }
 
-/// Lifecycle event types. v0.1: CREATED only; FILLED, ASSIGNED_TO_CRATE, … are added later.
+/// Lifecycle event types. FILLED, ASSIGNED_TO_CRATE, … are added in later phases.
 enum BottleEventType {
   CREATED
+  /// First physical label installation; consumes one NEW_BOTTLE unit of the selected lot (doc 018).
+  LABEL_APPLIED
 }
 
 /// A group of physical bottle identities registered in one operation (NOT a fill batch).
@@ -192,9 +197,10 @@ model Bottle {
   creationBatchId String       @map("creation_batch_id") @db.Uuid
   createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  creationBatch BottleCreationBatch @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  creationBatch BottleCreationBatch         @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
   events        BottleEvent[]
   printJobItems LabelPrintJobItem[]
+  components    BottleComponentAttachment[]
 
   @@index([creationBatchId, serial])
   @@map("bottles")
@@ -216,8 +222,11 @@ model BottleEvent {
   /// Small event-specific data, validated by Zod in the assets module.
   payload         Json            @default("{}")
 
-  bottle        Bottle               @relation(fields: [bottleId], references: [id], onDelete: Restrict)
-  creationBatch BottleCreationBatch? @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  bottle        Bottle                      @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  creationBatch BottleCreationBatch?        @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  movements     InventoryMovement[]
+  installations BottleComponentAttachment[] @relation("ComponentInstalledBy")
+  removals      BottleComponentAttachment[] @relation("ComponentRemovedBy")
 
   @@index([bottleId, occurredAt])
   @@map("bottle_events")
@@ -297,11 +306,478 @@ model LabelPrintJobItem {
   /// The exact URL encoded in this label's QR code (base URL + public token at job creation).
   qrUrl      String @map("qr_url")
 
-  printJob LabelPrintJob @relation(fields: [printJobId], references: [id], onDelete: Restrict)
-  bottle   Bottle        @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  printJob    LabelPrintJob               @relation(fields: [printJobId], references: [id], onDelete: Restrict)
+  bottle      Bottle                      @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  attachments BottleComponentAttachment[]
 
   @@id([printJobId, position])
   @@unique([printJobId, bottleId])
   @@index([bottleId])
   @@map("label_print_job_items")
+}
+
+/// Installation history of a bottle's replaceable components (doc 018 §15). The identity belongs
+/// to the bottle body; components come and go. LABEL now; PUMP and others later.
+/// DB: insert-only except one close (removed_* NULL → values); at most one open attachment per
+/// (bottle, component_type) (partial unique); LABEL requires label_qr_url + print job item of the
+/// same bottle with the same URL and an installing LABEL_APPLIED event of the same bottle;
+/// removal fields all-or-none; DELETE rejected.
+model BottleComponentAttachment {
+  id               String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  bottleId         String                @map("bottle_id") @db.Uuid
+  componentType    ComponentType         @map("component_type")
+  /// LABEL: the exact QR URL scanned at installation.
+  labelQrUrl       String?               @map("label_qr_url")
+  /// LABEL: the print job item the label came from (most recent COMPLETED job of the identity).
+  printJobId       String?               @map("print_job_id") @db.Uuid
+  printJobPosition Int?                  @map("print_job_position")
+  installedAt      DateTime              @map("installed_at") @db.Timestamptz(3)
+  installedBy      String?               @map("installed_by") @db.Uuid
+  installedEventId String                @map("installed_event_id") @db.Uuid
+  removedAt        DateTime?             @map("removed_at") @db.Timestamptz(3)
+  removedBy        String?               @map("removed_by") @db.Uuid
+  removalReason    String?               @map("removal_reason")
+  disposition      ComponentDisposition?
+  removalEventId   String?               @map("removal_event_id") @db.Uuid
+
+  bottle         Bottle             @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  printJobItem   LabelPrintJobItem? @relation(fields: [printJobId, printJobPosition], references: [printJobId, position], onDelete: Restrict)
+  installedEvent BottleEvent        @relation("ComponentInstalledBy", fields: [installedEventId], references: [id], onDelete: Restrict)
+  removalEvent   BottleEvent?       @relation("ComponentRemovedBy", fields: [removalEventId], references: [id], onDelete: Restrict)
+
+  @@index([bottleId])
+  @@index([installedEventId])
+  @@index([printJobId, printJobPosition])
+  @@map("bottle_component_attachments")
+}
+
+enum ComponentType {
+  LABEL
+}
+
+/// What happens to a removed component (removal workflows are deferred; doc 018 §16).
+enum ComponentDisposition {
+  REUSED
+  SCRAPPED
+  QUARANTINED
+  CLEANING_REQUIRED
+  RETURNED_TO_SUPPLIER
+}
+
+// ---------------------------------------------------------------------------------------------
+// inventory module — items, units, locations, lots, ledger, balances, consumption rules (doc 018)
+// ---------------------------------------------------------------------------------------------
+
+enum UnitDimension {
+  COUNT
+  VOLUME
+  MASS
+}
+
+/// Reference data. DB: code pattern; decimal_places 0–3; immutable; DELETE rejected.
+model InventoryUnit {
+  id            String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// "pcs", "ml", "g", "sheet", "roll"
+  code          String        @unique
+  name          String
+  dimension     UnitDimension
+  /// Quantities in this unit may have at most this many decimals ("pcs" = 0: whole pieces).
+  decimalPlaces Int           @map("decimal_places") @db.SmallInt
+
+  items InventoryItem[]
+
+  @@map("inventory_units")
+}
+
+enum InventoryItemKind {
+  NEW_BOTTLE
+  PUMP
+  LABEL_MEDIA
+  BULK_LIQUID
+  PACKAGING
+  COMPONENT
+}
+
+enum LotTracking {
+  NONE
+  REQUIRED
+}
+
+/// Catalogue entry of quantity-tracked material. Creating an item is never a receipt.
+/// DB: code pattern; identity (code, kind, base_unit_id, lot_tracking, created_at) immutable;
+/// DELETE rejected. (id, base_unit_id) unique: target of composite FKs that force every
+/// quantity of the item into its base unit.
+model InventoryItem {
+  id          String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// Language-neutral SKU, e.g. "NEW_BOTTLE".
+  code        String            @unique
+  name        String
+  kind        InventoryItemKind
+  baseUnitId  String            @map("base_unit_id") @db.Uuid
+  lotTracking LotTracking       @map("lot_tracking")
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  archivedAt  DateTime?         @map("archived_at") @db.Timestamptz(3)
+
+  baseUnit     InventoryUnit          @relation(fields: [baseUnitId], references: [id], onDelete: Restrict)
+  settings     InventoryItemSetting[]
+  lots         InventoryLot[]
+  receiptLines GoodsReceiptLine[]
+  movements    InventoryMovement[]
+  balances     InventoryBalance[]
+  bomLines     BomLine[]
+
+  @@unique([id, baseUnitId])
+  @@map("inventory_items")
+}
+
+/// Append-only planning settings of an item; the highest version is current.
+/// DB: immutable; version >= 1; quantities >= 0 in the item's unit scale; target >= reorder point.
+model InventoryItemSetting {
+  id                  String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId              String   @map("item_id") @db.Uuid
+  version             Int
+  reorderPoint        Decimal? @map("reorder_point") @db.Decimal(19, 3)
+  targetLevel         Decimal? @map("target_level") @db.Decimal(19, 3)
+  preferredSupplierId String?  @map("preferred_supplier_id") @db.Uuid
+  leadTimeDays        Int?     @map("lead_time_days")
+  purchaseMultiple    Decimal? @map("purchase_multiple") @db.Decimal(19, 3)
+  validFrom           DateTime @default(now()) @map("valid_from") @db.Timestamptz(3)
+  actorId             String?  @map("actor_id") @db.Uuid
+  requestId           String   @unique @map("request_id") @db.Uuid
+
+  item              InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  preferredSupplier Supplier?     @relation(fields: [preferredSupplierId], references: [id], onDelete: Restrict)
+
+  @@unique([itemId, version])
+  @@map("inventory_item_settings")
+}
+
+/// Physical stock location. One ("MAIN") for now. DB: code pattern; DELETE rejected.
+model InventoryLocation {
+  id   String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code String @unique
+  name String
+
+  movements InventoryMovement[]
+  balances  InventoryBalance[]
+
+  @@map("inventory_locations")
+}
+
+enum InventoryLotKind {
+  /// The supplier's own lot code.
+  SUPPLIER
+  /// Created by AYVO OS for one receipt line when the supplier gives no lot.
+  INTERNAL
+}
+
+/// Lot of a lot-tracked item. DB: immutable; (item, code) unique; SUPPLIER ⇒ supplier +
+/// supplier_lot_code, (item, supplier, supplier_lot_code) unique (partial); INTERNAL ⇒
+/// origin_receipt_line_id (unique, deferrable FK) and no supplier lot code; lot item must be
+/// lot-tracked.
+model InventoryLot {
+  id                  String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId              String           @map("item_id") @db.Uuid
+  kind                InventoryLotKind
+  /// Display code: the supplier lot code, or "GR-000001/1" for an internal lot.
+  code                String
+  supplierId          String?          @map("supplier_id") @db.Uuid
+  supplierLotCode     String?          @map("supplier_lot_code")
+  originReceiptLineId String?          @unique @map("origin_receipt_line_id") @db.Uuid
+  expiresOn           DateTime?        @map("expires_on") @db.Date
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  item              InventoryItem       @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  supplier          Supplier?           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  originReceiptLine GoodsReceiptLine?   @relation("InternalLotOrigin", fields: [originReceiptLineId], references: [id], onDelete: Restrict)
+  receiptLines      GoodsReceiptLine[]  @relation("ReceiptLineLot")
+  movements         InventoryMovement[]
+  balances          InventoryBalance[]
+
+  @@unique([itemId, code])
+  @@map("inventory_lots")
+}
+
+enum InventoryMovementType {
+  RECEIPT
+  RECEIPT_CORRECTION
+  LABEL_APPLICATION
+}
+
+/// The append-only stock ledger: the source of truth for every quantity.
+/// DB: UPDATE/DELETE/TRUNCATE rejected; quantity ≠ 0 in the unit's scale; type ⇔ sign ⇔ exactly
+/// one source; item/lot/quantity equal to the source (receipt line, correction, BOM line);
+/// lot ⇔ item lot-tracked; a BEFORE INSERT trigger updates inventory_balances and sets
+/// balance_after (a negative balance aborts the transaction); unique RECEIPT per line, one
+/// movement per correction, one per (bottle_event, bom_line).
+model InventoryMovement {
+  id                  String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId              String                @map("item_id") @db.Uuid
+  unitId              String                @map("unit_id") @db.Uuid
+  locationId          String                @map("location_id") @db.Uuid
+  lotId               String?               @map("lot_id") @db.Uuid
+  quantityDelta       Decimal               @map("quantity_delta") @db.Decimal(19, 3)
+  type                InventoryMovementType
+  receiptLineId       String?               @map("receipt_line_id") @db.Uuid
+  receiptCorrectionId String?               @map("receipt_correction_id") @db.Uuid
+  bottleEventId       String?               @map("bottle_event_id") @db.Uuid
+  bomLineId           String?               @map("bom_line_id") @db.Uuid
+  /// On-hand of (item, location, lot) after this movement — always set by the ledger trigger
+  /// (the default only lets inserts omit it).
+  balanceAfter        Decimal               @default(0) @map("balance_after") @db.Decimal(19, 3)
+  occurredAt          DateTime              @map("occurred_at") @db.Timestamptz(3)
+  recordedAt          DateTime              @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  actorId             String?               @map("actor_id") @db.Uuid
+  requestId           String?               @map("request_id") @db.Uuid
+
+  item              InventoryItem           @relation(fields: [itemId, unitId], references: [id, baseUnitId], onDelete: Restrict)
+  location          InventoryLocation       @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  lot               InventoryLot?           @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  receiptLine       GoodsReceiptLine?       @relation(fields: [receiptLineId], references: [id], onDelete: Restrict)
+  receiptCorrection GoodsReceiptCorrection? @relation(fields: [receiptCorrectionId], references: [id], onDelete: Restrict)
+  bottleEvent       BottleEvent?            @relation(fields: [bottleEventId], references: [id], onDelete: Restrict)
+  bomLine           BomLine?                @relation(fields: [bomLineId], references: [id], onDelete: Restrict)
+
+  @@index([itemId, locationId, lotId, recordedAt])
+  @@index([lotId])
+  @@index([bottleEventId])
+  @@index([receiptLineId])
+  @@index([receiptCorrectionId])
+  @@map("inventory_movements")
+}
+
+/// Current on-hand per (item, location, lot): a cache of Σ ledger.
+/// DB: written only by the ledger trigger; CHECK on_hand >= 0; unique per (item, location, lot)
+/// via two partial unique indexes (lot NULL / NOT NULL).
+model InventoryBalance {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId     String   @map("item_id") @db.Uuid
+  locationId String   @map("location_id") @db.Uuid
+  lotId      String?  @map("lot_id") @db.Uuid
+  onHand     Decimal  @map("on_hand") @db.Decimal(19, 3)
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  item     InventoryItem     @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  lot      InventoryLot?     @relation(fields: [lotId], references: [id], onDelete: Restrict)
+
+  @@index([itemId, locationId])
+  @@index([lotId])
+  @@map("inventory_balances")
+}
+
+enum ConsumptionStage {
+  LABEL_APPLICATION
+}
+
+/// A versioned consumption rule (BOM). Now: stage rules; later also product recipes.
+/// DB: immutable; version >= 1; (code, version) unique.
+model BomVersion {
+  id        String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code      String
+  version   Int
+  stage     ConsumptionStage
+  validFrom DateTime         @map("valid_from") @db.Timestamptz(3)
+  validTo   DateTime?        @map("valid_to") @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  lines BomLine[]
+
+  @@unique([code, version])
+  @@map("bom_versions")
+}
+
+/// One component of a BOM version: exact quantity in the item's base unit.
+/// DB: immutable; quantity > 0 in the unit's scale; (bom_version_id, line_no) unique.
+model BomLine {
+  id           String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  bomVersionId String  @map("bom_version_id") @db.Uuid
+  lineNo       Int     @map("line_no")
+  itemId       String  @map("item_id") @db.Uuid
+  unitId       String  @map("unit_id") @db.Uuid
+  quantity     Decimal @db.Decimal(19, 3)
+
+  bomVersion BomVersion          @relation(fields: [bomVersionId], references: [id], onDelete: Restrict)
+  item       InventoryItem       @relation(fields: [itemId, unitId], references: [id, baseUnitId], onDelete: Restrict)
+  movements  InventoryMovement[]
+
+  @@unique([bomVersionId, lineNo])
+  @@map("bom_lines")
+}
+
+// ---------------------------------------------------------------------------------------------
+// procurement module — suppliers, supplier documents, goods receipts (doc 018)
+// ---------------------------------------------------------------------------------------------
+
+/// DB: name unique (case-insensitive index); immutable except a one-way archive; DELETE rejected.
+model Supplier {
+  id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name       String
+  companyId  String?   @map("company_id")
+  vatId      String?   @map("vat_id")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+  requestId  String    @unique @map("request_id") @db.Uuid
+
+  documents        SupplierDocument[]
+  receipts         GoodsReceipt[]
+  lots             InventoryLot[]
+  preferredForItem InventoryItemSetting[]
+
+  @@map("suppliers")
+}
+
+enum SupplierDocumentKind {
+  INVOICE
+  DELIVERY_NOTE
+  OTHER_APPROVED
+}
+
+/// An uploaded supplier document (file in FileStorage, never a path to clients).
+/// DB: immutable; DELETE rejected; byte_size > 0; sha256 hex; storage_key unique.
+model SupplierDocument {
+  id               String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  supplierId       String               @map("supplier_id") @db.Uuid
+  kind             SupplierDocumentKind
+  documentNumber   String               @map("document_number")
+  issuedOn         DateTime             @map("issued_on") @db.Date
+  storageKey       String               @unique @map("storage_key")
+  sha256           String               @db.Char(64)
+  byteSize         Int                  @map("byte_size")
+  contentType      String               @map("content_type")
+  originalFilename String               @map("original_filename")
+  /// A correction is a new document superseding the old one; nothing is overwritten.
+  supersedesId     String?              @map("supersedes_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  actorId          String?              @map("actor_id") @db.Uuid
+  requestId        String               @unique @map("request_id") @db.Uuid
+
+  supplier     Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supersedes   SupplierDocument?      @relation("SupplierDocumentSupersedes", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy SupplierDocument[]     @relation("SupplierDocumentSupersedes")
+  receiptLinks GoodsReceiptDocument[]
+
+  @@index([supplierId])
+  @@map("supplier_documents")
+}
+
+enum GoodsReceiptType {
+  PURCHASE
+}
+
+/// A confirmed physical receipt of goods ("GR-000001"). Created confirmed; immutable.
+/// DB: code derived from serial; immutable; DELETE rejected; a PURCHASE receipt has at least
+/// one INVOICE or DELIVERY_NOTE link at commit (deferred trigger); every line has its RECEIPT
+/// movement at commit (deferred trigger).
+model GoodsReceipt {
+  id                String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial            BigInt           @unique
+  code              String           @unique
+  type              GoodsReceiptType
+  supplierId        String           @map("supplier_id") @db.Uuid
+  /// Supplier delivery-note or invoice number as printed on the paperwork.
+  supplierReference String           @map("supplier_reference")
+  receivedAt        DateTime         @map("received_at") @db.Timestamptz(3)
+  note              String?
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  actorId           String?          @map("actor_id") @db.Uuid
+  requestId         String           @unique @map("request_id") @db.Uuid
+
+  supplier  Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  lines     GoodsReceiptLine[]
+  documents GoodsReceiptDocument[]
+
+  @@index([supplierId])
+  @@map("goods_receipts")
+}
+
+/// DB: immutable; quantity > 0 in the unit's scale; lot ⇔ item lot-tracked, lot of the same item
+/// (and same supplier for SUPPLIER lots); price and currency both or neither; (receipt, line_no)
+/// unique.
+model GoodsReceiptLine {
+  id        String   @id @db.Uuid
+  receiptId String   @map("receipt_id") @db.Uuid
+  lineNo    Int      @map("line_no")
+  itemId    String   @map("item_id") @db.Uuid
+  unitId    String   @map("unit_id") @db.Uuid
+  quantity  Decimal  @db.Decimal(19, 3)
+  lotId     String?  @map("lot_id") @db.Uuid
+  unitPrice Decimal? @map("unit_price") @db.Decimal(19, 4)
+  currency  String?  @db.Char(3)
+  vatRate   Decimal? @map("vat_rate") @db.Decimal(5, 2)
+
+  receipt     GoodsReceipt             @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  item        InventoryItem            @relation(fields: [itemId, unitId], references: [id, baseUnitId], onDelete: Restrict)
+  lot         InventoryLot?            @relation("ReceiptLineLot", fields: [lotId], references: [id], onDelete: Restrict)
+  internalLot InventoryLot?            @relation("InternalLotOrigin")
+  corrections GoodsReceiptCorrection[]
+  movements   InventoryMovement[]
+
+  @@unique([receiptId, lineNo])
+  @@index([lotId])
+  @@map("goods_receipt_lines")
+}
+
+/// Append-only link of a receipt to a supplier document (documents can be added, never removed).
+/// DB: insert-only; document of the receipt's supplier.
+model GoodsReceiptDocument {
+  receiptId  String   @map("receipt_id") @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  linkedAt   DateTime @default(now()) @map("linked_at") @db.Timestamptz(3)
+  actorId    String?  @map("actor_id") @db.Uuid
+  requestId  String   @map("request_id") @db.Uuid
+
+  receipt  GoodsReceipt     @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  document SupplierDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@id([receiptId, documentId])
+  @@index([documentId])
+  @@map("goods_receipt_documents")
+}
+
+/// Compensating correction of a receipt line. DB: immutable; quantity ≠ 0 in the unit's scale;
+/// reason required; line quantity + Σ corrections >= 0 (line row locked); its movement exists at
+/// commit (deferred trigger).
+model GoodsReceiptCorrection {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  receiptLineId String   @map("receipt_line_id") @db.Uuid
+  quantityDelta Decimal  @map("quantity_delta") @db.Decimal(19, 3)
+  reason        String
+  occurredAt    DateTime @map("occurred_at") @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  actorId       String?  @map("actor_id") @db.Uuid
+  requestId     String   @unique @map("request_id") @db.Uuid
+
+  receiptLine GoodsReceiptLine    @relation(fields: [receiptLineId], references: [id], onDelete: Restrict)
+  movements   InventoryMovement[]
+
+  @@index([receiptLineId])
+  @@map("goods_receipt_corrections")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared: idempotency of mutating operations (doc 018 §8)
+// ---------------------------------------------------------------------------------------------
+
+enum OperationKind {
+  SUPPLIER_CREATE
+  SUPPLIER_ARCHIVE
+  SUPPLIER_DOCUMENT_UPLOAD
+  GOODS_RECEIPT
+  RECEIPT_DOCUMENT_LINK
+  RECEIPT_CORRECTION
+  ITEM_SETTINGS
+  LABEL_APPLICATION
+}
+
+/// One row per successful mutating request. Same request id + same payload → stored result;
+/// different payload → conflict. DB: insert-only except setting `result` once (NULL → value).
+model OperationRequest {
+  requestId     String        @id @map("request_id") @db.Uuid
+  kind          OperationKind
+  payloadSha256 String        @map("payload_sha256") @db.Char(64)
+  result        Json?
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("operation_requests")
 }
