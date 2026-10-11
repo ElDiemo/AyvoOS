@@ -22,7 +22,7 @@ export class StorageObjectNotFoundError extends Error {
   }
 }
 
-export type StorageNamespace = 'label-artworks' | 'label-print-jobs';
+export type StorageNamespace = 'label-artworks' | 'label-print-jobs' | 'supplier-documents';
 
 /** `namespace/yyyy/mm/<uuid>.<ext>` — lowercase ASCII only, no user-controlled parts. */
 export const STORAGE_KEY_PATTERN = /^[a-z0-9-]+\/\d{4}\/\d{2}\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/;

@@ -19,7 +19,7 @@ import { ADMIN_API } from '../common/routes.js';
 import { ENV, type Env } from '../config/env.js';
 import { allocateSerials } from '../database/code-counters.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { LabelPrintJob } from '../generated/prisma/client.js';
+import type { LabelPrintJob, Prisma } from '../generated/prisma/client.js';
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 import { LabelPdfRenderer } from '../labels/label-pdf-renderer.js';
@@ -128,6 +128,33 @@ export class LabelPrintJobsService {
         };
       }),
     };
+  }
+
+  /**
+   * The label behind a scanned QR URL (doc 018 §6): the print job item of the most recent
+   * COMPLETED job of this bottle carrying exactly that URL, or null if no completed job ever
+   * printed it. Reprints of one identity carry the same URL and cannot be told apart by a scan.
+   */
+  async latestCompletedLabel(
+    tx: Prisma.TransactionClient,
+    bottleId: string,
+    qrUrl: string,
+  ): Promise<{ printJobId: string; position: number } | null> {
+    const item = await tx.labelPrintJobItem.findFirst({
+      where: { bottleId, qrUrl, printJob: { status: 'COMPLETED' } },
+      orderBy: { printJob: { serial: 'desc' } },
+      select: { printJobId: true, position: true },
+    });
+    return item;
+  }
+
+  /** Print job codes by id (for read models of other modules). */
+  async codesByIds(ids: readonly string[]): Promise<Map<string, string>> {
+    const jobs = await this.prisma.labelPrintJob.findMany({
+      where: { id: { in: [...new Set(ids)] } },
+      select: { id: true, code: true },
+    });
+    return new Map(jobs.map((j) => [j.id, j.code]));
   }
 
   async getByCode(code: string): Promise<LabelPrintJobDto> {

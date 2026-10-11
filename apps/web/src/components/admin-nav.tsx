@@ -3,11 +3,14 @@
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { warehouseCs } from '@/i18n/cs/warehouse';
 
 /** `also`: other path prefixes that belong to the same module (e.g. old batch detail links). */
 const items = [
   { href: '/bottles', label: 'Bottles', also: ['/batches'] },
   { href: '/label-templates', label: 'Label templates', also: [] },
+  // The warehouse section is Czech (doc 018 §10); its entry carries its own name.
+  { href: '/warehouse', label: warehouseCs.nav, also: [] },
 ];
 
 const within = (pathname: string, prefix: string) =>

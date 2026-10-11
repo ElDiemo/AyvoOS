@@ -18,7 +18,11 @@ const nextConfig: NextConfig = {
   // JavaScript needed). Next.js passes the query string through (e.g. ?page=2). 307, not 308:
   // these aliases may still change while Milestone 1 is DEV-only.
   async redirects() {
-    return [{ source: '/batches', destination: '/bottles/history', permanent: false }];
+    return [
+      { source: '/batches', destination: '/bottles/history', permanent: false },
+      // The warehouse section opens on its main operator workflow.
+      { source: '/warehouse', destination: '/warehouse/labels', permanent: false },
+    ];
   },
   experimental: {
     // Local /api proxy (src/proxy.ts) buffers request bodies; allow artwork uploads up to the

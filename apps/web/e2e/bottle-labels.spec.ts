@@ -178,7 +178,7 @@ test('Bottles is one module: bottle list, creation history and series detail', a
   // One top-level entry for bottles; the old "Creation batches" item is gone.
   await page.goto('/');
   const mainNav = page.getByRole('navigation', { name: 'Main' });
-  await expect(mainNav.getByRole('link')).toHaveText(['Bottles', 'Label templates']);
+  await expect(mainNav.getByRole('link')).toHaveText(['Bottles', 'Label templates', 'Sklad']);
 
   // The bottle list is the default view of Bottles.
   await mainNav.getByRole('link', { name: 'Bottles' }).click();

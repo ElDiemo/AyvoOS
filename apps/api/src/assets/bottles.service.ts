@@ -14,7 +14,7 @@ import { ENV, type Env } from '../config/env.js';
 import { allocateSerials } from '../database/code-counters.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma } from '../generated/prisma/client.js';
-import type { BottleCreationBatch } from '../generated/prisma/client.js';
+import type { BottleCreationBatch, BottleStatus } from '../generated/prisma/client.js';
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { publicQrUrl } from '../common/qr-policy.js';
 import { generatePublicToken } from './public-token.js';
@@ -241,12 +241,121 @@ export class BottlesService {
       createdAt: bottle.createdAt.toISOString(),
       publicUrl: publicQrUrl(this.env.PUBLIC_QR_BASE_URL, bottle.publicToken),
       reuseCycles: countCompletedReuseCycles(bottle.events.map((e) => e.type)),
+      labelAppliedAt:
+        bottle.events.find((e) => e.type === 'LABEL_APPLIED')?.occurredAt.toISOString() ?? null,
       events: bottle.events.map((e) => ({
         type: e.type,
         occurredAt: e.occurredAt.toISOString(),
         recordedAt: e.recordedAt.toISOString(),
       })),
     };
+  }
+
+  // --- physical label application (doc 018; orchestrated by the warehouse module) -------------
+
+  /** The bottle behind a public token, or null. Not locked. */
+  findByPublicToken(tx: Prisma.TransactionClient, token: string) {
+    return tx.bottle.findUnique({
+      where: { publicToken: token },
+      select: { id: true, code: true, status: true },
+    });
+  }
+
+  /** Locks the bottle row (lock order: request → bottle → balances) and returns its status. */
+  async lockForLabelApplication(tx: Prisma.TransactionClient, bottleId: string) {
+    const rows = await tx.$queryRaw<{ status: BottleStatus }[]>`
+      SELECT "status" FROM "bottles" WHERE "id" = ${bottleId}::uuid FOR UPDATE`;
+    if (!rows[0]) throw new NotFoundException('Bottle not found');
+    return rows[0].status;
+  }
+
+  /**
+   * First physical label installation: CREATED → LABELED_EMPTY, the LABEL_APPLIED event and
+   * the open LABEL component attachment, in the caller's transaction (which must also post the
+   * stock consumption — the database refuses the commit otherwise).
+   */
+  async applyLabelInTransaction(
+    tx: Prisma.TransactionClient,
+    input: {
+      bottleId: string;
+      occurredAt: Date;
+      labelQrUrl: string;
+      printJobId: string;
+      printJobPosition: number;
+    },
+  ): Promise<{ eventId: string }> {
+    const event = await tx.bottleEvent.create({
+      data: { bottleId: input.bottleId, type: 'LABEL_APPLIED', occurredAt: input.occurredAt },
+      select: { id: true },
+    });
+    await tx.bottle.update({ where: { id: input.bottleId }, data: { status: 'LABELED_EMPTY' } });
+    await tx.bottleComponentAttachment.create({
+      data: {
+        bottleId: input.bottleId,
+        componentType: 'LABEL',
+        labelQrUrl: input.labelQrUrl,
+        printJobId: input.printJobId,
+        printJobPosition: input.printJobPosition,
+        installedAt: input.occurredAt,
+        installedEventId: event.id,
+      },
+    });
+    return { eventId: event.id };
+  }
+
+  async statusAndCode(bottleId: string) {
+    const bottle = await this.prisma.bottle.findUnique({
+      where: { id: bottleId },
+      select: { code: true, status: true },
+    });
+    if (!bottle) throw new NotFoundException('Bottle not found');
+    return bottle;
+  }
+
+  /** The LABEL_APPLIED event of a bottle, or null. */
+  labelAppliedEvent(bottleId: string, db: Prisma.TransactionClient = this.prisma) {
+    return db.bottleEvent.findFirst({
+      where: { bottleId, type: 'LABEL_APPLIED' },
+      select: { id: true, occurredAt: true },
+    });
+  }
+
+  /** Bottle identity + its component attachments (raw; print jobs are resolved by callers). */
+  async physicalByCode(code: string) {
+    const serial = parseCodeSerial(CODE_PREFIX.bottle, code);
+    const bottle =
+      serial === null
+        ? null
+        : await this.prisma.bottle.findUnique({
+            where: { serial },
+            select: {
+              id: true,
+              code: true,
+              events: { where: { type: 'LABEL_APPLIED' }, select: { id: true, occurredAt: true } },
+              components: { orderBy: { installedAt: 'asc' } },
+            },
+          });
+    if (!bottle) throw new NotFoundException('Bottle not found');
+    return bottle;
+  }
+
+  /** Bottle codes of events (for ledger and activity views). */
+  async bottleCodesOfEvents(eventIds: readonly string[]): Promise<Map<string, string>> {
+    const events = await this.prisma.bottleEvent.findMany({
+      where: { id: { in: [...eventIds] } },
+      select: { id: true, bottle: { select: { code: true } } },
+    });
+    return new Map(events.map((e) => [e.id, e.bottle.code]));
+  }
+
+  /** Most recent LABEL_APPLIED events. */
+  recentLabelApplications(limit: number) {
+    return this.prisma.bottleEvent.findMany({
+      where: { type: 'LABEL_APPLIED' },
+      orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+      select: { id: true, occurredAt: true, bottle: { select: { code: true } } },
+    });
   }
 
   async listBatches(page: number, pageSize: number): Promise<BottleCreationBatchListResponse> {

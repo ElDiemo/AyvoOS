@@ -1,4 +1,9 @@
-import { bottleCodeSchema, bottleDetailSchema, labelDesignerSettingsSchema } from '@ayvo/types';
+import {
+  bottleCodeSchema,
+  bottleDetailSchema,
+  bottlePhysicalSchema,
+  labelDesignerSettingsSchema,
+} from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { QrCode } from '@/components/qr-code';
@@ -13,10 +18,12 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
   const { code } = await params;
   // A malformed code can never exist: answer 404 instead of asking the API (which says 400).
   if (!bottleCodeSchema.safeParse(code).success) notFound();
-  const [bottle, settings] = await Promise.all([
+  const [bottle, settings, physical] = await Promise.all([
     apiGet(`admin/bottles/${encodeURIComponent(code)}`, bottleDetailSchema),
     apiGet('admin/label-designer/settings', labelDesignerSettingsSchema),
+    apiGet(`admin/bottles/${encodeURIComponent(code)}/physical`, bottlePhysicalSchema),
   ]);
+  const applied = physical.labelApplication;
   return (
     <>
       <PageHeader
@@ -47,6 +54,58 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
                 </Link>
               </Field>
             </FieldList>
+          </Card>
+          <Card title="Physical bottle">
+            <div data-testid="physical">
+              {applied ? (
+                <FieldList>
+                  <Field label="Label applied">{formatDateTime(applied.appliedAt)}</Field>
+                  <Field label="Body from lot">
+                    <Link
+                      href={`/warehouse/movements?lotId=${applied.lot.id}`}
+                      className="font-mono hover:underline"
+                    >
+                      {applied.lot.code}
+                    </Link>
+                  </Field>
+                  {applied.receipt && (
+                    <Field label="Goods receipt">
+                      <Link
+                        href={`/warehouse/receipts/${applied.receipt.code}`}
+                        className="font-mono hover:underline"
+                      >
+                        {applied.receipt.code}
+                      </Link>{' '}
+                      line {applied.receipt.lineNo}
+                      {applied.supplier ? ` · ${applied.supplier.name}` : ''}
+                    </Field>
+                  )}
+                </FieldList>
+              ) : (
+                <p className="text-sm text-stone-600">
+                  Identity and label only — the printed label has not been applied to a physical
+                  bottle yet.
+                </p>
+              )}
+              {physical.components.length > 0 && (
+                <>
+                  <h3 className="mt-4 mb-2 text-xs font-medium uppercase tracking-wide text-stone-500">
+                    Component history
+                  </h3>
+                  <ul className="flex flex-col gap-1 text-sm" data-testid="components">
+                    {physical.components.map((c, i) => (
+                      <li key={i} className="wrap-anywhere">
+                        {c.type} · {c.printJobCode ?? '—'} · installed{' '}
+                        {formatDateTime(c.installedAt)}
+                        {c.removedAt
+                          ? ` · removed ${formatDateTime(c.removedAt)} (${c.disposition}: ${c.removalReason})`
+                          : ' · installed now'}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
           </Card>
           <Card title="Lifecycle">
             <ol className="relative ml-2 border-l border-stone-200" data-testid="lifecycle">

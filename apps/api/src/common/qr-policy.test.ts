@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertQrBaseUrlAllowed,
+  classifyScannedQr,
   PRODUCTION_QR_BASE_URL,
   QrUrlPolicyError,
   qrBaseUrlViolation,
@@ -47,5 +48,46 @@ describe('QR URL policy (DEV / production separation)', () => {
     ]) {
       expect(qrBaseUrlViolation('development', base)).toBeNull();
     }
+  });
+});
+
+describe('classifyScannedQr (physical label scan, doc 018)', () => {
+  const base = 'https://dev.ayvo.co/q';
+  const token = 'abcDEF0123456789_-xyzA';
+
+  it('accepts exactly <base>/<token>, removing only scanner whitespace and CR/LF', () => {
+    expect(classifyScannedQr(`${base}/${token}`, base)).toEqual({
+      kind: 'TOKEN',
+      url: `${base}/${token}`,
+      token,
+    });
+    expect(classifyScannedQr(` \t${base}/${token}\r\n`, base)).toMatchObject({
+      kind: 'TOKEN',
+      token,
+    });
+  });
+
+  it('never repairs input: raw tokens, codes, case or path changes are not AYVO labels', () => {
+    for (const value of [
+      token,
+      'AYV-B-000001',
+      `${base.toUpperCase()}/${token}`,
+      `${base}/${token}/`,
+      `${base}/${token}x`,
+      `${base}/${token.toLowerCase()}x`.slice(0, -1) + '!',
+      `${base}?t=${token}`,
+      '',
+      'not a url',
+    ]) {
+      expect(classifyScannedQr(value, base).kind, value).toBe('NOT_AYVO_QR');
+    }
+  });
+
+  it('labels of another AYVO environment are WRONG_ENVIRONMENT', () => {
+    expect(classifyScannedQr(`https://qr.ayvo.co/${token}`, base).kind).toBe('WRONG_ENVIRONMENT');
+    expect(classifyScannedQr(`https://dev.ayvo.co/q/${token}`, 'https://qr.ayvo.co').kind).toBe(
+      'WRONG_ENVIRONMENT',
+    );
+    expect(classifyScannedQr(`https://example.com/q/${token}`, base).kind).toBe('NOT_AYVO_QR');
   });
 });
