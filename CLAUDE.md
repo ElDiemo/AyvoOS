@@ -30,15 +30,36 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   BottleEvent, BottleCreationBatch, LabelTemplate(+Version/Element), LabelArtwork, LabelPrintJob.
   Milestone 2A (doc 018): inventory units/items/settings/locations/lots, the stock ledger and
   balances, BOM versions/lines, suppliers, supplier documents, goods receipts (+lines, document
-  links, corrections), bottle component attachments, operation requests. Do not add other domain
-  models (Product, FillBatch, Crate, Hotel, Delivery, Billing, ESG, purchase orders, commissions)
-  until the owner approves the corresponding docs.
+  links, corrections), bottle component attachments, operation requests. **Approved design, not
+  implemented** (Production Core v0.1, doc 020): users/roles/scopes (ADR 0022), product
+  categories, products, product-label approvals, recipe versions, crate types, crates, crate
+  cycles/assignments/events, production orders and series, work sessions, inventory reservations,
+  bottle category bindings, holds and identity voids — implement only PR by PR as the owner
+  authorizes (doc 020 §14). Do not add other domain models (FillBatch, Hotel, Delivery, Billing,
+  ESG, purchase orders, commissions) until the owner approves the corresponding docs.
 
 ## Confirmed domain decisions (owner, 2026-10-10)
 
-- Standard outbound crate capacity is **20**. A **READY** outbound crate contains **exactly 20
-  bottles of the same product and size** (ADR 0004).
-- Return crates may be partial, mixed, or contain not-yet-identified bottles (ADR 0004).
+- **Crates (owner 2026-10-11, ADR 0021 — supersedes the 20-bottle crate of ADR 0004):** capacity
+  **40**, as data on the crate type and a snapshot on the cycle — never a constant. The same crate
+  serves assembly, filling, shipment and return; **one crate cycle = one complete circulation**
+  (`OPEN_ASSEMBLY → READY_TO_FILL → …→ CLOSED`). Bottles are scanned into the crate **before**
+  filling; the 40th eligible bottle makes it `READY_TO_FILL`, a partial cycle is never made ready
+  manually, and a cycle never mixes product, category, recipe version, label version or crate
+  type. Membership is an assignment (ordinal 1…capacity), never a bottle status.
+- Return crates may be partial, mixed, or contain not-yet-identified bottles (owner 2026-10-10);
+  a return links to the same circulation cycle.
+- **Production (owner 2026-10-11, doc 020):** product ≠ label template; a production order fixes
+  product, recipe version, label version and planned quantity (= currently eligible bottles). The
+  first physically confirmed label permanently binds the bottle's product category
+  (`HAND_SOAP`/`SHOWER_GEL`). Quarantine is an active `bottle_hold` (eligibility overlay), not a
+  status. A completed order is never reopened. The stock ledger follows physical truth; reservation
+  coverage is derived (priority → `ready_at` → order code, whole reservations only). No activation
+  outside a production order once the production scan exists. v0.1 deliveries are whole crates of
+  40 (doc 008).
+- **Authentication (owner 2026-10-11, ADR 0022):** external OIDC (WorkOS AuthKit preferred);
+  users, roles, permissions, scopes and audit actors are authoritative in PostgreSQL; never
+  authorize from an unverified external claim. Implemented before the production workflows.
 - Bottle **internal ID ≠ public QR identity**. The public QR identity is opaque, practically
   unguessable, and its URL stays stable for the bottle's physical lifetime (ADR 0005). Production
   QR URL `https://qr.ayvo.co/<token>`, DEV `https://dev.ayvo.co/q/<token>`; token = 128 random
@@ -69,13 +90,13 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   FIFO, never a silent lot switch. Creating identities or printing consumes no bottle stock. The
   bottle body owns the identity; labels/pumps/liquid are components with installation history.
   Receipts need an invoice or delivery note (no invoice ⇒ "invoice pending"). Never hard-code the
-  fill quantity (330 ml is recipe data, 2B). Warehouse/operator screens are Czech
-  (`apps/web/src/i18n/cs`), admin stays English for now.
+  fill quantity (330 ml is recipe data, 2B). The internal application is Czech
+  (`apps/web/src/i18n/cs`, doc 019); the public passport stays English.
 - **RETIRED** is operationally terminal but may be reversed only by an authorized, audited
   correction event. **DISPOSED/DESTROYED** is irreversible (ADR 0011).
 - A **completed reuse cycle** = delivered to a hotel, then returned and individually identified
   by AYVO (ADR 0011).
-- AYVO admin users will require MFA (doc 012).
+- AYVO admin users will require MFA (doc 012), provided through the identity provider (ADR 0022).
 
 ## Environment
 

@@ -17,7 +17,11 @@ Status: Draft — foundation phase (2026-10-10)
 
 ## Proposed design (requires confirmation)
 
-### Roles (proposal)
+### Roles
+
+**Decided 2026-10-11 for AYVO internal users** (permissions matrix in [doc 020 §12](020-production-core-v0.1.md)): `PRODUCTION_OPERATOR`, `PRODUCTION_SUPERVISOR`, `WAREHOUSE_OPERATOR`, `WAREHOUSE_SUPERVISOR`, `ADMIN` (user/role/configuration management; operational actions only as audited emergency overrides with a reason). Finance and hotel roles follow with their modules. The earlier proposal is kept below for history.
+
+Earlier proposal (2026-10-10):
 
 | Role               | Scope                                               |
 | ------------------ | --------------------------------------------------- |
@@ -38,9 +42,10 @@ Fine-grained permissions are checked per endpoint (NestJS guards); roles map to 
 
 ### Authentication
 
-- Strong password hashing (argon2id) or an external identity provider — open decision.
+- **Decided 2026-10-11 ([ADR 0022](adr/0022-external-oidc-authentication.md)):** external standards-based OIDC provider — preferred WorkOS AuthKit, subject to a pricing, DPA and EU data-location check before production. The provider handles sign-in, its sessions, invitations, MFA/passkeys/magic authentication and future hotel SSO.
+- AYVO PostgreSQL stays authoritative for the internal user and its active/deactivated state, roles, permissions, scopes (warehouses, hotel organizations, hotel sites) and audit actors; the external subject maps to an internal user; authorization never relies on an unverified external claim; the integration sits behind a provider boundary.
 - Secure, HttpOnly, SameSite cookies for web sessions.
-- MFA for AYVO admin users (confirmed requirement; method and rollout timing open).
+- MFA for AYVO admin users (confirmed requirement), provided through the identity provider.
 
 ### Secrets and configuration
 
@@ -70,7 +75,7 @@ Fine-grained permissions are checked per endpoint (NestJS guards); roles map to 
 ### Current state of access control (v0.1)
 
 - No application-level authentication yet. Admin routes live under `/api/admin/*`, the public passport under `/api/public/*`. On DEV everything is behind Caddy Basic Auth, which is acceptable **for the isolated DEV environment only**.
-- **Production blocker** ([ADR 0017](adr/0017-authentication-and-authorization-blocker.md), owner 2026-10-10): application-level authentication, server-side guards on every `/api/admin/*` route, deny-by-default authorization, admin / operations / read-only roles, organization/site scope, audit events for privileged mutations, and rate limiting for the public passport, authentication and mutation endpoints. No custom authentication system until the provider is selected.
+- **Production blocker** ([ADR 0017](adr/0017-authentication-and-authorization-blocker.md), owner 2026-10-10; provider decided in [ADR 0022](adr/0022-external-oidc-authentication.md), 2026-10-11): application-level authentication, server-side guards on every `/api/admin/*` route, deny-by-default authorization, admin / operations / read-only roles, organization/site scope, audit events for privileged mutations, and rate limiting for the public passport, authentication and mutation endpoints. No custom authentication system. Authentication, users, roles and guards are implemented before the Production Core workflows (doc 020 §14); Basic Auth remains only the outer DEV gate.
 
 ### Transport and headers
 
@@ -78,9 +83,9 @@ Fine-grained permissions are checked per endpoint (NestJS guards); roles map to 
 
 ## Open questions
 
-- Authentication approach (own vs. external IdP), SSO for hotel groups?
+- ~~Authentication approach (own vs. external IdP)~~ — decided 2026-10-11: external OIDC (ADR 0022); SSO for hotel groups through the same provider later.
 - Detailed permission matrix per role (including who may reverse a retirement); can one user belong to several hotels?
-- MFA method (TOTP, WebAuthn, via IdP?) and when it becomes mandatory.
+- MFA method: through the identity provider (TOTP/passkeys); when it becomes mandatory for which roles.
 - ~~QR payload format and public URL scheme/domain~~ — [ADR 0014](adr/0014-public-qr-identity-and-url.md).
 - Rate limiting of `/api/public/*` (not implemented in v0.1).
 - Data retention and GDPR handling for contacts and users.

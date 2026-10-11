@@ -108,10 +108,18 @@ No database schema change or migration; no change of inventory ledger invariants
 transactions apart from the additional `WRONG_SERIES` rejection; no authentication or roles; no
 crates, filling, hotels, sales, billing, PPL or returns.
 
+## 8a. Production Core (2026-10-11)
+
+Designed in [doc 020](020-production-core-v0.1.md): label application stops being a standalone
+station. `/production/label-activation` becomes a real redirect to `/production/orders`, and the
+standalone write endpoint is retired (`410 Gone`) when the production scan exists; Výroba's
+navigation becomes Přehled výroby · Výrobní zakázky · **Bedny** · Lahve · Šablony etiket ·
+Produkty a receptury. The planned permission names of §5 are replaced by doc 020 §12. The series
+binding of §7 generalizes to the production order (product, recipe and label version).
+
 ## 9. Follow-ups
 
-1. **Production orders / sessions** with product binding (see section 7) — first production
-   workflow follow-up.
+1. **Production orders / sessions** with product binding (see section 7) — designed in doc 020.
 2. Permission-filtered navigation and API guards once ADR 0017 is resolved.
 3. Language of the public passport and of API error details (currently English).
 4. Recent label applications are global (last 20), not per station or operator — needs accounts.

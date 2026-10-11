@@ -46,6 +46,12 @@ and short-lived locks. Redis data can be lost on restart or eviction.
   progress (e.g. 7/20 bottles in a crate) is business state and belongs in
   PostgreSQL.
 
+  > _Editorial note (2026-10-11):_ the numeric example "7/20" is historical
+  > and non-normative. Current crate capacity (40, as data) and the crate
+  > lifecycle are governed by
+  > [ADR 0021](0021-crate-capacity-and-circulation-cycle.md); production
+  > work sessions are PostgreSQL-backed as decided here (doc 020 §6).
+
 ## Open questions
 
 - Job queue library choice (e.g. BullMQ) — decided when the first

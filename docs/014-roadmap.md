@@ -2,7 +2,7 @@
 
 This document proposes a phased delivery order for AYVO OS. The ordering is a **proposal requiring confirmation**; each phase starts only after its open business questions are answered.
 
-Status: Draft — Phase 0 complete; Milestone 1 merged (DEV-only); Milestone 2A in review (2026-10-11)
+Status: Draft — Phase 0 complete; Milestones 1, 2A and 2A.1 merged and on DEV; Production Core v0.1 designed (2026-10-11)
 
 ## Confirmed requirements
 
@@ -25,23 +25,37 @@ Status: Draft — Phase 0 complete; Milestone 1 merged (DEV-only); Milestone 2A 
   bottle series server-side; overview pages; Czech internal application. No schema change. DEV
   only. First production-workflow follow-up: production orders/sessions with product binding.
 
-## Sequence after Milestone 2A (owner, 2026-10-11)
+- **Production Core v0.1 — designed** (owner, 2026-10-11; [020](020-production-core-v0.1.md),
+  ADR 0021, ADR 0022): products and recipes, crates (capacity 40, one cycle per circulation),
+  production orders with material reservations, server-side work sessions, and the atomic
+  production scan (activation + crate assignment). Not implemented yet.
 
-1. **Authentication and RBAC** — required before broader operational or external use; roles:
-   warehouse operator, warehouse manager, procurement, sales representative, sales manager,
-   finance, administrator, hotel user (read-only, never scans). Server-side authorization.
-2. **2B — products, BOMs, filling:** versioned recipes (fill quantity is recipe data, never a
-   constant), pumps and liquids received with lots, filling consumes the BOM atomically with
-   `FILLED`, measured variance as its own movement.
-3. **Component workflows:** label replacement, pump replacement, body retirement, complete
-   assembly write-off, liquid remainder disposition (doc 018 §16).
-4. **Crates**, then deliveries, returns, washing.
-5. **Purchasing:** replenishment requests, purchase orders, on-order, receipts linked to PO lines.
-6. **Sales and commissions:** effective-dated salesperson ↔ hotel assignments with immutable
-   history, versioned commission plans, auditable commission claims, team views; commission basis
-   pending decision (recommendation: collected revenue); margins only as labelled estimates until
-   a cost methodology is approved.
-7. **Full internationalization** of the application — required before external European rollout.
+## Sequence (owner, 2026-10-11)
+
+1. **Documentation and ADRs** for Production Core (doc 020, ADR 0021, ADR 0022).
+2. **Authentication, users, roles and server-side guards** — external OIDC (WorkOS AuthKit
+   preferred), roles and permissions in AYVO's database (doc 020 §12). Required before the
+   production workflows and before any pilot use; Basic Auth stays only the outer DEV gate.
+3. **Catalog and crates** — products, product-label approvals, recipes, crate types, crate
+   registration and labels.
+4. **Production orders and material reservations.**
+5. **Server-side production work sessions** (15-minute lease, supervised takeover).
+6. **Atomic activation + crate assignment** (the production scan); the standalone label
+   application is retired.
+7. **Production UI and E2E** (Výrobní zakázky, Bedny, workstation).
+8. **2B — filling:** the recipe's `FILL` stage (liquid quantity is recipe data, never a
+   constant), pumps and liquids received with lots, filling per crate cycle consuming the BOM
+   atomically with `FILLED`, measured variance as its own movement.
+9. **Quality and component workflows:** hold resolution, scrap/rework, label replacement, pump
+   replacement, body retirement, complete assembly write-off, liquid remainder disposition (doc 018
+   §16).
+10. **Deliveries, returns, washing** — continuing the same crate circulation cycle.
+11. **Purchasing:** replenishment requests, purchase orders, on-order, receipts linked to PO lines.
+12. **Sales and commissions:** effective-dated salesperson ↔ hotel assignments with immutable
+    history, versioned commission plans, auditable commission claims, team views; commission basis
+    pending decision (recommendation: collected revenue); margins only as labelled estimates until
+    a cost methodology is approved.
+13. **Full internationalization** of the application — required before external European rollout.
 
 ## Proposed phases (requires confirmation)
 
@@ -49,7 +63,7 @@ Status: Draft — Phase 0 complete; Milestone 1 merged (DEV-only); Milestone 2A 
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | 0 — Foundation ✅ complete         | Monorepo, dev environment, `/health`, tooling, architecture docs and ADRs, DEV preview                           | —                                                           |
 | 1 — Master data & identities       | Auth + roles, products, companies/hotels/locations/contacts/contracts, bottle & crate identities (QR), audit log | QR payload/URL format, roles, contract fields, bottle sizes |
-| 2 — Filling & crates               | Fill batches, filling workflow (n/20), crate completion/verification, bottle & crate lifecycle events            | Quality approval, fill-batch mixing                         |
+| 2 — Filling & crates               | Crate assembly in production (n/40, before filling), filling per crate cycle, bottle & crate lifecycle events    | Quality approval, fill-batch mixing                         |
 | 3 — Warehouse & service deliveries | Delivery proposals (simple rule), approval, picking by crate, COMPLETE PICKING, manual shipment                  | Planning formula v1, approval process                       |
 | 4 — Returns & processing           | Goods-in, sorting, routing (wash/inspect/quarantine/retire), reconciliation                                      | Routing/retirement criteria                                 |
 | 5 — Carrier integration            | Carrier adapter (e.g. PPL): shipment, tracking, labels, status                                                   | Carrier contract and API access                             |

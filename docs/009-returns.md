@@ -46,7 +46,7 @@ sequenceDiagram
 ### Sorting
 
 - Each bottle scan creates a SortingRecord linked to the ReturnReceipt (where determinable) and appends bottle events.
-- Routing options: WASHING, INSPECTION, QUARANTINE, RETIREMENT. Criteria are an open question.
+- Routing options: WASHING, INSPECTION, QUARANTINE, RETIREMENT. Criteria are an open question. QUARANTINE means opening an active `bottle_holds` row (eligibility overlay, not a lifecycle state — doc 020 §3.5); the bottle stays ineligible for production, crate assignment and dispatch until the hold is resolved.
 - If the bottle's last known hotel differs from the receipt's hotel, the discrepancy is recorded, not silently corrected.
 - Reconciliation (proposal): compare physical quantity vs. identified bottles per receipt and report differences.
 

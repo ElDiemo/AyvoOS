@@ -9,8 +9,11 @@ Status: Draft — foundation phase (2026-10-10)
 - Every physical bottle has one permanent internal identity, one permanent unique QR identity and a complete auditable lifecycle history.
 - The bottle internal ID and the public QR identity are **separate**; the public QR identity is opaque and practically unguessable, and its public URL stays stable for the bottle's physical lifetime _(confirmed by owner 2026-10-10)_.
 - Bottles have a **size** attribute _(confirmed by owner 2026-10-10)_; the set of sizes is still open.
-- Crates have permanent IDs and QR codes. Standard outbound capacity: 20 bottles _(confirmed by owner 2026-10-10)_.
-- A **READY** outbound crate contains exactly 20 bottles of the same product and size _(confirmed by owner 2026-10-10)_.
+- Crates have permanent identities (human-readable code + separate opaque QR token). **Capacity 40** — the same reusable crate for assembly, filling, shipment and return; one crate cycle is one complete circulation _(owner, 2026-10-11, [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md))_.
+- A crate cycle holds bottles of exactly one product, product category, recipe version and label version; the 40th eligible bottle makes it ready to fill _(owner, 2026-10-11)_.
+- ~~Standard outbound capacity: 20 bottles; a READY outbound crate contains exactly 20 bottles of the same product and size~~ _(owner 2026-10-10, superseded 2026-10-11 by ADR 0021)_.
+- The first physically confirmed label permanently binds a bottle to its product category (`HAND_SOAP`/`SHOWER_GEL`) _(owner, 2026-10-11)_.
+- Product ≠ label template; a product is a concrete variant ("Tekuté mýdlo 330 ml") with its nominal quantity; production orders define product, recipe version, label version and planned quantity _(owner, 2026-10-11, [doc 020](020-production-core-v0.1.md))_.
 - Return crates may be partial, mixed, or initially contain unknown bottle identities _(confirmed by owner 2026-10-10)_.
 - Crate membership is temporary and historical.
 - A bottle can never belong to two active crates simultaneously.
@@ -21,36 +24,43 @@ Status: Draft — foundation phase (2026-10-10)
 
 ## Glossary
 
-| Term                    | Meaning                                                                                                                             |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Product                 | A cosmetic product (e.g. Hand Soap, Hair & Body Wash) filled into bottles                                                           |
-| Bottle                  | A physical reusable bottle with permanent internal identity and a size attribute                                                    |
-| Bottle size             | Physical size of a bottle; part of the READY-crate rule (same product and size). Size values are open                               |
-| QR identity             | The permanent unique code printed on a bottle or crate; for bottles, opaque and separate from the internal ID                       |
-| READY crate             | Outbound crate holding exactly 20 bottles of the same product and size, usable as one logistics unit                                |
-| Reuse cycle             | Completed when a bottle delivered to a hotel is returned and individually identified by AYVO                                        |
-| Crate                   | A reusable transport crate with permanent identity; primary logistics unit                                                          |
-| CrateAssignment         | A time-bounded record that a bottle was in a crate (assigned_at / released_at)                                                      |
-| FillBatch               | A production batch of a product used to fill bottles                                                                                |
-| Company                 | Legal/billing entity of a customer                                                                                                  |
-| Hotel                   | A customer hotel (belongs to a company)                                                                                             |
-| HotelLocation           | A physical/shipping location of a hotel                                                                                             |
-| Contact                 | A person at a hotel/company                                                                                                         |
-| Contract                | Commercial agreement: contracted rooms, price per room per month, billing cycle, payment terms                                      |
-| ServiceConfiguration    | Per-hotel, per-product operational settings: active products, target/minimum stock, service frequency, preferred carrier            |
-| DeliveryProposal        | System-generated proposed delivery requiring AYVO approval                                                                          |
-| ServiceDelivery         | An approved delivery to a hotel location, picked as crates                                                                          |
-| Shipment                | Carrier-level shipment of a service delivery (tracking, label, status)                                                              |
-| ReturnReceipt           | Goods-in record of crates returned from a hotel, with physical quantity                                                             |
-| SortingRecord           | Processing record where an individual returned bottle is identified and routed                                                      |
-| BillingPeriod / Invoice | Contract-based billing artefacts                                                                                                    |
-| BottlePassport          | Public, whitelisted view of a bottle's verified data                                                                                |
-| BottleCreationBatch     | Bottle identities registered together in one operation (`BC-000001`); not a fill batch ([016](016-bottles-and-labels.md))           |
-| Bottle code             | Human-readable sequential bottle code (`AYV-B-000001`); not a security token                                                        |
-| Public token            | Opaque 128-bit public QR identity of a bottle; QR URL = base URL + token ([ADR 0014](adr/0014-public-qr-identity-and-url.md))       |
-| LabelTemplate           | Reusable label design (`mydlo1`) with immutable versions; not a product ([ADR 0015](adr/0015-immutable-label-template-versions.md)) |
-| LabelTemplateVersion    | Immutable snapshot of a label design: size, artwork, element positions in mm                                                        |
-| LabelPrintJob           | One rendering of labels for a fixed set of bottles with a fixed template version (`PJ-000001`)                                      |
+| Term                    | Meaning                                                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Product                 | A cosmetic product (e.g. Hand Soap, Hair & Body Wash) filled into bottles                                                                     |
+| Bottle                  | A physical reusable bottle with permanent internal identity and a size attribute                                                              |
+| Bottle size             | Physical size of a bottle; part of the READY-crate rule (same product and size). Size values are open                                         |
+| QR identity             | The permanent unique code printed on a bottle or crate; for bottles, opaque and separate from the internal ID                                 |
+| READY crate             | Superseded term (20-bottle outbound crate, ADR 0004). Now: a crate cycle `READY_TO_FILL` with 40 bottles; later states per ADR 0021           |
+| Product category        | Permanent family a bottle is bound to at its first label: `HAND_SOAP` or `SHOWER_GEL`                                                         |
+| RecipeVersion           | Approved, immutable recipe of a product; its components are BOM lines per stage (activation, later fill) — [020](020-production-core-v0.1.md) |
+| ProductionOrder         | Order to produce `planned_quantity` eligible bottles of one product/recipe/label version (`PO-000001`)                                        |
+| ProductionWorkSession   | Server-side workstation session: operator, order, claimed crate, source lot, 15-minute lease                                                  |
+| CrateType               | Kind of crate (hand soap, shower gel) with its capacity (40) and compatible product categories                                                |
+| CrateCycle              | One complete circulation of a crate, with an immutable product/recipe/label snapshot                                                          |
+| BottleHold              | Eligibility overlay (e.g. quarantine) that blocks operations on a bottle until resolved                                                       |
+| Reuse cycle             | Completed when a bottle delivered to a hotel is returned and individually identified by AYVO                                                  |
+| Crate                   | A reusable crate (capacity 40) with permanent identity; primary logistics unit                                                                |
+| CrateAssignment         | A time-bounded record that a bottle was in a crate cycle (ordinal, assigned_at / released_at)                                                 |
+| FillBatch               | A production batch of a product used to fill bottles                                                                                          |
+| Company                 | Legal/billing entity of a customer                                                                                                            |
+| Hotel                   | A customer hotel (belongs to a company)                                                                                                       |
+| HotelLocation           | A physical/shipping location of a hotel                                                                                                       |
+| Contact                 | A person at a hotel/company                                                                                                                   |
+| Contract                | Commercial agreement: contracted rooms, price per room per month, billing cycle, payment terms                                                |
+| ServiceConfiguration    | Per-hotel, per-product operational settings: active products, target/minimum stock, service frequency, preferred carrier                      |
+| DeliveryProposal        | System-generated proposed delivery requiring AYVO approval                                                                                    |
+| ServiceDelivery         | An approved delivery to a hotel location, picked as crates                                                                                    |
+| Shipment                | Carrier-level shipment of a service delivery (tracking, label, status)                                                                        |
+| ReturnReceipt           | Goods-in record of crates returned from a hotel, with physical quantity                                                                       |
+| SortingRecord           | Processing record where an individual returned bottle is identified and routed                                                                |
+| BillingPeriod / Invoice | Contract-based billing artefacts                                                                                                              |
+| BottlePassport          | Public, whitelisted view of a bottle's verified data                                                                                          |
+| BottleCreationBatch     | Bottle identities registered together in one operation (`BC-000001`); not a fill batch ([016](016-bottles-and-labels.md))                     |
+| Bottle code             | Human-readable sequential bottle code (`AYV-B-000001`); not a security token                                                                  |
+| Public token            | Opaque 128-bit public QR identity of a bottle; QR URL = base URL + token ([ADR 0014](adr/0014-public-qr-identity-and-url.md))                 |
+| LabelTemplate           | Reusable label design (`mydlo1`) with immutable versions; not a product ([ADR 0015](adr/0015-immutable-label-template-versions.md))           |
+| LabelTemplateVersion    | Immutable snapshot of a label design: size, artwork, element positions in mm                                                                  |
+| LabelPrintJob           | One rendering of labels for a fixed set of bottles with a fixed template version (`PJ-000001`)                                                |
 
 ## Proposed design (requires confirmation)
 
@@ -104,9 +114,9 @@ See [002 — System Principles](002-system-principles.md#module-boundaries).
 
 ## Open questions
 
-- ~~QR payload, URL and domain format~~ — resolved for bottles: [ADR 0014](adr/0014-public-qr-identity-and-url.md) (`https://qr.ayvo.co/<token>`, confirmed by owner 2026-10-10). Crate QR format still open.
+- ~~QR payload, URL and domain format~~ — resolved for bottles: [ADR 0014](adr/0014-public-qr-identity-and-url.md) (`https://qr.ayvo.co/<token>`, confirmed by owner 2026-10-10). Crates: human-readable code + separate opaque token under the same host policy, AYVO-printed labels, minimal public page (owner, 2026-10-11, ADR 0021).
 - Which bottle sizes exist?
-- Is a bottle permanently bound to one product, or can it be refilled with a different product?
-- Do crates have types other than the standard outbound crate (e.g. dedicated return crates)?
+- ~~Is a bottle permanently bound to one product?~~ — resolved 2026-10-11: permanently bound to its product **category**; the exact product/recipe/label may differ between circulations within that category.
+- ~~Do crates have types other than the standard outbound crate?~~ — resolved 2026-10-11: two crate types (hand soap, shower gel), capacity 40, no separate return crate (ADR 0021).
 - Is a hotel always under exactly one company? Can a company have many hotels with one combined invoice?
 - Are fill batches tracked with lot numbers/expiry dates?

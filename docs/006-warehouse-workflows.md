@@ -1,14 +1,18 @@
 # 006 — Warehouse Workflows
 
-This document describes the scanning-driven warehouse workflows: filling, crate completion, picking, dispatch, goods-in and sorting.
+This document describes the scanning-driven workflows around crates: crate assembly in production, filling, picking, dispatch, goods-in and sorting.
 
-Status: Draft — foundation phase (2026-10-10)
+Status: Updated 2026-10-11 — assembly before filling and crate capacity 40 confirmed by the owner
+([ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md), [doc 020](020-production-core-v0.1.md)).
+Crate assembly belongs to **Výroba** (Production), not to the warehouse (doc 019).
 
 ## Confirmed requirements
 
-- Filling: operator opens/scans a crate → selects product/fill batch → fills bottle → scans bottle directly into crate → UI shows n/20 → at 20/20 crate can become complete.
+- **Crate assembly (Production, owner 2026-10-11):** the operator opens a production order, claims a reusable crate, selects a source lot of anonymous bottles and scans freshly labelled **empty** bottles into the crate; each scan activates the bottle and assigns it to the crate's cycle; the UI shows order progress and crate progress (n/40) separately; the 40th eligible bottle makes the cycle `READY_TO_FILL` (doc 020).
+- **Filling happens after assembly**, crate by crate (2B; the bottles are already in the crate).
 - Completed, verified crates are handled as one unit; no rescanning of bottles in later operations.
-- A **READY** outbound crate contains exactly 20 bottles of the same product and size _(confirmed by owner 2026-10-10)_.
+- A crate holds bottles of exactly one product, recipe version and label version (cycle snapshot, ADR 0021); its capacity is 40 _(owner, 2026-10-11)_.
+- ~~Filling: open crate → select product → fill bottle → scan into crate → n/20 → at 20/20 complete; a READY outbound crate contains exactly 20 bottles of the same product and size~~ _(owner 2026-10-10, superseded 2026-10-11 by ADR 0021)_.
 - Return crates may be partial, mixed, or initially contain unknown bottle identities _(confirmed by owner 2026-10-10)_.
 - Picking: operator opens a proposed/approved delivery and scans suitable completed crates into it; UI shows per-product progress (e.g. "Hand Soap 2 / 2 crates").
 - COMPLETE PICKING validates contents, then CREATE SHIPMENT becomes possible.
@@ -17,7 +21,11 @@ Status: Draft — foundation phase (2026-10-10)
 
 ## Proposed design (requires confirmation)
 
-### Filling
+### Filling (superseded sketch, kept for history)
+
+The sequence below is the 2026-10-10 sketch (fill, then scan into a 20-bottle crate). It is
+superseded by crate assembly before filling (doc 020); the 2B filling design will start from a
+`READY_TO_FILL` crate cycle.
 
 ```mermaid
 sequenceDiagram
@@ -39,7 +47,7 @@ sequenceDiagram
   API->>DB: tx: crate COMPLETE + event
 ```
 
-Per-scan validation (proposal): bottle exists, is not retired, not quarantined, not in another active crate, is in a fillable state; crate is in FILLING, not full; product and size match the crate's product and size (confirmed READY rule).
+Per-scan validation (proposal): bottle exists, is not retired, has no active hold (quarantine is a `bottle_holds` overlay, doc 020), not in another active crate, is in a fillable state; crate is in FILLING, not full; product and size match the crate's product and size (confirmed READY rule).
 
 ### Picking a service delivery
 

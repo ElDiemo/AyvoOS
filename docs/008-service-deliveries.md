@@ -7,9 +7,10 @@ Status: Draft — foundation phase (2026-10-10)
 ## Confirmed requirements
 
 - This is **not** traditional ecommerce; hotels normally receive **recurring** AYVO service deliveries.
-- Quantities are expressed per product; crates contain 20 bottles. Example: 40 Hand Soap = 2 crates; 60 Hair & Body Wash = 3 crates.
-- A **READY** outbound crate contains exactly 20 bottles of the same product and size _(confirmed by owner 2026-10-10)_.
-- Warehouse operator opens the proposed delivery and scans suitable completed crates into it; UI shows progress per product (e.g. "Hand Soap 2 / 2 crates", "Hair & Body Wash 3 / 3 crates").
+- Quantities are expressed per product; a crate holds **40** bottles of one product, recipe and label version _(owner, 2026-10-11, [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md))_. Example: 80 Hand Soap = 2 crates; 120 Shower Gel = 3 crates.
+- ~~Crates contain 20 bottles; a READY outbound crate contains exactly 20 bottles of the same product and size~~ _(owner 2026-10-10, superseded 2026-10-11 by ADR 0021)_.
+- **Whole crates** _(owner, 2026-10-11)_: in v0.1 customer order lines are expressed as **whole crates**; a standard crate contains exactly **40** compatible bottles; a partial standard crate is never dispatched to a hotel; an order may contain any whole number of crates per product. The dispatched bottle quantity per standard product/crate type is therefore a multiple of 40. A smaller quantity later needs a separately defined crate type/capacity and a corresponding commercial product — never an exception that partially fills a standard crate.
+- Warehouse operator opens the proposed delivery and scans suitable completed (filled) crates into it; UI shows progress per product (e.g. "Hand Soap 2 / 2 crates", "Shower Gel 3 / 3 crates"). Picking continues the crate's circulation cycle (`FILLED → ALLOCATED`, ADR 0021).
 - **COMPLETE PICKING** validates contents; then **CREATE SHIPMENT** is allowed.
 - Carrier integration (e.g. PPL) will eventually return shipment ID, tracking number, label PDF/ZPL and shipment status. **Not required in the first implementation.**
 - Automatic service planning must create recurring delivery **proposals requiring AYVO approval**, not shipments.
@@ -37,17 +38,17 @@ flowchart TD
 
 ### Delivery lines
 
-| Field             | Notes                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------- |
-| product           |                                                                                              |
-| requested_bottles | e.g. 40                                                                                      |
-| required_crates   | derived: requested_bottles / 20 (only exact multiples until partial-crate rules are defined) |
-| picked_crates     | count of allocated crates for that product                                                   |
+| Field             | Notes                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------ |
+| product           |                                                                                            |
+| requested_bottles | e.g. 40                                                                                    |
+| required_crates   | whole crates per product (v0.1 order lines are expressed in crates; bottles = crates × 40) |
+| picked_crates     | count of allocated crates for that product                                                 |
 
 ### Validation at COMPLETE PICKING (proposal)
 
 - Every line has picked_crates == required_crates.
-- Every crate was READY (confirmed rule: exactly 20 known bottles of the same product and size) and is ALLOCATED to this delivery only, holds the right product, none of its bottles retired/quarantined.
+- Every crate was filled and complete (40 known bottles of one product, recipe and label version — ADR 0021) and is ALLOCATED to this delivery only, holds the right product, none of its bottles retired/quarantined.
 - Executed in one transaction; on success crate and bottle events are appended for all contained bottles.
 
 ### Planning (proposal for first version)
@@ -62,7 +63,7 @@ A `CarrierAdapter` interface in the deliveries module (createShipment, getLabel,
 
 - Exact planning formula and which inputs apply in v1.
 - Approval: who approves, can proposals be auto-approved ever?
-- Quantities not divisible by 20 — round up/down? (A partial outbound crate cannot be READY.)
+- ~~Quantities not divisible by the crate capacity (40)?~~ — **resolved 2026-10-11** (see "Whole crates" above).
 - Does a delivery line need to specify bottle size as well as product?
 - One delivery per hotel location, or can one delivery serve several locations?
 - Carrier choice, services, label format (PDF vs ZPL), pickup scheduling, and status sync method.
