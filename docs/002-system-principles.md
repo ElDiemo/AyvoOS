@@ -26,20 +26,21 @@ Status: Draft — foundation phase (2026-10-10)
 
 The API (`apps/api`) is split into modules (bounded contexts). Each module owns its tables and exposes an explicit service interface. Modules must not read or write another module's tables directly.
 
-| Module           | Owns                                                                     |
-| ---------------- | ------------------------------------------------------------------------ |
-| identity-access  | Users, roles, sessions, hotel scoping                                    |
-| catalog          | Products                                                                 |
-| assets           | Bottles, crates, QR identities, crate assignments, lifecycle events      |
-| production       | Fill batches, filling operations                                         |
-| warehouse        | Stock locations, picking                                                 |
-| customers        | Companies, hotels, locations, contacts, contracts, service configuration |
-| service-planning | Delivery proposals                                                       |
-| deliveries       | Service deliveries, shipments, carrier adapter                           |
-| returns          | Return receipts (goods-in), sorting/processing records                   |
-| billing          | Billing periods, invoices, invoice lines, payment status                 |
-| sustainability   | Metrics, ESG export, passport data                                       |
-| audit            | Generic administrative audit log                                         |
+| Module           | Owns                                                                                                           |
+| ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| identity         | Users, external identities, roles, permissions, scopes, audit actors (ADR 0022; earlier name: identity-access) |
+| catalog          | Product categories, products, product-label approvals, recipe versions (doc 020)                               |
+| assets           | Bottles, bottle events, component attachments, category bindings, holds                                        |
+| crates           | Crate types, crates, crate labels, crate cycles, assignments, crate events (ADR 0021)                          |
+| production       | Production orders, work sessions, the production scan; later fill batches and filling                          |
+| warehouse        | Stock locations, picking                                                                                       |
+| customers        | Companies, hotels, locations, contacts, contracts, service configuration                                       |
+| service-planning | Delivery proposals                                                                                             |
+| deliveries       | Service deliveries, shipments, carrier adapter                                                                 |
+| returns          | Return receipts (goods-in), sorting/processing records                                                         |
+| billing          | Billing periods, invoices, invoice lines, payment status                                                       |
+| sustainability   | Metrics, ESG export, passport data                                                                             |
+| audit            | Generic administrative audit log (Production Core: `audit_events` in `identity`)                               |
 
 ### History and state
 

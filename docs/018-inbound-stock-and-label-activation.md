@@ -283,6 +283,12 @@ language-neutral; `LABELED_EMPTY` is shown as "Etiketa nalepena – prázdná la
 
 ## 11. Roles
 
+> **Updated 2026-10-11:** the provider is decided (external OIDC, ADR 0022) and the role and
+> permission matrix for warehouse and production is in [doc 020 §12](020-production-core-v0.1.md)
+> (`WAREHOUSE_OPERATOR`, `WAREHOUSE_SUPERVISOR`, `PRODUCTION_*`, `ADMIN`). Receipt corrections that
+> reduce stock below reserved quantities need `WAREHOUSE_SUPERVISOR`, an impact preview and a
+> reason (doc 020 §5). The table below is the original 2A tagging.
+
 Now (DEV): no application authentication; the whole site sits behind Basic Auth (ADR 0013), so
 every user is effectively an administrator. **This is not authorization**; it blocks production
 (ADR 0017). Every endpoint is tagged in this document with the permission it will need, so guards
@@ -349,6 +355,11 @@ Deferred: everything in section 3 "Deliberately deferred" and the roadmap below.
   duplicate, wrong-environment, unknown, no-stock → bottle detail shows the fact; phone width.
 
 ## Roadmap additions (to be mirrored in doc 014)
+
+> **Superseded 2026-10-11** by the roadmap in doc 014 and the Production Core sequence (doc 020
+> §14): authentication first, then catalog/crates, orders and reservations, work sessions, the
+> atomic production scan (activation + crate assignment), UI. The standalone label application of
+> 2A is retired once the production scan exists. The list below is kept for history.
 
 1. **2A (this):** inventory foundation, receiving, label application.
 2. **Authentication and RBAC** — required before operational/external use; roles above.

@@ -1,7 +1,16 @@
 # ADR 0004: Crate as the primary logistics unit
 
-- **Status:** Accepted — confirmed by owner 2026-10-10
+- **Status:** **Superseded** by [ADR 0021](0021-crate-capacity-and-circulation-cycle.md)
+  (owner, 2026-10-11) — originally accepted, confirmed by owner 2026-10-10
 - **Deciders:** AYVO OS lead architect
+
+> **Superseded (2026-10-11).** The 20-bottle outbound crate, the READY rule of exactly 20 bottles
+> and "fill, then scan into the crate" no longer apply: one reusable crate of capacity **40**
+> (data, not a constant) serves assembly, filling, shipment and return, and one crate cycle is one
+> complete circulation (ADR 0021, doc 020). Membership as a time-bounded record, at most one active
+> membership per bottle, the crate as primary logistics unit and partial/mixed/unknown return
+> crates are carried over into ADR 0021. The text below is kept unchanged as the historical
+> decision.
 
 ## Context
 

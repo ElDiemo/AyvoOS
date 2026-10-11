@@ -13,6 +13,10 @@ timestamps are `timestamptz(3)` in UTC; lengths in millimetres are `numeric(6,2)
 > **Milestone 2A tables** (inventory, procurement, component attachments, operation requests)
 > are documented in [018](018-inbound-stock-and-label-activation.md) §3–§4 and §15 and in the
 > `DB:` comments of `apps/api/prisma/schema.prisma`.
+>
+> **Production Core v0.1 tables** (identity, catalog, crates, production, reservations, bottle
+> category bindings, holds) are designed in [020](020-production-core-v0.1.md) §3 and not yet
+> implemented; they are added here when their migrations exist.
 
 ## Shared
 

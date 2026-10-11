@@ -2,77 +2,104 @@
 
 This document describes reusable transport crates, crate membership and why the crate is the primary physical logistics unit.
 
-Status: Draft — foundation phase (2026-10-10)
+Status: Updated 2026-10-11 — crate capacity, circulation cycle and membership confirmed by the
+owner ([ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md), superseding ADR 0004);
+detailed design in [doc 020](020-production-core-v0.1.md). Production Core v0.1 implements the
+first two cycle states; the rest of the circulation is designed but not built.
 
 ## Confirmed requirements
 
-- Crates are reusable and have permanent IDs and QR codes.
-- Standard outbound crate capacity: **20 bottles** _(confirmed by owner 2026-10-10)_.
-- A **READY** outbound crate must contain **exactly 20 bottles of the same product and size** _(confirmed by owner 2026-10-10)_.
-- **Return crates may be partial, mixed, or initially contain unknown bottle identities** _(confirmed by owner 2026-10-10)_.
-- The crate is the **primary physical logistics unit** ([ADR 0004](adr/0004-crate-as-primary-logistics-unit.md)).
-- During filling, bottles are scanned directly into a crate; UI shows 1/20 … 20/20. At 20/20 the crate can become complete.
-- A completed and verified crate is then handled as one logistics unit: **one crate scan = 20 known bottle identities**.
-- Bottles must **not** be rescanned at every later warehouse operation.
-- Crate membership is **temporary and historical**.
-- Returned bottles generally do **not** come back in the crate they were delivered in; returned crate contents may be **unknown** at goods-in.
-- A bottle must never belong to two active crates simultaneously.
+- Crates are reusable and have permanent identities: a human-readable code (`AYV-C-000001`) and a
+  separate opaque QR token under the ADR 0014 host policy; AYVO prints controlled crate labels
+  _(owner, 2026-10-11)_.
+- **Capacity is 40 bottles** — data on the crate type and a snapshot on each cycle, never a
+  constant. It is the **same** reusable crate for assembly, filling, shipment to the hotel and
+  the return to AYVO; there is no separate 20-bottle outbound crate _(owner, 2026-10-11)_.
+- Two crate types now: hand soap and shower gel _(owner, 2026-10-11)_.
+- One **crate cycle** is one complete circulation. Empty, freshly labelled bottles are scanned
+  into the crate **before** filling; the 40th eligible bottle makes the cycle `READY_TO_FILL`; a
+  41st is impossible; a partial cycle is never made ready manually _(owner, 2026-10-11)_.
+- A later production order may continue a partially assembled crate only when product, product
+  category, recipe version, label-template version and crate type all match the cycle's snapshot
+  _(owner, 2026-10-11)_.
+- A completed and verified crate is handled as one logistics unit: one crate scan stands for its
+  known bottle identities; bottles are **not** rescanned at every later warehouse operation.
+- Crate membership is **temporary and historical**; a bottle never belongs to two active crates.
+- Return crates may be partial, mixed or contain not-yet-identified bottles _(owner, 2026-10-10)_;
+  a future return receipt links to the **same** circulation cycle.
+- The public page of a crate QR shows only that it is an AYVO reusable crate and a safe contact or
+  return instruction — never hotel, order, contents, count, tracking, location or history
+  _(owner, 2026-10-11)_.
 
-## Proposed design (requires confirmation)
+### Superseded (kept for history)
 
-### Proposed crate states
+- ~~Standard outbound crate capacity 20; a READY outbound crate contains exactly 20 bottles of the
+  same product and size; bottles are filled, then scanned into the crate (n/20)~~ — owner
+  2026-10-10, superseded 2026-10-11 by ADR 0021.
+
+## Crate cycle — one circulation
 
 ```mermaid
 stateDiagram-v2
-  [*] --> EMPTY: CREATED
-  EMPTY --> FILLING: opened for filling (product/fill batch selected)
-  FILLING --> FILLING: bottle scanned in (n/20)
-  FILLING --> COMPLETE: 20/20 + operator completes
-  COMPLETE --> READY: quality approved
-  READY --> ALLOCATED: scanned into service delivery
-  ALLOCATED --> READY: removed from delivery before dispatch
-  ALLOCATED --> DISPATCHED: shipment dispatched
-  DISPATCHED --> AT_HOTEL: delivered
-  AT_HOTEL --> RETURNED: scanned at goods-in
-  RETURNED --> EMPTY: emptied during sorting
-  EMPTY --> RETIRED
-  RETIRED --> [*]
+  [*] --> OPEN_ASSEMBLY: first eligible bottle (production scan)
+  OPEN_ASSEMBLY --> READY_TO_FILL: 40th eligible bottle (capacity)
+  READY_TO_FILL --> OPEN_ASSEMBLY: supervisor removes damaged bottle (before filling)
+  OPEN_ASSEMBLY --> ABORTED: supervisor abort (assignments released one by one)
+  READY_TO_FILL --> FILLING: future (2B)
+  FILLING --> FILLED: future — finished stock
+  FILLED --> ALLOCATED: future — picked into a delivery
+  ALLOCATED --> DISPATCHED: future
+  DISPATCHED --> AT_HOTEL: future
+  AT_HOTEL --> RETURNING: future
+  RETURNING --> RECEIVED: future — return receipt links to this cycle
+  RECEIVED --> CLOSED: future — all assignments released at sorting
+  ABORTED --> [*]
+  CLOSED --> [*]
 ```
 
-The READY rule (exactly 20 bottles, same product and size) is **confirmed**; the other states and transitions are a **proposal**.
+`OPEN_ASSEMBLY`, `READY_TO_FILL` and `ABORTED` are implemented in Production Core v0.1; later states
+are the confirmed direction, designed in doc 020 §4.2.
 
-### Membership model
+### Membership model (doc 020 §3.4)
 
-- `crate_assignments(id, crate_id, bottle_id, assigned_at, released_at, assigned_by, released_by, release_reason)`.
-- Partial unique index on `bottle_id WHERE released_at IS NULL` — DB guarantee that a bottle is in at most one active crate.
-- Capacity check (≤ 20 active assignments per outbound crate) and product/size match check inside the same transaction, with a row lock on the crate (`SELECT … FOR UPDATE`) to prevent concurrent overfill or mixing.
-- Transition to READY requires exactly 20 active assignments, all of the same product and size (confirmed rule; enforced in the transition and re-checked in the transaction).
-- Assignments are never deleted; leaving a crate sets `released_at`.
+- `crate_assignments(cycle, bottle, ordinal 1…capacity, slot_code NULL, snapshot, source,
+production_order, session, assigned_event, operation, released_*)` — ordinals are assignment
+  ordinals, not a physical grid (`slot_code` is reserved for one).
+- Partial unique index on `bottle_id WHERE released_at IS NULL`; partial unique
+  `(cycle_id, ordinal) WHERE released_at IS NULL`; ordinal ≤ the cycle's capacity; inserts only
+  into `OPEN_ASSEMBLY`; all checked by the database under the canonical lock order.
+- Assignments are never deleted; leaving a crate closes them with a reason, an event and an
+  operation id.
 
-### When is membership released? (proposal)
+### When is membership released?
 
-| Moment                                   | Rationale                                                                     |
-| ---------------------------------------- | ----------------------------------------------------------------------------- |
-| Bottle removed during filling (mis-scan) | Correction, with reason                                                       |
-| Crate delivered to hotel                 | Bottles are taken out by housekeeping; AYVO no longer knows physical grouping |
-| Bottle identified during sorting         | Explicit new location                                                         |
-
-Alternative: release at delivery vs. keep "last known crate" until return. Requires confirmation.
+| Moment                                              | Status                                                 |
+| --------------------------------------------------- | ------------------------------------------------------ |
+| Damaged bottle removed during assembly (supervisor) | v0.1 — bottle goes on hold (quarantine), ordinal freed |
+| Cycle aborted (supervisor)                          | v0.1 — every assignment released individually          |
+| Delivered to the hotel vs. identified at sorting    | open (future returns design)                           |
 
 ### Returned crates
 
-At goods-in the crate is scanned as a container with a recorded physical quantity, but its bottle contents are treated as **unknown**. Return crates may be partial or mixed (confirmed), so no capacity, product or size rule applies to them. Bottle identities become known again only at sorting ([009](009-returns.md)).
+At goods-in the crate is scanned as a container with a recorded physical quantity, and the return receipt links to the crate's **current circulation cycle** (no separate return cycle, ADR 0021). Its bottle contents are treated as **unknown**: return crates may be partial or mixed (confirmed), so no capacity or product rule applies to what physically comes back. Bottle identities become known again only at sorting ([009](009-returns.md)), where each assignment is released individually; the cycle closes when none is active.
 
 ### Crate events
 
-Append-only `crate_events` (created, opened for filling, completed, ready, allocated, dispatched, delivered, returned, emptied, retired, correction) written in the same transaction as the crate status update. See [ADR 0006](adr/0006-auditable-lifecycle-history.md).
+Append-only `crate_events` written in the same transaction as every cycle change, correlated by
+one operation id with bottle events, stock movements and assignments. v0.1 types: `REGISTERED`,
+`LABEL_PRINTED`, `CYCLE_OPENED`, `CLAIMED`, `CLAIM_RELEASED`, `CLAIM_TAKEN_OVER`,
+`BOTTLE_REMOVED`, `READY_TO_FILL`, `RETURNED_TO_ASSEMBLY`, `CYCLE_ABORTED`; later phases add
+their own. See [ADR 0006](adr/0006-auditable-lifecycle-history.md).
 
 ## Open questions
 
-- Are there crate sizes/types other than the 20-bottle standard outbound crate (e.g. dedicated return crates)?
-- Can anything other than a READY crate ever be shipped (exception handling)? Who may authorize it?
-- May one READY crate contain bottles from mixed fill batches (product and size must match; batches are not defined)?
-- What does quality approval to READY mean exactly (who approves, what is checked)?
+- ~~Are there crate sizes/types other than the 20-bottle standard outbound crate?~~ — resolved
+  2026-10-11: one crate of capacity 40, two types (ADR 0021).
+- ~~May one READY crate mix fill batches?~~ — superseded: a cycle never mixes product, recipe or
+  label versions; fill batches are a 2B topic.
+- Can anything other than a full, filled crate ever be dispatched (exception handling)? Who may
+  authorize it?
+- What does quality approval of a filled crate mean exactly (who approves, what is checked)?
 - Crate damage/retirement criteria; crate washing?
 - Are crates owned by AYVO only, and are hotels accountable for unreturned crates?
 - When exactly is crate membership released (at delivery or at sorting)?

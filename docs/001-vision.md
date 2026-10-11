@@ -16,17 +16,17 @@ AYVO provides reusable premium cosmetic bottles to hotels.
 
 AYVO OS must eventually provide:
 
-| Capability                    | Summary                                                                   | Doc                                |
-| ----------------------------- | ------------------------------------------------------------------------- | ---------------------------------- |
-| Bottle identity & lifecycle   | Permanent digital + QR identity per bottle, full auditable history        | [004](004-bottle-lifecycle.md)     |
-| Crate logistics               | Reusable crates (standard outbound capacity 20) as primary logistics unit | [005](005-crate-lifecycle.md)      |
-| Warehouse workflows           | Filling into crates, picking crates into deliveries, goods-in, sorting    | [006](006-warehouse-workflows.md)  |
-| Hotel master data & contracts | Companies, hotels, locations, contacts, contracts, service configuration  | [007](007-hotels-and-contracts.md) |
-| Service deliveries            | Recurring deliveries; automatic proposals requiring AYVO approval         | [008](008-service-deliveries.md)   |
-| Returns                       | Crate-level goods-in, bottle-level identification at sorting              | [009](009-returns.md)              |
-| Billing                       | Contract-based monthly billing, separate from logistics                   | [010](010-billing.md)              |
-| Sustainability                | Verified circulation metrics, public bottle passport, ESG exports         | [011](011-sustainability.md)       |
-| Hotel portal                  | Authenticated, strictly per-hotel portal                                  | [012](012-security.md)             |
+| Capability                    | Summary                                                                                  | Doc                                |
+| ----------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------- |
+| Bottle identity & lifecycle   | Permanent digital + QR identity per bottle, full auditable history                       | [004](004-bottle-lifecycle.md)     |
+| Crate logistics               | Reusable crates (capacity 40, one crate cycle per circulation) as primary logistics unit | [005](005-crate-lifecycle.md)      |
+| Warehouse workflows           | Filling into crates, picking crates into deliveries, goods-in, sorting                   | [006](006-warehouse-workflows.md)  |
+| Hotel master data & contracts | Companies, hotels, locations, contacts, contracts, service configuration                 | [007](007-hotels-and-contracts.md) |
+| Service deliveries            | Recurring deliveries; automatic proposals requiring AYVO approval                        | [008](008-service-deliveries.md)   |
+| Returns                       | Crate-level goods-in, bottle-level identification at sorting                             | [009](009-returns.md)              |
+| Billing                       | Contract-based monthly billing, separate from logistics                                  | [010](010-billing.md)              |
+| Sustainability                | Verified circulation metrics, public bottle passport, ESG exports                        | [011](011-sustainability.md)       |
+| Hotel portal                  | Authenticated, strictly per-hotel portal                                                 | [012](012-security.md)             |
 
 Non-negotiable qualities:
 

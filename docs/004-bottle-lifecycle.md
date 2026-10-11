@@ -18,6 +18,9 @@ Status: Draft — foundation phase (2026-10-10)
 - A **completed reuse cycle** means the bottle was delivered to a hotel and was subsequently returned **and individually identified** by AYVO _(confirmed by owner 2026-10-10)_.
 - See [ADR 0011](adr/0011-bottle-terminal-states-and-reuse-cycles.md).
 - Returned bottles are identified individually during sorting/processing and can be routed to washing, inspection, quarantine or retirement.
+- **Product category binding** _(owner, 2026-10-11)_: the first physically confirmed label permanently binds the bottle to its product category (`HAND_SOAP` or `SHOWER_GEL`); a hand-soap bottle can never become a shower-gel bottle. The exact product, recipe and label version belong to the production order, the crate assignment and the cycle snapshot ([doc 020](020-production-core-v0.1.md)).
+- **Crate membership is not a bottle status** _(owner, 2026-10-11)_: it is a time-bounded assignment to a crate cycle ([ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)).
+- **Holds (quarantine) are an eligibility overlay**, not a lifecycle status _(owner, 2026-10-11)_: an open hold blocks every operational step until resolved; an activated bottle on hold stays `LABELED_EMPTY` and never reverts to `CREATED`.
 
 ## Example lifecycle (from the brief)
 
@@ -44,10 +47,9 @@ Note: crate-level operations (allocate, dispatch, deliver) apply to all bottles 
 ```mermaid
 stateDiagram-v2
   [*] --> CREATED: CREATED
-  CREATED --> LABELED_EMPTY: LABEL_APPLIED (warehouse scan, consumes 1 new bottle)
-  LABELED_EMPTY --> FILLED: FILLED
-  FILLED --> IN_CRATE: ASSIGNED_TO_CRATE
-  IN_CRATE --> APPROVED: QUALITY_APPROVED (crate)
+  CREATED --> LABELED_EMPTY: LABEL_APPLIED (production scan into a crate, consumes 1 new bottle)
+  LABELED_EMPTY --> FILLED: FILLED (in its crate)
+  FILLED --> APPROVED: QUALITY_APPROVED (crate)
   APPROVED --> ALLOCATED: ALLOCATED_TO_DELIVERY (crate)
   ALLOCATED --> IN_TRANSIT: DISPATCHED
   IN_TRANSIT --> AT_HOTEL: DELIVERED_TO_HOTEL
@@ -57,16 +59,16 @@ stateDiagram-v2
   SORTED --> WASHED: WASHED
   WASHED --> INSPECTED: INSPECTED
   INSPECTED --> FILLED: FILLED (again)
-  SORTED --> QUARANTINED
-  INSPECTED --> QUARANTINED
-  QUARANTINED --> SORTED: released
   SORTED --> RETIRED
   INSPECTED --> RETIRED
-  QUARANTINED --> RETIRED
   RETIRED --> DISPOSED: DISPOSED / DESTROYED
   RETIRED --> SORTED: authorized audited correction only (re-entry state open)
   DISPOSED --> [*]
 ```
+
+**Revised 2026-10-11 (owner):** crate membership (`IN_CRATE`) and quarantine (`QUARANTINED`) were removed from this status proposal: membership is a crate-cycle assignment (ADR 0021) and quarantine is a hold overlay (doc 020 §3.5). Later crate-level states of a bottle (allocated, in transit, at hotel) will be derived from its active assignment and the cycle status rather than duplicated — finalized in the phases that build them.
+
+**Production Core v0.1 (designed, doc 020):** `CREATED → LABELED_EMPTY` happens only through the production scan of a production order, in one transaction with the category binding (`bottle_category_bindings`), the `ASSIGNED_TO_CRATE` event and the crate assignment. New events: `ASSIGNED_TO_CRATE`, `REMOVED_FROM_CRATE`, `QUARANTINED`, `IDENTITY_VOIDED`, `REPLACEMENT_REQUESTED`.
 
 **Implemented in Milestone 1 (DEV)** ([016](016-bottles-and-labels.md)): event `CREATED` and status `CREATED`. The initial status is named `CREATED` per the owner's milestone brief (an earlier draft of this diagram called it `EMPTY_NEW`).
 
@@ -81,6 +83,8 @@ RETIRED (operationally terminal, reversible only by authorized audited correctio
 | Permanent, unique internal ID      | UUID primary key, never reused                                                                                 |
 | Permanent, unique QR identity      | Unique constraint; no update path for the QR value                                                             |
 | Never in two active crates         | Partial unique index on `crate_assignments(bottle_id) WHERE released_at IS NULL`                               |
+| Category bound once, forever       | `bottle_category_bindings` primary key on the bottle, insert-only (doc 020)                                    |
+| No operation while on hold         | Every operational guard checks open `bottle_holds`; commit-time check on assignments (doc 020)                 |
 | Retired is operationally terminal  | Transition allow-list: only an authorized `CORRECTION` (with actor, reason, authorization) can leave `RETIRED` |
 | Disposed/destroyed is irreversible | Transition allow-list + DB check/trigger rejecting any event (including corrections) after `DISPOSED`          |
 | History immutable                  | `bottle_events` is append-only (no UPDATE/DELETE grants for the app DB role)                                   |
@@ -117,7 +121,7 @@ Definition _(confirmed by owner 2026-10-10)_: a reuse cycle is completed when a 
 - Who is authorized to reverse a retirement, and which state the bottle re-enters (e.g. SORTED or QUARANTINED).
 - Are DISPOSED and DESTROYED one state or two?
 - Quarantine criteria and release rules.
-- Can a bottle be refilled with a different product than before?
+- ~~Can a bottle be refilled with a different product than before?~~ — resolved 2026-10-11: only within its permanently bound product category (doc 020).
 - Which bottle sizes exist (size is a confirmed attribute; values are open)?
 - How are lost bottles (never returned) handled — status, and after how long?
 - Is a crate-level `QUALITY_APPROVED` sufficient, or is per-bottle approval needed?

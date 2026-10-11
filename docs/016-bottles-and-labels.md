@@ -290,9 +290,12 @@ This is the single consolidated list (other documents link here).
 3. **Printer verification** — printer model, DPI, label material, adhesive, washing conditions,
    print driver (100 % scale, exact size, black output).
 4. **`qr.ayvo.co` DNS and routing** of `/<token>` to the passport.
-5. **Application authentication provider** (ADR 0017).
-6. **Admin authorization and role model** — deny-by-default guards on every `/api/admin/*`
-   route, admin / operations / read-only roles, organization/site scope, audit events.
+5. **Application authentication** — provider decided 2026-10-11 (external OIDC, WorkOS AuthKit
+   preferred, ADR 0022); still a blocker until implemented and until the pricing, DPA and EU
+   data-location check is done.
+6. **Authorization and role model** — deny-by-default guards on every `/api/admin/*` route, the
+   roles and permissions of doc 020 §12, organization/site scope, audit events; designed, not
+   implemented.
 7. **Rate limiting** — public passport, authentication and mutation endpoints. Not implemented:
    it needs a decision on how client identity crosses the proxy chain (Caddy → Next.js SSR → API:
    which forwarded headers are trusted), the public QR host topology, limits and fail-open policy.

@@ -1,8 +1,15 @@
 # ADR 0017: Authentication and authorization — blocking decision (provider not selected)
 
-- **Status:** Blocked — open decision; **production blocker** (owner, 2026-10-10)
+- **Status:** **Superseded** (provider decision) by
+  [ADR 0022](0022-external-oidc-authentication.md) (owner, 2026-10-11) — the requirements below
+  stay in force and remain a **production blocker** until implemented
 - **Date:** 2026-10-10
 - **Deciders:** AYVO owner; AYVO OS lead architect
+
+> **2026-10-11:** the provider is decided — external OIDC (WorkOS AuthKit preferred, subject to a
+> pricing, DPA and EU data-location check), with users, roles, permissions, scopes and audit actors
+> authoritative in AYVO's database (ADR 0022). Authentication, users, roles and guards come before
+> the Production Core workflows (doc 020 §14). The original text is kept below.
 
 ## Context
 
