@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+# ayvo-gh — run the GitHub CLI as the "AYVO Automation" GitHub App installation (doc 017).
+#
+# Never a human account, never a personal access token. Every authenticated call mints a
+# short-lived installation token (scoped to the AyvoOS repository and to the permissions the call
+# needs), hands it to that single `gh` process through its environment, and revokes it when gh
+# exits.
+#
+# Usage:
+#   ayvo-gh <gh arguments…>          allowed operations only (see `policy`), e.g.
+#                                    ayvo-gh pr view 12 · ayvo-gh pr checks 12 · ayvo-gh repo view
+#   ayvo-gh --whoami                 non-secret audit: app, installation, repositories, permissions
+#   ayvo-gh --discover-installation  installations of the app (to find the Installation ID)
+#   ayvo-gh --help
+#
+# Merging is never automatic. It needs an explicit, per-PR owner authorization:
+#   AYVO_GH_ALLOW_MERGE=<pr-number> ayvo-gh pr merge <pr-number> --merge|--squash|--rebase
+#
+# Server-only configuration (outside the repository):
+#   /opt/ayvo/secrets/github-app/                 mode 700
+#   /opt/ayvo/secrets/github-app/app.env          mode 600  GITHUB_APP_ID,
+#                                                           GITHUB_APP_INSTALLATION_ID,
+#                                                           GITHUB_REPOSITORY (owner/name)
+#   /opt/ayvo/secrets/github-app/private-key.pem  mode 600  the App's private key
+#
+# Secrets (private key, JWT, installation token) never appear in argv, logs or files: curl reads
+# the Authorization header from stdin; the token lives only in a subshell and its gh child.
+#
+# Structure: the top level only defines functions. Sourcing the file (offline tests) defines them
+# and returns before any side effect; options, umask, constants and traps are set by `main` or
+# inside the subshell of an authenticated operation.
+
+# --- setup ----------------------------------------------------------------------------------------
+
+ayvo_gh_init() {
+  APP_DIR="${AYVO_GITHUB_APP_DIR:-/opt/ayvo/secrets/github-app}"
+  CONFIG_FILE="$APP_DIR/app.env"
+  KEY_FILE="$APP_DIR/private-key.pem"
+  API="https://api.github.com"
+  GH_BIN="${AYVO_GH_BIN:-gh}"
+  PERMS_READ='{"metadata":"read","contents":"read","pull_requests":"read","checks":"read","statuses":"read","actions":"read"}'
+  PERMS_PR='{"metadata":"read","contents":"read","pull_requests":"write","checks":"read","statuses":"read","actions":"read"}'
+  PERMS_MERGE='{"metadata":"read","contents":"write","pull_requests":"write","checks":"read","statuses":"read","actions":"read"}'
+  APP_ID=""
+  INSTALLATION_ID=""
+  REPOSITORY=""
+  AUTH=""    # current bearer credential (JWT or installation token); never exported
+  TOKEN=""   # installation token of this operation (revoked when its subshell exits)
+  GRANTED="" # permissions GitHub granted to TOKEN (non-secret)
+  AYVO_GH_TMP_PREFIX="ayvo-gh."              # mktemp prefix of the per-call gh config dir
+  AYVO_GH_TMP_MARKER=".created-by-ayvo-gh"   # marker file proving the wrapper created it
+}
+
+die() {
+  printf 'ayvo-gh: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
+
+# --- configuration ------------------------------------------------------------------------------
+
+require_private() { # path expected-mode
+  local path=$1 mode=$2
+  [[ -e $path ]] || die "missing $path (see docs/017-github-automation.md)"
+  [[ ! -L $path ]] || die "$path must not be a symbolic link"
+  [[ $(stat -c '%u' "$path") == "$(id -u)" ]] || die "$path must be owned by $(id -un)"
+  [[ $(stat -c '%a' "$path") == "$mode" ]] || die "$path must have mode $mode"
+}
+
+load_config() {
+  require_private "$APP_DIR" 700
+  require_private "$CONFIG_FILE" 600
+  local line key value
+  # Parsed, never sourced: only these keys, only these value shapes.
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    [[ $line =~ ^([A-Z_]+)=(.*)$ ]] || die "unexpected line in $CONFIG_FILE"
+    key=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    case $key in
+      GITHUB_APP_ID) APP_ID=$value ;;
+      GITHUB_APP_INSTALLATION_ID) INSTALLATION_ID=$value ;;
+      GITHUB_REPOSITORY) REPOSITORY=$value ;;
+      *) die "unknown key $key in $CONFIG_FILE" ;;
+    esac
+  done <"$CONFIG_FILE"
+  [[ $APP_ID =~ ^[0-9]+$ ]] || die "GITHUB_APP_ID is not set (numeric App ID) in $CONFIG_FILE"
+  [[ $REPOSITORY =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || die "GITHUB_REPOSITORY must be owner/name"
+  require_private "$KEY_FILE" 600
+}
+
+require_installation() {
+  [[ $INSTALLATION_ID =~ ^[0-9]+$ ]] ||
+    die "GITHUB_APP_INSTALLATION_ID is not set; run: ayvo-gh --discover-installation"
+}
+
+# --- GitHub API -----------------------------------------------------------------------------------
+
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+# App JWT (RS256): issued 60 s in the past (clock skew), expires 9 minutes from now (GitHub
+# allows at most 10).
+make_jwt() {
+  local now header payload signature
+  now=$(date +%s)
+  header=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+  # iss = the numeric App ID as a JSON number (validated as digits in load_config).
+  payload=$(printf '{"iat":%d,"exp":%d,"iss":%d}' $((now - 60)) $((now + 540)) "$APP_ID" | b64url)
+  signature=$(printf '%s.%s' "$header" "$payload" |
+    openssl dgst -sha256 -sign "$KEY_FILE" -binary | b64url) || die "could not sign the App JWT"
+  AUTH="$header.$payload.$signature"
+}
+
+# api METHOD PATH [JSON-BODY] -> prints the response body; dies with GitHub's message on non-2xx.
+api() {
+  local method=$1 path=$2 body=${3:-} response status
+  local args=(-sS -X "$method" --max-time 30
+    -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28'
+    -w '\n%{http_code}' --config -)
+  [[ -n $body ]] && args+=(-H 'Content-Type: application/json' --data-binary "$body")
+  response=$(printf 'header = "Authorization: Bearer %s"\n' "$AUTH" | curl "${args[@]}" "$API$path") ||
+    die "$method $path: network error"
+  status=${response##*$'\n'}
+  response=${response%$'\n'*}
+  if [[ ! $status =~ ^2 ]]; then
+    die "$method $path: HTTP $status: $(jq -r '.message // "no message"' <<<"$response" 2>/dev/null || echo 'no message')"
+  fi
+  printf '%s' "$response"
+}
+
+# Mints an installation token restricted to the repository and to the given permissions.
+mint_token() { # permissions-json
+  local permissions=$1 name response
+  require_installation
+  make_jwt
+  name=${REPOSITORY#*/}
+  response=$(api POST "/app/installations/$INSTALLATION_ID/access_tokens" \
+    "$(jq -cn --arg repo "$name" --argjson perms "$permissions" '{repositories: [$repo], permissions: $perms}')")
+  TOKEN=$(jq -r '.token // empty' <<<"$response")
+  [[ -n $TOKEN ]] || die "GitHub returned no installation token"
+  AUTH=$TOKEN
+  # Defence in depth: the token must cover exactly the one repository.
+  [[ $(jq -c '[.repositories[]?.full_name]' <<<"$response") == "[\"$REPOSITORY\"]" ]] ||
+    die "the installation token is not limited to $REPOSITORY; refusing to use it"
+  GRANTED=$(jq -c '.permissions' <<<"$response")
+}
+
+# --- policy -------------------------------------------------------------------------------------
+
+# Prints the permission set for an allowed command line, or dies (before any network access).
+policy() {
+  local cmd=${1:-} sub=${2:-}
+  case "$cmd $sub" in
+    'repo view') echo "$PERMS_READ" ;;
+    'pr list' | 'pr view' | 'pr status' | 'pr checks' | 'pr diff') echo "$PERMS_READ" ;;
+    'pr create' | 'pr edit' | 'pr comment' | 'pr ready') echo "$PERMS_PR" ;;
+    'pr merge') check_merge "${@:3}" && echo "$PERMS_MERGE" ;;
+    'run list' | 'run view') echo "$PERMS_READ" ;;
+    api\ *) check_api "${@:2}" && echo "$PERMS_READ" ;;
+    *) die "'gh $cmd $sub' is not an allowed operation (see docs/017-github-automation.md)" ;;
+  esac
+}
+
+# gh api: read-only GET requests only (no fields, no --input, no GraphQL).
+check_api() {
+  local arg next=""
+  for arg in "$@"; do
+    if [[ $next == method ]]; then
+      [[ ${arg^^} == GET ]] || die "gh api: only GET is allowed"
+      next=""
+      continue
+    fi
+    case $arg in
+      -X | --method) next=method ;;
+      -X* | --method=*) [[ ${arg#*[X=]} =~ ^(GET|get)$ ]] || die "gh api: only GET is allowed" ;;
+      -f* | -F* | --field* | --raw-field* | --input*) die "gh api: request bodies are not allowed" ;;
+      graphql) die "gh api graphql is not allowed (it can mutate)" ;;
+    esac
+  done
+  [[ $next != method ]] || die "gh api: -X/--method needs a value"
+}
+
+# gh pr merge: only the explicitly authorized PR number, explicit method, nothing automatic.
+check_merge() {
+  local arg number=""
+  for arg in "$@"; do
+    case $arg in
+      --auto | --admin | --disable-auto | -d | --delete-branch)
+        die "gh pr merge $arg is not allowed: merges are explicit, immediate and keep the branch" ;;
+      -*) ;;
+      *) [[ -z $number ]] && number=$arg ;;
+    esac
+  done
+  [[ $number =~ ^[0-9]+$ ]] || die "gh pr merge needs an explicit PR number"
+  [[ " $* " =~ \ --(merge|squash|rebase)\  ]] || die "gh pr merge needs --merge, --squash or --rebase"
+  [[ ${AYVO_GH_ALLOW_MERGE:-} == "$number" ]] ||
+    die "merging PR #$number needs explicit owner authorization: AYVO_GH_ALLOW_MERGE=$number"
+}
+
+# --- cleanup (subshell EXIT traps only) ---------------------------------------------------------
+
+# Revokes the installation token now instead of letting it live for its full hour. Runs in a
+# nested subshell so that a failure (even `die`) can never change the caller's exit status.
+revoke_token() {
+  [[ -n ${TOKEN:-} ]] || return 0
+  (AUTH=$TOKEN && api DELETE /installation/token) >/dev/null 2>&1 || true
+  TOKEN=""
+  AUTH=""
+  return 0
+}
+
+# Removes the gh config directory this wrapper created — and nothing else. Always succeeds.
+remove_tmp_dir() { # path
+  local dir=${1:-} real parent base
+  [[ -n $dir && -d $dir && ! -L $dir ]] || return 0
+  real=$(realpath -e -- "$dir" 2>/dev/null) || return 0
+  parent=$(realpath -e -- "${TMPDIR:-/tmp}" 2>/dev/null) || return 0
+  [[ $(dirname -- "$real") == "$parent" ]] || return 0
+  [[ $(basename -- "$real") =~ ^ayvo-gh\.[A-Za-z0-9]{10}$ ]] || return 0
+  case $real in
+    / | /tmp | /opt | /opt/ayvo | /opt/ayvo/* | /home | "${HOME:-/}" | "$APP_DIR"*) return 0 ;;
+  esac
+  [[ -f $real/$AYVO_GH_TMP_MARKER ]] || return 0
+  [[ $(stat -c '%u' -- "$real") == "$(id -u)" ]] || return 0
+  rm -rf -- "$real" 2>/dev/null || true
+  return 0
+}
+
+# --- authenticated operations (each runs in its own subshell with its own EXIT trap) ----------
+
+# The token and the temporary gh config exist only inside this subshell.
+run_gh() (
+  load_config
+  command -v "$GH_BIN" >/dev/null || die "GitHub CLI not found ($GH_BIN); see docs/017-github-automation.md"
+  permissions=$(policy "$@")
+  tmp_dir=""
+  trap 'status=$?; revoke_token; remove_tmp_dir "$tmp_dir"; exit "$status"' EXIT
+  mint_token "$permissions"
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/${AYVO_GH_TMP_PREFIX}XXXXXXXXXX")
+  : >"$tmp_dir/$AYVO_GH_TMP_MARKER"
+  # The token goes only into the environment of this one gh process: a prefix assignment on
+  # exec in a nested subshell (never `env NAME=value …`, which would show it in the process list).
+  (
+    unset GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN
+    GH_TOKEN=$TOKEN GH_REPO=$REPOSITORY GH_CONFIG_DIR=$tmp_dir \
+      GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GH_SPINNER_DISABLED=1 \
+      exec "$GH_BIN" "$@"
+  )
+)
+
+whoami() (
+  load_config
+  trap 'status=$?; revoke_token; exit "$status"' EXIT
+  make_jwt
+  app=$(api GET /app)
+  require_installation
+  installation=$(api GET "/app/installations/$INSTALLATION_ID")
+  mint_token "$PERMS_READ"
+  repos=$(api GET '/installation/repositories?per_page=100')
+  jq -n --argjson app "$app" --argjson inst "$installation" --argjson repos "$repos" \
+    --argjson granted "$GRANTED" '{
+      app: {slug: $app.slug, id: $app.id, owner: $app.owner.login},
+      installation: {id: $inst.id, account: $inst.account.login, target_type: $inst.target_type,
+        repository_selection: $inst.repository_selection, permissions: $inst.permissions,
+        events: $inst.events},
+      installation_repositories: [$repos.repositories[].full_name],
+      this_call_token_permissions: $granted,
+      authenticated_as: "GitHub App installation (no user account, no personal token)"
+    }'
+)
+
+# Uses only the short-lived App JWT (no installation token, nothing to revoke).
+discover() (
+  load_config
+  make_jwt
+  api GET /app/installations | jq '[.[] | {installation_id: .id, account: .account.login,
+    repository_selection, permissions, created_at}]'
+)
+
+main() {
+  set -Eeuo pipefail
+  umask 077
+  ayvo_gh_init
+  case ${1:-} in
+    '' | -h | --help) usage ;;
+    --whoami) whoami ;;
+    --discover-installation) discover ;;
+    *) run_gh "$@" ;;
+  esac
+}
+
+# Sourced (offline tests): stop here — definitions only, no options, traps, files or network.
+[[ ${BASH_SOURCE[0]} == "$0" ]] || return 0
+
+main "$@"
