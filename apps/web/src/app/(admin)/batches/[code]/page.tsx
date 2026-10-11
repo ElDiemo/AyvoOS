@@ -1,5 +1,10 @@
-import { bottleCreationBatchSchema, labelPrintJobListResponseSchema } from '@ayvo/types';
+import {
+  bottleCreationBatchCodeSchema,
+  bottleCreationBatchSchema,
+  labelPrintJobListResponseSchema,
+} from '@ayvo/types';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { NewPrintJobButton, PrintJobActions } from '@/components/bottles/print-job-actions';
 import { buttonClass, Card, EmptyState, Field, FieldList, PageHeader } from '@/components/ui';
 import { apiGet } from '@/lib/api';
@@ -10,6 +15,7 @@ export const dynamic = 'force-dynamic';
 /** Detail of one bottle creation (a creation batch in the backend): its bottles and labels. */
 export default async function BatchPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
+  if (!bottleCreationBatchCodeSchema.safeParse(code).success) notFound();
   const path = `admin/bottle-batches/${encodeURIComponent(code)}`;
   const [batch, jobs] = await Promise.all([
     apiGet(path, bottleCreationBatchSchema),
@@ -59,7 +65,7 @@ export default async function BatchPage({ params }: { params: Promise<{ code: st
               ))}
             </div>
           )}
-          <p className="mt-4 text-xs text-stone-400">
+          <p className="mt-4 text-xs text-stone-400 wrap-anywhere">
             Every print job renders exactly these {batch.quantityCreated} bottles with{' '}
             {batch.labelTemplate.label}. Printing never creates or removes bottles.
           </p>

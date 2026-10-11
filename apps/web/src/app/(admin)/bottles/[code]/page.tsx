@@ -1,5 +1,6 @@
-import { bottleDetailSchema, labelDesignerSettingsSchema } from '@ayvo/types';
+import { bottleCodeSchema, bottleDetailSchema, labelDesignerSettingsSchema } from '@ayvo/types';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { QrCode } from '@/components/qr-code';
 import { BottleStatusBadge } from '@/components/status';
 import { buttonClass, Card, Field, FieldList, PageHeader } from '@/components/ui';
@@ -10,6 +11,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function BottlePage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
+  // A malformed code can never exist: answer 404 instead of asking the API (which says 400).
+  if (!bottleCodeSchema.safeParse(code).success) notFound();
   const [bottle, settings] = await Promise.all([
     apiGet(`admin/bottles/${encodeURIComponent(code)}`, bottleDetailSchema),
     apiGet('admin/label-designer/settings', labelDesignerSettingsSchema),

@@ -45,7 +45,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
       className="flex flex-col gap-3 rounded-md border border-stone-200 p-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-mono text-sm font-medium">{job.code}</span>
           <PrintJobStatus status={busy ? 'GENERATING' : job.status} />
           {job.environment !== 'production' && (
@@ -56,7 +56,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
               DEV labels - not for real bottles
             </span>
           )}
-          <span className="text-sm text-stone-500">
+          <span className="min-w-0 text-sm text-stone-500 wrap-anywhere">
             {job.labelCount} labels · {job.labelTemplate.label}
           </span>
         </div>
@@ -88,7 +88,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
           )}
         </div>
       </div>
-      <p className="text-xs text-stone-500">
+      <p className="text-xs text-stone-500 wrap-anywhere">
         Created {formatDateTime(job.createdAt)}
         {job.completedAt && ` · completed ${formatDateTime(job.completedAt)}`}
         {job.attempts > 1 && ` · ${job.attempts} attempts`}

@@ -5,6 +5,8 @@ import {
   type LabelTemplateVersion,
 } from '@ayvo/types';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { z } from 'zod';
 import { QrCode } from '@/components/qr-code';
 import { TemplateArchiveButton } from '@/components/label-templates/template-archive-button';
 import { buttonClass, Card, PageHeader } from '@/components/ui';
@@ -21,6 +23,7 @@ export default async function LabelTemplatePage({
   searchParams: Promise<{ saved?: string }>;
 }) {
   const { id } = await params;
+  if (!z.uuid().safeParse(id).success) notFound();
   const { saved } = await searchParams;
   const [template, settings] = await Promise.all([
     apiGet(`admin/label-templates/${encodeURIComponent(id)}`, labelTemplateDetailSchema),
@@ -59,7 +62,7 @@ export default async function LabelTemplatePage({
       {saved && (
         <p
           role="status"
-          className="mb-6 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800"
+          className="mb-6 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 wrap-anywhere"
         >
           Saved as {template.name} v{saved}.
         </p>
@@ -130,7 +133,7 @@ function VersionCard({
           )}
         </div>
         <div className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">
+          <h2 className="text-lg font-semibold wrap-anywhere">
             {version.label}
             {current && (
               <span className="ml-2 rounded-full bg-stone-900 px-2 py-0.5 text-xs font-medium text-white">

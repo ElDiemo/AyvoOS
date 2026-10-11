@@ -129,7 +129,7 @@ export function LabelDesigner({
   const set = (patch: Partial<QrBox>) => onChange(clampBox({ ...box, ...patch }, label, minSizeMm));
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_16rem]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_16rem]">
       <div ref={containerRef} className="flex flex-col items-center gap-3">
         <div
           ref={stageRef}

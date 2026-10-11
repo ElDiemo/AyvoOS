@@ -231,7 +231,11 @@ them as **one module, "Bottles"** (2026-10-11):
   is created at review and kept in `sessionStorage` until the result is shown, so a retry, a
   double click or a reload during creation never registers bottles twice.
 - `/batches/[code]` — detail of one creation (series) with its print jobs; kept for deep links.
-  `/batches` redirects to `/bottles/history`.
+  `/batches` is a real HTTP 307 redirect to `/bottles/history` (`next.config.ts`, query kept).
+- Unknown or malformed bottle, series and template ids answer a real HTTP 404 with the
+  not-found page. Detail pages therefore have no `loading.tsx` above them (a loading boundary
+  streams the response with status 200 before the page can decide); list and create pages keep
+  their loading skeleton through route groups.
 - The bottle detail shows status, reuse cycles, creation date, the originating series (secondary
   link), the lifecycle and the QR code with an "Open passport" action. No current location yet
   (no location model).

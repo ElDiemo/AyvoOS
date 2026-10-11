@@ -317,7 +317,7 @@ export function CreateBottlesForm({
         ) : (
           <div className="flex flex-col gap-4 rounded-md border border-amber-300 bg-amber-50 p-4">
             <h2 className={labelClass}>3 · Review</h2>
-            <p className="text-sm text-amber-900" data-testid="create-confirmation">
+            <p className="text-sm text-amber-900 wrap-anywhere" data-testid="create-confirmation">
               You are about to create <strong>{quantity}</strong> permanent AYVO bottle identities
               using label template <strong>{version?.label}</strong>.
             </p>

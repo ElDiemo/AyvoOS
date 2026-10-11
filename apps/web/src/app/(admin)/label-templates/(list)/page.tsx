@@ -40,15 +40,15 @@ export default async function LabelTemplatesPage() {
                   href={`/label-templates/${t.id}`}
                   className="flex items-center justify-between gap-4 py-4 hover:bg-stone-50"
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex min-w-0 items-center gap-4">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={t.latestVersion.artwork.contentUrl}
                       alt=""
                       className="h-14 w-auto rounded-sm ring-1 ring-stone-200"
                     />
-                    <div>
-                      <p className="font-medium">
+                    <div className="min-w-0">
+                      <p className="font-medium wrap-anywhere">
                         {t.name}
                         {t.archivedAt && (
                           <span className="ml-2 rounded-full bg-stone-200 px-2 py-0.5 text-xs font-medium text-stone-700">

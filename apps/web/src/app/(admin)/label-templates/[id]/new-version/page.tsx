@@ -1,4 +1,6 @@
 import { labelDesignerSettingsSchema, labelTemplateDetailSchema } from '@ayvo/types';
+import { notFound } from 'next/navigation';
+import { z } from 'zod';
 import { TemplateEditor } from '@/components/label-templates/template-editor';
 import { PageHeader } from '@/components/ui';
 import { apiGet } from '@/lib/api';
@@ -11,6 +13,7 @@ export default async function NewTemplateVersionPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  if (!z.uuid().safeParse(id).success) notFound();
   const [template, settings] = await Promise.all([
     apiGet(`admin/label-templates/${encodeURIComponent(id)}`, labelTemplateDetailSchema),
     apiGet('admin/label-designer/settings', labelDesignerSettingsSchema),
