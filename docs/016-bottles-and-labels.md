@@ -213,6 +213,29 @@ overwrite, temp files always removed. Missing files → stable 404 "The stored f
 available". Production refuses to start with local storage
 ([ADR 0016](adr/0016-file-storage-abstraction.md)). **`pg_dump` does not back up these files.**
 
+## Admin UI: one Bottles module
+
+Bottles and creation batches stay separate in the database and API (a bottle is one physical
+item; a creation batch is the auditable record of one bulk registration), but the admin UI shows
+them as **one module, "Bottles"** (2026-10-11):
+
+- `/bottles` (default view) — the individual bottles, with search and filters;
+  `/bottles/history` — **Creation history**: one row per creation ("series") with its date,
+  quantity, code range, label template and the state of its latest print job
+  (`GET /api/admin/bottle-creation-history`, composed in label-production from the assets batch
+  list; a fixed number of queries per page, never one per row). The creator is not recorded
+  until authentication exists (ADR 0017).
+- `/bottles/new` — **Create bottles**: number of bottles → label template → review (expected code
+  range, template, this environment's QR URL and the DEV marker) → confirm once → result with
+  the created codes, a link to the created bottles and the labels (print job). The idempotency key
+  is created at review and kept in `sessionStorage` until the result is shown, so a retry, a
+  double click or a reload during creation never registers bottles twice.
+- `/batches/[code]` — detail of one creation (series) with its print jobs; kept for deep links.
+  `/batches` redirects to `/bottles/history`.
+- The bottle detail shows status, reuse cycles, creation date, the originating series (secondary
+  link), the lifecycle and the QR code with an "Open passport" action. No current location yet
+  (no location model).
+
 ## API overview
 
 | Method | Path                                                       | Module           |
@@ -236,6 +259,7 @@ available". Production refuses to start with local storage
 | POST   | `/api/admin/bottle-registrations`                          | label-production |
 | GET    | `/api/admin/bottle-batches/:code/print-jobs`               | label-production |
 | POST   | `/api/admin/bottle-batches/:code/print-jobs`               | label-production |
+| GET    | `/api/admin/bottle-creation-history?page&pageSize`         | label-production |
 | GET    | `/api/admin/label-print-jobs/:code`                        | label-production |
 | POST   | `/api/admin/label-print-jobs/:code/generate`               | label-production |
 | GET    | `/api/admin/label-print-jobs/:code/pdf`                    | label-production |

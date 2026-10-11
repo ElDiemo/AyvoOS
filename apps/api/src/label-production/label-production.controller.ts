@@ -1,7 +1,9 @@
 import {
   bottleCreationBatchCodeSchema,
+  bottleListQuerySchema,
   createBottleRegistrationRequestSchema,
   labelPrintJobCodeSchema,
+  type BottleCreationHistoryResponse,
   type BottleRegistrationResponse,
   type CreateBottleRegistrationRequest,
   type LabelPrintJob,
@@ -15,8 +17,10 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
   StreamableFile,
 } from '@nestjs/common';
+import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { BottleRegistrationService } from './bottle-registration.service.js';
@@ -24,6 +28,7 @@ import { LabelPrintJobsService } from './label-print-jobs.service.js';
 
 const BATCH_CODE = new ZodValidationPipe(bottleCreationBatchCodeSchema);
 const JOB_CODE = new ZodValidationPipe(labelPrintJobCodeSchema);
+const historyQuerySchema = bottleListQuerySchema.pick({ page: true, pageSize: true });
 
 /** Admin API: register bottles, manage print jobs, download print-ready PDFs. */
 @Controller(ADMIN_PREFIX)
@@ -39,6 +44,14 @@ export class LabelProductionController {
     body: CreateBottleRegistrationRequest,
   ): Promise<BottleRegistrationResponse> {
     return this.registration.register(body);
+  }
+
+  /** Creation batches with the state of their latest print job (Bottles → Creation history). */
+  @Get('bottle-creation-history')
+  creationHistory(
+    @Query(new ZodValidationPipe(historyQuerySchema)) query: z.infer<typeof historyQuerySchema>,
+  ): Promise<BottleCreationHistoryResponse> {
+    return this.printJobs.creationHistory(query.page, query.pageSize);
   }
 
   @Get('bottle-batches/:code/print-jobs')

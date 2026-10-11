@@ -96,7 +96,7 @@ pnpm --filter @ayvo/api db:migrate:deploy   # apply the committed migrations
 pnpm dev                      # API on :4000, web on :3000
 ```
 
-- Web: <http://localhost:3000> — admin UI (Bottles, Creation batches, Label templates)
+- Web: <http://localhost:3000> — admin UI (Bottles, Label templates)
 - API health: <http://localhost:4000/api/health> (every API route lives under `/api`)
 
 The API starts even when PostgreSQL/Redis are down and reports `"status": "degraded"`.

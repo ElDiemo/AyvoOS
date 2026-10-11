@@ -7,6 +7,7 @@ import { codeRange, formatDateTime } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
+/** Detail of one bottle creation (a creation batch in the backend): its bottles and labels. */
 export default async function BatchPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
   const path = `admin/bottle-batches/${encodeURIComponent(code)}`;
@@ -18,21 +19,21 @@ export default async function BatchPage({ params }: { params: Promise<{ code: st
     <>
       <PageHeader
         title={<span className="font-mono">{batch.code}</span>}
-        subtitle="Creation batch"
-        back={{ href: '/batches', label: 'Creation batches' }}
+        subtitle={`Created series of ${batch.quantityCreated} bottle${batch.quantityCreated === 1 ? '' : 's'}`}
+        back={{ href: '/bottles/history', label: 'Bottles · Creation history' }}
         actions={
           <Link href={`/bottles?batch=${batch.code}`} className={buttonClass.secondary}>
-            View bottles
+            View these bottles
           </Link>
         }
       />
       <div className="flex flex-col gap-6">
-        <Card title="Batch">
+        <Card title="Summary">
           <FieldList>
-            <Field label="Created">
+            <Field label="Bottles">
               {batch.quantityCreated} bottle{batch.quantityCreated === 1 ? '' : 's'}
             </Field>
-            <Field label="Template">{batch.labelTemplate.label}</Field>
+            <Field label="Label template">{batch.labelTemplate.label}</Field>
             <Field label="Bottle range">
               <span className="font-mono">
                 {codeRange(batch.firstBottleCode, batch.lastBottleCode)}
@@ -42,17 +43,15 @@ export default async function BatchPage({ params }: { params: Promise<{ code: st
           </FieldList>
         </Card>
         <Card>
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <h2 className="text-sm font-medium uppercase tracking-wide text-stone-500">
-              Print jobs
-            </h2>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <h2 className="text-sm font-medium uppercase tracking-wide text-stone-500">Labels</h2>
             <NewPrintJobButton
               batchCode={batch.code}
               label={jobs.items.length === 0 ? 'Create print job' : 'New print job (reprint)'}
             />
           </div>
           {jobs.items.length === 0 ? (
-            <EmptyState>No print jobs yet.</EmptyState>
+            <EmptyState>No label print job yet.</EmptyState>
           ) : (
             <div className="flex flex-col gap-3">
               {jobs.items.map((job) => (

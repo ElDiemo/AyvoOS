@@ -240,6 +240,7 @@ export class BottlesService {
       labelTemplate: requireRef(refs, bottle.creationBatch.labelTemplateVersionId),
       createdAt: bottle.createdAt.toISOString(),
       publicUrl: publicQrUrl(this.env.PUBLIC_QR_BASE_URL, bottle.publicToken),
+      reuseCycles: countCompletedReuseCycles(bottle.events.map((e) => e.type)),
       events: bottle.events.map((e) => ({
         type: e.type,
         occurredAt: e.occurredAt.toISOString(),
@@ -291,6 +292,15 @@ export class BottlesService {
     });
     if (!batch) throw new NotFoundException('Creation batch not found');
     return batch.code;
+  }
+
+  /** For label-production: internal ids of the given batch codes (unknown codes are omitted). */
+  async getBatchIds(codes: readonly string[]): Promise<Map<string, string>> {
+    const batches = await this.prisma.bottleCreationBatch.findMany({
+      where: { code: { in: [...codes] } },
+      select: { id: true, code: true },
+    });
+    return new Map(batches.map((b) => [b.code, b.id]));
   }
 
   /** For label-production: the bottles of a batch in code order (= page order). */

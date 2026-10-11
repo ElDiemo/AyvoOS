@@ -1,4 +1,9 @@
-import type { LabelPrintJob, LabelPrintJobListResponse, LabelTemplateVersion } from '@ayvo/types';
+import type {
+  BottleCreationHistoryResponse,
+  LabelPrintJob,
+  LabelPrintJobListResponse,
+  LabelTemplateVersion,
+} from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { qrSymbolInfo, QR_QUIET_ZONE_MODULES } from '../src/labels/label-pdf-renderer.js';
@@ -208,6 +213,44 @@ describe.skipIf(!hasDatabase)('label print jobs (label-production module)', () =
       }),
     ).rejects.toThrow();
     await expect(t.prisma.labelPrintJob.delete({ where: { id: job.id } })).rejects.toThrow();
+  });
+
+  it('creation history lists batches newest first with the state of their latest print job', async () => {
+    // Own template: an earlier test superseded `version` with a newer one.
+    const { versionId } = await createTemplate(t.app);
+    const older = await registerBottles(t.app, versionId, 2);
+    const newer = await registerBottles(t.app, versionId, 3);
+    // The older batch gets a reprint job; only the most recent job counts as its label state.
+    await generate(older.printJob!.code);
+    const completed = await generate(newer.printJob!.code);
+    const reprint = (
+      await http().post(`/api/admin/bottle-batches/${older.batch.code}/print-jobs`).expect(201)
+    ).body as LabelPrintJob;
+
+    const history = (
+      await http().get('/api/admin/bottle-creation-history?pageSize=100').expect(200)
+    ).body as BottleCreationHistoryResponse;
+    const codes = history.items.map((i) => i.code);
+    expect(codes.indexOf(newer.batch.code)).toBeLessThan(codes.indexOf(older.batch.code));
+    expect(history.total).toBeGreaterThanOrEqual(2);
+    expect(history.items.find((i) => i.code === newer.batch.code)).toEqual({
+      ...newer.batch,
+      latestPrintJob: {
+        code: completed.code,
+        status: 'COMPLETED',
+        downloadUrl: `/api/admin/label-print-jobs/${completed.code}/pdf`,
+      },
+    });
+    expect(history.items.find((i) => i.code === older.batch.code)?.latestPrintJob).toEqual({
+      code: reprint.code,
+      status: 'PENDING',
+      downloadUrl: null,
+    });
+
+    const page = (await http().get('/api/admin/bottle-creation-history?pageSize=1').expect(200))
+      .body as BottleCreationHistoryResponse;
+    expect(page.items).toHaveLength(1);
+    await http().get('/api/admin/bottle-creation-history?pageSize=0').expect(400);
   });
 
   it('returns 404 for unknown jobs and batches', async () => {

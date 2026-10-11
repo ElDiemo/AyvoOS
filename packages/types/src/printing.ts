@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { bottleCreationBatchSchema } from './bottles.js';
+import { bottleCreationBatchSchema, pageSchema } from './bottles.js';
 import { labelTemplateVersionRefSchema, qrErrorCorrectionSchema } from './labels.js';
 
 /** Label print jobs (label-production module). */
@@ -47,3 +47,17 @@ export const bottleRegistrationResponseSchema = z.object({
   printJob: labelPrintJobSchema.nullable(),
 });
 export type BottleRegistrationResponse = z.infer<typeof bottleRegistrationResponseSchema>;
+
+/**
+ * GET /api/admin/bottle-creation-history: creation batches, newest first, each with the state of
+ * its most recent print job (null if it has none). Read-only view for the Bottles module.
+ */
+export const bottleCreationHistoryItemSchema = bottleCreationBatchSchema.extend({
+  latestPrintJob: labelPrintJobSchema
+    .pick({ code: true, status: true, downloadUrl: true })
+    .nullable(),
+});
+export type BottleCreationHistoryItem = z.infer<typeof bottleCreationHistoryItemSchema>;
+
+export const bottleCreationHistoryResponseSchema = pageSchema(bottleCreationHistoryItemSchema);
+export type BottleCreationHistoryResponse = z.infer<typeof bottleCreationHistoryResponseSchema>;

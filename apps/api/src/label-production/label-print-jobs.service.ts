@@ -1,4 +1,8 @@
-import type { LabelPrintJob as LabelPrintJobDto, LabelTemplateVersionRef } from '@ayvo/types';
+import type {
+  BottleCreationHistoryResponse,
+  LabelPrintJob as LabelPrintJobDto,
+  LabelTemplateVersionRef,
+} from '@ayvo/types';
 import { createHash } from 'node:crypto';
 import {
   ConflictException,
@@ -96,6 +100,34 @@ export class LabelPrintJobsService {
     });
     const refs = await this.labels.getVersionRefs(jobs.map((j) => j.labelTemplateVersionId));
     return jobs.map((j) => toDto(j, batch.code, refs.get(j.labelTemplateVersionId)!));
+  }
+
+  /**
+   * Bottle creation history: the batch list (assets) with the state of each batch's most recent
+   * print job. A fixed number of queries per page, never one per row.
+   */
+  async creationHistory(page: number, pageSize: number): Promise<BottleCreationHistoryResponse> {
+    const batches = await this.bottles.listBatches(page, pageSize);
+    const ids = await this.bottles.getBatchIds(batches.items.map((b) => b.code));
+    const jobs = await this.prisma.labelPrintJob.findMany({
+      where: { creationBatchId: { in: [...ids.values()] } },
+      orderBy: { serial: 'desc' },
+      distinct: ['creationBatchId'],
+      select: { code: true, status: true, creationBatchId: true },
+    });
+    const latest = new Map(jobs.map((j) => [j.creationBatchId, j]));
+    return {
+      ...batches,
+      items: batches.items.map((batch) => {
+        const job = latest.get(ids.get(batch.code) ?? '');
+        return {
+          ...batch,
+          latestPrintJob: job
+            ? { code: job.code, status: job.status, downloadUrl: downloadUrl(job) }
+            : null,
+        };
+      }),
+    };
   }
 
   async getByCode(code: string): Promise<LabelPrintJobDto> {
@@ -265,7 +297,10 @@ function toDto(
     fileByteSize: job.fileByteSize,
     environment: job.appEnvironment,
     qrErrorCorrection: job.qrErrorCorrection,
-    downloadUrl:
-      job.status === 'COMPLETED' ? `${ADMIN_API}/label-print-jobs/${job.code}/pdf` : null,
+    downloadUrl: downloadUrl(job),
   };
+}
+
+function downloadUrl(job: Pick<LabelPrintJob, 'code' | 'status'>): string | null {
+  return job.status === 'COMPLETED' ? `${ADMIN_API}/label-print-jobs/${job.code}/pdf` : null;
 }

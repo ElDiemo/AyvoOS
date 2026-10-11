@@ -12,6 +12,9 @@ test.describe.configure({ mode: 'serial' });
 
 const MM_PER_PT = 25.4 / 72;
 
+/** The confirmed registration of BC-000001, captured in the first test for the resume test. */
+let firstRegistration: { requestId: string; labelTemplateVersionId: string; quantity: number };
+
 async function qrValues(page: Page) {
   const read = async (id: string) => Number(await page.getByTestId(id).inputValue());
   return { x: await read('qr-x'), y: await read('qr-y'), size: await read('qr-width') };
@@ -89,17 +92,39 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   await expect(page.getByTestId('create-confirmation')).toHaveText(
     'You are about to create 50 permanent AYVO bottle identities using label template mydlo1 v1.',
   );
+  // The review states the expected codes and this environment's QR URL (never production).
+  await expect(page.getByTestId('expected-code-range')).toHaveText('AYV-B-000001 – AYV-B-000050');
+  await expect(page.getByTestId('qr-url-pattern')).toHaveText('http://localhost:3100/q/<token>');
+  await expect(page.getByText('every label is marked “DEV - NOT FOR PRODUCTION”')).toBeVisible();
   const createButton = page.getByRole('button', { name: 'Create 50 bottles' });
   await expect(createButton).toBeDisabled();
   await page
     .getByLabel('I understand that bottle identities are permanent and are never deleted.')
     .check();
+  // The server registers the bottles, but the response is lost on the way back: the outcome is
+  // unknown to the page, and pressing the button again must not create a second set of bottles.
+  let attempts = 0;
+  await page.route('**/api/admin/bottle-registrations', async (route) => {
+    attempts++;
+    if (attempts === 1) {
+      firstRegistration = route.request().postDataJSON() as typeof firstRegistration;
+      await route.fetch();
+      await route.abort('connectionreset');
+    } else {
+      expect(route.request().postDataJSON()).toEqual(firstRegistration);
+      await route.continue();
+    }
+  });
   await createButton.click();
+  await expect(page.getByText('Pressing the button again is safe')).toBeVisible();
+  await createButton.click();
+  await page.unroute('**/api/admin/bottle-registrations');
 
-  // 34: result with the creation batch and the code range.
+  // 34: result with the code range and the series (creation batch) — the retry was a replay.
   await expect(page.getByRole('status')).toHaveText('50 bottles created successfully');
+  await expect(page.getByText('no additional bottles were created')).toBeVisible();
   await expect(page.getByTestId('result-batch-code')).toHaveText('BC-000001');
-  await expect(page.getByText('AYV-B-000001 – AYV-B-000050')).toBeVisible();
+  await expect(page.getByTestId('result-code-range')).toHaveText('AYV-B-000001 – AYV-B-000050');
 
   // 35: generate labels.
   await page.getByRole('button', { name: 'Generate labels' }).click();
@@ -116,8 +141,8 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
     expect(p.getHeight() * MM_PER_PT).toBeCloseTo(110, 2);
   }
 
-  // The batch page shows the same batch and its completed print job.
-  await page.getByRole('link', { name: 'View batch' }).click();
+  // The series page shows the same creation and its completed print job.
+  await page.getByRole('link', { name: 'Series details' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('BC-000001');
   await expect(page.getByText('AYV-B-000001 – AYV-B-000050')).toBeVisible();
   await expect(page.getByTestId('print-job-PJ-000001')).toContainText('COMPLETED');
@@ -127,11 +152,12 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   );
 
   // 37: open one bottle: CREATED timeline, QR and public URL.
-  await page.getByRole('link', { name: 'View bottles' }).click();
+  await page.getByRole('link', { name: 'View these bottles' }).click();
   await expect(page.getByText('50 bottles matching the filters')).toBeVisible();
   await page.getByRole('link', { name: 'AYV-B-000001' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('AYV-B-000001');
   await expect(page.getByTestId('lifecycle')).toContainText('CREATED');
+  await expect(page.getByTestId('reuse-cycles')).toHaveText('0');
   await expect(page.getByRole('img', { name: 'QR code of AYV-B-000001' })).toBeVisible();
   const publicUrl = await page.getByTestId('public-url').textContent();
   expect(publicUrl).toMatch(/^http:\/\/localhost:3100\/q\/[A-Za-z0-9_-]{22}$/);
@@ -146,7 +172,122 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   // Unknown tokens are not found.
   const missing = await page.goto('/q/AAAAAAAAAAAAAAAAAAAAAA');
   expect(missing?.status()).toBe(404);
+});
 
+test('Bottles is one module: bottle list, creation history and series detail', async ({ page }) => {
+  // One top-level entry for bottles; the old "Creation batches" item is gone.
+  await page.goto('/');
+  const mainNav = page.getByRole('navigation', { name: 'Main' });
+  await expect(mainNav.getByRole('link')).toHaveText(['Bottles', 'Label templates']);
+
+  // The bottle list is the default view of Bottles.
+  await mainNav.getByRole('link', { name: 'Bottles' }).click();
+  await expect(page).toHaveURL(/\/bottles$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Bottles');
+  const views = page.getByRole('navigation', { name: 'Bottles views' });
+  await expect(views.getByRole('link', { name: 'Bottles' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByText('50 bottles', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'AYV-B-000050' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Create bottles' })).toBeVisible();
+
+  // Creation history inside Bottles: one creation, its labels and a download.
+  await views.getByRole('link', { name: 'Creation history' }).click();
+  await expect(page).toHaveURL(/\/bottles\/history$/);
+  await expect(views.getByRole('link', { name: 'Creation history' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(mainNav.getByRole('link', { name: 'Bottles' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  const series = page.getByTestId('series-BC-000001');
+  await expect(page.getByTestId('creation-history').locator('tbody tr')).toHaveCount(1);
+  await expect(series).toContainText('50');
+  await expect(series).toContainText('AYV-B-000001 – AYV-B-000050');
+  await expect(series).toContainText('mydlo1 v1');
+  await expect(series).toContainText('COMPLETED');
+  await expect(series.getByRole('link', { name: 'Download PDF' })).toHaveAttribute(
+    'href',
+    '/api/admin/label-print-jobs/PJ-000001/pdf',
+  );
+
+  // Refresh keeps the view; the old list URL redirects here; the series detail still opens.
+  await page.reload();
+  await expect(page.getByTestId('series-BC-000001')).toBeVisible();
+  await page.goto('/batches');
+  await expect(page).toHaveURL(/\/bottles\/history$/);
+  await page.goto('/batches/BC-000001');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('BC-000001');
+  await expect(page.getByText('Created series of 50 bottles')).toBeVisible();
+  await expect(mainNav.getByRole('link', { name: 'Bottles' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await page.getByRole('link', { name: '← Bottles · Creation history' }).click();
+  await expect(page).toHaveURL(/\/bottles\/history$/);
+
+  // Bottle detail: status, reuse cycles, series as a secondary link, passport action.
+  await page.goto('/bottles/AYV-B-000002');
+  await expect(page.getByTestId('reuse-cycles')).toHaveText('0');
+  await expect(page.getByRole('link', { name: 'BC-000001' })).toHaveAttribute(
+    'href',
+    '/batches/BC-000001',
+  );
+  await expect(page.getByRole('link', { name: 'Open passport' })).toHaveAttribute(
+    'href',
+    /^http:\/\/localhost:3100\/q\/[A-Za-z0-9_-]{22}$/,
+  );
+
+  // Phone and tablet widths: no page-level horizontal scrolling on any Bottles page.
+  for (const width of [390, 820]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of [
+      '/bottles',
+      '/bottles/history',
+      '/bottles/new',
+      '/batches/BC-000001',
+      '/bottles/AYV-B-000001',
+    ]) {
+      await page.goto(path);
+      await expect(page.locator('body')).not.toContainText('qr.ayvo.co');
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `horizontal overflow on ${path} at ${width}px`).toBeLessThanOrEqual(0);
+    }
+  }
+});
+
+test('a creation whose result was never shown is finished safely after a reload', async ({
+  page,
+}) => {
+  // Simulates a reload while creating: the confirmed registration is still in sessionStorage.
+  await page.goto('/bottles/new');
+  await page.evaluate(
+    (pending) => sessionStorage.setItem('ayvo.pendingBottleRegistration', JSON.stringify(pending)),
+    firstRegistration,
+  );
+  await page.reload();
+  await expect(page.getByTestId('unfinished-creation')).toContainText('50 bottles');
+  await page.getByRole('button', { name: 'Finish and show result' }).click();
+  await expect(page.getByRole('status')).toHaveText('50 bottles created successfully');
+  await expect(page.getByText('no additional bottles were created')).toBeVisible();
+  await expect(page.getByTestId('result-batch-code')).toHaveText('BC-000001');
+
+  // Still exactly one creation and 50 bottles; the pending entry is gone.
+  await page.goto('/bottles/history');
+  await expect(page.getByTestId('creation-history').locator('tbody tr')).toHaveCount(1);
+  await page.goto('/bottles');
+  await expect(page.getByText('50 bottles', { exact: true })).toBeVisible();
+  await page.goto('/bottles/new');
+  await expect(page.getByTestId('unfinished-creation')).toHaveCount(0);
+});
+
+test('archived templates are no longer offered for new bottles', async ({ page }) => {
   // Archived templates stay viewable but are no longer offered for new bottles.
   await page.goto('/label-templates');
   await page.getByRole('link', { name: /mydlo1/ }).click();

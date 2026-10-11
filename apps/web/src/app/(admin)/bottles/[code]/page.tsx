@@ -2,7 +2,7 @@ import { bottleDetailSchema, labelDesignerSettingsSchema } from '@ayvo/types';
 import Link from 'next/link';
 import { QrCode } from '@/components/qr-code';
 import { BottleStatusBadge } from '@/components/status';
-import { Card, Field, FieldList, PageHeader } from '@/components/ui';
+import { buttonClass, Card, Field, FieldList, PageHeader } from '@/components/ui';
 import { apiGet } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 
@@ -23,30 +23,26 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
       />
       <div className="grid gap-6 md:grid-cols-[1fr_16rem]">
         <div className="flex flex-col gap-6">
-          <Card title="Identity">
+          <Card title="Overview">
             <FieldList>
               <Field label="Status">
                 <BottleStatusBadge status={bottle.status} />
               </Field>
-              <Field label="Creation batch">
+              <Field label="Reuse cycles">
+                <span className="tabular-nums" data-testid="reuse-cycles">
+                  {bottle.reuseCycles}
+                </span>
+              </Field>
+              <Field label="Created at">{formatDateTime(bottle.createdAt)}</Field>
+              <Field label="Label">{bottle.labelTemplate.label}</Field>
+              <Field label="Created in series">
                 <Link
                   href={`/batches/${bottle.creationBatchCode}`}
-                  className="font-mono hover:underline"
+                  className="font-mono text-stone-600 hover:underline"
                 >
                   {bottle.creationBatchCode}
                 </Link>
               </Field>
-              <Field label="Label">{bottle.labelTemplate.label}</Field>
-              <Field label="Public URL">
-                <a
-                  href={bottle.publicUrl}
-                  className="break-all font-mono text-xs hover:underline"
-                  data-testid="public-url"
-                >
-                  {bottle.publicUrl}
-                </a>
-              </Field>
-              <Field label="Registered">{formatDateTime(bottle.createdAt)}</Field>
             </FieldList>
           </Card>
           <Card title="Lifecycle">
@@ -65,10 +61,23 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
           <QrCode
             value={bottle.publicUrl}
             level={settings.qrErrorCorrection}
-            className="w-full"
+            className="mx-auto w-full max-w-56"
             title={`QR code of ${bottle.code}`}
           />
-          <p className="mt-3 text-xs text-stone-500">Encodes only the stable public URL above.</p>
+          <a
+            href={bottle.publicUrl}
+            target="_blank"
+            rel="noopener"
+            className={`${buttonClass.secondary} mt-4 w-full`}
+          >
+            Open passport
+          </a>
+          <p className="mt-3 text-xs text-stone-500">
+            The QR code encodes only this stable public URL:
+          </p>
+          <p className="mt-1 break-all font-mono text-xs" data-testid="public-url">
+            {bottle.publicUrl}
+          </p>
         </Card>
       </div>
     </>

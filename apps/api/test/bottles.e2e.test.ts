@@ -247,6 +247,7 @@ describe.skipIf(!hasDatabase)('bottle registration (assets module)', () => {
     });
     expect(detail.labelTemplate.label).toBe(version.label);
     expect(detail.events).toEqual([expect.objectContaining({ type: 'CREATED' })]);
+    expect(detail.reuseCycles).toBe(0);
     expect(detail.publicUrl).toMatch(/^https:\/\/qr\.example\.test\/[A-Za-z0-9_-]{22}$/);
     // Internal ids are not part of the admin DTO either.
     expect(JSON.stringify(detail)).not.toMatch(/"id"|serial/);

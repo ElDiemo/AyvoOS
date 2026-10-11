@@ -6,8 +6,9 @@ import {
 } from '@ayvo/types';
 import Link from 'next/link';
 import { z } from 'zod';
+import { BottlesHeader } from '@/components/bottles/bottles-header';
 import { BottleStatusBadge } from '@/components/status';
-import { buttonClass, Card, EmptyState, inputClass, PageHeader } from '@/components/ui';
+import { buttonClass, Card, EmptyState, inputClass } from '@/components/ui';
 import { apiGet } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 
@@ -46,17 +47,15 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
 
   return (
     <>
-      <PageHeader
-        title="Bottles"
+      <BottlesHeader
+        active="bottles"
         subtitle={`${list.total} bottle${list.total === 1 ? '' : 's'}${params.batch || params.search || params.templateId ? ' matching the filters' : ''}`}
-        actions={
-          <Link href="/bottles/new" className={buttonClass.primary}>
-            Create bottles
-          </Link>
-        }
       />
       <Card className="mb-6">
-        <form className="grid gap-3 sm:grid-cols-[1fr_12rem_12rem_auto]" action="/bottles">
+        <form
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_12rem_12rem_auto]"
+          action="/bottles"
+        >
           <input
             name="search"
             defaultValue={params.search}
@@ -67,9 +66,9 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
           <input
             name="batch"
             defaultValue={params.batch}
-            placeholder="Batch, e.g. BC-000001"
+            placeholder="Series, e.g. BC-000001"
             className={inputClass}
-            aria-label="Filter by creation batch"
+            aria-label="Filter by series"
           />
           <select
             name="templateId"
@@ -96,14 +95,25 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
       </Card>
       <Card className="overflow-x-auto p-0">
         {list.items.length === 0 ? (
-          <EmptyState>No bottles found.</EmptyState>
+          <EmptyState>
+            {params.batch || params.search || params.templateId ? (
+              'No bottles match the filters.'
+            ) : (
+              <>
+                No bottles yet.{' '}
+                <Link href="/bottles/new" className="font-medium underline">
+                  Create bottles
+                </Link>
+              </>
+            )}
+          </EmptyState>
         ) : (
           <table className="w-full text-left text-sm">
             <thead className="border-b border-stone-200 text-xs uppercase tracking-wide text-stone-500">
               <tr>
                 <th className="px-6 py-3 font-medium">Bottle code</th>
                 <th className="px-6 py-3 font-medium">Status</th>
-                <th className="px-6 py-3 font-medium">Creation batch</th>
+                <th className="px-6 py-3 font-medium">Series</th>
                 <th className="px-6 py-3 font-medium">Label template</th>
                 <th className="px-6 py-3 font-medium">Created at</th>
               </tr>

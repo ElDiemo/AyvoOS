@@ -64,6 +64,8 @@ export type BottleEvent = z.infer<typeof bottleEventSchema>;
 export const bottleDetailSchema = bottleSummarySchema.extend({
   /** The stable public URL encoded in the bottle's QR code. */
   publicUrl: z.url(),
+  /** Completed reuse cycles (ADR 0011), the same value as the public passport. */
+  reuseCycles: z.number().int().nonnegative(),
   /** Oldest first. */
   events: z.array(bottleEventSchema),
 });
