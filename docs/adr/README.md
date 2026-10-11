@@ -39,6 +39,7 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0015](0015-immutable-label-template-versions.md)        | Immutable label template versions, reproducible print jobs | Accepted — confirmed by owner 2026-10-10 |
 | [0016](0016-file-storage-abstraction.md)                 | File storage abstraction                                   | Accepted for DEV; production blocker     |
 | [0017](0017-authentication-and-authorization-blocker.md) | Authentication and authorization (provider not selected)   | Blocked — production blocker             |
+| [0018](0018-github-app-automation.md)                    | GitHub automation through a repository-scoped GitHub App   | Accepted — confirmed by owner 2026-10-11 |
 
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
