@@ -6,6 +6,8 @@ export class ClientApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Stable domain error code from the API (e.g. "LOT_EXHAUSTED"), if any. */
+    readonly code: string | null = null,
   ) {
     super(message);
   }
@@ -13,11 +15,14 @@ export class ClientApiError extends Error {
 
 async function readError(res: Response): Promise<ClientApiError> {
   let message = `Request failed (HTTP ${res.status})`;
+  let code: string | null = null;
   try {
     const body = (await res.json()) as {
       message?: unknown;
+      code?: unknown;
       issues?: { path: string; message: string }[];
     };
+    if (typeof body.code === 'string') code = body.code;
     if (body.issues?.length) {
       message = body.issues.map((i) => (i.path ? `${i.path}: ${i.message}` : i.message)).join('; ');
     } else if (typeof body.message === 'string') {
@@ -27,7 +32,7 @@ async function readError(res: Response): Promise<ClientApiError> {
     // non-JSON error body: keep the generic message
   }
   if (res.status === 413) message = 'The file is too large';
-  return new ClientApiError(res.status, message);
+  return new ClientApiError(res.status, message, code);
 }
 
 export async function apiSend<T extends z.ZodType>(
