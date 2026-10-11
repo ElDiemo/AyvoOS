@@ -73,10 +73,13 @@ export function LabelActivationStation({
   const busy = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   // A handheld scanner types into whatever has focus: keep the scan field focused whenever
-  // scanning becomes possible (session restored after hydration, lot or series changed).
+  // scanning becomes possible — session restored after hydration, lot or series chosen, and
+  // after every scan result. The field is disabled while a scan is checked (the browser then
+  // drops its focus), so focusing must wait for the render that enables it again: this effect
+  // runs after exactly that commit, never before it.
   useEffect(() => {
-    if (ready && !exhausted) input.current?.focus();
-  }, [ready, exhausted]);
+    if (ready && !exhausted && !checking) input.current?.focus();
+  }, [ready, exhausted, checking]);
 
   const log = (tone: SessionEntry['tone'], text: string) =>
     setEntries((list) =>
@@ -85,7 +88,6 @@ export function LabelActivationStation({
         20,
       ),
     );
-  const refocus = () => requestAnimationFrame(() => input.current?.focus());
 
   async function refreshLots() {
     try {
@@ -136,7 +138,6 @@ export function LabelActivationStation({
       busy.current = false;
       setChecking(false);
       setValue('');
-      refocus();
     }
   }
 
@@ -153,7 +154,6 @@ export function LabelActivationStation({
         onLot={(l) => {
           activeLot.set({ id: l.id, code: l.code });
           setOutcome(null);
-          refocus();
         }}
       />
     );

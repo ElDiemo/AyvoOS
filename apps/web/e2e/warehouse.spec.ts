@@ -193,26 +193,33 @@ test('apply labels by scanning: session series and lot, applied, duplicate, reje
   await expect(scan).toHaveValue('');
   await expect(scan).toBeFocused();
 
-  await scan.fill(urls[0]!);
-  await scan.press('Enter');
+  // From here on, scan like a handheld scanner: keystrokes go to whatever has focus, followed by
+  // Enter — no mouse, no fill(). Every result must leave the field empty and focused again.
+  const scanByKeyboard = async (value: string) => {
+    await page.keyboard.type(value);
+    await page.keyboard.press('Enter');
+  };
+  await scanByKeyboard(urls[0]!);
   await expect(page.getByTestId('scan-outcome')).toContainText('etiketa už byla nalepena');
   await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 1 ks');
+  await expect(scan).toHaveValue('');
+  await expect(scan).toBeFocused();
 
   // A label of another series is refused by the server; nothing is consumed.
-  await scan.fill(foreignUrl);
-  await scan.press('Enter');
+  await scanByKeyboard(foreignUrl);
   await expect(page.getByTestId('scan-outcome')).toContainText('Lahev nepatří do zvolené série');
   await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 1 ks');
+  await expect(scan).toBeFocused();
 
-  await scan.fill(`https://qr.ayvo.co/${urls[1]!.split('/').pop()}`);
-  await scan.press('Enter');
+  await scanByKeyboard(`https://qr.ayvo.co/${urls[1]!.split('/').pop()}`);
   await expect(page.getByTestId('scan-outcome')).toContainText('Etiketa patří do jiného prostředí');
-  await scan.fill('AYV-B-000001');
-  await scan.press('Enter');
+  await expect(scan).toBeFocused();
+  await scanByKeyboard('AYV-B-000001');
   await expect(page.getByTestId('scan-outcome')).toContainText('Toto není etiketa AYVO');
+  await expect(scan).toHaveValue('');
+  await expect(scan).toBeFocused();
 
-  await scan.fill(urls[1]!);
-  await scan.press('Enter');
+  await scanByKeyboard(urls[1]!);
   await expect(page.getByTestId('scan-outcome')).toContainText(`${codes[1]} – etiketa nalepena`);
   await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 0 ks');
   await expect(page.getByText('Šarže je vyčerpaná', { exact: true })).toBeVisible();
