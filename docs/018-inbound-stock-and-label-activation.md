@@ -244,6 +244,12 @@ receipt first.
 
 ## 10. Warehouse workflows (UI)
 
+> **Amended by [doc 019](019-app-shell-and-information-architecture.md) / ADR 0020 (2026-10-11):**
+> label application belongs to **Výroba** (Production) at `/production/label-activation`
+> (`/warehouse/labels` redirects there) and its session also binds a bottle series (server-side
+> `WRONG_SERIES`). `/warehouse` is the warehouse overview. The whole internal application is now
+> Czech, including bottle and template pages. The workflow descriptions below remain valid.
+
 New top-level **Sklad** — warehouse and operator screens are **Czech** (owner, 2026-10-11): each
 screen is linguistically consistent; strings live in a separate Czech dictionary
 (`apps/web/src/i18n/cs`), not in components or domain logic, so the screens are translation-ready.
@@ -282,15 +288,15 @@ every user is effectively an administrator. **This is not authorization**; it bl
 (ADR 0017). Every endpoint is tagged in this document with the permission it will need, so guards
 are mechanical once authentication exists:
 
-| Permission (future)            | Endpoints / screens                         | Roles                                                                                |
-| ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `warehouse.label.apply`        | label application scan                      | warehouse operator, manager                                                          |
-| `inventory.receive`            | receive goods, upload supplier documents    | warehouse operator, manager                                                          |
-| `inventory.correct`            | receipt corrections                         | warehouse manager                                                                    |
-| `inventory.read`               | stock, ledger, receipts (quantities)        | operator (own workflows), manager, procurement, sales (availability), finance, admin |
-| `inventory.read.prices`        | unit prices, currency, VAT on receipt lines | procurement, finance, admin                                                          |
-| `inventory.items.manage`       | items, planning settings                    | administrator (procurement: settings)                                                |
-| `procurement.suppliers.manage` | suppliers                                   | administrator, procurement                                                           |
+| Permission (future)            | Endpoints / screens                                             | Roles                                                                                |
+| ------------------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `warehouse.label.apply`        | label application scan (→ `production.label.apply`, doc 019 §5) | warehouse operator, manager                                                          |
+| `inventory.receive`            | receive goods, upload supplier documents                        | warehouse operator, manager                                                          |
+| `inventory.correct`            | receipt corrections                                             | warehouse manager                                                                    |
+| `inventory.read`               | stock, ledger, receipts (quantities)                            | operator (own workflows), manager, procurement, sales (availability), finance, admin |
+| `inventory.read.prices`        | unit prices, currency, VAT on receipt lines                     | procurement, finance, admin                                                          |
+| `inventory.items.manage`       | items, planning settings                                        | administrator (procurement: settings)                                                |
+| `procurement.suppliers.manage` | suppliers                                                       | administrator, procurement                                                           |
 
 Later roles (owner, 2026-10-11): warehouse operator, warehouse manager, procurement, sales
 representative, sales manager, finance, administrator, hotel user (read-only own hotel, never
@@ -379,7 +385,8 @@ Admin API (all under `/api/admin`, Zod contracts in `packages/types`: `inventory
 | `POST label-applications`, `GET label-applications`                    | the scan; recent applications (`warehouse.label.apply`)        |
 | `GET bottles/:code/physical`                                           | label application, source lot/receipt, component history       |
 
-Czech screens: `/warehouse/labels` (default; `/warehouse` redirects), `/warehouse/receipts/new`,
+Czech screens (placement since doc 019: `/warehouse` overview, label application at
+`/production/label-activation`): `/warehouse/labels` (redirect), `/warehouse/receipts/new`,
 `/warehouse/receipts`, `/warehouse/receipts/[code]`, `/warehouse/stock`, `/warehouse/movements`,
 `/warehouse/suppliers`; strings in `apps/web/src/i18n/cs/warehouse.ts`.
 
