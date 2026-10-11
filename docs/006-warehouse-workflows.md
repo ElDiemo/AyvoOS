@@ -47,7 +47,7 @@ sequenceDiagram
   API->>DB: tx: crate COMPLETE + event
 ```
 
-Per-scan validation (proposal): bottle exists, is not retired, not quarantined, not in another active crate, is in a fillable state; crate is in FILLING, not full; product and size match the crate's product and size (confirmed READY rule).
+Per-scan validation (proposal): bottle exists, is not retired, has no active hold (quarantine is a `bottle_holds` overlay, doc 020), not in another active crate, is in a fillable state; crate is in FILLING, not full; product and size match the crate's product and size (confirmed READY rule).
 
 ### Picking a service delivery
 

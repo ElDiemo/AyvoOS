@@ -79,3 +79,8 @@ completed reuse cycles, which needs an unambiguous definition.
 - Are DISPOSED and DESTROYED one state or two?
 - Which state a bottle re-enters after a reversed retirement (e.g.
   `SORTED` or `QUARANTINED`).
+
+  > _Editorial note (2026-10-11):_ quarantine is no longer a lifecycle state;
+  > it is an active `bottle_holds` row (eligibility overlay) — see
+  > [doc 020 §3.5](../020-production-core-v0.1.md). Read `QUARANTINED` above
+  > as "re-enters with a quarantine hold".

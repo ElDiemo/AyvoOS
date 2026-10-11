@@ -52,8 +52,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - **Production (owner 2026-10-11, doc 020):** product ≠ label template; a production order fixes
   product, recipe version, label version and planned quantity (= currently eligible bottles). The
   first physically confirmed label permanently binds the bottle's product category
-  (`HAND_SOAP`/`SHOWER_GEL`). Holds (quarantine) are an eligibility overlay, not a status. No
-  activation outside a production order once the production scan exists.
+  (`HAND_SOAP`/`SHOWER_GEL`). Quarantine is an active `bottle_hold` (eligibility overlay), not a
+  status. A completed order is never reopened. The stock ledger follows physical truth; reservation
+  coverage is derived (priority → `ready_at` → order code, whole reservations only). No activation
+  outside a production order once the production scan exists. v0.1 deliveries are whole crates of
+  40 (doc 008).
 - **Authentication (owner 2026-10-11, ADR 0022):** external OIDC (WorkOS AuthKit preferred);
   users, roles, permissions, scopes and audit actors are authoritative in PostgreSQL; never
   authorize from an unverified external claim. Implemented before the production workflows.

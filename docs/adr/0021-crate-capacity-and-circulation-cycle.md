@@ -64,8 +64,9 @@ AT_HOTEL → RETURNING → RECEIVED → CLOSED`, with `ABORTED` as the controlle
 
 ### Negative
 
-- Delivery quantities are now multiples of 40 bottles per product (doc 008); the existing open
-  question about quantities that are not exact multiples remains open.
+- Deliveries are whole crates: v0.1 customer order lines are expressed in crates of 40, so the
+  dispatched quantity per standard product is a multiple of 40; smaller quantities need a separate
+  crate type and commercial product (doc 008).
 - Long-lived open assembly cycles are possible when production is slow (visible in the Bedny UI).
 
 ## Alternatives considered
@@ -77,5 +78,4 @@ AT_HOTEL → RETURNING → RECEIVED → CLOSED`, with `ABORTED` as the controlle
 
 ## Open questions
 
-- Delivery quantities that are not multiples of 40 (doc 008).
 - Crate washing, damage and retirement criteria (doc 005).

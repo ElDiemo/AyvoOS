@@ -149,10 +149,12 @@ authentication and permission.
 | `bottle_events` (new columns) | nullable production_order_id, crate_cycle_id, session_id, operation_request_id — existing rows stay `NULL`, no backfill                                                                                             |
 | new event types               | `ASSIGNED_TO_CRATE`, `REMOVED_FROM_CRATE`, `QUARANTINED`, `IDENTITY_VOIDED`, `REPLACEMENT_REQUESTED` (on the defective bottle, referencing the replacement identity)                                                |
 
-`bottle_holds` is an **eligibility overlay**, not a lifecycle status: every operational guard
-(production scan, reassignment, future filling, picking, delivery) refuses a bottle with an open
-hold. After activation a bottle stays `LABELED_EMPTY` while on hold; it never reverts to
-`CREATED`.
+**Quarantine is an active `bottle_holds` row**, an eligibility overlay — not a separate lifecycle
+state. After activation the bottle's state stays `LABELED_EMPTY` (never `CREATED`) while it is on
+hold. An active hold makes the bottle ineligible for production (scan, reassignment), crate
+assignment and dispatch (and every later step such as filling and picking) until the hold is
+explicitly resolved by the future Quality workflow. The event `QUARANTINED` records the opening of
+such a hold; it is not a status.
 
 ### 3.6 Labels (`label-production`)
 
@@ -168,12 +170,13 @@ new bottle identity.
 
 ### 3.7 Production (`production`)
 
-| Table                       | Key columns and rules                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `production_orders`         | id, serial, code `PO-000001`, client_request_id (unique), status, planned_quantity (1–1000 in v0.1), **immutable snapshot**: product_id, category_code, recipe_version_id, label_template_version_id, activation_bom_version_id; progress counters (section 7); material_blocked (overlay, section 5); timestamps; created_by, released_by, cancelled_by, cancel_reason |
-| `production_order_series`   | production_order_id, creation_batch_id (unique), purpose `PLANNED`/`REPLACEMENT`, defect_hold_id (required for `REPLACEMENT`) — v0.1: exactly one `PLANNED` series per order (partial unique, droppable later); `REPLACEMENT` series hold replacement identities                                                                                                        |
-| `production_work_sessions`  | section 6                                                                                                                                                                                                                                                                                                                                                               |
-| `production_session_events` | append-only session history: opened, crate claimed/released, lot selected, heartbeat gap, expired-observed, resumed, released, taken over (reason), closed                                                                                                                                                                                                              |
+| Table                           | Key columns and rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `production_orders`             | id, serial, code `PO-000001`, client_request_id (unique), kind `STANDARD`/`REPLACEMENT`, replaces_production_order_id (`REPLACEMENT` only), status, planned_quantity (1–1000 in v0.1), **priority** (integer, higher first; set at creation, changed only by a reason-required, audited `PRIORITY_CHANGED` operation), ready_at, **immutable snapshot**: product_id, category_code, recipe_version_id, label_template_version_id, activation_bom_version_id; progress counters (section 7) incl. `accepted_count_at_completion` (frozen at `COMPLETED`); material_blocked (derived from reservation coverage, section 5); timestamps; created_by, released_by, cancelled_by, cancel_reason |
+| `production_order_series`       | production_order_id, creation_batch_id (unique), purpose `PLANNED`/`REPLACEMENT`, defect_hold_id (required for `REPLACEMENT`) — v0.1: exactly one normal `PLANNED` series per order (partial unique, droppable for orders > 1000 later); `REPLACEMENT` series only for traceable replacements **before** the order is `COMPLETED`                                                                                                                                                                                                                                                                                                                                                          |
+| `production_order_replacements` | replacement_order_id, defect_hold_id (unique) — links a `REPLACEMENT` order to the defect record(s) found after the original order was `COMPLETED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `production_work_sessions`      | section 6                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `production_session_events`     | append-only session history: opened, crate claimed/released, lot selected, heartbeat gap, expired-observed, resumed, released, taken over (reason), closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Database links: composite FK (product_id, label_template_version_id) → open product-label approval;
 (recipe_version_id, product_id) → approved recipe of that product; unique (id, product_id,
@@ -181,11 +184,12 @@ recipe_version_id, label_template_version_id) so assignments can reference the f
 
 ### 3.8 Inventory reservations (`inventory`)
 
-| Table                             | Key columns and rules                                                                                                                                                                                                                                                          |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `inventory_reservations`          | id, item_id, unit_id, location_id, lot_id (NULL = item/location level), demand_type `PRODUCTION_ORDER`, production_order_id, bom_line_id, quantity_reserved, **open_quantity**, **uncovered_quantity** (trigger-maintained), created_at/by, operation_request_id               |
-| `inventory_reservation_movements` | append-only: reservation_id, type `RESERVE`/`CONSUME`/`RELEASE`/`MARK_UNCOVERED`/`RESTORE_COVERAGE`, quantity_delta, inventory_movement_id (unique; required for `CONSUME`), receipt_correction_id (for `MARK_UNCOVERED`), operation_request_id, occurred_at, actor_id, reason |
-| `inventory_reservation_totals`    | per (item, location): open and uncovered totals — written only by trigger                                                                                                                                                                                                      |
+| Table                                   | Key columns and rules                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inventory_reservations`                | id, item_id, unit_id, location_id, lot_id (NULL = item/location level), demand_type `PRODUCTION_ORDER`, production_order_id, bom_line_id, quantity_reserved, **open_quantity**, **coverage_status** `COVERED`/`UNDER_COVERED` (whole reservation — no partial coverage in v0.1), **manual_pin** (NULL or `PINNED` by a `WAREHOUSE_SUPERVISOR`, reason required), coverage_changed_at, created_at/by, operation_request_id |
+| `inventory_reservation_movements`       | append-only quantity history: reservation_id, type `RESERVE`/`CONSUME`/`RELEASE`, quantity_delta, inventory_movement_id (unique; required for `CONSUME`), operation_request_id, occurred_at, actor_id, reason                                                                                                                                                                                                             |
+| `inventory_reservation_coverage_events` | append-only coverage history: reservation_id, from/to status, cause `RECALCULATION`/`MANUAL_REALLOCATION`, triggering operation (receipt, receipt correction, release, cancellation, replacement, priority change, manual), reason (required for manual), actor_id, operation_request_id, occurred_at — manual changes also write an audit event                                                                          |
+| `inventory_reservation_totals`          | per (item, location): open total and covered total — written only by trigger                                                                                                                                                                                                                                                                                                                                              |
 
 ## 4. State machines
 
@@ -209,6 +213,10 @@ READY ──cancel (reason; only with zero activations)──► CANCELLED
   in one transaction. Cancelling `IN_PROGRESS` and **short close are not in v0.1**; their future
   design must reconcile every unused identity, print and reservation the same way.
 - No status is ever set manually; every transition is a named, permission-guarded operation.
+- `COMPLETED` is final: it is never reopened; later defects are recorded against the historical
+  order and replaced through a new `REPLACEMENT` order (section 7).
+- An order with an `UNDER_COVERED` reservation is `material_blocked` (an overlay, not a status) and
+  refuses scans until coverage is restored (section 5.1).
 
 ### 4.2 CrateCycle — one full circulation (ADR 0021)
 
@@ -272,21 +280,57 @@ Lease expiry is **not** a status change (section 6).
 - **Each activation**: −1 stock movement on the session lot (existing type `LABEL_APPLICATION`)
   and a `CONSUME` reservation movement referencing exactly that stock movement — available stays
   unchanged (on hand and reserved both drop by one).
-- **Replacement identity** (section 7): `RESERVE` of one more activation unit in the same
-  transaction; if not available, the order becomes material-blocked.
-- **Cancellation**: `RELEASE` of the open quantity.
-- **Receipt correction below reserved** (owner decision): allowed — physical truth wins — but only
-  for `WAREHOUSE_SUPERVISOR`, after an impact preview listing affected reservations and production
-  orders, with a mandatory reason, in **one transaction** that records the correction, writes
-  `MARK_UNCOVERED` on **every** open reservation of that item/location (no invented priority
-  between orders) and sets the affected orders `material_blocked`. Availability is shown as a
-  shortage, never as a silent negative number, and blocked orders refuse scans
-  (`ORDER_MATERIAL_BLOCKED`). A `WAREHOUSE_SUPERVISOR` resolves coverage (`RESTORE_COVERAGE`) once
-  available stock covers the reservation again (e.g. after a receipt); the order unblocks in the
-  same transaction.
-- **Database checks:** open ≥ 0, uncovered between 0 and open; `CONSUME` matches its stock movement
-  (item, location, quantity) and belongs to a `LABEL_APPLIED` of the same order; at commit,
-  `COMPLETED`/`CANCELLED` ⇒ open = 0; an order with uncovered > 0 is material-blocked.
+- **Replacement identity before completion** (section 7): `RESERVE` of one more activation unit in
+  the same transaction, followed by the coverage recalculation below.
+- **Cancellation**: `RELEASE` of the open quantity, then recalculation.
+
+### 5.1 Physical truth vs. reservation coverage
+
+The **stock ledger always follows physical truth**: receipts, corrections and consumptions are
+recorded as they happened, and the protected balance never goes negative. **Reservation coverage
+is a derived operational decision** about which demands the physical stock currently backs; it is
+recalculated deterministically and never written into the ledger.
+
+A reservation is either `COVERED` (its whole open quantity is backed by on-hand stock) or
+`UNDER_COVERED`. v0.1 has **no partial coverage**: a reservation is never silently split.
+
+**Deterministic recalculation** (per item/location), run in the same transaction as every event
+that changes its on-hand stock or its open reservations — receipt, receipt correction, order
+release, cancellation, replacement reservation, priority change, manual reallocation (an
+activation consumes stock and its reservation together and needs none):
+
+1. capacity = on hand of the item/location (all lots);
+2. order the open reservations: manually pinned first, then **production-order priority, highest
+   first**; then **`ready_at`, oldest first**; then the **production-order code** as the stable
+   final tie-breaker;
+3. walk the list: while a reservation's open quantity fits into the remaining capacity it is
+   `COVERED` and its quantity is subtracted; the first reservation that does not fit and **every
+   later one** are `UNDER_COVERED` — the shortage tail. A lower-priority order never takes stock a
+   higher-priority order is waiting for;
+4. every status change writes a coverage event; an order with any `UNDER_COVERED` reservation is
+   `material_blocked` and may not proceed (scans refused with `ORDER_MATERIAL_BLOCKED`); it
+   unblocks automatically when a later recalculation covers it again (e.g. after a receipt).
+
+**Release to READY** never displaces existing coverage: it is refused with
+`INSUFFICIENT_AVAILABLE_STOCK` unless on hand − covered open total covers the new reservation. To
+put a later order first, a `PRODUCTION_SUPERVISOR` changes its priority (reason, audit), which
+triggers the recalculation.
+
+**Receipt correction below reserved** (owner decision): allowed — physical truth wins — only for
+`WAREHOUSE_SUPERVISOR`, after an **impact preview** computed with the same algorithm (which
+reservations and production orders would become under-covered), with a mandatory reason, in **one
+transaction**: the correction, the recalculation, the coverage events and the order blocks.
+Availability is shown as a shortage, never as a silent negative number, and reservations are never
+presented as covered when they are not.
+
+**Manual reallocation:** a `WAREHOUSE_SUPERVISOR` may pin or unpin reservations (reason required,
+audit event); pinned reservations are covered first, and pins can never cover more than on hand.
+The pin is cleared when the reservation is consumed, released or unpinned.
+
+**Database checks:** open ≥ 0; `CONSUME` matches its stock movement (item, location, quantity)
+and belongs to a `LABEL_APPLIED` of the same order; at commit, per item/location the open total of
+`COVERED` reservations ≤ on hand; `material_blocked` ⇔ any `UNDER_COVERED` reservation of the
+order; `COMPLETED`/`CANCELLED` ⇒ open = 0.
 
 ## 6. ProductionWorkSession — lease and takeover
 
@@ -319,30 +363,38 @@ close_reason. Choices change only through operations that also write `production
 ## 7. Progress, defects and replacements
 
 `planned_quantity` = the required number of **currently eligible physical bottles** produced by
-the order. Counters on the order (current state, changed only with their events):
+the order. Counters on the order distinguish history from current accepted output (current state,
+changed only with their events):
 
-| Counter             | Meaning                                                                         |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `activated_count`   | identities of this order activated (`LABEL_APPLIED`) — history, never decreases |
-| `eligible_count`    | activated by this order, no open hold, not scrapped — the completion measure    |
-| `on_hold_count`     | activated by this order with an open hold (rework/quarantine)                   |
-| `scrapped_count`    | bodies scrapped (future Quality workflow; 0 in v0.1)                            |
-| `replacement_count` | replacement identities created for defects                                      |
+| Counter                        | Meaning                                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `activated_count`              | identities of this order activated (`LABEL_APPLIED`) — history, never decreases                  |
+| `eligible_count`               | activated by this order, no active hold, not scrapped — currently eligible accepted output       |
+| `on_hold_count`                | activated by this order with an active hold (rework/quarantine)                                  |
+| `scrapped_count`               | bodies scrapped (future Quality workflow; 0 in v0.1)                                             |
+| `replacement_count`            | replacement identities created in this order's `REPLACEMENT` series before completion            |
+| `accepted_count_at_completion` | `eligible_count` frozen at `COMPLETED` — historical evidence of what was accepted, never changed |
+| `post_completion_loss_count`   | bottles of this order found defective after `COMPLETED` (exceptions recorded later)              |
 
 - The order becomes `COMPLETED` only when `eligible_count = planned_quantity` (commit-time check
-  against events and holds).
-- **Damaged body after assignment** (removal, section 9): the activation and its stock consumption
-  remain history; the bottle gets a hold and leaves eligible output; the order may create an
-  explicit **replacement identity** tied to the defect (`REPLACEMENT` series of one identity
-  referencing the hold, `REPLACEMENT_REQUESTED` event on the defective bottle, one more unit
-  reserved, a `REPRINT`-style single-label print job). The replacement is activated by a normal
-  scan.
+  against events and holds); at that moment `accepted_count_at_completion` is frozen.
+- **Before `COMPLETED` — damaged body:** the activation and its stock consumption remain history;
+  the bottle gets an active hold and no longer counts toward eligible output; the order may create
+  an explicit **replacement identity** in a `REPLACEMENT` series linked to the **same order** and
+  the **defect record** (the hold), with a `REPLACEMENT_REQUESTED` event on the defective bottle,
+  one more unit reserved (recalculated coverage) and a single-label print job. The replacement is
+  activated by a normal scan and counts toward eligible output.
+- **After `COMPLETED` — never reopened.** A later defect (e.g. removal from a `READY_TO_FILL`
+  crate) is recorded against the historical order and crate (hold, events,
+  `post_completion_loss_count`, crate events); the order keeps its accepted-at-completion figure as
+  evidence. Any required replacement is a **new production order** of kind `REPLACEMENT`
+  (`replaces_production_order_id`, defect holds linked in `production_order_replacements`) with its
+  own release, reservation, series and normal lifecycle. The crate's freed ordinal is filled by any
+  later compatible order.
 - **Damaged label only:** the same identity is kept; the label item is voided and reprinted for
   that identity (`REPRINT` job). No replacement bottle, no new identity.
-- **Defect found after the order is `COMPLETED`** (e.g. removal from a `READY_TO_FILL` crate): the
-  order is not reopened (statuses only move forward); its counters record the loss, and the crate's
-  freed ordinal is filled by a later compatible order. Replacing the lost output is planned as a
-  new order.
+- Therefore "one planned series per order in v0.1" means one normal `PLANNED` series; explicit
+  `REPLACEMENT` series exist only for traceable replacements before completion.
 
 ## 8. The production scan — transaction and exact lock order
 
@@ -405,10 +457,11 @@ Any failure — including a commit-time check — rolls back everything. Rejecti
   matching snapshots), cycle `ABORTED`, crate event, sessions holding the crate closed.
 - **Release / cancel order:** request → sessions of the order → order → reservation (new or
   existing) → reservation totals → balances.
-- **Receipt correction below reserved:** request → affected orders (found by reading the open
-  reservations of the item/location, id order) → reservations (id order) → reservation totals →
-  balances (the receipt line lock of the existing correction comes before the balances, as today).
-- **Restore coverage:** request → affected orders → reservations → reservation totals → balances.
+- **Coverage recalculation** (receipt, receipt correction, release, cancellation, replacement
+  reservation, priority change, manual reallocation): request → every order with an open
+  reservation of the item/location (found by reading, id order) → those reservations (id order) →
+  reservation totals → balances (the existing receipt-line lock of a correction comes before the
+  balances, as today).
 - **Session takeover / release / heartbeat:** request → session → crate.
 
 ## 9. Database invariants
@@ -424,6 +477,8 @@ Any failure — including a commit-time check — rolls back everything. Rejecti
 | no eligibility while on hold                                                  | guards in every operation + commit-time check that no assignment is created for a bottle with an open hold                                                                                                                   |
 | no double consumption                                                         | existing (one `LABEL_APPLIED` per bottle, movement ↔ event, protected balance) + `CONSUME` ↔ stock movement unique + order activation BOM (commit-time)                                                                      |
 | no activation outside an order                                                | insert trigger: a new `LABEL_APPLIED` without production_order_id is refused (existing rows unaffected)                                                                                                                      |
+| reservation coverage never overstated                                         | commit-time: per item/location the open total of `COVERED` reservations ≤ on hand; `material_blocked` ⇔ an `UNDER_COVERED` reservation                                                                                       |
+| completed orders are historical evidence                                      | `accepted_count_at_completion` written once at `COMPLETED`; no transition out of `COMPLETED`; replacements after completion only through a new `REPLACEMENT` order                                                           |
 | one active session per crate                                                  | partial unique `production_work_sessions(crate_id) WHERE status = 'ACTIVE'`                                                                                                                                                  |
 | forward-only status                                                           | transition triggers on orders, cycles (the one supervised `READY_TO_FILL → OPEN_ASSEMBLY` step requires a `RETURNED_TO_ASSEMBLY` crate event in the same transaction), recipes, sessions                                     |
 | actors present                                                                | `NOT NULL` actor columns referencing `users` on all new tables                                                                                                                                                               |
@@ -466,31 +521,32 @@ refuse. `ADMIN` manages users, roles and configuration; it may execute any opera
 only as an **emergency override** with an explicit reason and an `EMERGENCY_OVERRIDE` audit event
 — it is not the routine production approver.
 
-| Permission                                  | PROD. OPERATOR | PROD. SUPERVISOR | WH. OPERATOR | WH. SUPERVISOR |   ADMIN    |
-| ------------------------------------------- | :------------: | :--------------: | :----------: | :------------: | :--------: |
-| `production:order_read`                     |       ✓        |        ✓         |              |                |     ✓      |
-| `production:order_create` (draft)           |                |        ✓         |              |                | emergency  |
-| `production:order_release`                  |                |        ✓         |              |                | emergency  |
-| `production:order_cancel`                   |                |        ✓         |              |                | emergency  |
-| `production:scan` (session, crate, bottles) |       ✓        |        ✓         |              |                | emergency  |
-| `production:session_release_own`            |       ✓        |        ✓         |              |                |            |
-| `production:session_takeover`               |                |        ✓         |              |                | ✓ (reason) |
-| `production:defect_report`                  |       ✓        |        ✓         |              |                |            |
-| `production:crate_remove_bottle`            |                |        ✓         |              |                | emergency  |
-| `production:cycle_abort`                    |                |        ✓         |              |                | emergency  |
-| `production:replacement_create`             |                |        ✓         |              |                | emergency  |
-| `labels:item_void_single` + reprint request |       ✓        |        ✓         |              |                |            |
-| `labels:item_void_bulk` / exceptional       |                |        ✓         |              |                | emergency  |
-| `catalog:recipe_approve`                    |                |        ✓         |              |                | emergency  |
-| `catalog:product_manage`, label approvals   |                |        ✓         |              |                | emergency  |
-| `crates:register`, crate labels             |                |        ✓         |              |       ✓        |     ✓      |
-| `crates:read` (internal detail)             |       ✓        |        ✓         |      ✓       |       ✓        |     ✓      |
-| `inventory:receive`, supplier documents     |                |                  |      ✓       |       ✓        |            |
-| `inventory:correct`                         |                |                  |              |       ✓        | emergency  |
-| `inventory:correct_below_reserved`          |                |                  |              |       ✓        | emergency  |
-| `inventory:reservation_resolve`             |                |                  |              |       ✓        | emergency  |
-| `inventory:read`                            |       ✓        |        ✓         |      ✓       |       ✓        |     ✓      |
-| `identity:users_manage`, roles, config      |                |                  |              |                |     ✓      |
+| Permission                                                     | PROD. OPERATOR | PROD. SUPERVISOR | WH. OPERATOR | WH. SUPERVISOR |   ADMIN    |
+| -------------------------------------------------------------- | :------------: | :--------------: | :----------: | :------------: | :--------: |
+| `production:order_read`                                        |       ✓        |        ✓         |              |                |     ✓      |
+| `production:order_create` (draft)                              |                |        ✓         |              |                | emergency  |
+| `production:order_release`                                     |                |        ✓         |              |                | emergency  |
+| `production:order_cancel`                                      |                |        ✓         |              |                | emergency  |
+| `production:order_priority_change` (reason + audit)            |                |        ✓         |              |                | emergency  |
+| `production:scan` (session, crate, bottles)                    |       ✓        |        ✓         |              |                | emergency  |
+| `production:session_release_own`                               |       ✓        |        ✓         |              |                |            |
+| `production:session_takeover`                                  |                |        ✓         |              |                | ✓ (reason) |
+| `production:defect_report`                                     |       ✓        |        ✓         |              |                |            |
+| `production:crate_remove_bottle`                               |                |        ✓         |              |                | emergency  |
+| `production:cycle_abort`                                       |                |        ✓         |              |                | emergency  |
+| `production:replacement_create`                                |                |        ✓         |              |                | emergency  |
+| `labels:item_void_single` + reprint request                    |       ✓        |        ✓         |              |                |            |
+| `labels:item_void_bulk` / exceptional                          |                |        ✓         |              |                | emergency  |
+| `catalog:recipe_approve`                                       |                |        ✓         |              |                | emergency  |
+| `catalog:product_manage`, label approvals                      |                |        ✓         |              |                | emergency  |
+| `crates:register`, crate labels                                |                |        ✓         |              |       ✓        |     ✓      |
+| `crates:read` (internal detail)                                |       ✓        |        ✓         |      ✓       |       ✓        |     ✓      |
+| `inventory:receive`, supplier documents                        |                |                  |      ✓       |       ✓        |            |
+| `inventory:correct`                                            |                |                  |              |       ✓        | emergency  |
+| `inventory:correct_below_reserved`                             |                |                  |              |       ✓        | emergency  |
+| `inventory:reservation_reallocate` (pin/unpin, reason + audit) |                |                  |              |       ✓        | emergency  |
+| `inventory:read`                                               |       ✓        |        ✓         |      ✓       |       ✓        |     ✓      |
+| `identity:users_manage`, roles, config                         |                |                  |              |                |     ✓      |
 
 "Single" label void = one unused, damaged label of an identity not yet activated (operator);
 anything else (several items at once, an already activated identity, a whole series) is
@@ -503,15 +559,15 @@ orders is not modelled in v0.1.
 All migrations are additive; enum additions get their own migration (PostgreSQL enum values are
 not usable in the transaction that adds them — same as Milestone 2A).
 
-| #   | Migration               | Content                                                                                                                                                                               |
-| --- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | identity                | users, user_identities, roles (seed), role_permissions (seed), user_roles, user_scopes, audit_events                                                                                  |
-| 2   | enum values             | bottle events `ASSIGNED_TO_CRATE`, `REMOVED_FROM_CRATE`, `QUARANTINED`, `IDENTITY_VOIDED`, `REPLACEMENT_REQUESTED`; consumption stage `FILL`; print-job kind; new operation kinds     |
-| 3   | catalog                 | product_categories (seed 2), products, product_label_approvals, recipe_versions, recipe_version_stages                                                                                |
-| 4   | crates                  | crate_types (seed 2, capacity 40), crate_type_categories, qr_identities (+ copy of existing bottle tokens), crate_registrations, crates, crate label print jobs/items, crate_events   |
-| 5   | orders and reservations | production_orders, production_order_series, inventory_reservations, reservation movements and totals (+ triggers), label_print_item_voids, print-job kind rule, bottle_identity_voids |
-| 6   | work sessions           | production_work_sessions, production_session_events, partial unique indexes                                                                                                           |
-| 7   | cycles and assignment   | crate_cycles, crate_assignments, bottle_category_bindings, bottle_holds, new nullable bottle_events columns, all commit-time checks, "LABEL_APPLIED only with an order"               |
+| #   | Migration               | Content                                                                                                                                                                                                                                                                                                                              |
+| --- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | identity                | users, user_identities, roles (seed), role_permissions (seed), user_roles, user_scopes, audit_events                                                                                                                                                                                                                                 |
+| 2   | enum values             | bottle events `ASSIGNED_TO_CRATE`, `REMOVED_FROM_CRATE`, `QUARANTINED`, `IDENTITY_VOIDED`, `REPLACEMENT_REQUESTED`; consumption stage `FILL`; print-job kind; new operation kinds                                                                                                                                                    |
+| 3   | catalog                 | product_categories (seed 2), products, product_label_approvals, recipe_versions, recipe_version_stages                                                                                                                                                                                                                               |
+| 4   | crates                  | crate_types (seed 2, capacity 40), crate_type_categories, qr_identities (+ copy of existing bottle tokens), crate_registrations, crates, crate label print jobs/items, crate_events                                                                                                                                                  |
+| 5   | orders and reservations | production_orders (kind, priority, ready_at, counters), production_order_series, production_order_replacements, inventory_reservations (coverage status, manual pin), reservation movements, coverage events and totals (+ triggers, commit-time coverage check), label_print_item_voids, print-job kind rule, bottle_identity_voids |
+| 6   | work sessions           | production_work_sessions, production_session_events, partial unique indexes                                                                                                                                                                                                                                                          |
+| 7   | cycles and assignment   | crate_cycles, crate_assignments, bottle_category_bindings, bottle_holds, new nullable bottle_events columns, all commit-time checks, "LABEL_APPLIED only with an order"                                                                                                                                                              |
 
 **Existing data stays untouched.** New columns are nullable without backfill; bottle tokens are
 copied into the registry (bottle rows unchanged). The 12 `CREATED` DEV identities and series
@@ -534,8 +590,9 @@ the pilot/production database**; DEV rows are never deleted (bottles reject DELE
 3. **Catalog and crates** — products, label approvals, recipes, crate types/registration/labels
    (migrations 2–4).
 4. **Production orders and material reservations** — creation, release, cancellation with
-   reconciliation, label void/reprint, receipt correction below reserved, real available stock
-   (migration 5).
+   reconciliation, priorities and deterministic reservation coverage, manual reallocation, label
+   void/reprint, replacements, receipt correction below reserved with impact preview, real
+   available stock (migration 5).
 5. **Server-side work sessions** — open, heartbeat lease, resume, claim/release crate, takeover
    (migration 6).
 6. **Atomic activation + crate assignment** — the production scan, removal, abort, reassignment,

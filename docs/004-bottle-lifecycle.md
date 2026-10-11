@@ -20,7 +20,7 @@ Status: Draft — foundation phase (2026-10-10)
 - Returned bottles are identified individually during sorting/processing and can be routed to washing, inspection, quarantine or retirement.
 - **Product category binding** _(owner, 2026-10-11)_: the first physically confirmed label permanently binds the bottle to its product category (`HAND_SOAP` or `SHOWER_GEL`); a hand-soap bottle can never become a shower-gel bottle. The exact product, recipe and label version belong to the production order, the crate assignment and the cycle snapshot ([doc 020](020-production-core-v0.1.md)).
 - **Crate membership is not a bottle status** _(owner, 2026-10-11)_: it is a time-bounded assignment to a crate cycle ([ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)).
-- **Holds (quarantine) are an eligibility overlay**, not a lifecycle status _(owner, 2026-10-11)_: an open hold blocks every operational step until resolved; an activated bottle on hold stays `LABELED_EMPTY` and never reverts to `CREATED`.
+- **Quarantine is an active `bottle_hold`** — an eligibility overlay, not a lifecycle status _(owner, 2026-10-11)_: an active hold makes the bottle ineligible for production, crate assignment and dispatch until explicitly resolved; after activation the bottle's state stays `LABELED_EMPTY` and never reverts to `CREATED`.
 
 ## Example lifecycle (from the brief)
 
@@ -118,7 +118,7 @@ Definition _(confirmed by owner 2026-10-10)_: a reuse cycle is completed when a 
 
 - ~~QR payload/URL/domain format~~ (resolved: [ADR 0014](adr/0014-public-qr-identity-and-url.md)); engraving vs. printed labels, and what happens if a QR label becomes unreadable or damaged (re-label while keeping identity?).
 - Retirement criteria (max reuse cycles, damage, inspection failure) and who may retire a bottle.
-- Who is authorized to reverse a retirement, and which state the bottle re-enters (e.g. SORTED or QUARANTINED).
+- Who is authorized to reverse a retirement, and which state the bottle re-enters (e.g. SORTED, possibly with an active quarantine hold).
 - Are DISPOSED and DESTROYED one state or two?
 - Quarantine criteria and release rules.
 - ~~Can a bottle be refilled with a different product than before?~~ — resolved 2026-10-11: only within its permanently bound product category (doc 020).
