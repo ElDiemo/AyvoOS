@@ -2,7 +2,8 @@
 // Starts the BUILT API for the web app's Playwright tests (apps/web/playwright.config.ts):
 //   1. recreates the dedicated database `ayvo_e2e` on the dev PostgreSQL server (never the dev DB),
 //   2. applies the committed migrations (`prisma migrate deploy`),
-//   3. runs dist/main.js with a temporary file store.
+//   3. bootstraps the first administrator (e2e-admin@ayvo.test) with the one-time command,
+//   4. runs dist/main.js with a temporary file store and the fake identity provider (APP_ENV=test).
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
@@ -32,15 +33,26 @@ execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy']
   stdio: 'inherit',
 });
 
+const testEnv = {
+  ...process.env,
+  APP_ENV: 'test',
+  AUTH_PROVIDER: 'test',
+  DATABASE_URL: e2eUrl,
+  APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
+};
+execFileSync(
+  process.execPath,
+  ['dist/identity/bootstrap-admin.js', '--email', 'e2e-admin@ayvo.test', '--name', 'E2E Admin'],
+  { cwd: apiRoot, env: testEnv, stdio: 'inherit' },
+);
+
 const port = process.env.E2E_API_PORT ?? '4100';
 const child = spawn(process.execPath, ['dist/main.js'], {
   cwd: apiRoot,
   stdio: 'inherit',
   env: {
-    ...process.env,
-    APP_ENV: 'test',
+    ...testEnv,
     API_PORT: port,
-    DATABASE_URL: e2eUrl,
     FILE_STORAGE_DIR: mkdtempSync(join(tmpdir(), 'ayvo-e2e-files-')),
     PUBLIC_QR_BASE_URL: process.env.E2E_PUBLIC_QR_BASE_URL ?? 'http://localhost:3100/q',
   },

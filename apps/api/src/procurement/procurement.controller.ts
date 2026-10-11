@@ -38,6 +38,7 @@ import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ProcurementService } from './procurement.service.js';
+import { RequirePermission } from '../identity/access.decorators.js';
 
 const RECEIPT_CODE = new ZodValidationPipe(goodsReceiptCodeSchema);
 const supplierListQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
@@ -50,6 +51,7 @@ const supplierListQuerySchema = z.object({ archived: z.enum(['true', 'false']).d
 export class ProcurementController {
   constructor(private readonly procurement: ProcurementService) {}
 
+  @RequirePermission('inventory:read')
   @Get('suppliers')
   suppliers(
     @Query(new ZodValidationPipe(supplierListQuerySchema))
@@ -58,6 +60,7 @@ export class ProcurementController {
     return this.procurement.listSuppliers(q.archived === 'true');
   }
 
+  @RequirePermission('procurement:suppliers_manage')
   @Post('suppliers')
   createSupplier(
     @Body(new ZodValidationPipe(createSupplierRequestSchema)) body: CreateSupplierRequest,
@@ -65,6 +68,7 @@ export class ProcurementController {
     return this.procurement.createSupplier(body);
   }
 
+  @RequirePermission('procurement:suppliers_manage')
   @Post('suppliers/:id/archive')
   @HttpCode(200)
   archiveSupplier(
@@ -74,12 +78,14 @@ export class ProcurementController {
     return this.procurement.archiveSupplier(id, body.requestId);
   }
 
+  @RequirePermission('inventory:read')
   @Get('suppliers/:id/documents')
   documents(@Param('id', ParseUUIDPipe) id: string): Promise<SupplierDocument[]> {
     return this.procurement.listDocuments(id);
   }
 
   /** multipart/form-data: fields of uploadSupplierDocumentFieldsSchema + one `file` (PDF/JPEG/PNG). */
+  @RequirePermission('inventory:receive')
   @Post('supplier-documents')
   @UseInterceptors(FileInterceptor('file'))
   upload(
@@ -91,6 +97,7 @@ export class ProcurementController {
     return this.procurement.uploadDocument(fields, file);
   }
 
+  @RequirePermission('inventory:read')
   @Get('supplier-documents/:id/content')
   @Header('Cache-Control', 'private, no-store')
   @Header('Content-Security-Policy', "default-src 'none'; sandbox")
@@ -103,6 +110,7 @@ export class ProcurementController {
     });
   }
 
+  @RequirePermission('inventory:read')
   @Get('goods-receipts')
   receipts(
     @Query(new ZodValidationPipe(goodsReceiptListQuerySchema)) query: GoodsReceiptListQuery,
@@ -110,6 +118,7 @@ export class ProcurementController {
     return this.procurement.listReceipts(query);
   }
 
+  @RequirePermission('inventory:receive')
   @Post('goods-receipts')
   createReceipt(
     @Body(new ZodValidationPipe(createGoodsReceiptRequestSchema)) body: CreateGoodsReceiptRequest,
@@ -117,12 +126,14 @@ export class ProcurementController {
     return this.procurement.createReceipt(body);
   }
 
+  @RequirePermission('inventory:read')
   @Get('goods-receipts/:code')
   receipt(@Param('code', RECEIPT_CODE) code: string): Promise<GoodsReceipt> {
     return this.procurement.getReceipt(code);
   }
 
   /** Append-only: adds a document (e.g. the invoice that arrived after the goods). */
+  @RequirePermission('inventory:receive')
   @Post('goods-receipts/:code/documents')
   @HttpCode(200)
   linkDocument(
@@ -133,6 +144,7 @@ export class ProcurementController {
   }
 
   /** Compensating correction of a receipt line (warehouse manager; reason required). */
+  @RequirePermission('inventory:correct')
   @Post('goods-receipts/:code/corrections')
   @HttpCode(200)
   correct(

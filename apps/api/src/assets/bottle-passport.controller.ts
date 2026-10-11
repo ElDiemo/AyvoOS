@@ -2,12 +2,14 @@ import type { PublicBottlePassport } from '@ayvo/types';
 import { Controller, Get, Header, Param } from '@nestjs/common';
 import { PUBLIC_PREFIX } from '../common/routes.js';
 import { BottlesService } from './bottles.service.js';
+import { Public } from '../identity/access.decorators.js';
 
 /**
  * Public bottle passport, resolved by the opaque QR token only. Anonymous, read-only and
  * whitelisted (doc 011). Kept in its own `/api/public` route family so rate limiting and a future
  * public QR host can target exactly these routes (doc 012).
  */
+@Public()
 @Controller(`${PUBLIC_PREFIX}/bottles`)
 export class BottlePassportController {
   constructor(private readonly bottles: BottlesService) {}

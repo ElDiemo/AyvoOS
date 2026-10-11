@@ -4,6 +4,9 @@ import { loadEnv } from './env.js';
 const valid = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/ayvo_test',
   REDIS_URL: 'redis://localhost:6379',
+  // Obviously fake identity-provider settings (development requires the real provider).
+  WORKOS_API_KEY: 'sk_test_not_a_real_key',
+  WORKOS_CLIENT_ID: 'client_not_a_real_id',
 };
 
 /** A production configuration that is complete except for what a test leaves out. */
@@ -13,6 +16,7 @@ const production = {
   PUBLIC_QR_BASE_URL: 'https://qr.ayvo.co',
   LABEL_QR_MIN_SIZE_MM: '15',
   LABEL_QR_ERROR_CORRECTION: 'Q',
+  APP_PUBLIC_ORIGIN: 'https://app.ayvo.example',
 };
 
 describe('loadEnv', () => {
@@ -68,5 +72,52 @@ describe('loadEnv', () => {
 
   it('refuses to start production on local (container) file storage', () => {
     expect(() => loadEnv(production)).toThrow(/Production file storage is not configured/);
+  });
+
+  describe('identity and access (ADR 0022)', () => {
+    it('uses the real provider outside tests and the fake provider only in tests', () => {
+      expect(loadEnv(valid)).toMatchObject({
+        AUTH_PROVIDER: 'workos',
+        APP_PUBLIC_ORIGIN: 'http://localhost:3000',
+      });
+      expect(
+        loadEnv({ DATABASE_URL: valid.DATABASE_URL, REDIS_URL: valid.REDIS_URL, APP_ENV: 'test' }),
+      ).toMatchObject({ AUTH_PROVIDER: 'test' });
+    });
+
+    it('never allows the fake provider on DEV or production (no authentication bypass)', () => {
+      expect(() => loadEnv({ ...valid, AUTH_PROVIDER: 'test' })).toThrow(/AUTH_PROVIDER=test/);
+      expect(() => loadEnv({ ...production, AUTH_PROVIDER: 'test' })).toThrow(/AUTH_PROVIDER=test/);
+    });
+
+    it('refuses to start without WorkOS credentials, and never echoes secret values', () => {
+      const withoutKey: Record<string, string> = { ...valid };
+      delete withoutKey.WORKOS_API_KEY;
+      expect(() => loadEnv(withoutKey)).toThrow(/WORKOS_API_KEY and WORKOS_CLIENT_ID are required/);
+      const secret = 'fake_secret_value_must_never_be_printed';
+      let message = '';
+      try {
+        loadEnv({ ...valid, WORKOS_API_KEY: secret, SESSION_IDLE_MINUTES: '1' });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/SESSION_IDLE_MINUTES/);
+      expect(message).not.toContain(secret);
+    });
+
+    it('requires APP_PUBLIC_ORIGIN in production and a sane session lifetime', () => {
+      const noOrigin: Record<string, string> = { ...production };
+      delete noOrigin.APP_PUBLIC_ORIGIN;
+      expect(() =>
+        loadEnv({
+          ...noOrigin,
+          WORKOS_API_KEY: valid.WORKOS_API_KEY,
+          WORKOS_CLIENT_ID: valid.WORKOS_CLIENT_ID,
+        }),
+      ).toThrow(/APP_PUBLIC_ORIGIN/);
+      expect(() =>
+        loadEnv({ ...valid, SESSION_IDLE_MINUTES: '600', SESSION_ABSOLUTE_HOURS: '2' }),
+      ).toThrow(/idle timeout/);
+    });
   });
 });

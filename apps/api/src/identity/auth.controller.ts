@@ -1,0 +1,174 @@
+import type { CurrentUser } from '@ayvo/types';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  NotFoundException,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { ENV, type Env } from '../config/env.js';
+import { Authenticated, Public } from './access.decorators.js';
+import { CurrentPrincipal } from './access.guard.js';
+import { AuthService } from './auth.service.js';
+import {
+  clearCookie,
+  LOGIN_BINDING_COOKIE,
+  readCookie,
+  serializeCookie,
+  SESSION_COOKIE,
+} from './cookies.js';
+import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider.js';
+import type { Principal } from './principal.js';
+import { TestIdentityProvider } from './test.provider.js';
+
+function redirect(res: ServerResponse, location: string, cookies: string[] = []): void {
+  res.statusCode = 302;
+  res.setHeader('Location', location);
+  res.setHeader('Cache-Control', 'no-store');
+  if (cookies.length > 0) res.setHeader('Set-Cookie', cookies);
+  res.end();
+}
+
+/**
+ * Sign-in, sign-out and the current user (ADR 0022). The browser reaches these routes
+ * same-origin under /api/auth; the identity provider redirects back to /api/auth/callback.
+ */
+@Controller('auth')
+export class AuthController {
+  constructor(
+    private readonly auth: AuthService,
+    @Inject(IDENTITY_PROVIDER) private readonly provider: IdentityProvider,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('login')
+  @Public()
+  async login(
+    @Query('next') next: unknown,
+    @Query('login_hint') loginHint: unknown,
+    @Res() res: ServerResponse,
+  ): Promise<void> {
+    const attempt = await this.auth.startLogin(
+      next,
+      typeof loginHint === 'string' ? loginHint : undefined,
+    );
+    redirect(res, attempt.redirectUrl, [
+      serializeCookie(LOGIN_BINDING_COOKIE, attempt.binding, attempt.bindingMaxAgeSeconds),
+    ]);
+  }
+
+  @Get('callback')
+  @Public()
+  async callback(
+    @Query('code') code: unknown,
+    @Query('state') state: unknown,
+    @Req() req: IncomingMessage,
+    @Res() res: ServerResponse,
+  ): Promise<void> {
+    const outcome = await this.auth.completeLogin({
+      code,
+      state,
+      binding: readCookie(req, LOGIN_BINDING_COOKIE),
+    });
+    const clearBinding = clearCookie(LOGIN_BINDING_COOKIE);
+    if (outcome.kind === 'ok') {
+      redirect(res, outcome.nextPath, [
+        clearBinding,
+        serializeCookie(SESSION_COOKIE, outcome.token, outcome.maxAgeSeconds),
+      ]);
+      return;
+    }
+    const target =
+      outcome.reason === 'ACCOUNT_INACTIVE'
+        ? '/account-inactive'
+        : outcome.reason === 'NO_ACCESS'
+          ? '/account-inactive?reason=no-access'
+          : '/login?error=invalid';
+    redirect(res, target, [clearBinding]);
+  }
+
+  @Post('logout')
+  @Authenticated()
+  @HttpCode(200)
+  async logout(
+    @CurrentPrincipal() principal: Principal,
+    @Res({ passthrough: true }) res: ServerResponse,
+  ): Promise<{ redirectUrl: string }> {
+    const redirectUrl = await this.auth.logout({
+      sessionId: principal.sessionId,
+      userId: principal.userId,
+    });
+    res.setHeader('Set-Cookie', [clearCookie(SESSION_COOKIE)]);
+    res.setHeader('Cache-Control', 'no-store');
+    return { redirectUrl };
+  }
+
+  @Get('me')
+  @Authenticated()
+  me(
+    @CurrentPrincipal() principal: Principal,
+    @Res({ passthrough: true }) res: ServerResponse,
+  ): CurrentUser {
+    res.setHeader('Cache-Control', 'no-store');
+    return {
+      user: { id: principal.userId, email: principal.email, displayName: principal.displayName },
+      roles: principal.roles,
+      permissions: [...principal.permissions].sort(),
+      scopes: principal.scopes.map((s) => ({
+        id: s.id,
+        type: s.type as CurrentUser['scopes'][number]['type'],
+        locationCode: s.locationCode,
+        scopeRef: s.scopeRef,
+        grantedAt: s.grantedAt.toISOString(),
+      })),
+      session: {
+        idleExpiresAt: principal.idleExpiresAt.toISOString(),
+        absoluteExpiresAt: principal.absoluteExpiresAt.toISOString(),
+      },
+    };
+  }
+
+  /**
+   * The fake provider's sign-in page — automated tests only. Answers 404 unless the process runs
+   * with the test provider (which the environment schema allows only with APP_ENV=test).
+   */
+  @Get('test-provider/authorize')
+  @Public()
+  testAuthorize(
+    @Query('state') state: unknown,
+    @Query('redirect_uri') redirectUri: unknown,
+    @Query('login_hint') loginHint: unknown,
+    @Res() res: ServerResponse,
+  ): void {
+    if (this.env.APP_ENV !== 'test' || !(this.provider instanceof TestIdentityProvider)) {
+      throw new NotFoundException();
+    }
+    if (redirectUri !== this.auth.callbackUrl || typeof state !== 'string') {
+      throw new NotFoundException();
+    }
+    if (typeof loginHint !== 'string' || loginHint === '') {
+      // The fake provider's "sign-in page": an e-mail field that comes back here as login_hint.
+      const esc = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(
+        `<!doctype html><html lang="en"><title>Test identity provider</title>` +
+          `<form method="get"><input type="hidden" name="state" value="${esc(state)}">` +
+          `<input type="hidden" name="redirect_uri" value="${esc(redirectUri)}">` +
+          `<label>E-mail <input name="login_hint" type="email" required></label>` +
+          `<button type="submit">Continue</button></form></html>`,
+      );
+      return;
+    }
+    const target = new URL(redirectUri);
+    target.searchParams.set('code', this.provider.issueCode(loginHint));
+    target.searchParams.set('state', state);
+    redirect(res, target.toString());
+  }
+}

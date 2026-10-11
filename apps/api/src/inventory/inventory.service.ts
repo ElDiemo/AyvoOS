@@ -123,6 +123,15 @@ export class InventoryService {
 
   // --- locations and lots ----------------------------------------------------------------------
 
+  /** All inventory locations (warehouses), for access-scope administration. */
+  listLocations(db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryLocation.findMany({ orderBy: { code: 'asc' } });
+  }
+
+  locationByCode(code: string, db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryLocation.findUnique({ where: { code } });
+  }
+
   async mainLocation(db: Prisma.TransactionClient = this.prisma) {
     const location = await db.inventoryLocation.findUnique({ where: { code: MAIN_LOCATION_CODE } });
     if (!location) throw new Error('Inventory location MAIN is missing (migration not applied)');
