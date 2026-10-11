@@ -44,7 +44,8 @@ Note: crate-level operations (allocate, dispatch, deliver) apply to all bottles 
 ```mermaid
 stateDiagram-v2
   [*] --> CREATED: CREATED
-  CREATED --> FILLED: FILLED
+  CREATED --> LABELED_EMPTY: LABEL_APPLIED (warehouse scan, consumes 1 new bottle)
+  LABELED_EMPTY --> FILLED: FILLED
   FILLED --> IN_CRATE: ASSIGNED_TO_CRATE
   IN_CRATE --> APPROVED: QUALITY_APPROVED (crate)
   APPROVED --> ALLOCATED: ALLOCATED_TO_DELIVERY (crate)
@@ -67,7 +68,9 @@ stateDiagram-v2
   DISPOSED --> [*]
 ```
 
-**Implemented in Milestone 1 (DEV)** ([016](016-bottles-and-labels.md)): event `CREATED` and status `CREATED` only. The initial status is named `CREATED` per the owner's milestone brief (an earlier draft of this diagram called it `EMPTY_NEW`). All later states are still a proposal.
+**Implemented in Milestone 1 (DEV)** ([016](016-bottles-and-labels.md)): event `CREATED` and status `CREATED`. The initial status is named `CREATED` per the owner's milestone brief (an earlier draft of this diagram called it `EMPTY_NEW`).
+
+**Implemented in Milestone 2A (DEV)** ([018](018-inbound-stock-and-label-activation.md), owner 2026-10-11): `CREATED → LABELED_EMPTY` by the event `LABEL_APPLIED` — the printed QR label is physically on the bottle body ("Etiketa nalepena – prázdná lahev"); the transition consumes exactly one new bottle from a selected stock lot and opens the bottle's `LABEL` component attachment. A `CREATED` bottle is an identity (and possibly a printed label), not yet a physical bottle. All later states are still a proposal.
 
 RETIRED (operationally terminal, reversible only by authorized audited correction) and DISPOSED/DESTROYED (irreversible) are **confirmed**; all other states and transitions above are a **proposal**, including the re-entry state after reversing a retirement. The transition table will be implemented as an explicit allow-list in the assets module and covered by tests.
 

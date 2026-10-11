@@ -28,8 +28,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - **No secrets in git.** Only `.env.example` is committed.
 - **Domain models need owner approval.** Approved and implemented (Milestone 1, doc 016): Bottle,
   BottleEvent, BottleCreationBatch, LabelTemplate(+Version/Element), LabelArtwork, LabelPrintJob.
-  Do not add other domain models (Product, FillBatch, Crate, Hotel, Delivery, Billing, ESG) until
-  the owner approves the corresponding docs.
+  Milestone 2A (doc 018): inventory units/items/settings/locations/lots, the stock ledger and
+  balances, BOM versions/lines, suppliers, supplier documents, goods receipts (+lines, document
+  links, corrections), bottle component attachments, operation requests. Do not add other domain
+  models (Product, FillBatch, Crate, Hotel, Delivery, Billing, ESG, purchase orders, commissions)
+  until the owner approves the corresponding docs.
 
 ## Confirmed domain decisions (owner, 2026-10-10)
 
@@ -57,6 +60,17 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - Label engine vs. bottles: `labels` must not import bottle code (doc 016 "Module structure");
   registration is idempotent per client `requestId`; template renaming is disabled (prerequisites
   in doc 016).
+- **Inventory (owner 2026-10-11, doc 018, ADR 0019):** quantities are exact (`NUMERIC(19,3)`,
+  decimal strings, pieces whole, no implicit unit conversion); stock changes only through the
+  append-only ledger (balances are written by the database trigger, never negative); every
+  mutating operation is idempotent per request id (`OperationRequestsService`). A bottle identity
+  is physical only after `LABEL_APPLIED` (status `LABELED_EMPTY`, Czech "Etiketa nalepena – prázdná
+  lahev"), which consumes exactly one `NEW_BOTTLE` from the lot the operator selected — never
+  FIFO, never a silent lot switch. Creating identities or printing consumes no bottle stock. The
+  bottle body owns the identity; labels/pumps/liquid are components with installation history.
+  Receipts need an invoice or delivery note (no invoice ⇒ "invoice pending"). Never hard-code the
+  fill quantity (330 ml is recipe data, 2B). Warehouse/operator screens are Czech
+  (`apps/web/src/i18n/cs`), admin stays English for now.
 - **RETIRED** is operationally terminal but may be reversed only by an authorized, audited
   correction event. **DISPOSED/DESTROYED** is irreversible (ADR 0011).
 - A **completed reuse cycle** = delivered to a hotel, then returned and individually identified
@@ -88,10 +102,13 @@ Tailwind 4 · Vitest · Playwright.
 - `apps/api` — NestJS. ESM: relative imports **must** use the `.js` extension. Prisma schema in
   `apps/api/prisma/schema.prisma`; generated client in `apps/api/src/generated/` (git-ignored,
   produced by `pnpm db:generate`). Env validated by Zod in `src/config/env.ts`. Domain modules:
-  `labels` ← `assets` ← `label-production` (doc 016); `storage` = FileStorage abstraction.
+  `labels` ← `assets` ← `label-production` (doc 016); `inventory` ← `procurement`; `warehouse`
+  composes assets, label-production, inventory and procurement (doc 018); `storage` = FileStorage
+  abstraction.
   Routes: `/api/admin/*` (staff) and `/api/public/*` (anonymous passport only).
 - `apps/web` — Next.js App Router. Server-only env in `src/lib/env.ts`. Admin pages in
-  `src/app/(admin)`, public passport in `src/app/q/[token]`. Server components read the API via
+  `src/app/(admin)` (Czech warehouse screens in `(admin)/warehouse`), public passport in
+  `src/app/q/[token]`. Server components read the API via
   `lib/api.ts` (API_URL); client components call same-origin `/api` (`lib/client-api.ts`; locally
   forwarded by `src/proxy.ts`).
 - `packages/types` — Zod schemas shared by API and web (API contracts). Built to `dist/`.

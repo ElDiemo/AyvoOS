@@ -2,7 +2,7 @@
 
 This document proposes a phased delivery order for AYVO OS. The ordering is a **proposal requiring confirmation**; each phase starts only after its open business questions are answered.
 
-Status: Draft — Phase 0 complete; Milestone 1 implemented as DEV-only, in review (2026-10-10)
+Status: Draft — Phase 0 complete; Milestone 1 merged (DEV-only); Milestone 2A in review (2026-10-11)
 
 ## Confirmed requirements
 
@@ -13,6 +13,30 @@ Status: Draft — Phase 0 complete; Milestone 1 implemented as DEV-only, in revi
 - Billing is not implemented yet.
 - **Phase 0 (Foundation) is complete** and the DEV preview at `dev.ayvo.co` is deployed _(approved by owner 2026-10-10)_.
 - **Milestone 1 — bottles + label templates + printing v0.1** requested by owner 2026-10-10 and implemented on `feat/bottle-labels-v0.1` (in review): bottle identities with public QR tokens, creation batches, `CREATED` events, label templates with immutable versions and a visual QR designer, print jobs producing one-label-per-page PDFs, minimal public passport ([016](016-bottles-and-labels.md)). **DEV only** — production blockers are listed in [016](016-bottles-and-labels.md#production-blockers). It covers the "bottle identities (QR)" part of Phase 1 and the label printing needed before Phase 2.
+
+- **Milestone 2A — inventory foundation, supplier receiving, physical label application**
+  (owner, 2026-10-11; [018](018-inbound-stock-and-label-activation.md)): exact-quantity
+  inventory with an append-only ledger and protected balances, suppliers, supplier documents,
+  goods receipts with lots, invoice-pending follow-up, Czech warehouse screens, and the scan that
+  turns one new bottle into a labelled serialized bottle. DEV only.
+
+## Sequence after Milestone 2A (owner, 2026-10-11)
+
+1. **Authentication and RBAC** — required before broader operational or external use; roles:
+   warehouse operator, warehouse manager, procurement, sales representative, sales manager,
+   finance, administrator, hotel user (read-only, never scans). Server-side authorization.
+2. **2B — products, BOMs, filling:** versioned recipes (fill quantity is recipe data, never a
+   constant), pumps and liquids received with lots, filling consumes the BOM atomically with
+   `FILLED`, measured variance as its own movement.
+3. **Component workflows:** label replacement, pump replacement, body retirement, complete
+   assembly write-off, liquid remainder disposition (doc 018 §16).
+4. **Crates**, then deliveries, returns, washing.
+5. **Purchasing:** replenishment requests, purchase orders, on-order, receipts linked to PO lines.
+6. **Sales and commissions:** effective-dated salesperson ↔ hotel assignments with immutable
+   history, versioned commission plans, auditable commission claims, team views; commission basis
+   pending decision (recommendation: collected revenue); margins only as labelled estimates until
+   a cost methodology is approved.
+7. **Full internationalization** of the application — required before external European rollout.
 
 ## Proposed phases (requires confirmation)
 

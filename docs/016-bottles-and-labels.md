@@ -36,16 +36,16 @@ How to read this document:
 
 ## Concepts — do not confuse
 
-| Concept                  | What it is                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------------- |
-| **Bottle**               | Permanent identity of one physical reusable bottle. Never deleted.                 |
-| **BottleEvent**          | Append-only lifecycle history entry. Milestone 1: `CREATED` only.                  |
-| **BottleCreationBatch**  | Bottles registered together in one operation (`BC-000001`). **Not** a fill batch.  |
-| **LabelTemplate**        | Reusable logical label design, e.g. `mydlo1`. **Not** a product. Can be archived.  |
-| **LabelTemplateVersion** | Immutable snapshot of a design: size, artwork, element positions (`mydlo1 v1`).    |
-| **LabelTemplateElement** | One positioned element of a version. Implemented: `QR_CODE` only.                  |
-| **LabelArtwork**         | Uploaded background (SVG/PNG/JPEG); bytes in file storage, metadata in PostgreSQL. |
-| **LabelPrintJob**        | One rendering of a fixed set of bottles with a fixed version (`PJ-000001`).        |
+| Concept                  | What it is                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| **Bottle**               | Permanent identity of one reusable bottle body; physical once its label is applied (doc 018). Never deleted. |
+| **BottleEvent**          | Append-only lifecycle history entry. Milestone 1: `CREATED` only.                                            |
+| **BottleCreationBatch**  | Bottles registered together in one operation (`BC-000001`). **Not** a fill batch.                            |
+| **LabelTemplate**        | Reusable logical label design, e.g. `mydlo1`. **Not** a product. Can be archived.                            |
+| **LabelTemplateVersion** | Immutable snapshot of a design: size, artwork, element positions (`mydlo1 v1`).                              |
+| **LabelTemplateElement** | One positioned element of a version. Implemented: `QR_CODE` only.                                            |
+| **LabelArtwork**         | Uploaded background (SVG/PNG/JPEG); bytes in file storage, metadata in PostgreSQL.                           |
+| **LabelPrintJob**        | One rendering of a fixed set of bottles with a fixed version (`PJ-000001`).                                  |
 
 ## Module structure: reusable label engine vs. bottle orchestration
 
@@ -302,6 +302,10 @@ This is the single consolidated list (other documents link here).
 10. **Real restore test** before production approval.
 11. **Monitoring and alerting** (doc 013).
 12. **Production secrets and rotation procedure** (doc 012).
+13. **Durable secondary identity on the bottle body** (doc 018 §17) — a permanent small
+    QR/DataMatrix or durable human-readable code resolving to the same identity, chosen and
+    physically validated. Until then an unidentified returned bottle goes to quarantine and is never
+    matched by guessing.
 
 ## Deferred (not blockers for DEV)
 
