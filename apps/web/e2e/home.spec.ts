@@ -1,8 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-test('home page renders AYVO OS placeholder and API status panel', async ({ page }) => {
+test('the overview shows the operational modules and the system status', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { level: 1, name: 'AYVO OS' })).toBeVisible();
-  // Works whether or not the API is running: the panel always renders a status.
+  await expect(page.getByRole('heading', { level: 1, name: 'Přehled' })).toBeVisible();
+  await expect(page.getByTestId('module-warehouse')).toContainText('Sklad');
+  await expect(page.getByTestId('module-production')).toContainText('Výroba');
   await expect(page.getByTestId('api-status')).toBeVisible();
+  // Only implemented modules: no placeholders for future functions.
+  for (const future of ['Hotely', 'Prodej', 'Finance', 'ESG', 'Kvalita', 'Vratky', 'Logistika']) {
+    await expect(page.locator('body')).not.toContainText(future);
+  }
 });

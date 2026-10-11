@@ -290,7 +290,11 @@ describe.skipIf(!hasDatabase)('inventory foundation and supplier receiving (doc 
 
     // Stock already used cannot be corrected away.
     const [bottle] = await printedBottles(t, 1);
-    await applyLabel(t, { lotId: lot.id, scannedValue: bottle!.url }).expect(200);
+    await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: bottle!.seriesCode,
+      scannedValue: bottle!.url,
+    }).expect(200);
     expect((await correct('-3').expect(409)).body.code).toBe('INSUFFICIENT_STOCK');
     const requestId = randomUUID();
     await correct('-2', requestId).expect(200);
@@ -456,7 +460,11 @@ describe.skipIf(!hasDatabase)('inventory foundation and supplier receiving (doc 
       } else if (unused.length > 0) {
         const lotId = pick([...model.keys()]);
         const bottle = unused.shift()!;
-        const res = await applyLabel(t, { lotId, scannedValue: bottle.url });
+        const res = await applyLabel(t, {
+          lotId,
+          seriesCode: bottle.seriesCode,
+          scannedValue: bottle.url,
+        });
         if ((model.get(lotId) ?? 0) > 0) {
           expect(res.status).toBe(200);
           model.set(lotId, model.get(lotId)! - 1);

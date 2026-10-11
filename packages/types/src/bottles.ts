@@ -84,6 +84,8 @@ export const bottleListQuerySchema = z.object({
   batch: z.string().trim().max(32).optional(),
   /** Label template id (any version). */
   templateId: z.uuid().optional(),
+  /** Current bottle status, e.g. CREATED (labels not applied yet). */
+  status: bottleStatusSchema.optional(),
 });
 export type BottleListQuery = z.infer<typeof bottleListQuerySchema>;
 

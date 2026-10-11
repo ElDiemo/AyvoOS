@@ -107,8 +107,10 @@ Tailwind 4 · Vitest · Playwright.
   abstraction.
   Routes: `/api/admin/*` (staff) and `/api/public/*` (anonymous passport only).
 - `apps/web` — Next.js App Router. Server-only env in `src/lib/env.ts`. Admin pages in
-  `src/app/(admin)` (Czech warehouse screens in `(admin)/warehouse`), public passport in
-  `src/app/q/[token]`. Server components read the API via
+  `src/app/(admin)`, public passport in `src/app/q/[token]`. The internal app is organized by
+  company functions (doc 019, ADR 0020) — **Sklad** and **Výroba**, defined in
+  `src/lib/navigation.ts`; never add entity-level top-level navigation or placeholder modules.
+  Internal UI copy is Czech (`src/i18n/cs/`). Server components read the API via
   `lib/api.ts` (API_URL); client components call same-origin `/api` (`lib/client-api.ts`; locally
   forwarded by `src/proxy.ts`).
 - `packages/types` — Zod schemas shared by API and web (API contracts). Built to `dist/`.

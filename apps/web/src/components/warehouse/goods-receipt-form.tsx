@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { buttonClass, Card, ErrorNote, Field, FieldList, inputClass } from '@/components/ui';
-import { formatDateCs, formatDateTimeCs, formatQuantityCs } from '@/i18n/cs/format';
+import { formatDateCs, formatDateTimeCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiSend } from '@/lib/client-api';
 import { apiErrorText, SupplierDocumentUpload } from './supplier-document-upload';
@@ -228,7 +228,7 @@ export function GoodsReceiptForm({
                   </select>
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
-                  {r.quantity} {item ? `(${item.unit.code})` : ''}
+                  {r.quantity} {item ? `(${unitCs(item.unit.code)})` : ''}
                   <input
                     inputMode="decimal"
                     value={line.quantity}
@@ -351,7 +351,7 @@ export function GoodsReceiptForm({
                 const item = itemOf(l.itemId)!;
                 return (
                   <Field key={l.key} label={item.name}>
-                    {formatQuantityCs(l.quantity)} {item.unit.code}
+                    {formatQuantityCs(l.quantity)} {unitCs(item.unit.code)}
                     {item.lotTracked &&
                       ` · ${r.lot}: ${l.supplierLotCode.trim() || r.supplierLotHelp}`}
                   </Field>

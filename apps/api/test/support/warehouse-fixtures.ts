@@ -98,18 +98,23 @@ export async function printedBottles(t: TestApp, n: number) {
     orderBy: { serial: 'asc' },
     select: { id: true, code: true, publicToken: true },
   });
-  return bottles.map((b) => ({ ...b, url: `${TEST_QR_BASE_URL}/${b.publicToken}` }));
+  return bottles.map((b) => ({
+    ...b,
+    url: `${TEST_QR_BASE_URL}/${b.publicToken}`,
+    seriesCode: batch.code,
+  }));
 }
 
 export function applyLabel(
   t: TestApp,
-  body: { lotId: string; scannedValue: string; requestId?: string },
+  body: { lotId: string; seriesCode: string; scannedValue: string; requestId?: string },
 ) {
   return request(t.app.getHttpServer())
     .post('/api/admin/label-applications')
     .send({
       requestId: body.requestId ?? randomUUID(),
       lotId: body.lotId,
+      seriesCode: body.seriesCode,
       scannedValue: body.scannedValue,
     });
 }

@@ -14,7 +14,7 @@ export class ClientApiError extends Error {
 }
 
 async function readError(res: Response): Promise<ClientApiError> {
-  let message = `Request failed (HTTP ${res.status})`;
+  let message = `Požadavek se nezdařil (HTTP ${res.status})`;
   let code: string | null = null;
   try {
     const body = (await res.json()) as {
@@ -31,7 +31,7 @@ async function readError(res: Response): Promise<ClientApiError> {
   } catch {
     // non-JSON error body: keep the generic message
   }
-  if (res.status === 413) message = 'The file is too large';
+  if (res.status === 413) message = 'Soubor je příliš velký';
   return new ClientApiError(res.status, message, code);
 }
 

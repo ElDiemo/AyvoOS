@@ -4,9 +4,15 @@ import { labelPrintJobSchema, type LabelPrintJob } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { apiGet, apiSend } from '@/lib/client-api';
-import { formatBytes, formatDateTime } from '@/lib/format';
+import { formatBytes } from '@/lib/format';
 import { PrintJobStatus } from '@/components/status';
 import { buttonClass, ErrorNote } from '@/components/ui';
+import { formatDateTimeCs } from '@/i18n/cs/format';
+import { productionCs } from '@/i18n/cs/production';
+
+const t = productionCs.printJob;
+const fail = (e: unknown) =>
+  productionCs.common.failed(e instanceof Error ? e.message : productionCs.common.unexpectedError);
 
 /**
  * One print job with its actions: generate (PENDING), retry (FAILED), download (COMPLETED).
@@ -28,7 +34,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
       );
       router.refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Generation failed');
+      setError(fail(e));
       // The server may still be generating (or may have finished): show its real state.
       setJob(
         await apiGet(`admin/label-print-jobs/${job.code}`, labelPrintJobSchema).catch(() => job),
@@ -51,13 +57,13 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
           {job.environment !== 'production' && (
             <span
               className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-800 ring-1 ring-red-600/20 ring-inset"
-              title="Labels carry a DEV - NOT FOR PRODUCTION marker and DEV URLs"
+              title={productionCs.common.devLabelsHint}
             >
-              DEV labels - not for real bottles
+              {productionCs.common.devLabels}
             </span>
           )}
           <span className="min-w-0 text-sm text-stone-500 wrap-anywhere">
-            {job.labelCount} labels · {job.labelTemplate.label}
+            {t.labels(job.labelCount, job.labelTemplate.label)}
           </span>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -68,7 +74,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
               disabled={busy}
               onClick={() => void generate()}
             >
-              {busy ? 'Generating…' : 'Generate labels'}
+              {busy ? t.generating : t.generate}
             </button>
           )}
           {job.status === 'FAILED' && (
@@ -78,22 +84,24 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
               disabled={busy}
               onClick={() => void generate()}
             >
-              {busy ? 'Generating…' : 'Retry generation'}
+              {busy ? t.generating : t.retry}
             </button>
           )}
           {job.status === 'COMPLETED' && job.downloadUrl && (
             <a href={job.downloadUrl} className={buttonClass.primary} download>
-              Download PDF{job.fileByteSize ? ` (${formatBytes(job.fileByteSize)})` : ''}
+              {t.download(job.fileByteSize ? formatBytes(job.fileByteSize) : '')}
             </a>
           )}
         </div>
       </div>
       <p className="text-xs text-stone-500 wrap-anywhere">
-        Created {formatDateTime(job.createdAt)}
-        {job.completedAt && ` · completed ${formatDateTime(job.completedAt)}`}
-        {job.attempts > 1 && ` · ${job.attempts} attempts`}
-        {' · '}QR error correction {job.qrErrorCorrection} · one label per page at{' '}
-        {job.labelTemplate.label} size · print at 100 %, no scaling
+        {t.details({
+          created: formatDateTimeCs(job.createdAt),
+          completed: job.completedAt ? formatDateTimeCs(job.completedAt) : null,
+          attempts: job.attempts,
+          level: job.qrErrorCorrection,
+          template: job.labelTemplate.label,
+        })}
       </p>
       {job.status === 'FAILED' && job.failureReason && <ErrorNote>{job.failureReason}</ErrorNote>}
       {error && <ErrorNote>{error}</ErrorNote>}
@@ -123,13 +131,13 @@ export function NewPrintJobButton({ batchCode, label }: { batchCode: string; lab
             );
             router.refresh();
           } catch (e) {
-            setError(e instanceof Error ? e.message : 'Could not create the print job');
+            setError(fail(e));
           } finally {
             setBusy(false);
           }
         }}
       >
-        {busy ? 'Creating…' : label}
+        {busy ? t.creating : label}
       </button>
       {error && <ErrorNote>{error}</ErrorNote>}
     </div>

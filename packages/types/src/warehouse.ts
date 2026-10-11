@@ -1,13 +1,18 @@
 import { z } from 'zod';
-import { bottleStatusSchema } from './bottles.js';
+import { bottleCreationBatchCodeSchema, bottleStatusSchema } from './bottles.js';
 import { decimalStringSchema } from './inventory.js';
 
-/** Physical label application (warehouse module, doc 018 §7). */
+/** Physical label application (Production, doc 018 §7, doc 019). */
 
 export const labelApplicationRequestSchema = z.object({
   requestId: z.uuid(),
   /** The lot the operator selected for this working session (never guessed by the server). */
   lotId: z.uuid(),
+  /**
+   * The bottle series (creation batch, "BC-000001") the operator is labelling in this session.
+   * The server refuses a bottle of any other series (WRONG_SERIES), so label runs cannot be mixed.
+   */
+  seriesCode: bottleCreationBatchCodeSchema,
   /** Raw scanner input: the complete QR URL; only surrounding whitespace/CR/LF is removed. */
   scannedValue: z.string().max(512),
 });
@@ -41,6 +46,7 @@ export const labelApplicationErrorCodeSchema = z.enum([
   'NOT_APPLICABLE',
   'LOT_EXHAUSTED',
   'WRONG_LOT',
+  'WRONG_SERIES',
   'IDEMPOTENCY_CONFLICT',
 ]);
 export type LabelApplicationErrorCode = z.infer<typeof labelApplicationErrorCodeSchema>;

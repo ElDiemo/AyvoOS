@@ -19,6 +19,11 @@ Status: Draft — Phase 0 complete; Milestone 1 merged (DEV-only); Milestone 2A 
   inventory with an append-only ledger and protected balances, suppliers, supplier documents,
   goods receipts with lots, invoice-pending follow-up, Czech warehouse screens, and the scan that
   turns one new bottle into a labelled serialized bottle. DEV only.
+- **Milestone 2A.1 — application shell and operational module separation** (owner, 2026-10-11;
+  [019](019-app-shell-and-information-architecture.md), ADR 0020): AYVO OS organized by company
+  functions — **Sklad** and **Výroba**; label application moved to Production and bound to a
+  bottle series server-side; overview pages; Czech internal application. No schema change. DEV
+  only. First production-workflow follow-up: production orders/sessions with product binding.
 
 ## Sequence after Milestone 2A (owner, 2026-10-11)
 

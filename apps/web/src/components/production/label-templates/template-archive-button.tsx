@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { apiSend } from '@/lib/client-api';
 import { buttonClass, ErrorNote } from '@/components/ui';
+import { productionCs } from '@/i18n/cs/production';
+
+const t = productionCs.templates;
 
 /**
  * Archive (hide) or restore a template. Archived templates keep every version for reproducing
@@ -27,11 +30,7 @@ export function TemplateArchiveButton({
         className={buttonClass.secondary}
         disabled={busy}
         onClick={async () => {
-          if (
-            !archived &&
-            !window.confirm('Archive this template? It can no longer be used for new bottles.')
-          )
-            return;
+          if (!archived && !window.confirm(t.archiveConfirm)) return;
           setBusy(true);
           setError(null);
           try {
@@ -42,13 +41,17 @@ export function TemplateArchiveButton({
             );
             router.refresh();
           } catch (e) {
-            setError(e instanceof Error ? e.message : 'Failed');
+            setError(
+              productionCs.common.failed(
+                e instanceof Error ? e.message : productionCs.common.unexpectedError,
+              ),
+            );
           } finally {
             setBusy(false);
           }
         }}
       >
-        {busy ? '…' : archived ? 'Restore template' : 'Archive template'}
+        {busy ? '…' : archived ? t.restore : t.archive}
       </button>
       {error && <ErrorNote>{error}</ErrorNote>}
     </div>

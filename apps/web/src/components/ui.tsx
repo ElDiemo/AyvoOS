@@ -2,7 +2,8 @@ import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 
 /**
- * Small layout primitives for the admin UI (AYVO: calm, minimal, stone palette).
+ * Small layout primitives of the internal application (AYVO: calm, neutral stone palette;
+ * colour only for meaning — success, attention, error and the DEV environment).
  * Values such as template names (up to 64 characters without spaces), codes and URLs may have no
  * break opportunity: the primitives let them wrap (`wrap-anywhere` + `min-w-0`) so that a long
  * value never widens the page on a phone.
@@ -10,11 +11,11 @@ import Link from 'next/link';
 
 export const buttonClass = {
   primary:
-    'inline-flex max-w-full items-center justify-center gap-2 text-center wrap-anywhere rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-50',
+    'inline-flex max-w-full items-center justify-center gap-2 text-center break-words rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-50',
   secondary:
-    'inline-flex max-w-full items-center justify-center gap-2 text-center wrap-anywhere rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-800 shadow-sm transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50',
+    'inline-flex max-w-full items-center justify-center gap-2 text-center break-words rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-800 shadow-sm transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50',
   danger:
-    'inline-flex max-w-full items-center justify-center gap-2 text-center wrap-anywhere rounded-md bg-red-700 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-red-600 disabled:opacity-50',
+    'inline-flex max-w-full items-center justify-center gap-2 text-center break-words rounded-md bg-red-700 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-red-600 disabled:opacity-50',
 } as const;
 
 export const inputClass =
@@ -51,18 +52,103 @@ export function Card({
   children,
   className,
   title,
+  action,
+  testId,
 }: {
   children: React.ReactNode;
   className?: string;
   title?: string;
+  /** A link or button on the right of the title (e.g. "Zobrazit vše"). */
+  action?: React.ReactNode;
+  testId?: string;
 }) {
   return (
-    <section className={cn('rounded-lg border border-stone-200 bg-white p-6 shadow-sm', className)}>
+    <section
+      className={cn('rounded-lg border border-stone-200 bg-white p-5 shadow-sm sm:p-6', className)}
+      data-testid={testId}
+    >
       {title && (
-        <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-stone-500">{title}</h2>
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <h2 className="text-sm font-medium uppercase tracking-wide text-stone-500">{title}</h2>
+          {action && <div className="text-sm">{action}</div>}
+        </div>
       )}
       {children}
     </section>
+  );
+}
+
+/** A small text link used as a card action. */
+export function CardLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link href={href} className="font-medium whitespace-nowrap text-stone-700 hover:underline">
+      {children} →
+    </Link>
+  );
+}
+
+/** One key figure of an overview. Only real values from the API are ever shown. */
+export function Stat({
+  label,
+  value,
+  unit,
+  tone = 'neutral',
+  href,
+  testId,
+}: {
+  label: string;
+  value: React.ReactNode;
+  unit?: string;
+  tone?: 'neutral' | 'warning' | 'error';
+  href?: string;
+  testId?: string;
+}) {
+  const body = (
+    <>
+      <span className="min-w-0 text-xs text-stone-500 sm:block">{label}</span>
+      <span
+        className={cn(
+          'shrink-0 text-xl font-semibold whitespace-nowrap tabular-nums sm:mt-1 sm:block sm:text-2xl',
+          tone === 'warning' && 'text-amber-800',
+          tone === 'error' && 'text-red-800',
+        )}
+        data-testid={testId}
+      >
+        {value}
+        {unit && <span className="ml-1 text-sm font-normal text-stone-500">{unit}</span>}
+      </span>
+    </>
+  );
+  const box =
+    'flex min-w-0 items-baseline justify-between gap-3 rounded-md border border-stone-200 bg-stone-50/60 px-4 py-2.5 sm:block sm:py-3';
+  return href ? (
+    <Link href={href} className={cn(box, 'transition hover:border-stone-400 hover:bg-white')}>
+      {body}
+    </Link>
+  ) : (
+    <div className={box}>{body}</div>
+  );
+}
+
+/** A warning or notice line of an overview (colour carries meaning: amber = attention). */
+export function Notice({
+  tone = 'warning',
+  children,
+}: {
+  tone?: 'warning' | 'info';
+  children: React.ReactNode;
+}) {
+  return (
+    <p
+      className={cn(
+        'rounded-md px-3 py-2 text-sm',
+        tone === 'warning'
+          ? 'border border-amber-200 bg-amber-50 text-amber-900'
+          : 'border border-stone-200 bg-stone-50 text-stone-700',
+      )}
+    >
+      {children}
+    </p>
   );
 }
 

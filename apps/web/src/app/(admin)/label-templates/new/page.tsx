@@ -1,6 +1,7 @@
 import { labelDesignerSettingsSchema } from '@ayvo/types';
-import { TemplateEditor } from '@/components/label-templates/template-editor';
-import { PageHeader } from '@/components/ui';
+import { TemplateEditor } from '@/components/production/label-templates/template-editor';
+import { ProductionHeader } from '@/components/production/production-header';
+import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
@@ -9,10 +10,11 @@ export default async function NewLabelTemplatePage() {
   const settings = await apiGet('admin/label-designer/settings', labelDesignerSettingsSchema);
   return (
     <>
-      <PageHeader
-        title="Create label template"
-        subtitle="Upload the artwork, set the printed size and place the QR code."
-        back={{ href: '/label-templates', label: 'Label templates' }}
+      <ProductionHeader
+        active="templates"
+        title={productionCs.templates.newTitle}
+        subtitle={productionCs.templates.newSubtitle}
+        back={{ href: '/label-templates', label: productionCs.templates.back }}
       />
       <TemplateEditor mode={{ kind: 'create' }} settings={settings} />
     </>

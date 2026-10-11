@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { Card, Field, FieldList } from '@/components/ui';
 import { ItemSettingsForm } from '@/components/warehouse/item-settings-form';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
-import { formatDateTimeCs, formatQuantityCs } from '@/i18n/cs/format';
+import { formatDateTimeCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
 
@@ -25,7 +25,7 @@ export default async function StockPage() {
       />
       <div className="flex flex-col gap-6">
         {stock.items.map((entry) => {
-          const unit = entry.item.unit.code;
+          const unit = unitCs(entry.item.unit.code);
           return (
             <Card key={entry.item.id}>
               <div data-testid={`stock-${entry.item.code}`}>

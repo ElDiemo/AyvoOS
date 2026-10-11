@@ -1,8 +1,9 @@
 import { labelDesignerSettingsSchema, labelTemplateDetailSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
-import { TemplateEditor } from '@/components/label-templates/template-editor';
-import { PageHeader } from '@/components/ui';
+import { TemplateEditor } from '@/components/production/label-templates/template-editor';
+import { ProductionHeader } from '@/components/production/production-header';
+import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
@@ -21,9 +22,12 @@ export default async function NewTemplateVersionPage({
   const latest = template.versions[0]!;
   return (
     <>
-      <PageHeader
-        title={`Edit ${template.name}`}
-        subtitle={`Starting from ${latest.label}. Replace the artwork, change the size or move the QR code.`}
+      <ProductionHeader
+        active="templates"
+        title={
+          <span className="wrap-anywhere">{productionCs.templates.editTitle(template.name)}</span>
+        }
+        subtitle={productionCs.templates.editSubtitle(latest.label)}
         back={{ href: `/label-templates/${template.id}`, label: template.name }}
       />
       <TemplateEditor

@@ -14,14 +14,18 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: resolve(import.meta.dirname, '../..'),
   // @ayvo/ui ships TypeScript source; Next compiles it.
   transpilePackages: ['@ayvo/ui'],
-  // Legacy URLs of the Bottles reorganization: real HTTP redirects (no page render, no client
-  // JavaScript needed). Next.js passes the query string through (e.g. ?page=2). 307, not 308:
-  // these aliases may still change while Milestone 1 is DEV-only.
+  // Legacy URLs: real HTTP redirects (no page render, no client JavaScript needed). Next.js
+  // passes the query string through (e.g. ?page=2). 307, not 308: these aliases may still change
+  // while AYVO OS is DEV-only.
   async redirects() {
     return [
       { source: '/batches', destination: '/bottles/history', permanent: false },
-      // The warehouse section opens on its main operator workflow.
-      { source: '/warehouse', destination: '/warehouse/labels', permanent: false },
+      // Label application belongs to Production, not to the warehouse (doc 019).
+      {
+        source: '/warehouse/labels',
+        destination: '/production/label-activation',
+        permanent: false,
+      },
     ];
   },
   experimental: {

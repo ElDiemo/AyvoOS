@@ -4,7 +4,10 @@ import { LABEL_SIZE_MAX_MM, LABEL_SIZE_MIN_MM, type LabelArtwork } from '@ayvo/t
 import { useState } from 'react';
 import { NumberField } from '@/components/number-field';
 import { ErrorNote } from '@/components/ui';
+import { productionCs } from '@/i18n/cs/production';
 import { roundMm, type LabelSize } from '@/lib/label-geometry';
+
+const t = productionCs.editor;
 
 /** Clamp to the contract's physical limits (LABEL_SIZE_MIN_MM … LABEL_SIZE_MAX_MM). */
 export function clampLabelSize(value: number): number {
@@ -46,11 +49,16 @@ export function LabelSizeFields({
     <>
       <div className="flex flex-wrap items-end gap-4">
         <div className="w-36">
-          <NumberField label="Width" value={size.widthMm} onCommit={onWidth} testId="label-width" />
+          <NumberField
+            label={t.width}
+            value={size.widthMm}
+            onCommit={onWidth}
+            testId="label-width"
+          />
         </div>
         <div className="w-36">
           <NumberField
-            label="Height"
+            label={t.height}
             value={size.heightMm}
             onCommit={onHeight}
             testId="label-height"
@@ -62,24 +70,20 @@ export function LabelSizeFields({
             checked={lockProportions}
             onChange={(e) => setLockProportions(e.target.checked)}
           />
-          Keep artwork proportions
+          {t.keepProportions}
         </label>
       </div>
       <p className="mt-3 text-xs text-stone-500">
         {artwork.suggestedSizeMm
-          ? 'Size taken from the SVG file. '
+          ? t.sizeFromSvg
           : artwork.format === 'SVG'
-            ? 'Check the printed label size. '
-            : 'Raster files do not state a reliable physical size: enter the printed label size. '}
-        The artwork fills the whole label (no bleed in v0.1).
+            ? t.checkSize
+            : t.rasterSize}
+        {t.fillsLabel}
       </p>
       {mismatch && (
         <div className="mt-3">
-          <ErrorNote>
-            The label size does not match the artwork proportions (more than{' '}
-            {aspectRatioTolerance * 100}% difference) — the artwork would be distorted. The server
-            rejects such a layout.
-          </ErrorNote>
+          <ErrorNote>{t.proportionMismatch(aspectRatioTolerance * 100)}</ErrorNote>
         </div>
       )}
     </>

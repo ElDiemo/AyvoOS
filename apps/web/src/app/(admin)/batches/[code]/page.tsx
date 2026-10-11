@@ -5,10 +5,15 @@ import {
 } from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { NewPrintJobButton, PrintJobActions } from '@/components/bottles/print-job-actions';
-import { buttonClass, Card, EmptyState, Field, FieldList, PageHeader } from '@/components/ui';
+import { NewPrintJobButton, PrintJobActions } from '@/components/production/print-job-actions';
+import { ProductionHeader } from '@/components/production/production-header';
+import { buttonClass, Card, EmptyState, Field, FieldList } from '@/components/ui';
+import { formatDateTimeCs } from '@/i18n/cs/format';
+import { bottlesWord, productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
-import { codeRange, formatDateTime } from '@/lib/format';
+import { codeRange } from '@/lib/format';
+
+const t = productionCs.series;
 
 export const dynamic = 'force-dynamic';
 
@@ -23,41 +28,42 @@ export default async function BatchPage({ params }: { params: Promise<{ code: st
   ]);
   return (
     <>
-      <PageHeader
+      <ProductionHeader
+        active="bottles"
         title={<span className="font-mono">{batch.code}</span>}
-        subtitle={`Created series of ${batch.quantityCreated} bottle${batch.quantityCreated === 1 ? '' : 's'}`}
-        back={{ href: '/bottles/history', label: 'Bottles · Creation history' }}
+        subtitle={t.subtitle(batch.quantityCreated)}
+        back={{ href: '/bottles/history', label: t.back }}
         actions={
           <Link href={`/bottles?batch=${batch.code}`} className={buttonClass.secondary}>
-            View these bottles
+            {t.viewBottles}
           </Link>
         }
       />
       <div className="flex flex-col gap-6">
-        <Card title="Summary">
+        <Card title={t.summary}>
           <FieldList>
-            <Field label="Bottles">
-              {batch.quantityCreated} bottle{batch.quantityCreated === 1 ? '' : 's'}
-            </Field>
-            <Field label="Label template">{batch.labelTemplate.label}</Field>
-            <Field label="Bottle range">
+            <Field label={t.bottles}>{bottlesWord(batch.quantityCreated)}</Field>
+            <Field label={t.template}>{batch.labelTemplate.label}</Field>
+            <Field label={t.range}>
               <span className="font-mono">
                 {codeRange(batch.firstBottleCode, batch.lastBottleCode)}
               </span>
             </Field>
-            <Field label="Created at">{formatDateTime(batch.createdAt)}</Field>
+            <Field label={t.createdAt}>{formatDateTimeCs(batch.createdAt)}</Field>
           </FieldList>
         </Card>
         <Card>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-            <h2 className="text-sm font-medium uppercase tracking-wide text-stone-500">Labels</h2>
+            <h2 className="text-sm font-medium uppercase tracking-wide text-stone-500">
+              {t.labels}
+            </h2>
             <NewPrintJobButton
               batchCode={batch.code}
-              label={jobs.items.length === 0 ? 'Create print job' : 'New print job (reprint)'}
+              label={jobs.items.length === 0 ? t.createPrintJob : t.reprint}
             />
           </div>
           {jobs.items.length === 0 ? (
-            <EmptyState>No label print job yet.</EmptyState>
+            <EmptyState>{t.noPrintJob}</EmptyState>
           ) : (
             <div className="flex flex-col gap-3">
               {jobs.items.map((job) => (
@@ -66,8 +72,7 @@ export default async function BatchPage({ params }: { params: Promise<{ code: st
             </div>
           )}
           <p className="mt-4 text-xs text-stone-400 wrap-anywhere">
-            Every print job renders exactly these {batch.quantityCreated} bottles with{' '}
-            {batch.labelTemplate.label}. Printing never creates or removes bottles.
+            {t.footnote(batch.quantityCreated, batch.labelTemplate.label)}
           </p>
         </Card>
       </div>
