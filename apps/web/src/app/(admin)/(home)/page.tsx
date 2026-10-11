@@ -6,6 +6,7 @@ import {
 } from '@ayvo/types';
 import { StatusBadge } from '@ayvo/ui';
 import Link from 'next/link';
+import { unstable_rethrow } from 'next/navigation';
 import { z } from 'zod';
 import { buttonClass, Notice, PageHeader, Stat } from '@/components/ui';
 import { formatQuantityCs, unitCs } from '@/i18n/cs/format';
@@ -14,6 +15,7 @@ import { apiGet } from '@/lib/api';
 import { fetchApiHealth } from '@/lib/api-health';
 import { serverEnv } from '@/lib/env';
 import { moduleById } from '@/lib/navigation';
+import { currentUser, hasPermission } from '@/lib/session';
 
 // Always render at request time so figures and the API status are live.
 export const dynamic = 'force-dynamic';
@@ -23,7 +25,8 @@ const h = shellCs.home;
 async function settle<T>(load: () => Promise<T>): Promise<T | null> {
   try {
     return await load();
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error); // sign-in / forbidden redirects must not be swallowed
     return null;
   }
 }
@@ -66,10 +69,13 @@ async function productionFigures() {
  * the next useful actions, warnings and the system status. Future modules get no placeholder.
  */
 export default async function HomePage() {
+  const user = await currentUser();
+  const canWarehouse = hasPermission(user, 'inventory:read');
+  const canProduction = hasPermission(user, 'production:read');
   const [health, warehouse, production] = await Promise.all([
     fetchApiHealth(serverEnv.API_URL),
-    settle(warehouseFigures),
-    settle(productionFigures),
+    canWarehouse ? settle(warehouseFigures) : null,
+    canProduction ? settle(productionFigures) : null,
   ]);
   const warehouseModule = moduleById('warehouse');
   const productionModule = moduleById('production');
@@ -78,97 +84,106 @@ export default async function HomePage() {
     <>
       <PageHeader title={h.title} subtitle={h.subtitle} />
       <div className="flex flex-col gap-6">
+        {!canWarehouse && !canProduction && <Notice tone="info">{h.noModules}</Notice>}
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <ModulePanel
-            href={warehouseModule.href}
-            title={warehouseModule.label}
-            description={warehouseModule.description}
-            testId="module-warehouse"
-            openLabel={h.openWarehouse}
-            actions={
-              <Link href="/warehouse/receipts/new" className={buttonClass.primary}>
-                {shellCs.actions.newReceipt}
-              </Link>
-            }
-          >
-            {warehouse ? (
-              <>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Stat
-                    label={h.newBottlesOnHand}
-                    value={formatQuantityCs(warehouse.newBottlesOnHand)}
-                    unit={warehouse.unit}
-                    tone={warehouse.newBottlesOnHand === '0' ? 'warning' : 'neutral'}
-                    href="/warehouse/stock"
-                    testId="home-new-bottles"
+          {canWarehouse && (
+            <ModulePanel
+              href={warehouseModule.href}
+              title={warehouseModule.label}
+              description={warehouseModule.description}
+              testId="module-warehouse"
+              openLabel={h.openWarehouse}
+              actions={
+                hasPermission(user, 'inventory:receive') ? (
+                  <Link href="/warehouse/receipts/new" className={buttonClass.primary}>
+                    {shellCs.actions.newReceipt}
+                  </Link>
+                ) : null
+              }
+            >
+              {warehouse ? (
+                <>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Stat
+                      label={h.newBottlesOnHand}
+                      value={formatQuantityCs(warehouse.newBottlesOnHand)}
+                      unit={warehouse.unit}
+                      tone={warehouse.newBottlesOnHand === '0' ? 'warning' : 'neutral'}
+                      href="/warehouse/stock"
+                      testId="home-new-bottles"
+                    />
+                    <Stat
+                      label={h.receiptsPendingInvoice}
+                      value={warehouse.pendingInvoices}
+                      tone={warehouse.pendingInvoices > 0 ? 'warning' : 'neutral'}
+                      href="/warehouse/receipts?invoice=pending"
+                    />
+                    <Stat
+                      label={h.suppliers}
+                      value={warehouse.suppliers}
+                      href="/warehouse/suppliers"
+                    />
+                  </div>
+                  <Warnings
+                    items={[
+                      warehouse.suppliers === 0 && h.noSuppliers,
+                      warehouse.newBottlesOnHand === '0' && h.noStock,
+                      warehouse.lowStock.length > 0 &&
+                        h.lowStockWarning(warehouse.lowStock.join(', ')),
+                      warehouse.pendingInvoices > 0 &&
+                        h.pendingInvoiceWarning(warehouse.pendingInvoices),
+                    ]}
                   />
-                  <Stat
-                    label={h.receiptsPendingInvoice}
-                    value={warehouse.pendingInvoices}
-                    tone={warehouse.pendingInvoices > 0 ? 'warning' : 'neutral'}
-                    href="/warehouse/receipts?invoice=pending"
-                  />
-                  <Stat
-                    label={h.suppliers}
-                    value={warehouse.suppliers}
-                    href="/warehouse/suppliers"
-                  />
-                </div>
-                <Warnings
-                  items={[
-                    warehouse.suppliers === 0 && h.noSuppliers,
-                    warehouse.newBottlesOnHand === '0' && h.noStock,
-                    warehouse.lowStock.length > 0 &&
-                      h.lowStockWarning(warehouse.lowStock.join(', ')),
-                    warehouse.pendingInvoices > 0 &&
-                      h.pendingInvoiceWarning(warehouse.pendingInvoices),
-                  ]}
-                />
-              </>
-            ) : (
-              <Notice>{shellCs.common.errorTitle}</Notice>
-            )}
-          </ModulePanel>
+                </>
+              ) : (
+                <Notice>{shellCs.common.errorTitle}</Notice>
+              )}
+            </ModulePanel>
+          )}
 
-          <ModulePanel
-            href={productionModule.href}
-            title={productionModule.label}
-            description={productionModule.description}
-            testId="module-production"
-            openLabel={h.openProduction}
-            actions={
-              <>
-                <Link href="/production/label-activation" className={buttonClass.primary}>
-                  {shellCs.actions.labelActivation}
-                </Link>
-                <Link href="/bottles/new" className={buttonClass.secondary}>
-                  {shellCs.actions.createBottles}
-                </Link>
-              </>
-            }
-          >
-            {production ? (
-              <>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Stat label={h.bottles} value={production.bottles} href="/bottles" />
-                  <Stat
-                    label={h.awaitingLabel}
-                    value={production.awaiting}
-                    href="/bottles?status=CREATED"
-                    testId="home-awaiting-label"
-                  />
-                  <Stat
-                    label={h.labeled}
-                    value={production.labeled}
-                    href="/bottles?status=LABELED_EMPTY"
-                  />
-                </div>
-                <Warnings items={[production.bottles === 0 && h.noBottles]} />
-              </>
-            ) : (
-              <Notice>{shellCs.common.errorTitle}</Notice>
-            )}
-          </ModulePanel>
+          {canProduction && (
+            <ModulePanel
+              href={productionModule.href}
+              title={productionModule.label}
+              description={productionModule.description}
+              testId="module-production"
+              openLabel={h.openProduction}
+              actions={
+                <>
+                  <Link href="/production/label-activation" className={buttonClass.primary}>
+                    {shellCs.actions.labelActivation}
+                  </Link>
+                  {hasPermission(user, 'production:bottles_create') && (
+                    <Link href="/bottles/new" className={buttonClass.secondary}>
+                      {shellCs.actions.createBottles}
+                    </Link>
+                  )}
+                </>
+              }
+            >
+              {production ? (
+                <>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Stat label={h.bottles} value={production.bottles} href="/bottles" />
+                    <Stat
+                      label={h.awaitingLabel}
+                      value={production.awaiting}
+                      href="/bottles?status=CREATED"
+                      testId="home-awaiting-label"
+                    />
+                    <Stat
+                      label={h.labeled}
+                      value={production.labeled}
+                      href="/bottles?status=LABELED_EMPTY"
+                    />
+                  </div>
+                  <Warnings items={[production.bottles === 0 && h.noBottles]} />
+                </>
+              ) : (
+                <Notice>{shellCs.common.errorTitle}</Notice>
+              )}
+            </ModulePanel>
+          )}
         </div>
 
         <section
@@ -212,7 +227,7 @@ function ModulePanel({
   href: string;
   title: string;
   description: string;
-  actions: React.ReactNode;
+  actions: React.ReactNode | null;
   testId: string;
   openLabel: string;
   children: React.ReactNode;

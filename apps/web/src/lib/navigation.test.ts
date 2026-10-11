@@ -7,8 +7,31 @@ const where = (path: string) => {
 };
 
 describe('AYVO OS navigation (doc 019)', () => {
-  it('has exactly two operational modules: Sklad and Výroba', () => {
-    expect(visibleModules().map((m) => m.label)).toEqual(['Sklad', 'Výroba']);
+  it('has exactly two operational modules: Sklad and Výroba, plus the administration', () => {
+    const all = MODULES.map((m) => m.permission);
+    expect(
+      visibleModules(all)
+        .filter((m) => m.section === 'operations')
+        .map((m) => m.label),
+    ).toEqual(['Sklad', 'Výroba']);
+    expect(
+      visibleModules(all)
+        .filter((m) => m.section === 'administration')
+        .map((m) => m.label),
+    ).toEqual(['Správa']);
+  });
+
+  it('shows only what the permissions allow', () => {
+    expect(visibleModules([]).map((m) => m.id)).toEqual([]);
+    expect(visibleModules(['inventory:read']).map((m) => m.id)).toEqual(['warehouse']);
+    // Without inventory:receive the receipt form is not offered.
+    expect(visibleModules(['inventory:read'])[0]!.pages.map((p) => p.id)).not.toContain(
+      'new-receipt',
+    );
+    expect(
+      visibleModules(['inventory:read', 'inventory:receive'])[0]!.pages.map((p) => p.id),
+    ).toContain('new-receipt');
+    expect(visibleModules(['identity:users_read']).map((m) => m.id)).toEqual(['admin']);
   });
 
   it('keeps label application out of the warehouse and inside production', () => {
@@ -49,5 +72,6 @@ describe('AYVO OS navigation (doc 019)', () => {
     // Prefixes match whole path segments only.
     expect(where('/bottlesX')).toBeNull();
     expect(where('/warehouses')).toBeNull();
+    expect(where('/admin/users/x')).toBe('admin/users');
   });
 });

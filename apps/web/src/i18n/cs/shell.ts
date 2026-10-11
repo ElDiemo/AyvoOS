@@ -60,6 +60,8 @@ export const shellCs = {
     system: 'Stav systému',
     apiUnreachable: 'Server AYVO OS neodpovídá.',
     services: { api: 'Aplikační server', database: 'Databáze', redis: 'Mezipaměť' },
+    noModules:
+      'Váš účet zatím nemá přístup k žádnému provoznímu modulu. Přístup přiděluje administrátor AYVO OS.',
     up: 'v provozu',
     down: 'nedostupná',
   },

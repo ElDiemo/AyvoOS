@@ -1,18 +1,25 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 /**
- * The browser calls the API same-origin at /api/* (ADR 0013). On the DEV preview Caddy routes
- * /api to NestJS before a request ever reaches Next.js, so this never runs there. Locally
- * (`pnpm dev`, Playwright) it plays Caddy's role and forwards /api/* unchanged to API_URL —
- * read at runtime, so one build works against any API port.
+ * 1. /api/*: the browser calls the API same-origin (ADR 0013). On the DEV preview Caddy routes
+ *    /api to NestJS before a request ever reaches Next.js, so this branch never runs there.
+ *    Locally (`pnpm dev`, Playwright) it plays Caddy's role and forwards /api/* unchanged to
+ *    API_URL — read at runtime, so one build works against any API port.
+ * 2. Pages: records the requested path in `x-ayvo-path` (overwriting anything the client sent),
+ *    so a page can send the user back there after signing in.
  */
 export function proxy(request: NextRequest) {
-  const apiUrl = process.env.API_URL ?? 'http://localhost:4000';
-  const target = new URL(`${request.nextUrl.pathname}${request.nextUrl.search}`, apiUrl);
-  return NextResponse.rewrite(target);
+  const { pathname, search } = request.nextUrl;
+  if (pathname === '/api' || pathname.startsWith('/api/')) {
+    const apiUrl = process.env.API_URL ?? 'http://localhost:4000';
+    return NextResponse.rewrite(new URL(`${pathname}${search}`, apiUrl));
+  }
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-ayvo-path', `${pathname}${search}`);
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
-// Must be a static literal (Next.js reads it at build time); equals `${API_BASE_PATH}/:path*`.
+// Must be a static literal (Next.js reads it at build time). Static assets are skipped.
 export const config = {
-  matcher: ['/api/:path*'],
+  matcher: ['/api/:path*', '/((?!_next/static|_next/image|favicon.ico).*)'],
 };

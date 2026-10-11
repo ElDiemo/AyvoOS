@@ -1,3 +1,5 @@
+import type { PermissionCode } from '@ayvo/types';
+import { identityCs } from '../i18n/cs/identity';
 import { shellCs } from '../i18n/cs/shell';
 
 /**
@@ -15,13 +17,19 @@ export interface NavPage {
   label: string;
   exact?: boolean;
   prefixes?: readonly string[];
+  /** Hidden without this permission (the module's permission applies otherwise). */
+  permission?: PermissionCode;
 }
 
 export interface NavModule {
-  id: 'warehouse' | 'production';
+  id: 'warehouse' | 'production' | 'admin';
+  /** Operational modules ("Provoz") or the administration section ("Správa"). */
+  section: 'operations' | 'administration';
   label: string;
   href: string;
   description: string;
+  /** Required to see the module at all. */
+  permission: PermissionCode;
   pages: readonly NavPage[];
 }
 
@@ -31,12 +39,19 @@ const p = shellCs.modules.production;
 export const MODULES: readonly NavModule[] = [
   {
     id: 'warehouse',
+    section: 'operations',
+    permission: 'inventory:read',
     label: w.label,
     href: '/warehouse',
     description: w.description,
     pages: [
       { id: 'overview', href: '/warehouse', label: w.pages.overview, exact: true },
-      { id: 'new-receipt', href: '/warehouse/receipts/new', label: w.pages.newReceipt },
+      {
+        id: 'new-receipt',
+        href: '/warehouse/receipts/new',
+        label: w.pages.newReceipt,
+        permission: 'inventory:receive',
+      },
       { id: 'receipts', href: '/warehouse/receipts', label: w.pages.receipts },
       { id: 'stock', href: '/warehouse/stock', label: w.pages.stock },
       { id: 'movements', href: '/warehouse/movements', label: w.pages.movements },
@@ -45,6 +60,8 @@ export const MODULES: readonly NavModule[] = [
   },
   {
     id: 'production',
+    section: 'operations',
+    permission: 'production:read',
     label: p.label,
     href: '/production',
     description: p.description,
@@ -59,20 +76,36 @@ export const MODULES: readonly NavModule[] = [
       },
     ],
   },
+  {
+    id: 'admin',
+    section: 'administration',
+    permission: 'identity:users_read',
+    label: identityCs.shell.administration,
+    href: '/admin/users',
+    description: identityCs.admin.subtitle,
+    pages: [{ id: 'users', href: '/admin/users', label: identityCs.admin.nav }],
+  },
 ];
 
 export type WarehousePageId =
   'overview' | 'new-receipt' | 'receipts' | 'stock' | 'movements' | 'suppliers';
 export type ProductionPageId = 'overview' | 'bottles' | 'templates' | 'label-activation';
+export type AdminPageId = 'users';
 
 /**
- * The modules the current user may open. Application authentication and RBAC do not exist yet
- * (ADR 0017): on the DEV preview every implemented module is listed. When roles exist, this
- * becomes a server-side permission filter (the API enforces the same permissions); the shell
- * renders whatever it returns. Hiding a link is never the security boundary.
+ * The modules and pages the signed-in user may open, filtered by the permissions the API reports
+ * for the user (`/api/auth/me`). Hiding a link is never the security boundary: the API enforces
+ * every permission on its own, and pages check again on the server.
  */
-export function visibleModules(): readonly NavModule[] {
-  return MODULES;
+export function visibleModules(permissions: ReadonlySet<string> | readonly string[]): NavModule[] {
+  const has = (p: string) =>
+    permissions instanceof Set
+      ? permissions.has(p)
+      : (permissions as readonly string[]).includes(p);
+  return MODULES.filter((m) => has(m.permission)).map((m) => ({
+    ...m,
+    pages: m.pages.filter((page) => !page.permission || has(page.permission)),
+  }));
 }
 
 const within = (pathname: string, prefix: string) =>
