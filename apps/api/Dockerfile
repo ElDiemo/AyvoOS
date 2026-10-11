@@ -62,6 +62,9 @@ ENV NODE_ENV=production \
 COPY --from=build /out/runtime/package.json ./
 COPY --from=build /out/runtime/node_modules ./node_modules
 COPY --from=build /out/runtime/dist ./dist
+# Mount point for persistent file storage (FILE_STORAGE_DIR). A new named volume inherits this
+# ownership, so the unprivileged `node` user can write label artwork and PDFs there.
+RUN mkdir -p /var/lib/ayvo/files && chown node:node /var/lib/ayvo/files
 USER node
 EXPOSE 4000
 # Liveness only: the endpoint answers 200 (status ok or degraded) while the process serves HTTP.

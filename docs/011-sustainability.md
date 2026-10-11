@@ -32,6 +32,7 @@ Status: Draft — foundation phase (2026-10-10)
 - Exposes an **explicit whitelist** of fields; never hotel identity, locations, customers, internal IDs or operator data unless AYVO explicitly decides otherwise.
 - Rate-limited; cached (Redis, non-authoritative).
 - See [012 — Security](012-security.md) for enumeration concerns.
+- **v0.1 (implemented, [016](016-bottles-and-labels.md)):** fields `bottleCode` and `reuseCycles` only (always 0 until delivery and sorting events exist). Rate limiting and caching in Redis are not implemented yet (HTTP `Cache-Control: max-age=60` only).
 
 ### Hotel ESG exports
 

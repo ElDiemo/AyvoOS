@@ -25,6 +25,9 @@
 **/*.tsbuildinfo
 **/next-env.d.ts
 apps/api/src/generated
+# local file storage (label artwork, print PDFs)
+var
+artifacts
 
 # tests output
 **/coverage

@@ -14,6 +14,17 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: resolve(import.meta.dirname, '../..'),
   // @ayvo/ui ships TypeScript source; Next compiles it.
   transpilePackages: ['@ayvo/ui'],
+  // Legacy URLs of the Bottles reorganization: real HTTP redirects (no page render, no client
+  // JavaScript needed). Next.js passes the query string through (e.g. ?page=2). 307, not 308:
+  // these aliases may still change while Milestone 1 is DEV-only.
+  async redirects() {
+    return [{ source: '/batches', destination: '/bottles/history', permanent: false }];
+  },
+  experimental: {
+    // Local /api proxy (src/proxy.ts) buffers request bodies; allow artwork uploads up to the
+    // API's own limit (LABEL_ARTWORK_MAX_BYTES, default 10 MiB) plus multipart overhead.
+    proxyClientMaxBodySize: '12mb',
+  },
 };
 
 export default nextConfig;

@@ -63,6 +63,15 @@ Fine-grained permissions are checked per endpoint (NestJS guards); roles map to 
 - Public bottle QR identities are **opaque and practically unguessable** (confirmed; e.g. sufficient random entropy, never sequential or derived from the internal ID). The concrete payload/URL format is still open.
 - Rate limiting (Redis-backed) on public and authentication endpoints.
 
+### File uploads (implemented in v0.1)
+
+- Label artwork: type detected from content (never filename/MIME), size limit (`LABEL_ARTWORK_MAX_BYTES`), raster dimension caps, SVG deny-list (scripts, event handlers, foreignObject, DOCTYPE/entities, external references), server-generated storage keys, no path traversal, served with `nosniff` and a sandboxing CSP. See [016](016-bottles-and-labels.md#artwork).
+
+### Current state of access control (v0.1)
+
+- No application-level authentication yet. Admin routes live under `/api/admin/*`, the public passport under `/api/public/*`. On DEV everything is behind Caddy Basic Auth, which is acceptable **for the isolated DEV environment only**.
+- **Production blocker** ([ADR 0017](adr/0017-authentication-and-authorization-blocker.md), owner 2026-10-10): application-level authentication, server-side guards on every `/api/admin/*` route, deny-by-default authorization, admin / operations / read-only roles, organization/site scope, audit events for privileged mutations, and rate limiting for the public passport, authentication and mutation endpoints. No custom authentication system until the provider is selected.
+
 ### Transport and headers
 
 - HTTPS only in production; HSTS, CSP, CORS restricted to known origins.
@@ -72,6 +81,7 @@ Fine-grained permissions are checked per endpoint (NestJS guards); roles map to 
 - Authentication approach (own vs. external IdP), SSO for hotel groups?
 - Detailed permission matrix per role (including who may reverse a retirement); can one user belong to several hotels?
 - MFA method (TOTP, WebAuthn, via IdP?) and when it becomes mandatory.
-- QR payload format and public URL scheme/domain.
+- ~~QR payload format and public URL scheme/domain~~ — [ADR 0014](adr/0014-public-qr-identity-and-url.md).
+- Rate limiting of `/api/public/*` (not implemented in v0.1).
 - Data retention and GDPR handling for contacts and users.
 - Security logging/monitoring destination in production.

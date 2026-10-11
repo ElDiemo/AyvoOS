@@ -12,6 +12,12 @@ next-env.d.ts
 # generated
 apps/api/src/generated/
 
+# local file storage (label artwork, print PDFs)
+var/
+
+# generated label review artifacts (pnpm label-artifacts)
+artifacts/
+
 # turbo
 .turbo/
 
