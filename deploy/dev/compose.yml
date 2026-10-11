@@ -94,6 +94,12 @@ services:
     environment:
       APP_ENV: development
       API_PORT: 4000
+      # Identity and access (ADR 0022, doc 021): WorkOS AuthKit; values only in the server env file.
+      APP_PUBLIC_ORIGIN: https://${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
+      AUTH_PROVIDER: workos
+      WORKOS_API_KEY: ${WORKOS_API_KEY:?set WORKOS_API_KEY in the server env file (doc 021)}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:?set WORKOS_CLIENT_ID in the server env file (doc 021)}
+      WORKOS_JWT_ISSUER: ${WORKOS_JWT_ISSUER:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       # The QR URL printed on labels from this environment (DEV labels must never go on real
