@@ -64,6 +64,11 @@ approval on GitHub (GitHub asks the installation owner to accept added permissio
 Each call requests only part of this: read calls get read-only tokens; `pr create/edit/comment/
 ready` add `pull_requests: write`; only an authorized `pr merge` gets `contents: write`.
 
+- **Contents: Read and write is required for merging** — GitHub's merge endpoint needs it. Normal
+  calls never receive it (their tokens ask for `contents: read`).
+- **Issues is not needed:** comments on pull requests work with `Pull requests: write`; the
+  wrapper refuses `gh issue …` anyway.
+
 ## Allowed and refused operations
 
 Allowed (token permissions in brackets):
@@ -91,6 +96,10 @@ AYVO_GH_ALLOW_MERGE=<pr-number> /opt/ayvo/bin/ayvo-gh pr merge <pr-number> --mer
 
 The variable must name exactly that PR; it applies to that one command only. Claude Code sessions
 follow the same rule (CLAUDE.md: no merges without explicit owner approval).
+
+Merges always obey GitHub's branch protection, rulesets and required checks: the wrapper refuses
+`--admin` (the bypass flag) and any write through `gh api`, and the App has no Administration
+permission, so it cannot change protection rules. Do not add the App to a ruleset's bypass list.
 
 ## Server files
 
