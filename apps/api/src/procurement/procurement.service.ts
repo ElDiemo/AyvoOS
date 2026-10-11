@@ -12,6 +12,7 @@ import type {
   SupplierDocument as SupplierDocumentDto,
   UploadSupplierDocumentFields,
 } from '@ayvo/types';
+import { RECEIPT_DATE_MIN } from '@ayvo/types';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
 import { domainError } from '../common/domain-error.js';
 import { assertUnitScale, formatQuantity, quantity } from '../common/quantity.js';
@@ -240,8 +241,15 @@ export class ProcurementService {
           );
         }
         const receivedAt = new Date(input.receivedAt);
-        if (receivedAt.getTime() > Date.now() + 10 * 60_000) {
-          throw domainError(422, 'INVALID_DATE', 'The receipt date must not be in the future');
+        if (
+          receivedAt.getTime() > Date.now() + 10 * 60_000 ||
+          receivedAt.getTime() < Date.parse(RECEIPT_DATE_MIN)
+        ) {
+          throw domainError(
+            422,
+            'INVALID_DATE',
+            'The receipt date must be between 2020-01-01 and now',
+          );
         }
 
         const items = await this.inventory.getItemsByIds(

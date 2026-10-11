@@ -113,6 +113,43 @@ describe.skipIf(!hasDatabase)('inventory foundation and supplier receiving (doc 
     ).rejects.toThrow();
   });
 
+  it('prices, VAT and dates the database would reject are refused as clear validation errors', async () => {
+    // Regression (review of PR #3): these reached database checks and surfaced as HTTP 500.
+    const supplier = await createSupplier(t);
+    const note = await uploadDocument(t, supplier.id);
+    const base = await receiptBody(supplier.id, [note.id]);
+    const line = (patch: Record<string, unknown>) => ({
+      ...base,
+      lines: [{ ...base.lines[0], ...patch }],
+    });
+    await http()
+      .post('/api/admin/goods-receipts')
+      .send(line({ vatRate: '21' }))
+      .expect(400);
+    await http()
+      .post('/api/admin/goods-receipts')
+      .send(line({ unitPrice: '-1', currency: 'CZK' }))
+      .expect(400);
+    await http()
+      .post('/api/admin/goods-receipts')
+      .send(line({ unitPrice: '1', currency: 'CZK', vatRate: '150' }))
+      .expect(400);
+    await http()
+      .post('/api/admin/goods-receipts')
+      .send(line({ unitPrice: '1', currency: null }))
+      .expect(400);
+    const early = await http()
+      .post('/api/admin/goods-receipts')
+      .send({ ...base, receivedAt: '2019-12-31T12:00:00.000Z' })
+      .expect(422);
+    expect(early.body.code).toBe('INVALID_DATE');
+    const ok = await http()
+      .post('/api/admin/goods-receipts')
+      .send(line({ unitPrice: '12.5', currency: 'CZK', vatRate: '21' }))
+      .expect(201);
+    expect(ok.body.lines[0]).toMatchObject({ unitPrice: '12.5', currency: 'CZK', vatRate: '21' });
+  });
+
   it('a receipt needs an invoice or delivery note of the same supplier; quantities are exact', async () => {
     const supplier = await createSupplier(t);
     const other = await createSupplier(t);
@@ -162,6 +199,23 @@ describe.skipIf(!hasDatabase)('inventory foundation and supplier receiving (doc 
       .send({ ...body, lines: [{ ...body.lines[0], quantity: '101' }] })
       .expect(409);
     expect(conflict.body.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+
+  it('two suppliers may use the same lot code: separate lots, never merged', async () => {
+    // Regression (review of PR #3): lot codes were unique per item across all suppliers.
+    const one = await createSupplier(t);
+    const two = await createSupplier(t);
+    const a = await receiveBottles(t, 3, { supplierId: one.id, supplierLotCode: '2026-10' });
+    const b = await receiveBottles(t, 4, { supplierId: two.id, supplierLotCode: '2026-10' });
+    expect(a.lines[0]!.lot!.id).not.toBe(b.lines[0]!.lot!.id);
+    const balance = (lotId: string) =>
+      t.prisma.inventoryBalance
+        .findFirstOrThrow({ where: { lotId } })
+        .then((x) => x.onHand.toFixed());
+    expect([await balance(a.lines[0]!.lot!.id), await balance(b.lines[0]!.lot!.id)]).toEqual([
+      '3',
+      '4',
+    ]);
   });
 
   it('supplier lots are shared across receipts; without a supplier lot each line gets its own internal lot', async () => {

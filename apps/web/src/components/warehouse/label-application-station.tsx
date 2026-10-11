@@ -62,7 +62,7 @@ export function LabelApplicationStation({
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [entries, setEntries] = useState<SessionEntry[]>([]);
   const [lotCode, setLotCode] = useState('');
-  const [lotError, setLotError] = useState(false);
+  const [lotError, setLotError] = useState<string | null>(null);
   const busy = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   // A handheld scanner types into whatever has focus: keep the scan field focused whenever
@@ -138,7 +138,7 @@ export function LabelApplicationStation({
   function selectLot(lot: InventoryLot) {
     setActiveLot({ id: lot.id, code: lot.code });
     setOutcome(null);
-    setLotError(false);
+    setLotError(null);
     refocus();
   }
 
@@ -180,9 +180,10 @@ export function LabelApplicationStation({
           className="mt-6 flex flex-col gap-2 sm:flex-row"
           onSubmit={(e) => {
             e.preventDefault();
-            const lot = available.find((l) => l.code === lotCode.trim());
-            if (lot) selectLot(lot);
-            else setLotError(true);
+            // Lot codes are unique per supplier only: never guess between several matches.
+            const matches = available.filter((l) => l.code === lotCode.trim());
+            if (matches.length === 1) selectLot(matches[0]!);
+            else setLotError(matches.length > 1 ? t.ambiguousLot : t.unknownLot);
           }}
         >
           <input
@@ -196,7 +197,7 @@ export function LabelApplicationStation({
             {t.useLot}
           </button>
         </form>
-        {lotError && <p className="mt-2 text-sm text-red-700">{t.unknownLot}</p>}
+        {lotError && <p className="mt-2 text-sm text-red-700">{lotError}</p>}
       </Card>
     );
   }

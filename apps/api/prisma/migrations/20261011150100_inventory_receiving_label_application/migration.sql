@@ -313,7 +313,7 @@ CREATE UNIQUE INDEX "inventory_locations_code_key" ON "inventory_locations"("cod
 CREATE UNIQUE INDEX "inventory_lots_origin_receipt_line_id_key" ON "inventory_lots"("origin_receipt_line_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "inventory_lots_item_id_code_key" ON "inventory_lots"("item_id", "code");
+CREATE INDEX "inventory_lots_item_id_code_idx" ON "inventory_lots"("item_id", "code");
 
 -- CreateIndex
 CREATE INDEX "inventory_movements_item_id_location_id_lot_id_recorded_at_idx" ON "inventory_movements"("item_id", "location_id", "lot_id", "recorded_at");
@@ -651,8 +651,12 @@ ALTER TABLE "inventory_lots"
     ("kind" = 'SUPPLIER' AND "supplier_id" IS NOT NULL AND "supplier_lot_code" IS NOT NULL
        AND "code" = "supplier_lot_code" AND "origin_receipt_line_id" IS NULL)
     OR ("kind" = 'INTERNAL' AND "origin_receipt_line_id" IS NOT NULL AND "supplier_lot_code" IS NULL));
+-- A supplier lot is unique per (item, supplier, supplier lot code): two suppliers may use the same
+-- lot code and get separate lots. Internal lot codes ("GR-000001/1") are unique per item.
 CREATE UNIQUE INDEX "inventory_lots_supplier_lot_key"
   ON "inventory_lots" ("item_id", "supplier_id", "supplier_lot_code") WHERE "kind" = 'SUPPLIER';
+CREATE UNIQUE INDEX "inventory_lots_internal_code_key"
+  ON "inventory_lots" ("item_id", "code") WHERE "kind" = 'INTERNAL';
 CREATE FUNCTION inventory_lots_item_tracked() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
@@ -698,7 +702,7 @@ CREATE FUNCTION goods_receipts_received_at() RETURNS trigger
   AS $$
 BEGIN
   IF NEW."received_at" > now() + interval '10 minutes' OR NEW."received_at" < timestamptz '2020-01-01' THEN
-    RAISE EXCEPTION 'AYVO: receipt date must not be in the future' USING ERRCODE = 'check_violation';
+    RAISE EXCEPTION 'AYVO: receipt date must be between 2020-01-01 and now' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
 END
@@ -1057,42 +1061,71 @@ CREATE CONSTRAINT TRIGGER "bottles_labeled_has_event" AFTER UPDATE OF "status" O
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION bottles_labeled_has_event();
 
 -- At commit: a LABEL_APPLIED event comes with the status change, its open LABEL attachment and
--- exactly the stock consumption of one complete LABEL_APPLICATION BOM version.
-CREATE FUNCTION bottle_events_label_applied_complete() RETURNS trigger
+-- exactly the stock consumption of one complete LABEL_APPLICATION BOM version. Checked when the
+-- event is inserted AND whenever a label-application movement is inserted later, so no
+-- movement can ever be added to an already committed event.
+CREATE FUNCTION ayvo_assert_label_application_complete(p_event_id uuid) RETURNS void
   LANGUAGE plpgsql
   AS $$
 DECLARE
+  event record;
   versions int;
   consumed int;
   required int;
 BEGIN
-  IF NEW."type" <> 'LABEL_APPLIED' THEN
-    RETURN NULL;
+  SELECT * INTO event FROM "bottle_events" WHERE "id" = p_event_id;
+  IF event."type" <> 'LABEL_APPLIED' THEN
+    RAISE EXCEPTION 'AYVO: label application stock must be consumed by a LABEL_APPLIED event'
+      USING ERRCODE = 'check_violation';
   END IF;
-  IF (SELECT "status" FROM "bottles" WHERE "id" = NEW."bottle_id") = 'CREATED' THEN
+  IF (SELECT "status" FROM "bottles" WHERE "id" = event."bottle_id") = 'CREATED' THEN
     RAISE EXCEPTION 'AYVO: LABEL_APPLIED requires the bottle status change' USING ERRCODE = 'check_violation';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM "bottle_component_attachments"
-                 WHERE "installed_event_id" = NEW."id" AND "bottle_id" = NEW."bottle_id"
+                 WHERE "installed_event_id" = p_event_id AND "bottle_id" = event."bottle_id"
                    AND "component_type" = 'LABEL') THEN
     RAISE EXCEPTION 'AYVO: LABEL_APPLIED requires its label attachment' USING ERRCODE = 'check_violation';
   END IF;
   SELECT count(DISTINCT b."bom_version_id"), count(*) INTO versions, consumed
     FROM "inventory_movements" m JOIN "bom_lines" b ON b."id" = m."bom_line_id"
-    WHERE m."bottle_event_id" = NEW."id" AND m."type" = 'LABEL_APPLICATION';
+    WHERE m."bottle_event_id" = p_event_id AND m."type" = 'LABEL_APPLICATION';
   SELECT count(*) INTO required FROM "bom_lines"
     WHERE "bom_version_id" = (SELECT b."bom_version_id" FROM "inventory_movements" m
                               JOIN "bom_lines" b ON b."id" = m."bom_line_id"
-                              WHERE m."bottle_event_id" = NEW."id" LIMIT 1);
+                              WHERE m."bottle_event_id" = p_event_id LIMIT 1);
   IF versions <> 1 OR consumed <> required THEN
     RAISE EXCEPTION 'AYVO: LABEL_APPLIED must consume exactly one complete label-application BOM'
       USING ERRCODE = 'check_violation';
+  END IF;
+END
+$$;
+
+CREATE FUNCTION bottle_events_label_applied_complete() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF NEW."type" = 'LABEL_APPLIED' THEN
+    PERFORM ayvo_assert_label_application_complete(NEW."id");
   END IF;
   RETURN NULL;
 END
 $$;
 CREATE CONSTRAINT TRIGGER "bottle_events_label_applied_complete" AFTER INSERT ON "bottle_events"
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION bottle_events_label_applied_complete();
+
+CREATE FUNCTION inventory_movements_label_application_complete() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF NEW."type" = 'LABEL_APPLICATION' THEN
+    PERFORM ayvo_assert_label_application_complete(NEW."bottle_event_id");
+  END IF;
+  RETURN NULL;
+END
+$$;
+CREATE CONSTRAINT TRIGGER "inventory_movements_label_application_complete"
+  AFTER INSERT ON "inventory_movements"
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION inventory_movements_label_application_complete();
 
 -- --- Component attachments (doc 018 §15) ------------------------------------------------------
 

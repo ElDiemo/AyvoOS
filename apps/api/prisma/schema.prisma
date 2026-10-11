@@ -471,8 +471,9 @@ enum InventoryLotKind {
   INTERNAL
 }
 
-/// Lot of a lot-tracked item. DB: immutable; (item, code) unique; SUPPLIER ⇒ supplier +
-/// supplier_lot_code, (item, supplier, supplier_lot_code) unique (partial); INTERNAL ⇒
+/// Lot of a lot-tracked item. DB: immutable; SUPPLIER ⇒ supplier + supplier_lot_code,
+/// (item, supplier, supplier_lot_code) unique (partial) — two suppliers may use the same lot code;
+/// INTERNAL ⇒ (item, code) unique (partial),
 /// origin_receipt_line_id (unique, deferrable FK) and no supplier lot code; lot item must be
 /// lot-tracked.
 model InventoryLot {
@@ -494,7 +495,7 @@ model InventoryLot {
   movements         InventoryMovement[]
   balances          InventoryBalance[]
 
-  @@unique([itemId, code])
+  @@index([itemId, code])
   @@map("inventory_lots")
 }
 

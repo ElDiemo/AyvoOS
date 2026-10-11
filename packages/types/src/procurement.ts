@@ -67,6 +67,21 @@ export const goodsReceiptCodeSchema = z
 
 export const RECEIPT_LINES_MAX = 50;
 
+/** Earliest accepted receipt date (also enforced by the database). */
+export const RECEIPT_DATE_MIN = '2020-01-01T00:00:00.000Z';
+
+/** Unit price: NUMERIC(19,4) in the database — up to 15 integer digits, 4 decimals, ≥ 0. */
+export const unitPriceSchema = z
+  .string()
+  .trim()
+  .regex(/^(0|[1-9]\d{0,14})(\.\d{1,4})?$/, 'Expected a price ≥ 0 with at most 4 decimals');
+/** VAT rate in percent: NUMERIC(5,2), 0–100. */
+export const vatRateSchema = z
+  .string()
+  .trim()
+  .regex(/^(0|[1-9]\d{0,2})(\.\d{1,2})?$/, 'Expected a VAT rate with at most 2 decimals')
+  .refine((v) => Number(v) <= 100, 'VAT rate must be between 0 and 100');
+
 export const createGoodsReceiptRequestSchema = z.object({
   requestId: z.uuid(),
   supplierId: z.uuid(),
@@ -77,18 +92,27 @@ export const createGoodsReceiptRequestSchema = z.object({
   documentIds: z.array(z.uuid()).min(1).max(10),
   lines: z
     .array(
-      z.object({
-        itemId: z.uuid(),
-        quantity: positiveDecimalSchema,
-        /** Supplier lot code; empty/null creates an internal lot for lot-tracked items. */
-        supplierLotCode: z.string().trim().min(1).max(64).nullable(),
-        unitPrice: decimalStringSchema.nullable(),
-        currency: z
-          .string()
-          .regex(/^[A-Z]{3}$/)
-          .nullable(),
-        vatRate: decimalStringSchema.nullable(),
-      }),
+      z
+        .object({
+          itemId: z.uuid(),
+          quantity: positiveDecimalSchema,
+          /** Supplier lot code; empty/null creates an internal lot for lot-tracked items. */
+          supplierLotCode: z.string().trim().min(1).max(64).nullable(),
+          unitPrice: unitPriceSchema.nullable(),
+          currency: z
+            .string()
+            .regex(/^[A-Z]{3}$/)
+            .nullable(),
+          vatRate: vatRateSchema.nullable(),
+        })
+        .refine((l) => (l.unitPrice === null) === (l.currency === null), {
+          message: 'Give the unit price together with its currency',
+          path: ['currency'],
+        })
+        .refine((l) => l.vatRate === null || l.unitPrice !== null, {
+          message: 'A VAT rate needs a unit price',
+          path: ['vatRate'],
+        }),
     )
     .min(1)
     .max(RECEIPT_LINES_MAX),

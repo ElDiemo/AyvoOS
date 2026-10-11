@@ -393,6 +393,21 @@ anything reached DEV), now covered by tests:
   receipt line are created in the same transaction.
 - The label attachment trigger also requires the print job to be `COMPLETED` (not only the API).
 
+Independent pre-merge review (2026-10-11), fixed before merge with regression tests:
+
+- Lot codes are unique per `(item, supplier, supplier lot code)` only — two suppliers may use the
+  same lot code (it was wrongly unique per item, returning HTTP 500). Typing an ambiguous lot code
+  on the scan screen asks the operator to choose from the list instead of guessing.
+- The "exactly one complete label-application consumption" rule is also checked at commit for
+  every later `LABEL_APPLICATION` movement, so nothing can be added to a committed application.
+- Unit price (≤ 15 integer digits, 4 decimals, ≥ 0), VAT (0–100, needs a price) and the receipt
+  date (2020-01-01 … now) are validated by the API instead of surfacing database errors.
+
+Follow-ups (non-blocking): a domain exception filter for unexpected database errors; idempotent
+re-upload of supplier documents; a typed installing event for future label replacements; a
+narrower posting flag than `pg_trigger_depth()` for the balance guard (both are owner-bypassable
+only through DDL).
+
 ## 15. The bottle as an assembly of replaceable components
 
 A bottle in circulation is an assembly: **serialized bottle body** (carries the identity, the QR
