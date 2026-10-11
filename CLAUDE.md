@@ -30,7 +30,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   BottleEvent, BottleCreationBatch, LabelTemplate(+Version/Element), LabelArtwork, LabelPrintJob.
   Milestone 2A (doc 018): inventory units/items/settings/locations/lots, the stock ledger and
   balances, BOM versions/lines, suppliers, supplier documents, goods receipts (+lines, document
-  links, corrections), bottle component attachments, operation requests. **Approved design, not
+  links, corrections), bottle component attachments, operation requests. Milestone 2C (doc 021):
+  users, user identities, roles, permissions, user roles, user scopes, user sessions, login
+  states, identity bootstrap, audit events. **Approved design, not
   implemented** (Production Core v0.1, doc 020): users/roles/scopes (ADR 0022), product
   categories, products, product-label approvals, recipe versions, crate types, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,
@@ -57,9 +59,15 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   coverage is derived (priority → `ready_at` → order code, whole reservations only). No activation
   outside a production order once the production scan exists. v0.1 deliveries are whole crates of
   40 (doc 008).
-- **Authentication (owner 2026-10-11, ADR 0022):** external OIDC (WorkOS AuthKit preferred);
-  users, roles, permissions, scopes and audit actors are authoritative in PostgreSQL; never
-  authorize from an unverified external claim. Implemented before the production workflows.
+- **Authentication (owner 2026-10-11, ADR 0022, doc 021 — Milestone 2C):** external OIDC (WorkOS
+  AuthKit) behind the provider boundary in `apps/api/src/identity`; users, roles, permissions,
+  scopes, sessions and audit are authoritative in PostgreSQL and evaluated on every request;
+  identity only from the `ayvo_session` cookie, never from headers or unverified claims.
+  **Every API route must declare `@Public()`, `@Authenticated()` or `@RequirePermission(...)`** —
+  the global guard denies everything else, and `test/identity.e2e.test.ts` fails on an undeclared
+  route. New permissions are added to the catalogue by migration (and to `packages/types`).
+  `AUTH_PROVIDER=test` exists only with `APP_ENV=test`; never add another bypass. The first
+  ADMIN is bootstrapped once (`node dist/identity/bootstrap-admin.js`).
 - Bottle **internal ID ≠ public QR identity**. The public QR identity is opaque, practically
   unguessable, and its URL stays stable for the bottle's physical lifetime (ADR 0005). Production
   QR URL `https://qr.ayvo.co/<token>`, DEV `https://dev.ayvo.co/q/<token>`; token = 128 random
@@ -124,8 +132,8 @@ Tailwind 4 · Vitest · Playwright.
   `apps/api/prisma/schema.prisma`; generated client in `apps/api/src/generated/` (git-ignored,
   produced by `pnpm db:generate`). Env validated by Zod in `src/config/env.ts`. Domain modules:
   `labels` ← `assets` ← `label-production` (doc 016); `inventory` ← `procurement`; `warehouse`
-  composes assets, label-production, inventory and procurement (doc 018); `storage` = FileStorage
-  abstraction.
+  composes assets, label-production, inventory and procurement (doc 018); `identity` (users,
+  roles, sessions, global access guard — doc 021); `storage` = FileStorage abstraction.
   Routes: `/api/admin/*` (staff) and `/api/public/*` (anonymous passport only).
 - `apps/web` — Next.js App Router. Server-only env in `src/lib/env.ts`. Admin pages in
   `src/app/(admin)`, public passport in `src/app/q/[token]`. The internal app is organized by
@@ -150,8 +158,12 @@ Tailwind 4 · Vitest · Playwright.
 - API integration tests (`apps/api/test/*.e2e.test.ts`) run against a real, per-run PostgreSQL
   database (created, migrated and dropped by `test/support/global-setup.ts`; needs
   `pnpm infra:up`). Never mock the database for invariants, transactions or concurrency.
+  `createTestApp()` runs as a test superuser (resolver replaced in the test module only; the guard
+  still enforces each route's rule); use `createTestApp({}, {}, { auth: 'real' })` for
+  authentication tests.
 - Playwright (`pnpm test:e2e`, needs `pnpm build`) starts the built API on a fresh `ayvo_e2e`
-  database (port 4100) and the web app on port 3100.
+  database (port 4100, fake identity provider, bootstrapped `e2e-admin@ayvo.test`) and the web app
+  on port 3100; `e2e/auth.setup.ts` signs in and stores the operator session used by the specs.
 - Architecture changes need an ADR (`docs/adr/`, next number; supersede, don't rewrite).
 - **CLAUDE.md is the canonical AI instruction file.** Turborepo's auto-generated `AGENTS.md` is
   disabled (`"agentGuidance": false` in `turbo.json`, ADR 0012). Turborepo may differ from your

@@ -25,6 +25,10 @@ Status: Draft — Phase 0 complete; Milestones 1, 2A and 2A.1 merged and on DEV;
   bottle series server-side; overview pages; Czech internal application. No schema change. DEV
   only. First production-workflow follow-up: production orders/sessions with product binding.
 
+- **Milestone 2C — identity and access core** (owner, 2026-10-11; [021](021-identity-and-access.md),
+  ADR 0022): WorkOS AuthKit sign-in behind a provider boundary, AYVO users, roles, permissions,
+  warehouse scopes, sessions, deny-by-default guards, audit, user administration. DEV activation
+  waits for the owner's WorkOS setup.
 - **Production Core v0.1 — designed** (owner, 2026-10-11; [020](020-production-core-v0.1.md),
   ADR 0021, ADR 0022): products and recipes, crates (capacity 40, one cycle per circulation),
   production orders with material reservations, server-side work sessions, and the atomic

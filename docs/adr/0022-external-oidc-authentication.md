@@ -1,7 +1,8 @@
 # ADR 0022: Authentication through an external OIDC provider; authorization in AYVO OS
 
-- **Status:** Accepted — confirmed by owner 2026-10-11 (implementation pending; still a
-  production blocker until implemented, doc 016)
+- **Status:** Accepted — confirmed by owner 2026-10-11; implemented in Milestone 2C
+  ([doc 021](../021-identity-and-access.md)); DEV activation pending the owner's WorkOS setup;
+  still a production blocker until verified in production (doc 016)
 - **Date:** 2026-10-11
 - **Deciders:** AYVO owner; AYVO OS lead architect
 - **Supersedes:** the provider decision left open by

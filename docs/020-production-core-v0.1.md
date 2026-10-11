@@ -583,7 +583,7 @@ the pilot/production database**; DEV rows are never deleted (bottles reject DELE
 
 1. **Documentation and ADRs** — this document, ADR 0021 (supersedes ADR 0004), ADR 0022 (resolves
    ADR 0017's provider question); affected docs and CLAUDE.md updated.
-2. **Authentication, users, roles, guards** — WorkOS AuthKit behind the provider boundary (subject
+2. **Authentication, users, roles, guards** (Milestone 2C, [doc 021](021-identity-and-access.md)) — WorkOS AuthKit behind the provider boundary (subject
    to the pricing/DPA/EU data-location check before production), AYVO user mapping, roles and
    permissions, deny-by-default guards on every write endpoint, audit events; Basic Auth stays only
    the outer DEV gate; the standalone label-activation write becomes supervisor-only.

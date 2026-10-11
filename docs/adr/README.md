@@ -43,7 +43,7 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0019](0019-inventory-ledger-and-idempotent-operations.md) | Inventory ledger, protected balances, idempotent operations   | Accepted — confirmed by owner 2026-10-11                                                  |
 | [0020](0020-operational-modules-and-application-shell.md)  | Operational modules (Sklad, Výroba) and the application shell | Accepted — directed by owner 2026-10-11                                                   |
 | [0021](0021-crate-capacity-and-circulation-cycle.md)       | Crate capacity 40 and the full-circulation crate cycle        | Accepted — confirmed by owner 2026-10-11                                                  |
-| [0022](0022-external-oidc-authentication.md)               | External OIDC authentication; authorization in AYVO OS        | Accepted — implementation pending                                                         |
+| [0022](0022-external-oidc-authentication.md)               | External OIDC authentication; authorization in AYVO OS        | Accepted — implemented (doc 021), DEV activation pending WorkOS                           |
 
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
