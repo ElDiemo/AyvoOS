@@ -7,11 +7,12 @@ contracts, monthly billing and sustainability reporting.
 
 ## Current project status
 
-| Area             | Status                                                                      |
-| ---------------- | --------------------------------------------------------------------------- |
-| Foundation       | **Complete** — approved by owner 2026-10-10                                 |
-| DEV preview      | **Deployed** at `dev.ayvo.co` — first deployment completed 2026-10-10       |
-| Business modules | **Not implemented yet** (bottles, crates, hotels, deliveries, billing, ESG) |
+| Area          | Status                                                                               |
+| ------------- | ------------------------------------------------------------------------------------ |
+| Foundation    | **Complete** — approved by owner 2026-10-10                                          |
+| DEV preview   | **Deployed** at `dev.ayvo.co` — first deployment completed 2026-10-10                |
+| Milestone 1   | **DEV only** — bottles, label templates, printing v0.1; production blocked (doc 016) |
+| Other modules | **Not implemented yet** (products, crates, hotels, deliveries, billing, ESG)         |
 
 ## Environments
 
@@ -43,6 +44,8 @@ preview runs behind Caddy with HTTP Basic Auth; the API is same-origin at `/api/
 | [012 Security](docs/012-security.md)                         | Tenant isolation, roles, secrets                   |
 | [013 Infrastructure](docs/013-infrastructure.md)             | Dev setup, production principles                   |
 | [014 Roadmap](docs/014-roadmap.md)                           | Proposed phases                                    |
+| [015 Data dictionary](docs/015-data-dictionary.md)           | Tables, columns, database constraints              |
+| [016 Bottles and labels](docs/016-bottles-and-labels.md)     | Milestone 1: bottles, label templates, printing    |
 | [ADRs](docs/adr/README.md)                                   | Architecture Decision Records                      |
 
 ## Architecture at a glance
@@ -60,8 +63,10 @@ preview runs behind Caddy with HTTP Basic Auth; the API is same-origin at `/api/
 
 ```
 apps/
-  api/          NestJS 12 (ESM) backend — GET /api/health, Prisma + Redis wiring, Dockerfile
-  web/          Next.js 16 frontend — placeholder page showing API/DB/Redis status, Dockerfile
+  api/          NestJS 12 (ESM) backend — modules labels, assets, label-production, storage;
+                Prisma schema + migrations; /api/admin/* and /api/public/*; Dockerfile
+  web/          Next.js 16 frontend — admin UI (bottles, batches, label templates + designer),
+                public passport /q/<token>; Dockerfile
 packages/
   config/       Shared tsconfig + ESLint config
   types/        Shared API contracts (Zod schemas + inferred types)
@@ -87,32 +92,34 @@ corepack enable pnpm
 pnpm install
 cp .env.example .env          # dev-only values; never commit .env
 pnpm infra:up                 # start PostgreSQL + Redis (Docker)
+pnpm --filter @ayvo/api db:migrate:deploy   # apply the committed migrations
 pnpm dev                      # API on :4000, web on :3000
 ```
 
-- Web: <http://localhost:3000> — shows API, PostgreSQL and Redis status
+- Web: <http://localhost:3000> — admin UI (Bottles, Label templates)
 - API health: <http://localhost:4000/api/health> (every API route lives under `/api`)
 
 The API starts even when PostgreSQL/Redis are down and reports `"status": "degraded"`.
 
 ## Commands
 
-| Command                             | What it does                                           |
-| ----------------------------------- | ------------------------------------------------------ |
-| `pnpm dev`                          | Run all apps in watch mode                             |
-| `pnpm build`                        | Build all workspaces                                   |
-| `pnpm lint`                         | ESLint in every workspace                              |
-| `pnpm typecheck`                    | TypeScript `--noEmit` in every workspace               |
-| `pnpm test`                         | Vitest unit/integration tests                          |
-| `pnpm test:e2e`                     | Playwright smoke tests (needs `pnpm build` + browsers) |
-| `pnpm format` / `pnpm format:check` | Prettier                                               |
-| `pnpm db:generate`                  | Generate the Prisma client                             |
-| `pnpm db:migrate`                   | Create/apply a dev migration (`prisma migrate dev`)    |
-| `pnpm infra:up` / `pnpm infra:down` | Start/stop dev PostgreSQL + Redis                      |
-| `pnpm infra:config`                 | Validate `docker/compose.yml`                          |
-| `pnpm deploy-dev:config`            | Validate `deploy/dev/compose.yml` (placeholder env)    |
-| `scripts/deploy-dev.sh --check`     | Validate the server env file + DEV preview config      |
-| `scripts/deploy-dev.sh`             | Deploy the DEV preview (on the DEV server only)        |
+| Command                             | What it does                                          |
+| ----------------------------------- | ----------------------------------------------------- |
+| `pnpm dev`                          | Run all apps in watch mode                            |
+| `pnpm build`                        | Build all workspaces                                  |
+| `pnpm lint`                         | ESLint in every workspace                             |
+| `pnpm typecheck`                    | TypeScript `--noEmit` in every workspace              |
+| `pnpm test`                         | Vitest unit + DB integration tests (needs `infra:up`) |
+| `pnpm test:e2e`                     | Playwright happy path (needs `build`, `infra:up`)     |
+| `pnpm format` / `pnpm format:check` | Prettier                                              |
+| `pnpm db:generate`                  | Generate the Prisma client                            |
+| `pnpm db:migrate`                   | Create/apply a dev migration (`prisma migrate dev`)   |
+| `pnpm infra:up` / `pnpm infra:down` | Start/stop dev PostgreSQL + Redis                     |
+| `pnpm infra:config`                 | Validate `docker/compose.yml`                         |
+| `pnpm label-artifacts`              | QR validation / calibration PDFs + QR decode check    |
+| `pnpm deploy-dev:config`            | Validate `deploy/dev/compose.yml` (placeholder env)   |
+| `scripts/deploy-dev.sh --check`     | Validate the server env file + DEV preview config     |
+| `scripts/deploy-dev.sh`             | Deploy the DEV preview (on the DEV server only)       |
 
 Playwright browsers: `pnpm --filter @ayvo/web exec playwright install --with-deps chromium`.
 

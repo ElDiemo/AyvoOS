@@ -43,8 +43,8 @@ Note: crate-level operations (allocate, dispatch, deliver) apply to all bottles 
 
 ```mermaid
 stateDiagram-v2
-  [*] --> EMPTY_NEW: CREATED
-  EMPTY_NEW --> FILLED: FILLED
+  [*] --> CREATED: CREATED
+  CREATED --> FILLED: FILLED
   FILLED --> IN_CRATE: ASSIGNED_TO_CRATE
   IN_CRATE --> APPROVED: QUALITY_APPROVED (crate)
   APPROVED --> ALLOCATED: ALLOCATED_TO_DELIVERY (crate)
@@ -66,6 +66,8 @@ stateDiagram-v2
   RETIRED --> SORTED: authorized audited correction only (re-entry state open)
   DISPOSED --> [*]
 ```
+
+**Implemented in Milestone 1 (DEV)** ([016](016-bottles-and-labels.md)): event `CREATED` and status `CREATED` only. The initial status is named `CREATED` per the owner's milestone brief (an earlier draft of this diagram called it `EMPTY_NEW`). All later states are still a proposal.
 
 RETIRED (operationally terminal, reversible only by authorized audited correction) and DISPOSED/DESTROYED (irreversible) are **confirmed**; all other states and transitions above are a **proposal**, including the re-entry state after reversing a retirement. The transition table will be implemented as an explicit allow-list in the assets module and covered by tests.
 
@@ -107,7 +109,7 @@ Definition _(confirmed by owner 2026-10-10)_: a reuse cycle is completed when a 
 
 ## Open questions
 
-- QR payload/URL/domain format, printing/engraving method, and what happens if a QR label becomes unreadable or damaged (re-label while keeping identity?).
+- ~~QR payload/URL/domain format~~ (resolved: [ADR 0014](adr/0014-public-qr-identity-and-url.md)); engraving vs. printed labels, and what happens if a QR label becomes unreadable or damaged (re-label while keeping identity?).
 - Retirement criteria (max reuse cycles, damage, inspection failure) and who may retire a bottle.
 - Who is authorized to reverse a retirement, and which state the bottle re-enters (e.g. SORTED or QUARANTINED).
 - Are DISPOSED and DESTROYED one state or two?

@@ -1,3 +1,5 @@
 pnpm-lock.yaml
 apps/api/src/generated/
 apps/api/prisma/migrations/
+var/
+artifacts/

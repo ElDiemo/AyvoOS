@@ -29,11 +29,21 @@ Status: Draft — foundation complete; DEV preview deployed (2026-10-10)
 | Web (Next.js 16)     | on host via `pnpm dev`                   | 3000 |
 
 - Configuration: copy `.env.example` to `.env` and adjust. Real `.env` files are git-ignored.
-- Prisma 7 is configured (no domain models yet); see [ADR 0009](adr/0009-prisma-orm.md).
+- Prisma 7 with the Milestone 1 models (bottles, label templates, print jobs) and committed migrations; see [ADR 0009](adr/0009-prisma-orm.md) and the [data dictionary](015-data-dictionary.md).
+- File storage (label artwork, print PDFs): `FILE_STORAGE_DIR`, default `var/storage` in the repository (git-ignored) — [ADR 0016](adr/0016-file-storage-abstraction.md).
+- Further API settings (see `.env.example`): `PUBLIC_QR_BASE_URL` (local default `http://localhost:3000/q`), `LABEL_QR_MIN_SIZE_MM`, `LABEL_ARTWORK_MAX_BYTES`.
+- Locally the web app forwards `/api/*` to `API_URL` (`apps/web/src/proxy.ts`), mirroring Caddy, so the browser always uses same-origin `/api`.
+- Label review artifacts: `pnpm label-artifacts` writes the QR validation sheet, a calibration page, a DEV sample label and PNG previews to `artifacts/label-review/` (git-ignored) and decodes every QR (doc 016).
+- Tests: `pnpm test` needs PostgreSQL (`pnpm infra:up`): API integration tests create, migrate and drop a temporary `ayvo_test_*` database per run. `pnpm test:e2e` (after `pnpm build`) recreates an `ayvo_e2e` database and runs the built API on port 4100 and the web app on 3100.
 - Redis is non-authoritative ([ADR 0010](adr/0010-redis-non-authoritative.md)).
 - Docker is installed on the development server; PostgreSQL 18 and Redis 8 run healthy via `docker/compose.yml` (verified 2026-10-10).
 
 ## DEV preview deployment (dev.ayvo.co)
+
+> **⚠ Backups: the `pg_dump` taken by the deploy script is NOT a backup of the files volume.**
+> Label artwork and print PDFs live in the Docker volume `ayvo-dev-preview-files-data`, which no
+> script backs up. Losing it loses uploaded artwork. Local file storage is DEV-only; production
+> needs object storage, off-site backups and a tested restore ([ADR 0016](adr/0016-file-storage-abstraction.md)).
 
 Decision record: [ADR 0013](adr/0013-dev-preview-deployment.md). Files: `deploy/dev/compose.yml`,
 `deploy/dev/Caddyfile`, `apps/api/Dockerfile`, `apps/web/Dockerfile`, `scripts/deploy-dev.sh`.
@@ -73,7 +83,14 @@ path overridable with `AYVO_DEV_ENV_FILE`). Placeholders are documented in `.env
 | `POSTGRES_DB`         | e.g. `ayvo_dev_preview`                                        |
 | `POSTGRES_PASSWORD`   | 24+ characters of `[A-Za-z0-9_-]`, e.g. `openssl rand -hex 32` |
 
-`DATABASE_URL`, `REDIS_URL` and `API_URL` are derived inside `deploy/dev/compose.yml`.
+`DATABASE_URL`, `REDIS_URL` and `API_URL` are derived inside `deploy/dev/compose.yml`, as are
+`PUBLIC_QR_BASE_URL` (`https://$DEV_DOMAIN/q`) and `FILE_STORAGE_DIR` (`/var/lib/ayvo/files`).
+
+**Persistent files** (Milestone 1): the API mounts the named volume `ayvo-dev-preview-files-data`
+at `/var/lib/ayvo/files` for label artwork and generated PDFs; its root filesystem stays
+read-only. The volume is never removed by the scripts, but it is **not** included in the
+pre-migration `pg_dump` backup (open question below). Labels printed from DEV encode
+`https://dev.ayvo.co/q/<token>` and must never be used on real bottles.
 
 ### What `scripts/deploy-dev.sh` does
 
@@ -82,7 +99,7 @@ path overridable with `AYVO_DEV_ENV_FILE`). Placeholders are documented in `.env
 2. Takes a lock so two deployments cannot overlap.
 3. Builds `api`, `web` and `api-migrate` images tagged `<git-sha>[-dirty]-<UTC timestamp>`.
 4. Starts PostgreSQL and Redis and waits until healthy.
-5. Writes a `pg_dump` of the current database to `/opt/ayvo/backups/dev-preview/`.
+5. Writes a `pg_dump` of the current database to `/opt/ayvo/backups/dev-preview/` (database only — **not** the files volume).
 6. Runs `prisma migrate deploy` in the one-off `migrate` container.
 7. Starts the stack with the new images and waits until every service is healthy.
 8. Verifies (all checks are mandatory; any failure fails the deployment):
@@ -140,9 +157,13 @@ scripts/deploy-dev.sh
   `scripts/deploy-dev.sh --rollback <tag>` — starts the previously built images without building
   or migrating, then runs the same verification. Tags: the deployment log or
   `docker images 'ayvo-dev-preview/*'`.
-- **After a migration:** migrations are forward-only. Prefer a new compensating migration and a
-  normal deploy. If the data must go back, restore the pre-migration dump (a deliberate,
-  destructive step on the DEV database), then roll back the images:
+- **After a migration:** migrations are forward-only. **Rolling back the application does not
+  reverse a schema migration** — the old images run against the new schema. Prefer forward
+  recovery: fix the problem in a new migration and deploy normally. Milestone 1's migrations only
+  add objects, so pre-Milestone-1 images ignore them. If the data must go back, restore the
+  pre-migration dump (a deliberate, destructive step on the DEV database), mark a failed migration
+  with `prisma migrate resolve --rolled-back <name>`, then roll back the images. **The files
+  volume is not part of the dump** — restoring the database does not restore or remove files.
 
   ```bash
   C="docker compose -f deploy/dev/compose.yml --env-file /opt/ayvo/secrets/dev-preview.env"
@@ -179,3 +200,5 @@ revocation and removal: [doc 017](017-github-automation.md), [ADR 0018](adr/0018
 - CI/CD platform (e.g. GitHub Actions) and release process — deferred by owner until the first domain is stable.
 - Production domain and TLS setup (`dev.ayvo.co` is covered by ADR 0013).
 - Off-server copies and retention of DEV preview backups.
+- Backup of the DEV preview files volume (artwork, PDFs) together with the database dump.
+- Milestone 1 production blockers (QR host routing, storage, backups, restore test, monitoring, secrets rotation, …): the consolidated list in [doc 016](016-bottles-and-labels.md#production-blockers).
