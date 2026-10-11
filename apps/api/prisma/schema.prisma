@@ -4,7 +4,8 @@
 // Lifecycle history is append-only (ADR 0006).
 //
 // Milestone 1 (bottles, label templates, printing v0.1) and Milestone 2A (inventory foundation,
-// supplier receiving, physical label application — doc 018) add the models below. Crates,
+// supplier receiving, physical label application — doc 018) and Milestone 2C (identity and
+// access — ADR 0022, doc 021) add the models below. Crates,
 // products, fill batches, hotels, deliveries, billing and ESG are still NOT modelled.
 //
 // Invariants that Prisma cannot express live as raw SQL in the migrations and are listed in the
@@ -458,8 +459,9 @@ model InventoryLocation {
   code String @unique
   name String
 
-  movements InventoryMovement[]
-  balances  InventoryBalance[]
+  movements  InventoryMovement[]
+  balances   InventoryBalance[]
+  userScopes UserScope[]
 
   @@map("inventory_locations")
 }
@@ -781,4 +783,224 @@ model OperationRequest {
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@map("operation_requests")
+}
+
+// ---------------------------------------------------------------------------------------------
+// identity module — users, external identities, roles, permissions, scopes, sessions, audit
+// (Milestone 2C, ADR 0022, doc 021). Authentication is delegated to an external OIDC provider;
+// authorization is evaluated from these tables on every request.
+// ---------------------------------------------------------------------------------------------
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+/// An AYVO user. Never deleted; deactivation revokes access immediately.
+/// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
+model User {
+  id                 String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email              String     @unique
+  displayName        String     @map("display_name")
+  status             UserStatus @default(ACTIVE)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// NULL only for the bootstrap administrator.
+  createdBy          String?    @map("created_by") @db.Uuid
+  deactivatedAt      DateTime?  @map("deactivated_at") @db.Timestamptz(3)
+  deactivatedBy      String?    @map("deactivated_by") @db.Uuid
+  deactivationReason String?    @map("deactivation_reason")
+  lastLoginAt        DateTime?  @map("last_login_at") @db.Timestamptz(3)
+
+  createdByUser     User?              @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdUsers      User[]             @relation("UserCreatedBy")
+  deactivatedByUser User?              @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
+  deactivatedUsers  User[]             @relation("UserDeactivatedBy")
+  identities        UserIdentity[]
+  roles             UserRole[]         @relation("UserRoles")
+  rolesGranted      UserRole[]         @relation("RoleGrantedBy")
+  rolesRevoked      UserRole[]         @relation("RoleRevokedBy")
+  scopes            UserScope[]        @relation("UserScopes")
+  scopesGranted     UserScope[]        @relation("ScopeGrantedBy")
+  scopesRevoked     UserScope[]        @relation("ScopeRevokedBy")
+  sessions          UserSession[]
+  bootstrap         IdentityBootstrap?
+
+  @@map("users")
+}
+
+/// Link of an external identity (provider + subject) to an AYVO user.
+/// DB: one active link per (provider, subject) and per (user, provider) (partial unique);
+/// provider/subject/user immutable; unlink closes once; DELETE rejected.
+model UserIdentity {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  /// "WORKOS" (production/DEV) or "TEST" (APP_ENV=test only).
+  provider    String
+  subject     String
+  emailAtLink String    @map("email_at_link")
+  linkedAt    DateTime  @default(now()) @map("linked_at") @db.Timestamptz(3)
+  unlinkedAt  DateTime? @map("unlinked_at") @db.Timestamptz(3)
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions UserSession[]
+
+  @@index([userId])
+  @@map("user_identities")
+}
+
+/// Role catalogue. DB: seeded by migration; changes only by migration.
+model Role {
+  code        String @id
+  name        String
+  description String
+
+  permissions RolePermission[]
+  grants      UserRole[]
+
+  @@map("roles")
+}
+
+/// Permission catalogue. DB: seeded by migration; changes only by migration.
+model Permission {
+  code            String  @id
+  description     String
+  /// Also requires a warehouse scope for the warehouse the request acts on.
+  warehouseScoped Boolean @map("warehouse_scoped")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// Which permissions a role grants. DB: seeded by migration.
+model RolePermission {
+  roleCode       String @map("role_code")
+  permissionCode String @map("permission_code")
+
+  role       Role       @relation(fields: [roleCode], references: [code], onDelete: Restrict)
+  permission Permission @relation(fields: [permissionCode], references: [code], onDelete: Restrict)
+
+  @@id([roleCode, permissionCode])
+  @@map("role_permissions")
+}
+
+/// A role granted to a user. Revocation closes the grant once; the grant row stays as history.
+/// DB: at most one open grant per (user, role) (partial unique); DELETE rejected.
+model UserRole {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  roleCode     String    @map("role_code")
+  grantedAt    DateTime  @default(now()) @map("granted_at") @db.Timestamptz(3)
+  grantedBy    String?   @map("granted_by") @db.Uuid
+  grantReason  String    @map("grant_reason")
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy    String?   @map("revoked_by") @db.Uuid
+  revokeReason String?   @map("revoke_reason")
+
+  user          User  @relation("UserRoles", fields: [userId], references: [id], onDelete: Restrict)
+  role          Role  @relation(fields: [roleCode], references: [code], onDelete: Restrict)
+  grantedByUser User? @relation("RoleGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  revokedByUser User? @relation("RoleRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("user_roles")
+}
+
+enum ScopeType {
+  WAREHOUSE
+  HOTEL_ORGANIZATION
+  HOTEL_SITE
+}
+
+/// Data access scope of a user. WAREHOUSE references an inventory location; hotel scopes
+/// reference hotel organizations/sites once those modules exist (no FK yet).
+/// DB: WAREHOUSE ⇔ location_id set; hotel scopes ⇔ scope_ref set; at most one open scope per
+/// target (partial unique); revocation closes once; DELETE rejected.
+model UserScope {
+  id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  type       ScopeType
+  locationId String?   @map("location_id") @db.Uuid
+  scopeRef   String?   @map("scope_ref") @db.Uuid
+  grantedAt  DateTime  @default(now()) @map("granted_at") @db.Timestamptz(3)
+  grantedBy  String?   @map("granted_by") @db.Uuid
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy  String?   @map("revoked_by") @db.Uuid
+
+  user          User               @relation("UserScopes", fields: [userId], references: [id], onDelete: Restrict)
+  location      InventoryLocation? @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  grantedByUser User?              @relation("ScopeGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  revokedByUser User?              @relation("ScopeRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("user_scopes")
+}
+
+/// An AYVO application session. Only the SHA-256 of the random cookie token is stored.
+/// DB: token hash unique; revocation closes once.
+model UserSession {
+  id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  tokenSha256       String    @unique @map("token_sha256") @db.Char(64)
+  userId            String    @map("user_id") @db.Uuid
+  identityId        String    @map("identity_id") @db.Uuid
+  /// The provider's session id (for provider logout); never a credential.
+  providerSessionId String?   @map("provider_session_id")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  idleExpiresAt     DateTime  @map("idle_expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokeReason      String?   @map("revoke_reason")
+
+  user     User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  identity UserIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("user_sessions")
+}
+
+/// One-time OAuth state of a login attempt (CSRF protection of the callback, PKCE verifier).
+/// DB: state hash unique; used once.
+model AuthLoginState {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  stateSha256   String    @unique @map("state_sha256") @db.Char(64)
+  /// SHA-256 of the browser-binding cookie set when the attempt started.
+  bindingSha256 String    @map("binding_sha256") @db.Char(64)
+  codeVerifier  String    @map("code_verifier")
+  nextPath      String    @map("next_path")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt        DateTime? @map("used_at") @db.Timestamptz(3)
+
+  @@map("auth_login_states")
+}
+
+/// The one-time bootstrap of the first administrator. DB: a single row ever (PK = true);
+/// insert-only.
+model IdentityBootstrap {
+  singleton Boolean  @id @default(true)
+  userId    String   @unique @map("user_id") @db.Uuid
+  email     String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("identity_bootstrap")
+}
+
+/// Append-only security and administration audit (logins, role and scope changes, …).
+/// DB: UPDATE/DELETE rejected.
+model AuditEvent {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  type         String
+  /// NULL for system actions (bootstrap) and anonymous login attempts.
+  actorUserId  String?  @map("actor_user_id") @db.Uuid
+  targetUserId String?  @map("target_user_id") @db.Uuid
+  reason       String?
+  payload      Json     @default("{}")
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+
+  @@index([targetUserId, occurredAt])
+  @@index([occurredAt])
+  @@map("audit_events")
 }
