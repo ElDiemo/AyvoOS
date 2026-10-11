@@ -14,6 +14,9 @@ import {
 } from '@/lib/label-geometry';
 import { NumberField } from '@/components/number-field';
 import { QrCode } from '@/components/qr-code';
+import { productionCs } from '@/i18n/cs/production';
+
+const t = productionCs.editor;
 
 const CORNERS: Corner[] = ['nw', 'ne', 'sw', 'se'];
 const HANDLE_POSITION: Record<Corner, string> = {
@@ -144,7 +147,7 @@ export function LabelDesigner({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={artworkUrl}
-            alt="Label artwork"
+            alt={t.artworkAlt}
             draggable={false}
             className="pointer-events-none absolute inset-0 h-full w-full"
             style={{ objectFit: 'fill' }}
@@ -152,7 +155,7 @@ export function LabelDesigner({
           <div
             data-testid="qr-box"
             role="group"
-            aria-label={`QR code at ${box.xMm} mm, ${box.yMm} mm, ${box.sizeMm} mm wide. Use arrow keys to move.`}
+            aria-label={t.qrBoxLabel(box.xMm, box.yMm, box.sizeMm)}
             tabIndex={0}
             data-drag="move"
             onPointerDown={startDrag}
@@ -169,7 +172,7 @@ export function LabelDesigner({
               value={qrPreviewUrl}
               level={qrLevel}
               className="pointer-events-none h-full w-full"
-              title="QR code preview"
+              title={t.qrPreview}
             />
             {CORNERS.map((corner) => (
               <span
@@ -183,34 +186,30 @@ export function LabelDesigner({
           </div>
         </div>
         <p className="text-center text-xs text-stone-500">
-          {label.widthMm} × {label.heightMm} mm · Drag the QR code to move it, drag a corner to
-          resize. The dashed line is the QR boundary including its white quiet zone.
+          {t.stageHelp(label.widthMm, label.heightMm)}
         </p>
       </div>
 
       <div className="flex flex-col gap-4">
-        <h3 className="text-sm font-medium text-stone-700">QR position (from top-left)</h3>
+        <h3 className="text-sm font-medium text-stone-700">{t.qrPosition}</h3>
         <div className="grid grid-cols-2 gap-3">
           <NumberField label="X" value={box.xMm} onCommit={(xMm) => set({ xMm })} testId="qr-x" />
           <NumberField label="Y" value={box.yMm} onCommit={(yMm) => set({ yMm })} testId="qr-y" />
           <NumberField
-            label="Width"
+            label={t.width}
             value={box.sizeMm}
             onCommit={(sizeMm) => set({ sizeMm })}
             testId="qr-width"
           />
           <NumberField
-            label="Height"
+            label={t.height}
             value={box.sizeMm}
             onCommit={(sizeMm) => set({ sizeMm })}
             testId="qr-height"
-            hint="QR codes are square"
+            hint={t.qrSquare}
           />
         </div>
-        <p className="text-xs text-stone-500">
-          Minimum QR size: {minSizeMm} mm (quiet zone included). Arrow keys move by 0.1 mm, with
-          Shift by 1 mm.
-        </p>
+        <p className="text-xs text-stone-500">{t.minSize(minSizeMm)}</p>
       </div>
     </div>
   );

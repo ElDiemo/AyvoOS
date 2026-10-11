@@ -6,23 +6,34 @@ import {
 } from '@ayvo/types';
 import Link from 'next/link';
 import { z } from 'zod';
-import { BottlesHeader } from '@/components/bottles/bottles-header';
+import { BottlesHeader } from '@/components/production/bottles-header';
 import { BottleStatusBadge } from '@/components/status';
 import { buttonClass, Card, EmptyState, inputClass } from '@/components/ui';
+import { formatDateTimeCs } from '@/i18n/cs/format';
+import { productionCs } from '@/i18n/cs/production';
+import { shellCs } from '@/i18n/cs/shell';
 import { apiGet } from '@/lib/api';
-import { formatDateTime } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 50;
 
-type Search = { page?: string; search?: string; batch?: string; templateId?: string };
+const b = productionCs.bottles;
+const c = shellCs.common;
+
+type Search = {
+  page?: string;
+  search?: string;
+  batch?: string;
+  templateId?: string;
+  status?: string;
+};
 
 export default async function BottlesPage({ searchParams }: { searchParams: Promise<Search> }) {
   const raw = await searchParams;
   // Drop invalid filters (e.g. a mistyped templateId) instead of failing the whole page.
   const params: Search = {};
-  for (const key of ['page', 'search', 'batch', 'templateId'] as const) {
+  for (const key of ['page', 'search', 'batch', 'templateId', 'status'] as const) {
     const value = raw[key];
     if (typeof value !== 'string' || value === '') continue;
     if (bottleListQuerySchema.shape[key].safeParse(value).success) params[key] = value;
@@ -35,10 +46,12 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
       search: params.search,
       batch: params.batch,
       templateId: params.templateId,
+      status: params.status,
     }),
     apiGet('admin/label-templates', z.array(labelTemplateSummarySchema)),
   ]);
   const pages = Math.max(1, Math.ceil(list.total / list.pageSize));
+  const filtered = !!(params.batch || params.search || params.templateId || params.status);
   const link = (p: number) => {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries({ ...params, page: String(p) })) if (v) q.set(k, v);
@@ -47,48 +60,58 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
 
   return (
     <>
-      <BottlesHeader
-        active="bottles"
-        subtitle={`${list.total} bottle${list.total === 1 ? '' : 's'}${params.batch || params.search || params.templateId ? ' matching the filters' : ''}`}
-      />
+      <BottlesHeader active="list" subtitle={b.count(list.total, filtered)} />
       <Card className="mb-6">
         <form
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_12rem_12rem_auto]"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_11rem_12rem_12rem_auto]"
           action="/bottles"
         >
           <input
             name="search"
             defaultValue={params.search}
-            placeholder="Bottle code, e.g. AYV-B-000001 or 1"
+            placeholder={b.searchPlaceholder}
             className={inputClass}
-            aria-label="Search by bottle code"
+            aria-label={b.search}
           />
           <input
             name="batch"
             defaultValue={params.batch}
-            placeholder="Series, e.g. BC-000001"
+            placeholder={b.seriesPlaceholder}
             className={inputClass}
-            aria-label="Filter by series"
+            aria-label={b.seriesFilter}
           />
           <select
             name="templateId"
             defaultValue={params.templateId ?? ''}
             className={inputClass}
-            aria-label="Filter by label template"
+            aria-label={b.templateFilter}
           >
-            <option value="">All templates</option>
+            <option value="">{b.allTemplates}</option>
             {templates.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
               </option>
             ))}
           </select>
+          <select
+            name="status"
+            defaultValue={params.status ?? ''}
+            className={inputClass}
+            aria-label={b.statusFilter}
+          >
+            <option value="">{b.allStatuses}</option>
+            {Object.entries(productionCs.bottleStatus).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
           <div className="flex gap-2">
             <button type="submit" className={buttonClass.secondary}>
-              Filter
+              {b.filter}
             </button>
             <Link href="/bottles" className={buttonClass.secondary}>
-              Reset
+              {b.reset}
             </Link>
           </div>
         </form>
@@ -96,13 +119,13 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
       <Card className="overflow-x-auto p-0">
         {list.items.length === 0 ? (
           <EmptyState>
-            {params.batch || params.search || params.templateId ? (
-              'No bottles match the filters.'
+            {filtered ? (
+              b.noMatch
             ) : (
               <>
-                No bottles yet.{' '}
+                {b.none}{' '}
                 <Link href="/bottles/new" className="font-medium underline">
-                  Create bottles
+                  {b.create}
                 </Link>
               </>
             )}
@@ -111,31 +134,33 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
           <table className="w-full text-left text-sm">
             <thead className="border-b border-stone-200 text-xs uppercase tracking-wide text-stone-500">
               <tr>
-                <th className="px-6 py-3 font-medium">Bottle code</th>
-                <th className="px-6 py-3 font-medium">Status</th>
-                <th className="px-6 py-3 font-medium">Series</th>
-                <th className="px-6 py-3 font-medium">Label template</th>
-                <th className="px-6 py-3 font-medium">Created at</th>
+                <th className="px-6 py-3 font-medium">{b.code}</th>
+                <th className="px-6 py-3 font-medium">{b.status}</th>
+                <th className="px-6 py-3 font-medium">{b.series}</th>
+                <th className="px-6 py-3 font-medium">{b.template}</th>
+                <th className="px-6 py-3 font-medium">{b.createdAt}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {list.items.map((b) => (
-                <tr key={b.code} className="hover:bg-stone-50">
+              {list.items.map((bottle) => (
+                <tr key={bottle.code} className="hover:bg-stone-50">
                   <td className="px-6 py-3 font-mono">
-                    <Link href={`/bottles/${b.code}`} className="font-medium hover:underline">
-                      {b.code}
+                    <Link href={`/bottles/${bottle.code}`} className="font-medium hover:underline">
+                      {bottle.code}
                     </Link>
                   </td>
                   <td className="px-6 py-3">
-                    <BottleStatusBadge status={b.status} />
+                    <BottleStatusBadge status={bottle.status} />
                   </td>
                   <td className="px-6 py-3 font-mono">
-                    <Link href={`/batches/${b.creationBatchCode}`} className="hover:underline">
-                      {b.creationBatchCode}
+                    <Link href={`/batches/${bottle.creationBatchCode}`} className="hover:underline">
+                      {bottle.creationBatchCode}
                     </Link>
                   </td>
-                  <td className="px-6 py-3">{b.labelTemplate.label}</td>
-                  <td className="px-6 py-3 text-stone-500">{formatDateTime(b.createdAt)}</td>
+                  <td className="px-6 py-3 wrap-anywhere">{bottle.labelTemplate.label}</td>
+                  <td className="px-6 py-3 whitespace-nowrap text-stone-500">
+                    {formatDateTimeCs(bottle.createdAt)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -143,20 +168,18 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
         )}
       </Card>
       {pages > 1 && (
-        <nav className="mt-6 flex items-center justify-between text-sm" aria-label="Pagination">
+        <nav className="mt-6 flex items-center justify-between text-sm" aria-label={c.pagination}>
           {page > 1 ? (
             <Link href={link(page - 1)} className={buttonClass.secondary}>
-              ← Previous
+              {c.previous}
             </Link>
           ) : (
             <span />
           )}
-          <span className="text-stone-500">
-            Page {page} of {pages}
-          </span>
+          <span className="text-stone-500">{c.page(page, pages)}</span>
           {page < pages ? (
             <Link href={link(page + 1)} className={buttonClass.secondary}>
-              Next →
+              {c.next}
             </Link>
           ) : (
             <span />

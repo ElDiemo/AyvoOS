@@ -23,6 +23,9 @@ import {
 } from '@/lib/pending-registration';
 import { NewPrintJobButton, PrintJobActions } from './print-job-actions';
 import { buttonClass, Card, ErrorNote, FieldList, Field, inputClass } from '@/components/ui';
+import { productionCs } from '@/i18n/cs/production';
+
+const t = productionCs.create;
 
 const QUICK_QUANTITIES = [20, 50, 100, 500];
 
@@ -81,7 +84,6 @@ export function CreateBottlesForm({
     quantity >= BOTTLE_CREATION_MIN &&
     quantity <= BOTTLE_CREATION_MAX;
   const expected = quantityValid ? expectedBottleCodes(latestBottleCode, quantity) : null;
-  const plural = (n: number) => `${n} bottle${n === 1 ? '' : 's'}`;
 
   async function submit(request: PendingRegistration) {
     if (inFlight.current) return; // a second click while the first request runs
@@ -99,10 +101,8 @@ export function CreateBottlesForm({
       clearPendingRegistration();
       setResult(response);
     } catch (e) {
-      const reason = e instanceof Error ? e.message : 'The request failed';
-      setError(
-        `${reason}. The bottles may or may not have been created. Pressing the button again is safe: this confirmation can never create bottles twice.`,
-      );
+      const reason = e instanceof Error ? e.message : t.requestFailed;
+      setError(t.uncertain(reason));
       setStage(unfinished ? 'form' : 'review');
     } finally {
       inFlight.current = false;
@@ -123,23 +123,19 @@ export function CreateBottlesForm({
       <div className="flex flex-col gap-6">
         <Card>
           <p role="status" className="mb-2 text-xl font-semibold text-emerald-800">
-            {plural(batch.quantityCreated)} created successfully
+            {t.success(batch.quantityCreated)}
           </p>
-          {replayed && (
-            <p className="mb-2 text-sm text-stone-600">
-              This creation had already been completed — no additional bottles were created.
-            </p>
-          )}
+          {replayed && <p className="mb-2 text-sm text-stone-600">{t.replayed}</p>}
           <div className="mt-4">
             <FieldList>
-              <Field label="Bottles created">{batch.quantityCreated}</Field>
-              <Field label="Bottle codes">
+              <Field label={t.created}>{batch.quantityCreated}</Field>
+              <Field label={t.codes}>
                 <span className="font-mono" data-testid="result-code-range">
                   {codeRange(batch.firstBottleCode, batch.lastBottleCode)}
                 </span>
               </Field>
-              <Field label="Label template">{batch.labelTemplate.label}</Field>
-              <Field label="Series">
+              <Field label={productionCs.bottles.template}>{batch.labelTemplate.label}</Field>
+              <Field label={t.series}>
                 <span className="font-mono" data-testid="result-batch-code">
                   {batch.code}
                 </span>
@@ -148,26 +144,26 @@ export function CreateBottlesForm({
           </div>
           <div className="mt-6 flex flex-wrap gap-2">
             <Link href={`/bottles?batch=${batch.code}`} className={buttonClass.primary}>
-              View created bottles
+              {t.viewCreated}
             </Link>
             <Link href={`/batches/${batch.code}`} className={buttonClass.secondary}>
-              Series details
+              {t.seriesDetails}
             </Link>
             <button type="button" className={buttonClass.secondary} onClick={startOver}>
-              Create another group
+              {t.another}
             </button>
           </div>
         </Card>
-        <Card title="Labels">
+        <Card title={t.labels}>
           {printJob ? (
             <PrintJobActions initial={printJob} />
           ) : (
             <div className="flex flex-col gap-3">
-              <ErrorNote>
-                The bottles were created, but their label print job could not be prepared. The
-                bottles are safe — create the print job now or later from the series details.
-              </ErrorNote>
-              <NewPrintJobButton batchCode={batch.code} label="Create print job" />
+              <ErrorNote>{t.printJobMissing}</ErrorNote>
+              <NewPrintJobButton
+                batchCode={batch.code}
+                label={productionCs.series.createPrintJob}
+              />
             </div>
           )}
         </Card>
@@ -179,11 +175,7 @@ export function CreateBottlesForm({
     return (
       <Card>
         <div className="flex max-w-xl flex-col gap-4" data-testid="unfinished-creation">
-          <p className="text-sm text-stone-800">
-            A confirmed creation of <strong>{plural(unfinished.quantity)}</strong> did not show its
-            result (for example because the page was reloaded). Finishing it is safe: if the bottles
-            were already created, you get that result and no new bottles are created.
-          </p>
+          <p className="text-sm text-stone-800">{t.unfinished(unfinished.quantity)}</p>
           {error && <ErrorNote>{error}</ErrorNote>}
           <div className="flex flex-wrap gap-2">
             <button
@@ -192,7 +184,7 @@ export function CreateBottlesForm({
               disabled={stage === 'creating'}
               onClick={() => void submit(unfinished)}
             >
-              {stage === 'creating' ? 'Checking…' : 'Finish and show result'}
+              {stage === 'creating' ? t.checking : t.finish}
             </button>
             <button
               type="button"
@@ -204,13 +196,10 @@ export function CreateBottlesForm({
                 setStage('form');
               }}
             >
-              Discard
+              {t.discard}
             </button>
           </div>
-          <p className="text-xs text-stone-500">
-            Discarding only forgets this confirmation here. Bottles that were already created stay
-            in Bottles → Creation history.
-          </p>
+          <p className="text-xs text-stone-500">{t.discardHelp}</p>
         </div>
       </Card>
     );
@@ -220,11 +209,10 @@ export function CreateBottlesForm({
     return (
       <Card>
         <p className="text-sm text-stone-600">
-          Bottles are created with a label template.{' '}
+          {t.needTemplate}{' '}
           <Link href="/label-templates/new" className="font-medium underline">
-            Create a label template
-          </Link>{' '}
-          first.
+            {t.createTemplate}
+          </Link>
         </p>
       </Card>
     );
@@ -237,7 +225,7 @@ export function CreateBottlesForm({
       <div className="flex max-w-xl flex-col gap-6">
         <div className="flex flex-col gap-2">
           <label htmlFor="quantity" className={labelClass}>
-            1 · Number of bottles
+            {t.quantity}
           </label>
           <div className="flex flex-wrap items-center gap-2">
             <input
@@ -271,14 +259,14 @@ export function CreateBottlesForm({
           </div>
           {!quantityValid && (
             <p className="text-sm text-red-700">
-              Enter a whole number from {BOTTLE_CREATION_MIN} to {BOTTLE_CREATION_MAX}.
+              {t.quantityInvalid(BOTTLE_CREATION_MIN, BOTTLE_CREATION_MAX)}
             </p>
           )}
         </div>
 
         <div className="flex flex-col gap-1">
           <label htmlFor="template" className={labelClass}>
-            2 · Label template
+            {t.template}
           </label>
           <select
             id="template"
@@ -293,7 +281,7 @@ export function CreateBottlesForm({
               </option>
             ))}
           </select>
-          <p className="text-xs text-stone-400">Latest version of each active template.</p>
+          <p className="text-xs text-stone-400">{t.templateHelp}</p>
         </div>
 
         {editing ? (
@@ -311,19 +299,18 @@ export function CreateBottlesForm({
                 setStage('review');
               }}
             >
-              Review
+              {t.review}
             </button>
           </div>
         ) : (
           <div className="flex flex-col gap-4 rounded-md border border-amber-300 bg-amber-50 p-4">
-            <h2 className={labelClass}>3 · Review</h2>
+            <h2 className={labelClass}>{t.reviewTitle}</h2>
             <p className="text-sm text-amber-900 wrap-anywhere" data-testid="create-confirmation">
-              You are about to create <strong>{quantity}</strong> permanent AYVO bottle identities
-              using label template <strong>{version?.label}</strong>.
+              {t.confirmation(quantity, version?.label ?? '')}
             </p>
             <FieldList>
-              <Field label="Bottles">{quantity}</Field>
-              <Field label="Expected codes">
+              <Field label={t.bottles}>{quantity}</Field>
+              <Field label={t.expectedCodes}>
                 {expected ? (
                   <span className="font-mono" data-testid="expected-code-range">
                     {codeRange(expected.first, expected.last)}
@@ -331,21 +318,17 @@ export function CreateBottlesForm({
                 ) : (
                   '—'
                 )}
-                <span className="block text-xs text-stone-500">
-                  Final codes are confirmed after creation.
-                </span>
+                <span className="block text-xs text-stone-500">{t.finalCodes}</span>
               </Field>
-              <Field label="Label template">
+              <Field label={productionCs.bottles.template}>
                 {version?.label} ({version?.widthMm} × {version?.heightMm} mm)
               </Field>
-              <Field label="QR codes">
+              <Field label={t.qrCodes}>
                 <span className="break-all font-mono text-xs" data-testid="qr-url-pattern">
                   {qrUrlPattern}
                 </span>
                 {environment !== 'production' && (
-                  <span className="mt-1 block text-xs font-medium text-red-800">
-                    DEV environment — every label is marked “DEV - NOT FOR PRODUCTION”.
-                  </span>
+                  <span className="mt-1 block text-xs font-medium text-red-800">{t.devNotice}</span>
                 )}
               </Field>
             </FieldList>
@@ -357,7 +340,7 @@ export function CreateBottlesForm({
                 onChange={(e) => setAcknowledged(e.target.checked)}
                 className="mt-0.5"
               />
-              I understand that bottle identities are permanent and are never deleted.
+              {t.acknowledge}
             </label>
             {error && <ErrorNote>{error}</ErrorNote>}
             <div className="flex flex-wrap gap-2">
@@ -367,7 +350,7 @@ export function CreateBottlesForm({
                 disabled={!acknowledged || stage === 'creating' || !registration}
                 onClick={() => registration && void submit(registration)}
               >
-                {stage === 'creating' ? 'Creating…' : `Create ${plural(quantity)}`}
+                {stage === 'creating' ? t.creating : t.submit(quantity)}
               </button>
               <button
                 type="button"
@@ -379,7 +362,7 @@ export function CreateBottlesForm({
                   setError(null);
                 }}
               >
-                Back
+                {t.back2}
               </button>
             </div>
           </div>

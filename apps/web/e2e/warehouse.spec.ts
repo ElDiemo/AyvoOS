@@ -3,10 +3,11 @@ import { resolve } from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 /**
- * Milestone 2A warehouse flow in Czech (doc 018): supplier → goods receipt with a delivery note
- * (internal lot) → session lot → physical label application by scanning (Enter), duplicate,
- * wrong environment, not an AYVO label, lot exhausted → invoice linked later → stock, ledger and
- * the bottle's physical facts. Self-contained: creates its own printed bottles.
+ * Milestone 2A flow in Czech (doc 018, doc 019): Sklad: supplier → goods receipt with a delivery
+ * note (internal lot); Výroba: session series and lot → physical label application by scanning
+ * (Enter), duplicate, wrong series, wrong environment, not an AYVO label, lot exhausted; Sklad:
+ * invoice linked later → stock, ledger and the bottle's physical facts. Self-contained: creates
+ * its own printed bottles.
  */
 test.describe.configure({ mode: 'serial' });
 
@@ -15,6 +16,8 @@ let urls: string[] = [];
 let codes: string[] = [];
 let receiptCode = '';
 let lotCode = '';
+let seriesCode = '';
+let foreignUrl = '';
 
 async function json<T>(res: Awaited<ReturnType<APIRequestContext['get']>>): Promise<T> {
   expect(res.ok(), `${res.url()} -> ${res.status()}`).toBe(true);
@@ -63,7 +66,7 @@ test.beforeAll(async ({ request }) => {
     }),
   );
   const registration = await json<{
-    batch: { firstBottleCode: string; lastBottleCode: string };
+    batch: { code: string; firstBottleCode: string; lastBottleCode: string };
     printJob: { code: string };
   }>(
     await request.post('/api/admin/bottle-registrations', {
@@ -77,6 +80,7 @@ test.beforeAll(async ({ request }) => {
   await json(
     await request.post(`/api/admin/label-print-jobs/${registration.printJob.code}/generate`),
   );
+  seriesCode = registration.batch.code;
   const first = Number(registration.batch.firstBottleCode.slice(6));
   codes = [0, 1, 2].map((i) => `AYV-B-${String(first + i).padStart(6, '0')}`);
   urls = [];
@@ -86,16 +90,36 @@ test.beforeAll(async ({ request }) => {
         .publicUrl,
     );
   }
+  // A printed bottle of another series: the station must refuse it.
+  const foreign = await json<{ batch: { firstBottleCode: string }; printJob: { code: string } }>(
+    await request.post('/api/admin/bottle-registrations', {
+      data: {
+        requestId: crypto.randomUUID(),
+        labelTemplateVersionId: version.versionId,
+        quantity: 1,
+      },
+    }),
+  );
+  await json(await request.post(`/api/admin/label-print-jobs/${foreign.printJob.code}/generate`));
+  foreignUrl = (
+    await json<{ publicUrl: string }>(
+      await request.get(`/api/admin/bottles/${foreign.batch.firstBottleCode}`),
+    )
+  ).publicUrl;
 });
 
 test('receive new bottles: supplier, delivery note, internal lot, invoice pending', async ({
   page,
 }) => {
+  // The warehouse opens on its own overview (no redirect to label application).
   await page.goto('/warehouse');
-  await expect(page).toHaveURL(/\/warehouse\/labels$/);
+  await expect(page).toHaveURL(/\/warehouse$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled skladu');
   await expect(
-    page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Sklad' }),
+    page.getByRole('navigation', { name: 'Hlavní navigace' }).getByRole('link', { name: 'Sklad' }),
   ).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('next-action')).toHaveText('Založit dodavatele');
+  await expect(page.getByTestId('attention')).toContainText('není založen žádný dodavatel');
 
   await page
     .getByRole('navigation', { name: 'Sklad' })
@@ -135,14 +159,24 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
   await expect(page.getByTestId('line-1')).toContainText(lotCode);
 });
 
-test('apply labels by scanning: session lot, applied, duplicate, rejections, lot exhausted', async ({
+test('apply labels by scanning: session series and lot, applied, duplicate, rejections, lot exhausted', async ({
   page,
 }) => {
+  // The old warehouse URL leads to the Production station.
   await page.goto('/warehouse/labels');
+  await expect(page).toHaveURL(/\/production\/label-activation$/);
+  await expect(
+    page.getByRole('navigation', { name: 'Hlavní navigace' }).getByRole('link', { name: 'Výroba' }),
+  ).toHaveAttribute('aria-current', 'page');
+  await page
+    .getByTestId('series-choices')
+    .getByRole('button', { name: new RegExp(seriesCode) })
+    .click();
   await page
     .getByTestId('lot-choices')
     .getByRole('button', { name: new RegExp(lotCode) })
     .click();
+  await expect(page.getByTestId('active-series')).toContainText(seriesCode);
   await expect(page.getByTestId('active-lot')).toContainText(lotCode);
   await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 2 ks');
 
@@ -164,6 +198,12 @@ test('apply labels by scanning: session lot, applied, duplicate, rejections, lot
   await expect(page.getByTestId('scan-outcome')).toContainText('etiketa už byla nalepena');
   await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 1 ks');
 
+  // A label of another series is refused by the server; nothing is consumed.
+  await scan.fill(foreignUrl);
+  await scan.press('Enter');
+  await expect(page.getByTestId('scan-outcome')).toContainText('Lahev nepatří do zvolené série');
+  await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 1 ks');
+
   await scan.fill(`https://qr.ayvo.co/${urls[1]!.split('/').pop()}`);
   await scan.press('Enter');
   await expect(page.getByTestId('scan-outcome')).toContainText('Etiketa patří do jiného prostředí');
@@ -177,7 +217,7 @@ test('apply labels by scanning: session lot, applied, duplicate, rejections, lot
   await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 0 ks');
   await expect(page.getByText('Šarže je vyčerpaná', { exact: true })).toBeVisible();
   await expect(page.getByTestId('scan-input')).toHaveCount(0); // scanning stops; no silent switch
-  await expect(page.getByTestId('session-results').locator('li')).toHaveCount(5);
+  await expect(page.getByTestId('session-results').locator('li')).toHaveCount(6);
   await expect(page.locator('body')).not.toContainText('qr.ayvo.co/'); // never echoed back
 
   await page.getByRole('button', { name: 'Změnit šarži' }).click();
@@ -207,17 +247,24 @@ test('invoice linked later, stock and ledger, bottle physical facts, phone width
   await expect(page.getByTestId('stock-NEW_BOTTLE')).toContainText('Nová prázdná lahev');
 
   await page.goto(`/bottles/${codes[0]}`);
-  await expect(page.getByText('LABELED_EMPTY')).toBeVisible();
+  await expect(page.getByText('Etiketa nalepena – prázdná lahev')).toBeVisible();
   await expect(page.getByTestId('physical')).toContainText(lotCode);
   await expect(page.getByTestId('physical')).toContainText(receiptCode);
-  await expect(page.getByTestId('components')).toContainText('LABEL');
+  await expect(page.getByTestId('components')).toContainText('Etiketa');
   await page.goto(`/bottles/${codes[2]}`);
-  await expect(page.getByTestId('physical')).toContainText('not been applied');
+  await expect(page.getByTestId('physical')).toContainText('zatím nebyla nalepena');
+
+  // The warehouse overview now reflects the receipt and the movements.
+  await page.goto('/warehouse');
+  await expect(page.getByTestId('overview-receipts')).toContainText(receiptCode);
+  await expect(page.getByTestId('overview-movements')).toContainText('Nalepení etikety');
+  await expect(page.getByTestId('overview-stock-NEW_BOTTLE')).toContainText('Nová prázdná lahev');
 
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 900 });
     for (const path of [
-      '/warehouse/labels',
+      '/warehouse',
+      '/production/label-activation',
       '/warehouse/receipts/new',
       '/warehouse/receipts',
       `/warehouse/receipts/${receiptCode}`,
@@ -228,4 +275,89 @@ test('invoice linked later, stock and ledger, bottle physical facts, phone width
       await noOverflow(page, `${path} at ${width}px`);
     }
   }
+});
+
+test('long supplier and lot names wrap; the scan button stays on one line', async ({
+  page,
+  request,
+}) => {
+  // Longest allowed values without a natural break opportunity.
+  const supplierName = `Dodavatel_${'x'.repeat(110)}`;
+  const supplierLot = `LOT-${'9'.repeat(60)}`;
+  const supplier = await json<{ id: string }>(
+    await request.post('/api/admin/suppliers', {
+      data: { requestId: crypto.randomUUID(), name: supplierName, companyId: null, vatId: null },
+    }),
+  );
+  const deliveryNote = await json<{ id: string }>(
+    await request.post('/api/admin/supplier-documents', {
+      multipart: {
+        requestId: crypto.randomUUID(),
+        supplierId: supplier.id,
+        kind: 'DELIVERY_NOTE',
+        documentNumber: 'DL-LONG-1',
+        issuedOn: '2026-10-11',
+        file: { name: 'dl.pdf', mimeType: 'application/pdf', buffer: PDF },
+      },
+    }),
+  );
+  const item = (
+    await json<{ id: string; code: string }[]>(await request.get('/api/admin/inventory/items'))
+  ).find((i) => i.code === 'NEW_BOTTLE')!;
+  await json(
+    await request.post('/api/admin/goods-receipts', {
+      data: {
+        requestId: crypto.randomUUID(),
+        supplierId: supplier.id,
+        supplierReference: 'DL-LONG-1',
+        receivedAt: new Date().toISOString(),
+        note: null,
+        documentIds: [deliveryNote.id],
+        lines: [
+          {
+            itemId: item.id,
+            quantity: '1',
+            supplierLotCode: supplierLot,
+            unitPrice: null,
+            currency: null,
+            vatRate: null,
+          },
+        ],
+      },
+    }),
+  );
+
+  for (const width of [320, 390, 820, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of ['/', '/warehouse', '/warehouse/stock', '/warehouse/receipts']) {
+      await page.goto(path);
+      await noOverflow(page, `${path} at ${width}px`);
+    }
+    // Station setup lists the long lot and supplier; the active session shows them too.
+    await page.goto('/production/label-activation');
+    await page.evaluate(() => sessionStorage.clear());
+    await page.reload();
+    await expect(page.getByTestId('lot-choices')).toContainText(supplierLot);
+    await noOverflow(page, `label activation setup at ${width}px`);
+    await page
+      .getByTestId('series-choices')
+      .getByRole('button', { name: new RegExp(seriesCode) })
+      .click();
+    await page
+      .getByTestId('lot-choices')
+      .getByRole('button', { name: new RegExp(supplierLot) })
+      .click();
+    await expect(page.getByTestId('active-lot')).toContainText(supplierLot);
+    await noOverflow(page, `label activation session at ${width}px`);
+
+    // "Aktivovat" is rendered on exactly one line at every width.
+    await page.getByTestId('scan-input').fill('x');
+    const lines = await page.getByTestId('scan-submit').evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+    });
+    expect(lines, `Aktivovat lines at ${width}px`).toBe(1);
+  }
+  await expect(page.locator('body')).not.toContainText('qr.ayvo.co');
 });

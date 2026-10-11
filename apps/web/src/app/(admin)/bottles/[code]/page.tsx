@@ -6,11 +6,15 @@ import {
 } from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ProductionHeader } from '@/components/production/production-header';
 import { QrCode } from '@/components/qr-code';
 import { BottleStatusBadge } from '@/components/status';
-import { buttonClass, Card, Field, FieldList, PageHeader } from '@/components/ui';
+import { buttonClass, Card, Field, FieldList } from '@/components/ui';
+import { formatDateTimeCs } from '@/i18n/cs/format';
+import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
-import { formatDateTime } from '@/lib/format';
+
+const t = productionCs.bottle;
 
 export const dynamic = 'force-dynamic';
 
@@ -26,26 +30,27 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
   const applied = physical.labelApplication;
   return (
     <>
-      <PageHeader
+      <ProductionHeader
+        active="bottles"
         title={<span className="font-mono">{bottle.code}</span>}
-        subtitle="Reusable AYVO bottle"
-        back={{ href: '/bottles', label: 'Bottles' }}
+        subtitle={t.subtitle}
+        back={{ href: '/bottles', label: t.back }}
       />
       <div className="grid gap-6 md:grid-cols-[1fr_16rem]">
         <div className="flex flex-col gap-6">
-          <Card title="Overview">
+          <Card title={t.overview}>
             <FieldList>
-              <Field label="Status">
+              <Field label={t.status}>
                 <BottleStatusBadge status={bottle.status} />
               </Field>
-              <Field label="Reuse cycles">
+              <Field label={t.reuseCycles}>
                 <span className="tabular-nums" data-testid="reuse-cycles">
                   {bottle.reuseCycles}
                 </span>
               </Field>
-              <Field label="Created at">{formatDateTime(bottle.createdAt)}</Field>
-              <Field label="Label">{bottle.labelTemplate.label}</Field>
-              <Field label="Created in series">
+              <Field label={t.createdAt}>{formatDateTimeCs(bottle.createdAt)}</Field>
+              <Field label={t.label}>{bottle.labelTemplate.label}</Field>
+              <Field label={t.series}>
                 <Link
                   href={`/batches/${bottle.creationBatchCode}`}
                   className="font-mono text-stone-600 hover:underline"
@@ -55,12 +60,12 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
               </Field>
             </FieldList>
           </Card>
-          <Card title="Physical bottle">
+          <Card title={t.physical}>
             <div data-testid="physical">
               {applied ? (
                 <FieldList>
-                  <Field label="Label applied">{formatDateTime(applied.appliedAt)}</Field>
-                  <Field label="Body from lot">
+                  <Field label={t.labelApplied}>{formatDateTimeCs(applied.appliedAt)}</Field>
+                  <Field label={t.bodyFromLot}>
                     <Link
                       href={`/warehouse/movements?lotId=${applied.lot.id}`}
                       className="font-mono hover:underline"
@@ -69,37 +74,34 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
                     </Link>
                   </Field>
                   {applied.receipt && (
-                    <Field label="Goods receipt">
+                    <Field label={t.receipt}>
                       <Link
                         href={`/warehouse/receipts/${applied.receipt.code}`}
                         className="font-mono hover:underline"
                       >
                         {applied.receipt.code}
                       </Link>{' '}
-                      line {applied.receipt.lineNo}
+                      {t.receiptLine(applied.receipt.lineNo)}
                       {applied.supplier ? ` · ${applied.supplier.name}` : ''}
                     </Field>
                   )}
                 </FieldList>
               ) : (
-                <p className="text-sm text-stone-600">
-                  Identity and label only — the printed label has not been applied to a physical
-                  bottle yet.
-                </p>
+                <p className="text-sm text-stone-600">{t.notApplied}</p>
               )}
               {physical.components.length > 0 && (
                 <>
                   <h3 className="mt-4 mb-2 text-xs font-medium uppercase tracking-wide text-stone-500">
-                    Component history
+                    {t.components}
                   </h3>
                   <ul className="flex flex-col gap-1 text-sm" data-testid="components">
                     {physical.components.map((c, i) => (
                       <li key={i} className="wrap-anywhere">
-                        {c.type} · {c.printJobCode ?? '—'} · installed{' '}
-                        {formatDateTime(c.installedAt)}
+                        {t.componentType[c.type] ?? c.type} · {c.printJobCode ?? '—'} ·{' '}
+                        {t.installed(formatDateTimeCs(c.installedAt))}
                         {c.removedAt
-                          ? ` · removed ${formatDateTime(c.removedAt)} (${c.disposition}: ${c.removalReason})`
-                          : ' · installed now'}
+                          ? ` · ${t.removed(formatDateTimeCs(c.removedAt))} (${c.disposition}: ${c.removalReason})`
+                          : ` · ${t.installedNow}`}
                       </li>
                     ))}
                   </ul>
@@ -107,24 +109,26 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
               )}
             </div>
           </Card>
-          <Card title="Lifecycle">
+          <Card title={t.lifecycle}>
             <ol className="relative ml-2 border-l border-stone-200" data-testid="lifecycle">
               {bottle.events.map((event, i) => (
                 <li key={i} className="mb-4 ml-5 last:mb-0">
                   <span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border-2 border-white bg-stone-900" />
-                  <p className="text-sm font-medium">{event.type}</p>
-                  <p className="text-xs text-stone-500">{formatDateTime(event.occurredAt)}</p>
+                  <p className="text-sm font-medium">
+                    {productionCs.eventType[event.type] ?? event.type}
+                  </p>
+                  <p className="text-xs text-stone-500">{formatDateTimeCs(event.occurredAt)}</p>
                 </li>
               ))}
             </ol>
           </Card>
         </div>
-        <Card title="QR code">
+        <Card title={t.qr}>
           <QrCode
             value={bottle.publicUrl}
             level={settings.qrErrorCorrection}
             className="mx-auto w-full max-w-56"
-            title={`QR code of ${bottle.code}`}
+            title={t.qrTitle(bottle.code)}
           />
           <a
             href={bottle.publicUrl}
@@ -132,11 +136,9 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
             rel="noopener"
             className={`${buttonClass.secondary} mt-4 w-full`}
           >
-            Open passport
+            {t.openPassport}
           </a>
-          <p className="mt-3 text-xs text-stone-500">
-            The QR code encodes only this stable public URL:
-          </p>
+          <p className="mt-3 text-xs text-stone-500">{t.qrHelp}</p>
           <p className="mt-1 break-all font-mono text-xs" data-testid="public-url">
             {bottle.publicUrl}
           </p>

@@ -3,7 +3,13 @@ import { notFound } from 'next/navigation';
 import { Card, Field, FieldList } from '@/components/ui';
 import { AttachDocument, CorrectionForm } from '@/components/warehouse/receipt-actions';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
-import { formatDateCs, formatDateTimeCs, formatDeltaCs, formatQuantityCs } from '@/i18n/cs/format';
+import {
+  formatDateCs,
+  formatDateTimeCs,
+  formatDeltaCs,
+  formatQuantityCs,
+  unitCs,
+} from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
 
@@ -75,11 +81,11 @@ export default async function ReceiptPage({
                     <span className="font-mono text-xs text-stone-500">{line.item.code}</span>
                   </Field>
                   <Field label={r.quantity}>
-                    {formatQuantityCs(line.quantity)} {line.item.unitCode}
+                    {formatQuantityCs(line.quantity)} {unitCs(line.item.unitCode)}
                   </Field>
                   <Field label={r.netQuantity}>
                     <span data-testid={`net-${line.lineNo}`}>
-                      {formatQuantityCs(line.netQuantity)} {line.item.unitCode}
+                      {formatQuantityCs(line.netQuantity)} {unitCs(line.item.unitCode)}
                     </span>
                   </Field>
                   {line.lot && (

@@ -2,7 +2,7 @@ import { inventoryMovementPageSchema, movementListQuerySchema } from '@ayvo/type
 import Link from 'next/link';
 import { buttonClass, Card, EmptyState } from '@/components/ui';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
-import { formatDateTimeCs, formatDeltaCs, formatQuantityCs } from '@/i18n/cs/format';
+import { formatDateTimeCs, formatDeltaCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
 
@@ -59,7 +59,7 @@ export default async function MovementsPage({
                   <td className="px-4 py-2">{x.item.name}</td>
                   <td className="px-4 py-2 font-mono text-xs">{x.lot?.code ?? '—'}</td>
                   <td className="px-4 py-2 text-right tabular-nums">
-                    {formatDeltaCs(x.quantityDelta)} {x.item.unitCode}
+                    {formatDeltaCs(x.quantityDelta)} {unitCs(x.item.unitCode)}
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums">
                     {formatQuantityCs(x.balanceAfter)}

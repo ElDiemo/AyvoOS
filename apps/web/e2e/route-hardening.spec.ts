@@ -93,6 +93,8 @@ test('long template names wrap: no horizontal page scroll at 320, 390, tablet an
     '/bottles/history',
     `/batches/${batchCode}`,
     `/bottles/${bottleCode}`,
+    '/production',
+    '/production/label-activation',
   ];
   for (const width of [320, 390, 820, 1280]) {
     await page.setViewportSize({ width, height: 900 });
@@ -102,8 +104,8 @@ test('long template names wrap: no horizontal page scroll at 320, 390, tablet an
     }
     // The create workflow up to its review step (nothing is created).
     await page.goto(`/bottles/new?version=${versionId}`);
-    await page.getByLabel('1 · Number of bottles').fill('2');
-    await page.getByRole('button', { name: 'Review' }).click();
+    await page.getByLabel('1 · Počet lahví').fill('2');
+    await page.getByRole('button', { name: 'Zkontrolovat' }).click();
     await expect(page.getByTestId('create-confirmation')).toContainText(LONG_NAME);
     await expectNoHorizontalOverflow(page, `create review at ${width}px`);
   }
@@ -151,7 +153,7 @@ test('unknown or malformed codes answer a real 404 with the friendly page', asyn
     const res = await request.get(path);
     expect(res.status(), path).toBe(404);
     const body = await res.text();
-    expect(body, path).toContain('Not found');
+    expect(body, path).toContain('Stránka nenalezena');
     expect(body, path).not.toMatch(/ApiError|stack|ECONNREFUSED|API 40\d/);
   }
 

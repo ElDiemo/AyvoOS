@@ -8,6 +8,9 @@ const serverEnvSchema = z.object({
     .url({ protocol: /^https?$/ })
     .refine((url) => new URL(url).pathname === '/', 'API_URL must be an origin without a path')
     .default('http://localhost:4000'),
+  // Shown as the environment badge of the shell (ADR 0008). Unset counts as development, so a
+  // misconfigured server never looks like production.
+  APP_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });
 
 export const serverEnv = serverEnvSchema.parse(process.env);

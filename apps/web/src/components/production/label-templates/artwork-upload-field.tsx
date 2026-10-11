@@ -3,7 +3,10 @@
 import { labelArtworkSchema, type LabelArtwork } from '@ayvo/types';
 import { useState } from 'react';
 import { apiSend } from '@/lib/client-api';
+import { productionCs } from '@/i18n/cs/production';
 import { formatBytes } from '@/lib/format';
+
+const t = productionCs.editor;
 
 const ACCEPT = 'image/svg+xml,image/png,image/jpeg,.svg,.png,.jpg,.jpeg';
 
@@ -29,7 +32,7 @@ export function ArtworkUploadField({
   async function upload(file: File) {
     onError(null);
     if (file.size > maxBytes) {
-      onError(`The file is too large (max ${formatBytes(maxBytes)})`);
+      onError(t.artworkTooLarge(formatBytes(maxBytes)));
       return;
     }
     setUploading(true);
@@ -38,7 +41,11 @@ export function ArtworkUploadField({
       form.append('file', file);
       onUploaded(await apiSend('POST', 'admin/label-artworks', labelArtworkSchema, form));
     } catch (e) {
-      onError(e instanceof Error ? e.message : 'Upload failed');
+      onError(
+        productionCs.common.failed(
+          e instanceof Error ? e.message : productionCs.common.unexpectedError,
+        ),
+      );
     } finally {
       setUploading(false);
     }
@@ -50,7 +57,7 @@ export function ArtworkUploadField({
         htmlFor="artwork-file"
         className="text-xs font-medium uppercase tracking-wide text-stone-500"
       >
-        Background artwork (SVG, PNG or JPEG)
+        {t.artworkLabel}
       </label>
       <input
         id="artwork-file"
@@ -67,8 +74,8 @@ export function ArtworkUploadField({
       <p className="text-xs text-stone-400" aria-live="polite">
         {artwork
           ? `${artwork.originalFilename} · ${artwork.format} · ${formatBytes(artwork.byteSize)}`
-          : `Max ${formatBytes(maxBytes)}. SVG keeps the artwork vector-sharp in print.`}
-        {uploading && ' · Uploading…'}
+          : t.artworkHelp(formatBytes(maxBytes))}
+        {uploading && t.uploading}
       </p>
     </div>
   );

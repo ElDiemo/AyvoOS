@@ -7,11 +7,16 @@ import {
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
+import { TemplateArchiveButton } from '@/components/production/label-templates/template-archive-button';
+import { ProductionHeader } from '@/components/production/production-header';
 import { QrCode } from '@/components/qr-code';
-import { TemplateArchiveButton } from '@/components/label-templates/template-archive-button';
-import { buttonClass, Card, PageHeader } from '@/components/ui';
+import { buttonClass, Card } from '@/components/ui';
+import { formatDateTimeCs } from '@/i18n/cs/format';
+import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
-import { formatDateTime, formatMm } from '@/lib/format';
+import { formatMm } from '@/lib/format';
+
+const t = productionCs.templates;
 
 export const dynamic = 'force-dynamic';
 
@@ -33,10 +38,11 @@ export default async function LabelTemplatePage({
 
   return (
     <>
-      <PageHeader
-        title={template.name}
-        subtitle={`Label template · ${template.versions.length} version${template.versions.length === 1 ? '' : 's'}`}
-        back={{ href: '/label-templates', label: 'Label templates' }}
+      <ProductionHeader
+        active="templates"
+        title={<span className="wrap-anywhere">{template.name}</span>}
+        subtitle={t.detailSubtitle(template.versions.length)}
+        back={{ href: '/label-templates', label: t.back }}
         actions={
           <>
             <TemplateArchiveButton templateId={template.id} archived={!!template.archivedAt} />
@@ -46,13 +52,13 @@ export default async function LabelTemplatePage({
                   href={`/label-templates/${template.id}/new-version`}
                   className={buttonClass.secondary}
                 >
-                  Edit (new version)
+                  {t.edit}
                 </Link>
                 <Link
                   href={`/bottles/new?version=${latest!.versionId}`}
                   className={buttonClass.primary}
                 >
-                  Create bottles with {latest!.label}
+                  {t.createBottles}
                 </Link>
               </>
             )}
@@ -64,7 +70,7 @@ export default async function LabelTemplatePage({
           role="status"
           className="mb-6 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 wrap-anywhere"
         >
-          Saved as {template.name} v{saved}.
+          {t.saved(template.name, saved)}
         </p>
       )}
       {template.archivedAt && (
@@ -72,8 +78,7 @@ export default async function LabelTemplatePage({
           role="status"
           className="mb-6 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
         >
-          Archived {formatDateTime(template.archivedAt)}: kept for reproducing historical labels,
-          not selectable for new bottles.
+          {t.archivedNotice(formatDateTimeCs(template.archivedAt))}
         </p>
       )}
       <div className="flex flex-col gap-6">
@@ -127,7 +132,7 @@ function VersionCard({
                 value={settings.qrPreviewUrl}
                 level={settings.qrErrorCorrection}
                 className="h-full w-full"
-                title="QR position"
+                title={t.qrPosition}
               />
             </div>
           )}
@@ -137,41 +142,39 @@ function VersionCard({
             {version.label}
             {current && (
               <span className="ml-2 rounded-full bg-stone-900 px-2 py-0.5 text-xs font-medium text-white">
-                current
+                {t.current}
               </span>
             )}
           </h2>
-          <dl className="grid grid-cols-[8rem_1fr] gap-y-2 text-sm">
-            <dt className="text-stone-500">Label size</dt>
+          <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-y-2 text-sm">
+            <dt className="text-stone-500">{t.labelSize}</dt>
             <dd>
               {formatMm(version.widthMm)} × {formatMm(version.heightMm)}
             </dd>
-            <dt className="text-stone-500">Artwork</dt>
-            <dd>
+            <dt className="text-stone-500">{t.artwork}</dt>
+            <dd className="wrap-anywhere">
               {version.artwork.originalFilename} ({version.artwork.format})
             </dd>
             {qr && (
               <>
-                <dt className="text-stone-500">QR code</dt>
+                <dt className="text-stone-500">{t.qrCode}</dt>
                 <dd>
                   X {formatMm(qr.xMm)} · Y {formatMm(qr.yMm)} · {formatMm(qr.widthMm)} ×{' '}
                   {formatMm(qr.heightMm)}
                 </dd>
               </>
             )}
-            <dt className="text-stone-500">Saved</dt>
-            <dd>{formatDateTime(version.createdAt)}</dd>
+            <dt className="text-stone-500">{t.savedAt}</dt>
+            <dd>{formatDateTimeCs(version.createdAt)}</dd>
           </dl>
           <a
             href={`/api/admin/label-template-versions/${version.versionId}/calibration.pdf`}
             className="text-sm font-medium text-stone-700 underline"
             download
           >
-            Calibration PDF (print at 100 %)
+            {t.calibration}
           </a>
-          <p className="text-xs text-stone-400">
-            Versions are immutable: labels printed with this version can always be reproduced.
-          </p>
+          <p className="text-xs text-stone-400">{t.immutable}</p>
         </div>
       </div>
     </Card>

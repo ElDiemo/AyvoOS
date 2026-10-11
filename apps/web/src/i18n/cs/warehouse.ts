@@ -1,18 +1,41 @@
 /**
- * Czech strings of the warehouse/operator screens (doc 018 §10). All user-visible text of those
+ * Czech strings of the warehouse screens (doc 018 §10, doc 019). All user-visible text of those
  * screens lives here — never in components or domain logic — so another language is one more
  * dictionary with the same shape. Codes, SKUs and state values stay language-neutral.
  */
 export const warehouseCs = {
-  nav: 'Sklad',
   section: 'Sklad',
   tabs: {
-    labels: 'Nalepení etiket',
     newReceipt: 'Příjem zboží',
     receipts: 'Příjmy',
     stock: 'Stav skladu',
     movements: 'Pohyby',
     suppliers: 'Dodavatelé',
+  },
+  overview: {
+    title: 'Přehled skladu',
+    subtitle: 'Co je na skladě, co vyžaduje pozornost a co se naposledy přijalo a pohnulo.',
+    stock: 'Zásoby',
+    item: 'Položka',
+    lots: 'Šarže',
+    lotsCount: (n: number) =>
+      n === 1 ? '1 šarže' : n >= 2 && n <= 4 ? `${n} šarže` : `${n} šarží`,
+    attention: 'Vyžaduje pozornost',
+    nothing: 'Nic nevyžaduje pozornost.',
+    lowStock: (item: string) => `${item}: pod minimální zásobou.`,
+    pendingInvoices: (n: number) =>
+      n === 1 ? '1 příjem čeká na fakturu.' : `Příjmy čekající na fakturu: ${n}.`,
+    noSuppliers: 'Zatím není založen žádný dodavatel – příjem zboží nelze zaevidovat.',
+    noStock: (item: string) => `${item}: na skladě nic není.`,
+    recentReceipts: 'Poslední příjmy',
+    noReceipts: 'Zatím žádné příjmy.',
+    recentMovements: 'Poslední pohyby',
+    noMovements: 'Zatím žádné pohyby.',
+    nextAction: 'Další krok',
+    createSupplier: 'Založit dodavatele',
+    firstReceipt: 'Zaevidovat první příjem',
+    newReceipt: 'Příjem zboží',
+    showAll: 'Zobrazit vše',
   },
   common: {
     pcs: 'ks',
@@ -27,71 +50,6 @@ export const warehouseCs = {
       'Spojení se serverem selhalo. Výsledek není jistý – zkuste to znovu, opakování je bezpečné.',
     unexpectedError:
       'Akci se nepodařilo dokončit. Zkuste to znovu nebo kontaktujte vedoucího skladu.',
-  },
-  bottleStatus: {
-    CREATED: 'Vytvořená identita',
-    LABELED_EMPTY: 'Etiketa nalepena – prázdná lahev',
-  },
-  labels: {
-    title: 'Nalepení etiket',
-    subtitle:
-      'Nalepte vytištěnou QR etiketu na novou lahev a lahev naskenujte. Každá úspěšná aktivace odečte jednu novou lahev ze zvolené šarže.',
-    chooseLot: 'Vyberte zdrojovou šarži',
-    chooseLotHelp:
-      'Šarži vyberete jednou pro celou pracovní směnu. Systém šarži nikdy sám nemění – po vyčerpání musíte vybrat další.',
-    noLots: 'Na skladě nejsou žádné nové lahve. Nejprve zaevidujte příjem zboží.',
-    lotCodePlaceholder: 'nebo zadejte kód šarže',
-    useLot: 'Použít šarži',
-    unknownLot: 'Šarže s tímto kódem nemá žádné nové lahve.',
-    ambiguousLot: 'Tento kód má více šarží (různí dodavatelé). Vyberte šarži ze seznamu.',
-    activeLot: 'Aktivní šarže',
-    remaining: (n: string) => `zbývá ${n} ks`,
-    changeLot: 'Změnit šarži',
-    scanLabel: 'Naskenujte QR etiketu lahve',
-    scanPlaceholder: 'Naskenujte nebo vložte celou adresu z QR kódu a stiskněte Enter',
-    submit: 'Aktivovat',
-    checking: 'Ověřuji…',
-    ready: 'Připraveno ke skenování',
-    applied: (code: string) => `${code} – etiketa nalepena`,
-    appliedDetail: (lot: string, left: string) =>
-      `Odečtena 1 nová lahev ze šarže ${lot}. Zbývá ${left} ks.`,
-    alreadyApplied: (code: string) => `${code} – etiketa už byla nalepena`,
-    alreadyAppliedDetail: (when: string) =>
-      `Aktivováno ${when}. Žádná další lahev nebyla odečtena.`,
-    lotExhaustedTitle: 'Šarže je vyčerpaná',
-    lotExhausted: 'Ve zvolené šarži už nejsou žádné nové lahve. Vyberte další šarži.',
-    sessionResults: 'Výsledky této směny',
-    noResults: 'Zatím nic nenaskenováno.',
-    errors: {
-      NOT_AYVO_QR: {
-        title: 'Toto není etiketa AYVO',
-        action: 'Zkontrolujte, že skenujete QR kód na etiketě lahve.',
-      },
-      WRONG_ENVIRONMENT: {
-        title: 'Etiketa patří do jiného prostředí',
-        action: 'Tuto etiketu zde nepoužívejte. Lahev odložte a informujte vedoucího skladu.',
-      },
-      UNKNOWN_LABEL: {
-        title: 'Neznámá etiketa',
-        action: 'Lahev odložte a informujte vedoucího skladu.',
-      },
-      LABEL_NOT_PRINTED: {
-        title: 'Etiketa nebyla vytištěna systémem AYVO OS',
-        action: 'Lahev odložte a informujte vedoucího skladu.',
-      },
-      NOT_APPLICABLE: {
-        title: 'Tuto lahev nelze aktivovat',
-        action: 'Lahev je v jiném stavu. Informujte vedoucího skladu.',
-      },
-      WRONG_LOT: {
-        title: 'Neplatná šarže',
-        action: 'Vyberte šarži nových lahví znovu.',
-      },
-      IDEMPOTENCY_CONFLICT: {
-        title: 'Požadavek se nepodařilo zpracovat',
-        action: 'Naskenujte lahev znovu.',
-      },
-    } as Record<string, { title: string; action: string }>,
   },
   receipts: {
     title: 'Příjmy zboží',

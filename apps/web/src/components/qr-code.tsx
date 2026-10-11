@@ -37,7 +37,7 @@ export function QrCode({
       viewBox={`0 0 ${totalModules} ${totalModules}`}
       className={className}
       role="img"
-      aria-label={title ?? 'QR code'}
+      aria-label={title ?? 'QR kód'}
       shapeRendering="crispEdges"
       data-qr-value={value}
       data-qr-level={level}

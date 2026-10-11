@@ -21,7 +21,10 @@ export default async function BottlePassportPage({
     publicBottlePassportSchema,
   );
   return (
-    <main className="flex min-h-screen items-center justify-center bg-stone-100 px-6 py-16">
+    <main
+      lang="en"
+      className="flex min-h-screen items-center justify-center bg-stone-100 px-6 py-16"
+    >
       <div className="w-full max-w-sm rounded-2xl bg-white p-10 text-center shadow-sm ring-1 ring-stone-200">
         <p className="text-2xl font-semibold tracking-[0.35em] text-stone-900">AYVO</p>
         <h1 className="mt-10 font-mono text-lg">Bottle {passport.bottleCode}</h1>

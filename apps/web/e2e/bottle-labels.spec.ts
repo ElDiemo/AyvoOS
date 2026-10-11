@@ -23,10 +23,10 @@ async function qrValues(page: Page) {
 test('create template, register 50 bottles, print labels, inspect a bottle', async ({ page }) => {
   // 29–30: create template "mydlo1" and upload artwork.
   await page.goto('/label-templates');
-  await page.getByRole('link', { name: 'Create template' }).click();
-  await page.getByLabel('Template name').fill('mydlo1');
+  await page.getByRole('link', { name: 'Nová šablona' }).click();
+  await page.getByLabel('Název šablony').fill('mydlo1');
   await page
-    .getByLabel('Background artwork (SVG, PNG or JPEG)')
+    .getByLabel('Grafika na pozadí (SVG, PNG nebo JPEG)')
     .setInputFiles(resolve(import.meta.dirname, 'fixtures/mydlo1.svg'));
 
   // The SVG states 70 × 110 mm; the designer opens with a default QR placement.
@@ -73,8 +73,8 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   await expect(page.getByTestId('qr-x')).toHaveValue('20.5');
 
   // 32: save → mydlo1 v1 with exactly these millimetre values.
-  await page.getByRole('button', { name: 'Save template (v1)' }).click();
-  await expect(page.getByText('Saved as mydlo1 v1.')).toBeVisible();
+  await page.getByRole('button', { name: 'Uložit šablonu (v1)' }).click();
+  await expect(page.getByText('Uloženo jako mydlo1 v1.')).toBeVisible();
   // The detail preview uses the same API settings as the designer.
   const detailQr = page.getByTestId('version-preview-1').locator('svg');
   await expect(detailQr).toHaveAttribute('data-qr-value', (await designerQrValue(page)) ?? '');
@@ -85,22 +85,22 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   ).toBeVisible();
 
   // 33: create 50 bottles using mydlo1 v1 (explicit confirmation required).
-  await page.getByRole('link', { name: 'Create bottles with mydlo1 v1' }).click();
-  await expect(page.getByLabel('Label template')).toContainText('mydlo1 v1');
+  await page.getByRole('link', { name: 'Vytvořit lahve s touto šablonou' }).click();
+  await expect(page.getByLabel('Šablona etiket')).toContainText('mydlo1 v1');
   await page.getByRole('button', { name: '50', exact: true }).click();
-  await page.getByRole('button', { name: 'Review' }).click();
+  await page.getByRole('button', { name: 'Zkontrolovat' }).click();
   await expect(page.getByTestId('create-confirmation')).toHaveText(
-    'You are about to create 50 permanent AYVO bottle identities using label template mydlo1 v1.',
+    'Chystáte se vytvořit 50 lahví s trvalou identitou AYVO a šablonou etiket mydlo1 v1.',
   );
   // The review states the expected codes and this environment's QR URL (never production).
   await expect(page.getByTestId('expected-code-range')).toHaveText('AYV-B-000001 – AYV-B-000050');
   await expect(page.getByTestId('qr-url-pattern')).toHaveText('http://localhost:3100/q/<token>');
-  await expect(page.getByText('every label is marked “DEV - NOT FOR PRODUCTION”')).toBeVisible();
-  const createButton = page.getByRole('button', { name: 'Create 50 bottles' });
+  await expect(
+    page.getByText('každá etiketa nese označení „DEV - NOT FOR PRODUCTION“'),
+  ).toBeVisible();
+  const createButton = page.getByRole('button', { name: 'Vytvořit 50 lahví' });
   await expect(createButton).toBeDisabled();
-  await page
-    .getByLabel('I understand that bottle identities are permanent and are never deleted.')
-    .check();
+  await page.getByLabel('Rozumím, že identity lahví jsou trvalé a nikdy se nemažou.').check();
   // The server registers the bottles, but the response is lost on the way back: the outcome is
   // unknown to the page, and pressing the button again must not create a second set of bottles.
   let attempts = 0;
@@ -116,19 +116,19 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
     }
   });
   await createButton.click();
-  await expect(page.getByText('Pressing the button again is safe')).toBeVisible();
+  await expect(page.getByText('Opakované stisknutí tlačítka je bezpečné')).toBeVisible();
   await createButton.click();
   await page.unroute('**/api/admin/bottle-registrations');
 
   // 34: result with the code range and the series (creation batch) — the retry was a replay.
-  await expect(page.getByRole('status')).toHaveText('50 bottles created successfully');
-  await expect(page.getByText('no additional bottles were created')).toBeVisible();
+  await expect(page.getByRole('status')).toHaveText('50 lahví – úspěšně vytvořeno');
+  await expect(page.getByText('žádné další lahve nebyly vytvořeny')).toBeVisible();
   await expect(page.getByTestId('result-batch-code')).toHaveText('BC-000001');
   await expect(page.getByTestId('result-code-range')).toHaveText('AYV-B-000001 – AYV-B-000050');
 
   // 35: generate labels.
-  await page.getByRole('button', { name: 'Generate labels' }).click();
-  const download = page.getByRole('link', { name: /Download PDF/ });
+  await page.getByRole('button', { name: 'Vygenerovat etikety' }).click();
+  const download = page.getByRole('link', { name: /Stáhnout PDF/ });
   await expect(download).toBeVisible({ timeout: 60_000 });
 
   // 36: download the print-ready PDF: 50 pages of exactly 70 × 110 mm.
@@ -142,23 +142,23 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   }
 
   // The series page shows the same creation and its completed print job.
-  await page.getByRole('link', { name: 'Series details' }).click();
+  await page.getByRole('link', { name: 'Detail série' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('BC-000001');
   await expect(page.getByText('AYV-B-000001 – AYV-B-000050')).toBeVisible();
-  await expect(page.getByTestId('print-job-PJ-000001')).toContainText('COMPLETED');
+  await expect(page.getByTestId('print-job-PJ-000001')).toContainText('Vygenerováno');
   // Not a production process: the job is flagged as DEV labels.
   await expect(page.getByTestId('print-job-PJ-000001')).toContainText(
-    'DEV labels - not for real bottles',
+    'DEV etikety – ne pro skutečné lahve',
   );
 
   // 37: open one bottle: CREATED timeline, QR and public URL.
-  await page.getByRole('link', { name: 'View these bottles' }).click();
-  await expect(page.getByText('50 bottles matching the filters')).toBeVisible();
+  await page.getByRole('link', { name: 'Zobrazit lahve série' }).click();
+  await expect(page.getByText('50 lahví odpovídá filtru')).toBeVisible();
   await page.getByRole('link', { name: 'AYV-B-000001' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('AYV-B-000001');
-  await expect(page.getByTestId('lifecycle')).toContainText('CREATED');
+  await expect(page.getByTestId('lifecycle')).toContainText('Identita vytvořena');
   await expect(page.getByTestId('reuse-cycles')).toHaveText('0');
-  await expect(page.getByRole('img', { name: 'QR code of AYV-B-000001' })).toBeVisible();
+  await expect(page.getByRole('img', { name: 'QR kód lahve AYV-B-000001' })).toBeVisible();
   const publicUrl = await page.getByTestId('public-url').textContent();
   expect(publicUrl).toMatch(/^http:\/\/localhost:3100\/q\/[A-Za-z0-9_-]{22}$/);
 
@@ -174,33 +174,42 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   expect(missing?.status()).toBe(404);
 });
 
-test('Bottles is one module: bottle list, creation history and series detail', async ({ page }) => {
-  // One top-level entry for bottles; the old "Creation batches" item is gone.
+test('Bottles live in Production: bottle list, creation history and series detail', async ({
+  page,
+}) => {
+  // The global navigation lists company functions only — never Bottles or Label templates.
   await page.goto('/');
-  const mainNav = page.getByRole('navigation', { name: 'Main' });
-  await expect(mainNav.getByRole('link')).toHaveText(['Bottles', 'Label templates', 'Sklad']);
+  const mainNav = page.getByRole('navigation', { name: 'Hlavní navigace' });
+  await expect(mainNav.getByRole('link')).toHaveText(['Přehled', 'Sklad', 'Výroba']);
 
-  // The bottle list is the default view of Bottles.
-  await mainNav.getByRole('link', { name: 'Bottles' }).click();
+  // Výroba → Lahve: the bottle list is the default view.
+  await mainNav.getByRole('link', { name: 'Výroba' }).click();
+  await expect(page).toHaveURL(/\/production$/);
+  const production = page.getByRole('navigation', { name: 'Výroba' });
+  await production.getByRole('link', { name: 'Lahve' }).click();
   await expect(page).toHaveURL(/\/bottles$/);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Bottles');
-  const views = page.getByRole('navigation', { name: 'Bottles views' });
-  await expect(views.getByRole('link', { name: 'Bottles' })).toHaveAttribute(
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lahve');
+  await expect(production.getByRole('link', { name: 'Lahve' })).toHaveAttribute(
     'aria-current',
     'page',
   );
-  await expect(page.getByText('50 bottles', { exact: true })).toBeVisible();
+  await expect(mainNav.getByRole('link', { name: 'Výroba' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  const views = page.getByRole('navigation', { name: 'Zobrazení lahví' });
+  await expect(views.getByRole('link', { name: 'Všechny lahve' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByText('50 lahví', { exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'AYV-B-000050' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Create bottles' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Vytvořit lahve' })).toBeVisible();
 
-  // Creation history inside Bottles: one creation, its labels and a download.
-  await views.getByRole('link', { name: 'Creation history' }).click();
+  // Creation history inside Lahve: one creation, its labels and a download.
+  await views.getByRole('link', { name: 'Historie vytvoření' }).click();
   await expect(page).toHaveURL(/\/bottles\/history$/);
-  await expect(views.getByRole('link', { name: 'Creation history' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
-  await expect(mainNav.getByRole('link', { name: 'Bottles' })).toHaveAttribute(
+  await expect(views.getByRole('link', { name: 'Historie vytvoření' })).toHaveAttribute(
     'aria-current',
     'page',
   );
@@ -209,8 +218,8 @@ test('Bottles is one module: bottle list, creation history and series detail', a
   await expect(series).toContainText('50');
   await expect(series).toContainText('AYV-B-000001 – AYV-B-000050');
   await expect(series).toContainText('mydlo1 v1');
-  await expect(series).toContainText('COMPLETED');
-  await expect(series.getByRole('link', { name: 'Download PDF' })).toHaveAttribute(
+  await expect(series).toContainText('Vygenerováno');
+  await expect(series.getByRole('link', { name: 'Stáhnout PDF' })).toHaveAttribute(
     'href',
     '/api/admin/label-print-jobs/PJ-000001/pdf',
   );
@@ -222,12 +231,12 @@ test('Bottles is one module: bottle list, creation history and series detail', a
   await expect(page).toHaveURL(/\/bottles\/history$/);
   await page.goto('/batches/BC-000001');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('BC-000001');
-  await expect(page.getByText('Created series of 50 bottles')).toBeVisible();
-  await expect(mainNav.getByRole('link', { name: 'Bottles' })).toHaveAttribute(
+  await expect(page.getByText('Vytvořená série: 50 lahví')).toBeVisible();
+  await expect(mainNav.getByRole('link', { name: 'Výroba' })).toHaveAttribute(
     'aria-current',
     'page',
   );
-  await page.getByRole('link', { name: '← Bottles · Creation history' }).click();
+  await page.getByRole('link', { name: '← Lahve · Historie vytvoření' }).click();
   await expect(page).toHaveURL(/\/bottles\/history$/);
 
   // Bottle detail: status, reuse cycles, series as a secondary link, passport action.
@@ -237,15 +246,26 @@ test('Bottles is one module: bottle list, creation history and series detail', a
     'href',
     '/batches/BC-000001',
   );
-  await expect(page.getByRole('link', { name: 'Open passport' })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'Otevřít pas lahve' })).toHaveAttribute(
     'href',
     /^http:\/\/localhost:3100\/q\/[A-Za-z0-9_-]{22}$/,
   );
+  await expect(page.getByRole('navigation', { name: 'Umístění' })).toHaveText(
+    /Výroba\s*\/\s*Lahve/,
+  );
 
-  // Phone and tablet widths: no page-level horizontal scrolling on any Bottles page.
+  // The production overview shows real figures: 50 bottles, all still waiting for their labels.
+  await page.goto('/production');
+  await expect(page.getByTestId('stat-bottles')).toHaveText('50');
+  await expect(page.getByTestId('stat-awaiting-label')).toHaveText('50');
+  await expect(page.getByTestId('stat-labeled')).toHaveText('0');
+  await expect(page.getByTestId('recent-series')).toContainText('BC-000001');
+
+  // Phone and tablet widths: no page-level horizontal scrolling on any Production page.
   for (const width of [390, 820]) {
     await page.setViewportSize({ width, height: 900 });
     for (const path of [
+      '/production',
       '/bottles',
       '/bottles/history',
       '/bottles/new',
@@ -272,17 +292,17 @@ test('a creation whose result was never shown is finished safely after a reload'
     firstRegistration,
   );
   await page.reload();
-  await expect(page.getByTestId('unfinished-creation')).toContainText('50 bottles');
-  await page.getByRole('button', { name: 'Finish and show result' }).click();
-  await expect(page.getByRole('status')).toHaveText('50 bottles created successfully');
-  await expect(page.getByText('no additional bottles were created')).toBeVisible();
+  await expect(page.getByTestId('unfinished-creation')).toContainText('50 lahví');
+  await page.getByRole('button', { name: 'Dokončit a zobrazit výsledek' }).click();
+  await expect(page.getByRole('status')).toHaveText('50 lahví – úspěšně vytvořeno');
+  await expect(page.getByText('žádné další lahve nebyly vytvořeny')).toBeVisible();
   await expect(page.getByTestId('result-batch-code')).toHaveText('BC-000001');
 
   // Still exactly one creation and 50 bottles; the pending entry is gone.
   await page.goto('/bottles/history');
   await expect(page.getByTestId('creation-history').locator('tbody tr')).toHaveCount(1);
   await page.goto('/bottles');
-  await expect(page.getByText('50 bottles', { exact: true })).toBeVisible();
+  await expect(page.getByText('50 lahví', { exact: true })).toBeVisible();
   await page.goto('/bottles/new');
   await expect(page.getByTestId('unfinished-creation')).toHaveCount(0);
 });
@@ -292,12 +312,12 @@ test('archived templates are no longer offered for new bottles', async ({ page }
   await page.goto('/label-templates');
   await page.getByRole('link', { name: /mydlo1/ }).click();
   page.once('dialog', (dialog) => void dialog.accept());
-  await page.getByRole('button', { name: 'Archive template' }).click();
-  await expect(page.getByText(/^Archived /)).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Create bottles with mydlo1 v1' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Archivovat šablonu' }).click();
+  await expect(page.getByText(/^Archivováno /)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Vytvořit lahve s touto šablonou' })).toHaveCount(0);
   await page.goto('/bottles/new');
-  await expect(page.getByText('Create a label template')).toBeVisible();
-  await expect(page.getByLabel('Label template')).toHaveCount(0);
+  await expect(page.getByText('Nejprve vytvořte šablonu etiket')).toBeVisible();
+  await expect(page.getByLabel('Šablona etiket')).toHaveCount(0);
 });
 
 /** The designer preview value captured before saving (same settings → same preview URL). */

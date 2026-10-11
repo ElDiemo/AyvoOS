@@ -16,6 +16,9 @@ import { ArtworkUploadField } from './artwork-upload-field';
 import { LabelDesigner } from './label-designer';
 import { clampLabelSize, LabelSizeFields, proportionsMatch } from './label-size-fields';
 import { buttonClass, Card, ErrorNote, inputClass } from '@/components/ui';
+import { productionCs } from '@/i18n/cs/production';
+
+const t = productionCs.editor;
 
 type Mode =
   | { kind: 'create' }
@@ -106,7 +109,7 @@ export function TemplateEditor({
           { layout },
         );
         if (!result.created) {
-          setInfo(`No changes — ${result.version.label} is unchanged.`);
+          setInfo(t.unchanged(result.version.label));
           setBusy(null);
           return;
         }
@@ -114,7 +117,11 @@ export function TemplateEditor({
       }
       router.refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Saving failed');
+      setError(
+        productionCs.common.failed(
+          e instanceof Error ? e.message : productionCs.common.unexpectedError,
+        ),
+      );
       setBusy(null);
     }
   }
@@ -129,7 +136,7 @@ export function TemplateEditor({
 
   return (
     <div className="flex flex-col gap-6">
-      <Card title={mode.kind === 'create' ? '1 · Template' : '1 · Artwork'}>
+      <Card title={mode.kind === 'create' ? t.stepTemplate : t.stepArtwork}>
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {mode.kind === 'create' ? (
             <div className="flex flex-col gap-1">
@@ -137,7 +144,7 @@ export function TemplateEditor({
                 htmlFor="template-name"
                 className="text-xs font-medium uppercase tracking-wide text-stone-500"
               >
-                Template name
+                {t.name}
               </label>
               <input
                 id="template-name"
@@ -147,18 +154,11 @@ export function TemplateEditor({
                 maxLength={64}
                 className={inputClass}
               />
-              <p className="text-xs text-stone-400">
-                Lowercase letters, digits, “-” and “_”. Cannot be changed later.
-              </p>
+              <p className="text-xs text-stone-400">{t.nameHelp}</p>
             </div>
           ) : (
             <p className="text-sm text-stone-600 wrap-anywhere">
-              Saving creates{' '}
-              <strong>
-                {mode.templateName} v{mode.latest.versionNumber + 1}
-              </strong>
-              . Existing versions — and every label already printed with them — stay exactly as they
-              are.
+              {t.newVersion(mode.templateName, mode.latest.versionNumber + 1)}
             </p>
           )}
           <ArtworkUploadField
@@ -173,7 +173,7 @@ export function TemplateEditor({
 
       {artwork && box && (
         <>
-          <Card title="2 · Physical label size">
+          <Card title={t.stepSize}>
             <LabelSizeFields
               artwork={artwork}
               size={size}
@@ -182,7 +182,7 @@ export function TemplateEditor({
             />
           </Card>
 
-          <Card title="3 · QR code placement">
+          <Card title={t.stepQr}>
             <LabelDesigner
               artworkUrl={artwork.contentUrl}
               label={size}
@@ -211,10 +211,10 @@ export function TemplateEditor({
           onClick={() => void save()}
         >
           {busy === 'save'
-            ? 'Saving…'
+            ? t.saving
             : mode.kind === 'create'
-              ? 'Save template (v1)'
-              : `Save as ${mode.templateName} v${mode.latest.versionNumber + 1}`}
+              ? t.saveFirst
+              : t.saveVersion(mode.latest.versionNumber + 1)}
         </button>
       </div>
     </div>

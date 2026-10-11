@@ -12,6 +12,13 @@ export function formatQuantityCs(value: string): string {
   return `${negative ? '−' : ''}${grouped}${fraction ? `,${fraction}` : ''}`;
 }
 
+const UNITS: Record<string, string> = { pcs: 'ks', sheet: 'arch', roll: 'role' };
+
+/** Czech display name of a unit code from the API ("pcs" → "ks"); unknown codes stay as they are. */
+export function unitCs(code: string): string {
+  return UNITS[code] ?? code;
+}
+
 /** Signed quantity for ledgers: "+5", "−1". */
 export function formatDeltaCs(value: string): string {
   return value.startsWith('-') ? formatQuantityCs(value) : `+${formatQuantityCs(value)}`;

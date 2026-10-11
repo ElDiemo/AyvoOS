@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDateCs, formatDeltaCs, formatQuantityCs } from './format';
+import { formatDateCs, formatDeltaCs, formatQuantityCs, unitCs } from './format';
 
 describe('Czech warehouse formatting', () => {
   it('formats exact decimal strings without floating point', () => {
@@ -14,5 +14,11 @@ describe('Czech warehouse formatting', () => {
 
   it('formats calendar dates without shifting the day', () => {
     expect(formatDateCs('2026-10-11')).toBe('11. 10. 2026');
+  });
+
+  it('shows Czech unit names and keeps unknown codes', () => {
+    expect(unitCs('pcs')).toBe('ks');
+    expect(unitCs('ml')).toBe('ml');
+    expect(unitCs('kg')).toBe('kg');
   });
 });

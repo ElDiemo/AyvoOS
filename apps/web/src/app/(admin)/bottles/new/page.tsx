@@ -4,8 +4,9 @@ import {
   labelTemplateSummarySchema,
 } from '@ayvo/types';
 import { z } from 'zod';
-import { CreateBottlesForm } from '@/components/bottles/create-bottles-form';
-import { PageHeader } from '@/components/ui';
+import { CreateBottlesForm } from '@/components/production/create-bottles-form';
+import { ProductionHeader } from '@/components/production/production-header';
+import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
 import { fetchApiHealth } from '@/lib/api-health';
 import { serverEnv } from '@/lib/env';
@@ -29,10 +30,11 @@ export default async function CreateBottlesPage({
   const qrUrlPattern = `${settings.qrPreviewUrl.slice(0, settings.qrPreviewUrl.lastIndexOf('/'))}/<token>`;
   return (
     <>
-      <PageHeader
-        title="Create bottles"
-        subtitle="Each new bottle gets a permanent code and QR code; its labels are prepared for printing."
-        back={{ href: '/bottles', label: 'Bottles' }}
+      <ProductionHeader
+        active="bottles"
+        title={productionCs.create.title}
+        subtitle={productionCs.create.subtitle}
+        back={{ href: '/bottles', label: productionCs.create.back }}
       />
       <CreateBottlesForm
         templates={templates}

@@ -1,5 +1,6 @@
 import type { BottleStatus, LabelPrintJobStatus } from '@ayvo/types';
 import { StatusBadge, type StatusTone } from '@ayvo/ui';
+import { productionCs } from '@/i18n/cs/production';
 
 const printJobTone: Record<LabelPrintJobStatus, StatusTone> = {
   PENDING: 'neutral',
@@ -9,9 +10,19 @@ const printJobTone: Record<LabelPrintJobStatus, StatusTone> = {
 };
 
 export function PrintJobStatus({ status }: { status: LabelPrintJobStatus }) {
-  return <StatusBadge tone={printJobTone[status]}>{status}</StatusBadge>;
+  return (
+    <StatusBadge tone={printJobTone[status]}>
+      {productionCs.printJobStatus[status] ?? status}
+    </StatusBadge>
+  );
 }
 
+const bottleTone: Record<BottleStatus, StatusTone> = { CREATED: 'neutral', LABELED_EMPTY: 'ok' };
+
 export function BottleStatusBadge({ status }: { status: BottleStatus }) {
-  return <StatusBadge tone="neutral">{status}</StatusBadge>;
+  return (
+    <StatusBadge tone={bottleTone[status] ?? 'neutral'}>
+      {productionCs.bottleStatus[status] ?? status}
+    </StatusBadge>
+  );
 }
