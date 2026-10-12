@@ -59,7 +59,7 @@ await fixtures.$executeRawUnsafe(`
                        "time_zone", "default_locale", "default_currency", "capabilities")
   VALUES ('01990000-0000-7000-8000-0000000000e2', 'E2E-DE', 'Testovací provozovna DE', 'DE',
           'Teststraße 1', '10115', 'Berlin', 'Europe/Berlin', 'de-DE', 'EUR',
-          ARRAY['WAREHOUSE']::"SiteCapability"[])`);
+          ARRAY['WAREHOUSE', 'PRODUCTION']::"SiteCapability"[])`);
 await fixtures.$executeRawUnsafe(`
   INSERT INTO "inventory_locations" ("code", "name", "site_id", "is_site_default")
   VALUES ('E2E-DE-W', 'Testovací sklad DE', '01990000-0000-7000-8000-0000000000e2', true)`);

@@ -37,6 +37,27 @@ setup('sign in the administrator and the operator', async ({ browser }) => {
     },
   });
   expect(created.status()).toBe(201);
+  // Label templates are company-wide: the operator edits them only because ADMIN deliberately
+  // grants a custom role with the global template permission.
+  const role = await adminPage.request.post('/api/admin/identity/roles', {
+    data: {
+      code: 'E2E_TEMPLATE_EDITOR',
+      name: 'Správce šablon (E2E)',
+      description: 'Company-wide label templates',
+      permissions: ['production:templates_manage', 'production:read'],
+      copiedFrom: null,
+      reason: 'end-to-end operator edits templates',
+    },
+  });
+  expect(role.status()).toBe(201);
+  expect(
+    (
+      await adminPage.request.post(
+        `/api/admin/identity/users/${((await created.json()) as { id: string }).id}/roles/grant`,
+        { data: { role: 'E2E_TEMPLATE_EDITOR', reason: 'end-to-end operator edits templates' } },
+      )
+    ).status(),
+  ).toBe(200);
   await admin.close();
 
   const operator = await browser.newContext();

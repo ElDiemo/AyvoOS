@@ -462,6 +462,7 @@ test('purchase prices and supplier documents never reach roles without the permi
   await storePage.goto(`/warehouse/receipts/${receipt.code}`);
   await expect(storePage.getByTestId('line-1')).toBeVisible();
   await expect(storePage.getByTestId('documents-restricted')).toBeVisible();
+  await expect(storePage.getByRole('button', { name: 'Doplnit / opravit cenu' })).toHaveCount(0);
   await expect(storePage.locator('body')).not.toContainText('4321');
   await expect(storePage.locator('body')).not.toContainText('FV-PRICE-1.pdf');
   const direct = await storePage.request.get(`/api/admin/goods-receipts/${receipt.code}`);
@@ -481,6 +482,14 @@ test('purchase prices and supplier documents never reach roles without the permi
   await signInWithForm(financePage, 'e2e-finance@ayvo.test');
   await financePage.goto(`/warehouse/receipts/${receipt.code}`);
   await expect(financePage.getByTestId('line-1')).toContainText('4321.5 CZK');
+  // FINANCE corrects the price later: reason required, recorded append-only.
+  await financePage.getByRole('button', { name: 'Doplnit / opravit cenu' }).click();
+  const costForm = financePage.getByTestId('cost-form-1');
+  await costForm.getByLabel('Cena za jednotku (nepovinné)').fill('4300');
+  await costForm.getByLabel('Důvod (povinný, např. číslo faktury)').fill('dobropis D-1');
+  await costForm.getByRole('button', { name: 'Uložit cenu' }).click();
+  await expect(financePage.getByTestId('price-1')).toContainText('4300 CZK');
+  await expect(financePage.getByTestId('price-1')).toContainText('cena upravena');
   await expect(financePage.getByTestId('documents')).toContainText('FV-PRICE-1');
   expect((await financePage.request.get(invoice.contentUrl)).status()).toBe(200);
 
