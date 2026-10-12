@@ -53,7 +53,13 @@ export class LabelApplicationService {
     const { result, replayed } = await this.operations.run<StoredOutcome>(
       'LABEL_APPLICATION',
       request.requestId,
-      { lotId: request.lotId, seriesCode: request.seriesCode, url: scan.url },
+      // The site is part of the request's identity: a replay from another site is a conflict.
+      {
+        lotId: request.lotId,
+        seriesCode: request.seriesCode,
+        url: scan.url,
+        siteId: warehouse.siteId,
+      },
       async (tx) => {
         const bom = await this.inventory.activeBom('LABEL_APPLICATION', tx);
         const lotLines = bom.lines.filter((l) => l.item.lotTracking === 'REQUIRED');

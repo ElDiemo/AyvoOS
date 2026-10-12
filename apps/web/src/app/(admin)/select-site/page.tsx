@@ -1,13 +1,11 @@
 import { Card, Notice, PageHeader } from '@/components/ui';
 import { SelectSiteButton } from '@/components/shell/select-site-button';
 import { identityCs } from '@/i18n/cs/identity';
+import { safeNextPath } from '@/lib/safe-path';
 import { currentUser } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const t = identityCs.selectSite;
-
-const safeNext = (next: string | undefined) =>
-  next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '/';
 
 /** Choose the active site (several sites, none chosen, or the chosen one has no warehouse). */
 export default async function SelectSitePage({
@@ -41,7 +39,7 @@ export default async function SelectSitePage({
                     {s.id === user.activeSiteId ? (
                       <span className="text-sm text-stone-500">{t.current}</span>
                     ) : (
-                      <SelectSiteButton siteId={s.id} next={safeNext(next)} label={t.choose} />
+                      <SelectSiteButton siteId={s.id} next={safeNextPath(next)} label={t.choose} />
                     )}
                   </div>
                 </Card>

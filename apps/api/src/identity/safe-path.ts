@@ -5,7 +5,8 @@
 export function safeNextPath(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 512) return '/';
   if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return '/';
-  if ([...value].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return '/';
+  // Printable ASCII only: anything else cannot travel in a Location header (review P3-1).
+  if ([...value].some((c) => c.charCodeAt(0) < 0x21 || c.charCodeAt(0) > 0x7e)) return '/';
   if (value.startsWith('/api/')) return '/';
   return value;
 }

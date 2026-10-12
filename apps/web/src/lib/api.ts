@@ -4,6 +4,7 @@ import { cookies, headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
 import type { z } from 'zod';
 import { serverEnv } from './env';
+import { safeNextPath } from './safe-path';
 
 export class ApiError extends Error {
   constructor(
@@ -19,7 +20,7 @@ export const SESSION_COOKIE = 'ayvo_session';
 /** The page the browser asked for (set by src/proxy.ts), for "back to where you were" redirects. */
 export async function currentPath(): Promise<string> {
   const path = (await headers()).get('x-ayvo-path');
-  return path && path.startsWith('/') && !path.startsWith('//') ? path : '/';
+  return safeNextPath(path);
 }
 
 /** Only the AYVO session cookie is forwarded to the API — identity never travels in headers. */

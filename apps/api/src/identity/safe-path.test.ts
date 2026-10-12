@@ -15,6 +15,8 @@ describe('safeNextPath (no open redirects after sign-in)', () => {
     '/api/auth/logout',
     '/x\u0000y',
     '/x\ny',
+    '/č',
+    '/x y',
     '',
     42,
     undefined,

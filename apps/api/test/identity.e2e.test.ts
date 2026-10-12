@@ -777,6 +777,28 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       .send({ role: 'ADMIN', reason: 'oops' });
     expect(last.body.code).toBe('LAST_ADMIN');
 
+    // The database refuses it too — whatever the code path, also when everything happens in one
+    // transaction (checked at commit), and TRUNCATE of the role catalogue is refused.
+    await expect(
+      t.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`UPDATE "user_roles" SET "revoked_at" = now(), "revoke_reason" = 'sql'
+          WHERE "role_code" = 'ADMIN' AND "revoked_at" IS NULL`;
+      }),
+    ).rejects.toThrow();
+    await expect(
+      t.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`UPDATE "users" SET "status" = 'DEACTIVATED', "deactivated_at" = now(),
+          "deactivation_reason" = 'sql' WHERE "id" IN (SELECT "user_id" FROM "user_roles"
+          WHERE "role_code" = 'ADMIN' AND "revoked_at" IS NULL)`;
+      }),
+    ).rejects.toThrow();
+    expect(
+      await t.prisma.userRole.count({ where: { roleCode: 'ADMIN', revokedAt: null } }),
+    ).toBeGreaterThan(0);
+    for (const table of ['roles', 'permissions', 'role_permissions']) {
+      await expect(t.prisma.$executeRawUnsafe(`TRUNCATE "${table}" CASCADE`)).rejects.toThrow();
+    }
+
     // With a second administrator the first may step down.
     const second = await createUser(['ADMIN'], []);
     await http()

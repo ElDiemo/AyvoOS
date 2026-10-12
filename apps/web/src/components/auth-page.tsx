@@ -1,4 +1,5 @@
 import { cn } from '@ayvo/ui';
+import { safeNextPath } from '@/lib/safe-path';
 
 /** Centered page for sign-in and access messages (outside the application shell). */
 export function AuthPage({
@@ -27,6 +28,6 @@ export function AuthPage({
 
 /** "Sign in" link: the API starts the identity-provider flow and returns to `next` afterwards. */
 export function signInHref(next: string | undefined): string {
-  const safe = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  const safe = safeNextPath(next);
   return `/api/auth/login?next=${encodeURIComponent(safe)}`;
 }

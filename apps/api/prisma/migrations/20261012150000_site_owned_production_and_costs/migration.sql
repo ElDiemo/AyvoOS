@@ -5,6 +5,8 @@
 -- bypass), then the defaults are dropped. No bottle, event, movement or document is created.
 -- The only grant removed is `production:templates_manage` from PRODUCTION_SUPERVISOR: label
 -- templates are company-wide brand data and are no longer changed by a site-bound role.
+-- Also (security review): TRUNCATE guards on the role catalogue and a commit-time guard that
+-- the last active administrator is never removed.
 
 -- =============================================================================================
 -- Production records belong to the site that created them
@@ -203,3 +205,40 @@ DELETE FROM "role_permissions"
   WHERE "role_code" = 'PRODUCTION_SUPERVISOR' AND "permission_code" = 'production:templates_manage';
 
 SELECT set_config('ayvo.catalogue_migration', 'off', false);
+
+-- =============================================================================================
+-- Security review hardening
+-- =============================================================================================
+
+-- The role catalogue cannot be truncated (every other protected table already refuses it).
+CREATE TRIGGER "roles_no_truncate" BEFORE TRUNCATE ON "roles"
+  FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
+CREATE TRIGGER "permissions_no_truncate" BEFORE TRUNCATE ON "permissions"
+  FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
+CREATE TRIGGER "role_permissions_no_truncate" BEFORE TRUNCATE ON "role_permissions"
+  FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
+
+-- Once an administrator exists (bootstrap done), at least one active ADMIN must remain. Checked
+-- at commit (deferred), on top of the row locks the application takes, so no code path or direct
+-- statement can leave the system without administration.
+CREATE FUNCTION ayvo_last_admin_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM "identity_bootstrap") AND NOT EXISTS (
+       SELECT 1 FROM "user_roles" r JOIN "users" u ON u."id" = r."user_id"
+       WHERE r."role_code" = 'ADMIN' AND r."revoked_at" IS NULL AND u."status" = 'ACTIVE') THEN
+    RAISE EXCEPTION 'AYVO: the last active administrator cannot be removed'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  RETURN NULL;
+END
+$$;
+CREATE CONSTRAINT TRIGGER "user_roles_last_admin" AFTER UPDATE ON "user_roles"
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (OLD."role_code" = 'ADMIN' AND OLD."revoked_at" IS NULL AND NEW."revoked_at" IS NOT NULL)
+  EXECUTE FUNCTION ayvo_last_admin_guard();
+CREATE CONSTRAINT TRIGGER "users_last_admin" AFTER UPDATE ON "users"
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (OLD."status" = 'ACTIVE' AND NEW."status" <> 'ACTIVE')
+  EXECUTE FUNCTION ayvo_last_admin_guard();

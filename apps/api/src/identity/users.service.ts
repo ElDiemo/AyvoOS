@@ -442,12 +442,17 @@ export class UsersService {
     return rows[0];
   }
 
-  /** Serialised by locking all open ADMIN grants: two admins cannot remove each other at once. */
+  /**
+   * Serialised by locking all open ADMIN grants AND their users: under READ COMMITTED a waiting
+   * transaction re-checks the locked rows after the other commits, so a concurrent deactivation
+   * of one admin and revocation of the other cannot both pass (review P1). The database checks
+   * the same invariant again at commit (`ayvo_last_admin_guard`).
+   */
   private async assertNotLastAdmin(tx: Prisma.TransactionClient, userId: string) {
     const admins = await tx.$queryRaw<{ user_id: string }[]>`
       SELECT r."user_id" FROM "user_roles" r JOIN "users" u ON u."id" = r."user_id"
       WHERE r."role_code" = 'ADMIN' AND r."revoked_at" IS NULL AND u."status" = 'ACTIVE'
-      FOR UPDATE OF r`;
+      FOR UPDATE OF r, u`;
     if (admins.some((a) => a.user_id === userId) && admins.length <= 1) {
       throw domainError(409, 'LAST_ADMIN', 'The last active administrator cannot lose access');
     }

@@ -470,7 +470,7 @@ export class ProcurementService {
     await this.operations.run(
       'RECEIPT_DOCUMENT_LINK',
       input.requestId,
-      { code, ...input },
+      { code, ...input, siteId },
       async (tx) => {
         const receipt = await this.findReceipt(code, siteId, tx);
         const document = await tx.supplierDocument.findUnique({ where: { id: input.documentId } });
@@ -573,7 +573,7 @@ export class ProcurementService {
     await this.operations.run(
       'RECEIPT_CORRECTION',
       input.requestId,
-      { code, ...input },
+      { code, ...input, siteId },
       async (tx) => {
         const receipt = await this.findReceipt(code, siteId, tx);
         const line = receipt.lines.find((l) => l.lineNo === input.lineNo);
