@@ -1,4 +1,4 @@
-import { roleCatalogSchema } from '@ayvo/types';
+import { isPlannedRole, roleCatalogSchema } from '@ayvo/types';
 import Link from 'next/link';
 import { AdminHeader } from '@/components/admin/admin-header';
 import { buttonClass, Card, EmptyState } from '@/components/ui';
@@ -51,6 +51,17 @@ export default async function RolesPage() {
                       {r.code} · {r.system ? t.system : t.custom}
                       {!r.active && ` · ${t.inactive}`}
                     </span>
+                    {isPlannedRole(r.code) && (
+                      <span
+                        className="mt-1 block text-xs text-stone-500"
+                        data-planned-role={r.code}
+                      >
+                        <span className="rounded bg-stone-100 px-1.5 py-0.5 text-stone-600">
+                          {identityCs.planned.label}
+                        </span>{' '}
+                        {identityCs.planned.roles[r.code]}
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-3 align-top whitespace-nowrap">
                     {t.count(r.permissions.length)}

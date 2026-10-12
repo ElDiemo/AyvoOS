@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  isPlannedRole,
   PERMISSION_CODES,
   SECURITY_ADMIN_PERMISSIONS,
   SITE_SCOPED_PERMISSIONS,
@@ -101,6 +102,11 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
   }
 
   /** A user with roles and access to the given sites (default: the initial site). */
+  /**
+   * Creates a user through the API. Planned system roles (SALES, FINANCE, HOTEL_USER) can no
+   * longer be assigned there (doc 021 §4c); their permission templates are still tested through
+   * an assignment written directly — the situation of an assignment that already existed.
+   */
   async function createUser(
     roles: RoleCode[],
     siteIds: string[] = [INITIAL_SITE_ID],
@@ -112,13 +118,19 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       .send({
         email: unique('user'),
         displayName: 'Test User',
-        roles,
+        roles: roles.filter((r) => !isPlannedRole(r)),
         siteIds,
         warehouseCodes,
         reason: 'test setup',
       })
       .expect(201);
-    return res.body as AdminUserDetail;
+    const user = res.body as AdminUserDetail;
+    for (const role of roles.filter(isPlannedRole)) {
+      await t.prisma.userRole.create({
+        data: { userId: user.id, roleCode: role, grantReason: 'pre-existing assignment (test)' },
+      });
+    }
+    return user;
   }
 
   beforeAll(async () => {

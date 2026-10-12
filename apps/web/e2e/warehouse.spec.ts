@@ -437,9 +437,28 @@ test('purchase prices and supplier documents never reach roles without the permi
       },
     }),
   );
+  // FINANCE is a planned system role (not assignable yet, doc 021 §4c): purchase prices are
+  // recorded today through a custom role holding the same permissions.
+  await ok(
+    await api.post('/api/admin/identity/roles', {
+      data: {
+        code: 'E2E_PRICES',
+        name: 'Nákupní ceny',
+        description: 'Records purchase prices and reads supplier documents',
+        permissions: [
+          'inventory:read',
+          'procurement:cost_read',
+          'procurement:cost_write',
+          'procurement:documents_read',
+        ],
+        copiedFrom: 'FINANCE',
+        reason: 'price test',
+      },
+    }),
+  );
   for (const [email, role] of [
     ['e2e-store@ayvo.test', 'WAREHOUSE_OPERATOR'],
-    ['e2e-finance@ayvo.test', 'FINANCE'],
+    ['e2e-finance@ayvo.test', 'E2E_PRICES'],
   ] as const) {
     await ok(
       await api.post('/api/admin/identity/users', {
@@ -482,7 +501,7 @@ test('purchase prices and supplier documents never reach roles without the permi
   await signInWithForm(financePage, 'e2e-finance@ayvo.test');
   await financePage.goto(`/warehouse/receipts/${receipt.code}`);
   await expect(financePage.getByTestId('line-1')).toContainText('4321.5 CZK');
-  // FINANCE corrects the price later: reason required, recorded append-only.
+  // The price role corrects the price later: reason required, recorded append-only.
   await financePage.getByRole('button', { name: 'Doplnit / opravit cenu' }).click();
   const costForm = financePage.getByTestId('cost-form-1');
   await costForm.getByLabel('Cena za jednotku (nepovinné)').fill('4300');

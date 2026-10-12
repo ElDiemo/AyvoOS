@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  AdminUserDetail,
-  AdminUserSummary,
-  CreateUserRequest,
-  PermissionCode,
-  RoleCode,
+import {
+  isPlannedRole,
+  type AdminUserDetail,
+  type AdminUserSummary,
+  type CreateUserRequest,
+  type PermissionCode,
+  type RoleCode,
 } from '@ayvo/types';
 import { Injectable, Logger } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
@@ -373,6 +374,15 @@ export class UsersService {
     code: RoleCode,
     reason: string,
   ) {
+    // Planned system roles are templates only: never newly assigned, whatever the client sends
+    // (doc 021 §4c). Every assignment path (user creation, role grant) passes here.
+    if (isPlannedRole(code)) {
+      throw domainError(
+        422,
+        'ROLE_NOT_AVAILABLE',
+        'This system role is planned for a future module and cannot be assigned yet',
+      );
+    }
     const role = await tx.role.findUnique({
       where: { code },
       include: { permissions: { select: { permissionCode: true } } },

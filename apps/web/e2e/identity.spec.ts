@@ -131,19 +131,42 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await admin.close();
 });
 
-test('SALES sees stock availability for planning and nothing operational', async ({ browser }) => {
+test('a stock-summary role sees availability for planning and nothing operational', async ({
+  browser,
+}) => {
   const admin = await browser.newContext({ storageState: ADMIN });
+  const user = {
+    email: 'e2e-sales@ayvo.test',
+    displayName: 'Obchod Test',
+    siteIds: ['01990000-0000-7000-8000-000000000001'],
+    warehouseCodes: [],
+    reason: 'sales planning',
+  };
+  // SALES is a planned system role (doc 021 §4c): the API refuses it even without the UI.
+  const refused = await admin.request.post('/api/admin/identity/users', {
+    data: { ...user, roles: ['SALES'] },
+  });
+  expect(refused.status()).toBe(422);
+  expect((await refused.json()).code).toBe('ROLE_NOT_AVAILABLE');
+  // Planning availability today: a custom role with the SALES template's permission.
+  expect(
+    (
+      await admin.request.post('/api/admin/identity/roles', {
+        data: {
+          code: 'E2E_PLANNING',
+          name: 'Plánování zásob',
+          description: 'Stock availability for planning',
+          permissions: ['inventory:stock_summary'],
+          copiedFrom: 'SALES',
+          reason: 'sales planning',
+        },
+      })
+    ).status(),
+  ).toBe(201);
   expect(
     (
       await admin.request.post('/api/admin/identity/users', {
-        data: {
-          email: 'e2e-sales@ayvo.test',
-          displayName: 'Obchod Test',
-          roles: ['SALES'],
-          siteIds: ['01990000-0000-7000-8000-000000000001'],
-          warehouseCodes: [],
-          reason: 'sales planning',
-        },
+        data: { ...user, roles: ['E2E_PLANNING'] },
       })
     ).status(),
   ).toBe(201);

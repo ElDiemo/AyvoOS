@@ -2,6 +2,7 @@
 
 import {
   adminUserDetailSchema,
+  isPlannedRole,
   type AssignableSites,
   type PermissionCode,
   type RoleCatalog,
@@ -41,7 +42,9 @@ export function CreateUserForm({ roles, sites }: { roles: RoleCatalog; sites: As
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const grantable = roles.filter((r) => r.active);
+  // Planned system roles are shown, disabled, but never selectable (doc 021 §4c).
+  const grantable = roles.filter((r) => r.active && !isPlannedRole(r.code));
+  const planned = roles.filter((r) => isPlannedRole(r.code));
   const permissions = [
     ...new Set(
       grantable.filter((r) => selectedRoles.includes(r.code)).flatMap((r) => r.permissions),
@@ -122,6 +125,7 @@ export function CreateUserForm({ roles, sites }: { roles: RoleCatalog; sites: As
               ))}
             </div>
             <p className="text-xs text-stone-500">{t.roleHelp}</p>
+            {planned.length > 0 && <PlannedRoles roles={planned} />}
           </fieldset>
           <fieldset className="flex flex-col gap-3">
             <legend className={label}>2. {t.sites}</legend>
@@ -197,6 +201,33 @@ export function CreateUserForm({ roles, sites }: { roles: RoleCatalog; sites: As
           testId="access-preview"
         />
       </Card>
+    </div>
+  );
+}
+
+/** Planned system roles: visible, disabled, labelled "Připravuje se" with what each will be. */
+export function PlannedRoles({ roles }: { roles: RoleCatalog }) {
+  const p = identityCs.planned;
+  return (
+    <div className="mt-2 flex flex-col gap-2" data-testid="planned-roles">
+      <p className={label}>{p.section}</p>
+      {roles.map((r) => (
+        <label
+          key={r.code}
+          className="flex items-start gap-2 text-sm text-stone-400"
+          data-planned-role={r.code}
+        >
+          <input type="checkbox" className="mt-0.5" disabled checked={false} readOnly />
+          <span className="min-w-0 wrap-anywhere">
+            {r.name}{' '}
+            <span className="rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-600">
+              {p.label}
+            </span>
+            <span className="block text-xs text-stone-500">{p.roles[r.code] ?? p.help}</span>
+          </span>
+        </label>
+      ))}
+      <p className="text-xs text-stone-500">{p.help}</p>
     </div>
   );
 }

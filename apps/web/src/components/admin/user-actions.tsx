@@ -2,6 +2,7 @@
 
 import {
   adminUserDetailSchema,
+  isPlannedRole,
   type AdminUserDetail,
   type AssignableSites,
   type RoleCatalog,
@@ -44,7 +45,9 @@ export function UserActions({
   const [error, setError] = useState<string | null>(null);
   const reasonOk = reason.trim().length >= 3;
   const held = new Set(user.roles.map((r) => r.code));
-  const grantable = roles.filter((r) => r.active && !held.has(r.code));
+  // Planned system roles stay visible but disabled; one already held is kept and revocable.
+  const grantable = roles.filter((r) => r.active && !held.has(r.code) && !isPlannedRole(r.code));
+  const planned = roles.filter((r) => isPlannedRole(r.code) && !held.has(r.code));
   const siteScopes = user.scopes.filter((s) => s.type === 'SITE');
   const warehouseScopes = user.scopes.filter((s) => s.type === 'WAREHOUSE');
   const missingSites = sites.filter((s) => !siteScopes.some((x) => x.siteId === s.id));
@@ -109,7 +112,14 @@ export function UserActions({
             {user.roles.length === 0 && <li className="text-sm text-stone-500">{t.noRoles}</li>}
             {user.roles.map((r) => (
               <li key={r.code} className={chip}>
-                <span className="wrap-anywhere">{r.name}</span>
+                <span className="wrap-anywhere">
+                  {r.name}
+                  {isPlannedRole(r.code) && (
+                    <span className="ml-1 text-xs text-stone-500">
+                      ({identityCs.planned.label})
+                    </span>
+                  )}
+                </span>
                 <button
                   type="button"
                   disabled={disabled}
@@ -122,7 +132,7 @@ export function UserActions({
               </li>
             ))}
           </ul>
-          {grantable.length > 0 && (
+          {grantable.length + planned.length > 0 && (
             <div className="flex flex-col gap-2 sm:flex-row">
               <select
                 value={role}
@@ -137,6 +147,11 @@ export function UserActions({
                     {r.system ? '' : ` (${t.customRole})`}
                   </option>
                 ))}
+                {planned.map((r) => (
+                  <option key={r.code} value={r.code} disabled>
+                    {r.name} ({identityCs.planned.label})
+                  </option>
+                ))}
               </select>
               <button
                 type="button"
@@ -147,6 +162,12 @@ export function UserActions({
                 {t.grant}
               </button>
             </div>
+          )}
+          {planned.length > 0 && (
+            <p className="text-xs text-stone-500" data-testid="planned-roles-note">
+              {identityCs.planned.label}: {planned.map((r) => r.name).join(', ')}.{' '}
+              {identityCs.planned.help}
+            </p>
           )}
         </section>
 
