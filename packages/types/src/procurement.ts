@@ -134,10 +134,15 @@ export const goodsReceiptLineSchema = z.object({
   /** quantity + Σ corrections */
   netQuantity: decimalStringSchema,
   lot: z.object({ id: z.uuid(), code: z.string(), kind: inventoryLotKindSchema }).nullable(),
-  /** Purchase price fields — omitted (not null) unless the caller holds procurement:cost_read. */
+  /**
+   * Current purchase price (the latest completion/correction, else as received) — omitted (not
+   * null) unless the caller holds procurement:cost_read.
+   */
   unitPrice: decimalStringSchema.nullable().optional(),
   currency: z.string().nullable().optional(),
   vatRate: decimalStringSchema.nullable().optional(),
+  /** When the price was last completed or corrected (null: as received); with the price only. */
+  costUpdatedAt: z.iso.datetime().nullable().optional(),
   corrections: z.array(goodsReceiptCorrectionSchema),
 });
 
@@ -189,6 +194,31 @@ export const linkReceiptDocumentRequestSchema = z.object({
   documentId: z.uuid(),
 });
 export type LinkReceiptDocumentRequest = z.infer<typeof linkReceiptDocumentRequestSchema>;
+
+/**
+ * POST /api/admin/goods-receipts/:code/lines/:lineNo/cost — completes or corrects a line's
+ * purchase price (`procurement:cost_write`, FINANCE). Append-only, reason required, audited.
+ */
+export const receiptLineCostRequestSchema = z
+  .object({
+    requestId: z.uuid(),
+    unitPrice: unitPriceSchema.nullable(),
+    currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .nullable(),
+    vatRate: vatRateSchema.nullable(),
+    reason: z.string().trim().min(3).max(500),
+  })
+  .refine((l) => (l.unitPrice === null) === (l.currency === null), {
+    message: 'Give the unit price together with its currency',
+    path: ['currency'],
+  })
+  .refine((l) => l.vatRate === null || l.unitPrice !== null, {
+    message: 'A VAT rate needs a unit price',
+    path: ['vatRate'],
+  });
+export type ReceiptLineCostRequest = z.infer<typeof receiptLineCostRequestSchema>;
 
 /** POST /api/admin/goods-receipts/:code/corrections — compensating, never rewrites the receipt. */
 export const createReceiptCorrectionRequestSchema = z.object({

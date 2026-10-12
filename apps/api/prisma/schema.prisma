@@ -173,13 +173,18 @@ model BottleCreationBatch {
   firstBottleSerial      BigInt   @map("first_bottle_serial")
   lastBottleSerial       BigInt   @map("last_bottle_serial")
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// The site that created the series (doc 022 §6); its bottles and print jobs belong to it.
+  siteId                 String   @map("site_id") @db.Uuid
 
   labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  site                 Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
   bottles              Bottle[]
   events               BottleEvent[]
   printJobs            LabelPrintJob[]
 
+  @@unique([id, siteId])
   @@index([labelTemplateVersionId])
+  @@index([siteId, serial])
   @@map("bottle_creation_batches")
 }
 
@@ -197,13 +202,17 @@ model Bottle {
   status          BottleStatus
   creationBatchId String       @map("creation_batch_id") @db.Uuid
   createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// The site the bottle belongs to — its series' site (composite FK). No transfer in v0.1.
+  siteId          String       @map("site_id") @db.Uuid
 
-  creationBatch BottleCreationBatch         @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  creationBatch BottleCreationBatch         @relation(fields: [creationBatchId, siteId], references: [id, siteId], onDelete: Restrict)
+  site          Site                        @relation(fields: [siteId], references: [id], onDelete: Restrict)
   events        BottleEvent[]
   printJobItems LabelPrintJobItem[]
   components    BottleComponentAttachment[]
 
   @@index([creationBatchId, serial])
+  @@index([siteId, serial])
   @@map("bottles")
 }
 
@@ -289,12 +298,16 @@ model LabelPrintJob {
   fileStorageKey         String?                @map("file_storage_key")
   fileByteSize           Int?                   @map("file_byte_size")
   fileSha256             String?                @map("file_sha256") @db.Char(64)
+  /// The site of the series (composite FK): print jobs never cross sites.
+  siteId                 String                 @map("site_id") @db.Uuid
 
-  creationBatch        BottleCreationBatch  @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  creationBatch        BottleCreationBatch  @relation(fields: [creationBatchId, siteId], references: [id, siteId], onDelete: Restrict)
+  site                 Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
   labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
   items                LabelPrintJobItem[]
 
   @@index([creationBatchId])
+  @@index([siteId, serial])
   @@map("label_print_jobs")
 }
 
@@ -659,13 +672,17 @@ model SupplierDocument {
   createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   actorId          String?              @map("actor_id") @db.Uuid
   requestId        String               @unique @map("request_id") @db.Uuid
+  /// The receiving site whose purchasing paperwork this is (doc 022 §2).
+  siteId           String               @map("site_id") @db.Uuid
 
   supplier     Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  site         Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
   supersedes   SupplierDocument?      @relation("SupplierDocumentSupersedes", fields: [supersedesId], references: [id], onDelete: Restrict)
   supersededBy SupplierDocument[]     @relation("SupplierDocumentSupersedes")
   receiptLinks GoodsReceiptDocument[]
 
   @@index([supplierId])
+  @@index([siteId, supplierId])
   @@map("supplier_documents")
 }
 
@@ -724,10 +741,34 @@ model GoodsReceiptLine {
   internalLot InventoryLot?            @relation("InternalLotOrigin")
   corrections GoodsReceiptCorrection[]
   movements   InventoryMovement[]
+  costs       GoodsReceiptLineCost[]
 
   @@unique([receiptId, lineNo])
   @@index([lotId])
   @@map("goods_receipt_lines")
+}
+
+/// A later financial completion or correction of a receipt line's purchase price (FINANCE,
+/// `procurement:cost_write`; doc 021 §4). Append-only; the latest record is the line's current
+/// price, the line keeps what was recorded at receipt. DB: price ⇔ currency; VAT needs a price;
+/// site = the receipt's site; insert-only.
+model GoodsReceiptLineCost {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  receiptLineId String   @map("receipt_line_id") @db.Uuid
+  unitPrice     Decimal? @map("unit_price") @db.Decimal(19, 4)
+  currency      String?  @db.Char(3)
+  vatRate       Decimal? @map("vat_rate") @db.Decimal(5, 2)
+  reason        String
+  actorId       String   @map("actor_id") @db.Uuid
+  siteId        String   @map("site_id") @db.Uuid
+  requestId     String   @unique @map("request_id") @db.Uuid
+  recordedAt    DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  receiptLine GoodsReceiptLine @relation(fields: [receiptLineId], references: [id], onDelete: Restrict)
+  site        Site             @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([receiptLineId, recordedAt])
+  @@map("goods_receipt_line_costs")
 }
 
 /// Append-only link of a receipt to a supplier document (documents can be added, never removed).
@@ -780,6 +821,7 @@ enum OperationKind {
   RECEIPT_CORRECTION
   ITEM_SETTINGS
   LABEL_APPLICATION
+  RECEIPT_LINE_COST
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -889,12 +931,16 @@ model Role {
 
 /// Permission catalogue. DB: seeded by migration; changes only by migration.
 model Permission {
-  code            String  @id
+  code            String          @id
   description     String
   /// Also requires access to the active site and its warehouse (doc 022).
-  warehouseScoped Boolean @map("warehouse_scoped")
+  warehouseScoped Boolean         @map("warehouse_scoped")
   /// Security administration: only the ADMIN system role may hold it (never a custom role).
-  securityAdmin   Boolean @default(false) @map("security_admin")
+  securityAdmin   Boolean         @default(false) @map("security_admin")
+  /// Needs the active site (without a warehouse) and filters its data by that site (doc 022).
+  siteScoped      Boolean         @default(false) @map("site_scoped")
+  /// The site capability the active site must have for this permission.
+  siteCapability  SiteCapability? @map("site_capability")
 
   roles RolePermission[]
 
@@ -1081,11 +1127,16 @@ model Site {
 
   locations      InventoryLocation[]
   goodsReceipts  GoodsReceipt[]
+  bottleBatches  BottleCreationBatch[]
+  bottles        Bottle[]
+  printJobs      LabelPrintJob[]
+  documents      SupplierDocument[]
+  receiptCosts   GoodsReceiptLineCost[]
   userScopes     UserScope[]
   activeSessions UserSession[]
   auditEvents    AuditEvent[]
-  createdByUser  User?               @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  updatedByUser  User?               @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  createdByUser  User?                  @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedByUser  User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@map("sites")
 }

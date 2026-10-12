@@ -42,6 +42,7 @@ export const PERMISSION_CODES = [
   'inventory:items_manage',
   'procurement:suppliers_manage',
   'procurement:cost_read',
+  'procurement:cost_write',
   'procurement:documents_read',
   'production:read',
   'production:bottles_create',
@@ -76,6 +77,19 @@ export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 export const permissionModule = (code: PermissionCode): PermissionModule =>
   code.split(':')[0] as PermissionModule;
 
+/**
+ * Permissions bound to the active site without a warehouse (doc 022): their data is filtered by
+ * that site (production series, bottles, print jobs; purchasing values and paperwork).
+ */
+export const SITE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
+  'procurement:cost_read',
+  'procurement:cost_write',
+  'procurement:documents_read',
+  'production:read',
+  'production:bottles_create',
+  'production:labels_print',
+];
+
 /** Permissions that also need the active site and access to its warehouse (doc 022). */
 export const WAREHOUSE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'inventory:read',
@@ -104,6 +118,8 @@ export const AUTH_ERROR_CODES = [
   'SITE_FORBIDDEN',
   'SITE_INACTIVE',
   'SITE_WITHOUT_WAREHOUSE',
+  'SITE_WITHOUT_PRODUCTION',
+  'AUTH_UNAVAILABLE',
   'RATE_LIMITED',
 ] as const;
 export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];
