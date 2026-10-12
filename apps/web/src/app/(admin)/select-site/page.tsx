@@ -22,6 +22,7 @@ export default async function SelectSitePage({
       <PageHeader title={t.title} subtitle={t.text} />
       <div className="flex max-w-2xl flex-col gap-4">
         {reason === 'no-warehouse' && <Notice tone="warning">{t.noWarehouse}</Notice>}
+        {reason === 'no-production' && <Notice tone="warning">{t.noProduction}</Notice>}
         {user.sites.length === 0 ? (
           <Notice tone="info">{t.none}</Notice>
         ) : (

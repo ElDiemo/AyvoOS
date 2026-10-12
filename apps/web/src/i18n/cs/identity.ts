@@ -80,6 +80,8 @@ export const identityCs = {
     none: 'Nemáte přístup k žádné provozovně. Požádejte administrátora AYVO OS o přístup.',
     noWarehouse:
       'Vybraná provozovna nemá sklad. Skladové stránky jsou dostupné jen v provozovně se skladem.',
+    noProduction:
+      'Vybraná provozovna nevyrábí. Výrobní stránky jsou dostupné jen v provozovně s výrobou.',
     choose: 'Pracovat zde',
     inactive: 'Neaktivní – jen historie',
     current: 'Aktuální',
@@ -162,6 +164,7 @@ export const identityCs = {
       SITE_INACTIVE: 'Provozovna je neaktivní: historii lze číst, nové změny ne.',
       SITE_REQUIRED: 'Nejdřív vyberte provozovnu.',
       SITE_WITHOUT_WAREHOUSE: 'Vybraná provozovna nemá sklad.',
+      SITE_WITHOUT_PRODUCTION: 'Vybraná provozovna nevyrábí.',
       LAST_ADMIN: 'Poslední aktivní administrátor nemůže přijít o přístup.',
       CANNOT_DEACTIVATE_SELF: 'Vlastní účet deaktivovat nelze.',
       ALREADY_DEACTIVATED: 'Účet už je deaktivovaný.',

@@ -1,7 +1,11 @@
 import { goodsReceiptCodeSchema, goodsReceiptSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { Card, Field, FieldList } from '@/components/ui';
-import { AttachDocument, CorrectionForm } from '@/components/warehouse/receipt-actions';
+import {
+  AttachDocument,
+  CorrectionForm,
+  LineCostForm,
+} from '@/components/warehouse/receipt-actions';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import {
   formatDateCs,
@@ -35,6 +39,7 @@ export default async function ReceiptPage({
   ]);
   const canCorrect = hasPermission(me, 'inventory:correct');
   const canAttach = hasPermission(me, 'inventory:receive');
+  const canWriteCosts = hasPermission(me, 'procurement:cost_write');
   return (
     <>
       <WarehouseHeader
@@ -102,10 +107,24 @@ export default async function ReceiptPage({
                       {warehouseCs.stock.lotKind[line.lot.kind]})
                     </Field>
                   )}
-                  {line.unitPrice && (
+                  {(line.unitPrice || canWriteCosts) && (
                     <Field label={r.price}>
-                      {line.unitPrice} {line.currency}
-                      {line.vatRate ? ` · ${r.vat} ${line.vatRate}` : ''}
+                      <span data-testid={`price-${line.lineNo}`}>
+                        {line.unitPrice ? `${line.unitPrice} ${line.currency}` : '—'}
+                        {line.vatRate ? ` · ${r.vat} ${line.vatRate}` : ''}
+                        {line.costUpdatedAt ? ` (${r.costUpdated})` : ''}
+                      </span>
+                      {canWriteCosts && (
+                        <LineCostForm
+                          code={receipt.code}
+                          lineNo={line.lineNo}
+                          current={{
+                            unitPrice: line.unitPrice ?? null,
+                            currency: line.currency ?? null,
+                            vatRate: line.vatRate ?? null,
+                          }}
+                        />
+                      )}
                     </Field>
                   )}
                   <Field label={r.corrections}>

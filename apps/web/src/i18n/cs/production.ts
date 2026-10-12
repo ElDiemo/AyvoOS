@@ -340,6 +340,11 @@ export const productionCs = {
         action:
           'Etiketa je z jiné tiskové série. Lahev odložte a zkontrolujte, které etikety máte u linky.',
       },
+      BOTTLE_OF_ANOTHER_SITE: {
+        title: 'Lahev patří jiné provozovně',
+        action:
+          'Lahve se mezi provozovnami nepřevádějí. Lahev odložte a informujte vedoucího výroby.',
+      },
       LABEL_NOT_PRINTED: {
         title: 'Etiketa nebyla vytištěna systémem AYVO OS',
         action: 'Lahev odložte a informujte vedoucího výroby.',

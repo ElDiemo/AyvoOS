@@ -86,7 +86,8 @@ export default async function HomePage() {
   // Planning-only stock access (SALES) without the full warehouse.
   const canAvailability =
     siteHasWarehouse && !canWarehouse && hasPermission(user, 'inventory:stock_summary');
-  const canProduction = hasPermission(user, 'production:read');
+  const canProduction =
+    !!activeSite?.capabilities.includes('PRODUCTION') && hasPermission(user, 'production:read');
   const [health, warehouse, availability, production] = await Promise.all([
     fetchApiHealth(serverEnv.API_URL),
     canWarehouse ? settle(warehouseFigures) : null,

@@ -105,6 +105,10 @@ export const warehouseCs = {
     attachDocument: 'Přiložit další doklad',
     attach: 'Přiložit',
     download: 'Stáhnout',
+    costEdit: 'Doplnit / opravit cenu',
+    costSave: 'Uložit cenu',
+    costReason: 'Důvod (povinný, např. číslo faktury)',
+    costUpdated: 'cena upravena',
     documentsRestricted: 'Doklady dodavatele vidí jen uživatelé s oprávněním k dokladům.',
   },
   documents: {
@@ -192,6 +196,7 @@ export const warehouseCs = {
     INVALID_QUANTITY: 'Neplatné množství (kusy musí být celé číslo).',
     INVALID_DATE: 'Datum příjmu musí být mezi 1. 1. 2020 a dneškem.',
     INVALID_PRICE: 'Cenu uveďte spolu s měnou.',
+    COST_WRITE_REQUIRED: 'Ceny zadává finance (oprávnění k zápisu nákupních cen).',
     INVALID_ITEM: 'Neplatná položka.',
     LOT_NOT_TRACKED: 'U této položky se šarže nesleduje.',
     CORRECTION_BELOW_ZERO: 'Oprava by snížila položku příjmu pod nulu.',

@@ -14,6 +14,7 @@ import { buttonClass, Card } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
+import { currentUser, hasPermission } from '@/lib/session';
 import { formatMm } from '@/lib/format';
 
 const t = productionCs.templates;
@@ -30,6 +31,7 @@ export default async function LabelTemplatePage({
   const { id } = await params;
   if (!z.uuid().safeParse(id).success) notFound();
   const { saved } = await searchParams;
+  const canManage = hasPermission(await currentUser(), 'production:templates_manage');
   const [template, settings] = await Promise.all([
     apiGet(`admin/label-templates/${encodeURIComponent(id)}`, labelTemplateDetailSchema),
     apiGet('admin/label-designer/settings', labelDesignerSettingsSchema),
@@ -45,15 +47,19 @@ export default async function LabelTemplatePage({
         back={{ href: '/label-templates', label: t.back }}
         actions={
           <>
-            <TemplateArchiveButton templateId={template.id} archived={!!template.archivedAt} />
+            {canManage && (
+              <TemplateArchiveButton templateId={template.id} archived={!!template.archivedAt} />
+            )}
             {!template.archivedAt && (
               <>
-                <Link
-                  href={`/label-templates/${template.id}/new-version`}
-                  className={buttonClass.secondary}
-                >
-                  {t.edit}
-                </Link>
+                {canManage && (
+                  <Link
+                    href={`/label-templates/${template.id}/new-version`}
+                    className={buttonClass.secondary}
+                  >
+                    {t.edit}
+                  </Link>
+                )}
                 <Link
                   href={`/bottles/new?version=${latest!.versionId}`}
                   className={buttonClass.primary}

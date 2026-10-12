@@ -35,12 +35,20 @@ export async function redirectForAuth(status: number, code: string | undefined):
     redirect(code === 'SESSION_EXPIRED' ? `/session-expired?next=${next}` : `/login?next=${next}`);
   }
   if (code === 'ACCOUNT_INACTIVE') redirect('/account-inactive');
-  if (code === 'SITE_REQUIRED' || code === 'SITE_WITHOUT_WAREHOUSE') {
+  if (
+    code === 'SITE_REQUIRED' ||
+    code === 'SITE_WITHOUT_WAREHOUSE' ||
+    code === 'SITE_WITHOUT_PRODUCTION'
+  ) {
     // Choose (another) site, then come back.
     const next = encodeURIComponent(await currentPath());
-    redirect(
-      `/select-site?next=${next}${code === 'SITE_WITHOUT_WAREHOUSE' ? '&reason=no-warehouse' : ''}`,
-    );
+    const reason =
+      code === 'SITE_WITHOUT_WAREHOUSE'
+        ? '&reason=no-warehouse'
+        : code === 'SITE_WITHOUT_PRODUCTION'
+          ? '&reason=no-production'
+          : '';
+    redirect(`/select-site?next=${next}${reason}`);
   }
   redirect('/forbidden');
 }
@@ -77,7 +85,9 @@ export async function apiGet<T extends z.ZodType>(
       .clone()
       .json()
       .catch(() => ({}))) as { code?: string };
-    if (body.code === 'SITE_WITHOUT_WAREHOUSE') return redirectForAuth(409, body.code);
+    if (body.code === 'SITE_WITHOUT_WAREHOUSE' || body.code === 'SITE_WITHOUT_PRODUCTION') {
+      return redirectForAuth(409, body.code);
+    }
   }
   if (res.status === 404) notFound();
   if (!res.ok) throw new ApiError(res.status, `API ${res.status} for ${path}`);

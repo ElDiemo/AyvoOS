@@ -6,6 +6,7 @@ import { buttonClass, Card, EmptyState } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
+import { currentUser, hasPermission } from '@/lib/session';
 import { formatMm } from '@/lib/format';
 
 const t = productionCs.templates;
@@ -13,7 +14,12 @@ const t = productionCs.templates;
 export const dynamic = 'force-dynamic';
 
 export default async function LabelTemplatesPage() {
-  const templates = await apiGet('admin/label-templates', z.array(labelTemplateSummarySchema));
+  const [templates, me] = await Promise.all([
+    apiGet('admin/label-templates', z.array(labelTemplateSummarySchema)),
+    currentUser(),
+  ]);
+  // Templates are company-wide brand data: changed only with the global permission.
+  const canManage = hasPermission(me, 'production:templates_manage');
   return (
     <>
       <ProductionHeader
@@ -29,9 +35,11 @@ export default async function LabelTemplatesPage() {
             >
               {t.qrSheet}
             </a>
-            <Link href="/label-templates/new" className={buttonClass.primary}>
-              {t.create}
-            </Link>
+            {canManage && (
+              <Link href="/label-templates/new" className={buttonClass.primary}>
+                {t.create}
+              </Link>
+            )}
           </>
         }
       />
