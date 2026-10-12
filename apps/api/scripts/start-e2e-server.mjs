@@ -39,6 +39,10 @@ const testEnv = {
   AUTH_PROVIDER: 'test',
   DATABASE_URL: e2eUrl,
   APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
+  // The browser tests sign in many times from one address.
+  AUTH_RATE_LIMIT_LOGIN_MAX: '100000',
+  AUTH_RATE_LIMIT_CALLBACK_MAX: '100000',
+  AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: '100000',
 };
 execFileSync(
   process.execPath,

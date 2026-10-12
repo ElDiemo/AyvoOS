@@ -6,6 +6,7 @@ import { AccessGuard } from './access.guard.js';
 import { AccessService } from './access.service.js';
 import { AuditService } from './audit.service.js';
 import { AuthController } from './auth.controller.js';
+import { AuthRateLimitService } from './auth-rate-limit.service.js';
 import { AuthService } from './auth.service.js';
 import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider.js';
 import { PrincipalResolver } from './principal-resolver.js';
@@ -29,6 +30,7 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
     SessionsService,
     PrincipalResolver,
     AuthService,
+    AuthRateLimitService,
     UsersService,
     {
       provide: IDENTITY_PROVIDER,

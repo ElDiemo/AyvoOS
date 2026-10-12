@@ -67,6 +67,8 @@ export interface TestApp {
   renderer: ControllableRenderer;
   storage: ControllableStorage;
   env: Env;
+  /** The real Redis connection when created with `redis: 'real'`. */
+  redis: RedisService;
   close(): Promise<void>;
 }
 
@@ -121,7 +123,7 @@ export const hasDatabase = databaseUrl !== null;
 export async function createTestApp(
   rawEnv: Partial<Record<string, string>> = {},
   processEnv: Partial<Env> = {},
-  options: { auth?: 'superuser' | 'real' } = {},
+  options: { auth?: 'superuser' | 'real'; redis?: 'stub' | 'real' } = {},
 ): Promise<TestApp> {
   if (!databaseUrl) throw new Error('No test database');
   const storageDir = await mkdtemp(join(tmpdir(), 'ayvo-files-'));
@@ -129,7 +131,7 @@ export async function createTestApp(
     ...loadEnv({
       APP_ENV: 'test',
       DATABASE_URL: databaseUrl,
-      REDIS_URL: 'redis://localhost:6379',
+      REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6379',
       PUBLIC_QR_BASE_URL: TEST_QR_BASE_URL,
       APP_PUBLIC_ORIGIN: TEST_APP_ORIGIN,
       // Obviously fake: lets tests start a "development"/"production" process (WorkOS is
@@ -139,6 +141,11 @@ export async function createTestApp(
       WORKOS_JWT_ISSUER: 'https://auth.workos.example',
       FILE_STORAGE_DIR: storageDir,
       LABEL_ARTWORK_MAX_BYTES: String(512 * 1024),
+      // Sign-in limits are exercised by their own test with small values; everywhere else the
+      // many test sign-ins from 127.0.0.1 must not trip them.
+      AUTH_RATE_LIMIT_LOGIN_MAX: '100000',
+      AUTH_RATE_LIMIT_CALLBACK_MAX: '100000',
+      AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: '100000',
       ...rawEnv,
     }),
     ...processEnv,
@@ -148,13 +155,17 @@ export async function createTestApp(
   let builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(ENV)
     .useValue(env)
-    .overrideProvider(RedisService)
-    .useValue({ ping: () => Promise.resolve('PONG') })
     .overrideProvider(LabelPdfRenderer)
     .useValue(renderer)
     // Local storage directly: the real factory refuses to run with APP_ENV=production.
     .overrideProvider(FILE_STORAGE)
     .useValue(storage);
+  if ((options.redis ?? 'stub') === 'stub') {
+    // No Redis client: the sign-in rate limiter fails open (its own tests use the real one).
+    builder = builder
+      .overrideProvider(RedisService)
+      .useValue({ ping: () => Promise.resolve('PONG') });
+  }
   if ((options.auth ?? 'superuser') === 'superuser') {
     builder = builder.overrideProvider(PrincipalResolver).useFactory({
       factory: (prisma: PrismaService) => new SuperuserResolver(prisma),
@@ -170,6 +181,7 @@ export async function createTestApp(
     renderer,
     storage,
     env,
+    redis: app.get(RedisService),
     close: async () => {
       await app.close();
       await rm(storageDir, { recursive: true, force: true });

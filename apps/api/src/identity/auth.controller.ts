@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ENV, type Env } from '../config/env.js';
 import { Authenticated, Public } from './access.decorators.js';
 import { CurrentPrincipal } from './access.guard.js';
+import { AuthRateLimitService, type RateDecision } from './auth-rate-limit.service.js';
 import { AuthService } from './auth.service.js';
 import {
   clearCookie,
@@ -35,6 +36,38 @@ function redirect(res: ServerResponse, location: string, cookies: string[] = [])
 }
 
 /**
+ * 429 for a rate-limited sign-in route: a short Czech page for a browser navigation, a stable JSON
+ * error otherwise. Nothing about the limit's configuration or the client is revealed.
+ */
+function tooManyRequests(req: IncomingMessage, res: ServerResponse, decision: RateDecision): void {
+  res.statusCode = 429;
+  res.setHeader('Retry-After', String(decision.retryAfterSeconds));
+  res.setHeader('Cache-Control', 'no-store');
+  if ((req.headers.accept ?? '').includes('text/html')) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    res.end(
+      '<!doctype html><html lang="cs"><meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<title>Příliš mnoho pokusů – AYVO OS</title>' +
+        '<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">' +
+        '<h1>Příliš mnoho pokusů o přihlášení</h1>' +
+        '<p>Z tohoto připojení přišlo v krátké době příliš mnoho pokusů. Zkuste to prosím za chvíli znovu.</p>' +
+        '<p><a href="/login">Zpět na přihlášení</a></p></body></html>',
+    );
+    return;
+  }
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(
+    JSON.stringify({
+      statusCode: 429,
+      code: 'RATE_LIMITED',
+      message: 'Too many sign-in attempts. Try again later.',
+    }),
+  );
+}
+
+/**
  * Sign-in, sign-out and the current user (ADR 0022). The browser reaches these routes
  * same-origin under /api/auth; the identity provider redirects back to /api/auth/callback.
  */
@@ -42,6 +75,7 @@ function redirect(res: ServerResponse, location: string, cookies: string[] = [])
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
+    private readonly limits: AuthRateLimitService,
     @Inject(IDENTITY_PROVIDER) private readonly provider: IdentityProvider,
     @Inject(ENV) private readonly env: Env,
   ) {}
@@ -51,8 +85,11 @@ export class AuthController {
   async login(
     @Query('next') next: unknown,
     @Query('login_hint') loginHint: unknown,
+    @Req() req: IncomingMessage,
     @Res() res: ServerResponse,
   ): Promise<void> {
+    const decision = await this.limits.hit('login', this.limits.clientIp(req));
+    if (!decision.allowed) return tooManyRequests(req, res, decision);
     const attempt = await this.auth.startLogin(
       next,
       typeof loginHint === 'string' ? loginHint : undefined,
@@ -70,6 +107,13 @@ export class AuthController {
     @Req() req: IncomingMessage,
     @Res() res: ServerResponse,
   ): Promise<void> {
+    // Every callback counts; failed ones count separately and block sooner. The limit is checked
+    // before the one-time state is touched, so it never weakens the state/PKCE validation.
+    const ip = this.limits.clientIp(req);
+    const failures = await this.limits.check('callback_failure', ip);
+    if (!failures.allowed) return tooManyRequests(req, res, failures);
+    const decision = await this.limits.hit('callback', ip);
+    if (!decision.allowed) return tooManyRequests(req, res, decision);
     const outcome = await this.auth.completeLogin({
       code,
       state,
@@ -83,6 +127,7 @@ export class AuthController {
       ]);
       return;
     }
+    await this.limits.hit('callback_failure', ip);
     const target =
       outcome.reason === 'ACCOUNT_INACTIVE'
         ? '/account-inactive'

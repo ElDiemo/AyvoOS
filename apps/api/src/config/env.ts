@@ -67,6 +67,33 @@ export const envSchema = z
       (value) => (value === '' ? undefined : value),
       z.url({ protocol: /^https$/ }).optional(),
     ),
+    // Rate limiting of the sign-in routes (Redis, per client IP, fixed window; doc 021 §5b).
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(86_400).default(600),
+    AUTH_RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().min(1).max(100_000).default(30),
+    AUTH_RATE_LIMIT_CALLBACK_MAX: z.coerce.number().int().min(1).max(100_000).default(30),
+    AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: z.coerce.number().int().min(1).max(100_000).default(10),
+    // Proxies (IPs or CIDRs, comma-separated) whose X-Forwarded-For names the client. Empty: the
+    // socket address is the client. DEV: the Docker networks Caddy reaches the API from.
+    TRUSTED_PROXY_CIDRS: z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean),
+      )
+      .pipe(
+        z.array(
+          z
+            .string()
+            .regex(
+              /^(?:\d{1,3}(?:\.\d{1,3}){3}(?:\/(?:[0-9]|[12]\d|3[0-2]))?|[0-9a-fA-F:]+(?:\/(?:\d|[1-9]\d|1[01]\d|12[0-8]))?)$/,
+              'an IPv4/IPv6 address or CIDR',
+            ),
+        ),
+      ),
+
     // Application session lifetime: idle timeout and absolute maximum.
     SESSION_IDLE_MINUTES: z.coerce
       .number()
