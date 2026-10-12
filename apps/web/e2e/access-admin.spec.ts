@@ -75,6 +75,8 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
   await page.getByLabel('Důvod (povinný)').fill('new receiving colleague');
   await page.getByRole('button', { name: 'Založit uživatele' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Příjemce E2E');
+  // AYVO sent the invitation through the identity provider.
+  await expect(page.getByTestId('invitation-state')).toHaveText('Čeká na přijetí');
   const userUrl = page.url();
   const access = page.getByTestId('effective-access');
   await expect(access).toContainText('Zobrazit sklad');
@@ -109,6 +111,10 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
   await expect(colleaguePage.locator('body')).not.toContainText('Testovací sklad DE');
   await colleaguePage.goto('/bottles');
   await expect(colleaguePage).toHaveURL(/\/forbidden$/);
+
+  // The registration through the invitation linked the account.
+  await page.goto(userUrl);
+  await expect(page.getByTestId('invitation-state')).toHaveText('Přijata');
 
   // Narrowing the role removes access on the colleague's very next request.
   await page.goto(roleUrl);
@@ -161,5 +167,39 @@ test('administration and site pages fit phones and desktops without sideways scr
       await noOverflow(page, `${path} at ${width}px`);
     }
   }
+  await admin.close();
+});
+
+test('a revoked invitation cannot be used to sign in', async ({ browser }) => {
+  const admin = await browser.newContext({ storageState: ADMIN });
+  const page = await admin.newPage();
+  await page.goto('/admin/users/new');
+  await page.getByLabel('E-mail').fill('e2e-revoked@ayvo.test');
+  await page.getByLabel('Jméno').fill('Zrušená pozvánka');
+  await page.getByLabel('Skladník').check();
+  await page.getByLabel(/Přerov 1/).check();
+  await page.getByLabel('Důvod (povinný)').fill('temporary helper');
+  await page.getByRole('button', { name: 'Založit uživatele' }).click();
+  await expect(page.getByTestId('invitation-state')).toHaveText('Čeká na přijetí');
+  const actions = page.getByTestId('user-actions');
+  await actions.getByLabel('Důvod (povinný)').fill('helper not needed after all');
+  await actions.getByRole('button', { name: 'Zrušit pozvánku' }).click();
+  await expect(page.getByTestId('invitation-state')).toHaveText('Zrušena');
+  await expect(page.getByTestId('user-audit')).toContainText('Zrušení pozvánky');
+  const detailUrl = page.url();
+
+  const person = await browser.newContext();
+  const personPage = await person.newPage();
+  await signInWithForm(personPage, 'e2e-revoked@ayvo.test');
+  await expect(personPage).toHaveURL(/\/account-inactive\?reason=no-access$/);
+
+  await page.goto('/admin/users');
+  await expect(page.getByTestId('users')).toContainText('Pozvánka: Zrušena');
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(detailUrl);
+    await noOverflow(page, `user detail at ${width}px`);
+  }
+  await person.close();
   await admin.close();
 });
