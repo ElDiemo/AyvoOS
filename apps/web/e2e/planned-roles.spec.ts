@@ -38,18 +38,19 @@ test('user creation shows planned roles disabled, labelled "Připravuje se"', as
   }
 });
 
-test('user editing offers planned roles only as disabled options', async ({ page }) => {
+test('the access editor shows planned roles only disabled, labelled "Připravuje se"', async ({
+  page,
+}) => {
   await page.goto('/admin/users');
   await page.locator('a[href^="/admin/users/"]:not([href="/admin/users/new"])').first().click();
   await page.waitForURL(/\/admin\/users\/[0-9a-f-]{36}$/);
-  const actions = page.getByTestId('user-actions');
-  const select = actions.getByRole('combobox', { name: 'Role' });
+  const planned = page.getByTestId('access-editor').getByTestId('planned-roles');
   for (const [code, name] of PLANNED) {
-    const option = select.locator(`option[value="${code}"]`);
-    await expect(option).toHaveText(`${name} (Připravuje se)`);
-    await expect(option).toBeDisabled();
+    const row = planned.locator(`[data-planned-role="${code}"]`);
+    await expect(row).toContainText(name);
+    await expect(row).toContainText('Připravuje se');
+    await expect(row.getByRole('checkbox')).toBeDisabled();
   }
-  await expect(actions.getByTestId('planned-roles-note')).toContainText('Připravuje se');
 });
 
 test('role pages mark the planned roles as templates that are not assignable', async ({ page }) => {

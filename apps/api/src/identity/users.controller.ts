@@ -5,6 +5,7 @@ import {
   roleChangeRequestSchema,
   siteScopeRequestSchema,
   statusChangeRequestSchema,
+  updateUserAccessRequestSchema,
   warehouseScopeRequestSchema,
   type AdminUserDetail,
   type AdminUserSummary,
@@ -12,6 +13,7 @@ import {
   type RoleChangeRequest,
   type SiteScopeRequest,
   type StatusChangeRequest,
+  type UpdateUserAccessRequest,
   type WarehouseScopeRequest,
 } from '@ayvo/types';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
@@ -62,6 +64,18 @@ export class UsersController {
   @RequirePermission('identity:users_read')
   get(@Param('id', ID) id: string): Promise<AdminUserDetail> {
     return this.users.get(id);
+  }
+
+  /** The user's complete new access in one atomic, audited, idempotent change (doc 021 §7). */
+  @Post('users/:id/access')
+  @HttpCode(200)
+  @RequirePermission('identity:users_manage')
+  updateAccess(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ID) id: string,
+    @Body(new ZodValidationPipe(updateUserAccessRequestSchema)) body: UpdateUserAccessRequest,
+  ): Promise<AdminUserDetail> {
+    return this.users.updateAccess(actor(principal), id, body);
   }
 
   @Post('users/:id/roles/grant')

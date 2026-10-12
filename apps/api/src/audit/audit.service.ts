@@ -16,6 +16,7 @@ export type AuditType =
   | 'USER_REACTIVATED'
   | 'ROLE_GRANTED'
   | 'ROLE_REVOKED'
+  | 'USER_ACCESS_UPDATED'
   | 'SCOPE_GRANTED'
   | 'SCOPE_REVOKED'
   | 'ROLE_CREATED'

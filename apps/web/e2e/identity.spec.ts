@@ -83,11 +83,12 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await expect(page.getByTestId('user-roles')).toHaveText('Skladník');
   await expect(page.getByTestId('user-audit')).toContainText('Založení uživatele');
 
-  // Grant a role, with a reason.
-  const actions = page.getByTestId('user-actions');
-  await actions.getByLabel('Důvod (povinný)').fill('helps in production too');
-  await actions.getByRole('combobox', { name: 'Role' }).selectOption({ label: 'Operátor výroby' });
-  await actions.getByRole('button', { name: 'Přidat' }).first().click();
+  // Grant a role in the access editor, with a reason.
+  const editor = page.getByTestId('access-editor');
+  const production = editor.getByRole('checkbox', { name: /^Operátor výroby/ });
+  await production.check();
+  await editor.getByLabel('Důvod změny (povinný)').fill('helps in production too');
+  await editor.getByRole('button', { name: 'Uložit změny' }).click();
   await expect(page.getByTestId('user-roles')).toHaveText('Operátor výroby, Skladník');
   await expect(page.getByTestId('user-audit')).toContainText('helps in production too');
 
@@ -103,8 +104,9 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await expect(colleaguePage.getByRole('heading', { level: 1 })).toHaveText('Nemáte oprávnění');
 
   // Revoking a role takes effect on the next request (no new sign-in).
-  await actions.getByLabel('Důvod (povinný)').fill('back to the warehouse only');
-  await actions.getByRole('button', { name: 'Odebrat: Operátor výroby' }).click();
+  await production.uncheck();
+  await editor.getByLabel('Důvod změny (povinný)').fill('back to the warehouse only');
+  await editor.getByRole('button', { name: 'Uložit změny' }).click();
   await expect(page.getByTestId('user-roles')).toHaveText('Skladník');
   await colleaguePage.goto('/bottles');
   await expect(colleaguePage).toHaveURL(/\/forbidden$/);
@@ -112,7 +114,8 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await expect(colleagueNav.getByRole('link')).toHaveText(['Přehled', 'Sklad']);
 
   // Deactivation ends access at once.
-  await actions.getByLabel('Důvod (povinný)').fill('left the company');
+  const actions = page.getByTestId('user-actions');
+  await actions.getByLabel('Důvod akce s účtem (povinný)').fill('left the company');
   await actions.getByRole('button', { name: 'Deaktivovat účet' }).click();
   await expect(page.getByTestId('user-status')).toContainText('Deaktivovaný');
   await colleaguePage.goto('/warehouse');
