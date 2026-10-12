@@ -68,20 +68,15 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await page.goto('/');
   // The administrator sees the whole system — every module, through ordinary permissions.
   const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
-  await expect(nav.getByRole('link')).toHaveText([
-    'Přehled',
-    'Sklad',
-    'Výroba',
-    'Uživatelé a role',
-  ]);
+  await expect(nav.getByRole('link')).toHaveText(['Přehled', 'Sklad', 'Výroba', 'Správa systému']);
   await expect(page.getByText('nemá přístup k žádnému provoznímu modulu')).toHaveCount(0);
 
-  await nav.getByRole('link', { name: 'Uživatelé a role' }).click();
+  await nav.getByRole('link', { name: 'Správa systému' }).click();
   await page.getByRole('link', { name: 'Nový uživatel' }).click();
   await page.getByLabel('E-mail').fill('e2e-warehouse@ayvo.test');
   await page.getByLabel('Jméno').fill('Skladník Test');
   await page.getByLabel('Skladník').check();
-  await page.getByLabel(/Hlavní sklad/).check();
+  await page.getByLabel(/Výchozí provozovna/).check();
   await page.getByLabel('Důvod (povinný)').fill('new warehouse colleague');
   await page.getByRole('button', { name: 'Založit uživatele' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Skladník Test');
@@ -145,7 +140,8 @@ test('SALES sees stock availability for planning and nothing operational', async
           email: 'e2e-sales@ayvo.test',
           displayName: 'Obchod Test',
           roles: ['SALES'],
-          warehouseCodes: ['MAIN'],
+          siteIds: ['01990000-0000-7000-8000-000000000001'],
+          warehouseCodes: [],
           reason: 'sales planning',
         },
       })

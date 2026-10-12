@@ -31,7 +31,7 @@ test('global navigation: overview and the two operational modules only', async (
   // The real signed-in user and sign-out; no administration without the permission.
   await expect(page.getByTestId('current-user')).toHaveText('E2E Operátor');
   await expect(page.getByRole('button', { name: 'Odhlásit' }).first()).toBeVisible();
-  await expect(main.getByRole('link', { name: 'Uživatelé a role' })).toHaveCount(0);
+  await expect(main.getByRole('link', { name: 'Správa systému' })).toHaveCount(0);
 });
 
 test('Warehouse and Production are separate; label application belongs to Production', async ({
