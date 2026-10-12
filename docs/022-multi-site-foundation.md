@@ -79,8 +79,10 @@ by the server.
 
 ## 5. Migration and preserved data
 
-Migrations `20261012120000_site_scope_type` (enum value only; PostgreSQL needs it committed first)
-and `20261012120100_sites_and_custom_roles`:
+Migrations `20261012120000_site_scope_type` (enum value only; PostgreSQL needs it committed first),
+`20261012120100_sites_and_custom_roles` and `20261012150000_site_owned_production_and_costs`
+(series, bottles, print jobs and supplier documents → `SITE-1` by the same column-default
+technique):
 
 - create `sites` and **one deterministic initial site** — id `01990000-0000-7000-8000-000000000001`,
   code **`SITE-1`**, name "Výchozí provozovna", `CZ`, `Europe/Prague`, `cs-CZ`, `CZK`, capabilities
@@ -92,29 +94,35 @@ and `20261012120100_sites_and_custom_roles`:
 - create no stock movement, balance, receipt, lot or ledger event;
 - give every user who already had a warehouse scope the matching site scope (audited as
   "Migration: site access derived from existing warehouse access").
+- assume at most one pre-existing warehouse (true for every AYVO database: only `MAIN` was ever
+  created); with more, the migration stops at the one-default-per-site index without changing
+  anything (security review P3-6).
 
 **Evidence (2026-10-12, local DEV PostgreSQL 18):**
 
-| Check                                        | Result                                                                                                                                                                                                                                                      |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Clean installation                           | all 9 migrations applied to an empty database                                                                                                                                                                                                               |
-| Schema drift (`prisma migrate diff`)         | none (exit 0) — clean install and upgraded database                                                                                                                                                                                                         |
-| Upgrade from `main` (`19baf97`)              | a database filled by `main`'s own Playwright flows (2 suppliers, 3 documents, 2 receipts, 2 lots, 4 movements, 2 balances, 56 bottles, 58 bottle events, 4 series, 3 templates, 4 print jobs, 56 print items, 11 operation requests) upgraded without error |
-| Existing-data preservation                   | all 27 pre-existing tables: identical row counts and identical content hashes (ignoring only the added `site_id` / `is_site_default`)                                                                                                                       |
-| Site assignment                              | `MAIN` → `SITE-1` (default warehouse); 2 of 2 receipts → `SITE-1`; movements still 4                                                                                                                                                                        |
-| Scope upgrade (from this PR's previous head) | a user with a `MAIN` warehouse scope gained the `SITE-1` site scope and one audit event                                                                                                                                                                     |
+| Check                                                  | Result                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Clean installation                                     | all 9 migrations applied to an empty database                                                                                                                                                                                                               |
+| Schema drift (`prisma migrate diff`)                   | none (exit 0) — clean install and upgraded database                                                                                                                                                                                                         |
+| Upgrade from `main` (`19baf97`)                        | a database filled by `main`'s own Playwright flows (2 suppliers, 3 documents, 2 receipts, 2 lots, 4 movements, 2 balances, 56 bottles, 58 bottle events, 4 series, 3 templates, 4 print jobs, 56 print items, 11 operation requests) upgraded without error |
+| Existing-data preservation                             | all 27 pre-existing tables: identical row counts and identical content hashes (ignoring only the added `site_id` / `is_site_default`)                                                                                                                       |
+| Site assignment                                        | `MAIN` → `SITE-1` (default warehouse); 2 of 2 receipts → `SITE-1`; movements still 4                                                                                                                                                                        |
+| Production and purchasing ownership (`20261012150000`) | same database upgraded again: still 27 of 27 tables unchanged; 4 of 4 series, 56 of 56 bottles, 4 of 4 print jobs, 3 of 3 supplier documents → `SITE-1`; no price records created; no drift                                                                 |
+| Scope upgrade (from this PR's previous head)           | a user with a `MAIN` warehouse scope gained the `SITE-1` site scope and one audit event                                                                                                                                                                     |
 
 ## 6. Future site ownership (rules for the next milestones)
 
-| Entity (future)                  | Site rule                                                                         |
-| -------------------------------- | --------------------------------------------------------------------------------- |
-| inventory locations, balances    | implemented: location → site; balances per location                               |
-| goods receipts, stock movements  | implemented: receipt → site; movements per location                               |
-| production orders, work sessions | belong to the site that produces (doc 020)                                        |
-| bottles                          | identity is global; their _current operational location_ is per site when tracked |
-| crates and crate cycles          | a crate's home site; a cycle belongs to the site that runs it (ADR 0021)          |
-| returns, inspections, washing    | the receiving site (normally the hotel's fulfilment site)                         |
-| dispatches and carrier requests  | the origin site, kept as a snapshot on the dispatch                               |
+| Entity (future)                      | Site rule                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------------- |
+| inventory locations, balances        | implemented: location → site; balances per location                               |
+| goods receipts, stock movements      | implemented: receipt → site; movements per location                               |
+| production orders, work sessions     | belong to the site that produces (doc 020)                                        |
+| creation series, bottles, print jobs | implemented: the producing site (bottles and jobs via their series, composite FK) |
+| label applications                   | implemented: the bottle's site = the consuming warehouse's site (trigger)         |
+| supplier documents, receipt prices   | implemented: the receiving site                                                   |
+| crates and crate cycles              | a crate's home site; a cycle belongs to the site that runs it (ADR 0021)          |
+| returns, inspections, washing        | the receiving site (normally the hotel's fulfilment site)                         |
+| dispatches and carrier requests      | the origin site, kept as a snapshot on the dispatch                               |
 
 Human codes stay **globally unambiguous**: they come from global sequences in one database
 (`GR-000123` exists once across all sites). If a site-aware prefix is introduced, it must be stable
@@ -153,8 +161,9 @@ Human codes stay **globally unambiguous**: they come from global sequences in on
 - Warehouses are created by migration; a site created in the UI has no warehouse until then
   (`409 SITE_WITHOUT_WAREHOUSE`, the UI offers another site).
 - One active site per session: browser tabs of one session share it.
-- Production pages (bottles, series, templates, print jobs) are global in v0.1 — bottle identities
-  are company-wide; label application and its recent list are per site because they consume a
-  site's stock. Production orders bring site-bound production (doc 020).
+- Label templates and artwork are company-wide brand data (changed only with
+  `production:templates_manage`); everything operational in production is per site.
+- No bottle transfer between sites exists in v0.1; a future transfer must be an explicit, audited
+  business operation with its own records (the site of a bottle never changes in place).
 - Hotel organization/site scopes (`HOTEL_ORGANIZATION`, `HOTEL_SITE`) remain reserved for the hotel
   portal.

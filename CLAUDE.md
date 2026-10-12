@@ -69,7 +69,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   route. New permissions are added to the catalogue by migration (and to `packages/types`) and
   granted to `ADMIN` explicitly in the same migration (ADMIN = whole system, never a code bypass;
   the role-matrix test fails otherwise). Purchase prices and supplier documents need
-  `procurement:cost_read` / `procurement:documents_read` and are omitted server-side otherwise.
+  `procurement:cost_read` / `procurement:documents_read` and are omitted server-side otherwise;
+  recording prices needs `procurement:cost_write` (refused otherwise, also on replay). Production
+  series, bottles, print jobs and supplier documents belong to a site (`@OperationalSite()`);
+  label templates are company-wide (`production:templates_manage`, ADMIN by default). The sign-in
+  rate limiter fails closed (503) without Redis.
   WorkOS tokens: exact `WORKOS_JWT_ISSUER` (required), `client_id`, `sid`, RS256 only (doc 021 §5a).
   The permission catalogue and system roles change only inside a migration that switches
   `ayvo.catalogue_migration` on (and off at the end); custom roles never hold security

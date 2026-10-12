@@ -78,37 +78,59 @@ migration nobody can sign in until the administrator is bootstrapped (section 8)
 | `inventory:correct`            | site + wh. |   ✓   |       |   ✓    |         |          |       |         |       |
 | `inventory:items_manage`       | site + wh. |   ✓   |       |   ✓    |         |          |       |         |       |
 | `procurement:suppliers_manage` | site + wh. |   ✓   |       |   ✓    |         |          |       |         |       |
-| `procurement:cost_read`        |   global   |   ✓   |       |        |         |          |       |    ✓    |       |
-| `procurement:documents_read`   |   global   |   ✓   |       |   ✓    |         |          |       |    ✓    |       |
-| `production:read`              |   global   |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
-| `production:bottles_create`    |   global   |   ✓   |       |        |         |    ✓     |       |         |       |
-| `production:labels_print`      |   global   |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
-| `production:templates_manage`  |   global   |   ✓   |       |        |         |    ✓     |       |         |       |
+| `procurement:cost_read`        |    site    |   ✓   |       |        |         |          |       |    ✓    |       |
+| `procurement:cost_write`       |    site    |   ✓   |       |        |         |          |       |    ✓    |       |
+| `procurement:documents_read`   |    site    |   ✓   |       |   ✓    |         |          |       |    ✓    |       |
+| `production:read`              |  site (P)  |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
+| `production:bottles_create`    |  site (P)  |   ✓   |       |        |         |    ✓     |       |         |       |
+| `production:labels_print`      |  site (P)  |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
 | `production:label_apply`       | site + wh. |   ✓   |       |        |         |    ✓     |       |         |       |
+| `production:templates_manage`  |   global   |   ✓   |       |        |         |          |       |         |       |
 
 ⚿ security administration — only the ADMIN system role may hold it (database-enforced).
 **Where** — _site + wh._: the session's active site must be accessible (site scope, or global
-access) and have a warehouse the user may act on; _global_: not bound to a site in v0.1. A user may
-hold several roles (system and custom); the permissions add up.
+access), run a warehouse (`WAREHOUSE` capability) and have a warehouse the user may act on;
+_site_: the active site must be accessible and the data is filtered by it; _(P)_: the site must
+have the `PRODUCTION` capability; _global_: not bound to a site. Writes at an inactive site are
+refused. A user may hold several roles (system and custom); the permissions add up.
 
 - **ADMIN sees and manages the whole system** — through ordinary `role_permissions` rows, never a
   code bypass; its global site access is the explicit permission `sites:all_access`, evaluated by
-  the authorization service. The guard, scope evaluation and the last-administrator protection
-  apply to ADMIN like to anyone. **Every permission a future migration adds must be reviewed and
-  granted to ADMIN explicitly** (and is not given to any custom role); `test/identity.e2e.test.ts`
-  compares the database with this table and fails otherwise.
-- **Purchase prices** (`unitPrice`, `currency`, `vatRate` of receipt lines) need
-  `procurement:cost_read`; **supplier documents** (the documents of a receipt, supplier document
-  lists and files) need `procurement:documents_read`. Without them the API **omits** the fields
-  from every receipt response (detail, create, link document, correction, idempotent replays) —
-  filtered on the server (`receiptForViewer`), not only hidden in the UI. Receipt lists carry no
-  prices. Uploading/linking a document and entering prices on a new receipt stay part of
-  `inventory:receive` (the response is filtered the same way).
+  the authorization service (it switches the active site like anyone). The guard, scope
+  evaluation and the last-administrator protection apply to ADMIN like to anyone. **Every
+  permission a future migration adds must be reviewed and granted to ADMIN explicitly** (and is not
+  given to any custom role); `test/identity.e2e.test.ts` compares the database with this table and
+  fails otherwise.
+- **Purchasing belongs to the receiving site.** Supplier master data is company-wide; supplier
+  documents, receipts, prices and purchasing history belong to the site that received the goods
+  and are read and changed only at that (active, authorized) site — another site's document,
+  receipt or price is "not found", also by id/code and through idempotent replays.
+- **Purchase prices** (`unitPrice`, `currency`, `vatRate`, `costUpdatedAt`) need
+  `procurement:cost_read`; **supplier documents** need `procurement:documents_read`. Without them
+  the API **omits** the fields from every receipt response (detail, create, link document,
+  correction, price completion, idempotent replays) — filtered on the server
+  (`receiptForViewer`), never only hidden in the UI. Receipt lists carry no prices.
+- **Recording prices needs `procurement:cost_write`** (ADMIN, FINANCE). Warehouse staff record
+  quantities, lots and the delivery documents; a receipt request with any price, currency or VAT
+  value from a caller without `cost_write` is **refused** (`403 COST_WRITE_REQUIRED`) — on create,
+  retry and replay; a hidden form field authorizes nothing. FINANCE completes or corrects a line's
+  price later (`POST /goods-receipts/:code/lines/:lineNo/cost`): append-only
+  (`goods_receipt_line_costs`, the receipt line keeps what was received), reason required, audited
+  (`RECEIPT_COST_CORRECTED`, actor, reason, site, old and new values). Prices recorded with a
+  receipt are audited too (`RECEIPT_COSTS_RECORDED`). A custom role may combine receiving with
+  cost read/write — a deliberate ADMIN decision.
+- **Production belongs to the producing site.** Creation series, bottles, print jobs (open,
+  generate, PDF), the bottle's physical facts and label applications are listed, opened, printed
+  and changed only at their site; a bottle is labelled only at its own site
+  (`422 BOTTLE_OF_ANOTHER_SITE`, database trigger too); there is no implicit transfer. **Label
+  templates and artwork are company-wide brand data**: every production user reads them;
+  changing them needs `production:templates_manage`, which only ADMIN holds by default (a custom
+  role may grant it deliberately — the e2e operator gets one).
 - **SALES** reads `GET /api/admin/inventory/stock-summary` of its active site only: item (code,
   name, unit), available, reserved, low stock — no lots, suppliers, prices, documents, receipts,
   corrections, movements or write actions.
-- **FINANCE** reads stock and receipts (`inventory:read`) with prices and documents; no write
-  action.
+- **FINANCE** reads stock and receipts (`inventory:read`) with prices and documents of its sites
+  and records/corrects prices there; no stock operation.
 - `HOTEL_USER` has no permission in the internal application (the hotel portal is separate).
 - The standalone label application is supervisor-only until the production scan replaces it
   (doc 020). The Production Core permissions of doc 020 §12 are added by their own migrations.
@@ -175,9 +197,11 @@ Identity is taken **only** from the session cookie — never from headers such a
   right-most `X-Forwarded-For` address that is not a trusted proxy. Caddy replaces
   `X-Forwarded-For` with the real client, so a client cannot choose its address. DEV compose:
   `TRUSTED_PROXY_CIDRS=172.16.0.0/12,192.168.0.0/16` (Docker networks; the API publishes no port).
-- If Redis is unavailable the request is **allowed** and the failure logged (fail open): the
-  identity provider and the one-time state/PKCE still protect sign-in, and a cache outage must not
-  lock everyone out.
+- If Redis cannot give a reliable answer (down, timeout), **new sign-ins are refused** with `503`
+  (`AUTH_UNAVAILABLE`; a short Czech page for browsers, `Retry-After`) — rate limiting is never
+  silently switched off. Established AYVO sessions live in PostgreSQL and keep working. The
+  failure is logged with the bucket and error class only (no address, credential or token). The
+  Redis client fails fast (no offline queue, 2-second connect/command timeouts).
 - Public passport (`/q/<token>`, `/api/public/*`) rate limiting remains a production blocker
   (doc 016 item 7).
 
@@ -189,90 +213,93 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 `403 ACCOUNT_INACTIVE` for a deactivated user, `401 SESSION_EXPIRED` after expiry,
 `403 CSRF_REJECTED` for a cross-site state-changing request, `429 RATE_LIMITED` on sign-in routes.
 
-| Method | Route                                                    | Access                         | Where                       |
-| ------ | -------------------------------------------------------- | ------------------------------ | --------------------------- |
-| GET    | `/api/auth/callback`                                     | **public**                     | —                           |
-| GET    | `/api/auth/login`                                        | **public**                     | —                           |
-| GET    | `/api/auth/test-provider/authorize`                      | **public**                     | —                           |
-| GET    | `/api/health`                                            | **public**                     | —                           |
-| GET    | `/api/public/bottles/:token`                             | **public**                     | —                           |
-| POST   | `/api/auth/active-site`                                  | signed-in                      | —                           |
-| POST   | `/api/auth/logout`                                       | signed-in                      | —                           |
-| GET    | `/api/auth/me`                                           | signed-in                      | —                           |
-| GET    | `/api/admin/bottle-batches`                              | `production:read`              | global                      |
-| GET    | `/api/admin/bottle-batches/:code`                        | `production:read`              | global                      |
-| GET    | `/api/admin/bottle-batches/:code/print-jobs`             | `production:read`              | global                      |
-| POST   | `/api/admin/bottle-batches/:code/print-jobs`             | `production:bottles_create`    | global                      |
-| GET    | `/api/admin/bottle-creation-history`                     | `production:read`              | global                      |
-| POST   | `/api/admin/bottle-registrations`                        | `production:bottles_create`    | global                      |
-| GET    | `/api/admin/bottles`                                     | `production:read`              | global                      |
-| GET    | `/api/admin/bottles/:code`                               | `production:read`              | global                      |
-| GET    | `/api/admin/bottles/:code/physical`                      | `production:read`              | global                      |
-| GET    | `/api/admin/goods-receipts`                              | `inventory:read`               | active site + its warehouse |
-| POST   | `/api/admin/goods-receipts`                              | `inventory:receive`            | active site + its warehouse |
-| GET    | `/api/admin/goods-receipts/:code`                        | `inventory:read`               | active site + its warehouse |
-| POST   | `/api/admin/goods-receipts/:code/corrections`            | `inventory:correct`            | active site + its warehouse |
-| POST   | `/api/admin/goods-receipts/:code/documents`              | `inventory:receive`            | active site + its warehouse |
-| GET    | `/api/admin/identity/permissions`                        | `identity:users_read`          | global                      |
-| GET    | `/api/admin/identity/roles`                              | `identity:users_read`          | global                      |
-| POST   | `/api/admin/identity/roles`                              | `identity:roles_manage`        | global                      |
-| GET    | `/api/admin/identity/roles/:id`                          | `identity:users_read`          | global                      |
-| POST   | `/api/admin/identity/roles/:id`                          | `identity:roles_manage`        | global                      |
-| POST   | `/api/admin/identity/roles/:id/deactivate`               | `identity:roles_manage`        | global                      |
-| POST   | `/api/admin/identity/roles/:id/reactivate`               | `identity:roles_manage`        | global                      |
-| GET    | `/api/admin/identity/sites`                              | `identity:users_read`          | global                      |
-| GET    | `/api/admin/identity/users`                              | `identity:users_read`          | global                      |
-| POST   | `/api/admin/identity/users`                              | `identity:users_manage`        | global                      |
-| GET    | `/api/admin/identity/users/:id`                          | `identity:users_read`          | global                      |
-| POST   | `/api/admin/identity/users/:id/deactivate`               | `identity:users_manage`        | global                      |
-| POST   | `/api/admin/identity/users/:id/reactivate`               | `identity:users_manage`        | global                      |
-| POST   | `/api/admin/identity/users/:id/roles/grant`              | `identity:users_manage`        | global                      |
-| POST   | `/api/admin/identity/users/:id/roles/revoke`             | `identity:users_manage`        | global                      |
-| POST   | `/api/admin/identity/users/:id/sites/grant`              | `identity:users_manage`        | global                      |
-| POST   | `/api/admin/identity/users/:id/sites/revoke`             | `identity:users_manage`        | global                      |
-| POST   | `/api/admin/identity/users/:id/warehouses/grant`         | `identity:users_manage`        | global                      |
-| POST   | `/api/admin/identity/users/:id/warehouses/revoke`        | `identity:users_manage`        | global                      |
-| GET    | `/api/admin/identity/warehouses`                         | `identity:users_read`          | global                      |
-| GET    | `/api/admin/inventory/items`                             | `inventory:read`               | active site + its warehouse |
-| POST   | `/api/admin/inventory/items/:code/settings`              | `inventory:items_manage`       | active site + its warehouse |
-| GET    | `/api/admin/inventory/lots`                              | `inventory:read`               | active site + its warehouse |
-| GET    | `/api/admin/inventory/movements`                         | `inventory:read`               | active site + its warehouse |
-| GET    | `/api/admin/inventory/stock`                             | `inventory:read`               | active site + its warehouse |
-| GET    | `/api/admin/inventory/stock-summary`                     | `inventory:stock_summary`      | active site + its warehouse |
-| GET    | `/api/admin/label-applications`                          | `production:read`              | global                      |
-| POST   | `/api/admin/label-applications`                          | `production:label_apply`       | active site + its warehouse |
-| POST   | `/api/admin/label-artworks`                              | `production:templates_manage`  | global                      |
-| GET    | `/api/admin/label-artworks/:id/content`                  | `production:read`              | global                      |
-| GET    | `/api/admin/label-calibration/qr-validation-sheet.pdf`   | `production:read`              | global                      |
-| GET    | `/api/admin/label-designer/settings`                     | `production:read`              | global                      |
-| GET    | `/api/admin/label-print-jobs/:code`                      | `production:read`              | global                      |
-| POST   | `/api/admin/label-print-jobs/:code/generate`             | `production:labels_print`      | global                      |
-| GET    | `/api/admin/label-print-jobs/:code/pdf`                  | `production:read`              | global                      |
-| GET    | `/api/admin/label-template-versions/:id`                 | `production:read`              | global                      |
-| GET    | `/api/admin/label-template-versions/:id/calibration.pdf` | `production:read`              | global                      |
-| GET    | `/api/admin/label-templates`                             | `production:read`              | global                      |
-| POST   | `/api/admin/label-templates`                             | `production:templates_manage`  | global                      |
-| GET    | `/api/admin/label-templates/:id`                         | `production:read`              | global                      |
-| POST   | `/api/admin/label-templates/:id/archive`                 | `production:templates_manage`  | global                      |
-| POST   | `/api/admin/label-templates/:id/restore`                 | `production:templates_manage`  | global                      |
-| POST   | `/api/admin/label-templates/:id/versions`                | `production:templates_manage`  | global                      |
-| GET    | `/api/admin/sites`                                       | `sites:manage`                 | global                      |
-| POST   | `/api/admin/sites`                                       | `sites:manage`                 | global                      |
-| GET    | `/api/admin/sites/:id`                                   | `sites:manage`                 | global                      |
-| POST   | `/api/admin/sites/:id`                                   | `sites:manage`                 | global                      |
-| POST   | `/api/admin/sites/:id/deactivate`                        | `sites:manage`                 | global                      |
-| POST   | `/api/admin/sites/:id/reactivate`                        | `sites:manage`                 | global                      |
-| POST   | `/api/admin/supplier-documents`                          | `inventory:receive`            | active site + its warehouse |
-| GET    | `/api/admin/supplier-documents/:id/content`              | `procurement:documents_read`   | global                      |
-| GET    | `/api/admin/suppliers`                                   | `inventory:read`               | active site + its warehouse |
-| POST   | `/api/admin/suppliers`                                   | `procurement:suppliers_manage` | active site + its warehouse |
-| POST   | `/api/admin/suppliers/:id/archive`                       | `procurement:suppliers_manage` | active site + its warehouse |
-| GET    | `/api/admin/suppliers/:id/documents`                     | `procurement:documents_read`   | global                      |
+| Method | Route                                                    | Access                                      | Where                       |
+| ------ | -------------------------------------------------------- | ------------------------------------------- | --------------------------- |
+| GET    | `/api/auth/callback`                                     | **public**                                  | —                           |
+| GET    | `/api/auth/login`                                        | **public**                                  | —                           |
+| GET    | `/api/auth/test-provider/authorize`                      | **public**                                  | —                           |
+| GET    | `/api/health`                                            | **public**                                  | —                           |
+| GET    | `/api/public/bottles/:token`                             | **public**                                  | —                           |
+| POST   | `/api/auth/active-site`                                  | signed-in                                   | —                           |
+| POST   | `/api/auth/logout`                                       | signed-in                                   | —                           |
+| GET    | `/api/auth/me`                                           | signed-in                                   | —                           |
+| GET    | `/api/admin/bottle-batches`                              | `production:read`                           | active site                 |
+| GET    | `/api/admin/bottle-batches/:code`                        | `production:read`                           | active site                 |
+| GET    | `/api/admin/bottle-batches/:code/print-jobs`             | `production:read`                           | active site                 |
+| POST   | `/api/admin/bottle-batches/:code/print-jobs`             | `production:bottles_create`                 | active site                 |
+| GET    | `/api/admin/bottle-creation-history`                     | `production:read`                           | active site                 |
+| POST   | `/api/admin/bottle-registrations`                        | `production:bottles_create`                 | active site                 |
+| GET    | `/api/admin/bottles`                                     | `production:read`                           | active site                 |
+| GET    | `/api/admin/bottles/:code`                               | `production:read`                           | active site                 |
+| GET    | `/api/admin/bottles/:code/physical`                      | `production:read`                           | active site                 |
+| GET    | `/api/admin/goods-receipts`                              | `inventory:read`                            | active site + its warehouse |
+| POST   | `/api/admin/goods-receipts`                              | `inventory:receive`                         | active site + its warehouse |
+| GET    | `/api/admin/goods-receipts/:code`                        | `inventory:read`                            | active site + its warehouse |
+| POST   | `/api/admin/goods-receipts/:code/corrections`            | `inventory:correct`                         | active site + its warehouse |
+| POST   | `/api/admin/goods-receipts/:code/documents`              | `inventory:receive`                         | active site + its warehouse |
+| POST   | `/api/admin/goods-receipts/:code/lines/:lineNo/cost`     | `inventory:read` + `procurement:cost_write` | active site + its warehouse |
+| GET    | `/api/admin/identity/permissions`                        | `identity:users_read`                       | global                      |
+| GET    | `/api/admin/identity/roles`                              | `identity:users_read`                       | global                      |
+| POST   | `/api/admin/identity/roles`                              | `identity:roles_manage`                     | global                      |
+| GET    | `/api/admin/identity/roles/:id`                          | `identity:users_read`                       | global                      |
+| POST   | `/api/admin/identity/roles/:id`                          | `identity:roles_manage`                     | global                      |
+| POST   | `/api/admin/identity/roles/:id/deactivate`               | `identity:roles_manage`                     | global                      |
+| POST   | `/api/admin/identity/roles/:id/reactivate`               | `identity:roles_manage`                     | global                      |
+| GET    | `/api/admin/identity/sites`                              | `identity:users_read`                       | global                      |
+| GET    | `/api/admin/identity/users`                              | `identity:users_read`                       | global                      |
+| POST   | `/api/admin/identity/users`                              | `identity:users_manage`                     | global                      |
+| GET    | `/api/admin/identity/users/:id`                          | `identity:users_read`                       | global                      |
+| POST   | `/api/admin/identity/users/:id/deactivate`               | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/reactivate`               | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/roles/grant`              | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/roles/revoke`             | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/sites/grant`              | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/sites/revoke`             | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/warehouses/grant`         | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/warehouses/revoke`        | `identity:users_manage`                     | global                      |
+| GET    | `/api/admin/identity/warehouses`                         | `identity:users_read`                       | global                      |
+| GET    | `/api/admin/inventory/items`                             | `inventory:read`                            | active site + its warehouse |
+| POST   | `/api/admin/inventory/items/:code/settings`              | `inventory:items_manage`                    | active site + its warehouse |
+| GET    | `/api/admin/inventory/lots`                              | `inventory:read`                            | active site + its warehouse |
+| GET    | `/api/admin/inventory/movements`                         | `inventory:read`                            | active site + its warehouse |
+| GET    | `/api/admin/inventory/stock`                             | `inventory:read`                            | active site + its warehouse |
+| GET    | `/api/admin/inventory/stock-summary`                     | `inventory:stock_summary`                   | active site + its warehouse |
+| GET    | `/api/admin/label-applications`                          | `production:read`                           | active site                 |
+| POST   | `/api/admin/label-applications`                          | `production:label_apply`                    | active site + its warehouse |
+| POST   | `/api/admin/label-artworks`                              | `production:templates_manage`               | global                      |
+| GET    | `/api/admin/label-artworks/:id/content`                  | `production:read`                           | active site                 |
+| GET    | `/api/admin/label-calibration/qr-validation-sheet.pdf`   | `production:read`                           | active site                 |
+| GET    | `/api/admin/label-designer/settings`                     | `production:read`                           | active site                 |
+| GET    | `/api/admin/label-print-jobs/:code`                      | `production:read`                           | active site                 |
+| POST   | `/api/admin/label-print-jobs/:code/generate`             | `production:labels_print`                   | active site                 |
+| GET    | `/api/admin/label-print-jobs/:code/pdf`                  | `production:read`                           | active site                 |
+| GET    | `/api/admin/label-template-versions/:id`                 | `production:read`                           | active site                 |
+| GET    | `/api/admin/label-template-versions/:id/calibration.pdf` | `production:read`                           | active site                 |
+| GET    | `/api/admin/label-templates`                             | `production:read`                           | active site                 |
+| POST   | `/api/admin/label-templates`                             | `production:templates_manage`               | global                      |
+| GET    | `/api/admin/label-templates/:id`                         | `production:read`                           | active site                 |
+| POST   | `/api/admin/label-templates/:id/archive`                 | `production:templates_manage`               | global                      |
+| POST   | `/api/admin/label-templates/:id/restore`                 | `production:templates_manage`               | global                      |
+| POST   | `/api/admin/label-templates/:id/versions`                | `production:templates_manage`               | global                      |
+| GET    | `/api/admin/sites`                                       | `sites:manage`                              | global                      |
+| POST   | `/api/admin/sites`                                       | `sites:manage`                              | global                      |
+| GET    | `/api/admin/sites/:id`                                   | `sites:manage`                              | global                      |
+| POST   | `/api/admin/sites/:id`                                   | `sites:manage`                              | global                      |
+| POST   | `/api/admin/sites/:id/deactivate`                        | `sites:manage`                              | global                      |
+| POST   | `/api/admin/sites/:id/reactivate`                        | `sites:manage`                              | global                      |
+| POST   | `/api/admin/supplier-documents`                          | `inventory:receive`                         | active site + its warehouse |
+| GET    | `/api/admin/supplier-documents/:id/content`              | `procurement:documents_read`                | active site                 |
+| GET    | `/api/admin/suppliers`                                   | `inventory:read`                            | active site + its warehouse |
+| POST   | `/api/admin/suppliers`                                   | `procurement:suppliers_manage`              | active site + its warehouse |
+| POST   | `/api/admin/suppliers/:id/archive`                       | `procurement:suppliers_manage`              | active site + its warehouse |
+| GET    | `/api/admin/suppliers/:id/documents`                     | `procurement:documents_read`                | active site                 |
 
 Every receipt response (`GET /goods-receipts/:code`, `POST /goods-receipts`, `…/documents`,
 `…/corrections`) omits prices without `procurement:cost_read` and linked documents without
-`procurement:documents_read`. `GET /label-applications` lists only the active site's warehouse.
-Suppliers and supplier documents are company-wide; receipts belong to a site.
+`procurement:documents_read`. Every _active site_ route reads and changes only the active site's
+records (another site's series, bottle, print job, receipt, document or price is "not found").
+Supplier master data and label templates/artwork are company-wide; everything else belongs to a
+site. Prices are recorded only with `procurement:cost_write`.
 
 Web pages: `/login`, `/forbidden`, `/account-inactive`, `/session-expired` and the bottle passport
 `/q/<token>` are public; every page under the application shell requires a signed-in user;
@@ -388,7 +415,17 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
   ignored, a multi-site user switches and sees only the selected site's stock, losing a site ends
   access at once, a warehouse outside the allowed site refused (API and database), audit events
   carry their site, ADMIN's global access as a permission without scope rows, label applications
-  of another site not listed.
+  of another site not listed. **Site-owned production and purchasing** (IDOR): another site's
+  series, bottles, physical facts, print jobs (open, create, generate, PDF) are 404 and absent from
+  every list; a registration replay from another site is a conflict that names nothing; a bottle
+  cannot be labelled at another site (API and trigger) or moved (trigger); templates readable
+  everywhere, changed only with the global permission; the public passport reveals no site;
+  another site's documents, receipts and price endpoints are 404 by id/code; documents cannot be
+  linked across sites (API and trigger). **Prices**: refused without `cost_write` on create and
+  replay (also hidden fields), FINANCE completes a price append-only with reason, actor and site
+  in the audit, staff cannot correct or see it. **Redis outage**: 503 for login and callback,
+  never unlimited, signed-in sessions unaffected. **Last administrator**: also refused by the
+  database at commit (single statement or transaction), catalogue TRUNCATE refused.
 - Playwright: sign-in redirects back to the requested page; anonymous API 401; unknown identity;
   administration (create, grant, revoke, deactivate with reasons and audit) and its immediate
   effect in a second browser; forbidden and inactive pages; sign-out; ADMIN sees every module;
@@ -396,7 +433,9 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
   FINANCE sees both; SALES sees only Sklad → Dostupnost; **ADMIN builds a custom role from
   checkboxes, assigns it with two sites (preview), the user's navigation follows, chooses a site,
   switches sites (other site's data gone), narrowing the role and removing a site take effect at
-  once**; widths 320/390/1280 for administration, role, site and site-selection pages without
+  once**; a user of the other site cannot see or open this site's series, bottles or print jobs
+  (page 404, API 404); FINANCE completes a price in the receipt page, the warehouse operator gets
+  no price form; widths 320/390/1280 for administration, role, site and site-selection pages without
   horizontal overflow; no arbitrary sleeps.
 
 ## 11. Limitations and follow-ups
@@ -404,7 +443,7 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
 - **DEV activation needs the owner's WorkOS values** (section 9); until then the DEV preview stays
   on the previous release (deploy refuses).
 - Public passport rate limiting is still open (doc 016 item 7); sign-in routes are limited
-  (section 5b), and the limiter fails open without Redis by design.
+  (section 5b) and fail closed (503) without Redis.
 - The token rules of section 5a follow WorkOS' published AuthKit session-token claims
   (`iss`, `sub`, `sid`, `client_id`, `iat`, `exp`; no `aud` by default). They are proven against
   locally signed tokens only; the first real DEV sign-in confirms them against WorkOS.
@@ -413,8 +452,31 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
 - ADMIN holds every operational permission; the doc 020 §12 rule that operational actions by
   ADMIN need a mandatory reason (emergency override) is not enforced yet — it comes with the
   Production Core actions that carry actors and reasons.
-- Entering prices on a new receipt is part of `inventory:receive` (the responder never gets them
-  back without `procurement:cost_read`); whether entering prices should also require a cost
-  permission is an owner decision.
 - One active site per session (tabs share it); warehouses are created by migration (doc 022 §9).
+- Security review P3 follow-ups (section 12): database-role separation for migrations and the
+  application, `__Host-` cookie names, per-network/global sign-in buckets, actor foreign keys,
+  and refusing warehouse narrowing that excludes a site's operational warehouse.
 - Session lifetimes (120 minutes idle, 12 hours absolute) are configurable defaults.
+
+## 12. Independent security review (2026-10-12)
+
+Reviewer: Fable 5.1, independent of the implementation; scope: the complete diff `19baf97..0e2f0b6`
+(code reading, a scratch PostgreSQL database with all migrations, concurrent `psql` sessions).
+
+| ID   | Severity | Finding                                                                                                                                                                                          | Resolution                                                                                                                                                                                                                                                                                                 |
+| ---- | :------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1-1 |    P1    | Last-ADMIN race: concurrent "deactivate A" + "revoke ADMIN from B" could leave no active administrator (only the grant rows were locked; the users join came from a stale snapshot) — reproduced | **Fixed**: lock grants and users (`FOR UPDATE OF r, u`); additionally a deferred database guard (`ayvo_last_admin_guard`) refuses at commit any change that leaves no active ADMIN once bootstrapped. Reproduced again: the waiting transaction sees one admin; a forced revoke is refused by the database |
+| P2-1 |    P2    | Open redirect on `/login?next=/\evil.com` for signed-in users (web checked `//` but not `\`)                                                                                                     | **Fixed**: one web `safeNextPath` (printable ASCII, no `//`, no `\`, no `/api/`) used by the login, select-site, auth pages and `currentPath`; unit-tested                                                                                                                                                 |
+| P3-1 |    P3    | Non-ASCII `next` made the callback's `Location` header throw (500, orphaned session)                                                                                                             | **Fixed**: API `safeNextPath` accepts printable ASCII only                                                                                                                                                                                                                                                 |
+| P3-2 |    P3    | Some idempotency payloads lacked the site (label application, document link, correction)                                                                                                         | **Fixed**: the site is part of those payloads; a replay from another site is a conflict                                                                                                                                                                                                                    |
+| P3-3 |    P3    | The catalogue guard is a session setting any database session (e.g. via SQL injection) can switch on; the application connects as the owner                                                      | Follow-up: separate migration and application database roles; check the role in the trigger                                                                                                                                                                                                                |
+| P3-4 |    P3    | `roles`, `permissions`, `role_permissions` could be truncated                                                                                                                                    | **Fixed**: TRUNCATE triggers                                                                                                                                                                                                                                                                               |
+| P3-5 |    P3    | Cookies are not `__Host-` prefixed (a sibling subdomain could plant `Domain=ayvo.co` cookies)                                                                                                    | Follow-up before `qr.ayvo.co` or any other subdomain goes live                                                                                                                                                                                                                                             |
+| P3-6 |    P3    | Migration assumes at most one pre-existing warehouse; `goods_receipt_line_costs.actor_id` / audit actors without foreign keys                                                                    | Documented (doc 022 §5); FKs are a follow-up                                                                                                                                                                                                                                                               |
+| P3-7 |    P3    | Per-IP fixed window only (IPv6 /64 rotation; office NAT)                                                                                                                                         | Follow-up: per-network and global buckets, tuning with real traffic                                                                                                                                                                                                                                        |
+| P3-8 |    P3    | Narrowing a user to a non-default warehouse leaves no workable warehouse route in v0.1                                                                                                           | Follow-up (usability, not escalation)                                                                                                                                                                                                                                                                      |
+
+Areas confirmed sound by the reviewer: WorkOS token validation, state/PKCE/callback, sessions and
+logout, CSRF, trusted-proxy IP, custom-role escalation, cross-site IDOR and stale site state,
+warehouse-without-site, field-level price/document filtering, audit append-only, route declarations,
+secrets handling.
