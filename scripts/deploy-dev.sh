@@ -44,7 +44,8 @@ readonly STATE_DIR="${AYVO_DEV_STATE_DIR:-/opt/ayvo/logs}"
 readonly DEPLOY_LOG="$STATE_DIR/deployments-dev-preview.log"
 readonly IMAGE_PREFIX="ayvo-dev-preview"
 readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL DEV_BASIC_AUTH_USER DEV_BASIC_AUTH_HASH
-  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB)
+  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB WORKOS_API_KEY WORKOS_CLIENT_ID
+  WORKOS_JWT_ISSUER)
 
 MODE=deploy
 TAG=""
@@ -178,6 +179,13 @@ validate_env() {
   [[ ${CFG[DEV_BASIC_AUTH_HASH]} =~ ^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$ ]] ||
     die "DEV_BASIC_AUTH_HASH must be a bcrypt hash from 'caddy hash-password', in single quotes"
   [[ ${CFG[POSTGRES_USER]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_USER must match [a-z_][a-z0-9_]*"
+  # Identity provider (ADR 0022, doc 021). Values are never printed.
+  [[ ${CFG[WORKOS_API_KEY]} =~ ^sk_[A-Za-z0-9_]{10,}$ ]] ||
+    die "WORKOS_API_KEY must be a WorkOS API key (sk_…) from the WorkOS dashboard (doc 021)"
+  [[ ${CFG[WORKOS_CLIENT_ID]} =~ ^client_[A-Za-z0-9]{10,}$ ]] ||
+    die "WORKOS_CLIENT_ID must be a WorkOS client id (client_…) from the WorkOS dashboard (doc 021)"
+  [[ ${CFG[WORKOS_JWT_ISSUER]} =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] ||
+    die "WORKOS_JWT_ISSUER must be the exact https issuer of WorkOS access tokens (doc 021)"
   [[ ${CFG[POSTGRES_DB]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_DB must match [a-z_][a-z0-9_]*"
   # Embedded in DATABASE_URL, so restricted to URL-safe characters (e.g. `openssl rand -hex 32`).
   [[ ${CFG[POSTGRES_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,}$ ]] ||
@@ -300,13 +308,25 @@ verify() {
     die "http://$domain/ must redirect permanently to https://$domain/ (got HTTP $EDGE_STATUS, Location '$EDGE_LOCATION')"
   ok "http://$domain/ -> $EDGE_STATUS $EDGE_LOCATION"
 
-  STEP="verify: authenticated web"
+  STEP="verify: web behind Basic Auth and application sign-in"
   log "$STEP (user ${CFG[DEV_BASIC_AUTH_USER]})"
-  expect_edge "GET /" "https://$domain/" 200 auth || die "authenticated web check failed"
+  expect_edge "GET / without an application session" "https://$domain/" 307 auth ||
+    die "GET / must redirect to the sign-in page without an application session"
+  [[ $EDGE_LOCATION == "/login?next=%2F" || $EDGE_LOCATION == "https://$domain/login?next=%2F" ]] ||
+    die "GET / must redirect to /login (got Location '$EDGE_LOCATION')"
+  ok "GET / -> sign-in page"
+  expect_edge "GET /login" "https://$domain/login" 200 auth || die "the sign-in page is not served"
   if [[ $EDGE_TYPE != text/html* ]] || ! grep -q 'AYVO OS' "$EDGE_BODY"; then
-    die "GET / did not return the AYVO OS web application (Content-Type '$EDGE_TYPE')"
+    die "GET /login did not return the AYVO OS web application (Content-Type '$EDGE_TYPE')"
   fi
-  ok "GET / serves the AYVO OS web application ($EDGE_TYPE)"
+  ok "GET /login serves the AYVO OS sign-in page ($EDGE_TYPE)"
+
+  STEP="verify: API requires an application session"
+  log "$STEP"
+  edge "https://$domain/api/auth/me" auth || die "request to /api/auth/me failed"
+  [[ $EDGE_STATUS == 401 ]] && jq -e '.code == "UNAUTHENTICATED"' "$EDGE_BODY" >/dev/null ||
+    die "GET /api/auth/me must answer 401 UNAUTHENTICATED without a session (got HTTP $EDGE_STATUS)"
+  ok "GET /api/auth/me without a session -> 401 UNAUTHENTICATED"
 
   STEP="verify: authenticated API health"
   log "$STEP"

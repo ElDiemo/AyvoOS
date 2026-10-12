@@ -24,23 +24,39 @@ export function formatDeltaCs(value: string): string {
   return value.startsWith('-') ? formatQuantityCs(value) : `+${formatQuantityCs(value)}`;
 }
 
-const dateTime = new Intl.DateTimeFormat('cs-CZ', {
-  day: 'numeric',
-  month: 'numeric',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  timeZone: 'Europe/Prague',
-});
+/** The zone timestamps are shown in when no site is known (AYVO's first site; doc 022). */
+export const DEFAULT_TIME_ZONE = 'Europe/Prague';
+
+const dateTimeFormats = new Map<string, Intl.DateTimeFormat>();
 const dateOnly = new Intl.DateTimeFormat('cs-CZ', {
   day: 'numeric',
   month: 'numeric',
   year: 'numeric',
-  timeZone: 'Europe/Prague',
+  timeZone: DEFAULT_TIME_ZONE,
 });
 
-export function formatDateTimeCs(iso: string | null | undefined): string {
-  return iso ? dateTime.format(new Date(iso)) : '—';
+/**
+ * A UTC timestamp from the API shown in the IANA time zone of the site it belongs to (doc 022:
+ * stored in UTC, presented in the site's zone).
+ */
+export function formatDateTimeCs(
+  iso: string | null | undefined,
+  timeZone: string = DEFAULT_TIME_ZONE,
+): string {
+  if (!iso) return '—';
+  let format = dateTimeFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat('cs-CZ', {
+      day: 'numeric',
+      month: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone,
+    });
+    dateTimeFormats.set(timeZone, format);
+  }
+  return format.format(new Date(iso));
 }
 
 /** For calendar dates "YYYY-MM-DD" (no time zone shift). */

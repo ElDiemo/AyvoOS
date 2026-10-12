@@ -7,18 +7,16 @@ import type {
   MovementListQuery,
   RecentLabelApplication,
   StockOverview,
+  StockSummary,
   UpdateItemSettingsRequest,
 } from '@ayvo/types';
 import { BottlesService } from '../assets/bottles.service.js';
 import { formatQuantity, quantity } from '../common/quantity.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
-import {
-  InventoryService,
-  MAIN_LOCATION_CODE,
-  type InventoryItemRecord,
-} from '../inventory/inventory.service.js';
+import { InventoryService, type InventoryItemRecord } from '../inventory/inventory.service.js';
 import { LabelPrintJobsService } from '../label-production/label-print-jobs.service.js';
+import type { WarehouseContext } from '../inventory/warehouse-context.js';
 import { ProcurementService } from '../procurement/procurement.service.js';
 
 /**
@@ -53,8 +51,9 @@ export class WarehouseReadService {
     return item;
   }
 
-  async stock(): Promise<StockOverview> {
-    const location = await this.inventory.mainLocation();
+  /** Stock of the warehouse of the request's site (doc 022). */
+  async stock(warehouse: WarehouseContext): Promise<StockOverview> {
+    const location = await this.inventory.getLocation(warehouse.locationId);
     const [items, balances] = await Promise.all([
       this.inventory.listItems(),
       this.inventory.balances(location.id),
@@ -90,19 +89,46 @@ export class WarehouseReadService {
     };
   }
 
-  async lots(itemCode: string, onlyAvailable: boolean): Promise<InventoryLot[]> {
+  /**
+   * Planning view of the same numbers (SALES, doc 021): item, available, reserved, low stock.
+   * Built as an explicit allow-list so no lot, supplier or other operational field leaks.
+   */
+  async stockSummary(warehouse: WarehouseContext): Promise<StockSummary> {
+    const overview = await this.stock(warehouse);
+    return {
+      location: overview.location,
+      items: overview.items.map((s) => ({
+        item: { code: s.item.code, name: s.item.name, unitCode: s.item.unit.code },
+        available: s.available,
+        reserved: s.reserved,
+        lowStock: s.lowStock,
+      })),
+    };
+  }
+
+  async lots(
+    itemCode: string,
+    onlyAvailable: boolean,
+    warehouse: WarehouseContext,
+  ): Promise<InventoryLot[]> {
     const item = await this.inventory.getItemByCode(itemCode);
-    const location = await this.inventory.mainLocation();
-    const lots = await this.inventory.lotsWithStock(item.id, location.id, onlyAvailable);
+    const lots = await this.inventory.lotsWithStock(item.id, warehouse.locationId, onlyAvailable);
     const names = await this.procurement.supplierNames(
       lots.flatMap(({ lot }) => lot.supplierId ?? []),
     );
     return lots.map(({ lot, onHand }) => toLotDto(lot, onHand, names));
   }
 
-  async movements(query: MovementListQuery): Promise<InventoryMovementPage> {
+  async movements(
+    query: MovementListQuery,
+    warehouse: WarehouseContext,
+  ): Promise<InventoryMovementPage> {
     const itemId = query.item ? (await this.inventory.getItemByCode(query.item)).id : undefined;
-    const page = await this.inventory.movementsPage({ ...query, itemId });
+    const page = await this.inventory.movementsPage({
+      ...query,
+      itemId,
+      locationId: warehouse.locationId,
+    });
     const [sources, bottles] = await Promise.all([
       this.procurement.describeSources(
         page.items.flatMap((m) => m.receiptLineId ?? []),
@@ -139,21 +165,36 @@ export class WarehouseReadService {
     };
   }
 
-  async recentApplications(limit: number): Promise<RecentLabelApplication[]> {
-    const events = await this.bottles.recentLabelApplications(limit);
-    const movements = await this.inventory.movementsForBottleEvents(events.map((e) => e.id));
+  /**
+   * The latest label applications at one site's warehouse (doc 022): the consumed lots are that
+   * site's stock, so another site's applications are not listed.
+   */
+  async recentApplications(
+    limit: number,
+    locationId: string | null,
+  ): Promise<RecentLabelApplication[]> {
+    if (!locationId) return [];
+    const movements = await this.inventory.recentLabelApplicationMovements(locationId, limit * 4);
+    const seen = new Set<string>();
+    const latest = movements.filter((m) => {
+      if (seen.has(m.bottleEventId!)) return false;
+      seen.add(m.bottleEventId!);
+      return true;
+    });
+    const events = latest.slice(0, limit);
+    const codes = await this.bottles.bottleCodesOfEvents(events.map((m) => m.bottleEventId!));
     const lotOf = new Map(
       movements.filter((m) => m.lot).map((m) => [m.bottleEventId!, m.lot!.code]),
     );
-    return events.map((e) => ({
-      bottleCode: e.bottle.code,
-      appliedAt: e.occurredAt.toISOString(),
-      lotCode: lotOf.get(e.id) ?? '—',
+    return events.map((m) => ({
+      bottleCode: codes.get(m.bottleEventId!) ?? '—',
+      appliedAt: m.occurredAt.toISOString(),
+      lotCode: lotOf.get(m.bottleEventId!) ?? '—',
     }));
   }
 
-  async physical(code: string): Promise<BottlePhysical> {
-    const bottle = await this.bottles.physicalByCode(code);
+  async physical(code: string, siteId: string): Promise<BottlePhysical> {
+    const bottle = await this.bottles.physicalByCode(code, siteId);
     const event = bottle.events[0];
     const jobCodes = await this.printJobs.codesByIds(
       bottle.components.flatMap((c) => c.printJobId ?? []),
@@ -267,5 +308,3 @@ function toLotDto(
     createdAt: lot.createdAt.toISOString(),
   };
 }
-
-export { MAIN_LOCATION_CODE };

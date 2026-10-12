@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PRODUCTION_QR_BASE_URL } from '../src/common/qr-policy.js';
 import { createTemplate, registerBottles } from './support/fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { INITIAL_SITE_ID } from './support/sign-in.js';
 
 /**
  * Invariants enforced by PostgreSQL itself (migration CHECKs, unique indexes, triggers),
@@ -35,6 +36,7 @@ describe.skipIf(!hasDatabase)('database invariants', () => {
             publicToken: token,
             status: 'CREATED',
             creationBatchId: batchId,
+            siteId: INITIAL_SITE_ID,
           },
         }),
       ).rejects.toThrow();
@@ -43,7 +45,7 @@ describe.skipIf(!hasDatabase)('database invariants', () => {
 
   it('rejects a bottle code that does not match its serial, and duplicate codes or tokens', async () => {
     const existing = await t.prisma.bottle.findFirstOrThrow();
-    const base = { status: 'CREATED' as const, creationBatchId: batchId };
+    const base = { status: 'CREATED' as const, creationBatchId: batchId, siteId: INITIAL_SITE_ID };
     await expect(
       t.prisma.bottle.create({
         data: { ...base, serial: 900_001n, code: 'AYV-B-900002', publicToken: 'B'.repeat(22) },
@@ -78,6 +80,7 @@ describe.skipIf(!hasDatabase)('database invariants', () => {
           serial: 900_000n + BigInt(quantity),
           code: `BC-${900_000 + quantity}`,
           quantityRequested: quantity,
+          siteId: INITIAL_SITE_ID,
           quantityCreated: quantity,
           labelTemplateVersionId: version.versionId,
           firstBottleSerial: 1n,
@@ -154,6 +157,7 @@ describe.skipIf(!hasDatabase)('database invariants', () => {
           serial: BigInt(serial),
           code: `PJ-${serial}`,
           creationBatchId: batchId,
+          siteId: INITIAL_SITE_ID,
           labelTemplateVersionId: version.versionId,
           labelCount: 1,
           qrErrorCorrection: 'Q',

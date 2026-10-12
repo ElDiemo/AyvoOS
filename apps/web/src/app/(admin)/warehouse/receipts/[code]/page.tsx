@@ -1,7 +1,11 @@
 import { goodsReceiptCodeSchema, goodsReceiptSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { Card, Field, FieldList } from '@/components/ui';
-import { AttachDocument, CorrectionForm } from '@/components/warehouse/receipt-actions';
+import {
+  AttachDocument,
+  CorrectionForm,
+  LineCostForm,
+} from '@/components/warehouse/receipt-actions';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import {
   formatDateCs,
@@ -12,6 +16,7 @@ import {
 } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
+import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const r = warehouseCs.receipts;
@@ -23,10 +28,18 @@ export default async function ReceiptPage({
   params: Promise<{ code: string }>;
   searchParams: Promise<{ created?: string }>;
 }) {
+  const tz = await siteTimeZone();
   const { code } = await params;
   if (!goodsReceiptCodeSchema.safeParse(code).success) notFound();
   const { created } = await searchParams;
-  const receipt = await apiGet(`admin/goods-receipts/${code}`, goodsReceiptSchema);
+  // Prices and documents are omitted by the API without procurement:cost_read / documents_read.
+  const [receipt, me] = await Promise.all([
+    apiGet(`admin/goods-receipts/${code}`, goodsReceiptSchema),
+    currentUser(),
+  ]);
+  const canCorrect = hasPermission(me, 'inventory:correct');
+  const canAttach = hasPermission(me, 'inventory:receive');
+  const canWriteCosts = hasPermission(me, 'procurement:cost_write');
   return (
     <>
       <WarehouseHeader
@@ -48,7 +61,7 @@ export default async function ReceiptPage({
           <FieldList>
             <Field label={r.supplier}>{receipt.supplier.name}</Field>
             <Field label={r.reference}>{receipt.supplierReference}</Field>
-            <Field label={r.receivedAt}>{formatDateTimeCs(receipt.receivedAt)}</Field>
+            <Field label={r.receivedAt}>{formatDateTimeCs(receipt.receivedAt, tz)}</Field>
             {receipt.note && <Field label={r.note}>{receipt.note}</Field>}
             <Field label={r.documents}>
               {receipt.invoicePending ? (
@@ -94,10 +107,24 @@ export default async function ReceiptPage({
                       {warehouseCs.stock.lotKind[line.lot.kind]})
                     </Field>
                   )}
-                  {line.unitPrice && (
+                  {(line.unitPrice || canWriteCosts) && (
                     <Field label={r.price}>
-                      {line.unitPrice} {line.currency}
-                      {line.vatRate ? ` · ${r.vat} ${line.vatRate}` : ''}
+                      <span data-testid={`price-${line.lineNo}`}>
+                        {line.unitPrice ? `${line.unitPrice} ${line.currency}` : '—'}
+                        {line.vatRate ? ` · ${r.vat} ${line.vatRate}` : ''}
+                        {line.costUpdatedAt ? ` (${r.costUpdated})` : ''}
+                      </span>
+                      {canWriteCosts && (
+                        <LineCostForm
+                          code={receipt.code}
+                          lineNo={line.lineNo}
+                          current={{
+                            unitPrice: line.unitPrice ?? null,
+                            currency: line.currency ?? null,
+                            vatRate: line.vatRate ?? null,
+                          }}
+                        />
+                      )}
                     </Field>
                   )}
                   <Field label={r.corrections}>
@@ -108,12 +135,12 @@ export default async function ReceiptPage({
                         {line.corrections.map((c) => (
                           <li key={c.id}>
                             {formatDeltaCs(c.quantityDelta)} · {c.reason} ·{' '}
-                            {formatDateTimeCs(c.createdAt)}
+                            {formatDateTimeCs(c.createdAt, tz)}
                           </li>
                         ))}
                       </ul>
                     )}
-                    <CorrectionForm code={receipt.code} lineNo={line.lineNo} />
+                    {canCorrect && <CorrectionForm code={receipt.code} lineNo={line.lineNo} />}
                   </Field>
                 </FieldList>
               </li>
@@ -122,20 +149,30 @@ export default async function ReceiptPage({
         </Card>
 
         <Card title={r.documents}>
-          <ul className="mb-4 flex flex-col gap-2 text-sm" data-testid="documents">
-            {receipt.documents.map((d) => (
-              <li key={d.id} className="flex flex-wrap items-center gap-2 wrap-anywhere">
-                <span className="font-medium">{warehouseCs.documents.kinds[d.kind]}</span>
-                <span>{d.documentNumber}</span>
-                <span className="text-stone-500">{formatDateCs(d.issuedOn)}</span>
-                <a href={d.contentUrl} className="underline">
-                  {r.download}
-                </a>
-              </li>
-            ))}
-          </ul>
-          <h3 className="mb-2 text-sm font-medium">{r.attachDocument}</h3>
-          <AttachDocument code={receipt.code} supplierId={receipt.supplier.id} />
+          {receipt.documents ? (
+            <ul className="mb-4 flex flex-col gap-2 text-sm" data-testid="documents">
+              {receipt.documents.map((d) => (
+                <li key={d.id} className="flex flex-wrap items-center gap-2 wrap-anywhere">
+                  <span className="font-medium">{warehouseCs.documents.kinds[d.kind]}</span>
+                  <span>{d.documentNumber}</span>
+                  <span className="text-stone-500">{formatDateCs(d.issuedOn)}</span>
+                  <a href={d.contentUrl} className="underline">
+                    {r.download}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mb-4 text-sm text-stone-500" data-testid="documents-restricted">
+              {r.documentsRestricted}
+            </p>
+          )}
+          {canAttach && (
+            <>
+              <h3 className="mb-2 text-sm font-medium">{r.attachDocument}</h3>
+              <AttachDocument code={receipt.code} supplierId={receipt.supplier.id} />
+            </>
+          )}
         </Card>
       </div>
     </>

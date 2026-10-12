@@ -6,6 +6,7 @@ import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
+import { siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const r = warehouseCs.receipts;
@@ -15,6 +16,7 @@ export default async function ReceiptsPage({
 }: {
   searchParams: Promise<Record<string, string>>;
 }) {
+  const tz = await siteTimeZone();
   const parsed = goodsReceiptListQuerySchema.safeParse(await searchParams);
   const query = parsed.success ? parsed.data : goodsReceiptListQuerySchema.parse({});
   const list = await apiGet('admin/goods-receipts', goodsReceiptPageSchema, {
@@ -71,7 +73,7 @@ export default async function ReceiptsPage({
                   <td className="px-6 py-3">{x.supplier.name}</td>
                   <td className="px-6 py-3">{x.supplierReference}</td>
                   <td className="whitespace-nowrap px-6 py-3 text-stone-500">
-                    {formatDateTimeCs(x.receivedAt)}
+                    {formatDateTimeCs(x.receivedAt, tz)}
                   </td>
                   <td className="px-6 py-3 tabular-nums">{x.lineCount}</td>
                   <td className="px-6 py-3">

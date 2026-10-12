@@ -12,6 +12,7 @@ import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { formatDateTimeCs, formatDeltaCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
+import { siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const o = warehouseCs.overview;
@@ -22,6 +23,7 @@ const th = 'py-2 pr-4 font-medium';
  * movements, and the next useful action. Read-only; every figure comes from the API.
  */
 export default async function WarehouseOverviewPage() {
+  const tz = await siteTimeZone();
   const [stock, receipts, pending, movements, suppliers] = await Promise.all([
     apiGet('admin/inventory/stock', stockOverviewSchema),
     apiGet('admin/goods-receipts', goodsReceiptPageSchema, { page: 1, pageSize: 5 }),
@@ -170,7 +172,7 @@ export default async function WarehouseOverviewPage() {
                           {x.code}
                         </Link>
                         <span className="block text-xs text-stone-500">
-                          {formatDateTimeCs(x.receivedAt)}
+                          {formatDateTimeCs(x.receivedAt, tz)}
                         </span>
                       </td>
                       <td className="py-2 pr-4 align-top wrap-anywhere">
@@ -210,7 +212,7 @@ export default async function WarehouseOverviewPage() {
                       <td className="py-2 pr-4 align-top">
                         {warehouseCs.movements.types[x.type] ?? x.type}
                         <span className="block text-xs text-stone-500">
-                          {formatDateTimeCs(x.recordedAt)}
+                          {formatDateTimeCs(x.recordedAt, tz)}
                         </span>
                       </td>
                       <td className="py-2 pr-4 align-top wrap-anywhere">

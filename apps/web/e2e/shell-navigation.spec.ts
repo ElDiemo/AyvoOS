@@ -28,8 +28,10 @@ test('global navigation: overview and the two operational modules only', async (
     await expect(main.getByRole('link', { name })).toHaveCount(0);
   }
   await expect(page.getByTestId('environment-badge').first()).toHaveText('DEV');
-  // No fake user or role before application authentication exists.
-  await expect(page.locator('body')).not.toContainText(/Odhlásit|Přihlášen|Administrátor/);
+  // The real signed-in user and sign-out; no administration without the permission.
+  await expect(page.getByTestId('current-user')).toHaveText('E2E Operátor');
+  await expect(page.getByRole('button', { name: 'Odhlásit' }).first()).toBeVisible();
+  await expect(main.getByRole('link', { name: 'Správa systému' })).toHaveCount(0);
 });
 
 test('Warehouse and Production are separate; label application belongs to Production', async ({
@@ -88,7 +90,10 @@ test('/warehouse is a page; the old label-application URL is a real redirect kee
     expect(res.headers()['location'], from).toBe(to);
   }
   // Without client JavaScript the HTTP redirect alone gets the browser there.
-  const context = await browser.newContext({ javaScriptEnabled: false });
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    storageState: 'e2e/.auth/operator.json',
+  });
   const page = await context.newPage();
   const response = await page.goto('/warehouse/labels?x=1');
   expect(response?.status()).toBe(200);

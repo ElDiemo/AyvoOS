@@ -15,6 +15,10 @@ export class RedisService implements OnModuleDestroy {
     this.client = new Redis(env.REDIS_URL, {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
+      // Fail fast instead of queueing: callers (sign-in rate limits, health) decide what to do.
+      enableOfflineQueue: false,
+      connectTimeout: 2_000,
+      commandTimeout: 2_000,
       retryStrategy: (attempt) => Math.min(attempt * 500, 10_000),
     });
     // Connection failures surface as AggregateError with an empty message; fall back to the code.
@@ -23,9 +27,21 @@ export class RedisService implements OnModuleDestroy {
     );
   }
 
+  private connecting: Promise<void> | null = null;
+
+  /** The connected client (one shared first connection attempt; ioredis reconnects itself). */
+  async ready(): Promise<Redis> {
+    if (this.client.status === 'wait') {
+      this.connecting ??= this.client.connect().finally(() => {
+        this.connecting = null;
+      });
+    }
+    if (this.connecting) await this.connecting;
+    return this.client;
+  }
+
   async ping(): Promise<string> {
-    if (this.client.status === 'wait') await this.client.connect();
-    return this.client.ping();
+    return (await this.ready()).ping();
   }
 
   async onModuleDestroy(): Promise<void> {

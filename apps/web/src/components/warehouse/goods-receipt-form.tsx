@@ -42,9 +42,12 @@ function localNow(): string {
 export function GoodsReceiptForm({
   suppliers,
   items,
+  canWriteCosts,
 }: {
   suppliers: Supplier[];
   items: InventoryItem[];
+  /** Prices are recorded only with procurement:cost_write (the API refuses them otherwise). */
+  canWriteCosts: boolean;
 }) {
   const router = useRouter();
   const [supplierId, setSupplierId] = useState('');
@@ -112,9 +115,9 @@ export function GoodsReceiptForm({
           itemId: l.itemId,
           quantity: l.quantity,
           supplierLotCode: l.supplierLotCode.trim() === '' ? null : l.supplierLotCode.trim(),
-          unitPrice: l.unitPrice === '' ? null : l.unitPrice,
-          currency: l.unitPrice === '' ? null : l.currency,
-          vatRate: l.unitPrice === '' || l.vatRate === '' ? null : l.vatRate,
+          unitPrice: !canWriteCosts || l.unitPrice === '' ? null : l.unitPrice,
+          currency: !canWriteCosts || l.unitPrice === '' ? null : l.currency,
+          vatRate: !canWriteCosts || l.unitPrice === '' || l.vatRate === '' ? null : l.vatRate,
         })),
       });
       router.push(`/warehouse/receipts/${receipt.code}?created=1`);
@@ -250,36 +253,40 @@ export function GoodsReceiptForm({
                     <span className="text-xs text-stone-500">{r.supplierLotHelp}</span>
                   </label>
                 )}
-                <details className="sm:col-span-3">
-                  <summary className="cursor-pointer text-sm text-stone-600">{r.price}</summary>
-                  <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <input
-                      inputMode="decimal"
-                      aria-label={r.price}
-                      value={line.unitPrice}
-                      disabled={reviewing}
-                      onChange={(e) => update(line.key, { unitPrice: e.target.value.trim() })}
-                      className={inputClass}
-                    />
-                    <input
-                      aria-label={r.currency}
-                      value={line.currency}
-                      disabled={reviewing}
-                      maxLength={3}
-                      onChange={(e) => update(line.key, { currency: e.target.value.toUpperCase() })}
-                      className={inputClass}
-                    />
-                    <input
-                      inputMode="decimal"
-                      aria-label={r.vat}
-                      placeholder={r.vat}
-                      value={line.vatRate}
-                      disabled={reviewing}
-                      onChange={(e) => update(line.key, { vatRate: e.target.value.trim() })}
-                      className={inputClass}
-                    />
-                  </div>
-                </details>
+                {canWriteCosts && (
+                  <details className="sm:col-span-3">
+                    <summary className="cursor-pointer text-sm text-stone-600">{r.price}</summary>
+                    <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <input
+                        inputMode="decimal"
+                        aria-label={r.price}
+                        value={line.unitPrice}
+                        disabled={reviewing}
+                        onChange={(e) => update(line.key, { unitPrice: e.target.value.trim() })}
+                        className={inputClass}
+                      />
+                      <input
+                        aria-label={r.currency}
+                        value={line.currency}
+                        disabled={reviewing}
+                        maxLength={3}
+                        onChange={(e) =>
+                          update(line.key, { currency: e.target.value.toUpperCase() })
+                        }
+                        className={inputClass}
+                      />
+                      <input
+                        inputMode="decimal"
+                        aria-label={r.vat}
+                        placeholder={r.vat}
+                        value={line.vatRate}
+                        disabled={reviewing}
+                        onChange={(e) => update(line.key, { vatRate: e.target.value.trim() })}
+                        className={inputClass}
+                      />
+                    </div>
+                  </details>
+                )}
                 {lines.length > 1 && !reviewing && (
                   <button
                     type="button"

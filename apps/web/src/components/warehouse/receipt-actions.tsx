@@ -121,3 +121,117 @@ export function AttachDocument({ code, supplierId }: { code: string; supplierId:
     </div>
   );
 }
+
+/**
+ * Completes or corrects a line's purchase price (FINANCE, procurement:cost_write). Append-only on
+ * the server; a reason is required and the change is audited with the site.
+ */
+export function LineCostForm({
+  code,
+  lineNo,
+  current,
+}: {
+  code: string;
+  lineNo: number;
+  current: { unitPrice: string | null; currency: string | null; vatRate: string | null };
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [price, setPrice] = useState(current.unitPrice ?? '');
+  const [currency, setCurrency] = useState(current.currency ?? 'CZK');
+  const [vat, setVat] = useState(current.vatRate ?? '');
+  const [reason, setReason] = useState('');
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const change = (set: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    set(e.target.value.trim());
+    setRequestId(crypto.randomUUID());
+  };
+  if (!open) {
+    return (
+      <button type="button" className="text-sm underline" onClick={() => setOpen(true)}>
+        {r.costEdit}
+      </button>
+    );
+  }
+  return (
+    <form
+      className="mt-2 flex flex-col gap-2"
+      data-testid={`cost-form-${lineNo}`}
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        setError(null);
+        try {
+          await apiSend(
+            'POST',
+            `admin/goods-receipts/${code}/lines/${lineNo}/cost`,
+            goodsReceiptSchema,
+            {
+              requestId,
+              unitPrice: price === '' ? null : price,
+              currency: price === '' ? null : currency.toUpperCase(),
+              vatRate: price === '' || vat === '' ? null : vat,
+              reason,
+            },
+          );
+          setOpen(false);
+          router.refresh();
+        } catch (err) {
+          setError(apiErrorText(err));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <input
+          aria-label={r.price}
+          inputMode="decimal"
+          value={price}
+          onChange={change(setPrice)}
+          className={inputClass}
+        />
+        <input
+          aria-label={r.currency}
+          maxLength={3}
+          value={currency}
+          onChange={change(setCurrency)}
+          className={inputClass}
+        />
+        <input
+          aria-label={r.vat}
+          inputMode="decimal"
+          value={vat}
+          onChange={change(setVat)}
+          className={inputClass}
+        />
+      </div>
+      <input
+        aria-label={r.costReason}
+        placeholder={r.costReason}
+        value={reason}
+        maxLength={500}
+        onChange={(e) => {
+          setReason(e.target.value);
+          setRequestId(crypto.randomUUID());
+        }}
+        className={inputClass}
+      />
+      {error && <ErrorNote>{error}</ErrorNote>}
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          className={buttonClass.primary}
+          disabled={busy || reason.trim().length < 3}
+        >
+          {r.costSave}
+        </button>
+        <button type="button" className={buttonClass.secondary} onClick={() => setOpen(false)}>
+          {warehouseCs.common.cancel}
+        </button>
+      </div>
+    </form>
+  );
+}

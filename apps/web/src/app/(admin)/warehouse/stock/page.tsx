@@ -7,11 +7,13 @@ import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { formatDateTimeCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
+import { siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const s = warehouseCs.stock;
 
 export default async function StockPage() {
+  const tz = await siteTimeZone();
   const [stock, suppliers] = await Promise.all([
     apiGet('admin/inventory/stock', stockOverviewSchema),
     apiGet('admin/suppliers', z.array(supplierSchema)),
@@ -93,7 +95,7 @@ export default async function StockPage() {
                                   {lot.supplier ? ` · ${lot.supplier.name}` : ''}
                                 </td>
                                 <td className="whitespace-nowrap py-2 pr-4 text-stone-500">
-                                  {formatDateTimeCs(lot.createdAt)}
+                                  {formatDateTimeCs(lot.createdAt, tz)}
                                 </td>
                                 <td className="py-2 text-right font-semibold tabular-nums">
                                   {formatQuantityCs(lot.onHand)} {unit}

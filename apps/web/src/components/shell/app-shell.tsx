@@ -3,27 +3,33 @@
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useRef } from 'react';
+import type { CurrentUser } from '@ayvo/types';
+import { useEffect, useRef, useState } from 'react';
+import { identityCs } from '@/i18n/cs/identity';
 import { shellCs } from '@/i18n/cs/shell';
 import { locate, visibleModules, type NavModule } from '@/lib/navigation';
+import { SiteSwitcher } from './site-switcher';
 
 type Environment = 'development' | 'test' | 'production';
 
 /**
  * AYVO OS application shell (doc 019): a persistent left navigation (desktop) or a drawer
  * (phones, tablets), and a compact top bar with the location and the environment. The navigation
- * lists the overview and the operational modules only; each module brings its own page
- * navigation. No user or role is shown: application accounts do not exist yet (ADR 0017).
+ * lists the overview, the operational modules and the administration — only those the signed-in
+ * user's permissions allow (the API enforces them anyway); each module brings its own page
+ * navigation. The user and the sign-out action are always visible.
  */
 export function AppShell({
   environment,
+  user,
   children,
 }: {
   environment: Environment;
+  user: CurrentUser;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const modules = visibleModules();
+  const modules = visibleModules(user.permissions);
   const { module, page } = locate(pathname, modules);
   const drawer = useRef<HTMLDialogElement>(null);
 
@@ -35,7 +41,12 @@ export function AppShell({
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
       <aside className="sticky top-0 hidden h-screen flex-col overflow-y-auto bg-stone-950 lg:flex">
-        <SidebarContent pathname={pathname} modules={modules} environment={environment} />
+        <SidebarContent
+          pathname={pathname}
+          modules={modules}
+          environment={environment}
+          user={user}
+        />
       </aside>
 
       <dialog
@@ -48,7 +59,12 @@ export function AppShell({
         }}
       >
         <div className="flex h-full flex-col">
-          <SidebarContent pathname={pathname} modules={modules} environment={environment}>
+          <SidebarContent
+            pathname={pathname}
+            modules={modules}
+            environment={environment}
+            user={user}
+          >
             <button
               type="button"
               onClick={() => drawer.current?.close()}
@@ -95,7 +111,15 @@ export function AppShell({
               )}
             </ol>
           </nav>
+          <SiteSwitcher user={user} className="shrink-0" />
           <EnvironmentBadge environment={environment} withLabel />
+          <span
+            className="hidden max-w-48 truncate text-sm text-stone-600 md:inline"
+            data-testid="current-user"
+          >
+            {user.user.displayName}
+          </span>
+          <LogoutButton className="hidden md:inline-flex" />
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           {children}
@@ -109,14 +133,18 @@ function SidebarContent({
   pathname,
   modules,
   environment,
+  user,
   children,
 }: {
   pathname: string;
   modules: readonly NavModule[];
   environment: Environment;
+  user: CurrentUser;
   children?: React.ReactNode;
 }) {
   const { module: active } = locate(pathname, modules);
+  const operations = modules.filter((m) => m.section === 'operations');
+  const administration = modules.filter((m) => m.section === 'administration');
   return (
     <>
       <div className="flex items-center justify-between gap-2 px-5 pt-5 pb-6">
@@ -133,15 +161,36 @@ function SidebarContent({
         <NavLink href="/" active={pathname === '/'} icon={ICONS.overview}>
           {shellCs.overview}
         </NavLink>
-        <p className="mt-6 mb-1 px-3 text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">
-          {shellCs.operations}
-        </p>
-        {modules.map((m) => (
+        {operations.length > 0 && (
+          <p className="mt-6 mb-1 px-3 text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">
+            {shellCs.operations}
+          </p>
+        )}
+        {operations.map((m) => (
+          <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
+            {m.label}
+          </NavLink>
+        ))}
+        {administration.length > 0 && (
+          <p className="mt-6 mb-1 px-3 text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">
+            {identityCs.shell.administration}
+          </p>
+        )}
+        {administration.map((m) => (
           <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
             {m.label}
           </NavLink>
         ))}
       </nav>
+      <div className="mt-auto border-t border-white/10 px-5 py-4">
+        <p className="text-[11px] uppercase tracking-[0.14em] text-stone-500">
+          {identityCs.shell.account}
+        </p>
+        <p className="mt-1 truncate text-sm text-white">{user.user.displayName}</p>
+        <p className="truncate text-xs text-stone-400">{user.user.email}</p>
+        <p className="mt-1 text-xs text-stone-400">{user.roles.map((r) => r.name).join(', ')}</p>
+        <LogoutButton className="mt-3 w-full border-white/20 bg-transparent text-stone-200 hover:bg-white/10" />
+      </div>
     </>
   );
 }
@@ -200,7 +249,36 @@ const ICONS = {
   overview: 'M4 5h7v6H4zM13 5h7v3h-7zM13 10h7v9h-7zM4 13h7v6H4z',
   warehouse: 'M3 10l9-6 9 6v10H3zM7 20v-6h10v6M7 17h10',
   production: 'M4 20V9l5 3V9l5 3V5h6v15zM8 16h2M14 16h2',
+  admin: 'M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6zM9 12l2 2 4-4',
 } as const;
+
+/** Ends the AYVO session (and the provider session where known), then leaves the page. */
+function LogoutButton({ className }: { className?: string }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      className={cn(
+        'inline-flex items-center justify-center rounded-md border border-stone-300 px-3 py-1.5 text-sm font-medium whitespace-nowrap text-stone-700 transition hover:bg-stone-100 disabled:opacity-50',
+        className,
+      )}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          const res = await fetch('/api/auth/logout', { method: 'POST' });
+          const body = (await res.json().catch(() => ({}))) as { redirectUrl?: string };
+          window.location.assign(res.ok && body.redirectUrl ? body.redirectUrl : '/login');
+        } catch {
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a full reload drops all client state after the session ended
+          window.location.assign('/login');
+        }
+      }}
+    >
+      {busy ? identityCs.shell.loggingOut : identityCs.shell.logout}
+    </button>
+  );
+}
 
 function Icon({ path }: { path: string }) {
   return (

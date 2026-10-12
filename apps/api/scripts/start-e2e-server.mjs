@@ -2,7 +2,10 @@
 // Starts the BUILT API for the web app's Playwright tests (apps/web/playwright.config.ts):
 //   1. recreates the dedicated database `ayvo_e2e` on the dev PostgreSQL server (never the dev DB),
 //   2. applies the committed migrations (`prisma migrate deploy`),
-//   3. runs dist/main.js with a temporary file store.
+//   3. bootstraps the first administrator (e2e-admin@ayvo.test) with the one-time command,
+//   4. adds a second, clearly fictional test site with its own warehouse (multi-site browser
+//      tests; warehouses are created by migrations in v0.1, so the test database gets one here),
+//   5. runs dist/main.js with a temporary file store and the fake identity provider (APP_ENV=test).
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
@@ -32,15 +35,43 @@ execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy']
   stdio: 'inherit',
 });
 
+const testEnv = {
+  ...process.env,
+  APP_ENV: 'test',
+  AUTH_PROVIDER: 'test',
+  DATABASE_URL: e2eUrl,
+  APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
+  // The browser tests sign in many times from one address.
+  AUTH_RATE_LIMIT_LOGIN_MAX: '100000',
+  AUTH_RATE_LIMIT_CALLBACK_MAX: '100000',
+  AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: '100000',
+};
+execFileSync(
+  process.execPath,
+  ['dist/identity/bootstrap-admin.js', '--email', 'e2e-admin@ayvo.test', '--name', 'E2E Admin'],
+  { cwd: apiRoot, env: testEnv, stdio: 'inherit' },
+);
+
+// Test fixture only (this database is recreated for every run): a second site and warehouse.
+const fixtures = new PrismaClient({ adapter: new PrismaPg({ connectionString: e2eUrl }) });
+await fixtures.$executeRawUnsafe(`
+  INSERT INTO "sites" ("id", "code", "name", "country_code", "address_line1", "postal_code", "city",
+                       "time_zone", "default_locale", "default_currency", "capabilities")
+  VALUES ('01990000-0000-7000-8000-0000000000e2', 'E2E-DE', 'Testovací provozovna DE', 'DE',
+          'Teststraße 1', '10115', 'Berlin', 'Europe/Berlin', 'de-DE', 'EUR',
+          ARRAY['WAREHOUSE', 'PRODUCTION']::"SiteCapability"[])`);
+await fixtures.$executeRawUnsafe(`
+  INSERT INTO "inventory_locations" ("code", "name", "site_id", "is_site_default")
+  VALUES ('E2E-DE-W', 'Testovací sklad DE', '01990000-0000-7000-8000-0000000000e2', true)`);
+await fixtures.$disconnect();
+
 const port = process.env.E2E_API_PORT ?? '4100';
 const child = spawn(process.execPath, ['dist/main.js'], {
   cwd: apiRoot,
   stdio: 'inherit',
   env: {
-    ...process.env,
-    APP_ENV: 'test',
+    ...testEnv,
     API_PORT: port,
-    DATABASE_URL: e2eUrl,
     FILE_STORAGE_DIR: mkdtempSync(join(tmpdir(), 'ayvo-e2e-files-')),
     PUBLIC_QR_BASE_URL: process.env.E2E_PUBLIC_QR_BASE_URL ?? 'http://localhost:3100/q',
   },

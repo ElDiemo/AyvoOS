@@ -290,16 +290,17 @@ This is the single consolidated list (other documents link here).
 3. **Printer verification** — printer model, DPI, label material, adhesive, washing conditions,
    print driver (100 % scale, exact size, black output).
 4. **`qr.ayvo.co` DNS and routing** of `/<token>` to the passport.
-5. **Application authentication** — provider decided 2026-10-11 (external OIDC, WorkOS AuthKit
-   preferred, ADR 0022); still a blocker until implemented and until the pricing, DPA and EU
-   data-location check is done.
-6. **Authorization and role model** — deny-by-default guards on every `/api/admin/*` route, the
-   roles and permissions of doc 020 §12, organization/site scope, audit events; designed, not
-   implemented.
-7. **Rate limiting** — public passport, authentication and mutation endpoints. Not implemented:
-   it needs a decision on how client identity crosses the proxy chain (Caddy → Next.js SSR → API:
-   which forwarded headers are trusted), the public QR host topology, limits and fail-open policy.
-   Redis (already approved, ADR 0010) is the intended store.
+5. **Application authentication** — implemented (Milestone 2C, doc 021: WorkOS AuthKit behind a
+   provider boundary, AYVO sessions); still a blocker until activated and verified with real
+   WorkOS environments and until the pricing, DPA and EU data-location check is done.
+6. **Authorization and role model** — implemented (doc 021: deny-by-default guard on every route,
+   system and custom roles, permissions, site and warehouse scopes (doc 022), audit); hotel
+   organization/site scopes follow with the hotel modules.
+7. **Rate limiting** — **sign-in routes implemented** (doc 021 §5b: Redis, per client IP,
+   `X-Forwarded-For` only from trusted proxies, clean 429, 503 when Redis cannot decide). Still open: the public
+   passport (`/q/<token>`, `/api/public/*`) and mutation endpoints — they need the public QR host
+   topology (Caddy → Next.js SSR → API for `/q`), limits and the failure policy for public
+   traffic.
 8. **Production object-storage provider** — S3-compatible `FileStorage`, versioning / object lock.
 9. **Files backup and restore procedure** — off-site, retention, together with the database.
 10. **Real restore test** before production approval.

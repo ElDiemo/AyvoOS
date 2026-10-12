@@ -329,3 +329,61 @@ async function designerQrValue(page: Page): Promise<string | null> {
     return (JSON.parse(res.responseText) as { qrPreviewUrl: string }).qrPreviewUrl;
   });
 }
+
+test('another site never sees this site’s series, bottles or print jobs', async ({
+  browser,
+  request,
+}) => {
+  // Series and print jobs created above belong to the initial site (operator's site).
+  const history = (await (
+    await request.get('/api/admin/bottle-creation-history?pageSize=100')
+  ).json()) as { items: { code: string; latestPrintJob: { code: string } | null }[] };
+  const series = history.items[0]!;
+  const bottles = (await (await request.get(`/api/admin/bottles?batch=${series.code}`)).json()) as {
+    items: { code: string }[];
+  };
+  const bottle = bottles.items[0]!.code;
+
+  const admin = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
+  const created = await admin.request.post('/api/admin/identity/users', {
+    data: {
+      email: 'e2e-de-production@ayvo.test',
+      displayName: 'Výroba DE',
+      roles: ['PRODUCTION_SUPERVISOR'],
+      siteIds: ['01990000-0000-7000-8000-0000000000e2'],
+      warehouseCodes: [],
+      reason: 'cross-site test',
+    },
+  });
+  expect(created.status()).toBe(201);
+  await admin.close();
+
+  const other = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const page = await other.newPage();
+  await page.goto('/login');
+  await page.getByTestId('sign-in').click();
+  await page.getByLabel('E-mail').fill('e2e-de-production@ayvo.test');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByTestId('active-site')).toHaveText('E2E-DE');
+  await page.goto('/bottles');
+  await expect(page).toHaveURL(/\/bottles$/);
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  await expect(page.locator('main')).not.toContainText(bottle);
+  // Opening the other site's bottle by its code is "not found".
+  const response = await page.goto(`/bottles/${bottle}`);
+  expect(response?.status()).toBe(404);
+  for (const path of [
+    `/api/admin/bottles/${bottle}`,
+    `/api/admin/bottle-batches/${series.code}`,
+    `/api/admin/label-print-jobs/${series.latestPrintJob!.code}`,
+    `/api/admin/label-print-jobs/${series.latestPrintJob!.code}/pdf`,
+  ]) {
+    expect((await page.request.get(path)).status(), path).toBe(404);
+  }
+  expect(
+    (
+      await page.request.post(`/api/admin/label-print-jobs/${series.latestPrintJob!.code}/generate`)
+    ).status(),
+  ).toBe(404);
+  await other.close();
+});

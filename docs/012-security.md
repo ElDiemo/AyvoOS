@@ -74,7 +74,7 @@ Fine-grained permissions are checked per endpoint (NestJS guards); roles map to 
 
 ### Current state of access control (v0.1)
 
-- No application-level authentication yet. Admin routes live under `/api/admin/*`, the public passport under `/api/public/*`. On DEV everything is behind Caddy Basic Auth, which is acceptable **for the isolated DEV environment only**.
+- **Milestone 2C ([doc 021](021-identity-and-access.md)):** OIDC sign-in (WorkOS AuthKit), AYVO sessions, roles, permissions and warehouse scopes evaluated on every request, a deny-by-default guard on every route, and a security audit. Admin routes live under `/api/admin/*`, the public passport under `/api/public/*`. On DEV the whole site additionally stays behind Caddy Basic Auth (outer gate only).
 - **Production blocker** ([ADR 0017](adr/0017-authentication-and-authorization-blocker.md), owner 2026-10-10; provider decided in [ADR 0022](adr/0022-external-oidc-authentication.md), 2026-10-11): application-level authentication, server-side guards on every `/api/admin/*` route, deny-by-default authorization, admin / operations / read-only roles, organization/site scope, audit events for privileged mutations, and rate limiting for the public passport, authentication and mutation endpoints. No custom authentication system. Authentication, users, roles and guards are implemented before the Production Core workflows (doc 020 §14); Basic Auth remains only the outer DEV gate.
 
 ### Transport and headers

@@ -105,6 +105,11 @@ export const warehouseCs = {
     attachDocument: 'Přiložit další doklad',
     attach: 'Přiložit',
     download: 'Stáhnout',
+    costEdit: 'Doplnit / opravit cenu',
+    costSave: 'Uložit cenu',
+    costReason: 'Důvod (povinný, např. číslo faktury)',
+    costUpdated: 'cena upravena',
+    documentsRestricted: 'Doklady dodavatele vidí jen uživatelé s oprávněním k dokladům.',
   },
   documents: {
     kind: 'Druh dokladu',
@@ -140,6 +145,18 @@ export const warehouseCs = {
     settingsSaved: 'Nastavení uloženo jako nová verze.',
     noSettings: 'Plánování zásob není nastaveno.',
     lotKind: { SUPPLIER: 'šarže dodavatele', INTERNAL: 'interní šarže' },
+  },
+  availability: {
+    title: 'Dostupnost zásob',
+    subtitle:
+      'Dostupnost pro plánování obchodu. Pouze pro čtení – bez šarží, dodavatelů, cen a dokladů.',
+    item: 'Položka',
+    available: 'K dispozici',
+    reserved: 'Rezervováno',
+    state: 'Stav',
+    lowStock: 'Pod minimální zásobou',
+    ok: 'V pořádku',
+    empty: 'Žádné položky.',
   },
   movements: {
     title: 'Pohyby zásob',
@@ -179,6 +196,7 @@ export const warehouseCs = {
     INVALID_QUANTITY: 'Neplatné množství (kusy musí být celé číslo).',
     INVALID_DATE: 'Datum příjmu musí být mezi 1. 1. 2020 a dneškem.',
     INVALID_PRICE: 'Cenu uveďte spolu s měnou.',
+    COST_WRITE_REQUIRED: 'Ceny zadává finance (oprávnění k zápisu nákupních cen).',
     INVALID_ITEM: 'Neplatná položka.',
     LOT_NOT_TRACKED: 'U této položky se šarže nesleduje.',
     CORRECTION_BELOW_ZERO: 'Oprava by snížila položku příjmu pod nulu.',

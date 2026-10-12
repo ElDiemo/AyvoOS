@@ -5,6 +5,7 @@ import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { formatDateTimeCs, formatDeltaCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
+import { siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const m = warehouseCs.movements;
@@ -14,6 +15,7 @@ export default async function MovementsPage({
 }: {
   searchParams: Promise<Record<string, string>>;
 }) {
+  const tz = await siteTimeZone();
   const raw = await searchParams;
   const parsed = movementListQuerySchema.safeParse(raw);
   const query = parsed.success ? parsed.data : movementListQuerySchema.parse({});
@@ -53,7 +55,7 @@ export default async function MovementsPage({
               {page.items.map((x) => (
                 <tr key={x.id}>
                   <td className="whitespace-nowrap px-4 py-2 text-stone-500">
-                    {formatDateTimeCs(x.recordedAt)}
+                    {formatDateTimeCs(x.recordedAt, tz)}
                   </td>
                   <td className="px-4 py-2">{m.types[x.type] ?? x.type}</td>
                   <td className="px-4 py-2">{x.item.name}</td>

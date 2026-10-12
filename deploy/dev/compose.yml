@@ -94,6 +94,16 @@ services:
     environment:
       APP_ENV: development
       API_PORT: 4000
+      # Identity and access (ADR 0022, doc 021): WorkOS AuthKit; values only in the server env file.
+      APP_PUBLIC_ORIGIN: https://${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
+      AUTH_PROVIDER: workos
+      WORKOS_API_KEY: ${WORKOS_API_KEY:?set WORKOS_API_KEY in the server env file (doc 021)}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:?set WORKOS_CLIENT_ID in the server env file (doc 021)}
+      WORKOS_JWT_ISSUER: ${WORKOS_JWT_ISSUER:?set WORKOS_JWT_ISSUER in the server env file (doc 021)}
+      # Sign-in rate limits use the client IP. The API publishes no port: only Caddy and the web
+      # container (Docker address pools) reach it, and Caddy replaces X-Forwarded-For with the
+      # real client address (it trusts no incoming value). Thresholds: AUTH_RATE_LIMIT_* (doc 021).
+      TRUSTED_PROXY_CIDRS: 172.16.0.0/12,192.168.0.0/16
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       # The QR URL printed on labels from this environment (DEV labels must never go on real

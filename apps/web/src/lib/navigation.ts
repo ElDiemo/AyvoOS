@@ -1,3 +1,5 @@
+import type { PermissionCode } from '@ayvo/types';
+import { identityCs } from '../i18n/cs/identity';
 import { shellCs } from '../i18n/cs/shell';
 
 /**
@@ -15,13 +17,19 @@ export interface NavPage {
   label: string;
   exact?: boolean;
   prefixes?: readonly string[];
+  /** Hidden without this permission (visible to everyone who sees the module otherwise). */
+  permission?: PermissionCode;
 }
 
 export interface NavModule {
-  id: 'warehouse' | 'production';
+  id: 'warehouse' | 'production' | 'admin';
+  /** Operational modules ("Provoz") or the administration section ("Správa"). */
+  section: 'operations' | 'administration';
   label: string;
   href: string;
   description: string;
+  /** Any one of these is required to see the module at all. */
+  permissions: readonly PermissionCode[];
   pages: readonly NavPage[];
 }
 
@@ -31,20 +39,56 @@ const p = shellCs.modules.production;
 export const MODULES: readonly NavModule[] = [
   {
     id: 'warehouse',
+    section: 'operations',
+    permissions: ['inventory:read', 'inventory:stock_summary'],
     label: w.label,
     href: '/warehouse',
     description: w.description,
     pages: [
-      { id: 'overview', href: '/warehouse', label: w.pages.overview, exact: true },
-      { id: 'new-receipt', href: '/warehouse/receipts/new', label: w.pages.newReceipt },
-      { id: 'receipts', href: '/warehouse/receipts', label: w.pages.receipts },
-      { id: 'stock', href: '/warehouse/stock', label: w.pages.stock },
-      { id: 'movements', href: '/warehouse/movements', label: w.pages.movements },
-      { id: 'suppliers', href: '/warehouse/suppliers', label: w.pages.suppliers },
+      {
+        id: 'overview',
+        href: '/warehouse',
+        label: w.pages.overview,
+        exact: true,
+        permission: 'inventory:read',
+      },
+      {
+        id: 'new-receipt',
+        href: '/warehouse/receipts/new',
+        label: w.pages.newReceipt,
+        permission: 'inventory:receive',
+      },
+      {
+        id: 'receipts',
+        href: '/warehouse/receipts',
+        label: w.pages.receipts,
+        permission: 'inventory:read',
+      },
+      { id: 'stock', href: '/warehouse/stock', label: w.pages.stock, permission: 'inventory:read' },
+      {
+        id: 'availability',
+        href: '/warehouse/availability',
+        label: w.pages.availability,
+        permission: 'inventory:stock_summary',
+      },
+      {
+        id: 'movements',
+        href: '/warehouse/movements',
+        label: w.pages.movements,
+        permission: 'inventory:read',
+      },
+      {
+        id: 'suppliers',
+        href: '/warehouse/suppliers',
+        label: w.pages.suppliers,
+        permission: 'inventory:read',
+      },
     ],
   },
   {
     id: 'production',
+    section: 'operations',
+    permissions: ['production:read'],
     label: p.label,
     href: '/production',
     description: p.description,
@@ -59,20 +103,56 @@ export const MODULES: readonly NavModule[] = [
       },
     ],
   },
+  {
+    id: 'admin',
+    section: 'administration',
+    permissions: ['identity:users_read', 'sites:manage'],
+    label: identityCs.admin.module,
+    href: '/admin/users',
+    description: identityCs.admin.subtitle,
+    pages: [
+      {
+        id: 'users',
+        href: '/admin/users',
+        label: identityCs.admin.nav,
+        permission: 'identity:users_read',
+      },
+      {
+        id: 'roles',
+        href: '/admin/roles',
+        label: identityCs.roles_admin.nav,
+        permission: 'identity:users_read',
+      },
+      {
+        id: 'sites',
+        href: '/admin/sites',
+        label: identityCs.sites_admin.nav,
+        permission: 'sites:manage',
+      },
+    ],
+  },
 ];
 
 export type WarehousePageId =
-  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'movements' | 'suppliers';
+  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId = 'overview' | 'bottles' | 'templates' | 'label-activation';
+export type AdminPageId = 'users' | 'roles' | 'sites';
 
 /**
- * The modules the current user may open. Application authentication and RBAC do not exist yet
- * (ADR 0017): on the DEV preview every implemented module is listed. When roles exist, this
- * becomes a server-side permission filter (the API enforces the same permissions); the shell
- * renders whatever it returns. Hiding a link is never the security boundary.
+ * The modules and pages the signed-in user may open, filtered by the permissions the API reports
+ * for the user (`/api/auth/me`). Hiding a link is never the security boundary: the API enforces
+ * every permission on its own, and pages check again on the server.
  */
-export function visibleModules(): readonly NavModule[] {
-  return MODULES;
+export function visibleModules(permissions: ReadonlySet<string> | readonly string[]): NavModule[] {
+  const has = (p: string) =>
+    permissions instanceof Set
+      ? permissions.has(p)
+      : (permissions as readonly string[]).includes(p);
+  return MODULES.filter((m) => m.permissions.some(has)).flatMap((m) => {
+    const pages = m.pages.filter((page) => !page.permission || has(page.permission));
+    // The module link opens the first page the user may see (e.g. SALES: availability only).
+    return pages.length > 0 ? [{ ...m, href: pages[0]!.href, pages }] : [];
+  });
 }
 
 const within = (pathname: string, prefix: string) =>

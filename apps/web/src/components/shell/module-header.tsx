@@ -1,15 +1,18 @@
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { PageHeader } from '@/components/ui';
-import { moduleById, type NavModule } from '@/lib/navigation';
+import { visibleModules, type NavModule } from '@/lib/navigation';
+import { currentUser } from '@/lib/session';
 
 /**
  * Contextual navigation of one operational module (doc 019). Each page is its own URL, so
  * direct links, refresh and the back button keep the selected page. Wide screens wrap the tabs
- * (never a scrollbar); phones scroll them sideways without a visible scrollbar.
+ * (never a scrollbar); phones scroll them sideways without a visible scrollbar. Only the pages
+ * the signed-in user may open are listed (the pages and the API check again).
  */
-export function ModuleNav({ module, active }: { module: NavModule['id']; active: string }) {
-  const m = moduleById(module);
+export async function ModuleNav({ module, active }: { module: NavModule['id']; active: string }) {
+  const m = visibleModules((await currentUser()).permissions).find((x) => x.id === module);
+  if (!m) return null;
   return (
     <nav aria-label={m.label} className="mb-6 border-b border-stone-200">
       <ul className="flex gap-1 overflow-x-auto [scrollbar-width:none] md:flex-wrap md:overflow-visible [&::-webkit-scrollbar]:hidden">

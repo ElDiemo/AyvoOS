@@ -116,6 +116,24 @@ export const stockOverviewSchema = z.object({
 });
 export type StockOverview = z.infer<typeof stockOverviewSchema>;
 
+/**
+ * GET /api/admin/inventory/stock-summary — availability for planning (SALES, doc 021): item,
+ * available, reserved and the low-stock flag only. No lots, suppliers, prices, documents,
+ * receipts, corrections or movements.
+ */
+export const stockSummarySchema = z.object({
+  location: z.object({ code: z.string(), name: z.string() }),
+  items: z.array(
+    z.strictObject({
+      item: z.strictObject({ code: z.string(), name: z.string(), unitCode: z.string() }),
+      available: decimalStringSchema,
+      reserved: decimalStringSchema,
+      lowStock: z.boolean(),
+    }),
+  ),
+});
+export type StockSummary = z.infer<typeof stockSummarySchema>;
+
 export const inventoryMovementTypeSchema = z.enum([
   'RECEIPT',
   'RECEIPT_CORRECTION',

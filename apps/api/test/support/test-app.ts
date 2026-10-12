@@ -7,7 +7,11 @@ import { inject } from 'vitest';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { ENV, loadEnv, type Env } from '../../src/config/env.js';
+import { PERMISSION_CODES, SYSTEM_ROLE_CODES } from '@ayvo/types';
 import { PrismaService } from '../../src/database/prisma.service.js';
+import type { Principal } from '../../src/identity/principal.js';
+import { evaluateSites } from '../../src/identity/access.service.js';
+import { PrincipalResolver } from '../../src/identity/principal-resolver.js';
 import {
   LabelPdfRenderer,
   PdfLibLabelRenderer,
@@ -19,6 +23,8 @@ import { LocalFileStorage } from '../../src/storage/local-file-storage.js';
 
 /** Test QR base URL: neither a DEV nor the production host. */
 export const TEST_QR_BASE_URL = 'https://qr.example.test';
+/** Origin of the (imaginary) web app in API tests. */
+export const TEST_APP_ORIGIN = 'https://app.example.test';
 
 /** Real renderer that can be told to fail, to simulate PDF generation errors. */
 export class ControllableRenderer extends LabelPdfRenderer {
@@ -62,7 +68,61 @@ export interface TestApp {
   renderer: ControllableRenderer;
   storage: ControllableStorage;
   env: Env;
+  /** The real Redis connection when created with `redis: 'real'`. */
+  redis: RedisService;
   close(): Promise<void>;
+}
+
+/**
+ * Domain tests run as a test "superuser": the request resolver is replaced IN THE TEST MODULE
+ * ONLY by one that returns a principal with every permission, global site access and the site of
+ * the MAIN warehouse as its active site. The
+ * global access guard still runs and still enforces each route's declared rule. Identity tests
+ * use `auth: 'real'` (sessions, cookies, the fake provider) instead.
+ */
+export const SUPERUSER_EMAIL = 'superuser@ayvo.test';
+
+class SuperuserResolver {
+  private principal: Promise<Principal> | null = null;
+  constructor(private readonly prisma: PrismaService) {}
+
+  resolve() {
+    this.principal ??= (async () => {
+      await this.prisma.$executeRaw`
+        INSERT INTO "users" ("email", "display_name") VALUES (${SUPERUSER_EMAIL}, 'Test superuser')
+        ON CONFLICT ("email") DO NOTHING`;
+      const user = await this.prisma.user.findUniqueOrThrow({ where: { email: SUPERUSER_EMAIL } });
+      // Global site access (like ADMIN), working at the site of the MAIN warehouse.
+      const main = await this.prisma.inventoryLocation.findUniqueOrThrow({
+        where: { code: 'MAIN' },
+      });
+      const sites = evaluateSites(
+        await this.prisma.site.findMany({
+          include: {
+            locations: { select: { id: true, code: true, name: true, isSiteDefault: true } },
+          },
+          orderBy: { code: 'asc' },
+        }),
+        true,
+        [],
+      );
+      return {
+        userId: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        sessionId: '00000000-0000-4000-8000-000000000000',
+        roles: SYSTEM_ROLE_CODES.map((code) => ({ code, name: code })),
+        permissions: new Set(PERMISSION_CODES),
+        globalSiteAccess: true,
+        sites,
+        activeSite: sites.find((site) => site.id === main.siteId)!,
+        scopes: [],
+        idleExpiresAt: new Date(Date.now() + 3_600_000),
+        absoluteExpiresAt: new Date(Date.now() + 3_600_000),
+      } satisfies Principal;
+    })();
+    return this.principal.then((principal) => ({ kind: 'principal' as const, principal }));
+  }
 }
 
 export const databaseUrl = inject('testDatabaseUrl');
@@ -78,6 +138,7 @@ export const hasDatabase = databaseUrl !== null;
 export async function createTestApp(
   rawEnv: Partial<Record<string, string>> = {},
   processEnv: Partial<Env> = {},
+  options: { auth?: 'superuser' | 'real'; redis?: 'stub' | 'real' } = {},
 ): Promise<TestApp> {
   if (!databaseUrl) throw new Error('No test database');
   const storageDir = await mkdtemp(join(tmpdir(), 'ayvo-files-'));
@@ -85,27 +146,48 @@ export async function createTestApp(
     ...loadEnv({
       APP_ENV: 'test',
       DATABASE_URL: databaseUrl,
-      REDIS_URL: 'redis://localhost:6379',
+      REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6379',
       PUBLIC_QR_BASE_URL: TEST_QR_BASE_URL,
+      APP_PUBLIC_ORIGIN: TEST_APP_ORIGIN,
+      // Obviously fake: lets tests start a "development"/"production" process (WorkOS is
+      // required there). No request ever reaches WorkOS in tests.
+      WORKOS_API_KEY: 'sk_test_not_a_real_key',
+      WORKOS_CLIENT_ID: 'client_not_a_real_id',
+      WORKOS_JWT_ISSUER: 'https://auth.workos.example',
       FILE_STORAGE_DIR: storageDir,
       LABEL_ARTWORK_MAX_BYTES: String(512 * 1024),
+      // Sign-in limits are exercised by their own test with small values; everywhere else the
+      // many test sign-ins from 127.0.0.1 must not trip them.
+      AUTH_RATE_LIMIT_LOGIN_MAX: '100000',
+      AUTH_RATE_LIMIT_CALLBACK_MAX: '100000',
+      AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: '100000',
       ...rawEnv,
     }),
     ...processEnv,
   };
   const renderer = new ControllableRenderer();
   const storage = new ControllableStorage(storageDir);
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  let builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(ENV)
     .useValue(env)
-    .overrideProvider(RedisService)
-    .useValue({ ping: () => Promise.resolve('PONG') })
     .overrideProvider(LabelPdfRenderer)
     .useValue(renderer)
     // Local storage directly: the real factory refuses to run with APP_ENV=production.
     .overrideProvider(FILE_STORAGE)
-    .useValue(storage)
-    .compile();
+    .useValue(storage);
+  // Sign-in needs the rate limiter's Redis (it fails closed); superuser apps never sign in.
+  if ((options.redis ?? (options.auth === 'real' ? 'real' : 'stub')) === 'stub') {
+    builder = builder
+      .overrideProvider(RedisService)
+      .useValue({ ping: () => Promise.resolve('PONG') });
+  }
+  if ((options.auth ?? 'superuser') === 'superuser') {
+    builder = builder.overrideProvider(PrincipalResolver).useFactory({
+      factory: (prisma: PrismaService) => new SuperuserResolver(prisma),
+      inject: [PrismaService],
+    });
+  }
+  const moduleRef = await builder.compile();
   const app = configureApp(moduleRef.createNestApplication({ logger: false }));
   await app.init();
   return {
@@ -114,6 +196,7 @@ export async function createTestApp(
     renderer,
     storage,
     env,
+    redis: app.get(RedisService),
     close: async () => {
       await app.close();
       await rm(storageDir, { recursive: true, force: true });

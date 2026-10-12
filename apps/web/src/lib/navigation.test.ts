@@ -7,8 +7,64 @@ const where = (path: string) => {
 };
 
 describe('AYVO OS navigation (doc 019)', () => {
-  it('has exactly two operational modules: Sklad and Výroba', () => {
-    expect(visibleModules().map((m) => m.label)).toEqual(['Sklad', 'Výroba']);
+  it('has exactly two operational modules: Sklad and Výroba, plus the administration', () => {
+    const all = MODULES.flatMap((m) => [
+      ...m.permissions,
+      ...m.pages.flatMap((p) => p.permission ?? []),
+    ]);
+    expect(
+      visibleModules(all)
+        .filter((m) => m.section === 'operations')
+        .map((m) => m.label),
+    ).toEqual(['Sklad', 'Výroba']);
+    expect(
+      visibleModules(all)
+        .filter((m) => m.section === 'administration')
+        .map((m) => m.label),
+    ).toEqual(['Správa systému']);
+  });
+
+  it('administration pages follow their own permissions', () => {
+    const admin = (perms: string[]) =>
+      visibleModules(perms)
+        .find((m) => m.id === 'admin')
+        ?.pages.map((p) => p.id);
+    expect(admin(['identity:users_read', 'sites:manage'])).toEqual(['users', 'roles', 'sites']);
+    expect(admin(['identity:users_read'])).toEqual(['users', 'roles']);
+    expect(admin(['sites:manage'])).toEqual(['sites']);
+    expect(visibleModules(['sites:manage'])[0]!.href).toBe('/admin/sites');
+    expect(admin(['inventory:read'])).toBeUndefined();
+  });
+
+  it('shows only what the permissions allow', () => {
+    expect(visibleModules([]).map((m) => m.id)).toEqual([]);
+    expect(visibleModules(['inventory:read']).map((m) => m.id)).toEqual(['warehouse']);
+    // Without inventory:receive the receipt form is not offered.
+    expect(visibleModules(['inventory:read'])[0]!.pages.map((p) => p.id)).not.toContain(
+      'new-receipt',
+    );
+    expect(
+      visibleModules(['inventory:read', 'inventory:receive'])[0]!.pages.map((p) => p.id),
+    ).toContain('new-receipt');
+    expect(visibleModules(['identity:users_read']).map((m) => m.id)).toEqual(['admin']);
+  });
+
+  it('SALES sees only the availability page of the warehouse; the module link opens it', () => {
+    const [warehouse, ...rest] = visibleModules(['inventory:stock_summary']);
+    expect(rest).toEqual([]);
+    expect(warehouse!.id).toBe('warehouse');
+    expect(warehouse!.pages.map((p) => p.id)).toEqual(['availability']);
+    expect(warehouse!.href).toBe('/warehouse/availability');
+    // Full warehouse readers keep the overview as the module link and do not get the summary tab.
+    const full = visibleModules(['inventory:read'])[0]!;
+    expect(full.href).toBe('/warehouse');
+    expect(full.pages.map((p) => p.id)).toEqual([
+      'overview',
+      'receipts',
+      'stock',
+      'movements',
+      'suppliers',
+    ]);
   });
 
   it('keeps label application out of the warehouse and inside production', () => {
@@ -19,6 +75,7 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Příjem zboží',
       'Příjmy',
       'Stav skladu',
+      'Dostupnost',
       'Pohyby',
       'Dodavatelé',
     ]);
@@ -38,6 +95,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/warehouse/receipts/GR-000001')).toBe('warehouse/receipts');
     expect(where('/warehouse/receipts/new')).toBe('warehouse/new-receipt');
     expect(where('/warehouse/stock')).toBe('warehouse/stock');
+    expect(where('/warehouse/availability')).toBe('warehouse/availability');
     expect(where('/production')).toBe('production/overview');
     expect(where('/production/label-activation')).toBe('production/label-activation');
     // Bottles, series and templates keep their URLs but belong to Production.
@@ -49,5 +107,8 @@ describe('AYVO OS navigation (doc 019)', () => {
     // Prefixes match whole path segments only.
     expect(where('/bottlesX')).toBeNull();
     expect(where('/warehouses')).toBeNull();
+    expect(where('/admin/users/x')).toBe('admin/users');
+    expect(where('/admin/roles/new')).toBe('admin/roles');
+    expect(where('/admin/sites/x')).toBe('admin/sites');
   });
 });

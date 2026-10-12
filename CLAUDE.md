@@ -30,7 +30,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   BottleEvent, BottleCreationBatch, LabelTemplate(+Version/Element), LabelArtwork, LabelPrintJob.
   Milestone 2A (doc 018): inventory units/items/settings/locations/lots, the stock ledger and
   balances, BOM versions/lines, suppliers, supplier documents, goods receipts (+lines, document
-  links, corrections), bottle component attachments, operation requests. **Approved design, not
+  links, corrections), bottle component attachments, operation requests. Milestone 2C (doc 021):
+  users, user identities, roles (system + custom, ADR 0024), permissions, user roles, user scopes
+  (site + warehouse), user sessions (with the active site), login states, identity bootstrap,
+  audit events, **sites** (doc 022, ADR 0023), user invitations (doc 021 §7b). **Approved design, not
   implemented** (Production Core v0.1, doc 020): users/roles/scopes (ADR 0022), product
   categories, products, product-label approvals, recipe versions, crate types, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,
@@ -57,9 +60,37 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   coverage is derived (priority → `ready_at` → order code, whole reservations only). No activation
   outside a production order once the production scan exists. v0.1 deliveries are whole crates of
   40 (doc 008).
-- **Authentication (owner 2026-10-11, ADR 0022):** external OIDC (WorkOS AuthKit preferred);
-  users, roles, permissions, scopes and audit actors are authoritative in PostgreSQL; never
-  authorize from an unverified external claim. Implemented before the production workflows.
+- **Authentication (owner 2026-10-11, ADR 0022, doc 021 — Milestone 2C):** external OIDC (WorkOS
+  AuthKit) behind the provider boundary in `apps/api/src/identity`; users, roles, permissions,
+  scopes, sessions and audit are authoritative in PostgreSQL and evaluated on every request;
+  identity only from the `ayvo_session` cookie, never from headers or unverified claims.
+  **Every API route must declare `@Public()`, `@Authenticated()` or `@RequirePermission(...)`** —
+  the global guard denies everything else, and `test/identity.e2e.test.ts` fails on an undeclared
+  route. New permissions are added to the catalogue by migration (and to `packages/types`) and
+  granted to `ADMIN` explicitly in the same migration (ADMIN = whole system, never a code bypass;
+  the role-matrix test fails otherwise). Purchase prices and supplier documents need
+  `procurement:cost_read` / `procurement:documents_read` and are omitted server-side otherwise;
+  recording prices needs `procurement:cost_write` (refused otherwise, also on replay). Production
+  series, bottles, print jobs and supplier documents belong to a site (`@OperationalSite()`);
+  label templates are company-wide (`production:templates_manage`, ADMIN by default). The sign-in
+  rate limiter fails closed (503) without Redis.
+  Users are onboarded only by AYVO invitations (provider API, server-side): an identity is linked
+  at first sign-in only if the provider reports the user's invitation accepted by exactly that
+  identity (the bootstrap ADMIN excepted). Session defaults: 120 min idle, 12 h absolute.
+  WorkOS tokens: exact `WORKOS_JWT_ISSUER` (required), `client_id`, `sid`, RS256 only (doc 021 §5a).
+  The permission catalogue and system roles change only inside a migration that switches
+  `ayvo.catalogue_migration` on (and off at the end); custom roles never hold security
+  administration. Sign-in routes are rate limited in Redis (doc 021 §5b).
+- **Sites (owner 2026-10-12, ADR 0023, doc 022):** a site is a physical facility (not a country, not
+  a legal entity) and the operational boundary. Warehouses belong to exactly one site; roles say
+  what, site scopes say where (warehouse scopes only narrow an accessible site); ADMIN's global
+  access is the permission `sites:all_access`. Warehouse-scoped routes act on the session's
+  validated active site (`@OperationalWarehouse()`), never on a site named in the request. New
+  operational records belong to a site; codes stay globally unique; timestamps UTC, shown in the
+  site's time zone. Hotel fulfilment site and per-site carriers: rules in doc 022 §7–§8 (not
+  implemented).
+  `AUTH_PROVIDER=test` exists only with `APP_ENV=test`; never add another bypass. The first
+  ADMIN is bootstrapped once (`node dist/identity/bootstrap-admin.js`).
 - Bottle **internal ID ≠ public QR identity**. The public QR identity is opaque, practically
   unguessable, and its URL stays stable for the bottle's physical lifetime (ADR 0005). Production
   QR URL `https://qr.ayvo.co/<token>`, DEV `https://dev.ayvo.co/q/<token>`; token = 128 random
@@ -124,8 +155,9 @@ Tailwind 4 · Vitest · Playwright.
   `apps/api/prisma/schema.prisma`; generated client in `apps/api/src/generated/` (git-ignored,
   produced by `pnpm db:generate`). Env validated by Zod in `src/config/env.ts`. Domain modules:
   `labels` ← `assets` ← `label-production` (doc 016); `inventory` ← `procurement`; `warehouse`
-  composes assets, label-production, inventory and procurement (doc 018); `storage` = FileStorage
-  abstraction.
+  composes assets, label-production, inventory and procurement (doc 018); `sites` (facilities,
+  doc 022) ← `identity` (users, roles, scopes, sessions, global access guard — doc 021); `audit`
+  (shared security audit); `storage` = FileStorage abstraction.
   Routes: `/api/admin/*` (staff) and `/api/public/*` (anonymous passport only).
 - `apps/web` — Next.js App Router. Server-only env in `src/lib/env.ts`. Admin pages in
   `src/app/(admin)`, public passport in `src/app/q/[token]`. The internal app is organized by
@@ -150,8 +182,15 @@ Tailwind 4 · Vitest · Playwright.
 - API integration tests (`apps/api/test/*.e2e.test.ts`) run against a real, per-run PostgreSQL
   database (created, migrated and dropped by `test/support/global-setup.ts`; needs
   `pnpm infra:up`). Never mock the database for invariants, transactions or concurrency.
+  `createTestApp()` runs as a test superuser (resolver replaced in the test module only; the guard
+  still enforces each route's rule; global site access, active site = the site of `MAIN`); use
+  `createTestApp({}, {}, { auth: 'real' })` for authentication tests (`test/support/sign-in.ts`)
+  and `{ redis: 'real' }` where Redis matters (rate limits). Test files share one database and run
+  one at a time in no fixed order: never assume the number of sites, warehouses or admins.
 - Playwright (`pnpm test:e2e`, needs `pnpm build`) starts the built API on a fresh `ayvo_e2e`
-  database (port 4100) and the web app on port 3100.
+  database (port 4100, fake identity provider, bootstrapped `e2e-admin@ayvo.test`) and the web app
+  on port 3100; it also adds a fictional second site with a warehouse (`E2E-DE`). `e2e/auth.setup.ts`
+  signs in, sets the admin session's active site and stores the sessions used by the specs.
 - Architecture changes need an ADR (`docs/adr/`, next number; supersede, don't rewrite).
 - **CLAUDE.md is the canonical AI instruction file.** Turborepo's auto-generated `AGENTS.md` is
   disabled (`"agentGuidance": false` in `turbo.json`, ADR 0012). Turborepo may differ from your

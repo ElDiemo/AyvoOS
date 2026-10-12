@@ -45,6 +45,69 @@ export const envSchema = z
       .max(50 * 1024 * 1024)
       .default(10 * 1024 * 1024),
 
+    // --- Identity and access (ADR 0022, doc 021) ---------------------------------------------
+    // Origin of the web application as the browser sees it (redirect URIs, Origin checks of
+    // state-changing requests). DEV preview: https://dev.ayvo.co. Required in production.
+    APP_PUBLIC_ORIGIN: z
+      .url({ protocol: /^https?$/ })
+      .refine((url) => new URL(url).pathname === '/' && !url.endsWith('/'), 'origin without path')
+      .optional(),
+    // `workos` everywhere except automated tests; `test` (a fake provider) only with APP_ENV=test.
+    AUTH_PROVIDER: z.enum(['workos', 'test']).optional(),
+    WORKOS_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(10).optional()),
+    WORKOS_CLIENT_ID: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().min(10).optional(),
+    ),
+    WORKOS_API_BASE_URL: z.url({ protocol: /^https$/ }).default('https://api.workos.com'),
+    // Exact expected `iss` of WorkOS access tokens (copied from the WorkOS dashboard / a decoded
+    // token; custom auth domains change it). Required whenever AUTH_PROVIDER=workos; never derived
+    // from a token.
+    WORKOS_JWT_ISSUER: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.url({ protocol: /^https$/ }).optional(),
+    ),
+    // Rate limiting of the sign-in routes (Redis, per client IP, fixed window; doc 021 §5b).
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(86_400).default(600),
+    AUTH_RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().min(1).max(100_000).default(30),
+    AUTH_RATE_LIMIT_CALLBACK_MAX: z.coerce.number().int().min(1).max(100_000).default(30),
+    AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: z.coerce.number().int().min(1).max(100_000).default(10),
+    // Proxies (IPs or CIDRs, comma-separated) whose X-Forwarded-For names the client. Empty: the
+    // socket address is the client. DEV: the Docker networks Caddy reaches the API from.
+    TRUSTED_PROXY_CIDRS: z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean),
+      )
+      .pipe(
+        z.array(
+          z
+            .string()
+            .regex(
+              /^(?:\d{1,3}(?:\.\d{1,3}){3}(?:\/(?:[0-9]|[12]\d|3[0-2]))?|[0-9a-fA-F:]+(?:\/(?:\d|[1-9]\d|1[01]\d|12[0-8]))?)$/,
+              'an IPv4/IPv6 address or CIDR',
+            ),
+        ),
+      ),
+
+    // Application session lifetime: idle timeout and absolute maximum.
+    SESSION_IDLE_MINUTES: z.coerce
+      .number()
+      .int()
+      .min(5)
+      .max(24 * 60)
+      .default(120),
+    SESSION_ABSOLUTE_HOURS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(7 * 24)
+      .default(12),
+
     // Upper limit for an uploaded supplier document (PDF, JPEG or PNG), in bytes.
     SUPPLIER_DOCUMENT_MAX_BYTES: z.coerce
       .number()
@@ -59,6 +122,31 @@ export const envSchema = z
       ctx.addIssue({ code: 'custom', path: [path], message });
       return z.NEVER;
     };
+
+    // Identity first: a misconfigured authentication must never be masked by another error.
+    const authProvider = env.AUTH_PROVIDER ?? (env.APP_ENV === 'test' ? 'test' : 'workos');
+    if (authProvider === 'test' && env.APP_ENV !== 'test') {
+      // Never a bypass on DEV or production: the fake provider exists for automated tests only.
+      return fail('AUTH_PROVIDER', 'AUTH_PROVIDER=test is allowed only with APP_ENV=test');
+    }
+    if (
+      authProvider === 'workos' &&
+      (!env.WORKOS_API_KEY || !env.WORKOS_CLIENT_ID || !env.WORKOS_JWT_ISSUER)
+    ) {
+      return fail(
+        'AUTH_PROVIDER',
+        'WORKOS_API_KEY, WORKOS_CLIENT_ID and WORKOS_JWT_ISSUER are required for AUTH_PROVIDER=workos',
+      );
+    }
+    if (production && !env.APP_PUBLIC_ORIGIN) {
+      return fail('APP_PUBLIC_ORIGIN', 'APP_PUBLIC_ORIGIN is required in production');
+    }
+    if (env.SESSION_IDLE_MINUTES > env.SESSION_ABSOLUTE_HOURS * 60) {
+      return fail(
+        'SESSION_IDLE_MINUTES',
+        'The idle timeout cannot exceed the absolute session lifetime',
+      );
+    }
 
     if (production && !env.PUBLIC_QR_BASE_URL) {
       return fail('PUBLIC_QR_BASE_URL', 'PUBLIC_QR_BASE_URL is required in production');
@@ -88,6 +176,8 @@ export const envSchema = z
 
     return {
       ...env,
+      AUTH_PROVIDER: authProvider,
+      APP_PUBLIC_ORIGIN: env.APP_PUBLIC_ORIGIN ?? 'http://localhost:3000',
       PUBLIC_QR_BASE_URL: publicQrBaseUrl,
       LABEL_QR_MIN_SIZE_MM: env.LABEL_QR_MIN_SIZE_MM ?? 10,
       LABEL_QR_ERROR_CORRECTION: env.LABEL_QR_ERROR_CORRECTION ?? ('Q' as const),

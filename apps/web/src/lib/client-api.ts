@@ -32,6 +32,18 @@ async function readError(res: Response): Promise<ClientApiError> {
     // non-JSON error body: keep the generic message
   }
   if (res.status === 413) message = 'Soubor je příliš velký';
+  // The session ended or the account was deactivated while the page was open: leave the page.
+  if (typeof window !== 'undefined') {
+    const next = encodeURIComponent(window.location.pathname + window.location.search);
+    if (res.status === 401) {
+      window.location.assign(
+        code === 'SESSION_EXPIRED' ? `/session-expired?next=${next}` : `/login?next=${next}`,
+      );
+    } else if (res.status === 403 && code === 'ACCOUNT_INACTIVE') {
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a full reload drops all client state after the session ended
+      window.location.assign('/account-inactive');
+    }
+  }
   return new ClientApiError(res.status, message, code);
 }
 

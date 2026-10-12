@@ -1,7 +1,8 @@
 # ADR 0022: Authentication through an external OIDC provider; authorization in AYVO OS
 
-- **Status:** Accepted — confirmed by owner 2026-10-11 (implementation pending; still a
-  production blocker until implemented, doc 016)
+- **Status:** Accepted — confirmed by owner 2026-10-11; implemented in Milestone 2C
+  ([doc 021](../021-identity-and-access.md)); DEV activation pending the owner's WorkOS setup;
+  still a production blocker until verified in production (doc 016)
 - **Date:** 2026-10-11
 - **Deciders:** AYVO owner; AYVO OS lead architect
 - **Supersedes:** the provider decision left open by
@@ -36,6 +37,11 @@ quantities). Later the hotel portal needs hotel SSO and strict tenant isolation 
    `WAREHOUSE_SUPERVISOR`, `ADMIN`; hotel and finance roles later. Permissions are checked
    server-side, deny by default. `ADMIN` administers users, roles and configuration; operational
    actions by `ADMIN` are emergency overrides with a mandatory reason and an audit event.
+   _Amended by the owner 2026-10-12 (doc 021 §4):_ `ADMIN` sees and manages the whole system and
+   holds every permission — granted as ordinary `role_permissions` rows (never a code bypass;
+   guards, scopes and the last-admin protection stay active); each new permission is granted to
+   `ADMIN` explicitly by its migration. The mandatory-reason rule for operational ADMIN actions
+   arrives with Production Core.
 6. **Sequence:** authentication, users, roles and guards are implemented **before** the Production
    Core schema and workflows (doc 020 §14 step 2). Basic Auth stays only as the outer DEV gate.
 7. Secrets (provider API key, client secret, cookie password) live in the server env file

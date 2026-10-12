@@ -4,7 +4,8 @@
 // Lifecycle history is append-only (ADR 0006).
 //
 // Milestone 1 (bottles, label templates, printing v0.1) and Milestone 2A (inventory foundation,
-// supplier receiving, physical label application — doc 018) add the models below. Crates,
+// supplier receiving, physical label application — doc 018) and Milestone 2C (identity and
+// access — ADR 0022, doc 021) add the models below. Crates,
 // products, fill batches, hotels, deliveries, billing and ESG are still NOT modelled.
 //
 // Invariants that Prisma cannot express live as raw SQL in the migrations and are listed in the
@@ -172,13 +173,18 @@ model BottleCreationBatch {
   firstBottleSerial      BigInt   @map("first_bottle_serial")
   lastBottleSerial       BigInt   @map("last_bottle_serial")
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// The site that created the series (doc 022 §6); its bottles and print jobs belong to it.
+  siteId                 String   @map("site_id") @db.Uuid
 
   labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  site                 Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
   bottles              Bottle[]
   events               BottleEvent[]
   printJobs            LabelPrintJob[]
 
+  @@unique([id, siteId])
   @@index([labelTemplateVersionId])
+  @@index([siteId, serial])
   @@map("bottle_creation_batches")
 }
 
@@ -196,13 +202,17 @@ model Bottle {
   status          BottleStatus
   creationBatchId String       @map("creation_batch_id") @db.Uuid
   createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// The site the bottle belongs to — its series' site (composite FK). No transfer in v0.1.
+  siteId          String       @map("site_id") @db.Uuid
 
-  creationBatch BottleCreationBatch         @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  creationBatch BottleCreationBatch         @relation(fields: [creationBatchId, siteId], references: [id, siteId], onDelete: Restrict)
+  site          Site                        @relation(fields: [siteId], references: [id], onDelete: Restrict)
   events        BottleEvent[]
   printJobItems LabelPrintJobItem[]
   components    BottleComponentAttachment[]
 
   @@index([creationBatchId, serial])
+  @@index([siteId, serial])
   @@map("bottles")
 }
 
@@ -288,12 +298,16 @@ model LabelPrintJob {
   fileStorageKey         String?                @map("file_storage_key")
   fileByteSize           Int?                   @map("file_byte_size")
   fileSha256             String?                @map("file_sha256") @db.Char(64)
+  /// The site of the series (composite FK): print jobs never cross sites.
+  siteId                 String                 @map("site_id") @db.Uuid
 
-  creationBatch        BottleCreationBatch  @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  creationBatch        BottleCreationBatch  @relation(fields: [creationBatchId, siteId], references: [id, siteId], onDelete: Restrict)
+  site                 Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
   labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
   items                LabelPrintJobItem[]
 
   @@index([creationBatchId])
+  @@index([siteId, serial])
   @@map("label_print_jobs")
 }
 
@@ -454,12 +468,18 @@ model InventoryItemSetting {
 
 /// Physical stock location. One ("MAIN") for now. DB: code pattern; DELETE rejected.
 model InventoryLocation {
-  id   String @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code String @unique
-  name String
+  id            String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code          String  @unique
+  name          String
+  /// The site (facility) the warehouse belongs to — exactly one, immutable (doc 022).
+  siteId        String  @map("site_id") @db.Uuid
+  /// The warehouse the site's operations act on in v0.1. DB: at most one per site.
+  isSiteDefault Boolean @default(false) @map("is_site_default")
 
-  movements InventoryMovement[]
-  balances  InventoryBalance[]
+  site       Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  movements  InventoryMovement[]
+  balances   InventoryBalance[]
+  userScopes UserScope[]
 
   @@map("inventory_locations")
 }
@@ -652,13 +672,17 @@ model SupplierDocument {
   createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   actorId          String?              @map("actor_id") @db.Uuid
   requestId        String               @unique @map("request_id") @db.Uuid
+  /// The receiving site whose purchasing paperwork this is (doc 022 §2).
+  siteId           String               @map("site_id") @db.Uuid
 
   supplier     Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  site         Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
   supersedes   SupplierDocument?      @relation("SupplierDocumentSupersedes", fields: [supersedesId], references: [id], onDelete: Restrict)
   supersededBy SupplierDocument[]     @relation("SupplierDocumentSupersedes")
   receiptLinks GoodsReceiptDocument[]
 
   @@index([supplierId])
+  @@index([siteId, supplierId])
   @@map("supplier_documents")
 }
 
@@ -683,12 +707,16 @@ model GoodsReceipt {
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   actorId           String?          @map("actor_id") @db.Uuid
   requestId         String           @unique @map("request_id") @db.Uuid
+  /// The site whose warehouse received the goods (doc 022).
+  siteId            String           @map("site_id") @db.Uuid
 
   supplier  Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  site      Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
   lines     GoodsReceiptLine[]
   documents GoodsReceiptDocument[]
 
   @@index([supplierId])
+  @@index([siteId, receivedAt])
   @@map("goods_receipts")
 }
 
@@ -713,10 +741,34 @@ model GoodsReceiptLine {
   internalLot InventoryLot?            @relation("InternalLotOrigin")
   corrections GoodsReceiptCorrection[]
   movements   InventoryMovement[]
+  costs       GoodsReceiptLineCost[]
 
   @@unique([receiptId, lineNo])
   @@index([lotId])
   @@map("goods_receipt_lines")
+}
+
+/// A later financial completion or correction of a receipt line's purchase price (FINANCE,
+/// `procurement:cost_write`; doc 021 §4). Append-only; the latest record is the line's current
+/// price, the line keeps what was recorded at receipt. DB: price ⇔ currency; VAT needs a price;
+/// site = the receipt's site; insert-only.
+model GoodsReceiptLineCost {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  receiptLineId String   @map("receipt_line_id") @db.Uuid
+  unitPrice     Decimal? @map("unit_price") @db.Decimal(19, 4)
+  currency      String?  @db.Char(3)
+  vatRate       Decimal? @map("vat_rate") @db.Decimal(5, 2)
+  reason        String
+  actorId       String   @map("actor_id") @db.Uuid
+  siteId        String   @map("site_id") @db.Uuid
+  requestId     String   @unique @map("request_id") @db.Uuid
+  recordedAt    DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  receiptLine GoodsReceiptLine @relation(fields: [receiptLineId], references: [id], onDelete: Restrict)
+  site        Site             @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([receiptLineId, recordedAt])
+  @@map("goods_receipt_line_costs")
 }
 
 /// Append-only link of a receipt to a supplier document (documents can be added, never removed).
@@ -769,6 +821,7 @@ enum OperationKind {
   RECEIPT_CORRECTION
   ITEM_SETTINGS
   LABEL_APPLICATION
+  RECEIPT_LINE_COST
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -781,4 +834,380 @@ model OperationRequest {
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@map("operation_requests")
+}
+
+// ---------------------------------------------------------------------------------------------
+// identity module — users, external identities, roles, permissions, scopes, sessions, audit
+// (Milestone 2C, ADR 0022, doc 021). Authentication is delegated to an external OIDC provider;
+// authorization is evaluated from these tables on every request.
+// ---------------------------------------------------------------------------------------------
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+/// An AYVO user. Never deleted; deactivation revokes access immediately.
+/// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
+model User {
+  id                 String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email              String     @unique
+  displayName        String     @map("display_name")
+  status             UserStatus @default(ACTIVE)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// NULL only for the bootstrap administrator.
+  createdBy          String?    @map("created_by") @db.Uuid
+  deactivatedAt      DateTime?  @map("deactivated_at") @db.Timestamptz(3)
+  deactivatedBy      String?    @map("deactivated_by") @db.Uuid
+  deactivationReason String?    @map("deactivation_reason")
+  lastLoginAt        DateTime?  @map("last_login_at") @db.Timestamptz(3)
+
+  createdByUser      User?              @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdUsers       User[]             @relation("UserCreatedBy")
+  deactivatedByUser  User?              @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
+  deactivatedUsers   User[]             @relation("UserDeactivatedBy")
+  identities         UserIdentity[]
+  roles              UserRole[]         @relation("UserRoles")
+  rolesGranted       UserRole[]         @relation("RoleGrantedBy")
+  rolesRevoked       UserRole[]         @relation("RoleRevokedBy")
+  scopes             UserScope[]        @relation("UserScopes")
+  scopesGranted      UserScope[]        @relation("ScopeGrantedBy")
+  scopesRevoked      UserScope[]        @relation("ScopeRevokedBy")
+  sessions           UserSession[]
+  bootstrap          IdentityBootstrap?
+  rolesCreated       Role[]             @relation("RoleCreatedBy")
+  rolesUpdated       Role[]             @relation("RoleUpdatedBy")
+  sitesCreated       Site[]             @relation("SiteCreatedBy")
+  invitations        UserInvitation[]   @relation("UserInvitations")
+  invitationsSent    UserInvitation[]   @relation("InvitationCreatedBy")
+  invitationsRevoked UserInvitation[]   @relation("InvitationRevokedBy")
+  sitesUpdated       Site[]             @relation("SiteUpdatedBy")
+
+  @@map("users")
+}
+
+/// Link of an external identity (provider + subject) to an AYVO user.
+/// DB: one active link per (provider, subject) and per (user, provider) (partial unique);
+/// provider/subject/user immutable; unlink closes once; DELETE rejected.
+model UserIdentity {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  /// "WORKOS" (production/DEV) or "TEST" (APP_ENV=test only).
+  provider    String
+  subject     String
+  emailAtLink String    @map("email_at_link")
+  linkedAt    DateTime  @default(now()) @map("linked_at") @db.Timestamptz(3)
+  unlinkedAt  DateTime? @map("unlinked_at") @db.Timestamptz(3)
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions UserSession[]
+
+  @@index([userId])
+  @@map("user_identities")
+}
+
+/// Roles. System roles (is_system) are seeded and change only by migration; custom roles are
+/// created by ADMIN (doc 021 §7a). DB: never deleted; code, id and is_system immutable; a role
+/// with open grants cannot be deactivated; an inactive role cannot be granted.
+model Role {
+  code          String    @id
+  /// Stable identifier (the code is the human-readable key).
+  id            String    @unique @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// Czech display name.
+  name          String
+  description   String
+  isSystem      Boolean   @default(false) @map("is_system")
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy     String?   @map("created_by") @db.Uuid
+  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy     String?   @map("updated_by") @db.Uuid
+  deactivatedAt DateTime? @map("deactivated_at") @db.Timestamptz(3)
+
+  permissions   RolePermission[]
+  grants        UserRole[]
+  createdByUser User?            @relation("RoleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedByUser User?            @relation("RoleUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  @@map("roles")
+}
+
+/// Permission catalogue. DB: seeded by migration; changes only by migration.
+model Permission {
+  code            String          @id
+  description     String
+  /// Also requires access to the active site and its warehouse (doc 022).
+  warehouseScoped Boolean         @map("warehouse_scoped")
+  /// Security administration: only the ADMIN system role may hold it (never a custom role).
+  securityAdmin   Boolean         @default(false) @map("security_admin")
+  /// Needs the active site (without a warehouse) and filters its data by that site (doc 022).
+  siteScoped      Boolean         @default(false) @map("site_scoped")
+  /// The site capability the active site must have for this permission.
+  siteCapability  SiteCapability? @map("site_capability")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// Which permissions a role grants. DB: system roles change only by migration; custom roles by
+/// ADMIN (audited); a custom role never holds a security-administration permission.
+model RolePermission {
+  roleCode       String @map("role_code")
+  permissionCode String @map("permission_code")
+
+  role       Role       @relation(fields: [roleCode], references: [code], onDelete: Restrict)
+  permission Permission @relation(fields: [permissionCode], references: [code], onDelete: Restrict)
+
+  @@id([roleCode, permissionCode])
+  @@map("role_permissions")
+}
+
+/// A role granted to a user. Revocation closes the grant once; the grant row stays as history.
+/// DB: at most one open grant per (user, role) (partial unique); DELETE rejected.
+model UserRole {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  roleCode     String    @map("role_code")
+  grantedAt    DateTime  @default(now()) @map("granted_at") @db.Timestamptz(3)
+  grantedBy    String?   @map("granted_by") @db.Uuid
+  grantReason  String    @map("grant_reason")
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy    String?   @map("revoked_by") @db.Uuid
+  revokeReason String?   @map("revoke_reason")
+
+  user          User  @relation("UserRoles", fields: [userId], references: [id], onDelete: Restrict)
+  role          Role  @relation(fields: [roleCode], references: [code], onDelete: Restrict)
+  grantedByUser User? @relation("RoleGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  revokedByUser User? @relation("RoleRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("user_roles")
+}
+
+enum ScopeType {
+  WAREHOUSE
+  SITE
+  HOTEL_ORGANIZATION
+  HOTEL_SITE
+}
+
+/// Data access scope of a user (doc 022). SITE references a site (facility); WAREHOUSE narrows a
+/// site to listed warehouses and needs an open SITE scope of the warehouse's site; hotel scopes
+/// reference hotel organizations/sites once those modules exist (no FK yet).
+/// DB: SITE ⇔ site_id set; WAREHOUSE ⇔ location_id set; hotel scopes ⇔ scope_ref set; at most
+/// one open scope per target (partial unique); revocation closes once; DELETE rejected.
+model UserScope {
+  id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  type       ScopeType
+  siteId     String?   @map("site_id") @db.Uuid
+  locationId String?   @map("location_id") @db.Uuid
+  scopeRef   String?   @map("scope_ref") @db.Uuid
+  grantedAt  DateTime  @default(now()) @map("granted_at") @db.Timestamptz(3)
+  grantedBy  String?   @map("granted_by") @db.Uuid
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy  String?   @map("revoked_by") @db.Uuid
+
+  user          User               @relation("UserScopes", fields: [userId], references: [id], onDelete: Restrict)
+  site          Site?              @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  location      InventoryLocation? @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  grantedByUser User?              @relation("ScopeGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  revokedByUser User?              @relation("ScopeRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("user_scopes")
+}
+
+/// An AYVO application session. Only the SHA-256 of the random cookie token is stored.
+/// DB: token hash unique; revocation closes once.
+model UserSession {
+  id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  tokenSha256       String    @unique @map("token_sha256") @db.Char(64)
+  userId            String    @map("user_id") @db.Uuid
+  identityId        String    @map("identity_id") @db.Uuid
+  /// The provider's session id (for provider logout); never a credential.
+  providerSessionId String?   @map("provider_session_id")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  idleExpiresAt     DateTime  @map("idle_expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokeReason      String?   @map("revoke_reason")
+  /// The site the user works at in this session (validated against the scopes on every request).
+  activeSiteId      String?   @map("active_site_id") @db.Uuid
+
+  user       User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  identity   UserIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
+  activeSite Site?        @relation(fields: [activeSiteId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("user_sessions")
+}
+
+/// One-time OAuth state of a login attempt (CSRF protection of the callback, PKCE verifier).
+/// DB: state hash unique; used once.
+model AuthLoginState {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  stateSha256   String    @unique @map("state_sha256") @db.Char(64)
+  /// SHA-256 of the browser-binding cookie set when the attempt started.
+  bindingSha256 String    @map("binding_sha256") @db.Char(64)
+  codeVerifier  String    @map("code_verifier")
+  nextPath      String    @map("next_path")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt        DateTime? @map("used_at") @db.Timestamptz(3)
+
+  @@map("auth_login_states")
+}
+
+/// The one-time bootstrap of the first administrator. DB: a single row ever (PK = true);
+/// insert-only.
+model IdentityBootstrap {
+  singleton Boolean  @id @default(true)
+  userId    String   @unique @map("user_id") @db.Uuid
+  email     String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("identity_bootstrap")
+}
+
+/// Append-only security and administration audit (logins, role and scope changes, …).
+/// DB: UPDATE/DELETE rejected.
+model AuditEvent {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  type         String
+  /// NULL for system actions (bootstrap) and anonymous login attempts.
+  actorUserId  String?  @map("actor_user_id") @db.Uuid
+  targetUserId String?  @map("target_user_id") @db.Uuid
+  reason       String?
+  payload      Json     @default("{}")
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  /// The site a site-specific event concerns (doc 022).
+  siteId       String?  @map("site_id") @db.Uuid
+
+  site Site? @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([targetUserId, occurredAt])
+  @@index([siteId, occurredAt])
+  @@index([occurredAt])
+  @@map("audit_events")
+}
+
+enum SiteCapability {
+  WAREHOUSE
+  PRODUCTION
+  RETURNS
+}
+
+/// A physical AYVO facility — the top-level operational boundary (doc 022, ADR 0023). Not a
+/// country and not a legal entity. DB: code unique and immutable; never deleted; a valid IANA
+/// time zone; deactivation keeps history and blocks new operational changes.
+model Site {
+  id              String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code            String           @unique
+  name            String
+  /// ISO 3166-1 alpha-2.
+  countryCode     String           @map("country_code") @db.Char(2)
+  addressLine1    String?          @map("address_line1")
+  addressLine2    String?          @map("address_line2")
+  postalCode      String?          @map("postal_code")
+  city            String?
+  /// IANA time zone used to present this site's timestamps (stored in UTC).
+  timeZone        String           @map("time_zone")
+  defaultLocale   String           @map("default_locale")
+  /// ISO 4217.
+  defaultCurrency String           @map("default_currency") @db.Char(3)
+  capabilities    SiteCapability[]
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy       String?          @map("created_by") @db.Uuid
+  updatedAt       DateTime         @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy       String?          @map("updated_by") @db.Uuid
+  deactivatedAt   DateTime?        @map("deactivated_at") @db.Timestamptz(3)
+
+  locations      InventoryLocation[]
+  goodsReceipts  GoodsReceipt[]
+  bottleBatches  BottleCreationBatch[]
+  bottles        Bottle[]
+  printJobs      LabelPrintJob[]
+  documents      SupplierDocument[]
+  receiptCosts   GoodsReceiptLineCost[]
+  userScopes     UserScope[]
+  activeSessions UserSession[]
+  auditEvents    AuditEvent[]
+  createdByUser  User?                  @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedByUser  User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  @@map("sites")
+}
+
+enum UserInvitationState {
+  /// Recorded; the provider call is in progress (or was interrupted and is reconciled on retry).
+  SENDING
+  /// Sent by the provider; the person has not registered yet.
+  PENDING
+  /// The person registered through it and signed in: the identity is linked.
+  ACCEPTED
+  EXPIRED
+  REVOKED
+  /// The provider refused or failed; nothing was sent.
+  FAILED
+}
+
+/// An invitation of a prepared AYVO user to register with the identity provider (doc 021 §7b).
+/// The provider id is stored; invitation tokens and links are never stored or logged.
+/// DB: one open (SENDING/PENDING) invitation per e-mail and per user (partial unique); e-mail =
+/// the user's e-mail; only forward state transitions; identity columns immutable; never deleted.
+model UserInvitation {
+  id                   String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId               String              @map("user_id") @db.Uuid
+  email                String
+  provider             String
+  providerInvitationId String?             @unique @map("provider_invitation_id")
+  state                UserInvitationState @default(SENDING)
+  expiresAt            DateTime?           @map("expires_at") @db.Timestamptz(3)
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy            String?             @map("created_by") @db.Uuid
+  sentAt               DateTime?           @map("sent_at") @db.Timestamptz(3)
+  acceptedAt           DateTime?           @map("accepted_at") @db.Timestamptz(3)
+  /// The provider user that accepted it (must equal the linked identity's subject).
+  acceptedSubject      String?             @map("accepted_subject")
+  revokedAt            DateTime?           @map("revoked_at") @db.Timestamptz(3)
+  revokedBy            String?             @map("revoked_by") @db.Uuid
+  failureCode          String?             @map("failure_code")
+  requestId            String              @unique @map("request_id") @db.Uuid
+
+  user          User                    @relation("UserInvitations", fields: [userId], references: [id], onDelete: Restrict)
+  createdByUser User?                   @relation("InvitationCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  revokedByUser User?                   @relation("InvitationRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  requests      UserInvitationRequest[]
+
+  @@index([userId, createdAt])
+  @@map("user_invitations")
+}
+
+/// One administrative invitation action (send, resend, revoke) by its client request id: makes
+/// every action idempotent and safe to retry. DB: STARTED → DONE once; never deleted.
+model UserInvitationRequest {
+  requestId    String    @id @map("request_id") @db.Uuid
+  invitationId String    @map("invitation_id") @db.Uuid
+  kind         String
+  status       String    @default("STARTED")
+  actorId      String?   @map("actor_id") @db.Uuid
+  reason       String
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt  DateTime? @map("completed_at") @db.Timestamptz(3)
+  /// While set and in the future, one attempt is talking to the provider; others wait.
+  leaseUntil   DateTime? @map("lease_until") @db.Timestamptz(3)
+  /// The real result once DONE (SENT, RESENT, REVOKED, FAILED, SKIPPED_ACCEPTED, SKIPPED_CLOSED):
+  /// a retry of the same request answers the same.
+  outcome      String?
+
+  invitation UserInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+
+  @@index([invitationId])
+  @@map("user_invitation_requests")
 }

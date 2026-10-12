@@ -59,9 +59,10 @@ export class LabelPrintJobsService {
    * snapshots the environment, the QR base URL, the error correction level and the exact QR URL
    * of every label. Refused if this process may not encode its configured base URL (ADR 0014).
    */
-  async createForBatch(batchCode: string): Promise<LabelPrintJobDto> {
+  /** For a series of the given (active) site only; the job belongs to the series' site. */
+  async createForBatch(batchCode: string, siteId: string): Promise<LabelPrintJobDto> {
     this.assertQrPolicy(this.env.PUBLIC_QR_BASE_URL);
-    const batch = await this.bottles.getBatchForPrinting(batchCode);
+    const batch = await this.bottles.getBatchForPrinting(batchCode, siteId);
     const bottles = await this.bottles.listBatchBottlesForPrinting(batch.id);
     if (bottles.length !== batch.quantityCreated) throw new Error('Creation batch is incomplete');
 
@@ -72,6 +73,7 @@ export class LabelPrintJobsService {
           serial,
           code: formatCode(CODE_PREFIX.labelPrintJob, serial),
           creationBatchId: batch.id,
+          siteId: batch.siteId,
           labelTemplateVersionId: batch.labelTemplateVersionId,
           labelCount: bottles.length,
           publicBaseUrl: this.env.PUBLIC_QR_BASE_URL,
@@ -92,8 +94,8 @@ export class LabelPrintJobsService {
     return this.toDto(job, batch.code);
   }
 
-  async listForBatch(batchCode: string): Promise<LabelPrintJobDto[]> {
-    const batch = await this.bottles.getBatchForPrinting(batchCode);
+  async listForBatch(batchCode: string, siteId: string): Promise<LabelPrintJobDto[]> {
+    const batch = await this.bottles.getBatchForPrinting(batchCode, siteId);
     const jobs = await this.prisma.labelPrintJob.findMany({
       where: { creationBatchId: batch.id },
       orderBy: { serial: 'desc' },
@@ -106,11 +108,15 @@ export class LabelPrintJobsService {
    * Bottle creation history: the batch list (assets) with the state of each batch's most recent
    * print job. A fixed number of queries per page, never one per row.
    */
-  async creationHistory(page: number, pageSize: number): Promise<BottleCreationHistoryResponse> {
-    const batches = await this.bottles.listBatches(page, pageSize);
+  async creationHistory(
+    page: number,
+    pageSize: number,
+    siteId: string,
+  ): Promise<BottleCreationHistoryResponse> {
+    const batches = await this.bottles.listBatches(page, pageSize, siteId);
     const ids = await this.bottles.getBatchIds(batches.items.map((b) => b.code));
     const jobs = await this.prisma.labelPrintJob.findMany({
-      where: { creationBatchId: { in: [...ids.values()] } },
+      where: { creationBatchId: { in: [...ids.values()] }, siteId },
       orderBy: { serial: 'desc' },
       distinct: ['creationBatchId'],
       select: { code: true, status: true, creationBatchId: true },
@@ -157,8 +163,8 @@ export class LabelPrintJobsService {
     return new Map(jobs.map((j) => [j.id, j.code]));
   }
 
-  async getByCode(code: string): Promise<LabelPrintJobDto> {
-    const job = await this.findJob(code);
+  async getByCode(code: string, siteId: string): Promise<LabelPrintJobDto> {
+    const job = await this.findJob(code, siteId);
     return this.toDto(job, await this.batchCode(job));
   }
 
@@ -166,8 +172,8 @@ export class LabelPrintJobsService {
    * Renders the job's PDF (first run or retry of a FAILED/abandoned job). The claim is an atomic
    * conditional UPDATE, so two simultaneous requests never render the same job twice.
    */
-  async generate(code: string): Promise<LabelPrintJobDto> {
-    const job = await this.findJob(code);
+  async generate(code: string, siteId: string): Promise<LabelPrintJobDto> {
+    const job = await this.findJob(code, siteId);
     // A production process renders only production URLs; any other process never does.
     this.assertQrPolicy(job.publicBaseUrl);
     const now = new Date();
@@ -197,7 +203,7 @@ export class LabelPrintJobsService {
       },
     });
     if (claimed.count === 0) {
-      const current = await this.findJob(code);
+      const current = await this.findJob(code, siteId);
       throw new ConflictException(
         current.status === 'COMPLETED'
           ? `${current.code} is already completed: download it, or create a new print job to regenerate`
@@ -241,12 +247,12 @@ export class LabelPrintJobsService {
         data: { status: 'FAILED', failedAt: new Date(), failureReason: SAFE_FAILURE_REASON },
       });
     }
-    const finished = await this.findJob(code);
+    const finished = await this.findJob(code, siteId);
     return this.toDto(finished, await this.batchCode(finished));
   }
 
-  async getPdf(code: string): Promise<PrintJobPdf> {
-    const job = await this.findJob(code);
+  async getPdf(code: string, siteId: string): Promise<PrintJobPdf> {
+    const job = await this.findJob(code, siteId);
     if (job.status !== 'COMPLETED' || !job.fileStorageKey) {
       throw new ConflictException(`${job.code} has no PDF yet (status ${job.status})`);
     }
@@ -286,11 +292,12 @@ export class LabelPrintJobsService {
     if (violation) throw new ForbiddenException(violation);
   }
 
-  private async findJob(code: string): Promise<LabelPrintJob> {
+  /** A print job of the given site; another site's job is "not found" (doc 022). */
+  private async findJob(code: string, siteId: string): Promise<LabelPrintJob> {
     const serial = parseCodeSerial(CODE_PREFIX.labelPrintJob, code);
     const job =
       serial === null ? null : await this.prisma.labelPrintJob.findUnique({ where: { serial } });
-    if (!job) throw new NotFoundException('Print job not found');
+    if (!job || job.siteId !== siteId) throw new NotFoundException('Print job not found');
     return job;
   }
 

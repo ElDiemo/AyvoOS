@@ -33,6 +33,7 @@ import { ENV, type Env } from '../config/env.js';
 import { CalibrationService } from './calibration.service.js';
 import { LabelArtworkService } from './label-artwork.service.js';
 import { ASPECT_RATIO_TOLERANCE, LabelTemplatesService } from './label-templates.service.js';
+import { RequirePermission } from '../identity/access.decorators.js';
 
 /** The part of multer's in-memory file object this controller uses. */
 interface UploadedArtworkFile {
@@ -50,6 +51,7 @@ export class LabelsController {
     @Inject(ENV) private readonly env: Env,
   ) {}
 
+  @RequirePermission('production:read')
   @Get('label-designer/settings')
   settings(): LabelDesignerSettings {
     return {
@@ -63,6 +65,7 @@ export class LabelsController {
   }
 
   /** multipart/form-data with one `file` field. Size limit: LABEL_ARTWORK_MAX_BYTES (413). */
+  @RequirePermission('production:templates_manage')
   @Post('label-artworks')
   @UseInterceptors(FileInterceptor('file'))
   upload(@UploadedFile() file: UploadedArtworkFile | undefined): Promise<LabelArtwork> {
@@ -70,6 +73,7 @@ export class LabelsController {
     return this.artworks.upload(file.buffer, file.originalname);
   }
 
+  @RequirePermission('production:read')
   @Get('label-artworks/:id/content')
   @Header('Cache-Control', 'private, max-age=31536000, immutable')
   // SVG is shown as an image only; the sandbox CSP neutralises it if opened directly.
@@ -83,11 +87,13 @@ export class LabelsController {
     return new StreamableFile(bytes, { type: contentType, disposition: 'inline' });
   }
 
+  @RequirePermission('production:read')
   @Get('label-templates')
   list(): Promise<LabelTemplateSummary[]> {
     return this.templates.list();
   }
 
+  @RequirePermission('production:templates_manage')
   @Post('label-templates')
   create(
     @Body(new ZodValidationPipe(createLabelTemplateRequestSchema)) body: CreateLabelTemplateRequest,
@@ -95,11 +101,13 @@ export class LabelsController {
     return this.templates.create(body.name, body.layout);
   }
 
+  @RequirePermission('production:read')
   @Get('label-templates/:id')
   get(@Param('id', ParseUUIDPipe) id: string): Promise<LabelTemplateDetail> {
     return this.templates.get(id);
   }
 
+  @RequirePermission('production:templates_manage')
   @Post('label-templates/:id/versions')
   @HttpCode(200)
   createVersion(
@@ -110,12 +118,14 @@ export class LabelsController {
     return this.templates.createVersion(id, body.layout);
   }
 
+  @RequirePermission('production:templates_manage')
   @Post('label-templates/:id/archive')
   @HttpCode(200)
   archive(@Param('id', ParseUUIDPipe) id: string): Promise<LabelTemplateDetail> {
     return this.templates.setArchived(id, true);
   }
 
+  @RequirePermission('production:templates_manage')
   @Post('label-templates/:id/restore')
   @HttpCode(200)
   restore(@Param('id', ParseUUIDPipe) id: string): Promise<LabelTemplateDetail> {
@@ -123,6 +133,7 @@ export class LabelsController {
   }
 
   /** A4 sheet with 10/12/15/18 mm × EC M/Q QR variants for the physical print/scan test. */
+  @RequirePermission('production:read')
   @Get('label-calibration/qr-validation-sheet.pdf')
   @Header('Cache-Control', 'private, no-store')
   @Header('X-Content-Type-Options', 'nosniff')
@@ -132,6 +143,7 @@ export class LabelsController {
   }
 
   /** One page at the template version's exact size, with 10 mm reference and scaling warning. */
+  @RequirePermission('production:read')
   @Get('label-template-versions/:id/calibration.pdf')
   @Header('Cache-Control', 'private, no-store')
   @Header('X-Content-Type-Options', 'nosniff')
@@ -140,6 +152,7 @@ export class LabelsController {
     return pdfFile(bytes, filename);
   }
 
+  @RequirePermission('production:read')
   @Get('label-template-versions/:id')
   getVersion(@Param('id', ParseUUIDPipe) id: string): Promise<LabelTemplateVersion> {
     return this.templates.getVersion(id);
