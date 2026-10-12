@@ -81,15 +81,15 @@ by the server.
 
 Migrations `20261012120000_site_scope_type` (enum value only; PostgreSQL needs it committed first),
 `20261012120100_sites_and_custom_roles` and `20261012150000_site_owned_production_and_costs`
-(series, bottles, print jobs and supplier documents → `SITE-1` by the same column-default
+(series, bottles, print jobs and supplier documents → `CZ-PREROV-01` by the same column-default
 technique):
 
-- create `sites` and **one deterministic initial site** — id `01990000-0000-7000-8000-000000000001`,
-  code **`SITE-1`**, name "Výchozí provozovna", `CZ`, `Europe/Prague`, `cs-CZ`, `CZK`, capabilities
-  `WAREHOUSE` + `PRODUCTION`, **address empty** ("Adresa není doplněná"). These are the values the
-  application has used so far; ADMIN completes the address and may rename it after deployment
-  (the code stays). No other facility is invented.
-- assign every existing warehouse and goods receipt to `SITE-1` through **column defaults** (no
+- create `sites` and **one deterministic initial site** — the confirmed facility (owner decision
+  2026-10-12): id `01990000-0000-7000-8000-000000000001`, code **`CZ-PREROV-01`**, name
+  **"Přerov 1"**, `CZ`, `Europe/Prague`, `cs-CZ`, `CZK`, capabilities `WAREHOUSE`, `PRODUCTION`,
+  `RETURNS`; the **street address is empty** ("Adresa není doplněná") and is completed by ADMIN
+  after deployment. No other facility is invented.
+- assign every existing warehouse and goods receipt to `CZ-PREROV-01` through **column defaults** (no
   UPDATE of immutable rows, no trigger bypass), then drop the defaults;
 - create no stock movement, balance, receipt, lot or ledger event;
 - give every user who already had a warehouse scope the matching site scope (audited as
@@ -106,9 +106,9 @@ technique):
 | Schema drift (`prisma migrate diff`)                   | none (exit 0) — clean install and upgraded database                                                                                                                                                                                                         |
 | Upgrade from `main` (`19baf97`)                        | a database filled by `main`'s own Playwright flows (2 suppliers, 3 documents, 2 receipts, 2 lots, 4 movements, 2 balances, 56 bottles, 58 bottle events, 4 series, 3 templates, 4 print jobs, 56 print items, 11 operation requests) upgraded without error |
 | Existing-data preservation                             | all 27 pre-existing tables: identical row counts and identical content hashes (ignoring only the added `site_id` / `is_site_default`)                                                                                                                       |
-| Site assignment                                        | `MAIN` → `SITE-1` (default warehouse); 2 of 2 receipts → `SITE-1`; movements still 4                                                                                                                                                                        |
-| Production and purchasing ownership (`20261012150000`) | same database upgraded again: still 27 of 27 tables unchanged; 4 of 4 series, 56 of 56 bottles, 4 of 4 print jobs, 3 of 3 supplier documents → `SITE-1`; no price records created; no drift                                                                 |
-| Scope upgrade (from this PR's previous head)           | a user with a `MAIN` warehouse scope gained the `SITE-1` site scope and one audit event                                                                                                                                                                     |
+| Site assignment                                        | `MAIN` → `CZ-PREROV-01` (default warehouse); 2 of 2 receipts → `CZ-PREROV-01`; movements still 4                                                                                                                                                            |
+| Production and purchasing ownership (`20261012150000`) | same database upgraded again: still 27 of 27 tables unchanged; 4 of 4 series, 56 of 56 bottles, 4 of 4 print jobs, 3 of 3 supplier documents → `CZ-PREROV-01`; no price records created; no drift                                                           |
+| Scope upgrade (from this PR's previous head)           | a user with a `MAIN` warehouse scope gained the `CZ-PREROV-01` site scope and one audit event                                                                                                                                                               |
 
 ## 6. Future site ownership (rules for the next milestones)
 

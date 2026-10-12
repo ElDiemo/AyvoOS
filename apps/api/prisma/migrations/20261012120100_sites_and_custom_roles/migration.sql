@@ -1,7 +1,7 @@
 -- Multi-site foundation, custom roles and site scopes (doc 021, doc 022, ADR 0023), step 2 of 2.
 --
 -- ADDITIVE: no row is deleted and no business record is rewritten. Existing warehouses and
--- goods receipts are assigned to ONE deterministic initial site ("SITE-1", fixed id below) via
+-- goods receipts are assigned to ONE deterministic initial site ("CZ-PREROV-01", fixed id below) via
 -- column defaults (no UPDATE of immutable rows, no trigger bypass). No stock movement, balance,
 -- receipt, lot or ledger event is created. Existing warehouse scopes keep their meaning: each
 -- user holding one also gets the matching site scope (audited as a migration action).
@@ -78,13 +78,14 @@ CREATE TRIGGER "sites_no_delete" BEFORE DELETE ON "sites"
 CREATE TRIGGER "sites_no_truncate" BEFORE TRUNCATE ON "sites"
   FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
 
--- The initial site that owns everything that exists today. Its address is left for the
--- administrator to complete (doc 022 §9); country, time zone, locale and currency are those the
--- application has used so far (Czech UI, Europe/Prague, CZK).
+-- The initial site that owns everything that exists today: the confirmed facility Přerov 1
+-- (owner decision 2026-10-12). Its street address is left for the administrator to complete after
+-- deployment (doc 022 §5).
 INSERT INTO "sites" ("id", "code", "name", "country_code", "time_zone", "default_locale",
                      "default_currency", "capabilities")
-VALUES ('01990000-0000-7000-8000-000000000001', 'SITE-1', 'Výchozí provozovna', 'CZ',
-        'Europe/Prague', 'cs-CZ', 'CZK', ARRAY['WAREHOUSE', 'PRODUCTION']::"SiteCapability"[]);
+VALUES ('01990000-0000-7000-8000-000000000001', 'CZ-PREROV-01', 'Přerov 1', 'CZ',
+        'Europe/Prague', 'cs-CZ', 'CZK',
+        ARRAY['WAREHOUSE', 'PRODUCTION', 'RETURNS']::"SiteCapability"[]);
 
 -- Audit events name the site a site-specific event concerns.
 ALTER TABLE "audit_events" ADD COLUMN "site_id" UUID;
@@ -290,7 +291,7 @@ WITH migrated AS (
 )
 INSERT INTO "audit_events" ("type", "target_user_id", "reason", "payload", "site_id")
 SELECT 'SCOPE_GRANTED', "user_id", 'Migration: site access derived from existing warehouse access',
-       jsonb_build_object('site', 'SITE-1', 'migration', '20261012120100_sites_and_custom_roles'),
+       jsonb_build_object('site', 'CZ-PREROV-01', 'migration', '20261012120100_sites_and_custom_roles'),
        "site_id"
 FROM migrated;
 

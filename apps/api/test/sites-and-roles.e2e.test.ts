@@ -330,9 +330,15 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
       const initial = (await as(admin).get(`/api/admin/sites/${INITIAL_SITE_ID}`).expect(200))
         .body as SiteDetail;
       expect(initial).toMatchObject({
-        code: 'SITE-1',
+        // The confirmed initial facility (owner decision 2026-10-12).
+        code: 'CZ-PREROV-01',
+        name: 'Přerov 1',
         countryCode: 'CZ',
         timeZone: 'Europe/Prague',
+        defaultLocale: 'cs-CZ',
+        defaultCurrency: 'CZK',
+        capabilities: ['WAREHOUSE', 'PRODUCTION', 'RETURNS'],
+        addressLine1: null,
         addressComplete: false,
         warehouses: [{ code: 'MAIN', default: true }],
       });

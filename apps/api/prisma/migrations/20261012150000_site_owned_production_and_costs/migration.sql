@@ -1,7 +1,7 @@
 -- Site ownership of production and purchasing records; purchase-price completion (doc 021, doc 022).
 --
 -- ADDITIVE: existing creation series, bottles, print jobs and supplier documents are assigned to
--- the initial site SITE-1 through column defaults (no UPDATE of immutable rows, no trigger
+-- the initial site CZ-PREROV-01 through column defaults (no UPDATE of immutable rows, no trigger
 -- bypass), then the defaults are dropped. No bottle, event, movement or document is created.
 -- The only grant removed is `production:templates_manage` from PRODUCTION_SUPERVISOR: label
 -- templates are company-wide brand data and are no longer changed by a site-bound role.

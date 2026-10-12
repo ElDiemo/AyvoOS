@@ -212,7 +212,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect(me.globalSiteAccess).toBe(true);
     const initial = me.sites.find((x) => x.id === INITIAL_SITE_ID);
     expect(initial).toMatchObject({
-      code: 'SITE-1',
+      code: 'CZ-PREROV-01',
       allWarehouses: true,
       // Other test files may add warehouses to the initial site.
       warehouses: expect.arrayContaining([expect.objectContaining({ code: 'MAIN' })]),

@@ -66,11 +66,11 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
   await page.getByLabel('E-mail').fill(USER_EMAIL);
   await page.getByLabel('Jméno').fill('Příjemce E2E');
   await page.getByLabel(/Příjem zboží E2E/).check();
-  await page.getByLabel(/Výchozí provozovna/).check();
+  await page.getByLabel(/Přerov 1/).check();
   await page.getByLabel(/Testovací provozovna DE/).check();
   const preview = page.getByTestId('access-preview');
   await expect(preview).toContainText('Přijímat zboží a nahrávat doklady');
-  await expect(preview).toContainText('Výchozí provozovna');
+  await expect(preview).toContainText('Přerov 1');
   await expect(preview).toContainText('Testovací provozovna DE');
   await page.getByLabel('Důvod (povinný)').fill('new receiving colleague');
   await page.getByRole('button', { name: 'Založit uživatele' }).click();
@@ -102,7 +102,7 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
   // Switching the site in the shell reloads the operational context of the other site.
   await colleaguePage
     .getByTestId('site-switcher')
-    .selectOption({ label: 'SITE-1 · Výchozí provozovna' });
+    .selectOption({ label: 'CZ-PREROV-01 · Přerov 1' });
   await expect(colleaguePage.getByRole('heading', { level: 1 })).toHaveText(
     'Stav skladu – Hlavní sklad',
   );
@@ -129,7 +129,7 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
   await actions.getByRole('button', { name: 'Odebrat: E2E-DE' }).click();
   await expect(page.getByTestId('user-sites')).not.toContainText('E2E-DE');
   await colleaguePage.goto('/');
-  await expect(colleaguePage.getByTestId('active-site')).toHaveText('SITE-1');
+  await expect(colleaguePage.getByTestId('active-site')).toHaveText('CZ-PREROV-01');
   await expect(colleaguePage.getByTestId('site-switcher')).toHaveCount(0);
 
   await colleague.close();
@@ -142,9 +142,9 @@ test('administration and site pages fit phones and desktops without sideways scr
   const admin = await browser.newContext({ storageState: ADMIN });
   const page = await admin.newPage();
   await page.goto('/admin/sites');
-  await expect(page.getByTestId('sites')).toContainText('SITE-1');
+  await expect(page.getByTestId('sites')).toContainText('CZ-PREROV-01');
   await expect(page.getByTestId('sites')).toContainText('Adresa není doplněná');
-  await page.getByRole('link', { name: 'Výchozí provozovna' }).click();
+  await page.getByRole('link', { name: 'Přerov 1' }).click();
   await expect(page.getByTestId('site-blockers')).toBeVisible();
   const sitePath = new URL(page.url()).pathname;
   for (const width of [320, 390, 1280]) {

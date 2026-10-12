@@ -76,7 +76,7 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await page.getByLabel('E-mail').fill('e2e-warehouse@ayvo.test');
   await page.getByLabel('Jméno').fill('Skladník Test');
   await page.getByLabel('Skladník').check();
-  await page.getByLabel(/Výchozí provozovna/).check();
+  await page.getByLabel(/Přerov 1/).check();
   await page.getByLabel('Důvod (povinný)').fill('new warehouse colleague');
   await page.getByRole('button', { name: 'Založit uživatele' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Skladník Test');

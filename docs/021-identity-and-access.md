@@ -59,7 +59,7 @@ Migrations: `20261011190000_identity_access`, `20261012090000_identity_permissio
 
 The refinements migration INSERTs permissions and grants only (role descriptions: text). The sites
 migration adds columns with defaults (existing rows of immutable tables are never updated), one
-initial site `SITE-1`, the catalogue guard and the site scopes of users who had warehouse scopes
+initial site `CZ-PREROV-01`, the catalogue guard and the site scopes of users who had warehouse scopes
 (doc 022 §5, with the preservation evidence). Existing data is untouched; no user is invented. After
 migration nobody can sign in until the administrator is bootstrapped (section 8).
 
@@ -375,7 +375,7 @@ that bootstraps.
 7. In WorkOS, invite/create the owner's user with the e-mail used for the bootstrap.
 8. Then the DEV deployment can run (`scripts/deploy-dev.sh` refuses without the three values) and
    the one-time bootstrap (section 8). After the first sign-in, complete the address of the
-   initial site `SITE-1` in **Správa systému → Provozovny** (doc 022 §5).
+   initial site `CZ-PREROV-01` in **Správa systému → Provozovny** (doc 022 §5).
 
 Optional server env values (defaults shown; not secrets): `AUTH_RATE_LIMIT_WINDOW_SECONDS=600`,
 `AUTH_RATE_LIMIT_LOGIN_MAX=30`, `AUTH_RATE_LIMIT_CALLBACK_MAX=30`,
