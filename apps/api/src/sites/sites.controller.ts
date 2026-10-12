@@ -1,8 +1,10 @@
 import {
   createSiteRequestSchema,
+  createSiteWarehouseRequestSchema,
   siteStatusRequestSchema,
   updateSiteRequestSchema,
   type CreateSiteRequest,
+  type CreateSiteWarehouseRequest,
   type Site,
   type SiteDetail,
   type SiteStatusRequest,
@@ -53,6 +55,18 @@ export class SitesController {
     @Body(new ZodValidationPipe(updateSiteRequestSchema)) body: UpdateSiteRequest,
   ): Promise<SiteDetail> {
     return this.sites.update(principal.userId, id, body);
+  }
+
+  /** The site's warehouse (v0.1: one per site, the default; doc 022 §2). */
+  @Post(':id/warehouses')
+  @RequirePermission('sites:manage')
+  createWarehouse(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ID) id: string,
+    @Body(new ZodValidationPipe(createSiteWarehouseRequestSchema))
+    body: CreateSiteWarehouseRequest,
+  ): Promise<SiteDetail> {
+    return this.sites.createWarehouse(principal.userId, id, body);
   }
 
   @Post(':id/deactivate')

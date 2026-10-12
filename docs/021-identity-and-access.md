@@ -296,6 +296,7 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | POST   | `/api/admin/sites/:id`                                   | `sites:manage`                              | global                      |
 | POST   | `/api/admin/sites/:id/deactivate`                        | `sites:manage`                              | global                      |
 | POST   | `/api/admin/sites/:id/reactivate`                        | `sites:manage`                              | global                      |
+| POST   | `/api/admin/sites/:id/warehouses`                        | `sites:manage`                              | global                      |
 | POST   | `/api/admin/supplier-documents`                          | `inventory:receive`                         | active site + its warehouse |
 | GET    | `/api/admin/supplier-documents/:id/content`              | `procurement:documents_read`                | active site                 |
 | GET    | `/api/admin/suppliers`                                   | `inventory:read`                            | active site + its warehouse |
@@ -567,7 +568,8 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
 - ADMIN holds every operational permission; the doc 020 §12 rule that operational actions by
   ADMIN need a mandatory reason (emergency override) is not enforced yet — it comes with the
   Production Core actions that carry actors and reasons.
-- One active site per session (tabs share it); warehouses are created by migration (doc 022 §9).
+- One active site per session (tabs share it); one warehouse per site, created by an administrator
+  (doc 022 §2).
 - Security review P3 follow-ups (section 12): database-role separation for migrations and the
   application, `__Host-` cookie names, per-network/global sign-in buckets, actor foreign keys,
   and refusing warehouse narrowing that excludes a site's operational warehouse.

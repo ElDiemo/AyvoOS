@@ -152,6 +152,20 @@ export class InventoryService {
     return db.inventoryLocation.findUnique({ where: { code } });
   }
 
+  /**
+   * Creates a site's warehouse as its default (v0.1: the site has none — checked by the caller
+   * under the site lock; the database allows one default per site). A warehouse starts empty: no
+   * stock, lots, movements or balances are created. Codes are globally unique (database).
+   */
+  createSiteWarehouse(
+    tx: Prisma.TransactionClient,
+    input: { siteId: string; code: string; name: string },
+  ) {
+    return tx.inventoryLocation.create({
+      data: { siteId: input.siteId, code: input.code, name: input.name, isSiteDefault: true },
+    });
+  }
+
   /** The lot of this supplier's own lot code for the item; created on first receipt. */
   async findOrCreateSupplierLot(
     tx: Prisma.TransactionClient,
