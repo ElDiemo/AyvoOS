@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   isPlannedRole,
   type AdminUserDetail,
@@ -6,10 +6,12 @@ import {
   type CreateUserRequest,
   type PermissionCode,
   type RoleCode,
+  type UpdateUserAccessRequest,
 } from '@ayvo/types';
 import { Injectable, Logger } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
-import { domainError } from '../common/domain-error.js';
+import { domainError, idempotencyConflict } from '../common/domain-error.js';
+import { canonicalJson } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
@@ -205,25 +207,155 @@ export class UsersService {
   async revokeRole(actor: Actor, userId: string, role: RoleCode, reason: string) {
     await this.prisma.$transaction(async (tx) => {
       const user = await this.requireUser(tx, userId);
-      if (role === 'ADMIN' && user.status === 'ACTIVE') await this.assertNotLastAdmin(tx, userId);
-      const revoked = await tx.userRole.updateMany({
-        where: { userId, roleCode: role, revokedAt: null },
-        data: { revokedAt: new Date(), revokedBy: actor.userId, revokeReason: reason },
+      await this.removeRole(tx, actor, user, role, reason);
+    });
+    return this.get(userId);
+  }
+
+  /**
+   * Replaces the user's roles, sites and narrower warehouses with the requested state in ONE
+   * transaction (doc 021 §7): everything is validated and applied, or nothing is. The same rules as
+   * the single grants apply (planned roles refused, no privilege escalation, a warehouse only
+   * narrows a site in the new state, the last active administrator keeps ADMIN). Idempotent per
+   * request id for this user: the request id and a hash of the request live in the append-only
+   * audit event `USER_ACCESS_UPDATED`, checked under the user's row lock; the same id with the
+   * same request returns the current state, with another request IDEMPOTENCY_CONFLICT.
+   */
+  async updateAccess(
+    actor: Actor,
+    userId: string,
+    input: UpdateUserAccessRequest,
+  ): Promise<AdminUserDetail> {
+    const want = {
+      roles: [...input.roles].sort(),
+      siteIds: [...input.siteIds].sort(),
+      warehouseCodes: [...input.warehouseCodes].sort(),
+    };
+    const requestHash = createHash('sha256')
+      .update(canonicalJson({ ...want, reason: input.reason }))
+      .digest('hex');
+    await this.prisma.$transaction(async (tx) => {
+      // Lock order as in every user change: the user row first, then (for ADMIN) the admin rows.
+      const user = await this.requireUser(tx, userId);
+      const previous = await tx.auditEvent.findFirst({
+        where: {
+          type: 'USER_ACCESS_UPDATED',
+          targetUserId: userId,
+          payload: { path: ['requestId'], equals: input.requestId },
+        },
       });
-      if (revoked.count === 0)
-        throw domainError(409, 'ROLE_NOT_GRANTED', 'The user does not have this role');
+      if (previous) {
+        if ((previous.payload as Record<string, unknown>).requestHash === requestHash) return;
+        throw idempotencyConflict();
+      }
+
+      const before = await this.accessState(tx, userId);
+      const sites = await tx.site.findMany({
+        where: { id: { in: [...new Set([...want.siteIds, ...before.siteIds])] } },
+      });
+      if (want.siteIds.some((id) => !sites.some((s) => s.id === id))) {
+        throw domainError(422, 'UNKNOWN_SITE', 'No such site');
+      }
+      for (const code of want.warehouseCodes) {
+        const location = await this.inventory.locationByCode(code, tx);
+        if (!location) throw domainError(422, 'UNKNOWN_WAREHOUSE', 'No such warehouse');
+        if (!want.siteIds.includes(location.siteId)) {
+          throw domainError(
+            422,
+            'SITE_ACCESS_REQUIRED',
+            'A warehouse only narrows a site the user keeps access to',
+          );
+        }
+      }
+      const diff = <T>(a: T[], b: T[]) => a.filter((x) => !b.includes(x));
+      const change = {
+        addRoles: diff(want.roles, before.roles),
+        removeRoles: diff(before.roles, want.roles),
+        addSites: diff(want.siteIds, before.siteIds),
+        removeSites: diff(before.siteIds, want.siteIds),
+        addWarehouses: diff(want.warehouseCodes, before.warehouseCodes),
+        removeWarehouses: diff(before.warehouseCodes, want.warehouseCodes),
+      };
+      if (Object.values(change).every((l) => l.length === 0)) {
+        throw domainError(422, 'NO_CHANGES', 'The requested access equals the current access');
+      }
+
+      // Removals first (warehouses before their sites), then additions (sites before warehouses).
+      for (const code of change.removeWarehouses) {
+        await this.removeWarehouseScope(tx, actor, userId, code, input.reason);
+      }
+      for (const siteId of change.removeSites) {
+        await this.removeSiteScope(tx, actor, userId, siteId, input.reason);
+      }
+      for (const role of change.removeRoles) {
+        await this.removeRole(tx, actor, user, role, input.reason);
+      }
+      for (const role of change.addRoles) {
+        await this.addRole(tx, actor, userId, role, input.reason);
+      }
+      for (const siteId of change.addSites) {
+        await this.addSiteScope(tx, actor.userId, userId, siteId, input.reason);
+      }
+      for (const code of change.addWarehouses) {
+        await this.addWarehouseScope(tx, actor.userId, userId, code, input.reason);
+      }
+
+      const siteCode = (id: string) => sites.find((s) => s.id === id)?.code ?? id;
+      const view = (state: AccessState) => ({
+        roles: state.roles,
+        sites: state.siteIds.map(siteCode).sort(),
+        warehouses: state.warehouseCodes,
+      });
       await this.audit.record(
         {
-          type: 'ROLE_REVOKED',
+          type: 'USER_ACCESS_UPDATED',
           actorUserId: actor.userId,
           targetUserId: userId,
-          reason,
-          payload: { role },
+          reason: input.reason,
+          payload: {
+            requestId: input.requestId,
+            requestHash,
+            before: view(before),
+            after: view(want),
+            added: {
+              roles: change.addRoles,
+              sites: change.addSites.map(siteCode),
+              warehouses: change.addWarehouses,
+            },
+            removed: {
+              roles: change.removeRoles,
+              sites: change.removeSites.map(siteCode),
+              warehouses: change.removeWarehouses,
+            },
+          },
         },
         tx,
       );
     });
     return this.get(userId);
+  }
+
+  /** The open role and scope assignments of a user (sorted). */
+  private async accessState(tx: Prisma.TransactionClient, userId: string): Promise<AccessState> {
+    const roles = await tx.userRole.findMany({
+      where: { userId, revokedAt: null },
+      select: { roleCode: true },
+    });
+    const scopes = await tx.userScope.findMany({
+      where: { userId, revokedAt: null },
+      include: { location: { select: { code: true } } },
+    });
+    return {
+      roles: roles.map((r) => r.roleCode).sort(),
+      siteIds: scopes
+        .filter((s) => s.type === 'SITE' && s.siteId)
+        .map((s) => s.siteId!)
+        .sort(),
+      warehouseCodes: scopes
+        .filter((s) => s.type === 'WAREHOUSE' && s.location)
+        .map((s) => s.location!.code)
+        .sort(),
+    };
   }
 
   async grantSite(actor: Actor, userId: string, siteId: string, reason: string) {
@@ -238,47 +370,7 @@ export class UsersService {
   async revokeSite(actor: Actor, userId: string, siteId: string, reason: string) {
     await this.prisma.$transaction(async (tx) => {
       await this.requireUser(tx, userId);
-      const site = await tx.site.findUnique({ where: { id: siteId } });
-      if (!site) throw domainError(422, 'UNKNOWN_SITE', 'No such site');
-      const now = new Date();
-      const warehouses = await tx.userScope.findMany({
-        where: { userId, type: 'WAREHOUSE', revokedAt: null, location: { siteId } },
-        include: { location: { select: { code: true } } },
-      });
-      for (const w of warehouses) {
-        await tx.userScope.update({
-          where: { id: w.id },
-          data: { revokedAt: now, revokedBy: actor.userId },
-        });
-        await this.audit.record(
-          {
-            type: 'SCOPE_REVOKED',
-            actorUserId: actor.userId,
-            targetUserId: userId,
-            siteId,
-            reason,
-            payload: { warehouse: w.location!.code, site: site.code },
-          },
-          tx,
-        );
-      }
-      const revoked = await tx.userScope.updateMany({
-        where: { userId, type: 'SITE', siteId, revokedAt: null },
-        data: { revokedAt: now, revokedBy: actor.userId },
-      });
-      if (revoked.count === 0)
-        throw domainError(409, 'SCOPE_NOT_GRANTED', 'The user has no access to this site');
-      await this.audit.record(
-        {
-          type: 'SCOPE_REVOKED',
-          actorUserId: actor.userId,
-          targetUserId: userId,
-          siteId,
-          reason,
-          payload: { site: site.code },
-        },
-        tx,
-      );
+      await this.removeSiteScope(tx, actor, userId, siteId, reason);
     });
     return this.get(userId);
   }
@@ -294,25 +386,7 @@ export class UsersService {
   async revokeWarehouse(actor: Actor, userId: string, code: string, reason: string) {
     await this.prisma.$transaction(async (tx) => {
       await this.requireUser(tx, userId);
-      const location = await this.inventory.locationByCode(code, tx);
-      if (!location) throw domainError(422, 'UNKNOWN_WAREHOUSE', 'No such warehouse');
-      const revoked = await tx.userScope.updateMany({
-        where: { userId, type: 'WAREHOUSE', locationId: location.id, revokedAt: null },
-        data: { revokedAt: new Date(), revokedBy: actor.userId },
-      });
-      if (revoked.count === 0)
-        throw domainError(409, 'SCOPE_NOT_GRANTED', 'The user has no access to this warehouse');
-      await this.audit.record(
-        {
-          type: 'SCOPE_REVOKED',
-          actorUserId: actor.userId,
-          targetUserId: userId,
-          siteId: location.siteId,
-          reason,
-          payload: { warehouse: code },
-        },
-        tx,
-      );
+      await this.removeWarehouseScope(tx, actor, userId, code, reason);
     });
     return this.get(userId);
   }
@@ -407,6 +481,111 @@ export class UsersService {
         targetUserId: userId,
         reason,
         payload: { role: code },
+      },
+      tx,
+    );
+  }
+
+  private async removeRole(
+    tx: Prisma.TransactionClient,
+    actor: Actor,
+    user: { id: string; status: string },
+    role: RoleCode,
+    reason: string,
+  ) {
+    if (role === 'ADMIN' && user.status === 'ACTIVE') await this.assertNotLastAdmin(tx, user.id);
+    const revoked = await tx.userRole.updateMany({
+      where: { userId: user.id, roleCode: role, revokedAt: null },
+      data: { revokedAt: new Date(), revokedBy: actor.userId, revokeReason: reason },
+    });
+    if (revoked.count === 0)
+      throw domainError(409, 'ROLE_NOT_GRANTED', 'The user does not have this role');
+    await this.audit.record(
+      {
+        type: 'ROLE_REVOKED',
+        actorUserId: actor.userId,
+        targetUserId: user.id,
+        reason,
+        payload: { role },
+      },
+      tx,
+    );
+  }
+
+  /** Ends access to a site and to every narrower warehouse of it. */
+  private async removeSiteScope(
+    tx: Prisma.TransactionClient,
+    actor: Actor,
+    userId: string,
+    siteId: string,
+    reason: string,
+  ) {
+    const site = await tx.site.findUnique({ where: { id: siteId } });
+    if (!site) throw domainError(422, 'UNKNOWN_SITE', 'No such site');
+    const now = new Date();
+    const warehouses = await tx.userScope.findMany({
+      where: { userId, type: 'WAREHOUSE', revokedAt: null, location: { siteId } },
+      include: { location: { select: { code: true } } },
+    });
+    for (const w of warehouses) {
+      await tx.userScope.update({
+        where: { id: w.id },
+        data: { revokedAt: now, revokedBy: actor.userId },
+      });
+      await this.audit.record(
+        {
+          type: 'SCOPE_REVOKED',
+          actorUserId: actor.userId,
+          targetUserId: userId,
+          siteId,
+          reason,
+          payload: { warehouse: w.location!.code, site: site.code },
+        },
+        tx,
+      );
+    }
+    const revoked = await tx.userScope.updateMany({
+      where: { userId, type: 'SITE', siteId, revokedAt: null },
+      data: { revokedAt: now, revokedBy: actor.userId },
+    });
+    if (revoked.count === 0)
+      throw domainError(409, 'SCOPE_NOT_GRANTED', 'The user has no access to this site');
+    await this.audit.record(
+      {
+        type: 'SCOPE_REVOKED',
+        actorUserId: actor.userId,
+        targetUserId: userId,
+        siteId,
+        reason,
+        payload: { site: site.code },
+      },
+      tx,
+    );
+  }
+
+  private async removeWarehouseScope(
+    tx: Prisma.TransactionClient,
+    actor: Actor,
+    userId: string,
+    code: string,
+    reason: string,
+  ) {
+    const location = await this.inventory.locationByCode(code, tx);
+    if (!location) throw domainError(422, 'UNKNOWN_WAREHOUSE', 'No such warehouse');
+    const revoked = await tx.userScope.updateMany({
+      where: { userId, type: 'WAREHOUSE', locationId: location.id, revokedAt: null },
+      data: { revokedAt: new Date(), revokedBy: actor.userId },
+    });
+    if (revoked.count === 0)
+      throw domainError(409, 'SCOPE_NOT_GRANTED', 'The user has no access to this warehouse');
+    await this.audit.record(
+      {
+        type: 'SCOPE_REVOKED',
+        actorUserId: actor.userId,
+        targetUserId: userId,
+        siteId: location.siteId,
+        reason,
+        payload: { warehouse: code },
       },
       tx,
     );
@@ -531,6 +710,12 @@ export class UsersService {
       createdAt: user.createdAt.toISOString(),
     };
   }
+}
+
+interface AccessState {
+  roles: string[];
+  siteIds: string[];
+  warehouseCodes: string[];
 }
 
 /**

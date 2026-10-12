@@ -288,6 +288,7 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | POST   | `/api/admin/identity/users/:id/invitations/resend`       | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/invitations/revoke`       | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/reactivate`               | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/access`                   | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/roles/grant`              | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/roles/revoke`             | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/sites/grant`              | `identity:users_manage`                     | global                      |
@@ -358,6 +359,22 @@ change requires a reason, is audited (`USER_CREATED`, `ROLE_GRANTED`, `ROLE_REVO
 on the user's next request. The last active administrator can neither lose `ADMIN` nor be
 deactivated; nobody can deactivate themselves. No actor can grant a role with a permission it does
 not hold (`403 PRIVILEGE_ESCALATION`).
+
+**Access editor (user detail).** Roles, sites and narrower warehouses of an existing user are
+edited as one draft: current assignments are marked, additions and removals are listed in Czech
+before saving, and one **Uložit změny** saves everything with one reason (checked when saving;
+what prevents saving is written next to the button, controls are never silently disabled).
+Warehouse narrowing is offered only for a chosen site with more than one warehouse (or an existing
+narrowing), as "Všechny sklady provozovny" vs. "Jen vybrané sklady". The save is
+`POST /api/admin/identity/users/:id/access` (`identity:users_manage`) with the complete new state:
+one transaction under the user's row lock — all rules of the single grants (planned roles refused,
+no privilege escalation, a warehouse only narrows a site of the new state, the last active
+administrator keeps `ADMIN`), all-or-nothing, `422 NO_CHANGES` when nothing changes. It is
+idempotent per `requestId` for that user (request id and a hash of the request in the audit event
+`USER_ACCESS_UPDATED`, which records the previous and the new state, the additions and removals;
+the single `ROLE_*`/`SCOPE_*` events are recorded too). Invitations and deactivation/reactivation
+stay separate account actions with their own reason. The single grant/revoke endpoints remain for
+API clients.
 
 ### 7a. Custom roles (`/admin/roles`, ADR 0024)
 

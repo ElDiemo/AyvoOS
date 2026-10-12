@@ -365,6 +365,27 @@ export const assignableSitesSchema = z.array(
 );
 export type AssignableSites = z.infer<typeof assignableSitesSchema>;
 
+const uniqueList = <T extends z.ZodType>(item: T, max: number) =>
+  z
+    .array(item)
+    .max(max)
+    .refine((l) => new Set(l).size === l.length, 'Duplicate entry');
+
+/**
+ * POST /api/admin/identity/users/:id/access — the user's complete new access (roles, sites,
+ * narrower warehouses), applied atomically: everything or nothing, one reason, idempotent per
+ * `requestId` for this user, audited with the previous and the new state (doc 021 §7).
+ */
+export const updateUserAccessRequestSchema = z.object({
+  requestId: z.uuid(),
+  roles: uniqueList(roleCodeSchema, 50),
+  siteIds: uniqueList(z.uuid(), 50),
+  /** Each narrows one of `siteIds`; none for a site = all warehouses of that site. */
+  warehouseCodes: uniqueList(z.string().regex(/^[A-Z0-9_-]{1,40}$/), 20),
+  reason: reasonSchema,
+});
+export type UpdateUserAccessRequest = z.infer<typeof updateUserAccessRequestSchema>;
+
 export const siteScopeRequestSchema = z.object({ siteId: z.uuid(), reason: reasonSchema });
 export type SiteScopeRequest = z.infer<typeof siteScopeRequestSchema>;
 

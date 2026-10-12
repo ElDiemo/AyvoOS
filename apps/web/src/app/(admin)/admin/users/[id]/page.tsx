@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { AccessPreview } from '@/components/admin/access-preview';
 import { AdminHeader } from '@/components/admin/admin-header';
 import { AuditList } from '@/components/admin/audit-list';
+import { UserAccessEditor } from '@/components/admin/user-access-editor';
 import { UserActions } from '@/components/admin/user-actions';
 import { Card, Field, FieldList, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
@@ -86,7 +87,10 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
           </Card>
         </div>
         {hasPermission(me, 'identity:users_manage') && (
-          <UserActions user={user} roles={roles} sites={sites} isSelf={me.user.id === user.id} />
+          <div className="flex min-w-0 flex-col gap-6">
+            <UserAccessEditor user={user} roles={roles} sites={sites} />
+            <UserActions user={user} isSelf={me.user.id === user.id} />
+          </div>
         )}
       </div>
     </>

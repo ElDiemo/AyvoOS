@@ -130,10 +130,14 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
 
   // Removing a site removes it from the colleague's choice at once.
   await page.goto(userUrl);
-  const actions = page.getByTestId('user-actions');
-  await actions.getByLabel('Důvod (povinný)').fill('moved to the Czech site only');
-  await actions.getByRole('button', { name: 'Odebrat: E2E-DE' }).click();
-  await expect(page.getByTestId('user-sites')).not.toContainText('E2E-DE');
+  const editor = page.getByTestId('access-editor');
+  const deSite = editor.locator('[data-access-site="E2E-DE"]').getByRole('checkbox').first();
+  await deSite.uncheck();
+  await expect(editor.getByTestId('access-summary')).toContainText('Odebrané provozovny');
+  await editor.getByLabel('Důvod změny (povinný)').fill('moved to the Czech site only');
+  await editor.getByRole('button', { name: 'Uložit změny' }).click();
+  await expect(page.getByTestId('user-audit')).toContainText('Změna přístupu');
+  await expect(deSite).not.toBeChecked();
   await colleaguePage.goto('/');
   await expect(colleaguePage.getByTestId('active-site')).toHaveText('CZ-PREROV-01');
   await expect(colleaguePage.getByTestId('site-switcher')).toHaveCount(0);
@@ -182,7 +186,7 @@ test('a revoked invitation cannot be used to sign in', async ({ browser }) => {
   await page.getByRole('button', { name: 'Založit uživatele' }).click();
   await expect(page.getByTestId('invitation-state')).toHaveText('Čeká na přijetí');
   const actions = page.getByTestId('user-actions');
-  await actions.getByLabel('Důvod (povinný)').fill('helper not needed after all');
+  await actions.getByLabel('Důvod akce s účtem (povinný)').fill('helper not needed after all');
   await actions.getByRole('button', { name: 'Zrušit pozvánku' }).click();
   await expect(page.getByTestId('invitation-state')).toHaveText('Zrušena');
   await expect(page.getByTestId('user-audit')).toContainText('Zrušení pozvánky');
@@ -222,7 +226,7 @@ test('a failed first invitation is shown with a safe way to send it again', asyn
   );
   await expect(page.getByTestId('user-audit')).toContainText('Neúspěšné odeslání pozvánky');
   const actions = page.getByTestId('user-actions');
-  await actions.getByLabel('Důvod (povinný)').fill('second attempt');
+  await actions.getByLabel('Důvod akce s účtem (povinný)').fill('second attempt');
   await actions.getByRole('button', { name: 'Poslat pozvánku znovu' }).click();
   await expect(actions).toContainText('Poskytovatel identity pozvánku odmítl.');
   await admin.close();
