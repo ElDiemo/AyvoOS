@@ -287,6 +287,18 @@ export type CreateUserRequest = z.infer<typeof createUserRequestSchema>;
 export const roleChangeRequestSchema = z.object({ role: roleCodeSchema, reason: reasonSchema });
 export type RoleChangeRequest = z.infer<typeof roleChangeRequestSchema>;
 
+/** GET /api/admin/identity/sites — sites and their warehouses for assigning access. */
+export const assignableSitesSchema = z.array(
+  z.object({
+    id: z.uuid(),
+    code: z.string(),
+    name: z.string(),
+    active: z.boolean(),
+    warehouses: z.array(z.object({ code: z.string(), name: z.string() })),
+  }),
+);
+export type AssignableSites = z.infer<typeof assignableSitesSchema>;
+
 export const siteScopeRequestSchema = z.object({ siteId: z.uuid(), reason: reasonSchema });
 export type SiteScopeRequest = z.infer<typeof siteScopeRequestSchema>;
 
