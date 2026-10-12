@@ -106,18 +106,37 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'admin',
     section: 'administration',
-    permissions: ['identity:users_read'],
-    label: identityCs.shell.administration,
+    permissions: ['identity:users_read', 'sites:manage'],
+    label: identityCs.admin.module,
     href: '/admin/users',
     description: identityCs.admin.subtitle,
-    pages: [{ id: 'users', href: '/admin/users', label: identityCs.admin.nav }],
+    pages: [
+      {
+        id: 'users',
+        href: '/admin/users',
+        label: identityCs.admin.nav,
+        permission: 'identity:users_read',
+      },
+      {
+        id: 'roles',
+        href: '/admin/roles',
+        label: identityCs.roles_admin.nav,
+        permission: 'identity:users_read',
+      },
+      {
+        id: 'sites',
+        href: '/admin/sites',
+        label: identityCs.sites_admin.nav,
+        permission: 'sites:manage',
+      },
+    ],
   },
 ];
 
 export type WarehousePageId =
   'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId = 'overview' | 'bottles' | 'templates' | 'label-activation';
-export type AdminPageId = 'users';
+export type AdminPageId = 'users' | 'roles' | 'sites';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports

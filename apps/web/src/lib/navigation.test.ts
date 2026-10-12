@@ -21,7 +21,19 @@ describe('AYVO OS navigation (doc 019)', () => {
       visibleModules(all)
         .filter((m) => m.section === 'administration')
         .map((m) => m.label),
-    ).toEqual(['Správa']);
+    ).toEqual(['Správa systému']);
+  });
+
+  it('administration pages follow their own permissions', () => {
+    const admin = (perms: string[]) =>
+      visibleModules(perms)
+        .find((m) => m.id === 'admin')
+        ?.pages.map((p) => p.id);
+    expect(admin(['identity:users_read', 'sites:manage'])).toEqual(['users', 'roles', 'sites']);
+    expect(admin(['identity:users_read'])).toEqual(['users', 'roles']);
+    expect(admin(['sites:manage'])).toEqual(['sites']);
+    expect(visibleModules(['sites:manage'])[0]!.href).toBe('/admin/sites');
+    expect(admin(['inventory:read'])).toBeUndefined();
   });
 
   it('shows only what the permissions allow', () => {
@@ -96,5 +108,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/bottlesX')).toBeNull();
     expect(where('/warehouses')).toBeNull();
     expect(where('/admin/users/x')).toBe('admin/users');
+    expect(where('/admin/roles/new')).toBe('admin/roles');
+    expect(where('/admin/sites/x')).toBe('admin/sites');
   });
 });

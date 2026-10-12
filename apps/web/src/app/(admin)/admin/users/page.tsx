@@ -55,7 +55,7 @@ export default async function UsersPage() {
                     {u.roles.length === 0 ? (
                       <span className="text-stone-400">{t.noRoles}</span>
                     ) : (
-                      u.roles.map((r) => identityCs.roles[r] ?? r).join(', ')
+                      u.roles.map((r) => r.name).join(', ')
                     )}
                   </td>
                   <td className="px-5 py-3 align-top whitespace-nowrap">

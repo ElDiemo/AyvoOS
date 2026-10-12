@@ -35,6 +35,13 @@ export async function redirectForAuth(status: number, code: string | undefined):
     redirect(code === 'SESSION_EXPIRED' ? `/session-expired?next=${next}` : `/login?next=${next}`);
   }
   if (code === 'ACCOUNT_INACTIVE') redirect('/account-inactive');
+  if (code === 'SITE_REQUIRED' || code === 'SITE_WITHOUT_WAREHOUSE') {
+    // Choose (another) site, then come back.
+    const next = encodeURIComponent(await currentPath());
+    redirect(
+      `/select-site?next=${next}${code === 'SITE_WITHOUT_WAREHOUSE' ? '&reason=no-warehouse' : ''}`,
+    );
+  }
   redirect('/forbidden');
 }
 
@@ -64,6 +71,13 @@ export async function apiGet<T extends z.ZodType>(
   if (res.status === 401 || res.status === 403) {
     const body = (await res.json().catch(() => ({}))) as { code?: string };
     return redirectForAuth(res.status, body.code);
+  }
+  if (res.status === 409) {
+    const body = (await res
+      .clone()
+      .json()
+      .catch(() => ({}))) as { code?: string };
+    if (body.code === 'SITE_WITHOUT_WAREHOUSE') return redirectForAuth(409, body.code);
   }
   if (res.status === 404) notFound();
   if (!res.ok) throw new ApiError(res.status, `API ${res.status} for ${path}`);

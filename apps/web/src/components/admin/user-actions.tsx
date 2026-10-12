@@ -1,6 +1,11 @@
 'use client';
 
-import { adminUserDetailSchema, type AdminUserDetail, type RoleCatalog } from '@ayvo/types';
+import {
+  adminUserDetailSchema,
+  type AdminUserDetail,
+  type AssignableSites,
+  type RoleCatalog,
+} from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { buttonClass, Card, ErrorNote, inputClass } from '@/components/ui';
@@ -10,32 +15,43 @@ import { errorText } from './create-user-form';
 
 const t = identityCs.admin;
 const label = 'text-xs font-medium uppercase tracking-wide text-stone-500';
+const chip = 'flex items-center gap-2 rounded-full bg-stone-100 py-1 pr-1 pl-3 text-sm';
+const chipButton =
+  'rounded-full px-2 py-0.5 text-xs text-red-800 hover:bg-red-50 disabled:opacity-40';
 
 /**
- * Role, warehouse and status changes of one user. One shared, required reason field: every
+ * Role, site, warehouse and status changes of one user. One shared, required reason field: every
  * change is audited with it and applies to the user's next request.
  */
 export function UserActions({
   user,
   roles,
-  warehouses,
+  sites,
   isSelf,
 }: {
   user: AdminUserDetail;
   roles: RoleCatalog;
-  warehouses: { code: string; name: string }[];
+  sites: AssignableSites;
   isSelf: boolean;
 }) {
   const router = useRouter();
   const [reason, setReason] = useState('');
   const [role, setRole] = useState('');
+  const [site, setSite] = useState('');
   const [warehouse, setWarehouse] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reasonOk = reason.trim().length >= 3;
-  const missingRoles = roles.filter((r) => !user.roles.includes(r.code));
-  const scopedCodes = user.scopes.flatMap((s) => (s.locationCode ? [s.locationCode] : []));
-  const missingWarehouses = warehouses.filter((w) => !scopedCodes.includes(w.code));
+  const held = new Set(user.roles.map((r) => r.code));
+  const grantable = roles.filter((r) => r.active && !held.has(r.code));
+  const siteScopes = user.scopes.filter((s) => s.type === 'SITE');
+  const warehouseScopes = user.scopes.filter((s) => s.type === 'WAREHOUSE');
+  const missingSites = sites.filter((s) => !siteScopes.some((x) => x.siteId === s.id));
+  // A warehouse only narrows a site the user already has.
+  const narrowable = sites
+    .filter((s) => siteScopes.some((x) => x.siteId === s.id))
+    .flatMap((s) => s.warehouses.map((w) => ({ ...w, site: s })))
+    .filter((w) => !warehouseScopes.some((x) => x.locationCode === w.code));
 
   async function run(path: string, body: Record<string, unknown>) {
     setBusy(true);
@@ -72,24 +88,21 @@ export function UserActions({
           <ul className="flex flex-wrap gap-2">
             {user.roles.length === 0 && <li className="text-sm text-stone-500">{t.noRoles}</li>}
             {user.roles.map((r) => (
-              <li
-                key={r}
-                className="flex items-center gap-2 rounded-full bg-stone-100 py-1 pr-1 pl-3 text-sm"
-              >
-                {identityCs.roles[r] ?? r}
+              <li key={r.code} className={chip}>
+                <span className="wrap-anywhere">{r.name}</span>
                 <button
                   type="button"
                   disabled={disabled}
-                  onClick={() => void run('roles/revoke', { role: r })}
-                  className="rounded-full px-2 py-0.5 text-xs text-red-800 hover:bg-red-50 disabled:opacity-40"
-                  aria-label={`${t.revoke}: ${identityCs.roles[r] ?? r}`}
+                  onClick={() => void run('roles/revoke', { role: r.code })}
+                  className={chipButton}
+                  aria-label={`${t.revoke}: ${r.name}`}
                 >
                   {t.revoke}
                 </button>
               </li>
             ))}
           </ul>
-          {missingRoles.length > 0 && (
+          {grantable.length > 0 && (
             <div className="flex flex-col gap-2 sm:flex-row">
               <select
                 value={role}
@@ -98,9 +111,10 @@ export function UserActions({
                 className={inputClass}
               >
                 <option value="">—</option>
-                {missingRoles.map((r) => (
+                {grantable.map((r) => (
                   <option key={r.code} value={r.code}>
-                    {identityCs.roles[r.code] ?? r.code}
+                    {r.name}
+                    {r.system ? '' : ` (${t.customRole})`}
                   </option>
                 ))}
               </select>
@@ -117,40 +131,84 @@ export function UserActions({
         </section>
 
         <section className="flex flex-col gap-2">
-          <h3 className={label}>{t.warehouses}</h3>
-          <ul className="flex flex-wrap gap-2">
-            {scopedCodes.length === 0 && (
-              <li className="text-sm text-stone-500">{t.noWarehouses}</li>
-            )}
-            {scopedCodes.map((code) => (
-              <li
-                key={code}
-                className="flex items-center gap-2 rounded-full bg-stone-100 py-1 pr-1 pl-3 font-mono text-sm"
-              >
-                {code}
+          <h3 className={label}>{t.sites}</h3>
+          <ul className="flex flex-wrap gap-2" data-testid="user-sites">
+            {siteScopes.length === 0 && <li className="text-sm text-stone-500">{t.noSites}</li>}
+            {siteScopes.map((s) => (
+              <li key={s.id} className={chip}>
+                <span className="font-mono">{s.siteCode}</span>
                 <button
                   type="button"
                   disabled={disabled}
-                  onClick={() => void run('warehouses/revoke', { warehouseCode: code })}
-                  className="rounded-full px-2 py-0.5 font-sans text-xs text-red-800 hover:bg-red-50 disabled:opacity-40"
+                  onClick={() => void run('sites/revoke', { siteId: s.siteId })}
+                  className={chipButton}
+                  aria-label={`${t.revoke}: ${s.siteCode}`}
                 >
                   {t.revoke}
                 </button>
               </li>
             ))}
           </ul>
-          {missingWarehouses.length > 0 && (
+          {missingSites.length > 0 && (
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <select
+                value={site}
+                onChange={(e) => setSite(e.target.value)}
+                aria-label={t.sites}
+                className={inputClass}
+              >
+                <option value="">—</option>
+                {missingSites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.code})
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={disabled || !site}
+                onClick={() => void run('sites/grant', { siteId: site }).then(() => setSite(''))}
+                className={`${buttonClass.secondary} shrink-0 whitespace-nowrap`}
+              >
+                {t.grant}
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <h3 className={label}>{t.narrowWarehouses}</h3>
+          <ul className="flex flex-wrap gap-2">
+            {warehouseScopes.length === 0 && (
+              <li className="text-sm text-stone-500">{t.allWarehouses}</li>
+            )}
+            {warehouseScopes.map((w) => (
+              <li key={w.id} className={`${chip} font-mono`}>
+                {w.locationCode}
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => void run('warehouses/revoke', { warehouseCode: w.locationCode })}
+                  className={`${chipButton} font-sans`}
+                  aria-label={`${t.revoke}: ${w.locationCode}`}
+                >
+                  {t.revoke}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {narrowable.length > 0 && (
             <div className="flex flex-col gap-2 sm:flex-row">
               <select
                 value={warehouse}
                 onChange={(e) => setWarehouse(e.target.value)}
-                aria-label={t.warehouses}
+                aria-label={t.narrowWarehouses}
                 className={inputClass}
               >
                 <option value="">—</option>
-                {missingWarehouses.map((w) => (
+                {narrowable.map((w) => (
                   <option key={w.code} value={w.code}>
-                    {w.name} ({w.code})
+                    {w.site.code} · {w.name} ({w.code})
                   </option>
                 ))}
               </select>

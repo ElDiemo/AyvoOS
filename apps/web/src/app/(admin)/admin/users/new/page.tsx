@@ -1,5 +1,4 @@
-import { roleCatalogSchema } from '@ayvo/types';
-import { z } from 'zod';
+import { assignableSitesSchema, roleCatalogSchema } from '@ayvo/types';
 import { AdminHeader } from '@/components/admin/admin-header';
 import { CreateUserForm } from '@/components/admin/create-user-form';
 import { identityCs } from '@/i18n/cs/identity';
@@ -11,9 +10,9 @@ const t = identityCs.admin;
 
 export default async function NewUserPage() {
   await requirePermission('identity:users_manage');
-  const [roles, warehouses] = await Promise.all([
+  const [roles, sites] = await Promise.all([
     apiGet('admin/identity/roles', roleCatalogSchema),
-    apiGet('admin/identity/warehouses', z.array(z.object({ code: z.string(), name: z.string() }))),
+    apiGet('admin/identity/sites', assignableSitesSchema),
   ]);
   return (
     <>
@@ -22,7 +21,7 @@ export default async function NewUserPage() {
         subtitle={t.createSubtitle}
         back={{ href: '/admin/users', label: t.back }}
       />
-      <CreateUserForm roles={roles} warehouses={warehouses} />
+      <CreateUserForm roles={roles} sites={sites} />
     </>
   );
 }

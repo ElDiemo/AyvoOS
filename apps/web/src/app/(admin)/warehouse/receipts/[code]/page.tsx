@@ -12,7 +12,7 @@ import {
 } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
-import { currentUser, hasPermission } from '@/lib/session';
+import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const r = warehouseCs.receipts;
@@ -24,6 +24,7 @@ export default async function ReceiptPage({
   params: Promise<{ code: string }>;
   searchParams: Promise<{ created?: string }>;
 }) {
+  const tz = await siteTimeZone();
   const { code } = await params;
   if (!goodsReceiptCodeSchema.safeParse(code).success) notFound();
   const { created } = await searchParams;
@@ -55,7 +56,7 @@ export default async function ReceiptPage({
           <FieldList>
             <Field label={r.supplier}>{receipt.supplier.name}</Field>
             <Field label={r.reference}>{receipt.supplierReference}</Field>
-            <Field label={r.receivedAt}>{formatDateTimeCs(receipt.receivedAt)}</Field>
+            <Field label={r.receivedAt}>{formatDateTimeCs(receipt.receivedAt, tz)}</Field>
             {receipt.note && <Field label={r.note}>{receipt.note}</Field>}
             <Field label={r.documents}>
               {receipt.invoicePending ? (
@@ -115,7 +116,7 @@ export default async function ReceiptPage({
                         {line.corrections.map((c) => (
                           <li key={c.id}>
                             {formatDeltaCs(c.quantityDelta)} · {c.reason} ·{' '}
-                            {formatDateTimeCs(c.createdAt)}
+                            {formatDateTimeCs(c.createdAt, tz)}
                           </li>
                         ))}
                       </ul>

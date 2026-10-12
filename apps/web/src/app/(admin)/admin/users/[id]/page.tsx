@@ -1,7 +1,9 @@
-import { adminUserDetailSchema, roleCatalogSchema } from '@ayvo/types';
+import { adminUserDetailSchema, assignableSitesSchema, roleCatalogSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
+import { AccessPreview } from '@/components/admin/access-preview';
 import { AdminHeader } from '@/components/admin/admin-header';
+import { AuditList } from '@/components/admin/audit-list';
 import { UserActions } from '@/components/admin/user-actions';
 import { Card, Field, FieldList } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
@@ -15,11 +17,11 @@ const t = identityCs.admin;
 export default async function UserPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!z.uuid().safeParse(id).success) notFound();
-  const [me, user, roles, warehouses] = await Promise.all([
+  const [me, user, roles, sites] = await Promise.all([
     currentUser(),
     apiGet(`admin/identity/users/${id}`, adminUserDetailSchema),
     apiGet('admin/identity/roles', roleCatalogSchema),
-    apiGet('admin/identity/warehouses', z.array(z.object({ code: z.string(), name: z.string() }))),
+    apiGet('admin/identity/sites', assignableSitesSchema),
   ]);
   return (
     <>
@@ -42,16 +44,8 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
               </Field>
               <Field label={t.roles}>
                 <span data-testid="user-roles">
-                  {user.roles.length
-                    ? user.roles.map((r) => identityCs.roles[r] ?? r).join(', ')
-                    : t.noRoles}
+                  {user.roles.length ? user.roles.map((r) => r.name).join(', ') : t.noRoles}
                 </span>
-              </Field>
-              <Field label={t.warehouses}>
-                {user.scopes
-                  .map((s) => s.locationCode)
-                  .filter(Boolean)
-                  .join(', ') || t.noWarehouses}
               </Field>
               <Field label={t.lastLogin}>
                 {user.lastLoginAt ? formatDateTimeCs(user.lastLoginAt) : t.never} ·{' '}
@@ -59,38 +53,20 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
               </Field>
             </FieldList>
           </Card>
+          <Card title={t.effective}>
+            <p className="mb-3 text-xs text-stone-500">{t.effectiveHelp}</p>
+            <AccessPreview
+              permissions={user.effectiveAccess.permissions}
+              sites={user.effectiveAccess.sites}
+              global={user.effectiveAccess.globalSiteAccess}
+            />
+          </Card>
           <Card title={t.audit} className="relative overflow-x-auto">
-            {user.audit.length === 0 ? (
-              <p className="text-sm text-stone-500">{t.noAudit}</p>
-            ) : (
-              <ol
-                className="flex flex-col divide-y divide-stone-100 text-sm"
-                data-testid="user-audit"
-              >
-                {user.audit.map((a) => (
-                  <li key={a.id} className="py-2">
-                    <span className="font-medium">{t.auditTypes[a.type] ?? a.type}</span>
-                    {typeof a.details.role === 'string' &&
-                      ` · ${identityCs.roles[a.details.role] ?? a.details.role}`}
-                    {typeof a.details.warehouse === 'string' && ` · ${a.details.warehouse}`}
-                    <span className="block text-xs wrap-anywhere text-stone-500">
-                      {formatDateTimeCs(a.occurredAt)}
-                      {a.actor ? ` · ${a.actor}` : ''}
-                      {a.reason ? ` · ${a.reason}` : ''}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            )}
+            <AuditList events={user.audit} testId="user-audit" />
           </Card>
         </div>
         {hasPermission(me, 'identity:users_manage') && (
-          <UserActions
-            user={user}
-            roles={roles}
-            warehouses={warehouses}
-            isSelf={me.user.id === user.id}
-          />
+          <UserActions user={user} roles={roles} sites={sites} isSelf={me.user.id === user.id} />
         )}
       </div>
     </>

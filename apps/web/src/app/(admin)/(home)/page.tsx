@@ -11,6 +11,7 @@ import { unstable_rethrow } from 'next/navigation';
 import { z } from 'zod';
 import { buttonClass, Notice, PageHeader, Stat } from '@/components/ui';
 import { formatQuantityCs, unitCs } from '@/i18n/cs/format';
+import { identityCs } from '@/i18n/cs/identity';
 import { shellCs } from '@/i18n/cs/shell';
 import { apiGet } from '@/lib/api';
 import { fetchApiHealth } from '@/lib/api-health';
@@ -76,9 +77,15 @@ async function productionFigures() {
  */
 export default async function HomePage() {
   const user = await currentUser();
-  const canWarehouse = hasPermission(user, 'inventory:read');
+  // Warehouse figures belong to the active site; without one (several sites, none chosen) or at a
+  // site without a warehouse the overview offers the site choice instead of redirecting.
+  const activeSite = user.sites.find((s) => s.id === user.activeSiteId) ?? null;
+  const siteHasWarehouse = !!activeSite?.capabilities.includes('WAREHOUSE');
+  const needsSite = !activeSite && user.sites.length > 1;
+  const canWarehouse = siteHasWarehouse && hasPermission(user, 'inventory:read');
   // Planning-only stock access (SALES) without the full warehouse.
-  const canAvailability = !canWarehouse && hasPermission(user, 'inventory:stock_summary');
+  const canAvailability =
+    siteHasWarehouse && !canWarehouse && hasPermission(user, 'inventory:stock_summary');
   const canProduction = hasPermission(user, 'production:read');
   const [health, warehouse, availability, production] = await Promise.all([
     fetchApiHealth(serverEnv.API_URL),
@@ -93,7 +100,14 @@ export default async function HomePage() {
     <>
       <PageHeader title={h.title} subtitle={h.subtitle} />
       <div className="flex flex-col gap-6">
-        {!canWarehouse && !canAvailability && !canProduction && (
+        {needsSite && (
+          <Notice tone="warning">
+            <Link href="/select-site" className="underline" data-testid="choose-site">
+              {identityCs.shell.chooseSite}
+            </Link>
+          </Notice>
+        )}
+        {!needsSite && !canWarehouse && !canAvailability && !canProduction && (
           <Notice tone="info">{h.noModules}</Notice>
         )}
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">

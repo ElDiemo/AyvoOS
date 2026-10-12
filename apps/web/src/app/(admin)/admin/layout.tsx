@@ -1,7 +1,7 @@
-import { requirePermission } from '@/lib/session';
+import { requireAnyPermission } from '@/lib/session';
 
-/** Page-level guard of this section; the API enforces the same permission on every request. */
+/** Section guard of the administration; each page checks its own permission again (and the API). */
 export default async function GuardedLayout({ children }: { children: React.ReactNode }) {
-  await requirePermission('identity:users_read');
+  await requireAnyPermission(['identity:users_read', 'sites:manage']);
   return children;
 }

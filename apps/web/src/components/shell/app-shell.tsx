@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import { identityCs } from '@/i18n/cs/identity';
 import { shellCs } from '@/i18n/cs/shell';
 import { locate, visibleModules, type NavModule } from '@/lib/navigation';
+import { SiteSwitcher } from './site-switcher';
 
 type Environment = 'development' | 'test' | 'production';
 
@@ -110,6 +111,7 @@ export function AppShell({
               )}
             </ol>
           </nav>
+          <SiteSwitcher user={user} className="shrink-0" />
           <EnvironmentBadge environment={environment} withLabel />
           <span
             className="hidden max-w-48 truncate text-sm text-stone-600 md:inline"
@@ -176,7 +178,7 @@ function SidebarContent({
         )}
         {administration.map((m) => (
           <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
-            {m.pages[0]?.label ?? m.label}
+            {m.label}
           </NavLink>
         ))}
       </nav>
@@ -186,9 +188,7 @@ function SidebarContent({
         </p>
         <p className="mt-1 truncate text-sm text-white">{user.user.displayName}</p>
         <p className="truncate text-xs text-stone-400">{user.user.email}</p>
-        <p className="mt-1 text-xs text-stone-400">
-          {user.roles.map((r) => identityCs.roles[r] ?? r).join(', ')}
-        </p>
+        <p className="mt-1 text-xs text-stone-400">{user.roles.map((r) => r.name).join(', ')}</p>
         <LogoutButton className="mt-3 w-full border-white/20 bg-transparent text-stone-200 hover:bg-white/10" />
       </div>
     </>
