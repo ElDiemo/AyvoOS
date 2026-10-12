@@ -59,6 +59,32 @@ export type UpdateSiteRequest = z.infer<typeof updateSiteRequestSchema>;
 export const siteStatusRequestSchema = z.object({ reason: reasonSchema });
 export type SiteStatusRequest = z.infer<typeof siteStatusRequestSchema>;
 
+/**
+ * Warehouse codes are **globally** unique and immutable (doc 022 §2, §6) — the same rule as the
+ * database CHECK; `MAIN` belongs to the initial site, so another site's warehouse gets its own code.
+ */
+export const warehouseCodeSchema = z
+  .string()
+  .regex(/^[A-Z][A-Z0-9_-]{1,19}$/, 'A–Z, 0–9, - and _ (2–20 characters)');
+
+/** Suggested code of a site's (only) warehouse: `<SITE CODE>-MAIN`, when it fits the 20 limit. */
+export function suggestedWarehouseCode(siteCode: string): string | null {
+  const code = `${siteCode}-MAIN`;
+  return warehouseCodeSchema.safeParse(code).success ? code : null;
+}
+
+/**
+ * Creates the warehouse of a WAREHOUSE site that has none (v0.1: one warehouse per site, always
+ * its default). Idempotent per `requestId`; the reason is audited.
+ */
+export const createSiteWarehouseRequestSchema = z.object({
+  requestId: z.uuid(),
+  code: warehouseCodeSchema,
+  name: z.string().trim().min(1).max(80),
+  reason: reasonSchema,
+});
+export type CreateSiteWarehouseRequest = z.infer<typeof createSiteWarehouseRequestSchema>;
+
 export const siteSchema = z.object({
   id: z.uuid(),
   code: z.string(),

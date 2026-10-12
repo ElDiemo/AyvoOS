@@ -4,9 +4,11 @@ import { z } from 'zod';
 import { AdminHeader } from '@/components/admin/admin-header';
 import { AuditList } from '@/components/admin/audit-list';
 import { SiteForm, SiteStatus } from '@/components/admin/site-form';
+import { SiteWarehouseForm } from '@/components/admin/site-warehouse-form';
 import { Card, Notice } from '@/components/ui';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiGet } from '@/lib/api';
+import { currentUser, hasPermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const t = identityCs.sites_admin;
@@ -14,7 +16,11 @@ const t = identityCs.sites_admin;
 export default async function SitePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!z.uuid().safeParse(id).success) notFound();
-  const site = await apiGet(`admin/sites/${id}`, siteDetailSchema);
+  const [site, me] = await Promise.all([
+    apiGet(`admin/sites/${id}`, siteDetailSchema),
+    currentUser(),
+  ]);
+  const canManage = hasPermission(me, 'sites:manage');
   return (
     <>
       <AdminHeader
@@ -38,18 +44,34 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
         <div className="flex flex-col gap-6">
           <Card title={t.warehouses}>
             {site.warehouses.length === 0 ? (
-              <p className="text-sm text-stone-500">{t.noWarehouses}</p>
-            ) : (
-              <ul className="flex flex-col gap-1 text-sm">
-                {site.warehouses.map((w) => (
-                  <li key={w.code}>
-                    {w.name} <span className="font-mono text-xs text-stone-500">{w.code}</span>
-                    {w.default && (
-                      <span className="ml-1 text-xs text-stone-500">({t.defaultWarehouse})</span>
+              <div className="flex flex-col gap-4" data-testid="site-warehouses-empty">
+                {!site.capabilities.includes('WAREHOUSE') ? (
+                  <p className="text-sm text-stone-500">{t.noWarehouseCapability}</p>
+                ) : (
+                  <>
+                    <Notice tone="warning">{t.noWarehouses}</Notice>
+                    {!site.active ? (
+                      <p className="text-sm text-stone-500">{t.inactiveNoWarehouse}</p>
+                    ) : (
+                      canManage && <SiteWarehouseForm siteId={site.id} siteCode={site.code} />
                     )}
-                  </li>
-                ))}
-              </ul>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <ul className="flex flex-col gap-1 text-sm" data-testid="site-warehouses">
+                  {site.warehouses.map((w) => (
+                    <li key={w.code}>
+                      {w.name} <span className="font-mono text-xs text-stone-500">{w.code}</span>
+                      {w.default && (
+                        <span className="ml-1 text-xs text-stone-500">({t.defaultWarehouse})</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-stone-500">{t.oneWarehouse}</p>
+              </div>
             )}
           </Card>
           <Card title={site.active ? t.deactivate : t.reactivate}>

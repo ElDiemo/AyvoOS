@@ -39,9 +39,36 @@ accounts). A deactivated site keeps all history readable; new operational writes
 
 Every inventory location (warehouse) belongs to exactly one site (`inventory_locations.site_id`,
 immutable). v0.1: a site's operations act on its **default warehouse** (`is_site_default`, at most
-one per site); warehouses are still created by migration. Goods receipts record their site; stock,
+one per site). Goods receipts record their site; stock,
 lots, movements, receipts, corrections and label application act on the warehouse of the request's
 site only — another site's receipt is "not found".
+
+**Creating a site's warehouse (v0.1: exactly one per site).** In **Správa systému → Provozovny →
+detail**, an administrator with `sites:manage` creates the warehouse of an active site with the
+WAREHOUSE capability that has none yet (`POST /api/admin/sites/:id/warehouses`): code, name and a
+mandatory reason. The warehouse is always the site's default. Rules, all enforced by the server and
+the database:
+
+- Warehouse codes are **globally unique** and immutable (`^[A-Z][A-Z0-9_-]{1,19}$`). `MAIN` belongs
+  to `CZ-PREROV-01`; another site's warehouse is named after the site — the UI suggests
+  `<SITE CODE>-MAIN`, e.g. `DE-TEST-01-MAIN`. A taken code answers `409 WAREHOUSE_CODE_EXISTS`.
+- One warehouse per site: a second one answers `409 SITE_HAS_WAREHOUSE`. Attempts are serialised
+  by the site lock (the same lock as every site change), so concurrent requests cannot create two.
+  The database also allows only one default per site and never changes or deletes a warehouse.
+- Refused for an inactive site (`409 SITE_INACTIVE`) and a site without WAREHOUSE
+  (`409 SITE_NOT_WAREHOUSE`).
+- Idempotent per `requestId`: the creation and its audit event `WAREHOUSE_CREATED` (reason, site,
+  code, name, request id) commit together; a repeated request returns the same result, a reused id
+  with other data answers `409 IDEMPOTENCY_CONFLICT`.
+- Nothing else changes: no stock, lots, receipts, documents, movements or balances; the site's
+  capabilities, users and roles stay as they are. Users with access to the site reach the new
+  warehouse through their existing site scope; until it exists, warehouse operations there answer
+  `409 SITE_WITHOUT_WAREHOUSE`.
+- Not in v0.1: further warehouses, changing the default, renaming or deleting a warehouse.
+
+Acceptance after deployment: `DE-TEST-01` → warehouse `DE-TEST-01-MAIN` "Hlavní sklad"; Germany
+shows zero stock and no receipts or movements; Přerov keeps `MAIN` with its stock; switching sites
+never mixes data; a warehouse user of Přerov only cannot reach the German warehouse.
 
 Suppliers and supplier documents are company-wide (purchasing serves several sites); what they
 were received into is per site.
@@ -159,8 +186,8 @@ Human codes stay **globally unambiguous**: they come from global sequences in on
 
 ## 9. Limitations
 
-- Warehouses are created by migration; a site created in the UI has no warehouse until then
-  (`409 SITE_WITHOUT_WAREHOUSE`, the UI offers another site).
+- One warehouse per site (section 2); a new site has none until an administrator creates it
+  (`409 SITE_WITHOUT_WAREHOUSE` until then, the UI offers another site).
 - One active site per session: browser tabs of one session share it.
 - Label templates and artwork are company-wide brand data (changed only with
   `production:templates_manage`); everything operational in production is per site.

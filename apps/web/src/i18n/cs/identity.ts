@@ -183,6 +183,10 @@ export const identityCs = {
       ROLE_ALREADY_ACTIVE: 'Role už je aktivní.',
       SITE_EXISTS: 'Provozovna s tímto kódem už existuje.',
       SITE_HAS_WAREHOUSES: 'Provozovna se sklady musí mít schopnost Sklad.',
+      SITE_HAS_WAREHOUSE: 'Provozovna už svůj sklad má.',
+      SITE_NOT_WAREHOUSE: 'Sklad lze založit jen provozovně se schopností Sklad.',
+      WAREHOUSE_CODE_EXISTS:
+        'Sklad s tímto kódem už existuje (kódy jsou jedinečné ve všech provozovnách).',
       SITE_DEPENDENCIES: 'Provozovnu teď nelze deaktivovat.',
       SITE_ALREADY_INACTIVE: 'Provozovna už je neaktivní.',
       SITE_ALREADY_ACTIVE: 'Provozovna už je aktivní.',
@@ -228,6 +232,7 @@ export const identityCs = {
       SITE_UPDATED: 'Úprava provozovny',
       SITE_DEACTIVATED: 'Deaktivace provozovny',
       SITE_REACTIVATED: 'Opětovná aktivace provozovny',
+      WAREHOUSE_CREATED: 'Založení skladu',
       ACTIVE_SITE_SELECTED: 'Odmítnutý výběr provozovny',
       INVITATION_SENT: 'Odeslání pozvánky',
       INVITATION_RESENT: 'Opětovné odeslání pozvánky',
@@ -292,7 +297,18 @@ export const identityCs = {
       string
     >,
     warehouses: 'Sklady',
-    noWarehouses: 'Zatím bez skladu (sklady zakládá migrace).',
+    noWarehouses:
+      'Provozovna zatím nemá sklad. Skladové operace jsou do jeho založení zablokované.',
+    noWarehouseCapability: 'Provozovna nemá schopnost Sklad, sklad se jí nezakládá.',
+    inactiveNoWarehouse: 'Neaktivní provozovně nelze založit sklad.',
+    newWarehouse: 'Nový sklad',
+    createWarehouse: 'Vytvořit sklad',
+    warehouseCode: 'Kód skladu (neměnný, jedinečný ve všech provozovnách)',
+    warehouseCodeHelp:
+      'Kód MAIN patří Přerovu; navržený kód obsahuje kód provozovny. Později ho nelze změnit.',
+    warehouseName: 'Název skladu',
+    defaultWarehouseName: 'Hlavní sklad',
+    oneWarehouse: 'Provozovna má v této verzi právě jeden sklad (výchozí).',
     defaultWarehouse: 'výchozí',
     addressMissing: 'Adresa není doplněná',
     active: 'Aktivní',

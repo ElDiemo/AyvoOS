@@ -1,5 +1,6 @@
 import type {
   CreateSiteRequest,
+  CreateSiteWarehouseRequest,
   Site,
   SiteCapability,
   SiteDependency,
@@ -8,12 +9,14 @@ import type {
 } from '@ayvo/types';
 import { Injectable } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
-import { domainError } from '../common/domain-error.js';
+import { domainError, idempotencyConflict } from '../common/domain-error.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, type Site as SiteRecord } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 
 const notFound = () => domainError(404, 'SITE_NOT_FOUND', 'No such site');
+const warehouseCodeTaken = () =>
+  domainError(409, 'WAREHOUSE_CODE_EXISTS', 'Warehouse codes are unique across all sites');
 
 export type SiteWithWarehouses = SiteRecord & {
   locations: { id: string; code: string; name: string; isSiteDefault: boolean }[];
@@ -174,6 +177,92 @@ export class SitesService {
       );
     });
     return this.detail(id);
+  }
+
+  /**
+   * Creates the warehouse of a site (v0.1: exactly one per site, always the default; doc 022 §2).
+   * Refused unless the site is active, has the WAREHOUSE capability and no warehouse yet; the code
+   * is globally unique. The site lock (all sites, the same lock as every site change) serialises
+   * concurrent attempts, so two requests can never create two warehouses for one site. Creation and
+   * the audit event (reason, request id) commit together; a repeated request id returns the result
+   * of the first request (same site, code, name and reason) instead of a conflict. No stock, lots,
+   * receipts or movements are created; the site's capabilities, users and roles stay unchanged.
+   */
+  async createWarehouse(
+    actorId: string,
+    siteId: string,
+    input: CreateSiteWarehouseRequest,
+  ): Promise<SiteDetail> {
+    await this.prisma.$transaction(async (tx) => {
+      const site = await this.lock(tx, siteId);
+      // The request id lives in the append-only audit event of the creation (no separate request
+      // table for site administration); checked under the lock, so it is race-free.
+      const previous = await tx.auditEvent.findFirst({
+        where: {
+          type: 'WAREHOUSE_CREATED',
+          payload: { path: ['requestId'], equals: input.requestId },
+        },
+      });
+      if (previous) {
+        const p = previous.payload as Record<string, unknown>;
+        const same =
+          previous.siteId === siteId &&
+          p.warehouse === input.code &&
+          p.name === input.name &&
+          previous.reason === input.reason;
+        if (same) return;
+        throw idempotencyConflict();
+      }
+      if (!site.active) {
+        throw domainError(
+          409,
+          'SITE_INACTIVE',
+          'The site is inactive: its history can be read, not changed',
+        );
+      }
+      if (!site.capabilities.includes('WAREHOUSE')) {
+        throw domainError(
+          409,
+          'SITE_NOT_WAREHOUSE',
+          'Only a site with the WAREHOUSE capability has a warehouse',
+        );
+      }
+      if ((await this.inventory.listLocations(tx, [siteId])).length > 0) {
+        throw domainError(409, 'SITE_HAS_WAREHOUSE', 'The site already has its warehouse');
+      }
+      if (await this.inventory.locationByCode(input.code, tx)) {
+        throw warehouseCodeTaken();
+      }
+      try {
+        await this.inventory.createSiteWarehouse(tx, {
+          siteId,
+          code: input.code,
+          name: input.name,
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw warehouseCodeTaken();
+        }
+        throw error;
+      }
+      await this.audit.record(
+        {
+          type: 'WAREHOUSE_CREATED',
+          actorUserId: actorId,
+          siteId,
+          reason: input.reason,
+          payload: {
+            site: site.code,
+            warehouse: input.code,
+            name: input.name,
+            default: true,
+            requestId: input.requestId,
+          },
+        },
+        tx,
+      );
+    });
+    return this.detail(siteId);
   }
 
   /**
