@@ -438,11 +438,18 @@ that bootstraps.
    WORKOS_CLIENT_ID=client_…
    WORKOS_JWT_ISSUER=https://…
    ```
-   `WORKOS_JWT_ISSUER` is **required** and compared exactly: copy the issuer shown for the
-   environment in the WorkOS dashboard (session/JWT settings; it is your AuthKit domain, or the
-   custom auth domain if one is configured), or the `iss` of a decoded access token of that
-   environment — including or excluding the trailing slash exactly as WorkOS issues it. A wrong
-   value refuses every sign-in (fail closed) without exposing anything.
+   `WORKOS_JWT_ISSUER` is **required** and compared exactly. It is the `issuer` field of the
+   client's OIDC discovery document
+   `https://api.workos.com/user_management/<WORKOS_CLIENT_ID>/.well-known/openid-configuration`
+   — for AuthKit access tokens `https://api.workos.com/user_management/<WORKOS_CLIENT_ID>`, no
+   trailing slash — **not** a generic WorkOS address such as `https://api.workos.com/` (that value
+   made the first DEV sign-in fail token verification, 2026-10-12). Copy the value byte for byte.
+   `scripts/deploy-dev.sh` (also `--check`) fetches that document from the fixed WorkOS API origin
+   and refuses unless `issuer` is an https URL without query or fragment and equals
+   `WORKOS_JWT_ISSUER` exactly; an unreachable or invalid document also refuses. It prints no
+   client id, issuer or key. The API itself never reads the document: it compares the token's
+   `iss` with the configured value only (section 5a), and a wrong value refuses every sign-in
+   (fail closed) without exposing anything.
 7. In WorkOS, invite/create **only the owner's** user (the e-mail used for the bootstrap). Every
    later user is invited from AYVO OS (section 7b) — never create them manually in WorkOS.
 8. Then the DEV deployment can run (`scripts/deploy-dev.sh` refuses without the three values) and
@@ -459,6 +466,17 @@ that bootstraps.
    (`sub`). If WorkOS did not return it, AYVO refuses the link (fail closed) — report it before
    relying on invitations.
 4. Revoke an unused invitation and confirm that signing up with it is refused by WorkOS and AYVO.
+
+**DEV acceptance record (2026-10-12, WorkOS Staging, release `0dfacb1`):** passed, verified
+manually by the owner — sign-in with e-mail + password; mandatory TOTP MFA; linking of the
+bootstrapped administrator at the first sign-in; an invitation sent from AYVO and accepted (account
+linked); a restricted account with the role Skladník holding warehouse permissions only and access
+to exactly one site (`CZ-PREROV-01`). No production environment was used.
+
+**Operational rule (DEV verification):** a `curl` call that carries credentials (Basic Auth, a
+session cookie) must never print `%{redirect_url}` or `%{url_effective}` — curl puts the
+credentials into the URL it reports. Print status codes and paths only, and pass credentials on
+stdin (`--config -`) or from a mode-600 file, never as arguments.
 
 Optional server env values (defaults shown; not secrets): `AUTH_RATE_LIMIT_WINDOW_SECONDS=600`,
 `AUTH_RATE_LIMIT_LOGIN_MAX=30`, `AUTH_RATE_LIMIT_CALLBACK_MAX=30`,
@@ -477,6 +495,12 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
   configuration (fake provider refused outside tests, WorkOS key, client id and https issuer
   required in development and production, rate-limit and proxy settings validated, secrets never
   echoed); trusted-proxy client IP; site/warehouse scope evaluation; no privilege escalation.
+- Deploy preflight (`apps/api/test/deploy-dev-issuer.test.ts`, stubbed `curl`/`docker`, never the
+  real WorkOS endpoint): `deploy-dev.sh --check` passes only when `WORKOS_JWT_ISSUER` equals the
+  discovery `issuer` exactly and fails on a generic issuer, a different declared issuer, invalid
+  JSON, a missing issuer, an issuer with a query and a network error — without printing the client
+  id, issuer or key.
+- Web unit: every permission in the catalogue has a Czech name (the slug is secondary text only).
 - API integration (real migrated database, real guard and sessions): every route declares access
   and answers 401 anonymously; sign-in, secure cookie, hashed token; unknown identities refused and
   audited; single-use state bound to the browser; safe redirects; permissions, site and warehouse
@@ -531,13 +555,13 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
 
 ## 11. Limitations and follow-ups
 
-- **DEV activation needs the owner's WorkOS values** (section 9); until then the DEV preview stays
-  on the previous release (deploy refuses).
+- DEV runs this milestone since 2026-10-12 against WorkOS Staging (acceptance record, section 9).
 - Public passport rate limiting is still open (doc 016 item 7); sign-in routes are limited
   (section 5b) and fail closed (503) without Redis.
 - The token rules of section 5a follow WorkOS' published AuthKit session-token claims
   (`iss`, `sub`, `sid`, `client_id`, `iat`, `exp`; no `aud` by default). They are proven against
-  locally signed tokens only; the first real DEV sign-in confirms them against WorkOS.
+  locally signed tokens and were confirmed by real DEV sign-ins against WorkOS Staging
+  (2026-10-12), with the issuer of section 9.
 - Operational `actor_id` columns (bottle events, movements) are filled with Production Core.
 - Hotel scopes, hotel SSO and the hotel portal come with the hotel modules.
 - ADMIN holds every operational permission; the doc 020 §12 rule that operational actions by
@@ -547,6 +571,11 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
 - Security review P3 follow-ups (section 12): database-role separation for migrations and the
   application, `__Host-` cookie names, per-network/global sign-in buckets, actor foreign keys,
   and refusing warehouse narrowing that excludes a site's operational warehouse.
+- Invitation follow-ups (P3, found in the focused review of the invitation delta): a provider
+  call that outlasts the 30 s request lease lets a second attempt finish the same request, which
+  can record the outcome twice and answer the later caller with a wrong 409; and at first sign-in
+  the invitation is marked `ACCEPTED` before the "identity already linked" check, so a refused
+  link can leave an accepted invitation without a linked identity. Neither grants access.
 - Session lifetimes (120 minutes idle, 12 hours absolute) are configurable defaults.
 
 ## 12. Independent security review (2026-10-12)
