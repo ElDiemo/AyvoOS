@@ -55,6 +55,13 @@ flowchart TD
 
 The first version should be deliberately simple and transparent: proposal quantities from ServiceConfiguration (e.g. target stock) and schedule (service frequency), always editable by AYVO before approval, with the calculation inputs stored on the proposal for explainability. More advanced inputs (consumption history, returns, hotel inventory) are added later once their rules are defined.
 
+### Carriers per site (decided 2026-10-12, ADR 0023, doc 022 §8)
+
+Carriers are configured per site (accounts, sender/return addresses, pickup settings, services,
+priority, active state; credentials only as references to protected secrets). A dispatch keeps a
+snapshot of its origin site, carrier and service. Hotels may choose among the services their
+fulfilment site permits and never see its credentials.
+
 ### Carrier adapter (later)
 
 A `CarrierAdapter` interface in the deliveries module (createShipment, getLabel, getStatus) with a manual implementation first and a PPL implementation later. Carrier calls happen outside DB transactions; results are persisted with idempotency keys.

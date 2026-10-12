@@ -294,12 +294,13 @@ This is the single consolidated list (other documents link here).
    provider boundary, AYVO sessions); still a blocker until activated and verified with real
    WorkOS environments and until the pricing, DPA and EU data-location check is done.
 6. **Authorization and role model** — implemented (doc 021: deny-by-default guard on every route,
-   roles, permissions, warehouse scopes, audit); hotel organization/site scopes follow with the
-   hotel modules.
-7. **Rate limiting** — public passport, authentication and mutation endpoints. Not implemented:
-   it needs a decision on how client identity crosses the proxy chain (Caddy → Next.js SSR → API:
-   which forwarded headers are trusted), the public QR host topology, limits and fail-open policy.
-   Redis (already approved, ADR 0010) is the intended store.
+   system and custom roles, permissions, site and warehouse scopes (doc 022), audit); hotel
+   organization/site scopes follow with the hotel modules.
+7. **Rate limiting** — **sign-in routes implemented** (doc 021 §5b: Redis, per client IP,
+   `X-Forwarded-For` only from trusted proxies, clean 429, fail open). Still open: the public
+   passport (`/q/<token>`, `/api/public/*`) and mutation endpoints — they need the public QR host
+   topology (Caddy → Next.js SSR → API for `/q`), limits and the fail-open policy for public
+   traffic.
 8. **Production object-storage provider** — S3-compatible `FileStorage`, versioning / object lock.
 9. **Files backup and restore procedure** — off-site, retention, together with the database.
 10. **Real restore test** before production approval.

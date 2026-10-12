@@ -57,6 +57,13 @@ Delivery history, return history, invoices and sustainability data are **not** s
 - Only authorized AYVO administrators can edit hotel configuration (roles in [012](012-security.md)).
 - Hotel users may view (not edit) a limited subset of their own hotel's data via the portal; exact subset is open.
 
+### Fulfilment site (decided 2026-10-12, ADR 0023, doc 022 §7)
+
+A hotel's address/country and the AYVO site serving it are separate; the serving site is never
+derived from the country. v0.1: exactly one active primary `fulfillment_site_id` per hotel (a
+hotel group may span sites); orders snapshot it; reassignment (reason + audit) affects only new
+orders; returns go to the same site by default; no ordering without an active fulfilment site.
+
 ### Relationship to other modules
 
 - service-planning reads ServiceConfiguration (target/minimum stock, frequency).

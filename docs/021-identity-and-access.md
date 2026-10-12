@@ -2,15 +2,17 @@
 
 Status: **Implemented on branch `feat/identity-access-core` — DEV activation pending the owner's
 WorkOS setup** (section 9). Decision: [ADR 0022](adr/0022-external-oidc-authentication.md);
-roles and permissions follow [doc 020 §12](020-production-core-v0.1.md) and this document.
+roles and permissions follow [doc 020 §12](020-production-core-v0.1.md) and this document; custom
+roles [ADR 0024](adr/0024-custom-roles-and-permission-catalogue.md); sites and site scopes
+[doc 022](022-multi-site-foundation.md) / [ADR 0023](adr/0023-sites-as-operational-boundary.md).
 
 ## 1. What this milestone delivers
 
 - Sign-in through an external OIDC identity provider — **WorkOS AuthKit** behind a provider
   boundary (`apps/api/src/identity`); the code is exchanged server-to-server and the access token
   is verified strictly (section 5a) before anything is trusted.
-- AYVO users, their link to the external identity, roles, permissions, warehouse scopes, AYVO
-  application sessions and a security audit — all in PostgreSQL, evaluated by the API on **every
+- AYVO users, their link to the external identity, system and custom roles, permissions, site and
+  warehouse scopes, the session's active site, AYVO application sessions and a security audit — all in PostgreSQL, evaluated by the API on **every
   request**.
 - A global NestJS guard: **deny by default**; every route declares `@Public()`,
   `@Authenticated()` or `@RequirePermission(…)`; an undeclared route is refused (and a test fails).
@@ -19,6 +21,8 @@ roles and permissions follow [doc 020 §12](020-production-core-v0.1.md) and thi
 - Czech pages: sign-in, "Nemáte oprávnění", "Účet není aktivní" / "Účet nemá přístup", "Relace
   vypršela"; user and role administration with reasons and audit; sign-out.
 - One-time, audited bootstrap of the first administrator.
+- Redis-backed rate limiting of the sign-in routes (section 5b).
+- Administration of custom roles (checkboxes) and sites (doc 022).
 - No authentication bypass on DEV or production: the fake provider used by automated tests is
   refused by the configuration unless `APP_ENV=test`.
 
@@ -33,56 +37,66 @@ roles and permissions follow [doc 020 §12](020-production-core-v0.1.md) and thi
 | State-changing requests without CSRF protection                              | SameSite=Lax HttpOnly cookie + Origin / Sec-Fetch-Site check on every non-GET request        |
 | Deploy verification expected `GET / → 200`                                   | Now: `GET /` → sign-in redirect, `/login` 200, `/api/auth/me` 401 without a session          |
 
-## 3. Data model (migrations `20261011190000_identity_access` and `20261012090000_identity_permission_refinements`, additive)
+## 3. Data model (additive migrations)
 
-| Table                | Purpose and database rules                                                                                                                           |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`              | AYVO user: e-mail (lower-case, unique, immutable), display name, `ACTIVE`/`DEACTIVATED` (fields consistent by CHECK), last login; never deleted      |
-| `user_identities`    | external identity link (provider `WORKOS`/`TEST`, subject); one active link per subject and per (user, provider); closes once; never deleted         |
-| `roles`              | catalogue (8 roles, seeded); changes only by migration                                                                                               |
-| `permissions`        | catalogue (15 permissions, seeded) incl. `warehouse_scoped`; changes only by migration                                                               |
-| `role_permissions`   | role → permission (seeded); changes only by migration                                                                                                |
-| `user_roles`         | grants with grantor and reason; revocation closes once with revoker and reason; one open grant per (user, role); never deleted                       |
-| `user_scopes`        | `WAREHOUSE` (inventory location) now; `HOTEL_ORGANIZATION` / `HOTEL_SITE` reserved for the hotel modules; closes once; never deleted                 |
-| `user_sessions`      | AYVO sessions: only the SHA-256 of the 256-bit cookie token, idle and absolute expiry, revocation once (reason); only activity/revocation may change |
-| `auth_login_states`  | one-time OAuth state (hash), browser binding (hash), PKCE verifier, safe next path, 10-minute expiry                                                 |
-| `identity_bootstrap` | the single bootstrap of the first administrator — one row ever (primary key `true`), immutable                                                       |
-| `audit_events`       | append-only security/administration audit (UPDATE/DELETE/TRUNCATE rejected)                                                                          |
+Migrations: `20261011190000_identity_access`, `20261012090000_identity_permission_refinements`,
+`20261012120000_site_scope_type`, `20261012120100_sites_and_custom_roles`.
 
-The second migration only INSERTs the three permissions of the owner review (prices, supplier
-documents, stock summary) and their role grants, and updates four role descriptions (text only);
-nothing is deleted or revoked. Existing data is untouched; no user is invented. After migration nobody can sign in until the
-administrator is bootstrapped (section 8).
+| Table                | Purpose and database rules                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `users`              | AYVO user: e-mail (lower-case, unique, immutable), display name, `ACTIVE`/`DEACTIVATED` (fields consistent by CHECK), last login; never deleted                                            |
+| `user_identities`    | external identity link (provider `WORKOS`/`TEST`, subject); one active link per subject and per (user, provider); closes once; never deleted                                               |
+| `roles`              | 8 protected **system** roles (seeded) and ADMIN-created **custom** roles: stable `id`, unique code, Czech name, description, active, `is_system`, timestamps; never deleted (section 7a)   |
+| `permissions`        | catalogue (18 permissions) incl. `warehouse_scoped` and `security_admin`; inserted/changed **only inside a migration** (database guard)                                                    |
+| `role_permissions`   | system roles: only by migration; custom roles: by ADMIN (audited); a custom role never holds a security-administration permission (trigger)                                                |
+| `user_roles`         | grants with grantor and reason; revocation closes once with revoker and reason; one open grant per (user, role); an inactive role cannot be granted; never deleted                         |
+| `user_scopes`        | `SITE` (a site) and `WAREHOUSE` (narrows an accessible site — needs the open site scope, trigger); `HOTEL_ORGANIZATION` / `HOTEL_SITE` reserved; closes once; never deleted                |
+| `user_sessions`      | AYVO sessions: only the SHA-256 of the 256-bit cookie token, idle and absolute expiry, the **active site**, revocation once (reason); only activity, active site and revocation may change |
+| `auth_login_states`  | one-time OAuth state (hash), browser binding (hash), PKCE verifier, safe next path, 10-minute expiry                                                                                       |
+| `identity_bootstrap` | the single bootstrap of the first administrator — one row ever (primary key `true`), immutable                                                                                             |
+| `audit_events`       | append-only security/administration audit with actor, target, **site**, reason, time (UPDATE/DELETE/TRUNCATE rejected)                                                                     |
+| `sites`              | AYVO facilities (doc 022)                                                                                                                                                                  |
 
-## 4. Roles and permissions
+The refinements migration INSERTs permissions and grants only (role descriptions: text). The sites
+migration adds columns with defaults (existing rows of immutable tables are never updated), one
+initial site `SITE-1`, the catalogue guard and the site scopes of users who had warehouse scopes
+(doc 022 §5, with the preservation evidence). Existing data is untouched; no user is invented. After
+migration nobody can sign in until the administrator is bootstrapped (section 8).
 
-| Permission                     | Scoped | ADMIN | WH_OP | WH_SUP | PROD_OP | PROD_SUP | SALES | FINANCE | HOTEL |
-| ------------------------------ | :----: | :---: | :---: | :----: | :-----: | :------: | :---: | :-----: | :---: |
-| `identity:users_read`          |        |   ✓   |       |        |         |          |       |         |       |
-| `identity:users_manage`        |        |   ✓   |       |        |         |          |       |         |       |
-| `inventory:read`               |   ✓    |   ✓   |   ✓   |   ✓    |    ✓    |    ✓     |       |    ✓    |       |
-| `inventory:stock_summary`      |   ✓    |   ✓   |       |        |         |          |   ✓   |         |       |
-| `inventory:receive`            |   ✓    |   ✓   |   ✓   |   ✓    |         |          |       |         |       |
-| `inventory:correct`            |   ✓    |   ✓   |       |   ✓    |         |          |       |         |       |
-| `inventory:items_manage`       |   ✓    |   ✓   |       |   ✓    |         |          |       |         |       |
-| `procurement:suppliers_manage` |   ✓    |   ✓   |       |   ✓    |         |          |       |         |       |
-| `procurement:cost_read`        |        |   ✓   |       |        |         |          |       |    ✓    |       |
-| `procurement:documents_read`   |        |   ✓   |       |   ✓    |         |          |       |    ✓    |       |
-| `production:read`              |        |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
-| `production:bottles_create`    |        |   ✓   |       |        |         |    ✓     |       |         |       |
-| `production:labels_print`      |        |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
-| `production:templates_manage`  |        |   ✓   |       |        |         |    ✓     |       |         |       |
-| `production:label_apply`       |   ✓    |   ✓   |       |        |         |    ✓     |       |         |       |
+## 4. Roles and permissions (system roles)
 
-A user may hold several roles. **Scoped** permissions also need a `WAREHOUSE` scope for the
-warehouse the operation acts on (today always `MAIN`).
+| Permission                     |   Where    | ADMIN | WH_OP | WH_SUP | PROD_OP | PROD_SUP | SALES | FINANCE | HOTEL |
+| ------------------------------ | :--------: | :---: | :---: | :----: | :-----: | :------: | :---: | :-----: | :---: |
+| `identity:users_read` ⚿        |   global   |   ✓   |       |        |         |          |       |         |       |
+| `identity:users_manage` ⚿      |   global   |   ✓   |       |        |         |          |       |         |       |
+| `identity:roles_manage` ⚿      |   global   |   ✓   |       |        |         |          |       |         |       |
+| `sites:manage` ⚿               |   global   |   ✓   |       |        |         |          |       |         |       |
+| `sites:all_access` ⚿           |   global   |   ✓   |       |        |         |          |       |         |       |
+| `inventory:read`               | site + wh. |   ✓   |   ✓   |   ✓    |    ✓    |    ✓     |       |    ✓    |       |
+| `inventory:stock_summary`      | site + wh. |   ✓   |       |        |         |          |   ✓   |         |       |
+| `inventory:receive`            | site + wh. |   ✓   |   ✓   |   ✓    |         |          |       |         |       |
+| `inventory:correct`            | site + wh. |   ✓   |       |   ✓    |         |          |       |         |       |
+| `inventory:items_manage`       | site + wh. |   ✓   |       |   ✓    |         |          |       |         |       |
+| `procurement:suppliers_manage` | site + wh. |   ✓   |       |   ✓    |         |          |       |         |       |
+| `procurement:cost_read`        |   global   |   ✓   |       |        |         |          |       |    ✓    |       |
+| `procurement:documents_read`   |   global   |   ✓   |       |   ✓    |         |          |       |    ✓    |       |
+| `production:read`              |   global   |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
+| `production:bottles_create`    |   global   |   ✓   |       |        |         |    ✓     |       |         |       |
+| `production:labels_print`      |   global   |   ✓   |       |        |    ✓    |    ✓     |       |         |       |
+| `production:templates_manage`  |   global   |   ✓   |       |        |         |    ✓     |       |         |       |
+| `production:label_apply`       | site + wh. |   ✓   |       |        |         |    ✓     |       |         |       |
 
-- **ADMIN sees and manages the whole system** (owner decision) — through ordinary
-  `role_permissions` rows, never a code bypass: the guard, the warehouse scopes and the
-  last-administrator protection apply to ADMIN like to anyone. The bootstrap grants the first
-  administrator every existing warehouse scope (as data). **Every permission a future migration
-  adds must be reviewed and granted to ADMIN explicitly** — `test/identity.e2e.test.ts` compares
-  the database matrix with this table and fails otherwise.
+⚿ security administration — only the ADMIN system role may hold it (database-enforced).
+**Where** — _site + wh._: the session's active site must be accessible (site scope, or global
+access) and have a warehouse the user may act on; _global_: not bound to a site in v0.1. A user may
+hold several roles (system and custom); the permissions add up.
+
+- **ADMIN sees and manages the whole system** — through ordinary `role_permissions` rows, never a
+  code bypass; its global site access is the explicit permission `sites:all_access`, evaluated by
+  the authorization service. The guard, scope evaluation and the last-administrator protection
+  apply to ADMIN like to anyone. **Every permission a future migration adds must be reviewed and
+  granted to ADMIN explicitly** (and is not given to any custom role); `test/identity.e2e.test.ts`
+  compares the database with this table and fails otherwise.
 - **Purchase prices** (`unitPrice`, `currency`, `vatRate` of receipt lines) need
   `procurement:cost_read`; **supplier documents** (the documents of a receipt, supplier document
   lists and files) need `procurement:documents_read`. Without them the API **omits** the fields
@@ -90,9 +104,9 @@ warehouse the operation acts on (today always `MAIN`).
   filtered on the server (`receiptForViewer`), not only hidden in the UI. Receipt lists carry no
   prices. Uploading/linking a document and entering prices on a new receipt stay part of
   `inventory:receive` (the response is filtered the same way).
-- **SALES** reads `GET /api/admin/inventory/stock-summary` only: item (code, name, unit),
-  available, reserved, low stock — no lots, suppliers, prices, documents, receipts, corrections,
-  movements or write actions.
+- **SALES** reads `GET /api/admin/inventory/stock-summary` of its active site only: item (code,
+  name, unit), available, reserved, low stock — no lots, suppliers, prices, documents, receipts,
+  corrections, movements or write actions.
 - **FINANCE** reads stock and receipts (`inventory:read`) with prices and documents; no write
   action.
 - `HOTEL_USER` has no permission in the internal application (the hotel portal is separate).
@@ -119,6 +133,8 @@ warehouse the operation acts on (today always `MAIN`).
    the same transaction.
 6. `POST /api/auth/logout` revokes the session, clears the cookie and returns the WorkOS logout URL
    (ends the provider session) or `/login?signed_out=1`.
+7. The session's **active site** (doc 022 §4) is chosen with `POST /api/auth/active-site`, stored
+   on the session and re-validated against the user's sites on every request.
 
 ### 5a. Access-token verification (WorkOS)
 
@@ -143,96 +159,157 @@ no token or secret in the message):
 Identity is taken **only** from the session cookie — never from headers such as `X-User-Id`,
 `Authorization` or forwarded user headers (tested).
 
+### 5b. Rate limiting of the sign-in routes
+
+- Store: **Redis** (`ayvo:rl:auth:<bucket>:<client IP>`), fixed window — shared by every API
+  instance; no in-memory limiter. Counters only (ADR 0010).
+- Buckets per client IP within `AUTH_RATE_LIMIT_WINDOW_SECONDS` (default 600):
+  `GET /api/auth/login` ≤ `AUTH_RATE_LIMIT_LOGIN_MAX` (30); `GET /api/auth/callback` ≤
+  `AUTH_RATE_LIMIT_CALLBACK_MAX` (30); failed callbacks ≤ `AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX`
+  (10) — once reached, further callbacks from that IP wait for the window.
+- The limit is checked **before** the one-time state is touched; state, binding and PKCE checks are
+  unchanged (a blocked valid callback keeps its state usable after the window).
+- Exceeded: **`429`** with `Retry-After`; browsers get a short Czech page ("Příliš mnoho pokusů o
+  přihlášení"), API clients `{"code":"RATE_LIMITED"}` — no limits, counters or client details.
+- Client IP: the socket address, or — only when the socket peer is in `TRUSTED_PROXY_CIDRS` — the
+  right-most `X-Forwarded-For` address that is not a trusted proxy. Caddy replaces
+  `X-Forwarded-For` with the real client, so a client cannot choose its address. DEV compose:
+  `TRUSTED_PROXY_CIDRS=172.16.0.0/12,192.168.0.0/16` (Docker networks; the API publishes no port).
+- If Redis is unavailable the request is **allowed** and the failure logged (fail open): the
+  identity provider and the one-time state/PKCE still protect sign-in, and a cache outage must not
+  lock everyone out.
+- Public passport (`/q/<token>`, `/api/public/*`) rate limiting remains a production blocker
+  (doc 016 item 7).
+
 ## 6. Route matrix (generated from the code)
 
 Every route not listed as public answers `401 UNAUTHENTICATED` without a session (tested for all
-routes). `403 FORBIDDEN` without the permission or warehouse scope, `403 ACCOUNT_INACTIVE` for a
-deactivated user, `401 SESSION_EXPIRED` after expiry, `403 CSRF_REJECTED` for a cross-site
-state-changing request.
+routes). `403 FORBIDDEN` without the permission or warehouse access, `403 SITE_REQUIRED` without an
+active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITHOUT_WAREHOUSE`,
+`403 ACCOUNT_INACTIVE` for a deactivated user, `401 SESSION_EXPIRED` after expiry,
+`403 CSRF_REJECTED` for a cross-site state-changing request, `429 RATE_LIMITED` on sign-in routes.
 
-| Method | Route                                                    | Access                         |
-| ------ | -------------------------------------------------------- | ------------------------------ |
-| GET    | `/api/auth/callback`                                     | **public**                     |
-| GET    | `/api/auth/login`                                        | **public**                     |
-| GET    | `/api/auth/test-provider/authorize`                      | **public**                     |
-| GET    | `/api/health`                                            | **public**                     |
-| GET    | `/api/public/bottles/:token`                             | **public**                     |
-| POST   | `/api/auth/logout`                                       | signed-in                      |
-| GET    | `/api/auth/me`                                           | signed-in                      |
-| GET    | `/api/admin/bottle-batches`                              | `production:read`              |
-| GET    | `/api/admin/bottle-batches/:code`                        | `production:read`              |
-| GET    | `/api/admin/bottle-batches/:code/print-jobs`             | `production:read`              |
-| POST   | `/api/admin/bottle-batches/:code/print-jobs`             | `production:bottles_create`    |
-| GET    | `/api/admin/bottle-creation-history`                     | `production:read`              |
-| POST   | `/api/admin/bottle-registrations`                        | `production:bottles_create`    |
-| GET    | `/api/admin/bottles`                                     | `production:read`              |
-| GET    | `/api/admin/bottles/:code`                               | `production:read`              |
-| GET    | `/api/admin/bottles/:code/physical`                      | `production:read`              |
-| GET    | `/api/admin/goods-receipts`                              | `inventory:read`               |
-| POST   | `/api/admin/goods-receipts`                              | `inventory:receive`            |
-| GET    | `/api/admin/goods-receipts/:code`                        | `inventory:read` ¹             |
-| POST   | `/api/admin/goods-receipts/:code/corrections`            | `inventory:correct`            |
-| POST   | `/api/admin/goods-receipts/:code/documents`              | `inventory:receive`            |
-| GET    | `/api/admin/identity/roles`                              | `identity:users_read`          |
-| GET    | `/api/admin/identity/users`                              | `identity:users_read`          |
-| POST   | `/api/admin/identity/users`                              | `identity:users_manage`        |
-| GET    | `/api/admin/identity/users/:id`                          | `identity:users_read`          |
-| POST   | `/api/admin/identity/users/:id/deactivate`               | `identity:users_manage`        |
-| POST   | `/api/admin/identity/users/:id/reactivate`               | `identity:users_manage`        |
-| POST   | `/api/admin/identity/users/:id/roles/grant`              | `identity:users_manage`        |
-| POST   | `/api/admin/identity/users/:id/roles/revoke`             | `identity:users_manage`        |
-| POST   | `/api/admin/identity/users/:id/warehouses/grant`         | `identity:users_manage`        |
-| POST   | `/api/admin/identity/users/:id/warehouses/revoke`        | `identity:users_manage`        |
-| GET    | `/api/admin/identity/warehouses`                         | `identity:users_read`          |
-| GET    | `/api/admin/inventory/items`                             | `inventory:read`               |
-| POST   | `/api/admin/inventory/items/:code/settings`              | `inventory:items_manage`       |
-| GET    | `/api/admin/inventory/lots`                              | `inventory:read`               |
-| GET    | `/api/admin/inventory/movements`                         | `inventory:read`               |
-| GET    | `/api/admin/inventory/stock`                             | `inventory:read`               |
-| GET    | `/api/admin/inventory/stock-summary`                     | `inventory:stock_summary`      |
-| GET    | `/api/admin/label-applications`                          | `production:read`              |
-| POST   | `/api/admin/label-applications`                          | `production:label_apply`       |
-| POST   | `/api/admin/label-artworks`                              | `production:templates_manage`  |
-| GET    | `/api/admin/label-artworks/:id/content`                  | `production:read`              |
-| GET    | `/api/admin/label-calibration/qr-validation-sheet.pdf`   | `production:read`              |
-| GET    | `/api/admin/label-designer/settings`                     | `production:read`              |
-| GET    | `/api/admin/label-print-jobs/:code`                      | `production:read`              |
-| POST   | `/api/admin/label-print-jobs/:code/generate`             | `production:labels_print`      |
-| GET    | `/api/admin/label-print-jobs/:code/pdf`                  | `production:read`              |
-| GET    | `/api/admin/label-template-versions/:id`                 | `production:read`              |
-| GET    | `/api/admin/label-template-versions/:id/calibration.pdf` | `production:read`              |
-| GET    | `/api/admin/label-templates`                             | `production:read`              |
-| POST   | `/api/admin/label-templates`                             | `production:templates_manage`  |
-| GET    | `/api/admin/label-templates/:id`                         | `production:read`              |
-| POST   | `/api/admin/label-templates/:id/archive`                 | `production:templates_manage`  |
-| POST   | `/api/admin/label-templates/:id/restore`                 | `production:templates_manage`  |
-| POST   | `/api/admin/label-templates/:id/versions`                | `production:templates_manage`  |
-| POST   | `/api/admin/supplier-documents`                          | `inventory:receive`            |
-| GET    | `/api/admin/supplier-documents/:id/content`              | `procurement:documents_read`   |
-| GET    | `/api/admin/suppliers`                                   | `inventory:read`               |
-| POST   | `/api/admin/suppliers`                                   | `procurement:suppliers_manage` |
-| POST   | `/api/admin/suppliers/:id/archive`                       | `procurement:suppliers_manage` |
-| GET    | `/api/admin/suppliers/:id/documents`                     | `procurement:documents_read`   |
+| Method | Route                                                    | Access                         | Where                       |
+| ------ | -------------------------------------------------------- | ------------------------------ | --------------------------- |
+| GET    | `/api/auth/callback`                                     | **public**                     | —                           |
+| GET    | `/api/auth/login`                                        | **public**                     | —                           |
+| GET    | `/api/auth/test-provider/authorize`                      | **public**                     | —                           |
+| GET    | `/api/health`                                            | **public**                     | —                           |
+| GET    | `/api/public/bottles/:token`                             | **public**                     | —                           |
+| POST   | `/api/auth/active-site`                                  | signed-in                      | —                           |
+| POST   | `/api/auth/logout`                                       | signed-in                      | —                           |
+| GET    | `/api/auth/me`                                           | signed-in                      | —                           |
+| GET    | `/api/admin/bottle-batches`                              | `production:read`              | global                      |
+| GET    | `/api/admin/bottle-batches/:code`                        | `production:read`              | global                      |
+| GET    | `/api/admin/bottle-batches/:code/print-jobs`             | `production:read`              | global                      |
+| POST   | `/api/admin/bottle-batches/:code/print-jobs`             | `production:bottles_create`    | global                      |
+| GET    | `/api/admin/bottle-creation-history`                     | `production:read`              | global                      |
+| POST   | `/api/admin/bottle-registrations`                        | `production:bottles_create`    | global                      |
+| GET    | `/api/admin/bottles`                                     | `production:read`              | global                      |
+| GET    | `/api/admin/bottles/:code`                               | `production:read`              | global                      |
+| GET    | `/api/admin/bottles/:code/physical`                      | `production:read`              | global                      |
+| GET    | `/api/admin/goods-receipts`                              | `inventory:read`               | active site + its warehouse |
+| POST   | `/api/admin/goods-receipts`                              | `inventory:receive`            | active site + its warehouse |
+| GET    | `/api/admin/goods-receipts/:code`                        | `inventory:read`               | active site + its warehouse |
+| POST   | `/api/admin/goods-receipts/:code/corrections`            | `inventory:correct`            | active site + its warehouse |
+| POST   | `/api/admin/goods-receipts/:code/documents`              | `inventory:receive`            | active site + its warehouse |
+| GET    | `/api/admin/identity/permissions`                        | `identity:users_read`          | global                      |
+| GET    | `/api/admin/identity/roles`                              | `identity:users_read`          | global                      |
+| POST   | `/api/admin/identity/roles`                              | `identity:roles_manage`        | global                      |
+| GET    | `/api/admin/identity/roles/:id`                          | `identity:users_read`          | global                      |
+| POST   | `/api/admin/identity/roles/:id`                          | `identity:roles_manage`        | global                      |
+| POST   | `/api/admin/identity/roles/:id/deactivate`               | `identity:roles_manage`        | global                      |
+| POST   | `/api/admin/identity/roles/:id/reactivate`               | `identity:roles_manage`        | global                      |
+| GET    | `/api/admin/identity/sites`                              | `identity:users_read`          | global                      |
+| GET    | `/api/admin/identity/users`                              | `identity:users_read`          | global                      |
+| POST   | `/api/admin/identity/users`                              | `identity:users_manage`        | global                      |
+| GET    | `/api/admin/identity/users/:id`                          | `identity:users_read`          | global                      |
+| POST   | `/api/admin/identity/users/:id/deactivate`               | `identity:users_manage`        | global                      |
+| POST   | `/api/admin/identity/users/:id/reactivate`               | `identity:users_manage`        | global                      |
+| POST   | `/api/admin/identity/users/:id/roles/grant`              | `identity:users_manage`        | global                      |
+| POST   | `/api/admin/identity/users/:id/roles/revoke`             | `identity:users_manage`        | global                      |
+| POST   | `/api/admin/identity/users/:id/sites/grant`              | `identity:users_manage`        | global                      |
+| POST   | `/api/admin/identity/users/:id/sites/revoke`             | `identity:users_manage`        | global                      |
+| POST   | `/api/admin/identity/users/:id/warehouses/grant`         | `identity:users_manage`        | global                      |
+| POST   | `/api/admin/identity/users/:id/warehouses/revoke`        | `identity:users_manage`        | global                      |
+| GET    | `/api/admin/identity/warehouses`                         | `identity:users_read`          | global                      |
+| GET    | `/api/admin/inventory/items`                             | `inventory:read`               | active site + its warehouse |
+| POST   | `/api/admin/inventory/items/:code/settings`              | `inventory:items_manage`       | active site + its warehouse |
+| GET    | `/api/admin/inventory/lots`                              | `inventory:read`               | active site + its warehouse |
+| GET    | `/api/admin/inventory/movements`                         | `inventory:read`               | active site + its warehouse |
+| GET    | `/api/admin/inventory/stock`                             | `inventory:read`               | active site + its warehouse |
+| GET    | `/api/admin/inventory/stock-summary`                     | `inventory:stock_summary`      | active site + its warehouse |
+| GET    | `/api/admin/label-applications`                          | `production:read`              | global                      |
+| POST   | `/api/admin/label-applications`                          | `production:label_apply`       | active site + its warehouse |
+| POST   | `/api/admin/label-artworks`                              | `production:templates_manage`  | global                      |
+| GET    | `/api/admin/label-artworks/:id/content`                  | `production:read`              | global                      |
+| GET    | `/api/admin/label-calibration/qr-validation-sheet.pdf`   | `production:read`              | global                      |
+| GET    | `/api/admin/label-designer/settings`                     | `production:read`              | global                      |
+| GET    | `/api/admin/label-print-jobs/:code`                      | `production:read`              | global                      |
+| POST   | `/api/admin/label-print-jobs/:code/generate`             | `production:labels_print`      | global                      |
+| GET    | `/api/admin/label-print-jobs/:code/pdf`                  | `production:read`              | global                      |
+| GET    | `/api/admin/label-template-versions/:id`                 | `production:read`              | global                      |
+| GET    | `/api/admin/label-template-versions/:id/calibration.pdf` | `production:read`              | global                      |
+| GET    | `/api/admin/label-templates`                             | `production:read`              | global                      |
+| POST   | `/api/admin/label-templates`                             | `production:templates_manage`  | global                      |
+| GET    | `/api/admin/label-templates/:id`                         | `production:read`              | global                      |
+| POST   | `/api/admin/label-templates/:id/archive`                 | `production:templates_manage`  | global                      |
+| POST   | `/api/admin/label-templates/:id/restore`                 | `production:templates_manage`  | global                      |
+| POST   | `/api/admin/label-templates/:id/versions`                | `production:templates_manage`  | global                      |
+| GET    | `/api/admin/sites`                                       | `sites:manage`                 | global                      |
+| POST   | `/api/admin/sites`                                       | `sites:manage`                 | global                      |
+| GET    | `/api/admin/sites/:id`                                   | `sites:manage`                 | global                      |
+| POST   | `/api/admin/sites/:id`                                   | `sites:manage`                 | global                      |
+| POST   | `/api/admin/sites/:id/deactivate`                        | `sites:manage`                 | global                      |
+| POST   | `/api/admin/sites/:id/reactivate`                        | `sites:manage`                 | global                      |
+| POST   | `/api/admin/supplier-documents`                          | `inventory:receive`            | active site + its warehouse |
+| GET    | `/api/admin/supplier-documents/:id/content`              | `procurement:documents_read`   | global                      |
+| GET    | `/api/admin/suppliers`                                   | `inventory:read`               | active site + its warehouse |
+| POST   | `/api/admin/suppliers`                                   | `procurement:suppliers_manage` | active site + its warehouse |
+| POST   | `/api/admin/suppliers/:id/archive`                       | `procurement:suppliers_manage` | active site + its warehouse |
+| GET    | `/api/admin/suppliers/:id/documents`                     | `procurement:documents_read`   | global                      |
 
-¹ Every receipt response (`GET /goods-receipts/:code`, `POST /goods-receipts`,
-`…/documents`, `…/corrections`) omits prices without `procurement:cost_read` and linked documents
-without `procurement:documents_read`.
+Every receipt response (`GET /goods-receipts/:code`, `POST /goods-receipts`, `…/documents`,
+`…/corrections`) omits prices without `procurement:cost_read` and linked documents without
+`procurement:documents_read`. `GET /label-applications` lists only the active site's warehouse.
+Suppliers and supplier documents are company-wide; receipts belong to a site.
 
 Web pages: `/login`, `/forbidden`, `/account-inactive`, `/session-expired` and the bottle passport
 `/q/<token>` are public; every page under the application shell requires a signed-in user;
-`/warehouse/availability` needs `inventory:stock_summary`, every other `/warehouse/*` page
-`inventory:read` (`/warehouse/receipts/new` also `inventory:receive`); `/production/*`,
-`/bottles/*`, `/batches/*`, `/label-templates/*` need `production:read`, `/admin/*` needs
-`identity:users_read` (creating users `identity:users_manage`). Navigation tabs follow the same
-permissions.
+`/select-site` chooses the active site; `/warehouse/availability` needs `inventory:stock_summary`,
+every other `/warehouse/*` page `inventory:read` (`/warehouse/receipts/new` also
+`inventory:receive`); `/production/*`, `/bottles/*`, `/batches/*`, `/label-templates/*` need
+`production:read`; `/admin/users` and `/admin/roles` need `identity:users_read` (new user
+`identity:users_manage`, new role `identity:roles_manage`), `/admin/sites` needs `sites:manage`.
+Navigation tabs follow the same permissions; the API is the boundary.
 
 ## 7. Administration (`/admin/users`, ADMIN)
 
-Create pre-provisioned users (e-mail, name, roles, warehouses), grant/revoke roles and warehouse
-scopes, deactivate/reactivate. Every change requires a reason, is audited (`USER_CREATED`,
-`ROLE_GRANTED`, `ROLE_REVOKED`, `SCOPE_GRANTED`, `SCOPE_REVOKED`, `USER_DEACTIVATED`,
-`USER_REACTIVATED`) and applies on the user's next request. The last active administrator can
-neither lose `ADMIN` nor be deactivated; nobody can deactivate themselves.
+Create pre-provisioned users and assign 1. **roles** (system and active custom roles), 2. **sites**, 3. optionally **narrower warehouses** of those sites; the page shows the server-computed
+**effective access** (what the user may do, at which sites and warehouses). Grant/revoke roles,
+sites (revoking a site also revokes its warehouses) and warehouses; deactivate/reactivate. Every
+change requires a reason, is audited (`USER_CREATED`, `ROLE_GRANTED`, `ROLE_REVOKED`,
+`SCOPE_GRANTED`, `SCOPE_REVOKED` with the site, `USER_DEACTIVATED`, `USER_REACTIVATED`) and applies
+on the user's next request. The last active administrator can neither lose `ADMIN` nor be
+deactivated; nobody can deactivate themselves. No actor can grant a role with a permission it does
+not hold (`403 PRIVILEGE_ESCALATION`).
+
+### 7a. Custom roles (`/admin/roles`, ADR 0024)
+
+- **System roles** (the 8 of section 4) are protected templates: not renamed, edited, deactivated
+  or deleted in the application (`409 SYSTEM_ROLE_IMMUTABLE`; the database refuses it too); they
+  change only by reviewed migrations. They can be **duplicated** into a custom role.
+- **Custom roles** (`identity:roles_manage`, ADMIN only): code (`^[A-Z][A-Z0-9_]{2,39}$`, unique,
+  immutable), Czech name, description, permissions chosen by **checkboxes grouped by module**,
+  active/inactive, timestamps, history (`ROLE_CREATED` incl. the duplicated source,
+  `ROLE_UPDATED` with added/removed permissions, `ROLE_DEACTIVATED`, `ROLE_REACTIVATED`).
+- Refused: unknown or obsolete permission codes (validation and foreign key); security
+  administration permissions (`422 SECURITY_PERMISSION_RESERVED`, database trigger); permissions
+  the actor does not hold; deactivating a role still held (`409 ROLE_IN_USE` — reassign or remove
+  first); granting an inactive role (`409 ROLE_INACTIVE`, database trigger).
+- A custom role holds exactly its chosen permissions — never one introduced later unless ADMIN adds
+  it. Changes apply to all holders on their next request.
+- No direct per-user permission overrides: a special combination is a named custom role.
 
 ## 8. Bootstrap of the first administrator (one-time)
 
@@ -241,8 +318,8 @@ neither lose `ADMIN` nor be deactivated; nobody can deactivate themselves.
 node dist/identity/bootstrap-admin.js --email <owner e-mail verified in WorkOS> --name "<Name>"
 ```
 
-Creates the ACTIVE user with `ADMIN` and a `WAREHOUSE` scope for every existing warehouse, and
-audits `ADMIN_BOOTSTRAPPED` (with the warehouses). The owner then signs in via
+Creates the ACTIVE user with `ADMIN` (every permission, including the explicit global site access
+`sites:all_access` — no scope rows) and audits `ADMIN_BOOTSTRAPPED`. The owner then signs in via
 WorkOS with exactly this e-mail, which links the identity. The database permits **one** bootstrap
 ever (`identity_bootstrap`); the command refuses afterwards, and there is no endpoint or setting
 that bootstraps.
@@ -270,7 +347,12 @@ that bootstraps.
    value refuses every sign-in (fail closed) without exposing anything.
 7. In WorkOS, invite/create the owner's user with the e-mail used for the bootstrap.
 8. Then the DEV deployment can run (`scripts/deploy-dev.sh` refuses without the three values) and
-   the one-time bootstrap (section 8).
+   the one-time bootstrap (section 8). After the first sign-in, complete the address of the
+   initial site `SITE-1` in **Správa systému → Provozovny** (doc 022 §5).
+
+Optional server env values (defaults shown; not secrets): `AUTH_RATE_LIMIT_WINDOW_SECONDS=600`,
+`AUTH_RATE_LIMIT_LOGIN_MAX=30`, `AUTH_RATE_LIMIT_CALLBACK_MAX=30`,
+`AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX=10`; `TRUSTED_PROXY_CIDRS` is set by the Compose file.
 
 Before production: pricing, DPA and EU data-location check of WorkOS (ADR 0022); production
 environment values in the production secret store; `APP_PUBLIC_ORIGIN` of production.
@@ -281,30 +363,48 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
   of foreign-key, HMAC, expired, other-subject, wrong/missing/trailing-slash issuer, wrong/missing
   client id, foreign audience, missing/empty `sid`, missing/malformed/future/inverted `iat`/`exp`,
   machine-to-machine, impersonation, agent and client-credentials tokens — each verified to fail
-  for its own reason; no secrets in errors); configuration (fake provider refused outside tests,
-  WorkOS key, client id and https issuer required in development and production, secrets never
-  echoed).
-- API integration (real migrated database): every route declares access and answers 401
-  anonymously; sign-in, secure cookie, hashed token; unknown identities refused and audited;
-  single-use state bound to the browser; safe redirects; permissions and warehouse scopes; no
-  identity from headers; role change and deactivation effective at once; expiry; logout; CSRF;
-  one-time bootstrap (with warehouse scopes); last-admin protection; append-only audit; public
-  passport and health; the database role matrix equals section 4 (ADMIN holds every permission);
-  prices and documents omitted for every restricted role on detail, list, create, link and
-  idempotent replay, document lists and files refused; SALES gets only the four summary fields
-  and is refused on every other read and write.
+  for its own reason; the exchanged identity must match the token subject; no secrets in errors);
+  configuration (fake provider refused outside tests, WorkOS key, client id and https issuer
+  required in development and production, rate-limit and proxy settings validated, secrets never
+  echoed); trusted-proxy client IP; site/warehouse scope evaluation; no privilege escalation.
+- API integration (real migrated database, real guard and sessions): every route declares access
+  and answers 401 anonymously; sign-in, secure cookie, hashed token; unknown identities refused and
+  audited; single-use state bound to the browser; safe redirects; permissions, site and warehouse
+  scopes; no identity from headers; role change and deactivation effective at once; expiry;
+  logout; CSRF; one-time bootstrap; last-admin protection; append-only audit; public passport and
+  health; the system role matrix equals section 4 (ADMIN holds every permission), catalogue and
+  system roles unchangeable outside migrations; prices and documents omitted for every restricted
+  role (detail, list, create, link, idempotent replay; document lists and files refused); SALES gets
+  only the summary. **Rate limiting** (real Redis): normal sign-in, 429 page/JSON with
+  `Retry-After`, other clients unaffected, recovery after the window, failed callbacks blocking
+  before the state is consumed, no dodging through `X-Forwarded-For` from an untrusted peer, fail
+  open without Redis. **Custom roles**: create from permissions (with duplicate source), assign,
+  immediate gain and loss of access, role in use not deactivatable, inactive role not grantable,
+  system roles immutable, security/unknown permissions refused (API and database), non-admins
+  refused on every role, user, site and catalogue route. **Sites**: validation, immutable code,
+  never deleted, valid time zone, capability rules, deactivation blockers, read-only inactive site.
+  **Isolation**: a Czech-site user never reads or corrects a German receipt (code, list,
+  movements), forged active-site choice refused and audited, site ids in query/cookie/headers
+  ignored, a multi-site user switches and sees only the selected site's stock, losing a site ends
+  access at once, a warehouse outside the allowed site refused (API and database), audit events
+  carry their site, ADMIN's global access as a permission without scope rows, label applications
+  of another site not listed.
 - Playwright: sign-in redirects back to the requested page; anonymous API 401; unknown identity;
   administration (create, grant, revoke, deactivate with reasons and audit) and its immediate
-  effect in a second browser; forbidden and inactive pages; sign-out; widths 320/390/1280;
-  ADMIN sees every module; a warehouse operator sees neither price nor documents on the receipt
-  page or through direct API calls, FINANCE sees both; SALES sees only Sklad → Dostupnost and is
-  sent to "Nemáte oprávnění" elsewhere.
+  effect in a second browser; forbidden and inactive pages; sign-out; ADMIN sees every module;
+  prices/documents hidden from a warehouse operator on the page and through direct API calls,
+  FINANCE sees both; SALES sees only Sklad → Dostupnost; **ADMIN builds a custom role from
+  checkboxes, assigns it with two sites (preview), the user's navigation follows, chooses a site,
+  switches sites (other site's data gone), narrowing the role and removing a site take effect at
+  once**; widths 320/390/1280 for administration, role, site and site-selection pages without
+  horizontal overflow; no arbitrary sleeps.
 
 ## 11. Limitations and follow-ups
 
 - **DEV activation needs the owner's WorkOS values** (section 9); until then the DEV preview stays
   on the previous release (deploy refuses).
-- Rate limiting of sign-in and public endpoints is still open (ADR 0017 item 7).
+- Public passport rate limiting is still open (doc 016 item 7); sign-in routes are limited
+  (section 5b), and the limiter fails open without Redis by design.
 - The token rules of section 5a follow WorkOS' published AuthKit session-token claims
   (`iss`, `sub`, `sid`, `client_id`, `iat`, `exp`; no `aud` by default). They are proven against
   locally signed tokens only; the first real DEV sign-in confirms them against WorkOS.
@@ -316,4 +416,5 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
 - Entering prices on a new receipt is part of `inventory:receive` (the responder never gets them
   back without `procurement:cost_read`); whether entering prices should also require a cost
   permission is an owner decision.
+- One active site per session (tabs share it); warehouses are created by migration (doc 022 §9).
 - Session lifetimes (120 minutes idle, 12 hours absolute) are configurable defaults.
