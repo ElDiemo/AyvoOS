@@ -7,6 +7,7 @@ const valid = {
   // Obviously fake identity-provider settings (development requires the real provider).
   WORKOS_API_KEY: 'sk_test_not_a_real_key',
   WORKOS_CLIENT_ID: 'client_not_a_real_id',
+  WORKOS_JWT_ISSUER: 'https://auth.workos.example',
 };
 
 /** A production configuration that is complete except for what a test leaves out. */
@@ -93,7 +94,9 @@ describe('loadEnv', () => {
     it('refuses to start without WorkOS credentials, and never echoes secret values', () => {
       const withoutKey: Record<string, string> = { ...valid };
       delete withoutKey.WORKOS_API_KEY;
-      expect(() => loadEnv(withoutKey)).toThrow(/WORKOS_API_KEY and WORKOS_CLIENT_ID are required/);
+      expect(() => loadEnv(withoutKey)).toThrow(
+        /WORKOS_API_KEY, WORKOS_CLIENT_ID and WORKOS_JWT_ISSUER/,
+      );
       const secret = 'fake_secret_value_must_never_be_printed';
       let message = '';
       try {
@@ -105,6 +108,18 @@ describe('loadEnv', () => {
       expect(message).not.toContain(secret);
     });
 
+    it('refuses development and production without the exact WorkOS token issuer', () => {
+      for (const base of [valid, production]) {
+        const withoutIssuer: Record<string, string> = { ...base };
+        delete withoutIssuer.WORKOS_JWT_ISSUER;
+        expect(() => loadEnv(withoutIssuer)).toThrow(/WORKOS_JWT_ISSUER/);
+        expect(() => loadEnv({ ...base, WORKOS_JWT_ISSUER: '' })).toThrow(/WORKOS_JWT_ISSUER/);
+        expect(() => loadEnv({ ...base, WORKOS_JWT_ISSUER: 'http://auth.example' })).toThrow(
+          /WORKOS_JWT_ISSUER/,
+        );
+      }
+    });
+
     it('requires APP_PUBLIC_ORIGIN in production and a sane session lifetime', () => {
       const noOrigin: Record<string, string> = { ...production };
       delete noOrigin.APP_PUBLIC_ORIGIN;
@@ -113,6 +128,7 @@ describe('loadEnv', () => {
           ...noOrigin,
           WORKOS_API_KEY: valid.WORKOS_API_KEY,
           WORKOS_CLIENT_ID: valid.WORKOS_CLIENT_ID,
+          WORKOS_JWT_ISSUER: valid.WORKOS_JWT_ISSUER,
         }),
       ).toThrow(/APP_PUBLIC_ORIGIN/);
       expect(() =>

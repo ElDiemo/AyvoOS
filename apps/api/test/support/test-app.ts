@@ -136,6 +136,7 @@ export async function createTestApp(
       // required there). No request ever reaches WorkOS in tests.
       WORKOS_API_KEY: 'sk_test_not_a_real_key',
       WORKOS_CLIENT_ID: 'client_not_a_real_id',
+      WORKOS_JWT_ISSUER: 'https://auth.workos.example',
       FILE_STORAGE_DIR: storageDir,
       LABEL_ARTWORK_MAX_BYTES: String(512 * 1024),
       ...rawEnv,

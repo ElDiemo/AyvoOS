@@ -60,11 +60,12 @@ export const envSchema = z
       z.string().min(10).optional(),
     ),
     WORKOS_API_BASE_URL: z.url({ protocol: /^https$/ }).default('https://api.workos.com'),
-    // Expected `iss` of WorkOS access tokens. When unset only signature (client-specific JWKS),
-    // expiry and subject are verified.
+    // Exact expected `iss` of WorkOS access tokens (copied from the WorkOS dashboard / a decoded
+    // token; custom auth domains change it). Required whenever AUTH_PROVIDER=workos; never derived
+    // from a token.
     WORKOS_JWT_ISSUER: z.preprocess(
       (value) => (value === '' ? undefined : value),
-      z.string().min(1).optional(),
+      z.url({ protocol: /^https$/ }).optional(),
     ),
     // Application session lifetime: idle timeout and absolute maximum.
     SESSION_IDLE_MINUTES: z.coerce
@@ -101,10 +102,13 @@ export const envSchema = z
       // Never a bypass on DEV or production: the fake provider exists for automated tests only.
       return fail('AUTH_PROVIDER', 'AUTH_PROVIDER=test is allowed only with APP_ENV=test');
     }
-    if (authProvider === 'workos' && (!env.WORKOS_API_KEY || !env.WORKOS_CLIENT_ID)) {
+    if (
+      authProvider === 'workos' &&
+      (!env.WORKOS_API_KEY || !env.WORKOS_CLIENT_ID || !env.WORKOS_JWT_ISSUER)
+    ) {
       return fail(
         'AUTH_PROVIDER',
-        'WORKOS_API_KEY and WORKOS_CLIENT_ID are required for AUTH_PROVIDER=workos',
+        'WORKOS_API_KEY, WORKOS_CLIENT_ID and WORKOS_JWT_ISSUER are required for AUTH_PROVIDER=workos',
       );
     }
     if (production && !env.APP_PUBLIC_ORIGIN) {

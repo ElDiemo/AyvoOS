@@ -8,25 +8,46 @@ const config = {
   apiKey: API_KEY,
   clientId: 'client_test_123',
   apiBaseUrl: 'https://api.workos.example',
-  issuer: null,
+  issuer: 'https://auth.workos.example',
 };
+const USER_ID = 'user_01HZXAMPLE0000000000000001';
+const OTHER_USER_ID = 'user_01HZXAMPLE0000000000000002';
+/** Claims of a genuine AuthKit user session token of this client. */
+const session = (extra: Record<string, unknown> = {}) => ({
+  iss: config.issuer,
+  sub: USER_ID,
+  sid: 'session_01HZXAMPLE',
+  client_id: config.clientId,
+  ...extra,
+});
 
 let jwk: JWK;
 let sign: (
   claims: Record<string, unknown>,
-  opts?: { expired?: boolean; foreignKey?: boolean },
+  opts?: { expired?: boolean; foreignKey?: boolean; rawTimes?: boolean; alg?: 'HS256' },
 ) => Promise<string>;
 
 beforeAll(async () => {
   const { publicKey, privateKey } = await generateKeyPair('RS256');
   const other = await generateKeyPair('RS256');
   jwk = { ...(await exportJWK(publicKey)), kid: 'k1', alg: 'RS256' };
-  sign = (claims, opts = {}) =>
-    new SignJWT(claims)
-      .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
-      .setIssuedAt()
-      .setExpirationTime(opts.expired ? Math.floor(Date.now() / 1000) - 3600 : '5m')
-      .sign(opts.foreignKey ? other.privateKey : privateKey);
+  sign = (claims, opts = {}) => {
+    if (opts.alg === 'HS256') {
+      return new SignJWT(claims)
+        .setProtectedHeader({ alg: 'HS256', kid: 'k1' })
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(new TextEncoder().encode('a-shared-secret-that-is-long-enough-123'));
+    }
+    const jwt = new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'k1' });
+    // rawTimes: the test sets (or deliberately omits/malforms) iat and exp itself.
+    if (!opts.rawTimes) {
+      jwt
+        .setIssuedAt(opts.expired ? Math.floor(Date.now() / 1000) - 7200 : undefined)
+        .setExpirationTime(opts.expired ? Math.floor(Date.now() / 1000) - 3600 : '5m');
+    }
+    return jwt.sign(opts.foreignKey ? other.privateKey : privateKey);
+  };
 });
 
 function provider(response: { status?: number; body?: unknown }, seen: { body?: string } = {}) {
@@ -39,7 +60,7 @@ function provider(response: { status?: number; body?: unknown }, seen: { body?: 
   });
 }
 
-const user = { id: 'user_01', email: 'Operator@Ayvo.Example', email_verified: true };
+const user = { id: USER_ID, email: 'Operator@Ayvo.Example', email_verified: true };
 
 describe('WorkOS identity provider (ADR 0022)', () => {
   it('builds the AuthKit authorization URL with state and PKCE (S256)', () => {
@@ -67,17 +88,17 @@ describe('WorkOS identity provider (ADR 0022)', () => {
 
   it('exchanges the code server-side and returns the verified identity', async () => {
     const seen: { body?: string } = {};
-    const token = await sign({ sub: 'user_01', sid: 'session_01' });
+    const token = await sign(session());
     const identity = await provider({ body: { user, access_token: token } }, seen).exchangeCode({
       code: 'code-1',
       codeVerifier: 'verifier-1',
     });
     expect(identity).toEqual({
       provider: 'WORKOS',
-      subject: 'user_01',
+      subject: USER_ID,
       email: 'operator@ayvo.example',
       emailVerified: true,
-      providerSessionId: 'session_01',
+      providerSessionId: 'session_01HZXAMPLE',
     });
     expect(JSON.parse(seen.body!)).toMatchObject({
       client_id: 'client_test_123',
@@ -88,10 +109,41 @@ describe('WorkOS identity provider (ADR 0022)', () => {
     });
   });
 
-  it.each([
-    ['a token of another user', { sub: 'user_02' }, {}],
-    ['an expired token', { sub: 'user_01' }, { expired: true }],
-    ['a token signed by a foreign key', { sub: 'user_01' }, { foreignKey: true }],
+  const now = () => Math.floor(Date.now() / 1000);
+  it.each<[string, Record<string, unknown>, Parameters<typeof sign>[1]]>([
+    ['a token of another user', session({ sub: OTHER_USER_ID }), {}],
+    ['an expired token', session(), { expired: true }],
+    ['a token signed by a foreign key', session(), { foreignKey: true }],
+    ['a symmetric (HS256) token', session(), { alg: 'HS256' }],
+    ['a valid signature with a wrong issuer', session({ iss: 'https://evil.example' }), {}],
+    ['a valid signature with no issuer', session({ iss: undefined }), {}],
+    ['an issuer that differs only by a trailing slash', session({ iss: `${config.issuer}/` }), {}],
+    ['a valid signature with a wrong client id', session({ client_id: 'client_other_0001' }), {}],
+    ['a valid signature with no client id', session({ client_id: undefined }), {}],
+    ['a foreign audience', session({ aud: 'https://another-api.example' }), {}],
+    ['an audience list with a foreign entry', session({ aud: [config.clientId, 'x'] }), {}],
+    ['an empty audience list', session({ aud: [] }), {}],
+    ['a missing sid', session({ sid: undefined }), {}],
+    ['an empty sid', session({ sid: '' }), {}],
+    ['a missing exp', session({ iat: now() }), { rawTimes: true }],
+    ['a missing iat', session({ exp: now() + 300 }), { rawTimes: true }],
+    ['a string exp', session({ iat: now(), exp: String(now() + 300) }), { rawTimes: true }],
+    ['a fractional iat', session({ iat: now() + 0.5, exp: now() + 300 }), { rawTimes: true }],
+    ['an iat in the future', session({ iat: now() + 3600, exp: now() + 7200 }), { rawTimes: true }],
+    ['iat after exp', session({ iat: now() + 10, exp: now() + 5 }), { rawTimes: true }],
+    [
+      'a machine-to-machine token (client subject, no sid)',
+      {
+        iss: config.issuer,
+        sub: config.clientId,
+        client_id: config.clientId,
+        aud: config.clientId,
+      },
+      {},
+    ],
+    ['an impersonation (act) token', session({ act: { sub: 'admin@workos' } }), {}],
+    ['an agent token', session({ agent_id: 'agent_01' }), {}],
+    ['a client-credentials token', session({ gty: 'client-credentials' }), {}],
   ])('refuses %s', async (_name, claims, opts) => {
     const token = await sign(claims, opts);
     await expect(
@@ -102,23 +154,16 @@ describe('WorkOS identity provider (ADR 0022)', () => {
     ).rejects.toBeInstanceOf(IdentityVerificationError);
   });
 
-  it('refuses a configured issuer mismatch', async () => {
-    const strict = new WorkOsIdentityProvider(
-      { ...config, issuer: 'https://api.workos.example' },
-      {
-        jwks: createLocalJWKSet({ keys: [jwk] }),
-        fetch: (async () =>
-          new Response(
-            JSON.stringify({
-              user,
-              access_token: await sign({ sub: 'user_01', iss: 'https://evil.example' }),
-            }),
-          )) as typeof fetch,
-      },
-    );
-    await expect(strict.exchangeCode({ code: 'c', codeVerifier: 'v' })).rejects.toBeInstanceOf(
-      IdentityVerificationError,
-    );
+  it('accepts an audience of this client when one is present', async () => {
+    for (const aud of [config.clientId, [config.clientId]]) {
+      const token = await sign(session({ aud }));
+      await expect(
+        provider({ body: { user, access_token: token } }).exchangeCode({
+          code: 'c',
+          codeVerifier: 'v',
+        }),
+      ).resolves.toMatchObject({ subject: USER_ID });
+    }
   });
 
   it('reports provider failures without secrets or tokens', async () => {

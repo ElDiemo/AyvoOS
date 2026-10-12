@@ -40,7 +40,7 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
               apiKey: env.WORKOS_API_KEY!,
               clientId: env.WORKOS_CLIENT_ID!,
               apiBaseUrl: env.WORKOS_API_BASE_URL,
-              issuer: env.WORKOS_JWT_ISSUER ?? null,
+              issuer: env.WORKOS_JWT_ISSUER!,
             }),
     },
     { provide: APP_GUARD, useClass: AccessGuard },

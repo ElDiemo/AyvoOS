@@ -9,8 +9,56 @@ export interface WorkOsConfig {
   apiKey: string;
   clientId: string;
   apiBaseUrl: string;
-  /** Expected `iss` of access tokens; when null only signature, expiry and subject are checked. */
-  issuer: string | null;
+  /** Exact expected `iss` of access tokens (configuration only — never read from a token). */
+  issuer: string;
+}
+
+/** WorkOS signs AuthKit access tokens with RS256; no other algorithm is accepted. */
+const ACCEPTED_ALGORITHMS = ['RS256'];
+const CLOCK_TOLERANCE_SECONDS = 30;
+const USER_SUBJECT = /^user_[A-Za-z0-9]{10,}$/;
+
+/**
+ * Checks that a signature-verified token is a human AuthKit user session of this application:
+ * exact client, user subject, session id, numeric issue/expiry times, an audience (when present)
+ * of this client, and no delegation, agent or machine-to-machine markers. Fails closed: anything
+ * missing or malformed is refused.
+ */
+export function assertUserSessionClaims(
+  claims: Record<string, unknown>,
+  expected: { clientId: string; userId: string },
+): void {
+  const refuse = (why: string): never => {
+    throw new IdentityVerificationError(`The access token is not a user session: ${why}`);
+  };
+  if (claims.client_id !== expected.clientId) refuse('foreign or missing client');
+  if (claims.aud !== undefined) {
+    const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    if (audiences.length === 0 || audiences.some((a) => a !== expected.clientId)) {
+      refuse('foreign audience');
+    }
+  }
+  if (typeof claims.sub !== 'string' || !USER_SUBJECT.test(claims.sub))
+    refuse('not a user subject');
+  if (claims.sub !== expected.userId) refuse('another user');
+  if (typeof claims.sid !== 'string' || claims.sid.length === 0) refuse('missing session id');
+  for (const claim of ['iat', 'exp'] as const) {
+    const value = claims[claim];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      refuse(`missing or malformed ${claim}`);
+    }
+  }
+  if ((claims.iat as number) >= (claims.exp as number)) refuse('inverted lifetime');
+  if ((claims.iat as number) > Math.floor(Date.now() / 1000) + CLOCK_TOLERANCE_SECONDS) {
+    refuse('issued in the future');
+  }
+  // Delegation (impersonation `act`), agent and machine-to-machine profiles are not human sign-ins.
+  for (const marker of ['act', 'may_act', 'gty', 'agent', 'agent_id']) {
+    if (claims[marker] !== undefined) refuse('delegated, agent or machine token');
+  }
+  if (claims.grant_type !== undefined && claims.grant_type !== 'authorization_code') {
+    refuse('machine grant');
+  }
 }
 
 interface AuthenticateResponse {
@@ -97,22 +145,21 @@ export class WorkOsIdentityProvider implements IdentityProvider {
     let claims: Record<string, unknown>;
     try {
       ({ payload: claims } = await jwtVerify(token, this.jwks, {
-        ...(this.config.issuer ? { issuer: this.config.issuer } : {}),
-        algorithms: ['RS256'],
-        clockTolerance: 30,
+        issuer: this.config.issuer,
+        algorithms: ACCEPTED_ALGORITHMS,
+        requiredClaims: ['iss', 'sub', 'sid', 'iat', 'exp', 'client_id'],
+        clockTolerance: CLOCK_TOLERANCE_SECONDS,
       }));
     } catch {
       throw new IdentityVerificationError('The access token could not be verified');
     }
-    if (claims.sub !== userId) {
-      throw new IdentityVerificationError('The access token belongs to another user');
-    }
+    assertUserSessionClaims(claims, { clientId: this.config.clientId, userId });
     return {
       provider: 'WORKOS',
       subject: userId,
       email: email.trim().toLowerCase(),
       emailVerified: body.user?.email_verified === true,
-      providerSessionId: typeof claims.sid === 'string' ? claims.sid : null,
+      providerSessionId: claims.sid as string,
     };
   }
 

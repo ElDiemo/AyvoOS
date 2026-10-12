@@ -99,7 +99,7 @@ services:
       AUTH_PROVIDER: workos
       WORKOS_API_KEY: ${WORKOS_API_KEY:?set WORKOS_API_KEY in the server env file (doc 021)}
       WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:?set WORKOS_CLIENT_ID in the server env file (doc 021)}
-      WORKOS_JWT_ISSUER: ${WORKOS_JWT_ISSUER:-}
+      WORKOS_JWT_ISSUER: ${WORKOS_JWT_ISSUER:?set WORKOS_JWT_ISSUER in the server env file (doc 021)}
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       # The QR URL printed on labels from this environment (DEV labels must never go on real

@@ -44,7 +44,8 @@ readonly STATE_DIR="${AYVO_DEV_STATE_DIR:-/opt/ayvo/logs}"
 readonly DEPLOY_LOG="$STATE_DIR/deployments-dev-preview.log"
 readonly IMAGE_PREFIX="ayvo-dev-preview"
 readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL DEV_BASIC_AUTH_USER DEV_BASIC_AUTH_HASH
-  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB WORKOS_API_KEY WORKOS_CLIENT_ID)
+  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB WORKOS_API_KEY WORKOS_CLIENT_ID
+  WORKOS_JWT_ISSUER)
 
 MODE=deploy
 TAG=""
@@ -183,6 +184,8 @@ validate_env() {
     die "WORKOS_API_KEY must be a WorkOS API key (sk_…) from the WorkOS dashboard (doc 021)"
   [[ ${CFG[WORKOS_CLIENT_ID]} =~ ^client_[A-Za-z0-9]{10,}$ ]] ||
     die "WORKOS_CLIENT_ID must be a WorkOS client id (client_…) from the WorkOS dashboard (doc 021)"
+  [[ ${CFG[WORKOS_JWT_ISSUER]} =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] ||
+    die "WORKOS_JWT_ISSUER must be the exact https issuer of WorkOS access tokens (doc 021)"
   [[ ${CFG[POSTGRES_DB]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_DB must match [a-z_][a-z0-9_]*"
   # Embedded in DATABASE_URL, so restricted to URL-safe characters (e.g. `openssl rand -hex 32`).
   [[ ${CFG[POSTGRES_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,}$ ]] ||
