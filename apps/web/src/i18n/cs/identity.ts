@@ -1,3 +1,5 @@
+import type { PermissionCode } from '@ayvo/types';
+
 /** Czech strings of sign-in, access pages and user administration (doc 021). */
 export const identityCs = {
   roles: {
@@ -10,7 +12,10 @@ export const identityCs = {
     FINANCE: 'Finance',
     HOTEL_USER: 'Uživatel hotelu',
   } as Record<string, string>,
-  /** Czech labels of the permission catalogue (doc 021 §4), grouped by module in the editor. */
+  /**
+   * Czech labels of the permission catalogue (doc 021 §4), grouped by module in the editor. Every
+   * code needs one (checked by `satisfies` and identity.test.ts); the slug is only secondary text.
+   */
   permissions: {
     'identity:users_read': 'Zobrazit uživatele, role a audit',
     'identity:users_manage': 'Spravovat uživatele a jejich přístup',
@@ -24,13 +29,14 @@ export const identityCs = {
     'inventory:items_manage': 'Plánování položek (minimální a cílová zásoba)',
     'procurement:suppliers_manage': 'Zakládat a archivovat dodavatele',
     'procurement:cost_read': 'Vidět nákupní ceny',
+    'procurement:cost_write': 'Upravovat nákupní ceny',
     'procurement:documents_read': 'Vidět doklady dodavatelů',
     'production:read': 'Zobrazit výrobu (lahve, série, šablony)',
     'production:bottles_create': 'Vytvářet lahve a tiskové úlohy',
     'production:labels_print': 'Tisknout etikety',
     'production:templates_manage': 'Spravovat šablony etiket',
     'production:label_apply': 'Nalepovat etikety (spotřeba ze skladu)',
-  } as Record<string, string>,
+  } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
     procurement: 'Nákup',
