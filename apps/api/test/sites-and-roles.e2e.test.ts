@@ -577,6 +577,8 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
       expect((await as(admin).get('/api/admin/inventory/stock')).body.location.code).toBe(
         `${de.code}-W`,
       );
+      // Label applications consume a site's stock: the list shows only the active site's.
+      expect((await as(admin).get('/api/admin/label-applications')).body.items).toEqual([]);
     });
   });
 });

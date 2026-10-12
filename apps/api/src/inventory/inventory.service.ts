@@ -298,6 +298,16 @@ export class InventoryService {
     return { total, items };
   }
 
+  /** The latest label-application consumptions at one location (newest first). */
+  recentLabelApplicationMovements(locationId: string, limit: number) {
+    return this.prisma.inventoryMovement.findMany({
+      where: { type: 'LABEL_APPLICATION', locationId, bottleEventId: { not: null } },
+      orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+      include: { lot: true },
+    });
+  }
+
   /** The stock movements written for the given bottle events (label application). */
   movementsForBottleEvents(eventIds: readonly string[]) {
     return this.prisma.inventoryMovement.findMany({

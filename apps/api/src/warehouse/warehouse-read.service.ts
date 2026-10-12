@@ -165,16 +165,31 @@ export class WarehouseReadService {
     };
   }
 
-  async recentApplications(limit: number): Promise<RecentLabelApplication[]> {
-    const events = await this.bottles.recentLabelApplications(limit);
-    const movements = await this.inventory.movementsForBottleEvents(events.map((e) => e.id));
+  /**
+   * The latest label applications at one site's warehouse (doc 022): the consumed lots are that
+   * site's stock, so another site's applications are not listed.
+   */
+  async recentApplications(
+    limit: number,
+    locationId: string | null,
+  ): Promise<RecentLabelApplication[]> {
+    if (!locationId) return [];
+    const movements = await this.inventory.recentLabelApplicationMovements(locationId, limit * 4);
+    const seen = new Set<string>();
+    const latest = movements.filter((m) => {
+      if (seen.has(m.bottleEventId!)) return false;
+      seen.add(m.bottleEventId!);
+      return true;
+    });
+    const events = latest.slice(0, limit);
+    const codes = await this.bottles.bottleCodesOfEvents(events.map((m) => m.bottleEventId!));
     const lotOf = new Map(
       movements.filter((m) => m.lot).map((m) => [m.bottleEventId!, m.lot!.code]),
     );
-    return events.map((e) => ({
-      bottleCode: e.bottle.code,
-      appliedAt: e.occurredAt.toISOString(),
-      lotCode: lotOf.get(e.id) ?? '—',
+    return events.map((m) => ({
+      bottleCode: codes.get(m.bottleEventId!) ?? '—',
+      appliedAt: m.occurredAt.toISOString(),
+      lotCode: lotOf.get(m.bottleEventId!) ?? '—',
     }));
   }
 

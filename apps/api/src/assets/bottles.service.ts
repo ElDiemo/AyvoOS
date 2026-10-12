@@ -349,16 +349,6 @@ export class BottlesService {
     return new Map(events.map((e) => [e.id, e.bottle.code]));
   }
 
-  /** Most recent LABEL_APPLIED events. */
-  recentLabelApplications(limit: number) {
-    return this.prisma.bottleEvent.findMany({
-      where: { type: 'LABEL_APPLIED' },
-      orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
-      take: limit,
-      select: { id: true, occurredAt: true, bottle: { select: { code: true } } },
-    });
-  }
-
   async listBatches(page: number, pageSize: number): Promise<BottleCreationBatchListResponse> {
     const [total, batches] = await this.prisma.$transaction([
       this.prisma.bottleCreationBatch.count(),

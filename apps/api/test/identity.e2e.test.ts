@@ -208,7 +208,8 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect(initial).toMatchObject({
       code: 'SITE-1',
       allWarehouses: true,
-      warehouses: [expect.objectContaining({ code: 'MAIN' })],
+      // Other test files may add warehouses to the initial site.
+      warehouses: expect.arrayContaining([expect.objectContaining({ code: 'MAIN' })]),
     });
     // A single site is selected automatically; with several the user chooses.
     expect(me.activeSiteId).toBe(me.sites.length === 1 ? INITIAL_SITE_ID : null);

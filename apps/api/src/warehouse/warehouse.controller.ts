@@ -22,7 +22,9 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { LabelApplicationService } from './label-application.service.js';
 import { WarehouseReadService } from './warehouse-read.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
-import { OperationalWarehouse } from '../identity/access.guard.js';
+import { CurrentPrincipal, OperationalWarehouse } from '../identity/access.guard.js';
+import type { Principal } from '../identity/principal.js';
+import { InventoryService } from '../inventory/inventory.service.js';
 import type { WarehouseContext } from '../inventory/warehouse-context.js';
 
 const ITEM_CODE = new ZodValidationPipe(inventoryItemCodeSchema);
@@ -37,6 +39,7 @@ export class WarehouseController {
   constructor(
     private readonly labels: LabelApplicationService,
     private readonly read: WarehouseReadService,
+    private readonly inventory: InventoryService,
   ) {}
 
   /** The physical label scan. 200 for APPLIED / ALREADY_APPLIED; 4xx with a stable code otherwise. */
@@ -50,10 +53,13 @@ export class WarehouseController {
     return this.labels.apply(body, warehouse);
   }
 
+  /** Recent applications at the active site's warehouse (none without an active site). */
   @RequirePermission('production:read')
   @Get('label-applications')
-  async recent() {
-    return { items: await this.read.recentApplications(20) };
+  async recent(@CurrentPrincipal() principal: Principal) {
+    const site = principal.activeSite;
+    const warehouse = site ? await this.inventory.siteDefaultLocation(site.id) : null;
+    return { items: await this.read.recentApplications(20, warehouse?.id ?? null) };
   }
 
   @RequirePermission('production:read')
