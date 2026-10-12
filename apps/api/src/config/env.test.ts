@@ -135,5 +135,12 @@ describe('loadEnv', () => {
         loadEnv({ ...valid, SESSION_IDLE_MINUTES: '600', SESSION_ABSOLUTE_HOURS: '2' }),
       ).toThrow(/idle timeout/);
     });
+
+    it('session defaults are 120 minutes of inactivity and 12 hours absolute (owner decision)', () => {
+      expect(loadEnv(valid)).toMatchObject({
+        SESSION_IDLE_MINUTES: 120,
+        SESSION_ABSOLUTE_HOURS: 12,
+      });
+    });
   });
 });

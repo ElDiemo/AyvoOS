@@ -33,6 +33,41 @@ export interface IdentityProvider {
   }): Promise<ExternalIdentity>;
   /** Provider logout URL that ends the provider session, or null (the AYVO session is enough). */
   logoutUrl(input: { providerSessionId: string | null; returnTo: string }): string | null;
+
+  // --- invitations (doc 021 §7b); server-side only, the API key never leaves the server -------
+
+  /** Sends a registration invitation to the e-mail. */
+  sendInvitation(input: { email: string; expiresInDays: number }): Promise<ProviderInvitation>;
+  getInvitation(id: string): Promise<ProviderInvitation>;
+  /** Pending invitations of the e-mail (reconciles a send whose response was lost). */
+  findPendingInvitations(email: string): Promise<ProviderInvitation[]>;
+  /** Sends a pending invitation's e-mail again. */
+  resendInvitation(id: string): Promise<ProviderInvitation>;
+  revokeInvitation(id: string): Promise<ProviderInvitation>;
+}
+
+/** The provider's view of an invitation. Never contains its token or acceptance link. */
+export interface ProviderInvitation {
+  id: string;
+  email: string;
+  state: 'pending' | 'accepted' | 'expired' | 'revoked';
+  expiresAt: Date;
+  /** The provider user who accepted it (accepted only). */
+  acceptedUserId: string | null;
+}
+
+/**
+ * A provider call failed; the message is safe to log and show (no secrets, no tokens).
+ * `ambiguous`: the provider may have done it (no answer — timeout, network); the caller must
+ * reconcile before retrying instead of assuming failure.
+ */
+export class IdentityProviderError extends Error {
+  constructor(
+    message: string,
+    readonly ambiguous = false,
+  ) {
+    super(message);
+  }
 }
 
 export const IDENTITY_PROVIDER = Symbol('IDENTITY_PROVIDER');

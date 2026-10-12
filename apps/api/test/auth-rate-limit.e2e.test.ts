@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { prepareInvitedUser } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
 /**
@@ -26,7 +27,7 @@ describe.skipIf(!hasDatabase)('sign-in rate limiting', () => {
       {},
       { auth: 'real', redis: 'real' },
     );
-    await t.prisma.user.create({ data: { email, displayName: 'Rate Test' } });
+    await prepareInvitedUser(t, { email, displayName: 'Rate Test' });
   });
   afterAll(() => t?.close());
 

@@ -9,6 +9,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthRateLimitService } from './auth-rate-limit.service.js';
 import { AuthService } from './auth.service.js';
 import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider.js';
+import { InvitationsService } from './invitations.service.js';
 import { PrincipalResolver } from './principal-resolver.js';
 import { RolesController } from './roles.controller.js';
 import { RolesService } from './roles.service.js';
@@ -29,6 +30,7 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
   providers: [
     AccessService,
     RolesService,
+    InvitationsService,
     SessionsService,
     PrincipalResolver,
     AuthService,

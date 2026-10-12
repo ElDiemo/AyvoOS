@@ -1,8 +1,10 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import {
+  IdentityProviderError,
   IdentityVerificationError,
   type ExternalIdentity,
   type IdentityProvider,
+  type ProviderInvitation,
 } from './identity-provider.js';
 
 export interface WorkOsConfig {
@@ -163,6 +165,78 @@ export class WorkOsIdentityProvider implements IdentityProvider {
     };
   }
 
+  // --- invitations (User Management API; the API key is sent server-to-server only) ----------
+
+  async sendInvitation(input: {
+    email: string;
+    expiresInDays: number;
+  }): Promise<ProviderInvitation> {
+    return toInvitation(
+      await this.call('POST', '/user_management/invitations', {
+        email: input.email,
+        expires_in_days: input.expiresInDays,
+      }),
+    );
+  }
+
+  async getInvitation(id: string): Promise<ProviderInvitation> {
+    return toInvitation(
+      await this.call('GET', `/user_management/invitations/${encodeURIComponent(id)}`),
+    );
+  }
+
+  async findPendingInvitations(email: string): Promise<ProviderInvitation[]> {
+    const body = (await this.call(
+      'GET',
+      `/user_management/invitations?email=${encodeURIComponent(email)}&limit=100`,
+    )) as { data?: unknown };
+    if (!Array.isArray(body.data)) {
+      throw new IdentityProviderError('The identity provider returned an unexpected list');
+    }
+    return body.data.map(toInvitation).filter((i) => i.state === 'pending' && i.email === email);
+  }
+
+  async resendInvitation(id: string): Promise<ProviderInvitation> {
+    return toInvitation(
+      await this.call('POST', `/user_management/invitations/${encodeURIComponent(id)}/resend`, {}),
+    );
+  }
+
+  async revokeInvitation(id: string): Promise<ProviderInvitation> {
+    return toInvitation(
+      await this.call('POST', `/user_management/invitations/${encodeURIComponent(id)}/revoke`, {}),
+    );
+  }
+
+  /** One API call; failures carry only the method, path kind and HTTP status (no body, no key). */
+  private async call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<unknown> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(new URL(path, this.config.apiBaseUrl), {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.config.apiKey}`,
+          Accept: 'application/json',
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      throw new IdentityProviderError('The identity provider could not be reached', true);
+    }
+    if (!response.ok) {
+      // 5xx may have been processed; 4xx was refused.
+      throw new IdentityProviderError(
+        `The identity provider refused the invitation request (HTTP ${response.status})`,
+        response.status >= 500,
+      );
+    }
+    return response.json().catch(() => {
+      throw new IdentityProviderError('The identity provider returned an unreadable response');
+    });
+  }
+
   logoutUrl(input: { providerSessionId: string | null; returnTo: string }): string | null {
     if (!input.providerSessionId) return null;
     const url = new URL('/user_management/sessions/logout', this.config.apiBaseUrl);
@@ -170,4 +244,29 @@ export class WorkOsIdentityProvider implements IdentityProvider {
     url.searchParams.set('return_to', input.returnTo);
     return url.toString();
   }
+}
+
+const INVITATION_STATES = ['pending', 'accepted', 'expired', 'revoked'] as const;
+
+/** Only the fields AYVO keeps — the invitation token and acceptance URL are dropped here. */
+function toInvitation(raw: unknown): ProviderInvitation {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const state = INVITATION_STATES.find((x) => x === r.state);
+  const expiresAt = typeof r.expires_at === 'string' ? new Date(r.expires_at) : null;
+  if (
+    typeof r.id !== 'string' ||
+    typeof r.email !== 'string' ||
+    !state ||
+    !expiresAt ||
+    Number.isNaN(expiresAt.getTime())
+  ) {
+    throw new IdentityProviderError('The identity provider returned an incomplete invitation');
+  }
+  return {
+    id: r.id,
+    email: r.email.trim().toLowerCase(),
+    state,
+    expiresAt,
+    acceptedUserId: typeof r.accepted_user_id === 'string' ? r.accepted_user_id : null,
+  };
 }

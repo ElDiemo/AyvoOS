@@ -8,6 +8,7 @@ import {
   IdentityVerificationError,
   type IdentityProvider,
 } from './identity-provider.js';
+import { InvitationsService } from './invitations.service.js';
 import { safeNextPath } from './safe-path.js';
 import { SessionsService } from './sessions.service.js';
 
@@ -31,6 +32,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly sessions: SessionsService,
     private readonly audit: AuditService,
+    private readonly invitations: InvitationsService,
     @Inject(IDENTITY_PROVIDER) private readonly provider: IdentityProvider,
     @Inject(ENV) private readonly env: Env,
   ) {}
@@ -107,19 +109,53 @@ export class AuthService {
       return { kind: 'denied', reason: 'INVALID_LOGIN' };
     }
 
+    // Linking a new identity (first sign-in): decided outside the transaction because it asks
+    // the provider whether this identity accepted the user's invitation (doc 021 §7b).
+    const known = await this.prisma.userIdentity.findFirst({
+      where: { provider: identity.provider, subject: identity.subject, unlinkedAt: null },
+    });
+    let candidate: { userId: string; invitationId: string | null } | null = null;
+    let denial = 'NOT_INVITED';
+    if (!known && identity.emailVerified) {
+      const user = await this.prisma.user.findUnique({ where: { email: identity.email } });
+      if (user) {
+        const decision = await this.invitations.authorizeLink(user.id, identity);
+        if (decision.ok) candidate = { userId: user.id, invitationId: decision.invitationId };
+        else denial = decision.reason;
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
+      if (candidate) {
+        // Serialise first sign-ins of this user: a concurrent callback of the same identity
+        // waits here and then finds the link instead of creating a second one.
+        await tx.$queryRaw`SELECT 1 FROM "users" WHERE "id" = ${candidate.userId}::uuid FOR UPDATE`;
+      }
       let link = await tx.userIdentity.findFirst({
         where: { provider: identity.provider, subject: identity.subject, unlinkedAt: null },
         include: { user: true },
       });
-      if (!link && identity.emailVerified) {
-        const user = await tx.user.findUnique({ where: { email: identity.email } });
+      if (!link && candidate) {
+        const user = await tx.user.findUniqueOrThrow({ where: { id: candidate.userId } });
         const alreadyLinked =
-          user &&
           (await tx.userIdentity.count({
             where: { userId: user.id, provider: identity.provider, unlinkedAt: null },
           })) > 0;
-        if (user && user.status === 'ACTIVE' && !alreadyLinked) {
+        if (user.status !== 'ACTIVE') {
+          await this.audit.record(
+            {
+              type: 'LOGIN_DENIED',
+              targetUserId: user.id,
+              payload: { reason: 'ACCOUNT_INACTIVE' },
+            },
+            tx,
+          );
+          return { kind: 'denied', reason: 'ACCOUNT_INACTIVE' } as const;
+        }
+        const accepted =
+          candidate.invitationId === null ||
+          (await this.invitations.markAccepted(tx, candidate.invitationId, identity));
+        if (!alreadyLinked && accepted) {
           const created = await tx.userIdentity.create({
             data: {
               userId: user.id,
@@ -138,13 +174,21 @@ export class AuthService {
             },
             tx,
           );
+        } else {
+          denial = alreadyLinked ? 'ALREADY_LINKED' : 'INVITATION_CLOSED';
         }
       }
       if (!link) {
+        // The same answer for unknown, uninvited and mismatching identities (no enumeration).
         await this.audit.record(
           {
             type: 'LOGIN_DENIED',
-            payload: { reason: 'NO_ACCESS', provider: identity.provider, email: identity.email },
+            payload: {
+              reason: 'NO_ACCESS',
+              detail: denial,
+              provider: identity.provider,
+              email: identity.email,
+            },
           },
           tx,
         );

@@ -10,7 +10,7 @@ import type {
 } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { INITIAL_SITE_ID, sessionCookie } from './support/sign-in.js';
+import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { SVG_70x110 } from './support/artwork-fixtures.js';
 import { layout } from './support/fixtures.js';
 import { createTestApp, hasDatabase, TEST_QR_BASE_URL, type TestApp } from './support/test-app.js';
@@ -108,8 +108,9 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
 
   beforeAll(async () => {
     t = await createTestApp({}, {}, { auth: 'real' });
-    const user = await t.prisma.user.create({
-      data: { email: unique('site-admin'), displayName: 'Site Admin' },
+    const user = await prepareInvitedUser(t, {
+      email: unique('site-admin'),
+      displayName: 'Site Admin',
     });
     adminId = user.id;
     await t.prisma.userRole.create({

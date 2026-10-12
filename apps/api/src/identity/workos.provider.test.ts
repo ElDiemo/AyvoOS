@@ -1,6 +1,6 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { IdentityVerificationError } from './identity-provider.js';
+import { IdentityProviderError, IdentityVerificationError } from './identity-provider.js';
 import { WorkOsIdentityProvider } from './workos.provider.js';
 
 const API_KEY = 'sk_test_secret_value_never_printed';
@@ -191,5 +191,103 @@ describe('WorkOS identity provider (ADR 0022)', () => {
     );
     expect(url.pathname).toBe('/user_management/sessions/logout');
     expect(url.searchParams.get('session_id')).toBe('session_01');
+  });
+
+  describe('invitations (server-side User Management API)', () => {
+    const raw = {
+      object: 'invitation',
+      id: 'invitation_01',
+      email: 'New@Ayvo.Example',
+      state: 'pending',
+      expires_at: '2026-10-19T10:00:00.000Z',
+      accepted_user_id: null,
+      token: 'secret-invitation-token',
+      accept_invitation_url: 'https://auth.example/invite?token=secret-invitation-token',
+    };
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const invitations = (status = 200, body: unknown = raw) =>
+      new WorkOsIdentityProvider(config, {
+        jwks: createLocalJWKSet({ keys: [jwk] }),
+        fetch: (async (url: unknown, init?: RequestInit) => {
+          calls.push({ url: String(url), init });
+          return new Response(JSON.stringify(body), { status });
+        }) as typeof fetch,
+      });
+
+    it('sends with the API key as a bearer header and keeps neither token nor link', async () => {
+      calls.length = 0;
+      const sent = await invitations().sendInvitation({
+        email: 'new@ayvo.example',
+        expiresInDays: 7,
+      });
+      expect(sent).toEqual({
+        id: 'invitation_01',
+        email: 'new@ayvo.example',
+        state: 'pending',
+        expiresAt: new Date('2026-10-19T10:00:00.000Z'),
+        acceptedUserId: null,
+      });
+      expect(JSON.stringify(sent)).not.toContain('secret-invitation-token');
+      expect(calls[0]!.url).toBe('https://api.workos.example/user_management/invitations');
+      expect((calls[0]!.init!.headers as Record<string, string>).Authorization).toBe(
+        `Bearer ${API_KEY}`,
+      );
+      expect(JSON.parse(String(calls[0]!.init!.body))).toEqual({
+        email: 'new@ayvo.example',
+        expires_in_days: 7,
+      });
+    });
+
+    it('lists only pending invitations of exactly that e-mail', async () => {
+      const list = invitations(200, {
+        data: [
+          raw,
+          { ...raw, id: 'invitation_02', state: 'revoked' },
+          { ...raw, id: 'i3', email: 'x@y.z' },
+        ],
+      });
+      expect((await list.findPendingInvitations('new@ayvo.example')).map((i) => i.id)).toEqual([
+        'invitation_01',
+      ]);
+    });
+
+    it('resends, revokes and reads by id (path-encoded)', async () => {
+      calls.length = 0;
+      const p = invitations();
+      await p.resendInvitation('invitation_01');
+      await p.revokeInvitation('a/b');
+      await p.getInvitation('invitation_01');
+      expect(calls.map((c) => `${c.init!.method} ${new URL(c.url).pathname}`)).toEqual([
+        'POST /user_management/invitations/invitation_01/resend',
+        'POST /user_management/invitations/a%2Fb/revoke',
+        'GET /user_management/invitations/invitation_01',
+      ]);
+    });
+
+    it('classifies failures: refused (4xx) vs. ambiguous (5xx, no answer); no secrets in errors', async () => {
+      const refused = await invitations(422, { message: API_KEY })
+        .sendInvitation({ email: 'a@b.c', expiresInDays: 7 })
+        .catch((e: unknown) => e);
+      expect(refused).toBeInstanceOf(IdentityProviderError);
+      expect((refused as IdentityProviderError).ambiguous).toBe(false);
+      expect((refused as Error).message).not.toContain(API_KEY);
+      const unsure = await invitations(503)
+        .sendInvitation({ email: 'a@b.c', expiresInDays: 7 })
+        .catch((e: unknown) => e);
+      expect((unsure as IdentityProviderError).ambiguous).toBe(true);
+      const offline = new WorkOsIdentityProvider(config, {
+        jwks: createLocalJWKSet({ keys: [jwk] }),
+        fetch: (async () => {
+          throw new Error(`socket hang up ${API_KEY}`);
+        }) as typeof fetch,
+      });
+      const lost = await offline.getInvitation('x').catch((e: unknown) => e);
+      expect((lost as IdentityProviderError).ambiguous).toBe(true);
+      expect((lost as Error).message).not.toContain(API_KEY);
+      const broken = await invitations(200, { id: 'x' })
+        .getInvitation('x')
+        .catch((e: unknown) => e);
+      expect(broken).toBeInstanceOf(IdentityProviderError);
+    });
   });
 });

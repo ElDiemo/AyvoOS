@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   AdminUserDetail,
   AdminUserSummary,
@@ -13,6 +14,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { SitesService } from '../sites/sites.service.js';
 import { AccessService, toAccessibleSite } from './access.service.js';
+import { invitationView, InvitationsService } from './invitations.service.js';
 import { SessionsService } from './sessions.service.js';
 
 const notFound = () => domainError(404, 'USER_NOT_FOUND', 'No such user');
@@ -38,6 +40,7 @@ export class UsersService {
     private readonly inventory: InventoryService,
     private readonly sites: SitesService,
     private readonly access: AccessService,
+    private readonly invitations: InvitationsService,
   ) {}
 
   async warehouses() {
@@ -69,6 +72,7 @@ export class UsersService {
           orderBy: { roleCode: 'asc' },
         },
         identities: { where: { unlinkedAt: null }, select: { id: true } },
+        invitations: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 },
       },
       orderBy: [{ status: 'asc' }, { email: 'asc' }],
     });
@@ -88,12 +92,14 @@ export class UsersService {
           orderBy: { roleCode: 'asc' },
         },
         identities: { where: { unlinkedAt: null }, select: { id: true } },
+        invitations: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 },
       },
     });
     if (!user) throw notFound();
     const snapshot = await this.access.snapshot(id);
     return {
       ...this.summary(user),
+      invitation: invitationView(user.invitations[0] ?? null),
       roleGrants: user.roles.map((r) => ({
         role: r.role.code,
         name: r.role.name,
@@ -150,7 +156,28 @@ export class UsersService {
       }
       return user.id;
     });
+    // Roles and sites are in place before the invitation is sent. A provider failure leaves a
+    // prepared user without any way to sign in (FAILED invitation, shown to the administrator,
+    // resendable) — never a partially authorized account.
+    await this.invitations
+      .send(actor.userId, id, randomUUID(), request.reason)
+      .catch(() => undefined);
     return this.get(id);
+  }
+
+  async sendInvitation(actor: Actor, userId: string, requestId: string, reason: string) {
+    await this.invitations.send(actor.userId, userId, requestId, reason);
+    return this.get(userId);
+  }
+
+  async resendInvitation(actor: Actor, userId: string, requestId: string, reason: string) {
+    await this.invitations.resend(actor.userId, userId, requestId, reason);
+    return this.get(userId);
+  }
+
+  async revokeInvitation(actor: Actor, userId: string, requestId: string, reason: string) {
+    await this.invitations.revoke(actor.userId, userId, requestId, reason);
+    return this.get(userId);
   }
 
   async grantRole(actor: Actor, userId: string, role: RoleCode, reason: string) {
@@ -467,6 +494,7 @@ export class UsersService {
     createdAt: Date;
     roles: { role: { code: string; name: string } }[];
     identities: { id: string }[];
+    invitations: Parameters<typeof invitationView>[0][];
   }): AdminUserSummary {
     return {
       id: user.id,
@@ -475,6 +503,7 @@ export class UsersService {
       status: user.status,
       roles: user.roles.map((r) => ({ code: r.role.code, name: r.role.name })),
       linked: user.identities.length > 0,
+      invitationState: invitationView(user.invitations[0] ?? null)?.state ?? null,
       lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
       createdAt: user.createdAt.toISOString(),
     };

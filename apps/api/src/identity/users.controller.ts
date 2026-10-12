@@ -1,5 +1,7 @@
 import {
   createUserRequestSchema,
+  invitationActionRequestSchema,
+  type InvitationActionRequest,
   roleChangeRequestSchema,
   siteScopeRequestSchema,
   statusChangeRequestSchema,
@@ -82,6 +84,40 @@ export class UsersController {
     @Body(new ZodValidationPipe(roleChangeRequestSchema)) body: RoleChangeRequest,
   ) {
     return this.users.revokeRole(actor(principal), id, body.role, body.reason);
+  }
+
+  /** Sends an invitation to register (ADMIN; idempotent per requestId). */
+  @Post('users/:id/invitations')
+  @HttpCode(200)
+  @RequirePermission('identity:users_manage')
+  sendInvitation(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ID) id: string,
+    @Body(new ZodValidationPipe(invitationActionRequestSchema)) body: InvitationActionRequest,
+  ) {
+    return this.users.sendInvitation(actor(principal), id, body.requestId, body.reason);
+  }
+
+  @Post('users/:id/invitations/resend')
+  @HttpCode(200)
+  @RequirePermission('identity:users_manage')
+  resendInvitation(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ID) id: string,
+    @Body(new ZodValidationPipe(invitationActionRequestSchema)) body: InvitationActionRequest,
+  ) {
+    return this.users.resendInvitation(actor(principal), id, body.requestId, body.reason);
+  }
+
+  @Post('users/:id/invitations/revoke')
+  @HttpCode(200)
+  @RequirePermission('identity:users_manage')
+  revokeInvitation(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ID) id: string,
+    @Body(new ZodValidationPipe(invitationActionRequestSchema)) body: InvitationActionRequest,
+  ) {
+    return this.users.revokeInvitation(actor(principal), id, body.requestId, body.reason);
   }
 
   @Post('users/:id/sites/grant')

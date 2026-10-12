@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
+import { InvitationsService } from '../../src/identity/invitations.service.js';
 import type { TestApp } from './test-app.js';
 
 /** The migrated initial site that owns every pre-existing warehouse (doc 022 §9). */
@@ -22,4 +24,17 @@ export async function sessionCookie(t: TestApp, email: string): Promise<string> 
   const token = /ayvo_session=([^;]+)/.exec(String(done.headers['set-cookie']))?.[1];
   if (!token) throw new Error(`sign-in of ${email} failed: ${done.headers.location}`);
   return `ayvo_session=${token}`;
+}
+
+/**
+ * A prepared user created directly in the database plus an invitation through the (fake)
+ * provider — what the administration does — so that the user can register and sign in.
+ */
+export async function prepareInvitedUser(
+  t: TestApp,
+  data: { email: string; displayName: string },
+): Promise<{ id: string; email: string }> {
+  const user = await t.prisma.user.create({ data });
+  await t.app.get(InvitationsService).send(null, user.id, randomUUID(), 'test preparation');
+  return user;
 }
