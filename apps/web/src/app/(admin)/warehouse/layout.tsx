@@ -1,7 +1,10 @@
-import { requirePermission } from '@/lib/session';
+import { requireAnyPermission } from '@/lib/session';
 
-/** Page-level guard of this section; the API enforces the same permission on every request. */
+/**
+ * Section guard: the warehouse opens with full stock access or the planning summary (SALES). Each
+ * page below checks its own permission again; the API enforces every permission on its own.
+ */
 export default async function GuardedLayout({ children }: { children: React.ReactNode }) {
-  await requirePermission('inventory:read');
+  await requireAnyPermission(['inventory:read', 'inventory:stock_summary']);
   return children;
 }

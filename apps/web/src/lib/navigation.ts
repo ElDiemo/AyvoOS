@@ -17,7 +17,7 @@ export interface NavPage {
   label: string;
   exact?: boolean;
   prefixes?: readonly string[];
-  /** Hidden without this permission (the module's permission applies otherwise). */
+  /** Hidden without this permission (visible to everyone who sees the module otherwise). */
   permission?: PermissionCode;
 }
 
@@ -28,8 +28,8 @@ export interface NavModule {
   label: string;
   href: string;
   description: string;
-  /** Required to see the module at all. */
-  permission: PermissionCode;
+  /** Any one of these is required to see the module at all. */
+  permissions: readonly PermissionCode[];
   pages: readonly NavPage[];
 }
 
@@ -40,28 +40,55 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'warehouse',
     section: 'operations',
-    permission: 'inventory:read',
+    permissions: ['inventory:read', 'inventory:stock_summary'],
     label: w.label,
     href: '/warehouse',
     description: w.description,
     pages: [
-      { id: 'overview', href: '/warehouse', label: w.pages.overview, exact: true },
+      {
+        id: 'overview',
+        href: '/warehouse',
+        label: w.pages.overview,
+        exact: true,
+        permission: 'inventory:read',
+      },
       {
         id: 'new-receipt',
         href: '/warehouse/receipts/new',
         label: w.pages.newReceipt,
         permission: 'inventory:receive',
       },
-      { id: 'receipts', href: '/warehouse/receipts', label: w.pages.receipts },
-      { id: 'stock', href: '/warehouse/stock', label: w.pages.stock },
-      { id: 'movements', href: '/warehouse/movements', label: w.pages.movements },
-      { id: 'suppliers', href: '/warehouse/suppliers', label: w.pages.suppliers },
+      {
+        id: 'receipts',
+        href: '/warehouse/receipts',
+        label: w.pages.receipts,
+        permission: 'inventory:read',
+      },
+      { id: 'stock', href: '/warehouse/stock', label: w.pages.stock, permission: 'inventory:read' },
+      {
+        id: 'availability',
+        href: '/warehouse/availability',
+        label: w.pages.availability,
+        permission: 'inventory:stock_summary',
+      },
+      {
+        id: 'movements',
+        href: '/warehouse/movements',
+        label: w.pages.movements,
+        permission: 'inventory:read',
+      },
+      {
+        id: 'suppliers',
+        href: '/warehouse/suppliers',
+        label: w.pages.suppliers,
+        permission: 'inventory:read',
+      },
     ],
   },
   {
     id: 'production',
     section: 'operations',
-    permission: 'production:read',
+    permissions: ['production:read'],
     label: p.label,
     href: '/production',
     description: p.description,
@@ -79,7 +106,7 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'admin',
     section: 'administration',
-    permission: 'identity:users_read',
+    permissions: ['identity:users_read'],
     label: identityCs.shell.administration,
     href: '/admin/users',
     description: identityCs.admin.subtitle,
@@ -88,7 +115,7 @@ export const MODULES: readonly NavModule[] = [
 ];
 
 export type WarehousePageId =
-  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'movements' | 'suppliers';
+  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId = 'overview' | 'bottles' | 'templates' | 'label-activation';
 export type AdminPageId = 'users';
 
@@ -102,10 +129,11 @@ export function visibleModules(permissions: ReadonlySet<string> | readonly strin
     permissions instanceof Set
       ? permissions.has(p)
       : (permissions as readonly string[]).includes(p);
-  return MODULES.filter((m) => has(m.permission)).map((m) => ({
-    ...m,
-    pages: m.pages.filter((page) => !page.permission || has(page.permission)),
-  }));
+  return MODULES.filter((m) => m.permissions.some(has)).flatMap((m) => {
+    const pages = m.pages.filter((page) => !page.permission || has(page.permission));
+    // The module link opens the first page the user may see (e.g. SALES: availability only).
+    return pages.length > 0 ? [{ ...m, href: pages[0]!.href, pages }] : [];
+  });
 }
 
 const within = (pathname: string, prefix: string) =>

@@ -24,6 +24,15 @@ export async function requirePermission(permission: PermissionCode): Promise<Cur
   return user;
 }
 
+/** Like requirePermission, for a section that any one of several permissions opens. */
+export async function requireAnyPermission(
+  permissions: readonly PermissionCode[],
+): Promise<CurrentUser> {
+  const user = await currentUser();
+  if (!permissions.some((p) => user.permissions.includes(p))) redirect('/forbidden');
+  return user;
+}
+
 export function hasPermission(user: CurrentUser, permission: PermissionCode): boolean {
   return user.permissions.includes(permission);
 }

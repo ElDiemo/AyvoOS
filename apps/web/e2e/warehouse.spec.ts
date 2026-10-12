@@ -368,3 +368,122 @@ test('long supplier and lot names wrap; the scan button stays on one line', asyn
   }
   await expect(page.locator('body')).not.toContainText('qr.ayvo.co');
 });
+
+/** A context without the operator session of this file (new users sign in themselves). */
+const SIGNED_OUT = { cookies: [], origins: [] };
+
+/** Sign-in of a newly created user through the fake identity provider (APP_ENV=test). */
+async function signInWithForm(page: Page, email: string) {
+  await page.goto('/login');
+  await page.getByTestId('sign-in').click();
+  await page.getByLabel('E-mail').fill(email);
+  await page.getByRole('button', { name: 'Continue' }).click();
+}
+
+// Last in this file: it adds a supplier and stock that the flows above do not expect.
+test('purchase prices and supplier documents never reach roles without the permission', async ({
+  browser,
+}) => {
+  const admin = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
+  const api = admin.request;
+  const ok = async <T>(res: Awaited<ReturnType<typeof api.get>>): Promise<T> => {
+    expect(res.ok(), `${res.url()} -> ${res.status()}`).toBe(true);
+    return (await res.json()) as T;
+  };
+  const supplier = await ok<{ id: string }>(
+    await api.post('/api/admin/suppliers', {
+      data: {
+        requestId: crypto.randomUUID(),
+        name: 'Cenový dodavatel',
+        companyId: null,
+        vatId: null,
+      },
+    }),
+  );
+  const invoice = await ok<{ id: string; contentUrl: string }>(
+    await api.post('/api/admin/supplier-documents', {
+      multipart: {
+        requestId: crypto.randomUUID(),
+        supplierId: supplier.id,
+        kind: 'INVOICE',
+        documentNumber: 'FV-PRICE-1',
+        issuedOn: '2026-10-11',
+        file: { name: 'fv.pdf', mimeType: 'application/pdf', buffer: PDF },
+      },
+    }),
+  );
+  const item = (
+    await ok<{ id: string; code: string }[]>(await api.get('/api/admin/inventory/items'))
+  ).find((i) => i.code === 'NEW_BOTTLE')!;
+  const receipt = await ok<{ code: string }>(
+    await api.post('/api/admin/goods-receipts', {
+      data: {
+        requestId: crypto.randomUUID(),
+        supplierId: supplier.id,
+        supplierReference: 'FV-PRICE-1',
+        receivedAt: new Date().toISOString(),
+        note: null,
+        documentIds: [invoice.id],
+        lines: [
+          {
+            itemId: item.id,
+            quantity: '2',
+            supplierLotCode: null,
+            unitPrice: '4321.5',
+            currency: 'CZK',
+            vatRate: '21',
+          },
+        ],
+      },
+    }),
+  );
+  for (const [email, role] of [
+    ['e2e-store@ayvo.test', 'WAREHOUSE_OPERATOR'],
+    ['e2e-finance@ayvo.test', 'FINANCE'],
+  ] as const) {
+    await ok(
+      await api.post('/api/admin/identity/users', {
+        data: {
+          email,
+          displayName: role,
+          roles: [role],
+          warehouseCodes: ['MAIN'],
+          reason: 'price test',
+        },
+      }),
+    );
+  }
+
+  // A warehouse operator: neither prices nor documents — not on the page, not from the API.
+  const store = await browser.newContext({ storageState: SIGNED_OUT });
+  const storePage = await store.newPage();
+  await signInWithForm(storePage, 'e2e-store@ayvo.test');
+  await storePage.goto(`/warehouse/receipts/${receipt.code}`);
+  await expect(storePage.getByTestId('line-1')).toBeVisible();
+  await expect(storePage.getByTestId('documents-restricted')).toBeVisible();
+  await expect(storePage.locator('body')).not.toContainText('4321');
+  await expect(storePage.locator('body')).not.toContainText('FV-PRICE-1.pdf');
+  const direct = await storePage.request.get(`/api/admin/goods-receipts/${receipt.code}`);
+  expect(direct.status()).toBe(200);
+  const text = await direct.text();
+  expect(text).not.toContain('4321');
+  expect(text).not.toContain('unitPrice');
+  expect(text).not.toContain(invoice.id);
+  expect((await storePage.request.get(invoice.contentUrl)).status()).toBe(403);
+  expect(
+    (await storePage.request.get(`/api/admin/suppliers/${supplier.id}/documents`)).status(),
+  ).toBe(403);
+
+  // Finance sees both.
+  const finance = await browser.newContext({ storageState: SIGNED_OUT });
+  const financePage = await finance.newPage();
+  await signInWithForm(financePage, 'e2e-finance@ayvo.test');
+  await financePage.goto(`/warehouse/receipts/${receipt.code}`);
+  await expect(financePage.getByTestId('line-1')).toContainText('4321.5 CZK');
+  await expect(financePage.getByTestId('documents')).toContainText('FV-PRICE-1');
+  expect((await financePage.request.get(invoice.contentUrl)).status()).toBe(200);
+
+  await store.close();
+  await finance.close();
+  await admin.close();
+});

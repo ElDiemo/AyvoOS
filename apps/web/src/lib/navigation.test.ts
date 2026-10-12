@@ -8,7 +8,10 @@ const where = (path: string) => {
 
 describe('AYVO OS navigation (doc 019)', () => {
   it('has exactly two operational modules: Sklad and Výroba, plus the administration', () => {
-    const all = MODULES.map((m) => m.permission);
+    const all = MODULES.flatMap((m) => [
+      ...m.permissions,
+      ...m.pages.flatMap((p) => p.permission ?? []),
+    ]);
     expect(
       visibleModules(all)
         .filter((m) => m.section === 'operations')
@@ -34,6 +37,24 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(visibleModules(['identity:users_read']).map((m) => m.id)).toEqual(['admin']);
   });
 
+  it('SALES sees only the availability page of the warehouse; the module link opens it', () => {
+    const [warehouse, ...rest] = visibleModules(['inventory:stock_summary']);
+    expect(rest).toEqual([]);
+    expect(warehouse!.id).toBe('warehouse');
+    expect(warehouse!.pages.map((p) => p.id)).toEqual(['availability']);
+    expect(warehouse!.href).toBe('/warehouse/availability');
+    // Full warehouse readers keep the overview as the module link and do not get the summary tab.
+    const full = visibleModules(['inventory:read'])[0]!;
+    expect(full.href).toBe('/warehouse');
+    expect(full.pages.map((p) => p.id)).toEqual([
+      'overview',
+      'receipts',
+      'stock',
+      'movements',
+      'suppliers',
+    ]);
+  });
+
   it('keeps label application out of the warehouse and inside production', () => {
     const warehouse = MODULES.find((m) => m.id === 'warehouse')!;
     const production = MODULES.find((m) => m.id === 'production')!;
@@ -42,6 +63,7 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Příjem zboží',
       'Příjmy',
       'Stav skladu',
+      'Dostupnost',
       'Pohyby',
       'Dodavatelé',
     ]);
@@ -61,6 +83,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/warehouse/receipts/GR-000001')).toBe('warehouse/receipts');
     expect(where('/warehouse/receipts/new')).toBe('warehouse/new-receipt');
     expect(where('/warehouse/stock')).toBe('warehouse/stock');
+    expect(where('/warehouse/availability')).toBe('warehouse/availability');
     expect(where('/production')).toBe('production/overview');
     expect(where('/production/label-activation')).toBe('production/label-activation');
     // Bottles, series and templates keep their URLs but belong to Production.

@@ -66,10 +66,15 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   const admin = await browser.newContext({ storageState: ADMIN });
   const page = await admin.newPage();
   await page.goto('/');
-  // The administrator sees the administration, and no operational module (no such role).
+  // The administrator sees the whole system — every module, through ordinary permissions.
   const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
-  await expect(nav.getByRole('link')).toHaveText(['Přehled', 'Uživatelé a role']);
-  await expect(page.getByText('nemá přístup k žádnému provoznímu modulu')).toBeVisible();
+  await expect(nav.getByRole('link')).toHaveText([
+    'Přehled',
+    'Sklad',
+    'Výroba',
+    'Uživatelé a role',
+  ]);
+  await expect(page.getByText('nemá přístup k žádnému provoznímu modulu')).toHaveCount(0);
 
   await nav.getByRole('link', { name: 'Uživatelé a role' }).click();
   await page.getByRole('link', { name: 'Nový uživatel' }).click();
@@ -129,6 +134,63 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   }
   await colleague.close();
   await admin.close();
+});
+
+test('SALES sees stock availability for planning and nothing operational', async ({ browser }) => {
+  const admin = await browser.newContext({ storageState: ADMIN });
+  expect(
+    (
+      await admin.request.post('/api/admin/identity/users', {
+        data: {
+          email: 'e2e-sales@ayvo.test',
+          displayName: 'Obchod Test',
+          roles: ['SALES'],
+          warehouseCodes: ['MAIN'],
+          reason: 'sales planning',
+        },
+      })
+    ).status(),
+  ).toBe(201);
+  await admin.close();
+
+  const sales = await browser.newContext();
+  const page = await sales.newPage();
+  await page.goto('/login');
+  await signInWithForm(page, 'e2e-sales@ayvo.test');
+  const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
+  await expect(nav.getByRole('link')).toHaveText(['Přehled', 'Sklad']);
+  await expect(page.getByTestId('module-availability')).toBeVisible();
+  await nav.getByRole('link', { name: 'Sklad' }).click();
+  await expect(page).toHaveURL(/\/warehouse\/availability$/);
+  await expect(page.getByRole('navigation', { name: 'Sklad' }).getByRole('link')).toHaveText([
+    'Dostupnost',
+  ]);
+  await expect(page.getByTestId('availability-NEW_BOTTLE')).toBeVisible();
+  await expect(page.getByTestId('availability')).not.toContainText(/šarž|dodavatel|cena/i);
+
+  for (const path of [
+    '/warehouse',
+    '/warehouse/stock',
+    '/warehouse/receipts',
+    '/warehouse/receipts/new',
+    '/bottles',
+  ]) {
+    await page.goto(path);
+    await expect(page, path).toHaveURL(/\/forbidden$/);
+  }
+  for (const path of [
+    '/api/admin/inventory/stock',
+    '/api/admin/goods-receipts',
+    '/api/admin/suppliers',
+  ]) {
+    expect((await page.request.get(path)).status(), path).toBe(403);
+  }
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/warehouse/availability');
+    await noOverflow(page, `/warehouse/availability at ${width}px`);
+  }
+  await sales.close();
 });
 
 test('sign-out ends the session; status pages are clear', async ({ page }) => {

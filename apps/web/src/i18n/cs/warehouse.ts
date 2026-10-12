@@ -105,6 +105,7 @@ export const warehouseCs = {
     attachDocument: 'Přiložit další doklad',
     attach: 'Přiložit',
     download: 'Stáhnout',
+    documentsRestricted: 'Doklady dodavatele vidí jen uživatelé s oprávněním k dokladům.',
   },
   documents: {
     kind: 'Druh dokladu',
@@ -140,6 +141,18 @@ export const warehouseCs = {
     settingsSaved: 'Nastavení uloženo jako nová verze.',
     noSettings: 'Plánování zásob není nastaveno.',
     lotKind: { SUPPLIER: 'šarže dodavatele', INTERNAL: 'interní šarže' },
+  },
+  availability: {
+    title: 'Dostupnost zásob',
+    subtitle:
+      'Dostupnost pro plánování obchodu. Pouze pro čtení – bez šarží, dodavatelů, cen a dokladů.',
+    item: 'Položka',
+    available: 'K dispozici',
+    reserved: 'Rezervováno',
+    state: 'Stav',
+    lowStock: 'Pod minimální zásobou',
+    ok: 'V pořádku',
+    empty: 'Žádné položky.',
   },
   movements: {
     title: 'Pohyby zásob',

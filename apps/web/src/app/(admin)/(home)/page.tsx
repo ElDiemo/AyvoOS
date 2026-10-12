@@ -2,6 +2,7 @@ import {
   bottleListResponseSchema,
   goodsReceiptPageSchema,
   stockOverviewSchema,
+  stockSummarySchema,
   supplierSchema,
 } from '@ayvo/types';
 import { StatusBadge } from '@ayvo/ui';
@@ -51,6 +52,11 @@ async function warehouseFigures() {
   };
 }
 
+async function availabilityFigures() {
+  const summary = await apiGet('admin/inventory/stock-summary', stockSummarySchema);
+  return { lowStock: summary.items.filter((s) => s.lowStock).map((s) => s.item.name) };
+}
+
 async function productionFigures() {
   const total = (status?: 'CREATED' | 'LABELED_EMPTY') =>
     apiGet('admin/bottles', bottleListResponseSchema, { page: 1, pageSize: 1, status }).then(
@@ -71,10 +77,13 @@ async function productionFigures() {
 export default async function HomePage() {
   const user = await currentUser();
   const canWarehouse = hasPermission(user, 'inventory:read');
+  // Planning-only stock access (SALES) without the full warehouse.
+  const canAvailability = !canWarehouse && hasPermission(user, 'inventory:stock_summary');
   const canProduction = hasPermission(user, 'production:read');
-  const [health, warehouse, production] = await Promise.all([
+  const [health, warehouse, availability, production] = await Promise.all([
     fetchApiHealth(serverEnv.API_URL),
     canWarehouse ? settle(warehouseFigures) : null,
+    canAvailability ? settle(availabilityFigures) : null,
     canProduction ? settle(productionFigures) : null,
   ]);
   const warehouseModule = moduleById('warehouse');
@@ -84,7 +93,9 @@ export default async function HomePage() {
     <>
       <PageHeader title={h.title} subtitle={h.subtitle} />
       <div className="flex flex-col gap-6">
-        {!canWarehouse && !canProduction && <Notice tone="info">{h.noModules}</Notice>}
+        {!canWarehouse && !canAvailability && !canProduction && (
+          <Notice tone="info">{h.noModules}</Notice>
+        )}
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           {canWarehouse && (
             <ModulePanel
@@ -135,6 +146,27 @@ export default async function HomePage() {
                     ]}
                   />
                 </>
+              ) : (
+                <Notice>{shellCs.common.errorTitle}</Notice>
+              )}
+            </ModulePanel>
+          )}
+
+          {canAvailability && (
+            <ModulePanel
+              href="/warehouse/availability"
+              title={warehouseModule.label}
+              description={h.availabilityDescription}
+              testId="module-availability"
+              openLabel={h.openAvailability}
+              actions={null}
+            >
+              {availability ? (
+                availability.lowStock.length > 0 ? (
+                  <Warnings items={[h.lowStockWarning(availability.lowStock.join(', '))]} />
+                ) : (
+                  <p className="text-sm text-stone-600">{h.allAvailable}</p>
+                )
               ) : (
                 <Notice>{shellCs.common.errorTitle}</Notice>
               )}

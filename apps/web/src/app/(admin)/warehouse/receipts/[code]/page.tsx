@@ -12,6 +12,7 @@ import {
 } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
+import { currentUser, hasPermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const r = warehouseCs.receipts;
@@ -26,7 +27,13 @@ export default async function ReceiptPage({
   const { code } = await params;
   if (!goodsReceiptCodeSchema.safeParse(code).success) notFound();
   const { created } = await searchParams;
-  const receipt = await apiGet(`admin/goods-receipts/${code}`, goodsReceiptSchema);
+  // Prices and documents are omitted by the API without procurement:cost_read / documents_read.
+  const [receipt, me] = await Promise.all([
+    apiGet(`admin/goods-receipts/${code}`, goodsReceiptSchema),
+    currentUser(),
+  ]);
+  const canCorrect = hasPermission(me, 'inventory:correct');
+  const canAttach = hasPermission(me, 'inventory:receive');
   return (
     <>
       <WarehouseHeader
@@ -113,7 +120,7 @@ export default async function ReceiptPage({
                         ))}
                       </ul>
                     )}
-                    <CorrectionForm code={receipt.code} lineNo={line.lineNo} />
+                    {canCorrect && <CorrectionForm code={receipt.code} lineNo={line.lineNo} />}
                   </Field>
                 </FieldList>
               </li>
@@ -122,20 +129,30 @@ export default async function ReceiptPage({
         </Card>
 
         <Card title={r.documents}>
-          <ul className="mb-4 flex flex-col gap-2 text-sm" data-testid="documents">
-            {receipt.documents.map((d) => (
-              <li key={d.id} className="flex flex-wrap items-center gap-2 wrap-anywhere">
-                <span className="font-medium">{warehouseCs.documents.kinds[d.kind]}</span>
-                <span>{d.documentNumber}</span>
-                <span className="text-stone-500">{formatDateCs(d.issuedOn)}</span>
-                <a href={d.contentUrl} className="underline">
-                  {r.download}
-                </a>
-              </li>
-            ))}
-          </ul>
-          <h3 className="mb-2 text-sm font-medium">{r.attachDocument}</h3>
-          <AttachDocument code={receipt.code} supplierId={receipt.supplier.id} />
+          {receipt.documents ? (
+            <ul className="mb-4 flex flex-col gap-2 text-sm" data-testid="documents">
+              {receipt.documents.map((d) => (
+                <li key={d.id} className="flex flex-wrap items-center gap-2 wrap-anywhere">
+                  <span className="font-medium">{warehouseCs.documents.kinds[d.kind]}</span>
+                  <span>{d.documentNumber}</span>
+                  <span className="text-stone-500">{formatDateCs(d.issuedOn)}</span>
+                  <a href={d.contentUrl} className="underline">
+                    {r.download}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mb-4 text-sm text-stone-500" data-testid="documents-restricted">
+              {r.documentsRestricted}
+            </p>
+          )}
+          {canAttach && (
+            <>
+              <h3 className="mb-2 text-sm font-medium">{r.attachDocument}</h3>
+              <AttachDocument code={receipt.code} supplierId={receipt.supplier.id} />
+            </>
+          )}
         </Card>
       </div>
     </>
