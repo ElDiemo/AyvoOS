@@ -10,7 +10,6 @@ import {
 import { PrismaService } from '../database/prisma.service.js';
 
 /** The physical warehouse (doc 018: one location for now; every row still names it). */
-export const MAIN_LOCATION_CODE = 'MAIN';
 
 const itemInclude = {
   baseUnit: true,
@@ -123,19 +122,34 @@ export class InventoryService {
 
   // --- locations and lots ----------------------------------------------------------------------
 
-  /** All inventory locations (warehouses), for access-scope administration. */
-  listLocations(db: Prisma.TransactionClient = this.prisma) {
-    return db.inventoryLocation.findMany({ orderBy: { code: 'asc' } });
+  /** Inventory locations (warehouses), optionally of some sites only (doc 022). */
+  listLocations(db: Prisma.TransactionClient = this.prisma, siteIds?: readonly string[]) {
+    return db.inventoryLocation.findMany({
+      where: siteIds ? { siteId: { in: [...siteIds] } } : {},
+      orderBy: { code: 'asc' },
+    });
+  }
+
+  async getLocation(id: string, db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryLocation.findUniqueOrThrow({ where: { id } });
+  }
+
+  /** The warehouse a site's operations act on in v0.1 (null: the site has no warehouse yet). */
+  siteDefaultLocation(siteId: string, db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryLocation.findFirst({ where: { siteId, isSiteDefault: true } });
+  }
+
+  /** Whether any warehouse of the site holds stock (a site with stock cannot be deactivated). */
+  async siteHasStock(siteId: string): Promise<boolean> {
+    return (
+      (await this.prisma.inventoryBalance.count({
+        where: { location: { siteId }, onHand: { gt: 0 } },
+      })) > 0
+    );
   }
 
   locationByCode(code: string, db: Prisma.TransactionClient = this.prisma) {
     return db.inventoryLocation.findUnique({ where: { code } });
-  }
-
-  async mainLocation(db: Prisma.TransactionClient = this.prisma) {
-    const location = await db.inventoryLocation.findUnique({ where: { code: MAIN_LOCATION_CODE } });
-    if (!location) throw new Error('Inventory location MAIN is missing (migration not applied)');
-    return location;
   }
 
   /** The lot of this supplier's own lot code for the item; created on first receipt. */
@@ -194,11 +208,11 @@ export class InventoryService {
       .filter(({ onHand }) => !onlyAvailable || onHand.greaterThan(0));
   }
 
-  /** A lot and its on-hand at MAIN (null if the lot does not exist). */
-  async lotOnHand(lotId: string) {
+  /** A lot and its on-hand at a location (null if the lot does not exist). */
+  async lotOnHand(lotId: string, locationId: string) {
     const lot = await this.prisma.inventoryLot.findUnique({
       where: { id: lotId },
-      include: { balances: { where: { location: { code: MAIN_LOCATION_CODE } } } },
+      include: { balances: { where: { locationId } } },
     });
     return lot ? { lot, onHand: lot.balances[0]?.onHand ?? quantity(0) } : null;
   }
@@ -259,8 +273,15 @@ export class InventoryService {
     return this.prisma.inventoryBalance.findMany({ where: { locationId } });
   }
 
-  async movementsPage(query: { page: number; pageSize: number; itemId?: string; lotId?: string }) {
+  async movementsPage(query: {
+    page: number;
+    pageSize: number;
+    locationId: string;
+    itemId?: string;
+    lotId?: string;
+  }) {
     const where: Prisma.InventoryMovementWhereInput = {
+      locationId: query.locationId,
       ...(query.itemId ? { itemId: query.itemId } : {}),
       ...(query.lotId ? { lotId: query.lotId } : {}),
     };

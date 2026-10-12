@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   PERMISSION_CODES,
-  ROLE_CODES,
+  SECURITY_ADMIN_PERMISSIONS,
+  SYSTEM_ROLE_CODES,
   WAREHOUSE_SCOPED_PERMISSIONS,
+  type SystemRoleCode,
   type AdminUserDetail,
   type CurrentUser,
   type GoodsReceipt,
@@ -16,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ACCESS_METADATA, type AccessRule } from '../src/identity/access.decorators.js';
 import { bootstrapFirstAdmin } from '../src/identity/bootstrap.js';
 import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
+import { INITIAL_SITE_ID } from './support/sign-in.js';
 import { newBottleItemId, PDF_BYTES } from './support/warehouse-fixtures.js';
 
 /**
@@ -23,7 +26,7 @@ import { newBottleItemId, PDF_BYTES } from './support/warehouse-fixtures.js';
  * ordinary role_permissions rows — a permission added by a later migration fails this test until
  * it is reviewed and granted to ADMIN explicitly.
  */
-const ROLE_MATRIX: Record<RoleCode, readonly string[]> = {
+const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
   ADMIN: [...PERMISSION_CODES],
   WAREHOUSE_OPERATOR: ['inventory:read', 'inventory:receive'],
   WAREHOUSE_SUPERVISOR: [
@@ -91,7 +94,12 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     return `ayvo_session=${token}`;
   }
 
-  async function createUser(roles: RoleCode[], warehouses: string[] = ['MAIN']) {
+  /** A user with roles and access to the given sites (default: the initial site). */
+  async function createUser(
+    roles: RoleCode[],
+    siteIds: string[] = [INITIAL_SITE_ID],
+    warehouseCodes: string[] = [],
+  ) {
     const res = await http()
       .post('/api/admin/identity/users')
       .set('Cookie', adminCookie)
@@ -99,7 +107,8 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
         email: unique('user'),
         displayName: 'Test User',
         roles,
-        warehouseCodes: warehouses,
+        siteIds,
+        warehouseCodes,
         reason: 'test setup',
       })
       .expect(201);
@@ -114,6 +123,12 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     });
     expect(result).toMatchObject({ ok: true });
     adminCookie = await session('owner@ayvo.test');
+    // Other test files may have added sites: the administrator works at the initial one.
+    await http()
+      .post('/api/auth/active-site')
+      .set('Cookie', adminCookie)
+      .send({ siteId: INITIAL_SITE_ID })
+      .expect(200);
   });
   afterAll(() => t?.close());
 
@@ -180,11 +195,23 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
 
     const me = (await http().get('/api/auth/me').set('Cookie', `ayvo_session=${token}`).expect(200))
       .body as CurrentUser;
-    expect(me).toMatchObject({ user: { email: 'owner@ayvo.test' }, roles: ['ADMIN'] });
+    expect(me).toMatchObject({
+      user: { email: 'owner@ayvo.test' },
+      roles: [{ code: 'ADMIN', name: 'Administrátor' }],
+    });
     expect(me.permissions).toEqual([...PERMISSION_CODES].sort());
-    // ADMIN still needs warehouse scopes for warehouse-scoped permissions: the bootstrap grants
-    // every existing warehouse as data.
-    expect(me.scopes.map((x) => [x.type, x.locationCode])).toEqual([['WAREHOUSE', 'MAIN']]);
+    // ADMIN's global site access is an explicit permission evaluated by the server — no scope
+    // rows; with one site it is selected automatically.
+    expect(me.scopes).toEqual([]);
+    expect(me.globalSiteAccess).toBe(true);
+    const initial = me.sites.find((x) => x.id === INITIAL_SITE_ID);
+    expect(initial).toMatchObject({
+      code: 'SITE-1',
+      allWarehouses: true,
+      warehouses: [expect.objectContaining({ code: 'MAIN' })],
+    });
+    // A single site is selected automatically; with several the user chooses.
+    expect(me.activeSiteId).toBe(me.sites.length === 1 ? INITIAL_SITE_ID : null);
     expect(
       await t.prisma.auditEvent.count({
         where: { type: 'LOGIN_SUCCEEDED', targetUserId: me.user.id },
@@ -229,7 +256,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect(absolute.headers.location).toBe('/');
   });
 
-  it('permissions are explicit per route and scoped to the warehouse', async () => {
+  it('permissions are explicit per route and scoped to the site and its warehouse', async () => {
     const operator = await createUser(['WAREHOUSE_OPERATOR']);
     const cookie = await session(operator.email);
     await http().get('/api/admin/inventory/stock').set('Cookie', cookie).expect(200);
@@ -246,12 +273,12 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect((await http().get('/api/admin/identity/users').set('Cookie', cookie)).status).toBe(403);
     expect((await http().get('/api/admin/bottles').set('Cookie', cookie)).status).toBe(403);
 
-    // The same role without the warehouse scope reads nothing in the warehouse.
+    // The same role without site access reads nothing in the warehouse.
     const unscoped = await createUser(['WAREHOUSE_OPERATOR'], []);
     const unscopedCookie = await session(unscoped.email);
-    expect(
-      (await http().get('/api/admin/inventory/stock').set('Cookie', unscopedCookie)).status,
-    ).toBe(403);
+    const refused = await http().get('/api/admin/inventory/stock').set('Cookie', unscopedCookie);
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe('SITE_REQUIRED');
 
     // The hotel role grants nothing internal.
     const hotel = await createUser(['HOTEL_USER']);
@@ -273,8 +300,13 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect(catalogue.filter((p) => p.warehouseScoped).map((p) => p.code)).toEqual(
       [...WAREHOUSE_SCOPED_PERMISSIONS].sort(),
     );
-    const grants = await t.prisma.rolePermission.findMany();
-    for (const role of ROLE_CODES) {
+    expect(catalogue.filter((p) => p.securityAdmin).map((p) => p.code)).toEqual(
+      [...SECURITY_ADMIN_PERMISSIONS].sort(),
+    );
+    const systemRoles = await t.prisma.role.findMany({ where: { isSystem: true } });
+    expect(systemRoles.map((x) => x.code).sort()).toEqual([...SYSTEM_ROLE_CODES].sort());
+    const grants = await t.prisma.rolePermission.findMany({ where: { role: { isSystem: true } } });
+    for (const role of SYSTEM_ROLE_CODES) {
       expect(
         grants
           .filter((g) => g.roleCode === role)
@@ -283,13 +315,29 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
         role,
       ).toEqual([...ROLE_MATRIX[role]].sort());
     }
-    // The catalogue changes only by migration.
+    // System roles and the permission catalogue change only by migration.
     await expect(
       t.prisma.rolePermission.deleteMany({ where: { roleCode: 'ADMIN' } }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/only by migration/);
     await expect(
-      t.prisma.role.update({ where: { code: 'SALES' }, data: { description: 'x' } }),
-    ).rejects.toThrow();
+      t.prisma.rolePermission.create({
+        data: { roleCode: 'SALES', permissionCode: 'inventory:read' },
+      }),
+    ).rejects.toThrow(/only by migration/);
+    await expect(
+      t.prisma.role.update({ where: { code: 'SALES' }, data: { name: 'Prodej' } }),
+    ).rejects.toThrow(/only by migration/);
+    await expect(t.prisma.role.delete({ where: { code: 'HOTEL_USER' } })).rejects.toThrow();
+    await expect(
+      t.prisma.role.create({
+        data: { code: 'SNEAKY', name: 'x', description: '', isSystem: true },
+      }),
+    ).rejects.toThrow(/only by migration/);
+    await expect(
+      t.prisma.permission.create({
+        data: { code: 'inventory:anything', description: 'x', warehouseScoped: false },
+      }),
+    ).rejects.toThrow(/only by migration/);
   });
 
   describe('purchase prices and supplier documents', () => {

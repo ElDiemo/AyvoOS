@@ -1,35 +1,94 @@
-import type { PermissionCode, RoleCode } from '@ayvo/types';
+import type { AccessibleSite, PermissionCode } from '@ayvo/types';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
+import { SitesService, type SiteWithWarehouses } from '../sites/sites.service.js';
+import type { Principal, SiteAccess } from './principal.js';
 
-export interface AccessSnapshot {
-  roles: RoleCode[];
-  permissions: Set<PermissionCode>;
-  warehouseIds: Set<string>;
-  scopes: {
-    id: string;
-    type: string;
-    locationCode: string | null;
-    scopeRef: string | null;
-    grantedAt: Date;
-  }[];
+export type AccessSnapshot = Pick<
+  Principal,
+  'roles' | 'permissions' | 'globalSiteAccess' | 'sites' | 'activeSite' | 'scopes'
+>;
+
+/** The scope rows that decide where a user may act. */
+interface ScopeRow {
+  type: string;
+  siteId: string | null;
+  locationId: string | null;
 }
 
 /**
- * Current roles, permissions and scopes of a user, read from the database on every request —
- * a role change or deactivation applies to the very next request, not when a session renews.
+ * Where a user may act (doc 022): every site with global access, otherwise the sites of open
+ * SITE scopes. Within a site, all its warehouses — unless WAREHOUSE scopes of that site narrow it
+ * to those. A warehouse scope without its site scope grants nothing.
+ */
+export function evaluateSites(
+  sites: readonly SiteWithWarehouses[],
+  global: boolean,
+  scopes: readonly ScopeRow[],
+): SiteAccess[] {
+  const siteIds = new Set(scopes.flatMap((s) => (s.type === 'SITE' && s.siteId ? [s.siteId] : [])));
+  const narrowed = new Set(
+    scopes.flatMap((s) => (s.type === 'WAREHOUSE' && s.locationId ? [s.locationId] : [])),
+  );
+  return sites
+    .filter((site) => global || siteIds.has(site.id))
+    .map((site) => {
+      const own = global ? [] : site.locations.filter((l) => narrowed.has(l.id));
+      const all = own.length === 0;
+      const warehouses = all ? site.locations : own;
+      return {
+        id: site.id,
+        code: site.code,
+        name: site.name,
+        countryCode: site.countryCode,
+        timeZone: site.timeZone,
+        active: site.active,
+        capabilities: site.capabilities,
+        warehouses: warehouses.map((l) => ({ code: l.code, name: l.name })),
+        allWarehouses: all,
+        warehouseIds: new Set(warehouses.map((l) => l.id)),
+      };
+    });
+}
+
+/** The client view of a site access (no internal ids). */
+export function toAccessibleSite(site: SiteAccess): AccessibleSite {
+  return {
+    id: site.id,
+    code: site.code,
+    name: site.name,
+    countryCode: site.countryCode,
+    timeZone: site.timeZone,
+    active: site.active,
+    capabilities: site.capabilities,
+    warehouses: site.warehouses,
+    allWarehouses: site.allWarehouses,
+  };
+}
+
+/**
+ * Current roles, permissions and site access of a user, read from the database on every
+ * request — a role, scope or site change applies to the very next request.
  */
 @Injectable()
 export class AccessService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sites: SitesService,
+  ) {}
 
-  async snapshot(userId: string): Promise<AccessSnapshot> {
-    const [grants, scopes] = await Promise.all([
+  async snapshot(userId: string, sessionSiteId: string | null = null): Promise<AccessSnapshot> {
+    const [grants, scopes, allSites] = await Promise.all([
       this.prisma.userRole.findMany({
-        where: { userId, revokedAt: null },
+        where: { userId, revokedAt: null, role: { active: true } },
         select: {
-          roleCode: true,
-          role: { select: { permissions: { select: { permissionCode: true } } } },
+          role: {
+            select: {
+              code: true,
+              name: true,
+              permissions: { select: { permissionCode: true } },
+            },
+          },
         },
         orderBy: { roleCode: 'asc' },
       }),
@@ -38,25 +97,39 @@ export class AccessService {
         select: {
           id: true,
           type: true,
+          siteId: true,
           locationId: true,
           scopeRef: true,
           grantedAt: true,
-          location: { select: { code: true } },
+          site: { select: { code: true } },
+          location: { select: { code: true, siteId: true, site: { select: { code: true } } } },
         },
         orderBy: { grantedAt: 'asc' },
       }),
+      this.sites.all(),
     ]);
+    const permissions = new Set(
+      grants.flatMap((g) => g.role.permissions.map((p) => p.permissionCode as PermissionCode)),
+    );
+    const globalSiteAccess = permissions.has('sites:all_access');
+    const sites = evaluateSites(allSites, globalSiteAccess, scopes);
+    // The session's choice if still allowed; otherwise the only active site, or the only site
+    // at all (an inactive one stays readable); with several the user chooses.
+    const activeSites = sites.filter((s) => s.active);
+    const activeSite =
+      sites.find((s) => s.id === sessionSiteId) ??
+      (activeSites.length === 1 ? activeSites[0]! : sites.length === 1 ? sites[0]! : null);
     return {
-      roles: grants.map((g) => g.roleCode as RoleCode),
-      permissions: new Set(
-        grants.flatMap((g) => g.role.permissions.map((p) => p.permissionCode as PermissionCode)),
-      ),
-      warehouseIds: new Set(
-        scopes.flatMap((s) => (s.type === 'WAREHOUSE' && s.locationId ? [s.locationId] : [])),
-      ),
+      roles: grants.map((g) => ({ code: g.role.code, name: g.role.name })),
+      permissions,
+      globalSiteAccess,
+      sites,
+      activeSite,
       scopes: scopes.map((s) => ({
         id: s.id,
         type: s.type,
+        siteId: s.siteId ?? s.location?.siteId ?? null,
+        siteCode: s.site?.code ?? s.location?.site.code ?? null,
         locationCode: s.location?.code ?? null,
         scopeRef: s.scopeRef,
         grantedAt: s.grantedAt,

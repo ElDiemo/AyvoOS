@@ -1,5 +1,6 @@
-import type { CurrentUser } from '@ayvo/types';
+import { activeSiteRequestSchema, type ActiveSiteRequest, type CurrentUser } from '@ayvo/types';
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -11,6 +12,9 @@ import {
   Res,
 } from '@nestjs/common';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { AuditService } from '../audit/audit.service.js';
+import { domainError } from '../common/domain-error.js';
+import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ENV, type Env } from '../config/env.js';
 import { Authenticated, Public } from './access.decorators.js';
 import { CurrentPrincipal } from './access.guard.js';
@@ -24,7 +28,9 @@ import {
   SESSION_COOKIE,
 } from './cookies.js';
 import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider.js';
+import { toAccessibleSite } from './access.service.js';
 import type { Principal } from './principal.js';
+import { SessionsService } from './sessions.service.js';
 import { TestIdentityProvider } from './test.provider.js';
 
 function redirect(res: ServerResponse, location: string, cookies: string[] = []): void {
@@ -76,6 +82,8 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly limits: AuthRateLimitService,
+    private readonly sessions: SessionsService,
+    private readonly audit: AuditService,
     @Inject(IDENTITY_PROVIDER) private readonly provider: IdentityProvider,
     @Inject(ENV) private readonly env: Env,
   ) {}
@@ -164,9 +172,14 @@ export class AuthController {
       user: { id: principal.userId, email: principal.email, displayName: principal.displayName },
       roles: principal.roles,
       permissions: [...principal.permissions].sort(),
+      sites: principal.sites.map(toAccessibleSite),
+      activeSiteId: principal.activeSite?.id ?? null,
+      globalSiteAccess: principal.globalSiteAccess,
       scopes: principal.scopes.map((s) => ({
         id: s.id,
         type: s.type as CurrentUser['scopes'][number]['type'],
+        siteId: s.siteId,
+        siteCode: s.siteCode,
         locationCode: s.locationCode,
         scopeRef: s.scopeRef,
         grantedAt: s.grantedAt.toISOString(),
@@ -176,6 +189,34 @@ export class AuthController {
         absoluteExpiresAt: principal.absoluteExpiresAt.toISOString(),
       },
     };
+  }
+
+  /**
+   * Chooses the site this session works at. The id is untrusted input: it is accepted only if
+   * the server's evaluation of the user's scopes (or global access) includes the site.
+   */
+  @Post('active-site')
+  @Authenticated()
+  @HttpCode(200)
+  async activeSite(
+    @CurrentPrincipal() principal: Principal,
+    @Body(new ZodValidationPipe(activeSiteRequestSchema)) body: ActiveSiteRequest,
+    @Res({ passthrough: true }) res: ServerResponse,
+  ): Promise<{ activeSiteId: string }> {
+    const site = principal.sites.find((s) => s.id === body.siteId);
+    if (!site) {
+      await this.audit.record({
+        type: 'ACTIVE_SITE_SELECTED',
+        actorUserId: principal.userId,
+        targetUserId: principal.userId,
+        reason: 'Refused: no access to this site',
+        payload: { requestedSiteId: body.siteId, refused: true },
+      });
+      throw domainError(403, 'SITE_FORBIDDEN', 'You have no access to this site');
+    }
+    await this.sessions.setActiveSite(principal.sessionId, site.id);
+    res.setHeader('Cache-Control', 'no-store');
+    return { activeSiteId: site.id };
   }
 
   /**

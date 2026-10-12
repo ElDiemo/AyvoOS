@@ -1,13 +1,14 @@
 import {
   createUserRequestSchema,
   roleChangeRequestSchema,
+  siteScopeRequestSchema,
   statusChangeRequestSchema,
   warehouseScopeRequestSchema,
   type AdminUserDetail,
   type AdminUserSummary,
   type CreateUserRequest,
-  type RoleCatalog,
   type RoleChangeRequest,
+  type SiteScopeRequest,
   type StatusChangeRequest,
   type WarehouseScopeRequest,
 } from '@ayvo/types';
@@ -17,19 +18,21 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from './access.decorators.js';
 import { CurrentPrincipal } from './access.guard.js';
 import type { Principal } from './principal.js';
-import { UsersService } from './users.service.js';
+import { UsersService, type Actor } from './users.service.js';
 
 const ID = new ParseUUIDPipe();
+const actor = (p: Principal): Actor => ({ userId: p.userId, permissions: p.permissions });
 
 /** User and role administration (ADMIN). Every mutation needs a reason and is audited. */
 @Controller(`${ADMIN_PREFIX}/identity`)
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
-  @Get('roles')
+  /** Sites and their warehouses, for assigning access. */
+  @Get('sites')
   @RequirePermission('identity:users_read')
-  roles(): Promise<RoleCatalog> {
-    return this.users.roleCatalog();
+  sites() {
+    return this.users.sitesForAssignment();
   }
 
   @Get('warehouses')
@@ -50,7 +53,7 @@ export class UsersController {
     @CurrentPrincipal() principal: Principal,
     @Body(new ZodValidationPipe(createUserRequestSchema)) body: CreateUserRequest,
   ): Promise<AdminUserDetail> {
-    return this.users.create(principal.userId, body);
+    return this.users.create(actor(principal), body);
   }
 
   @Get('users/:id')
@@ -67,7 +70,7 @@ export class UsersController {
     @Param('id', ID) id: string,
     @Body(new ZodValidationPipe(roleChangeRequestSchema)) body: RoleChangeRequest,
   ) {
-    return this.users.grantRole(principal.userId, id, body.role, body.reason);
+    return this.users.grantRole(actor(principal), id, body.role, body.reason);
   }
 
   @Post('users/:id/roles/revoke')
@@ -78,7 +81,29 @@ export class UsersController {
     @Param('id', ID) id: string,
     @Body(new ZodValidationPipe(roleChangeRequestSchema)) body: RoleChangeRequest,
   ) {
-    return this.users.revokeRole(principal.userId, id, body.role, body.reason);
+    return this.users.revokeRole(actor(principal), id, body.role, body.reason);
+  }
+
+  @Post('users/:id/sites/grant')
+  @HttpCode(200)
+  @RequirePermission('identity:users_manage')
+  grantSite(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ID) id: string,
+    @Body(new ZodValidationPipe(siteScopeRequestSchema)) body: SiteScopeRequest,
+  ) {
+    return this.users.grantSite(actor(principal), id, body.siteId, body.reason);
+  }
+
+  @Post('users/:id/sites/revoke')
+  @HttpCode(200)
+  @RequirePermission('identity:users_manage')
+  revokeSite(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ID) id: string,
+    @Body(new ZodValidationPipe(siteScopeRequestSchema)) body: SiteScopeRequest,
+  ) {
+    return this.users.revokeSite(actor(principal), id, body.siteId, body.reason);
   }
 
   @Post('users/:id/warehouses/grant')
@@ -89,7 +114,7 @@ export class UsersController {
     @Param('id', ID) id: string,
     @Body(new ZodValidationPipe(warehouseScopeRequestSchema)) body: WarehouseScopeRequest,
   ) {
-    return this.users.grantWarehouse(principal.userId, id, body.warehouseCode, body.reason);
+    return this.users.grantWarehouse(actor(principal), id, body.warehouseCode, body.reason);
   }
 
   @Post('users/:id/warehouses/revoke')
@@ -100,7 +125,7 @@ export class UsersController {
     @Param('id', ID) id: string,
     @Body(new ZodValidationPipe(warehouseScopeRequestSchema)) body: WarehouseScopeRequest,
   ) {
-    return this.users.revokeWarehouse(principal.userId, id, body.warehouseCode, body.reason);
+    return this.users.revokeWarehouse(actor(principal), id, body.warehouseCode, body.reason);
   }
 
   @Post('users/:id/deactivate')
@@ -111,7 +136,7 @@ export class UsersController {
     @Param('id', ID) id: string,
     @Body(new ZodValidationPipe(statusChangeRequestSchema)) body: StatusChangeRequest,
   ) {
-    return this.users.deactivate(principal.userId, id, body.reason);
+    return this.users.deactivate(actor(principal), id, body.reason);
   }
 
   @Post('users/:id/reactivate')
@@ -122,6 +147,6 @@ export class UsersController {
     @Param('id', ID) id: string,
     @Body(new ZodValidationPipe(statusChangeRequestSchema)) body: StatusChangeRequest,
   ) {
-    return this.users.reactivate(principal.userId, id, body.reason);
+    return this.users.reactivate(actor(principal), id, body.reason);
   }
 }

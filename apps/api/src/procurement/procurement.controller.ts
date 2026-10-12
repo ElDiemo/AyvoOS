@@ -39,7 +39,8 @@ import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ProcurementService } from './procurement.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
-import { CurrentPrincipal } from '../identity/access.guard.js';
+import { CurrentPrincipal, OperationalWarehouse } from '../identity/access.guard.js';
+import type { WarehouseContext } from '../inventory/warehouse-context.js';
 import type { Principal } from '../identity/principal.js';
 import { receiptForViewer } from './receipt-visibility.js';
 
@@ -118,8 +119,9 @@ export class ProcurementController {
   @Get('goods-receipts')
   receipts(
     @Query(new ZodValidationPipe(goodsReceiptListQuerySchema)) query: GoodsReceiptListQuery,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<GoodsReceiptPage> {
-    return this.procurement.listReceipts(query);
+    return this.procurement.listReceipts(query, warehouse.siteId);
   }
 
   @RequirePermission('inventory:receive')
@@ -127,8 +129,12 @@ export class ProcurementController {
   async createReceipt(
     @Body(new ZodValidationPipe(createGoodsReceiptRequestSchema)) body: CreateGoodsReceiptRequest,
     @CurrentPrincipal() principal: Principal,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<GoodsReceipt> {
-    return receiptForViewer(await this.procurement.createReceipt(body), principal.permissions);
+    return receiptForViewer(
+      await this.procurement.createReceipt(body, warehouse),
+      principal.permissions,
+    );
   }
 
   @RequirePermission('inventory:read')
@@ -136,8 +142,12 @@ export class ProcurementController {
   async receipt(
     @Param('code', RECEIPT_CODE) code: string,
     @CurrentPrincipal() principal: Principal,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<GoodsReceipt> {
-    return receiptForViewer(await this.procurement.getReceipt(code), principal.permissions);
+    return receiptForViewer(
+      await this.procurement.getReceipt(code, warehouse.siteId),
+      principal.permissions,
+    );
   }
 
   /** Append-only: adds a document (e.g. the invoice that arrived after the goods). */
@@ -148,8 +158,12 @@ export class ProcurementController {
     @Param('code', RECEIPT_CODE) code: string,
     @Body(new ZodValidationPipe(linkReceiptDocumentRequestSchema)) body: LinkReceiptDocumentRequest,
     @CurrentPrincipal() principal: Principal,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<GoodsReceipt> {
-    return receiptForViewer(await this.procurement.linkDocument(code, body), principal.permissions);
+    return receiptForViewer(
+      await this.procurement.linkDocument(code, body, warehouse.siteId),
+      principal.permissions,
+    );
   }
 
   /** Compensating correction of a receipt line (warehouse manager; reason required). */
@@ -161,7 +175,11 @@ export class ProcurementController {
     @Body(new ZodValidationPipe(createReceiptCorrectionRequestSchema))
     body: CreateReceiptCorrectionRequest,
     @CurrentPrincipal() principal: Principal,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<GoodsReceipt> {
-    return receiptForViewer(await this.procurement.correctLine(code, body), principal.permissions);
+    return receiptForViewer(
+      await this.procurement.correctLine(code, body, warehouse.siteId),
+      principal.permissions,
+    );
   }
 }

@@ -2,14 +2,16 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ENV, type Env } from '../config/env.js';
 import { InventoryModule } from '../inventory/inventory.module.js';
+import { SitesModule } from '../sites/sites.module.js';
 import { AccessGuard } from './access.guard.js';
 import { AccessService } from './access.service.js';
-import { AuditService } from './audit.service.js';
 import { AuthController } from './auth.controller.js';
 import { AuthRateLimitService } from './auth-rate-limit.service.js';
 import { AuthService } from './auth.service.js';
 import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider.js';
 import { PrincipalResolver } from './principal-resolver.js';
+import { RolesController } from './roles.controller.js';
+import { RolesService } from './roles.service.js';
 import { SessionsService } from './sessions.service.js';
 import { TestIdentityProvider } from './test.provider.js';
 import { UsersController } from './users.controller.js';
@@ -22,11 +24,11 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
  * the global access guard — every route of every module is denied unless it declares access.
  */
 @Module({
-  imports: [InventoryModule],
-  controllers: [AuthController, UsersController],
+  imports: [InventoryModule, SitesModule],
+  controllers: [AuthController, UsersController, RolesController],
   providers: [
-    AuditService,
     AccessService,
+    RolesService,
     SessionsService,
     PrincipalResolver,
     AuthService,
@@ -47,6 +49,6 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
     },
     { provide: APP_GUARD, useClass: AccessGuard },
   ],
-  exports: [AccessService, AuditService],
+  exports: [AccessService],
 })
 export class IdentityModule {}

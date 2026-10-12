@@ -7,9 +7,10 @@ import { inject } from 'vitest';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { ENV, loadEnv, type Env } from '../../src/config/env.js';
-import { PERMISSION_CODES, ROLE_CODES } from '@ayvo/types';
+import { PERMISSION_CODES, SYSTEM_ROLE_CODES } from '@ayvo/types';
 import { PrismaService } from '../../src/database/prisma.service.js';
 import type { Principal } from '../../src/identity/principal.js';
+import { evaluateSites } from '../../src/identity/access.service.js';
 import { PrincipalResolver } from '../../src/identity/principal-resolver.js';
 import {
   LabelPdfRenderer,
@@ -74,7 +75,8 @@ export interface TestApp {
 
 /**
  * Domain tests run as a test "superuser": the request resolver is replaced IN THE TEST MODULE
- * ONLY by one that returns a principal with every permission and the MAIN warehouse scope. The
+ * ONLY by one that returns a principal with every permission, global site access and the site of
+ * the MAIN warehouse as its active site. The
  * global access guard still runs and still enforces each route's declared rule. Identity tests
  * use `auth: 'real'` (sessions, cookies, the fake provider) instead.
  */
@@ -90,17 +92,30 @@ class SuperuserResolver {
         INSERT INTO "users" ("email", "display_name") VALUES (${SUPERUSER_EMAIL}, 'Test superuser')
         ON CONFLICT ("email") DO NOTHING`;
       const user = await this.prisma.user.findUniqueOrThrow({ where: { email: SUPERUSER_EMAIL } });
+      // Global site access (like ADMIN), working at the site of the MAIN warehouse.
       const main = await this.prisma.inventoryLocation.findUniqueOrThrow({
         where: { code: 'MAIN' },
       });
+      const sites = evaluateSites(
+        await this.prisma.site.findMany({
+          include: {
+            locations: { select: { id: true, code: true, name: true, isSiteDefault: true } },
+          },
+          orderBy: { code: 'asc' },
+        }),
+        true,
+        [],
+      );
       return {
         userId: user.id,
         email: user.email,
         displayName: user.displayName,
         sessionId: '00000000-0000-4000-8000-000000000000',
-        roles: [...ROLE_CODES],
+        roles: SYSTEM_ROLE_CODES.map((code) => ({ code, name: code })),
         permissions: new Set(PERMISSION_CODES),
-        warehouseIds: new Set([main.id]),
+        globalSiteAccess: true,
+        sites,
+        activeSite: sites.find((site) => site.id === main.siteId)!,
         scopes: [],
         idleExpiresAt: new Date(Date.now() + 3_600_000),
         absoluteExpiresAt: new Date(Date.now() + 3_600_000),

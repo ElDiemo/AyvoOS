@@ -21,6 +21,7 @@ import { allocateSerials } from '../database/code-counters.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, type Supplier, type SupplierDocument } from '../generated/prisma/client.js';
+import type { WarehouseContext } from '../inventory/warehouse-context.js';
 import { InventoryService, type NewMovement } from '../inventory/inventory.service.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 
@@ -209,7 +210,11 @@ export class ProcurementService {
 
   // --- goods receipts --------------------------------------------------------------------------
 
-  async createReceipt(input: CreateGoodsReceiptRequest): Promise<GoodsReceipt> {
+  /** Receives goods into the warehouse of the request's site (doc 022). */
+  async createReceipt(
+    input: CreateGoodsReceiptRequest,
+    warehouse: WarehouseContext,
+  ): Promise<GoodsReceipt> {
     const { result } = await this.operations.run(
       'GOODS_RECEIPT',
       input.requestId,
@@ -259,12 +264,13 @@ export class ProcurementService {
         const itemById = new Map(items.map((i) => [i.id, i]));
         const serial = (await allocateSerials(tx, 'goods_receipt', 1)).first;
         const code = formatCode(CODE_PREFIX.goodsReceipt, serial);
-        const location = await this.inventory.mainLocation(tx);
+        const location = { id: warehouse.locationId };
 
         const receipt = await tx.goodsReceipt.create({
           data: {
             serial,
             code,
+            siteId: warehouse.siteId,
             type: 'PURCHASE',
             supplierId: supplier.id,
             supplierReference: input.supplierReference,
@@ -345,12 +351,17 @@ export class ProcurementService {
         return { receiptCode: code };
       },
     );
-    return this.getReceipt(result.receiptCode);
+    // A replay from another site finds no receipt there (404) — nothing crosses sites.
+    return this.getReceipt(result.receiptCode, warehouse.siteId);
   }
 
-  async listReceipts(query: GoodsReceiptListQuery): Promise<GoodsReceiptPage> {
-    const where: Prisma.GoodsReceiptWhereInput =
-      query.invoice === 'pending' ? { documents: { none: { document: { kind: 'INVOICE' } } } } : {};
+  async listReceipts(query: GoodsReceiptListQuery, siteId: string): Promise<GoodsReceiptPage> {
+    const where: Prisma.GoodsReceiptWhereInput = {
+      siteId,
+      ...(query.invoice === 'pending'
+        ? { documents: { none: { document: { kind: 'INVOICE' } } } }
+        : {}),
+    };
     const [total, receipts] = await this.prisma.$transaction([
       this.prisma.goodsReceipt.count({ where }),
       this.prisma.goodsReceipt.findMany({
@@ -380,28 +391,38 @@ export class ProcurementService {
     };
   }
 
-  async getReceipt(code: string): Promise<GoodsReceipt> {
-    return toReceiptDto(await this.findReceipt(code, this.prisma));
+  /** A receipt of the given site; a receipt of another site is "not found" (doc 022). */
+  async getReceipt(code: string, siteId: string): Promise<GoodsReceipt> {
+    return toReceiptDto(await this.findReceipt(code, siteId, this.prisma));
   }
 
-  private async findReceipt(code: string, db: Prisma.TransactionClient): Promise<ReceiptRecord> {
+  private async findReceipt(
+    code: string,
+    siteId: string,
+    db: Prisma.TransactionClient,
+  ): Promise<ReceiptRecord> {
     const serial = parseCodeSerial(CODE_PREFIX.goodsReceipt, code);
     const receipt =
       serial === null
         ? null
         : await db.goodsReceipt.findUnique({ where: { serial }, include: receiptInclude });
-    if (!receipt) throw new NotFoundException('Goods receipt not found');
+    if (!receipt || receipt.siteId !== siteId)
+      throw new NotFoundException('Goods receipt not found');
     return receipt;
   }
 
   /** Adds a document to a confirmed receipt (e.g. the invoice arriving after the goods). */
-  async linkDocument(code: string, input: LinkReceiptDocumentRequest): Promise<GoodsReceipt> {
+  async linkDocument(
+    code: string,
+    input: LinkReceiptDocumentRequest,
+    siteId: string,
+  ): Promise<GoodsReceipt> {
     await this.operations.run(
       'RECEIPT_DOCUMENT_LINK',
       input.requestId,
       { code, ...input },
       async (tx) => {
-        const receipt = await this.findReceipt(code, tx);
+        const receipt = await this.findReceipt(code, siteId, tx);
         const document = await tx.supplierDocument.findUnique({ where: { id: input.documentId } });
         if (!document || document.supplierId !== receipt.supplierId) {
           throw domainError(
@@ -423,20 +444,24 @@ export class ProcurementService {
         return { receiptCode: receipt.code };
       },
     );
-    return this.getReceipt(code);
+    return this.getReceipt(code, siteId);
   }
 
   /**
    * Compensating correction of one receipt line (warehouse-manager action, doc 018). Lock order:
    * request → receipt line → balance. Never below zero for the line or the stock.
    */
-  async correctLine(code: string, input: CreateReceiptCorrectionRequest): Promise<GoodsReceipt> {
+  async correctLine(
+    code: string,
+    input: CreateReceiptCorrectionRequest,
+    siteId: string,
+  ): Promise<GoodsReceipt> {
     await this.operations.run(
       'RECEIPT_CORRECTION',
       input.requestId,
       { code, ...input },
       async (tx) => {
-        const receipt = await this.findReceipt(code, tx);
+        const receipt = await this.findReceipt(code, siteId, tx);
         const line = receipt.lines.find((l) => l.lineNo === input.lineNo);
         if (!line)
           throw domainError(422, 'INVALID_LINE', `The receipt has no line ${input.lineNo}`);
@@ -455,7 +480,13 @@ export class ProcurementService {
             'The correction would make the receipt line negative',
           );
         }
-        const location = await this.inventory.mainLocation(tx);
+        // The correction acts where the goods were received.
+        const received = await tx.inventoryMovement.findFirst({
+          where: { receiptLineId: line.id },
+          select: { locationId: true },
+        });
+        if (!received) throw new Error('Receipt line without its receipt movement');
+        const location = { id: received.locationId };
         if (delta.isNegative()) {
           const onHand = await this.inventory.lockBalance(tx, {
             itemId: line.itemId,
@@ -495,7 +526,7 @@ export class ProcurementService {
         return { receiptCode: receipt.code };
       },
     );
-    return this.getReceipt(code);
+    return this.getReceipt(code, siteId);
   }
 
   // --- read helpers for other modules ----------------------------------------------------------

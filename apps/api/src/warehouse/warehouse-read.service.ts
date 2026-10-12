@@ -14,12 +14,9 @@ import { BottlesService } from '../assets/bottles.service.js';
 import { formatQuantity, quantity } from '../common/quantity.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
-import {
-  InventoryService,
-  MAIN_LOCATION_CODE,
-  type InventoryItemRecord,
-} from '../inventory/inventory.service.js';
+import { InventoryService, type InventoryItemRecord } from '../inventory/inventory.service.js';
 import { LabelPrintJobsService } from '../label-production/label-print-jobs.service.js';
+import type { WarehouseContext } from '../inventory/warehouse-context.js';
 import { ProcurementService } from '../procurement/procurement.service.js';
 
 /**
@@ -54,8 +51,9 @@ export class WarehouseReadService {
     return item;
   }
 
-  async stock(): Promise<StockOverview> {
-    const location = await this.inventory.mainLocation();
+  /** Stock of the warehouse of the request's site (doc 022). */
+  async stock(warehouse: WarehouseContext): Promise<StockOverview> {
+    const location = await this.inventory.getLocation(warehouse.locationId);
     const [items, balances] = await Promise.all([
       this.inventory.listItems(),
       this.inventory.balances(location.id),
@@ -95,8 +93,8 @@ export class WarehouseReadService {
    * Planning view of the same numbers (SALES, doc 021): item, available, reserved, low stock.
    * Built as an explicit allow-list so no lot, supplier or other operational field leaks.
    */
-  async stockSummary(): Promise<StockSummary> {
-    const overview = await this.stock();
+  async stockSummary(warehouse: WarehouseContext): Promise<StockSummary> {
+    const overview = await this.stock(warehouse);
     return {
       location: overview.location,
       items: overview.items.map((s) => ({
@@ -108,19 +106,29 @@ export class WarehouseReadService {
     };
   }
 
-  async lots(itemCode: string, onlyAvailable: boolean): Promise<InventoryLot[]> {
+  async lots(
+    itemCode: string,
+    onlyAvailable: boolean,
+    warehouse: WarehouseContext,
+  ): Promise<InventoryLot[]> {
     const item = await this.inventory.getItemByCode(itemCode);
-    const location = await this.inventory.mainLocation();
-    const lots = await this.inventory.lotsWithStock(item.id, location.id, onlyAvailable);
+    const lots = await this.inventory.lotsWithStock(item.id, warehouse.locationId, onlyAvailable);
     const names = await this.procurement.supplierNames(
       lots.flatMap(({ lot }) => lot.supplierId ?? []),
     );
     return lots.map(({ lot, onHand }) => toLotDto(lot, onHand, names));
   }
 
-  async movements(query: MovementListQuery): Promise<InventoryMovementPage> {
+  async movements(
+    query: MovementListQuery,
+    warehouse: WarehouseContext,
+  ): Promise<InventoryMovementPage> {
     const itemId = query.item ? (await this.inventory.getItemByCode(query.item)).id : undefined;
-    const page = await this.inventory.movementsPage({ ...query, itemId });
+    const page = await this.inventory.movementsPage({
+      ...query,
+      itemId,
+      locationId: warehouse.locationId,
+    });
     const [sources, bottles] = await Promise.all([
       this.procurement.describeSources(
         page.items.flatMap((m) => m.receiptLineId ?? []),
@@ -285,5 +293,3 @@ function toLotDto(
     createdAt: lot.createdAt.toISOString(),
   };
 }
-
-export { MAIN_LOCATION_CODE };

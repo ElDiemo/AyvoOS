@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../database/prisma.service.js';
-import { AuditService } from './audit.service.js';
+import { AuditService } from '../audit/audit.service.js';
 import { pkceChallenge, randomToken, sha256Hex } from './crypto.js';
 import {
   IDENTITY_PROVIDER,

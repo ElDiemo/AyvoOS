@@ -27,7 +27,7 @@ export class PrincipalResolver {
     if (lookup.kind === 'none') return { kind: 'anonymous' };
     if (lookup.kind === 'expired') return { kind: 'expired' };
     if (lookup.kind === 'inactive') return { kind: 'inactive' };
-    const snapshot = await this.access.snapshot(lookup.user.id);
+    const snapshot = await this.access.snapshot(lookup.user.id, lookup.activeSiteId);
     return {
       kind: 'principal',
       principal: {

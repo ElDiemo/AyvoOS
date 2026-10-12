@@ -7,6 +7,7 @@ import { classifyScannedQr } from '../common/qr-policy.js';
 import { ENV, type Env } from '../config/env.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { byLockOrder, InventoryService } from '../inventory/inventory.service.js';
+import type { WarehouseContext } from '../inventory/warehouse-context.js';
 import { LabelPrintJobsService } from '../label-production/label-print-jobs.service.js';
 
 interface StoredOutcome {
@@ -36,7 +37,11 @@ export class LabelApplicationService {
     private readonly inventory: InventoryService,
   ) {}
 
-  async apply(request: LabelApplicationRequest): Promise<LabelApplicationResult> {
+  /** Consumes the new bottle from the warehouse of the request's site (doc 022). */
+  async apply(
+    request: LabelApplicationRequest,
+    warehouse: WarehouseContext,
+  ): Promise<LabelApplicationResult> {
     const scan = classifyScannedQr(request.scannedValue, this.env.PUBLIC_QR_BASE_URL);
     if (scan.kind === 'NOT_AYVO_QR') {
       throw domainError(422, 'NOT_AYVO_QR', 'This is not an AYVO bottle label of this environment');
@@ -91,7 +96,7 @@ export class LabelApplicationService {
           );
         }
 
-        const location = await this.inventory.mainLocation(tx);
+        const location = { id: warehouse.locationId };
         const consumption = bom.lines
           .map((line) => ({
             line,
@@ -133,18 +138,19 @@ export class LabelApplicationService {
         return { outcome: 'APPLIED', bottleId: bottle.id, eventId };
       },
     );
-    return this.toResult(result, replayed, request.lotId);
+    return this.toResult(result, replayed, request.lotId, warehouse.locationId);
   }
 
   private async toResult(
     stored: StoredOutcome,
     replayed: boolean,
     selectedLotId: string,
+    locationId: string,
   ): Promise<LabelApplicationResult> {
     const [bottle, movements, selected] = await Promise.all([
       this.bottles.statusAndCode(stored.bottleId),
       this.inventory.movementsForBottleEvents([stored.eventId]),
-      this.inventory.lotOnHand(selectedLotId),
+      this.inventory.lotOnHand(selectedLotId, locationId),
     ]);
     const consumed = movements.find((m) => m.lot)?.lot;
     const event = await this.bottles.labelAppliedEvent(stored.bottleId);

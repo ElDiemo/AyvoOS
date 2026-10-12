@@ -12,6 +12,7 @@ export type SessionLookup =
       kind: 'active';
       sessionId: string;
       user: { id: string; email: string; displayName: string };
+      activeSiteId: string | null;
       idleExpiresAt: Date;
       absoluteExpiresAt: Date;
     };
@@ -96,9 +97,18 @@ export class SessionsService {
         email: session.user.email,
         displayName: session.user.displayName,
       },
+      activeSiteId: session.activeSiteId,
       idleExpiresAt,
       absoluteExpiresAt: session.absoluteExpiresAt,
     };
+  }
+
+  /** Remembers the site this session works at (the caller has authorized it). */
+  setActiveSite(sessionId: string, siteId: string) {
+    return this.prisma.userSession.updateMany({
+      where: { id: sessionId, revokedAt: null },
+      data: { activeSiteId: siteId },
+    });
   }
 
   async revoke(sessionId: string, reason: string, db: Prisma.TransactionClient = this.prisma) {

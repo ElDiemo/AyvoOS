@@ -22,6 +22,8 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { LabelApplicationService } from './label-application.service.js';
 import { WarehouseReadService } from './warehouse-read.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
+import { OperationalWarehouse } from '../identity/access.guard.js';
+import type { WarehouseContext } from '../inventory/warehouse-context.js';
 
 const ITEM_CODE = new ZodValidationPipe(inventoryItemCodeSchema);
 const lotQuerySchema = z.object({
@@ -43,8 +45,9 @@ export class WarehouseController {
   @HttpCode(200)
   apply(
     @Body(new ZodValidationPipe(labelApplicationRequestSchema)) body: LabelApplicationRequest,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<LabelApplicationResult> {
-    return this.labels.apply(body);
+    return this.labels.apply(body, warehouse);
   }
 
   @RequirePermission('production:read')
@@ -79,30 +82,32 @@ export class WarehouseController {
 
   @RequirePermission('inventory:read')
   @Get('inventory/stock')
-  stock(): Promise<StockOverview> {
-    return this.read.stock();
+  stock(@OperationalWarehouse() warehouse: WarehouseContext): Promise<StockOverview> {
+    return this.read.stock(warehouse);
   }
 
   /** Read-only availability for planning (SALES); no operational, supplier or cost details. */
   @RequirePermission('inventory:stock_summary')
   @Get('inventory/stock-summary')
-  stockSummary(): Promise<StockSummary> {
-    return this.read.stockSummary();
+  stockSummary(@OperationalWarehouse() warehouse: WarehouseContext): Promise<StockSummary> {
+    return this.read.stockSummary(warehouse);
   }
 
   @RequirePermission('inventory:read')
   @Get('inventory/lots')
   lots(
     @Query(new ZodValidationPipe(lotQuerySchema)) q: z.infer<typeof lotQuerySchema>,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<InventoryLot[]> {
-    return this.read.lots(q.item, q.available === 'true');
+    return this.read.lots(q.item, q.available === 'true', warehouse);
   }
 
   @RequirePermission('inventory:read')
   @Get('inventory/movements')
   movements(
     @Query(new ZodValidationPipe(movementListQuerySchema)) query: MovementListQuery,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<InventoryMovementPage> {
-    return this.read.movements(query);
+    return this.read.movements(query, warehouse);
   }
 }

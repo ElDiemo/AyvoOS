@@ -7,9 +7,8 @@ export type BootstrapResult =
 /**
  * One-time bootstrap of the first administrator (ADR 0022). The database allows a single
  * `identity_bootstrap` row ever, so a second run fails even if this check were bypassed. ADMIN
- * holds every permission through role_permissions; warehouse-scoped permissions still need a
- * warehouse scope, so the first administrator is granted every existing warehouse (as data —
- * the guard evaluates scopes as for any other user).
+ * holds every permission through role_permissions, including `sites:all_access` — the explicit
+ * global site scope the guard evaluates — so no per-site scope rows are needed.
  */
 export function bootstrapFirstAdmin(
   prisma: PrismaClient,
@@ -33,21 +32,13 @@ export function bootstrapFirstAdmin(
         grantReason: 'Bootstrap of the first administrator',
       },
     });
-    // A CLI outside the Nest container: reads the location catalogue directly (read-only).
-    const warehouses = await tx.inventoryLocation.findMany({
-      select: { id: true, code: true },
-      orderBy: { code: 'asc' },
-    });
-    for (const w of warehouses) {
-      await tx.userScope.create({ data: { userId: user.id, type: 'WAREHOUSE', locationId: w.id } });
-    }
     await tx.identityBootstrap.create({ data: { userId: user.id, email: user.email } });
     await tx.auditEvent.create({
       data: {
         type: 'ADMIN_BOOTSTRAPPED',
         targetUserId: user.id,
         reason: 'Bootstrap of the first administrator',
-        payload: { email: user.email, warehouses: warehouses.map((w) => w.code) },
+        payload: { email: user.email },
       },
     });
     return { ok: true, userId: user.id, email: user.email };
