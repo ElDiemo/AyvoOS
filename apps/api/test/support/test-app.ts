@@ -175,8 +175,8 @@ export async function createTestApp(
     // Local storage directly: the real factory refuses to run with APP_ENV=production.
     .overrideProvider(FILE_STORAGE)
     .useValue(storage);
-  if ((options.redis ?? 'stub') === 'stub') {
-    // No Redis client: the sign-in rate limiter fails open (its own tests use the real one).
+  // Sign-in needs the rate limiter's Redis (it fails closed); superuser apps never sign in.
+  if ((options.redis ?? (options.auth === 'real' ? 'real' : 'stub')) === 'stub') {
     builder = builder
       .overrideProvider(RedisService)
       .useValue({ ping: () => Promise.resolve('PONG') });

@@ -4,6 +4,14 @@ import { PrismaService } from '../database/prisma.service.js';
 import { SitesService, type SiteWithWarehouses } from '../sites/sites.service.js';
 import type { Principal, SiteAccess } from './principal.js';
 
+export interface PermissionScope {
+  /** Needs the session's active site; its data is filtered by that site. */
+  site: boolean;
+  /** Also needs access to the active site's warehouse. */
+  warehouse: boolean;
+  capability: 'WAREHOUSE' | 'PRODUCTION' | 'RETURNS' | null;
+}
+
 export type AccessSnapshot = Pick<
   Principal,
   'roles' | 'permissions' | 'globalSiteAccess' | 'sites' | 'activeSite' | 'scopes'
@@ -137,12 +145,29 @@ export class AccessService {
     };
   }
 
-  /** Which catalogue permissions need a warehouse scope (cached: the catalogue changes only by migration). */
-  private scoped: Promise<Set<PermissionCode>> | null = null;
-  warehouseScopedPermissions(): Promise<Set<PermissionCode>> {
+  /**
+   * Where each permission applies (cached: the catalogue changes only by migration): bound to the
+   * active site, additionally to its warehouse, and the site capability it needs.
+   */
+  private scoped: Promise<Map<PermissionCode, PermissionScope>> | null = null;
+  permissionScopes(): Promise<Map<PermissionCode, PermissionScope>> {
     this.scoped ??= this.prisma.permission
-      .findMany({ where: { warehouseScoped: true }, select: { code: true } })
-      .then((rows) => new Set(rows.map((r) => r.code as PermissionCode)))
+      .findMany({
+        select: { code: true, siteScoped: true, warehouseScoped: true, siteCapability: true },
+      })
+      .then(
+        (rows) =>
+          new Map(
+            rows.map((r) => [
+              r.code as PermissionCode,
+              {
+                site: r.siteScoped || r.warehouseScoped,
+                warehouse: r.warehouseScoped,
+                capability: r.siteCapability,
+              },
+            ]),
+          ),
+      )
       .catch((error: unknown) => {
         this.scoped = null; // retry on the next request instead of caching a failure
         throw error;

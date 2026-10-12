@@ -1,6 +1,6 @@
 import type { AccessibleSite, PermissionCode, RoleCode } from '@ayvo/types';
 import type { IncomingMessage } from 'node:http';
-import type { WarehouseContext } from '../inventory/warehouse-context.js';
+import type { SiteContext, WarehouseContext } from '../inventory/warehouse-context.js';
 
 /** One site the principal may access, with the warehouse ids it may act on there. */
 export interface SiteAccess extends AccessibleSite {
@@ -39,4 +39,6 @@ export type RequestWithPrincipal = IncomingMessage & {
   ayvoPrincipal?: Principal;
   /** Set by the guard on warehouse-scoped routes: where the request acts. */
   ayvoWarehouse?: WarehouseContext;
+  /** Set by the guard on site- and warehouse-scoped routes: the authorized active site. */
+  ayvoSite?: SiteContext;
 };

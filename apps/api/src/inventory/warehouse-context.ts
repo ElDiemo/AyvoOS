@@ -9,3 +9,9 @@ export interface WarehouseContext {
   locationId: string;
   locationCode: string;
 }
+
+/** The active site a site-scoped request acts at (authorized by the guard, doc 022). */
+export interface SiteContext {
+  siteId: string;
+  siteCode: string;
+}

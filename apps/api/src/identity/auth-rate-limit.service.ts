@@ -9,14 +9,16 @@ export type AuthBucket = 'login' | 'callback' | 'callback_failure';
 export interface RateDecision {
   allowed: boolean;
   retryAfterSeconds: number;
+  /** The store could not decide: sign-in is refused (503), never left unlimited. */
+  unavailable?: boolean;
 }
 
 /**
  * Rate limits of the sign-in routes (doc 021 §5b), per client IP, in Redis so that every API
  * instance shares the counters (ADR 0010: Redis is non-authoritative — counters only). Fixed
- * window: the first hit starts the window, the counter disappears with it. If Redis is
- * unavailable the request is allowed and the failure logged: the identity provider and the
- * one-time state/PKCE checks still protect sign-in, and an outage must not lock everyone out.
+ * window: the first hit starts the window, the counter disappears with it. If Redis cannot give a reliable answer, NEW sign-ins are refused with 503 (fail closed —
+ * rate limiting is never silently switched off); established AYVO sessions live in PostgreSQL and
+ * keep working. Failures are logged without addresses, credentials or tokens.
  */
 @Injectable()
 export class AuthRateLimitService {
@@ -60,8 +62,7 @@ export class AuthRateLimitService {
     const key = AuthRateLimitService.key(bucket, ip);
     const windowMs = this.env.AUTH_RATE_LIMIT_WINDOW_SECONDS * 1000;
     try {
-      const client = this.redis.client;
-      if (client.status === 'wait') await client.connect();
+      const client = await this.redis.ready();
       let current: number;
       let ttl: number;
       if (count) {
@@ -78,9 +79,9 @@ export class AuthRateLimitService {
       return { allowed: !exceeded, retryAfterSeconds: Math.max(1, Math.ceil(ttl / 1000)) };
     } catch (error) {
       this.logger.error(
-        `Rate limit store unavailable (${bucket}); request allowed: ${(error as Error).message}`,
+        `Sign-in rate limit store unavailable (${bucket}): ${(error as Error).name}; sign-in refused`,
       );
-      return { allowed: true, retryAfterSeconds: 0 };
+      return { allowed: false, retryAfterSeconds: 30, unavailable: true };
     }
   }
 }

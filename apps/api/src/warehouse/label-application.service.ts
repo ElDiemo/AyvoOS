@@ -64,6 +64,10 @@ export class LabelApplicationService {
 
         const bottle = await this.bottles.findByPublicToken(tx, scan.token);
         if (!bottle) throw domainError(422, 'UNKNOWN_LABEL', 'No bottle has this label');
+        // A bottle consumes stock only at its own site; no implicit transfer (doc 022 §6).
+        if (bottle.siteId !== warehouse.siteId) {
+          throw domainError(422, 'BOTTLE_OF_ANOTHER_SITE', 'This bottle belongs to another site');
+        }
         // The session's label run: a bottle of another series is never labelled here. The series
         // of a bottle is immutable, so no lock is needed for this check.
         if (bottle.creationBatch.code !== request.seriesCode) {

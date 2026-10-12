@@ -193,8 +193,8 @@ export class WarehouseReadService {
     }));
   }
 
-  async physical(code: string): Promise<BottlePhysical> {
-    const bottle = await this.bottles.physicalByCode(code);
+  async physical(code: string, siteId: string): Promise<BottlePhysical> {
+    const bottle = await this.bottles.physicalByCode(code, siteId);
     const event = bottle.events[0];
     const jobCodes = await this.printJobs.codesByIds(
       bottle.components.flatMap((c) => c.printJobId ?? []),

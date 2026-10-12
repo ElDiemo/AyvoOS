@@ -146,16 +146,37 @@ describe.skipIf(!hasDatabase)('sign-in rate limiting', () => {
     }
   });
 
-  it('an unavailable rate-limit store does not lock everyone out', async () => {
+  it('without Redis new sign-ins pause with 503; signed-in sessions keep working', async () => {
+    // A session established while Redis was available (sessions live in PostgreSQL).
+    const signedIn = await signIn(ip());
+    const cookie = `ayvo_session=${/ayvo_session=([^;]+)/.exec(String(signedIn.headers['set-cookie']))![1]}`;
     const noRedis = await createTestApp(
-      { REDIS_URL: 'redis://127.0.0.1:1', AUTH_RATE_LIMIT_LOGIN_MAX: '1' },
+      { REDIS_URL: 'redis://127.0.0.1:1' },
       {},
       { auth: 'real', redis: 'real' },
     );
     try {
-      for (let i = 0; i < 3; i++) {
-        await request(noRedis.app.getHttpServer()).get('/api/auth/login').expect(302);
-      }
+      const http2 = () => request(noRedis.app.getHttpServer());
+      const login = await http2().get('/api/auth/login').set('Accept', 'application/json');
+      expect(login.status).toBe(503);
+      expect(login.body).toEqual({
+        statusCode: 503,
+        code: 'AUTH_UNAVAILABLE',
+        message: 'Sign-in is temporarily unavailable. Try again later.',
+      });
+      expect(login.headers['set-cookie']).toBeUndefined();
+      const page = await http2().get('/api/auth/login').set('Accept', 'text/html');
+      expect(page.status).toBe(503);
+      expect(page.text).toContain('Přihlášení je dočasně nedostupné');
+      // The callback is refused before the one-time state is looked at.
+      const callback = await http2().get('/api/auth/callback').query({ code: 'x', state: 'y' });
+      expect(callback.status).toBe(503);
+      // Rate limiting was not switched off: nothing was counted as allowed.
+      for (let i = 0; i < 3; i++) expect((await http2().get('/api/auth/login')).status).toBe(503);
+      // Established sessions are not affected by the outage.
+      const me = await http2().get('/api/auth/me').set('Cookie', cookie);
+      expect(me.status).toBe(200);
+      expect(me.body.user.email).toBe(email);
     } finally {
       await noRedis.close();
     }

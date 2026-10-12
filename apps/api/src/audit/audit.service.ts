@@ -26,7 +26,9 @@ export type AuditType =
   | 'SITE_UPDATED'
   | 'SITE_DEACTIVATED'
   | 'SITE_REACTIVATED'
-  | 'ACTIVE_SITE_SELECTED';
+  | 'ACTIVE_SITE_SELECTED'
+  | 'RECEIPT_COSTS_RECORDED'
+  | 'RECEIPT_COST_CORRECTED';
 
 export interface AuditInput {
   type: AuditType;

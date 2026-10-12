@@ -19,13 +19,19 @@ export class BottleRegistrationService {
     private readonly printJobs: LabelPrintJobsService,
   ) {}
 
-  async register(request: CreateBottleRegistrationRequest): Promise<BottleRegistrationResponse> {
-    const { batch, replayed } = await this.bottles.createBatch(request);
+  /** Registers bottles at the active site (doc 022 §6); the series and bottles belong to it. */
+  async register(
+    request: CreateBottleRegistrationRequest,
+    siteId: string,
+  ): Promise<BottleRegistrationResponse> {
+    const { batch, replayed } = await this.bottles.createBatch({ ...request, siteId });
     try {
       // A replayed request returns the job prepared the first time (or completes the workflow
       // if that step had failed), so retries never multiply print jobs either.
-      const previous = replayed ? (await this.printJobs.listForBatch(batch.code))[0] : undefined;
-      const printJob = previous ?? (await this.printJobs.createForBatch(batch.code));
+      const previous = replayed
+        ? (await this.printJobs.listForBatch(batch.code, siteId))[0]
+        : undefined;
+      const printJob = previous ?? (await this.printJobs.createForBatch(batch.code, siteId));
       return { replayed, batch, printJob };
     } catch (error) {
       this.logger.error(

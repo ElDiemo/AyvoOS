@@ -21,6 +21,7 @@ export function receiptForViewer(
       delete withoutCosts.unitPrice;
       delete withoutCosts.currency;
       delete withoutCosts.vatRate;
+      delete withoutCosts.costUpdatedAt;
       return withoutCosts;
     }),
   };

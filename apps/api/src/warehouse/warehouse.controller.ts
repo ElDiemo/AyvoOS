@@ -22,10 +22,9 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { LabelApplicationService } from './label-application.service.js';
 import { WarehouseReadService } from './warehouse-read.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
-import { CurrentPrincipal, OperationalWarehouse } from '../identity/access.guard.js';
-import type { Principal } from '../identity/principal.js';
+import { OperationalSite, OperationalWarehouse } from '../identity/access.guard.js';
 import { InventoryService } from '../inventory/inventory.service.js';
-import type { WarehouseContext } from '../inventory/warehouse-context.js';
+import type { SiteContext, WarehouseContext } from '../inventory/warehouse-context.js';
 
 const ITEM_CODE = new ZodValidationPipe(inventoryItemCodeSchema);
 const lotQuerySchema = z.object({
@@ -53,12 +52,11 @@ export class WarehouseController {
     return this.labels.apply(body, warehouse);
   }
 
-  /** Recent applications at the active site's warehouse (none without an active site). */
+  /** Recent applications at the active site's warehouse (production of that site). */
   @RequirePermission('production:read')
   @Get('label-applications')
-  async recent(@CurrentPrincipal() principal: Principal) {
-    const site = principal.activeSite;
-    const warehouse = site ? await this.inventory.siteDefaultLocation(site.id) : null;
+  async recent(@OperationalSite() site: SiteContext) {
+    const warehouse = await this.inventory.siteDefaultLocation(site.siteId);
     return { items: await this.read.recentApplications(20, warehouse?.id ?? null) };
   }
 
@@ -66,8 +64,9 @@ export class WarehouseController {
   @Get('bottles/:code/physical')
   physical(
     @Param('code', new ZodValidationPipe(bottleCodeSchema)) code: string,
+    @OperationalSite() site: SiteContext,
   ): Promise<BottlePhysical> {
-    return this.read.physical(code);
+    return this.read.physical(code, site.siteId);
   }
 
   @RequirePermission('inventory:read')

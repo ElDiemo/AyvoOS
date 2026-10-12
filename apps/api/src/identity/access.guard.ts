@@ -10,7 +10,7 @@ import { Reflector } from '@nestjs/core';
 import { ENV, type Env } from '../config/env.js';
 import { domainError } from '../common/domain-error.js';
 import { InventoryService } from '../inventory/inventory.service.js';
-import type { WarehouseContext } from '../inventory/warehouse-context.js';
+import type { SiteContext, WarehouseContext } from '../inventory/warehouse-context.js';
 import { ACCESS_METADATA, type AccessRule } from './access.decorators.js';
 import { AccessService } from './access.service.js';
 import type { Principal, RequestWithPrincipal } from './principal.js';
@@ -31,6 +31,8 @@ const siteInactive = () =>
   domainError(409, 'SITE_INACTIVE', 'The site is inactive: its history can be read, not changed');
 const siteWithoutWarehouse = () =>
   domainError(409, 'SITE_WITHOUT_WAREHOUSE', 'The active site has no warehouse');
+const siteWithoutProduction = () =>
+  domainError(409, 'SITE_WITHOUT_PRODUCTION', 'The active site does not produce');
 
 /**
  * Global access guard (ADR 0022) — deny by default. Every route must declare @Public(),
@@ -38,9 +40,10 @@ const siteWithoutWarehouse = () =>
  * logged). State-changing requests from another origin are refused (CSRF defence in depth on top
  * of SameSite cookies). Permissions and scopes are evaluated from the database on each request.
  *
- * Warehouse-scoped permissions (doc 022) also need the session's active site — validated against
- * the user's site scopes (or the explicit global access of `sites:all_access`) — and access to
- * that site's warehouse; an inactive site is read-only. A site or warehouse named anywhere in the
+ * Site- and warehouse-scoped permissions (doc 022) need the session's active site — validated
+ * against the user's site scopes (or the explicit global access of `sites:all_access`) — with the
+ * capability the permission needs; warehouse-scoped ones also access to that site's warehouse; an
+ * inactive site is read-only. A site or warehouse named anywhere in the
  * request (URL, query, body, cookie, header) is never trusted: the guard resolves the warehouse
  * itself and hands it to the handler (`@OperationalWarehouse()`).
  */
@@ -84,22 +87,30 @@ export class AccessGuard implements CanActivate {
     if (rule.kind === 'authenticated') return true;
 
     if (!rule.permissions.every((p) => principal.permissions.has(p))) throw forbidden();
-    const scoped = await this.access.warehouseScopedPermissions();
-    if (rule.permissions.some((p) => scoped.has(p))) {
+    const scopes = await this.access.permissionScopes();
+    const required = rule.permissions.map((p) => scopes.get(p));
+    if (required.some((x) => x?.site)) {
       const site = principal.activeSite;
       if (!site) throw siteRequired();
-      if (!site.capabilities.includes('WAREHOUSE')) throw siteWithoutWarehouse();
-      // v0.1: a site's operations act on its default warehouse (doc 022 §5).
-      const warehouse = await this.inventory.siteDefaultLocation(site.id);
-      if (!warehouse) throw siteWithoutWarehouse();
-      if (!site.warehouseIds.has(warehouse.id)) throw forbidden();
+      for (const capability of new Set(required.flatMap((x) => x?.capability ?? []))) {
+        if (!site.capabilities.includes(capability)) {
+          throw capability === 'WAREHOUSE' ? siteWithoutWarehouse() : siteWithoutProduction();
+        }
+      }
       if (!SAFE_METHODS.has(req.method ?? 'GET') && !site.active) throw siteInactive();
-      req.ayvoWarehouse = {
-        siteId: site.id,
-        siteCode: site.code,
-        locationId: warehouse.id,
-        locationCode: warehouse.code,
-      };
+      req.ayvoSite = { siteId: site.id, siteCode: site.code };
+      if (required.some((x) => x?.warehouse)) {
+        // v0.1: a site's warehouse operations act on its default warehouse (doc 022 §2).
+        const warehouse = await this.inventory.siteDefaultLocation(site.id);
+        if (!warehouse) throw siteWithoutWarehouse();
+        if (!site.warehouseIds.has(warehouse.id)) throw forbidden();
+        req.ayvoWarehouse = {
+          siteId: site.id,
+          siteCode: site.code,
+          locationId: warehouse.id,
+          locationCode: warehouse.code,
+        };
+      }
     }
     return true;
   }
@@ -130,5 +141,14 @@ export const OperationalWarehouse = createParamDecorator(
     // A route using this without a warehouse-scoped permission is a programming error: refuse.
     if (!warehouse) throw forbidden();
     return warehouse;
+  },
+);
+
+/** The site the guard authorized for this request (site- or warehouse-scoped routes only). */
+export const OperationalSite = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): SiteContext => {
+    const site = context.switchToHttp().getRequest<RequestWithPrincipal>().ayvoSite;
+    if (!site) throw forbidden();
+    return site;
   },
 );

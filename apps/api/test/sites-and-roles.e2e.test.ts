@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AdminUserDetail,
+  BottleRegistrationResponse,
   CurrentUser,
   GoodsReceipt,
   RoleDetail,
@@ -10,7 +11,9 @@ import type {
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { INITIAL_SITE_ID, sessionCookie } from './support/sign-in.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { SVG_70x110 } from './support/artwork-fixtures.js';
+import { layout } from './support/fixtures.js';
+import { createTestApp, hasDatabase, TEST_QR_BASE_URL, type TestApp } from './support/test-app.js';
 import { newBottleItemId, PDF_BYTES } from './support/warehouse-fixtures.js';
 
 /**
@@ -54,14 +57,20 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
     });
   }
 
-  async function receive(cookie: string, quantity: string): Promise<GoodsReceipt> {
-    const supplier = await as(cookie).post('/api/admin/suppliers', {
-      requestId: randomUUID(),
-      name: `Supplier ${randomUUID().slice(0, 6)}`,
-      companyId: null,
-      vatId: null,
-    });
-    expect(supplier.status, JSON.stringify(supplier.body)).toBe(201);
+  async function receive(
+    cookie: string,
+    quantity: string,
+    supplierId?: string,
+  ): Promise<GoodsReceipt> {
+    const supplier = supplierId
+      ? { body: { id: supplierId } }
+      : await as(cookie).post('/api/admin/suppliers', {
+          requestId: randomUUID(),
+          name: `Supplier ${randomUUID().slice(0, 6)}`,
+          companyId: null,
+          vatId: null,
+        });
+    if (!supplierId) expect((supplier as { status: number }).status).toBe(201);
     const document = await http()
       .post('/api/admin/supplier-documents')
       .set('Cookie', cookie)
@@ -448,6 +457,174 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
     });
   });
 
+  describe('cross-site production and purchasing (IDOR)', () => {
+    let template: string;
+    let cz: Awaited<ReturnType<typeof createUser>>;
+    let ger: Awaited<ReturnType<typeof createUser>>;
+    let czReg: BottleRegistrationResponse;
+    let deReg: BottleRegistrationResponse;
+    let deBottle: { code: string; publicToken: string };
+
+    const register = async (cookie: string, quantity: number) => {
+      const res = await as(cookie).post('/api/admin/bottle-registrations', {
+        requestId: randomUUID(),
+        labelTemplateVersionId: template,
+        quantity,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      return res.body as BottleRegistrationResponse;
+    };
+
+    beforeAll(async () => {
+      // Label templates are company-wide brand data, managed by ADMIN.
+      const artwork = await http()
+        .post('/api/admin/label-artworks')
+        .set('Cookie', admin)
+        .attach('file', SVG_70x110, 'artwork.svg')
+        .expect(201);
+      template = (
+        await as(admin)
+          .post('/api/admin/label-templates', {
+            name: `site-tpl-${randomUUID().slice(0, 6)}`,
+            layout: layout(artwork.body.id),
+          })
+          .expect(201)
+      ).body.versionId;
+      cz = await createUser(['PRODUCTION_SUPERVISOR', 'WAREHOUSE_SUPERVISOR'], [INITIAL_SITE_ID]);
+      ger = await createUser(['PRODUCTION_SUPERVISOR', 'WAREHOUSE_SUPERVISOR'], [de.id]);
+      czReg = await register(cz.cookie, 2);
+      deReg = await register(ger.cookie, 1);
+      await as(ger.cookie)
+        .post(`/api/admin/label-print-jobs/${deReg.printJob!.code}/generate`)
+        .expect(200);
+      deBottle = await t.prisma.bottle.findFirstOrThrow({
+        where: { creationBatch: { code: deReg.batch.code } },
+        select: { code: true, publicToken: true },
+      });
+    });
+
+    it('series, bottles and print jobs of another site cannot be listed, opened, printed or changed', async () => {
+      const czList = JSON.stringify(
+        (await as(cz.cookie).get('/api/admin/bottles?pageSize=100')).body,
+      );
+      expect(czList).not.toContain(deBottle.code);
+      for (const path of [
+        '/api/admin/bottle-batches?pageSize=100',
+        '/api/admin/bottle-creation-history?pageSize=100',
+      ]) {
+        const body = JSON.stringify((await as(cz.cookie).get(path).expect(200)).body);
+        expect(body, path).toContain(czReg.batch.code);
+        expect(body, path).not.toContain(deReg.batch.code);
+      }
+      const de = deReg.batch.code;
+      const job = deReg.printJob!.code;
+      for (const [method, path] of [
+        ['GET', `/api/admin/bottles/${deBottle.code}`],
+        ['GET', `/api/admin/bottles/${deBottle.code}/physical`],
+        ['GET', `/api/admin/bottle-batches/${de}`],
+        ['GET', `/api/admin/bottle-batches/${de}/print-jobs`],
+        ['POST', `/api/admin/bottle-batches/${de}/print-jobs`],
+        ['GET', `/api/admin/label-print-jobs/${job}`],
+        ['POST', `/api/admin/label-print-jobs/${job}/generate`],
+        ['GET', `/api/admin/label-print-jobs/${job}/pdf`],
+      ] as const) {
+        const res =
+          method === 'GET' ? await as(cz.cookie).get(path) : await as(cz.cookie).post(path);
+        expect(res.status, `${method} ${path}`).toBe(404);
+      }
+      // The owning site sees its own records.
+      await as(ger.cookie).get(`/api/admin/bottles/${deBottle.code}`).expect(200);
+      await as(ger.cookie).get(`/api/admin/label-print-jobs/${job}/pdf`).expect(200);
+      // Replaying another site's registration request reveals nothing.
+      const replay = await as(cz.cookie).post('/api/admin/bottle-registrations', {
+        requestId: (await t.prisma.bottleCreationBatch.findUniqueOrThrow({ where: { code: de } }))
+          .clientRequestId,
+        labelTemplateVersionId: template,
+        quantity: 1,
+      });
+      expect(replay.status).toBe(409);
+      expect(JSON.stringify(replay.body)).not.toContain(de);
+      // No implicit transfer: the database refuses to move a bottle or print job.
+      await expect(
+        t.prisma
+          .$executeRaw`UPDATE "bottles" SET "site_id" = ${INITIAL_SITE_ID}::uuid WHERE "code" = ${deBottle.code}`,
+      ).rejects.toThrow(/never changes|violates foreign key/);
+    });
+
+    it('a bottle is labelled only at its own site', async () => {
+      const lot = (await receive(cz.cookie, '5')).lines[0]!.lot!;
+      const res = await as(cz.cookie).post('/api/admin/label-applications', {
+        requestId: randomUUID(),
+        lotId: lot.id,
+        seriesCode: deReg.batch.code,
+        scannedValue: `${TEST_QR_BASE_URL}/${deBottle.publicToken}`,
+      });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('BOTTLE_OF_ANOTHER_SITE');
+    });
+
+    it('templates are global brand data: readable at every site, changed only with the global permission', async () => {
+      const list = await as(cz.cookie).get('/api/admin/label-templates').expect(200);
+      expect(JSON.stringify(list.body)).toContain(template);
+      const create = await as(cz.cookie).post('/api/admin/label-templates', {
+        name: 'site supervisor template',
+        layout: layout(randomUUID()),
+      });
+      expect(create.status).toBe(403);
+    });
+
+    it('the public passport stays public and reveals no site, warehouse or operation', async () => {
+      const passport = await http().get(`/api/public/bottles/${deBottle.publicToken}`).expect(200);
+      const text = JSON.stringify(passport.body);
+      for (const secret of [de.code, `${de.code}-W`, de.id, 'site', 'warehouse', 'lot']) {
+        expect(text.toLowerCase()).not.toContain(secret.toLowerCase());
+      }
+    });
+
+    it('documents, receipts and prices of another site are out of reach by id or code', async () => {
+      const deReceipt = await receive(ger.cookie, '2');
+      const deDoc = deReceipt.documents![0]!;
+      const finance = await createUser(['FINANCE'], [INITIAL_SITE_ID]);
+      for (const cookie of [finance.cookie, cz.cookie]) {
+        expect((await as(cookie).get(deDoc.contentUrl)).status).toBe(404);
+        expect((await as(cookie).get(`/api/admin/goods-receipts/${deReceipt.code}`)).status).toBe(
+          404,
+        );
+        const docs = JSON.stringify(
+          (await as(cookie).get(`/api/admin/suppliers/${deDoc.supplierId}/documents`)).body,
+        );
+        expect(docs).not.toContain(deDoc.id);
+      }
+      const cost = await as(finance.cookie).post(
+        `/api/admin/goods-receipts/${deReceipt.code}/lines/1/cost`,
+        { requestId: randomUUID(), unitPrice: '1', currency: 'EUR', vatRate: null, reason: 'idor' },
+      );
+      expect(cost.status).toBe(404);
+      // Another site's document cannot be attached to this site's receipt or new receipts.
+      const czReceipt = await receive(cz.cookie, '1', deDoc.supplierId);
+      const link = await as(cz.cookie).post(
+        `/api/admin/goods-receipts/${czReceipt.code}/documents`,
+        {
+          requestId: randomUUID(),
+          documentId: deDoc.id,
+        },
+      );
+      expect(link.status).toBe(422);
+      // FINANCE at the German site sees German values; not the Czech ones.
+      const deFinance = await createUser(['FINANCE'], [de.id]);
+      await as(deFinance.cookie).get(`/api/admin/goods-receipts/${deReceipt.code}`).expect(200);
+      expect(
+        (await as(deFinance.cookie).get(`/api/admin/goods-receipts/${czReceipt.code}`)).status,
+      ).toBe(404);
+      // The database keeps a receipt's documents at its site, whatever the application does.
+      await expect(
+        t.prisma
+          .$executeRaw`INSERT INTO "goods_receipt_documents" ("receipt_id", "document_id", "request_id")
+          SELECT r."id", ${deDoc.id}::uuid, ${randomUUID()}::uuid FROM "goods_receipts" r WHERE r."code" = ${czReceipt.code}`,
+      ).rejects.toThrow(/its own site/);
+    });
+  });
+
   describe('multi-site isolation', () => {
     it('a user of one site never reaches another site, whatever the request claims', async () => {
       const cz = await createUser(['WAREHOUSE_SUPERVISOR'], [INITIAL_SITE_ID]);
@@ -456,11 +633,12 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
       expect(czMe.sites.map((s) => s.id)).toEqual([INITIAL_SITE_ID]);
       expect(czMe.activeSiteId).toBe(INITIAL_SITE_ID);
 
+      const before = newBottles((await as(ger.cookie).get('/api/admin/inventory/stock')).body);
       const deReceipt = await receive(ger.cookie, '7');
       const czReceipt = await receive(cz.cookie, '2');
       const deStock = (await as(ger.cookie).get('/api/admin/inventory/stock')).body;
       expect(deStock.location.code).toBe(`${de.code}-W`);
-      expect(newBottles(deStock)).toBe('7');
+      expect(Number(newBottles(deStock)) - Number(before)).toBe(7);
 
       // Another site's receipt does not exist for this user — not by code, list or movements.
       expect((await as(cz.cookie).get(`/api/admin/goods-receipts/${deReceipt.code}`)).status).toBe(
@@ -513,7 +691,15 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
       const atCz = (await as(multi.cookie).get('/api/admin/inventory/stock')).body as StockOverview;
       expect(atDe.location.code).toBe(`${de.code}-W`);
       expect(atCz.location.code).toBe('MAIN');
-      expect(newBottles(atDe)).toBe('7');
+      // Each view equals what a user of only that site sees.
+      const deOnly = await createUser(['WAREHOUSE_SUPERVISOR'], [de.id]);
+      const czOnly = await createUser(['WAREHOUSE_SUPERVISOR'], [INITIAL_SITE_ID]);
+      expect(newBottles(atDe)).toBe(
+        newBottles((await as(deOnly.cookie).get('/api/admin/inventory/stock')).body),
+      );
+      expect(newBottles(atCz)).toBe(
+        newBottles((await as(czOnly.cookie).get('/api/admin/inventory/stock')).body),
+      );
       expect(newBottles(atCz)).not.toBe(newBottles(atDe));
 
       // Losing the site ends access to it at once, even for the session that selected it.

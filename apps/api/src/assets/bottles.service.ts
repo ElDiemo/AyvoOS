@@ -23,6 +23,7 @@ import { countCompletedReuseCycles } from './reuse-cycles.js';
 /** What the label-production module needs to know about a creation batch. */
 export interface BatchForPrinting {
   id: string;
+  siteId: string;
   code: string;
   labelTemplateVersionId: string;
   quantityCreated: number;
@@ -63,6 +64,8 @@ export class BottlesService {
     requestId: string;
     labelTemplateVersionId: string;
     quantity: number;
+    /** The active site creating the series; its bottles belong to it (doc 022 §6). */
+    siteId: string;
   }): Promise<{ batch: BottleCreationBatchDto; replayed: boolean }> {
     // Idempotency: a retried request (same requestId) returns the batch it already created.
     const existing = await this.findReplay(input);
@@ -98,12 +101,15 @@ export class BottlesService {
     requestId: string;
     labelTemplateVersionId: string;
     quantity: number;
+    siteId: string;
   }): Promise<BottleCreationBatchDto | null> {
     const batch = await this.prisma.bottleCreationBatch.findUnique({
       where: { clientRequestId: input.requestId },
     });
     if (!batch) return null;
+    // A replay from another site reveals nothing about the other site's series.
     if (
+      batch.siteId !== input.siteId ||
       batch.labelTemplateVersionId !== input.labelTemplateVersionId ||
       batch.quantityRequested !== input.quantity
     ) {
@@ -119,7 +125,8 @@ export class BottlesService {
       requestId,
       labelTemplateVersionId,
       quantity,
-    }: { requestId: string; labelTemplateVersionId: string; quantity: number },
+      siteId,
+    }: { requestId: string; labelTemplateVersionId: string; quantity: number; siteId: string },
   ): Promise<BottleCreationBatch> {
     const now = new Date();
     // Re-check under a share lock on the template (archive / new version wait for us).
@@ -139,6 +146,7 @@ export class BottlesService {
         firstBottleSerial: range.first,
         lastBottleSerial: range.last,
         createdAt: now,
+        siteId,
       },
     });
 
@@ -152,6 +160,7 @@ export class BottlesService {
           status: 'CREATED' as const,
           creationBatchId: batch.id,
           createdAt: now,
+          siteId,
         };
       }),
       select: { id: true },
@@ -170,8 +179,9 @@ export class BottlesService {
     return batch;
   }
 
-  async list(query: BottleListQuery): Promise<BottleListResponse> {
-    const where: Prisma.BottleWhereInput = {};
+  /** Bottles of one site only (doc 022). */
+  async list(query: BottleListQuery, siteId: string): Promise<BottleListResponse> {
+    const where: Prisma.BottleWhereInput = { siteId };
     const empty = { items: [], page: query.page, pageSize: query.pageSize, total: 0 };
 
     if (query.search) {
@@ -220,7 +230,8 @@ export class BottlesService {
     };
   }
 
-  async getByCode(code: string): Promise<BottleDetail> {
+  /** A bottle of the given site; another site's bottle is "not found". */
+  async getByCode(code: string, siteId: string): Promise<BottleDetail> {
     const serial = parseCodeSerial(CODE_PREFIX.bottle, code);
     const bottle =
       serial === null
@@ -232,7 +243,7 @@ export class BottlesService {
               events: { orderBy: [{ occurredAt: 'asc' }, { recordedAt: 'asc' }] },
             },
           });
-    if (!bottle) throw new NotFoundException('Bottle not found');
+    if (!bottle || bottle.siteId !== siteId) throw new NotFoundException('Bottle not found');
     const refs = await this.labels.getVersionRefs([bottle.creationBatch.labelTemplateVersionId]);
     return {
       code: bottle.code,
@@ -258,7 +269,13 @@ export class BottlesService {
   findByPublicToken(tx: Prisma.TransactionClient, token: string) {
     return tx.bottle.findUnique({
       where: { publicToken: token },
-      select: { id: true, code: true, status: true, creationBatch: { select: { code: true } } },
+      select: {
+        id: true,
+        siteId: true,
+        code: true,
+        status: true,
+        creationBatch: { select: { code: true } },
+      },
     });
   }
 
@@ -322,7 +339,7 @@ export class BottlesService {
   }
 
   /** Bottle identity + its component attachments (raw; print jobs are resolved by callers). */
-  async physicalByCode(code: string) {
+  async physicalByCode(code: string, siteId: string) {
     const serial = parseCodeSerial(CODE_PREFIX.bottle, code);
     const bottle =
       serial === null
@@ -332,11 +349,12 @@ export class BottlesService {
             select: {
               id: true,
               code: true,
+              siteId: true,
               events: { where: { type: 'LABEL_APPLIED' }, select: { id: true, occurredAt: true } },
               components: { orderBy: { installedAt: 'asc' } },
             },
           });
-    if (!bottle) throw new NotFoundException('Bottle not found');
+    if (!bottle || bottle.siteId !== siteId) throw new NotFoundException('Bottle not found');
     return bottle;
   }
 
@@ -349,10 +367,15 @@ export class BottlesService {
     return new Map(events.map((e) => [e.id, e.bottle.code]));
   }
 
-  async listBatches(page: number, pageSize: number): Promise<BottleCreationBatchListResponse> {
+  async listBatches(
+    page: number,
+    pageSize: number,
+    siteId: string,
+  ): Promise<BottleCreationBatchListResponse> {
     const [total, batches] = await this.prisma.$transaction([
-      this.prisma.bottleCreationBatch.count(),
+      this.prisma.bottleCreationBatch.count({ where: { siteId } }),
       this.prisma.bottleCreationBatch.findMany({
+        where: { siteId },
         orderBy: { serial: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -367,17 +390,18 @@ export class BottlesService {
     };
   }
 
-  async getBatchByCode(code: string): Promise<BottleCreationBatchDto> {
-    const batch = await this.findBatch(code);
+  async getBatchByCode(code: string, siteId: string): Promise<BottleCreationBatchDto> {
+    const batch = await this.findBatch(code, siteId);
     const refs = await this.labels.getVersionRefs([batch.labelTemplateVersionId]);
     return toBatchDto(batch, requireRef(refs, batch.labelTemplateVersionId));
   }
 
   /** For label-production: the batch behind a code (404 if unknown). */
-  async getBatchForPrinting(code: string): Promise<BatchForPrinting> {
-    const batch = await this.findBatch(code);
+  async getBatchForPrinting(code: string, siteId: string): Promise<BatchForPrinting> {
+    const batch = await this.findBatch(code, siteId);
     return {
       id: batch.id,
+      siteId: batch.siteId,
       code: batch.code,
       labelTemplateVersionId: batch.labelTemplateVersionId,
       quantityCreated: batch.quantityCreated,
@@ -447,13 +471,14 @@ export class BottlesService {
     };
   }
 
-  private async findBatch(code: string): Promise<BottleCreationBatch> {
+  /** A series of the given site; another site's series is "not found". */
+  private async findBatch(code: string, siteId: string): Promise<BottleCreationBatch> {
     const serial = parseCodeSerial(CODE_PREFIX.bottleCreationBatch, code);
     const batch =
       serial === null
         ? null
         : await this.prisma.bottleCreationBatch.findUnique({ where: { serial } });
-    if (!batch) throw new NotFoundException('Creation batch not found');
+    if (!batch || batch.siteId !== siteId) throw new NotFoundException('Creation batch not found');
     return batch;
   }
 }

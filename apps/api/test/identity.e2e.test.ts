@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   PERMISSION_CODES,
   SECURITY_ADMIN_PERMISSIONS,
+  SITE_SCOPED_PERMISSIONS,
   SYSTEM_ROLE_CODES,
   WAREHOUSE_SCOPED_PERMISSIONS,
   type SystemRoleCode,
@@ -38,16 +39,21 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'procurement:documents_read',
   ],
   PRODUCTION_OPERATOR: ['production:read', 'production:labels_print', 'inventory:read'],
+  // Label templates are company-wide brand data: not changed by a site-bound role.
   PRODUCTION_SUPERVISOR: [
     'production:read',
     'production:labels_print',
     'production:bottles_create',
-    'production:templates_manage',
     'production:label_apply',
     'inventory:read',
   ],
   SALES: ['inventory:stock_summary'],
-  FINANCE: ['inventory:read', 'procurement:cost_read', 'procurement:documents_read'],
+  FINANCE: [
+    'inventory:read',
+    'procurement:cost_read',
+    'procurement:cost_write',
+    'procurement:documents_read',
+  ],
   HOTEL_USER: [],
 };
 
@@ -301,6 +307,9 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect(catalogue.filter((p) => p.warehouseScoped).map((p) => p.code)).toEqual(
       [...WAREHOUSE_SCOPED_PERMISSIONS].sort(),
     );
+    expect(catalogue.filter((p) => p.siteScoped).map((p) => p.code)).toEqual(
+      [...SITE_SCOPED_PERMISSIONS].sort(),
+    );
     expect(catalogue.filter((p) => p.securityAdmin).map((p) => p.code)).toEqual(
       [...SECURITY_ADMIN_PERMISSIONS].sort(),
     );
@@ -445,7 +454,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       },
     );
 
-    it('write responses and idempotent replays are filtered too', async () => {
+    it('prices are written only with cost_write; replays and responses never leak them', async () => {
       const operator = await createUser(['WAREHOUSE_OPERATOR']);
       const cookie = await session(operator.email);
       const upload = await http()
@@ -458,40 +467,112 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
         .field('issuedOn', '2026-10-11')
         .attach('file', PDF_BYTES, 'note.pdf')
         .expect(201);
-      const body = {
+      const line = {
+        itemId: await newBottleItemId(t),
+        quantity: '1',
+        supplierLotCode: null,
+        unitPrice: null as string | null,
+        currency: null as string | null,
+        vatRate: null as string | null,
+      };
+      const body = (prices: Partial<typeof line> = {}) => ({
         requestId: randomUUID(),
         supplierId,
         supplierReference: 'DL-OP-1',
         receivedAt: new Date().toISOString(),
         note: null,
         documentIds: [upload.body.id],
-        lines: [
-          {
-            itemId: await newBottleItemId(t),
-            quantity: '1',
-            supplierLotCode: null,
-            unitPrice: '987.6543',
-            currency: 'CZK',
-            vatRate: null,
-          },
-        ],
-      };
+        lines: [{ ...line, ...prices }],
+      });
+
+      // Warehouse staff record quantities, never prices — not even as a hidden form field, and
+      // not by replaying a priced request of someone else.
+      const priced = body({ unitPrice: '987.6543', currency: 'CZK' });
+      const refused = await http()
+        .post('/api/admin/goods-receipts')
+        .set('Cookie', cookie)
+        .send(priced);
+      expect(refused.status).toBe(403);
+      expect(refused.body.code).toBe('COST_WRITE_REQUIRED');
+      await http()
+        .post('/api/admin/goods-receipts')
+        .set('Cookie', adminCookie)
+        .send(priced)
+        .expect(201);
+      const replay = await http()
+        .post('/api/admin/goods-receipts')
+        .set('Cookie', cookie)
+        .send(priced);
+      expect(replay.status).toBe(403);
+      expect(leaks(replay.body)).toEqual([]);
+      const supervisor = await session((await createUser(['WAREHOUSE_SUPERVISOR'])).email);
+      expect(
+        (
+          await http()
+            .post('/api/admin/goods-receipts')
+            .set('Cookie', supervisor)
+            .send(body({ vatRate: '21', unitPrice: '1', currency: 'CZK' }))
+        ).body.code,
+      ).toBe('COST_WRITE_REQUIRED');
+
+      // A quantity-only receipt: responses and replays carry neither prices nor documents.
+      const plain = body();
+      let code = '';
       for (let attempt = 0; attempt < 2; attempt++) {
         const res = await http()
           .post('/api/admin/goods-receipts')
           .set('Cookie', cookie)
-          .send(body)
+          .send(plain)
           .expect(201);
         expect(leaks(res.body)).toEqual([]);
         expect('documents' in res.body).toBe(false);
+        code = res.body.code;
       }
-      // The same request replayed by an administrator returns the stored values in full.
-      const admin = await http()
-        .post('/api/admin/goods-receipts')
-        .set('Cookie', adminCookie)
-        .send(body)
-        .expect(201);
-      expect(admin.body.lines[0].unitPrice).toBe('987.6543');
+
+      // FINANCE completes the price later: append-only, reason, audited with actor and site.
+      const finance = await createUser(['FINANCE']);
+      const financeCookie = await session(finance.email);
+      const costBody = {
+        requestId: randomUUID(),
+        unitPrice: '12.5',
+        currency: 'EUR',
+        vatRate: '19',
+        reason: 'invoice FV-2026-77 arrived',
+      };
+      const completed = await http()
+        .post(`/api/admin/goods-receipts/${code}/lines/1/cost`)
+        .set('Cookie', financeCookie)
+        .send(costBody)
+        .expect(200);
+      expect(completed.body.lines[0]).toMatchObject({
+        unitPrice: '12.5',
+        currency: 'EUR',
+        vatRate: '19',
+        costUpdatedAt: expect.any(String),
+      });
+      const event = await t.prisma.auditEvent.findFirstOrThrow({
+        where: { type: 'RECEIPT_COST_CORRECTED', actorUserId: finance.id },
+      });
+      expect(event).toMatchObject({
+        reason: 'invoice FV-2026-77 arrived',
+        siteId: INITIAL_SITE_ID,
+      });
+      expect(event.payload).toMatchObject({ receipt: code, lineNo: 1, unitPrice: '12.5' });
+      await expect(
+        t.prisma.goodsReceiptLineCost.deleteMany({ where: { reason: costBody.reason } }),
+      ).rejects.toThrow();
+      // Staff without cost_write cannot correct; the operator still sees no price.
+      expect(
+        (
+          await http()
+            .post(`/api/admin/goods-receipts/${code}/lines/1/cost`)
+            .set('Cookie', supervisor)
+            .send({ ...costBody, requestId: randomUUID() })
+        ).status,
+      ).toBe(403);
+      const seen = await http().get(`/api/admin/goods-receipts/${code}`).set('Cookie', cookie);
+      expect(leaks(seen.body)).toEqual([]);
+      expect(JSON.stringify(seen.body)).not.toContain('costUpdatedAt');
 
       const linked = await http()
         .post(`/api/admin/goods-receipts/${receipt.code}/documents`)

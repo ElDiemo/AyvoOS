@@ -6,6 +6,8 @@ import {
   goodsReceiptCodeSchema,
   goodsReceiptListQuerySchema,
   linkReceiptDocumentRequestSchema,
+  receiptLineCostRequestSchema,
+  type ReceiptLineCostRequest,
   uploadSupplierDocumentFieldsSchema,
   type CreateGoodsReceiptRequest,
   type CreateReceiptCorrectionRequest,
@@ -39,8 +41,12 @@ import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ProcurementService } from './procurement.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
-import { CurrentPrincipal, OperationalWarehouse } from '../identity/access.guard.js';
-import type { WarehouseContext } from '../inventory/warehouse-context.js';
+import {
+  CurrentPrincipal,
+  OperationalSite,
+  OperationalWarehouse,
+} from '../identity/access.guard.js';
+import type { SiteContext, WarehouseContext } from '../inventory/warehouse-context.js';
 import type { Principal } from '../identity/principal.js';
 import { receiptForViewer } from './receipt-visibility.js';
 
@@ -48,9 +54,11 @@ const RECEIPT_CODE = new ZodValidationPipe(goodsReceiptCodeSchema);
 const supplierListQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 
 /**
- * Admin API: suppliers, supplier documents, goods receipts (doc 018). Supplier documents need
- * procurement:documents_read; receipt responses omit prices without procurement:cost_read and
- * linked documents without procurement:documents_read (receiptForViewer, doc 021).
+ * Admin API: suppliers, supplier documents, goods receipts (doc 018). Supplier master data is
+ * company-wide; documents, receipts and prices belong to the receiving site and are read only at
+ * the active site. Documents need procurement:documents_read; receipt responses omit prices
+ * without procurement:cost_read and linked documents without procurement:documents_read
+ * (receiptForViewer); recording prices needs procurement:cost_write (doc 021 §4).
  */
 @Controller(ADMIN_PREFIX)
 export class ProcurementController {
@@ -85,8 +93,11 @@ export class ProcurementController {
 
   @RequirePermission('procurement:documents_read')
   @Get('suppliers/:id/documents')
-  documents(@Param('id', ParseUUIDPipe) id: string): Promise<SupplierDocument[]> {
-    return this.procurement.listDocuments(id);
+  documents(
+    @Param('id', ParseUUIDPipe) id: string,
+    @OperationalSite() site: SiteContext,
+  ): Promise<SupplierDocument[]> {
+    return this.procurement.listDocuments(id, site.siteId);
   }
 
   /** multipart/form-data: fields of uploadSupplierDocumentFieldsSchema + one `file` (PDF/JPEG/PNG). */
@@ -97,9 +108,10 @@ export class ProcurementController {
     @Body(new ZodValidationPipe(uploadSupplierDocumentFieldsSchema))
     fields: UploadSupplierDocumentFields,
     @UploadedFile() file: { buffer: Buffer; originalname: string } | undefined,
+    @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<SupplierDocument> {
     if (!file) throw new BadRequestException('Attach the document as the "file" field');
-    return this.procurement.uploadDocument(fields, file);
+    return this.procurement.uploadDocument(fields, file, warehouse.siteId);
   }
 
   @RequirePermission('procurement:documents_read')
@@ -107,8 +119,14 @@ export class ProcurementController {
   @Header('Cache-Control', 'private, no-store')
   @Header('Content-Security-Policy', "default-src 'none'; sandbox")
   @Header('X-Content-Type-Options', 'nosniff')
-  async documentContent(@Param('id', ParseUUIDPipe) id: string): Promise<StreamableFile> {
-    const { bytes, contentType, filename } = await this.procurement.getDocumentContent(id);
+  async documentContent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @OperationalSite() site: SiteContext,
+  ): Promise<StreamableFile> {
+    const { bytes, contentType, filename } = await this.procurement.getDocumentContent(
+      id,
+      site.siteId,
+    );
     return new StreamableFile(bytes, {
       type: contentType,
       disposition: `inline; filename="${filename.replace(/"/g, '')}"`,
@@ -132,7 +150,10 @@ export class ProcurementController {
     @OperationalWarehouse() warehouse: WarehouseContext,
   ): Promise<GoodsReceipt> {
     return receiptForViewer(
-      await this.procurement.createReceipt(body, warehouse),
+      await this.procurement.createReceipt(body, warehouse, {
+        userId: principal.userId,
+        canWriteCosts: principal.permissions.has('procurement:cost_write'),
+      }),
       principal.permissions,
     );
   }
@@ -162,6 +183,24 @@ export class ProcurementController {
   ): Promise<GoodsReceipt> {
     return receiptForViewer(
       await this.procurement.linkDocument(code, body, warehouse.siteId),
+      principal.permissions,
+    );
+  }
+
+  /** Completes or corrects a line's purchase price (FINANCE; reason required, audited). */
+  @RequirePermission('inventory:read', 'procurement:cost_write')
+  @Post('goods-receipts/:code/lines/:lineNo/cost')
+  @HttpCode(200)
+  async lineCost(
+    @Param('code', RECEIPT_CODE) code: string,
+    @Param('lineNo', new ZodValidationPipe(z.coerce.number().int().min(1).max(1000)))
+    lineNo: number,
+    @Body(new ZodValidationPipe(receiptLineCostRequestSchema)) body: ReceiptLineCostRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalWarehouse() warehouse: WarehouseContext,
+  ): Promise<GoodsReceipt> {
+    return receiptForViewer(
+      await this.procurement.recordLineCost(code, lineNo, body, warehouse.siteId, principal.userId),
       principal.permissions,
     );
   }

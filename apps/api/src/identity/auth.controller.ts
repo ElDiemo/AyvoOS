@@ -46,6 +46,7 @@ function redirect(res: ServerResponse, location: string, cookies: string[] = [])
  * error otherwise. Nothing about the limit's configuration or the client is revealed.
  */
 function tooManyRequests(req: IncomingMessage, res: ServerResponse, decision: RateDecision): void {
+  if (decision.unavailable) return signInUnavailable(req, res, decision);
   res.statusCode = 429;
   res.setHeader('Retry-After', String(decision.retryAfterSeconds));
   res.setHeader('Cache-Control', 'no-store');
@@ -69,6 +70,39 @@ function tooManyRequests(req: IncomingMessage, res: ServerResponse, decision: Ra
       statusCode: 429,
       code: 'RATE_LIMITED',
       message: 'Too many sign-in attempts. Try again later.',
+    }),
+  );
+}
+
+/** 503 when the rate limiter cannot decide: sign-in pauses, signed-in sessions are unaffected. */
+function signInUnavailable(
+  req: IncomingMessage,
+  res: ServerResponse,
+  decision: RateDecision,
+): void {
+  res.statusCode = 503;
+  res.setHeader('Retry-After', String(decision.retryAfterSeconds));
+  res.setHeader('Cache-Control', 'no-store');
+  if ((req.headers.accept ?? '').includes('text/html')) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    res.end(
+      '<!doctype html><html lang="cs"><meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<title>Přihlášení je dočasně nedostupné – AYVO OS</title>' +
+        '<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem">' +
+        '<h1>Přihlášení je dočasně nedostupné</h1>' +
+        '<p>Zkuste to prosím za chvíli znovu. Kdo je už přihlášený, může dál pracovat.</p>' +
+        '<p><a href="/login">Zpět na přihlášení</a></p></body></html>',
+    );
+    return;
+  }
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(
+    JSON.stringify({
+      statusCode: 503,
+      code: 'AUTH_UNAVAILABLE',
+      message: 'Sign-in is temporarily unavailable. Try again later.',
     }),
   );
 }

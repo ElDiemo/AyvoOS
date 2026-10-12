@@ -5,6 +5,7 @@ import { PRODUCTION_QR_BASE_URL } from '../src/common/qr-policy.js';
 import { createTemplate, registerBottles } from './support/fixtures.js';
 import { decodeQrOnPage, openPdf, pageText } from './support/pdf-inspect.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { INITIAL_SITE_ID } from './support/sign-in.js';
 
 /**
  * DEV / production QR separation (ADR 0014), tested on the print-job guards themselves: the
@@ -158,6 +159,7 @@ describe.skipIf(!hasDatabase)('DEV / production QR separation', () => {
     const base = {
       creationBatchId: batch.id,
       labelTemplateVersionId: batch.labelTemplateVersionId,
+      siteId: INITIAL_SITE_ID,
       labelCount: 1,
       qrErrorCorrection: 'Q' as const,
     };
