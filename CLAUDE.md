@@ -33,7 +33,7 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   links, corrections), bottle component attachments, operation requests. Milestone 2C (doc 021):
   users, user identities, roles (system + custom, ADR 0024), permissions, user roles, user scopes
   (site + warehouse), user sessions (with the active site), login states, identity bootstrap,
-  audit events, **sites** (doc 022, ADR 0023). **Approved design, not
+  audit events, **sites** (doc 022, ADR 0023), user invitations (doc 021 §7b). **Approved design, not
   implemented** (Production Core v0.1, doc 020): users/roles/scopes (ADR 0022), product
   categories, products, product-label approvals, recipe versions, crate types, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,
@@ -74,6 +74,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   series, bottles, print jobs and supplier documents belong to a site (`@OperationalSite()`);
   label templates are company-wide (`production:templates_manage`, ADMIN by default). The sign-in
   rate limiter fails closed (503) without Redis.
+  Users are onboarded only by AYVO invitations (provider API, server-side): an identity is linked
+  at first sign-in only if the provider reports the user's invitation accepted by exactly that
+  identity (the bootstrap ADMIN excepted). Session defaults: 120 min idle, 12 h absolute.
   WorkOS tokens: exact `WORKOS_JWT_ISSUER` (required), `client_id`, `sid`, RS256 only (doc 021 §5a).
   The permission catalogue and system roles change only inside a migration that switches
   `ayvo.catalogue_migration` on (and off at the end); custom roles never hold security

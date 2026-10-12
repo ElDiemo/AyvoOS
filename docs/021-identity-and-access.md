@@ -40,22 +40,25 @@ roles [ADR 0024](adr/0024-custom-roles-and-permission-catalogue.md); sites and s
 ## 3. Data model (additive migrations)
 
 Migrations: `20261011190000_identity_access`, `20261012090000_identity_permission_refinements`,
-`20261012120000_site_scope_type`, `20261012120100_sites_and_custom_roles`.
+`20261012120000_site_scope_type`, `20261012120100_sites_and_custom_roles`,
+`20261012150000_site_owned_production_and_costs`, `20261012180000_user_invitations`.
 
-| Table                | Purpose and database rules                                                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `users`              | AYVO user: e-mail (lower-case, unique, immutable), display name, `ACTIVE`/`DEACTIVATED` (fields consistent by CHECK), last login; never deleted                                            |
-| `user_identities`    | external identity link (provider `WORKOS`/`TEST`, subject); one active link per subject and per (user, provider); closes once; never deleted                                               |
-| `roles`              | 8 protected **system** roles (seeded) and ADMIN-created **custom** roles: stable `id`, unique code, Czech name, description, active, `is_system`, timestamps; never deleted (section 7a)   |
-| `permissions`        | catalogue (18 permissions) incl. `warehouse_scoped` and `security_admin`; inserted/changed **only inside a migration** (database guard)                                                    |
-| `role_permissions`   | system roles: only by migration; custom roles: by ADMIN (audited); a custom role never holds a security-administration permission (trigger)                                                |
-| `user_roles`         | grants with grantor and reason; revocation closes once with revoker and reason; one open grant per (user, role); an inactive role cannot be granted; never deleted                         |
-| `user_scopes`        | `SITE` (a site) and `WAREHOUSE` (narrows an accessible site — needs the open site scope, trigger); `HOTEL_ORGANIZATION` / `HOTEL_SITE` reserved; closes once; never deleted                |
-| `user_sessions`      | AYVO sessions: only the SHA-256 of the 256-bit cookie token, idle and absolute expiry, the **active site**, revocation once (reason); only activity, active site and revocation may change |
-| `auth_login_states`  | one-time OAuth state (hash), browser binding (hash), PKCE verifier, safe next path, 10-minute expiry                                                                                       |
-| `identity_bootstrap` | the single bootstrap of the first administrator — one row ever (primary key `true`), immutable                                                                                             |
-| `audit_events`       | append-only security/administration audit with actor, target, **site**, reason, time (UPDATE/DELETE/TRUNCATE rejected)                                                                     |
-| `sites`              | AYVO facilities (doc 022)                                                                                                                                                                  |
+| Table                      | Purpose and database rules                                                                                                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `users`                    | AYVO user: e-mail (lower-case, unique, immutable), display name, `ACTIVE`/`DEACTIVATED` (fields consistent by CHECK), last login; never deleted                                            |
+| `user_identities`          | external identity link (provider `WORKOS`/`TEST`, subject); one active link per subject and per (user, provider); closes once; never deleted                                               |
+| `roles`                    | 8 protected **system** roles (seeded) and ADMIN-created **custom** roles: stable `id`, unique code, Czech name, description, active, `is_system`, timestamps; never deleted (section 7a)   |
+| `permissions`              | catalogue (18 permissions) incl. `warehouse_scoped` and `security_admin`; inserted/changed **only inside a migration** (database guard)                                                    |
+| `role_permissions`         | system roles: only by migration; custom roles: by ADMIN (audited); a custom role never holds a security-administration permission (trigger)                                                |
+| `user_roles`               | grants with grantor and reason; revocation closes once with revoker and reason; one open grant per (user, role); an inactive role cannot be granted; never deleted                         |
+| `user_scopes`              | `SITE` (a site) and `WAREHOUSE` (narrows an accessible site — needs the open site scope, trigger); `HOTEL_ORGANIZATION` / `HOTEL_SITE` reserved; closes once; never deleted                |
+| `user_sessions`            | AYVO sessions: only the SHA-256 of the 256-bit cookie token, idle and absolute expiry, the **active site**, revocation once (reason); only activity, active site and revocation may change |
+| `auth_login_states`        | one-time OAuth state (hash), browser binding (hash), PKCE verifier, safe next path, 10-minute expiry                                                                                       |
+| `identity_bootstrap`       | the single bootstrap of the first administrator — one row ever (primary key `true`), immutable                                                                                             |
+| `audit_events`             | append-only security/administration audit with actor, target, **site**, reason, time (UPDATE/DELETE/TRUNCATE rejected)                                                                     |
+| `sites`                    | AYVO facilities (doc 022)                                                                                                                                                                  |
+| `user_invitations`         | invitations of prepared users (state, provider invitation id, expiry, accepted subject); one open per e-mail and per user; forward-only states; never deleted (section 7b)                 |
+| `user_invitation_requests` | idempotency and attempt lease of every send/resend/revoke request; completes once; never deleted                                                                                           |
 
 The refinements migration INSERTs permissions and grants only (role descriptions: text). The sites
 migration adds columns with defaults (existing rows of immutable tables are never updated), one
@@ -143,9 +146,12 @@ refused. A user may hold several roles (system and custom); the permissions add 
    concern) and redirects to `GET /api/auth/callback`.
 3. The callback consumes the state only together with the matching binding cookie, exchanges the
    code server-side (API key) and verifies the access token. The external subject must be linked
-   to an AYVO user; an unlinked identity is linked only to an **ACTIVE, pre-provisioned user with
-   the same provider-verified e-mail** — nobody is created automatically. Unknown → "Účet nemá
-   přístup"; deactivated → "Účet není aktivní"; both audited (`LOGIN_DENIED`).
+   to an AYVO user. A new identity is linked (once, transactionally, under the user's row lock)
+   only to an **ACTIVE prepared user with the same provider-verified e-mail whose AYVO invitation
+   the provider reports as accepted by exactly this identity** (section 7b) — or, without an
+   invitation, to the bootstrap administrator. Nobody is created automatically. Unknown,
+   uninvited, revoked, expired or mismatching identities get the same "Účet nemá přístup";
+   deactivated → "Účet není aktivní"; both audited (`LOGIN_DENIED`, with the internal reason).
 4. Success creates an AYVO session: 256 random bits in the `ayvo_session` cookie
    (`HttpOnly; Secure; SameSite=Lax; Path=/`), only its SHA-256 in the database; redirect to the
    safe `next` path (same-site paths only).
@@ -250,6 +256,9 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | POST   | `/api/admin/identity/users`                              | `identity:users_manage`                     | global                      |
 | GET    | `/api/admin/identity/users/:id`                          | `identity:users_read`                       | global                      |
 | POST   | `/api/admin/identity/users/:id/deactivate`               | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/invitations`              | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/invitations/resend`       | `identity:users_manage`                     | global                      |
+| POST   | `/api/admin/identity/users/:id/invitations/revoke`       | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/reactivate`               | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/roles/grant`              | `identity:users_manage`                     | global                      |
 | POST   | `/api/admin/identity/users/:id/roles/revoke`             | `identity:users_manage`                     | global                      |
@@ -338,6 +347,51 @@ not hold (`403 PRIVILEGE_ESCALATION`).
   it. Changes apply to all holders on their next request.
 - No direct per-user permission overrides: a special combination is a named custom role.
 
+### 7b. Invitations (onboarding from AYVO OS)
+
+1. ADMIN creates the prepared user (name, normalized e-mail) with roles, sites and optional
+   warehouses — access is configured **before** anyone is invited.
+2. AYVO immediately sends an invitation through the provider's server-side API (WorkOS
+   `POST /user_management/invitations`, valid 7 days; the API key never leaves the server).
+3. The person follows the invitation e-mail and registers at WorkOS (with MFA).
+4. On the first successful sign-in AYVO asks the provider for that invitation and links the
+   identity only if it is **accepted by exactly the signing-in user** (`accepted_user_id` = token
+   `sub`, same verified e-mail) and the AYVO invitation is still pending; the invitation becomes
+   ACCEPTED and the identity is linked in one transaction under the user's lock. Simultaneous
+   first sign-ins link once. A provider identity is linked to at most one user (unique index).
+5. Unknown, uninvited, revoked, expired or mismatching identities are refused with the same
+   answer; a deactivated prepared user is refused although WorkOS signed the person in.
+
+| State (`user_invitations`) | Czech UI              | Meaning                                                                         |
+| -------------------------- | --------------------- | ------------------------------------------------------------------------------- |
+| `SENDING`                  | Odesílá se            | recorded; the provider call is running or was interrupted (reconciled on retry) |
+| `PENDING`                  | Čeká na přijetí       | sent; valid until `expires_at` (shown as **Vypršela** afterwards)               |
+| `ACCEPTED`                 | Přijata               | registered through it and linked at first sign-in                               |
+| `EXPIRED`                  | Vypršela              | not accepted in time — resend sends a new invitation                            |
+| `REVOKED`                  | Zrušena               | cancelled by ADMIN (at the provider and in AYVO)                                |
+| `FAILED`                   | Nepodařilo se odeslat | the provider refused; nothing was sent — resend tries again                     |
+
+Administration (`identity:users_manage`, ADMIN; reason required; audited as `INVITATION_SENT`,
+`INVITATION_RESENT`, `INVITATION_REVOKED`, `INVITATION_FAILED`, `INVITATION_ACCEPTED`):
+`POST /api/admin/identity/users/:id/invitations` (send), `…/invitations/resend` (sends the pending
+invitation again, or a new one after expiry/failure/revocation), `…/invitations/revoke`; the
+account is deactivated with the existing action (history stays).
+
+Reliability and safety:
+
+- Every action carries a client `requestId` and is **idempotent** (`user_invitation_requests`);
+  a retry continues an interrupted action, the same id for another action is a conflict, and an
+  attempt lease stops concurrent retries from calling the provider twice.
+- A **lost provider response** (timeout, 5xx) keeps the invitation `SENDING` and answers 503; the
+  retry first looks up the provider's pending invitations of the e-mail and adopts one instead of
+  sending a second. A definite refusal marks it `FAILED`. No provider failure grants anything:
+  only an accepted, matching invitation links an identity.
+- One open invitation per normalized e-mail and per user (partial unique indexes); the invitation
+  e-mail must equal the user's; states only move forward; nothing is deleted.
+- Only the provider's invitation id is stored — never its token or acceptance link; errors and
+  logs carry no key, token or link.
+- The endpoints are ADMIN-only; the sign-in answer never reveals whether an e-mail exists.
+
 ## 8. Bootstrap of the first administrator (one-time)
 
 ```bash
@@ -354,8 +408,10 @@ that bootstraps.
 ## 9. WorkOS setup the owner must do (nothing of this is in Git)
 
 1. Create a WorkOS account/organization; use the **Staging** environment for DEV.
-2. Enable **AuthKit** (User Management). Sign-in methods (e-mail + password, magic link, passkeys)
-   and **MFA** are configured there.
+2. Enable **AuthKit** (User Management). Sign-in methods (e-mail + password, magic link,
+   passkeys). **Require MFA for every user** (mandatory for AYVO internal users, doc 012) and
+   **allow sign-up only through invitations** (disable public sign-up) — AYVO sends the
+   invitations (section 7b); an uninvited WorkOS account is refused by AYVO anyway.
 3. Redirect URI (Staging): `https://dev.ayvo.co/api/auth/callback`.
 4. Sign-out redirect (allowed logout return URL): `https://dev.ayvo.co/login?signed_out=1`.
 5. Copy the **API key** (`sk_test_…`) and the **Client ID** (`client_…`) of the Staging
@@ -372,7 +428,8 @@ that bootstraps.
    custom auth domain if one is configured), or the `iss` of a decoded access token of that
    environment — including or excluding the trailing slash exactly as WorkOS issues it. A wrong
    value refuses every sign-in (fail closed) without exposing anything.
-7. In WorkOS, invite/create the owner's user with the e-mail used for the bootstrap.
+7. In WorkOS, invite/create **only the owner's** user (the e-mail used for the bootstrap). Every
+   later user is invited from AYVO OS (section 7b) — never create them manually in WorkOS.
 8. Then the DEV deployment can run (`scripts/deploy-dev.sh` refuses without the three values) and
    the one-time bootstrap (section 8). After the first sign-in, complete the address of the
    initial site `CZ-PREROV-01` in **Správa systému → Provozovny** (doc 022 §5).
@@ -424,7 +481,15 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
   linked across sites (API and trigger). **Prices**: refused without `cost_write` on create and
   replay (also hidden fields), FINANCE completes a price append-only with reason, actor and site
   in the audit, staff cannot correct or see it. **Redis outage**: 503 for login and callback,
-  never unlimited, signed-in sessions unaffected. **Last administrator**: also refused by the
+  never unlimited, signed-in sessions unaffected. **Invitations** (fake provider with failure markers; real
+  database): send on creation after roles and sites, sign-in links once and marks ACCEPTED, a lost
+  provider response reconciled on retry without a second invitation, idempotent request ids and
+  conflicts, provider refusal → FAILED and no sign-in, revocation (idempotent, blocks sign-in,
+  resend invites anew), expiry, e-mail normalization and duplicate prevention (API, concurrency
+  and database), identity mismatch refused, simultaneous first sign-ins link once, deactivated
+  invited user refused, ADMIN-only endpoints, no enumeration; WorkOS adapter: bearer key
+  server-side, token and link never kept, refused vs. ambiguous failures, no secrets in errors;
+  session defaults 120 min / 12 h. **Last administrator**: also refused by the
   database at commit (single statement or transaction), catalogue TRUNCATE refused.
 - Playwright: sign-in redirects back to the requested page; anonymous API 401; unknown identity;
   administration (create, grant, revoke, deactivate with reasons and audit) and its immediate
