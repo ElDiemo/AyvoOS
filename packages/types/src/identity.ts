@@ -65,7 +65,13 @@ export const SECURITY_ADMIN_PERMISSIONS: readonly PermissionCode[] = [
 ];
 
 /** Module of a permission (its code prefix) — the checkbox groups of the role editor. */
-export const PERMISSION_MODULES = ['inventory', 'procurement', 'production', 'identity', 'sites'] as const;
+export const PERMISSION_MODULES = [
+  'inventory',
+  'procurement',
+  'production',
+  'identity',
+  'sites',
+] as const;
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 export const permissionModule = (code: PermissionCode): PermissionModule =>
   code.split(':')[0] as PermissionModule;
