@@ -47,6 +47,16 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
                   {user.roles.length ? user.roles.map((r) => r.name).join(', ') : t.noRoles}
                 </span>
               </Field>
+              <Field label={t.invitation}>
+                <span data-testid="invitation-state">
+                  {user.invitation ? t.invitationStates[user.invitation.state] : t.noInvitation}
+                </span>
+                {user.invitation?.state === 'PENDING' && user.invitation.expiresAt && (
+                  <span className="block text-xs text-stone-500">
+                    {t.invitationExpires(formatDateTimeCs(user.invitation.expiresAt))}
+                  </span>
+                )}
+              </Field>
               <Field label={t.lastLogin}>
                 {user.lastLoginAt ? formatDateTimeCs(user.lastLoginAt) : t.never} ·{' '}
                 {user.linked ? t.linked : t.notLinked} · {t.sessions(user.activeSessions)}

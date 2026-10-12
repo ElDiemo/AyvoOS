@@ -70,6 +70,11 @@ export function UserActions({
     }
   }
 
+  /** Invitation actions are idempotent: one request id per click, reused if retried. */
+  async function invite(path: string) {
+    await run(path, { requestId: crypto.randomUUID() });
+  }
+
   const disabled = busy || !reasonOk;
   return (
     <Card title={t.reason}>
@@ -227,6 +232,45 @@ export function UserActions({
             </div>
           )}
         </section>
+
+        {!user.linked && user.status === 'ACTIVE' && (
+          <section className="flex flex-col gap-2" data-testid="invitation-actions">
+            <h3 className={label}>{t.invitation}</h3>
+            <div className="flex flex-wrap gap-2">
+              {(!user.invitation ||
+                ['EXPIRED', 'REVOKED', 'FAILED'].includes(user.invitation.state)) && (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => void invite('invitations/resend')}
+                  className={`${buttonClass.secondary} whitespace-nowrap`}
+                >
+                  {user.invitation ? t.resendInvitation : t.sendInvitation}
+                </button>
+              )}
+              {user.invitation && ['PENDING', 'SENDING'].includes(user.invitation.state) && (
+                <>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => void invite('invitations/resend')}
+                    className={`${buttonClass.secondary} whitespace-nowrap`}
+                  >
+                    {t.resendInvitation}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => void invite('invitations/revoke')}
+                    className={`${buttonClass.danger} whitespace-nowrap`}
+                  >
+                    {t.revokeInvitation}
+                  </button>
+                </>
+              )}
+            </div>
+          </section>
+        )}
 
         <section className="flex flex-col gap-2">
           <h3 className={label}>{t.status}</h3>

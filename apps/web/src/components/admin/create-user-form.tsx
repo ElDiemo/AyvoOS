@@ -168,6 +168,7 @@ export function CreateUserForm({ roles, sites }: { roles: RoleCatalog; sites: As
               </div>
             ))}
           </fieldset>
+          <p className="text-xs text-stone-500">{t.invitationHelp}</p>
           <label className="flex flex-col gap-1">
             <span className={label}>{t.reason}</span>
             <input

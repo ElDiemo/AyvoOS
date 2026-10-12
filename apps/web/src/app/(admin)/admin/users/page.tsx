@@ -64,8 +64,12 @@ export default async function UsersPage() {
                     ) : (
                       <span className="text-red-800">{t.deactivated}</span>
                     )}
-                    <span className="block text-xs text-stone-500">
-                      {u.linked ? t.linked : t.notLinked}
+                    <span className="block text-xs text-stone-500" data-testid="user-invitation">
+                      {u.linked
+                        ? t.linked
+                        : u.invitationState
+                          ? `${t.invitation}: ${t.invitationStates[u.invitationState]}`
+                          : t.notLinked}
                     </span>
                   </td>
                   <td className="px-5 py-3 align-top whitespace-nowrap text-stone-500">
