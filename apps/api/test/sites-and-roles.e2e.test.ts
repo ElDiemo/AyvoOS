@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  AdminUserDetail,
-  BottleRegistrationResponse,
-  CurrentUser,
-  GoodsReceipt,
-  RoleDetail,
-  SiteDetail,
-  StockOverview,
+import {
+  isPlannedRole,
+  type AdminUserDetail,
+  type BottleRegistrationResponse,
+  type CurrentUser,
+  type GoodsReceipt,
+  type RoleDetail,
+  type SiteDetail,
+  type StockOverview,
 } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -36,17 +37,27 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
     post: (path: string, body: object = {}) => http().post(path).set('Cookie', cookie).send(body),
   });
 
+  /**
+   * Planned system roles (FINANCE, SALES, HOTEL_USER) are no longer assignable through the API
+   * (doc 021 §4c); their templates are tested through an assignment written directly — like one
+   * that already existed.
+   */
   async function createUser(roles: string[], siteIds: string[], warehouseCodes: string[] = []) {
     const res = await as(admin).post('/api/admin/identity/users', {
       email: unique('user'),
       displayName: 'Test User',
-      roles,
+      roles: roles.filter((r) => !isPlannedRole(r)),
       siteIds,
       warehouseCodes,
       reason: 'test setup',
     });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     const user = res.body as AdminUserDetail;
+    for (const role of roles.filter(isPlannedRole)) {
+      await t.prisma.userRole.create({
+        data: { userId: user.id, roleCode: role, grantReason: 'pre-existing assignment (test)' },
+      });
+    }
     return { user, cookie: await sessionCookie(t, user.email) };
   }
 

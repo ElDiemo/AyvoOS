@@ -13,6 +13,22 @@ export const identityCs = {
     HOTEL_USER: 'Uživatel hotelu',
   } as Record<string, string>,
   /**
+   * Planned system roles (doc 021 §4c): templates of modules that do not exist yet, not
+   * assignable. HOTEL_USER is an external hotel-portal role, never an internal operational one.
+   */
+  planned: {
+    label: 'Připravuje se',
+    section: 'Připravované role (zatím nelze přidělit)',
+    help: 'Role je šablona pro modul, který zatím neexistuje. Nelze ji přidělit; dosavadní přidělení zůstává.',
+    roles: {
+      SALES:
+        'Obchod: bude omezen na přidělené hotely a hotelové skupiny, ne na výrobní provozovny.',
+      FINANCE: 'Finance: bude omezena účetní jednotkou; finanční modul zatím neexistuje.',
+      HOTEL_USER:
+        'Externí role hotelového portálu (smlouvy, faktury, ESG) — není to interní provozní role.',
+    } as Record<string, string>,
+  },
+  /**
    * Czech labels of the permission catalogue (doc 021 §4), grouped by module in the editor. Every
    * code needs one (checked by `satisfies` and identity.test.ts); the slug is only secondary text.
    */
@@ -184,6 +200,7 @@ export const identityCs = {
       SITE_EXISTS: 'Provozovna s tímto kódem už existuje.',
       SITE_HAS_WAREHOUSES: 'Provozovna se sklady musí mít schopnost Sklad.',
       SITE_HAS_WAREHOUSE: 'Provozovna už svůj sklad má.',
+      ROLE_NOT_AVAILABLE: 'Tato role se teprve připravuje a zatím ji nelze přidělit.',
       SITE_NOT_WAREHOUSE: 'Sklad lze založit jen provozovně se schopností Sklad.',
       WAREHOUSE_CODE_EXISTS:
         'Sklad s tímto kódem už existuje (kódy jsou jedinečné ve všech provozovnách).',

@@ -1,4 +1,4 @@
-import { permissionCatalogSchema, roleDetailSchema } from '@ayvo/types';
+import { isPlannedRole, permissionCatalogSchema, roleDetailSchema } from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -31,7 +31,11 @@ export default async function RolePage({ params }: { params: Promise<{ id: strin
         subtitle={
           <span className="font-mono wrap-anywhere">
             {role.code} · {role.system ? t.system : t.custom} ·{' '}
-            {role.active ? t.active : t.inactive}
+            {isPlannedRole(role.code)
+              ? identityCs.planned.label
+              : role.active
+                ? t.active
+                : t.inactive}
           </span>
         }
         back={{ href: '/admin/roles', label: t.back }}
@@ -47,6 +51,14 @@ export default async function RolePage({ params }: { params: Promise<{ id: strin
         <div className="flex min-w-0 flex-col gap-6">
           {role.system || !canManage ? (
             <Card title={t.permissions}>
+              {isPlannedRole(role.code) && (
+                <div className="mb-4" data-testid="planned-role">
+                  <Notice tone="warning">
+                    {identityCs.planned.label}: {identityCs.planned.roles[role.code]}{' '}
+                    {identityCs.planned.help}
+                  </Notice>
+                </div>
+              )}
               {role.system && (
                 <div className="mb-4">
                   <Notice tone="info">{t.readOnly}</Notice>

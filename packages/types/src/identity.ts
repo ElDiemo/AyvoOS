@@ -17,6 +17,20 @@ export const SYSTEM_ROLE_CODES = [
   'FINANCE',
   'HOTEL_USER',
 ] as const;
+/**
+ * System roles that are templates for modules that do not exist yet (finance, hotel portfolio
+ * and commissions, the external hotel portal; doc 021 §4c). Their records and permission templates
+ * stay, but they are **not assignable** now: the API refuses every new assignment and the UI shows
+ * them as "Připravuje se". An assignment that already exists is kept (shown, revocable).
+ */
+export const PLANNED_SYSTEM_ROLE_CODES = ['SALES', 'FINANCE', 'HOTEL_USER'] as const;
+export type PlannedSystemRoleCode = (typeof PLANNED_SYSTEM_ROLE_CODES)[number];
+
+/** Whether a role (system or custom) is a planned template that cannot be assigned yet. */
+export function isPlannedRole(code: string): code is PlannedSystemRoleCode {
+  return (PLANNED_SYSTEM_ROLE_CODES as readonly string[]).includes(code);
+}
+
 /** @deprecated use SYSTEM_ROLE_CODES */
 export const ROLE_CODES = SYSTEM_ROLE_CODES;
 export type SystemRoleCode = (typeof SYSTEM_ROLE_CODES)[number];

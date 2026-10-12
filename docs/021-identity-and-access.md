@@ -113,9 +113,9 @@ refused. A user may hold several roles (system and custom); the permissions add 
   the API **omits** the fields from every receipt response (detail, create, link document,
   correction, price completion, idempotent replays) — filtered on the server
   (`receiptForViewer`), never only hidden in the UI. Receipt lists carry no prices.
-- **Recording prices needs `procurement:cost_write`** (ADMIN, FINANCE). Warehouse staff record
-  quantities, lots and the delivery documents; a receipt request with any price, currency or VAT
-  value from a caller without `cost_write` is **refused** (`403 COST_WRITE_REQUIRED`) — on create,
+- **Recording prices needs `procurement:cost_write`** (ADMIN, FINANCE — FINANCE is planned,
+  §4c). Warehouse staff record quantities, lots and the delivery documents; a receipt request
+  with any price, currency or VAT value from a caller without `cost_write` is **refused** (`403 COST_WRITE_REQUIRED`) — on create,
   retry and replay; a hidden form field authorizes nothing. FINANCE completes or corrects a line's
   price later (`POST /goods-receipts/:code/lines/:lineNo/cost`): append-only
   (`goods_receipt_line_costs`, the receipt line keeps what was received), reason required, audited
@@ -137,6 +137,34 @@ refused. A user may hold several roles (system and custom); the permissions add 
 - `HOTEL_USER` has no permission in the internal application (the hotel portal is separate).
 - The standalone label application is supervisor-only until the production scan replaces it
   (doc 020). The Production Core permissions of doc 020 §12 are added by their own migrations.
+
+### 4c. Planned system roles — not assignable yet (owner 2026-10-12)
+
+`SALES`, `FINANCE` and `HOTEL_USER` are templates of modules that do not exist yet (hotel
+portfolio and commissions, finance and accounting, the external hotel portal). Their records and
+permission templates above stay unchanged, but they are **not assignable** now:
+
+- One central definition, `PLANNED_SYSTEM_ROLE_CODES` / `isPlannedRole()` in `@ayvo/types`, is
+  used by the API and the web. The API refuses every new assignment — user creation (all or
+  nothing: no user, no invitation) and role grants — with `422 ROLE_NOT_AVAILABLE`, whatever the
+  client sends. Invitations carry no roles. Custom roles and the active system roles (`ADMIN`,
+  warehouse and production roles) are unaffected; a custom role may copy a planned template's
+  permissions (e.g. purchase prices, which otherwise only ADMIN records now).
+- An assignment that already exists is kept: shown (marked "Připravuje se") and revocable, never
+  re-added. Nothing is removed automatically.
+- UI: in user creation and editing the three roles are disabled and labelled **"Připravuje se"**
+  with a short explanation (HOTEL_USER as an external portal role, not an internal operational
+  one); the role overview and detail mark them as planned templates.
+
+Intended scope when their modules are approved (not implemented):
+
+- Warehouse and production roles are scoped by AYVO sites (section 3, doc 022).
+- `SALES` will be scoped by assigned hotels or hotel groups, not primarily by production sites.
+- `HOTEL_USER` will use a separate external portal shell, restricted to its assigned hotels or
+  hotel groups and their contracts, invoices, ESG reports and other customer-facing data. It must
+  never gain warehouse, production, procurement-cost or internal administration access, and
+  internal and external hotel roles are never combined on one account.
+- `FINANCE` will be scoped by legal entity / accounting scope, not merely by site.
 
 ## 5. Sign-in, session and sign-out
 

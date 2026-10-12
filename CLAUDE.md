@@ -74,6 +74,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   series, bottles, print jobs and supplier documents belong to a site (`@OperationalSite()`);
   label templates are company-wide (`production:templates_manage`, ADMIN by default). The sign-in
   rate limiter fails closed (503) without Redis.
+  `SALES`, `FINANCE` and `HOTEL_USER` are planned templates (doc 021 §4c): not assignable
+  (`isPlannedRole`, refused by the API), records and permissions unchanged.
   Users are onboarded only by AYVO invitations (provider API, server-side): an identity is linked
   at first sign-in only if the provider reports the user's invitation accepted by exactly that
   identity (the bootstrap ADMIN excepted). Session defaults: 120 min idle, 12 h absolute.
