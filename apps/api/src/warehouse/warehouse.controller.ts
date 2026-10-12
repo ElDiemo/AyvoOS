@@ -12,6 +12,7 @@ import {
   type LabelApplicationResult,
   type MovementListQuery,
   type StockOverview,
+  type StockSummary,
   type UpdateItemSettingsRequest,
 } from '@ayvo/types';
 import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
@@ -28,10 +29,7 @@ const lotQuerySchema = z.object({
   available: z.enum(['true', 'false']).default('true'),
 });
 
-/**
- * Admin API of the warehouse screens (doc 018). Future permissions: warehouse.label.apply,
- * inventory.read, inventory.items.manage.
- */
+/** Admin API of the warehouse screens (doc 018); permissions per route (doc 021). */
 @Controller(ADMIN_PREFIX)
 export class WarehouseController {
   constructor(
@@ -83,6 +81,13 @@ export class WarehouseController {
   @Get('inventory/stock')
   stock(): Promise<StockOverview> {
     return this.read.stock();
+  }
+
+  /** Read-only availability for planning (SALES); no operational, supplier or cost details. */
+  @RequirePermission('inventory:stock_summary')
+  @Get('inventory/stock-summary')
+  stockSummary(): Promise<StockSummary> {
+    return this.read.stockSummary();
   }
 
   @RequirePermission('inventory:read')

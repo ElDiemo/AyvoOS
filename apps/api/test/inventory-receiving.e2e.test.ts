@@ -256,7 +256,7 @@ describe.skipIf(!hasDatabase)('inventory foundation and supplier receiving (doc 
         .expect(200)
     ).body as GoodsReceipt;
     expect(linked.invoicePending).toBe(false);
-    expect(linked.documents.map((d) => d.kind)).toEqual(['DELIVERY_NOTE', 'INVOICE']);
+    expect(linked.documents!.map((d) => d.kind)).toEqual(['DELIVERY_NOTE', 'INVOICE']);
     await http()
       .post(`/api/admin/goods-receipts/${receipt.code}/documents`)
       .send({ requestId, documentId: invoice.id })

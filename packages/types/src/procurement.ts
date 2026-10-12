@@ -134,9 +134,10 @@ export const goodsReceiptLineSchema = z.object({
   /** quantity + Σ corrections */
   netQuantity: decimalStringSchema,
   lot: z.object({ id: z.uuid(), code: z.string(), kind: inventoryLotKindSchema }).nullable(),
-  unitPrice: decimalStringSchema.nullable(),
-  currency: z.string().nullable(),
-  vatRate: decimalStringSchema.nullable(),
+  /** Purchase price fields — omitted (not null) unless the caller holds procurement:cost_read. */
+  unitPrice: decimalStringSchema.nullable().optional(),
+  currency: z.string().nullable().optional(),
+  vatRate: decimalStringSchema.nullable().optional(),
   corrections: z.array(goodsReceiptCorrectionSchema),
 });
 
@@ -150,7 +151,8 @@ export const goodsReceiptSchema = z.object({
   createdAt: z.iso.datetime(),
   /** No INVOICE linked yet: stock is available, the purchase is not financially complete. */
   invoicePending: z.boolean(),
-  documents: z.array(supplierDocumentSchema.extend({ linkedAt: z.iso.datetime() })),
+  /** Omitted unless the caller holds procurement:documents_read. */
+  documents: z.array(supplierDocumentSchema.extend({ linkedAt: z.iso.datetime() })).optional(),
   lines: z.array(goodsReceiptLineSchema),
 });
 export type GoodsReceipt = z.infer<typeof goodsReceiptSchema>;

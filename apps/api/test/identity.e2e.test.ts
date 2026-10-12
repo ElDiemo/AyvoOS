@@ -1,4 +1,14 @@
-import type { AdminUserDetail, CurrentUser, RoleCode } from '@ayvo/types';
+import { randomUUID } from 'node:crypto';
+import {
+  PERMISSION_CODES,
+  ROLE_CODES,
+  WAREHOUSE_SCOPED_PERMISSIONS,
+  type AdminUserDetail,
+  type CurrentUser,
+  type GoodsReceipt,
+  type RoleCode,
+  type StockSummary,
+} from '@ayvo/types';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { ModulesContainer } from '@nestjs/core';
 import request, { type Response } from 'supertest';
@@ -6,6 +16,37 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ACCESS_METADATA, type AccessRule } from '../src/identity/access.decorators.js';
 import { bootstrapFirstAdmin } from '../src/identity/bootstrap.js';
 import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
+import { newBottleItemId, PDF_BYTES } from './support/warehouse-fixtures.js';
+
+/**
+ * The approved role → permission matrix (doc 021 §4). ADMIN holds every permission through
+ * ordinary role_permissions rows — a permission added by a later migration fails this test until
+ * it is reviewed and granted to ADMIN explicitly.
+ */
+const ROLE_MATRIX: Record<RoleCode, readonly string[]> = {
+  ADMIN: [...PERMISSION_CODES],
+  WAREHOUSE_OPERATOR: ['inventory:read', 'inventory:receive'],
+  WAREHOUSE_SUPERVISOR: [
+    'inventory:read',
+    'inventory:receive',
+    'inventory:correct',
+    'inventory:items_manage',
+    'procurement:suppliers_manage',
+    'procurement:documents_read',
+  ],
+  PRODUCTION_OPERATOR: ['production:read', 'production:labels_print', 'inventory:read'],
+  PRODUCTION_SUPERVISOR: [
+    'production:read',
+    'production:labels_print',
+    'production:bottles_create',
+    'production:templates_manage',
+    'production:label_apply',
+    'inventory:read',
+  ],
+  SALES: ['inventory:stock_summary'],
+  FINANCE: ['inventory:read', 'procurement:cost_read', 'procurement:documents_read'],
+  HOTEL_USER: [],
+};
 
 /**
  * Identity and access (Milestone 2C, ADR 0022, doc 021) against the real migrated database, the
@@ -140,7 +181,10 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     const me = (await http().get('/api/auth/me').set('Cookie', `ayvo_session=${token}`).expect(200))
       .body as CurrentUser;
     expect(me).toMatchObject({ user: { email: 'owner@ayvo.test' }, roles: ['ADMIN'] });
-    expect(me.permissions).toEqual(['identity:users_manage', 'identity:users_read']);
+    expect(me.permissions).toEqual([...PERMISSION_CODES].sort());
+    // ADMIN still needs warehouse scopes for warehouse-scoped permissions: the bootstrap grants
+    // every existing warehouse as data.
+    expect(me.scopes.map((x) => [x.type, x.locationCode])).toEqual([['WAREHOUSE', 'MAIN']]);
     expect(
       await t.prisma.auditEvent.count({
         where: { type: 'LOGIN_SUCCEEDED', targetUserId: me.user.id },
@@ -209,18 +253,250 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       (await http().get('/api/admin/inventory/stock').set('Cookie', unscopedCookie)).status,
     ).toBe(403);
 
-    // Roles without implemented modules grant nothing internal.
-    for (const role of ['SALES', 'FINANCE', 'HOTEL_USER'] as const) {
-      const user = await createUser([role]);
-      const c = await session(user.email);
-      for (const path of [
-        '/api/admin/inventory/stock',
-        '/api/admin/bottles',
-        '/api/admin/identity/users',
-      ]) {
-        expect((await http().get(path).set('Cookie', c)).status, `${role} ${path}`).toBe(403);
-      }
+    // The hotel role grants nothing internal.
+    const hotel = await createUser(['HOTEL_USER']);
+    const hotelCookie = await session(hotel.email);
+    for (const path of [
+      '/api/admin/inventory/stock',
+      '/api/admin/inventory/stock-summary',
+      '/api/admin/goods-receipts',
+      '/api/admin/bottles',
+      '/api/admin/identity/users',
+    ]) {
+      expect((await http().get(path).set('Cookie', hotelCookie)).status, path).toBe(403);
     }
+  });
+
+  it('the role catalogue in the database is exactly the approved matrix; ADMIN holds every permission', async () => {
+    const catalogue = await t.prisma.permission.findMany({ orderBy: { code: 'asc' } });
+    expect(catalogue.map((p) => p.code)).toEqual([...PERMISSION_CODES].sort());
+    expect(catalogue.filter((p) => p.warehouseScoped).map((p) => p.code)).toEqual(
+      [...WAREHOUSE_SCOPED_PERMISSIONS].sort(),
+    );
+    const grants = await t.prisma.rolePermission.findMany();
+    for (const role of ROLE_CODES) {
+      expect(
+        grants
+          .filter((g) => g.roleCode === role)
+          .map((g) => g.permissionCode)
+          .sort(),
+        role,
+      ).toEqual([...ROLE_MATRIX[role]].sort());
+    }
+    // The catalogue changes only by migration.
+    await expect(
+      t.prisma.rolePermission.deleteMany({ where: { roleCode: 'ADMIN' } }),
+    ).rejects.toThrow();
+    await expect(
+      t.prisma.role.update({ where: { code: 'SALES' }, data: { description: 'x' } }),
+    ).rejects.toThrow();
+  });
+
+  describe('purchase prices and supplier documents', () => {
+    let receipt: GoodsReceipt;
+    let documentId: string;
+    let supplierId: string;
+
+    beforeAll(async () => {
+      supplierId = (
+        await http()
+          .post('/api/admin/suppliers')
+          .set('Cookie', adminCookie)
+          .send({
+            requestId: randomUUID(),
+            name: `Cost ${randomUUID()}`,
+            companyId: null,
+            vatId: null,
+          })
+          .expect(201)
+      ).body.id;
+      documentId = (
+        await http()
+          .post('/api/admin/supplier-documents')
+          .set('Cookie', adminCookie)
+          .field('requestId', randomUUID())
+          .field('supplierId', supplierId)
+          .field('kind', 'INVOICE')
+          .field('documentNumber', 'FV-SECRET-1')
+          .field('issuedOn', '2026-10-11')
+          .attach('file', PDF_BYTES, 'invoice.pdf')
+          .expect(201)
+      ).body.id;
+      receipt = (
+        await http()
+          .post('/api/admin/goods-receipts')
+          .set('Cookie', adminCookie)
+          .send({
+            requestId: randomUUID(),
+            supplierId,
+            supplierReference: 'FV-SECRET-1',
+            receivedAt: new Date().toISOString(),
+            note: null,
+            documentIds: [documentId],
+            lines: [
+              {
+                itemId: await newBottleItemId(t),
+                quantity: '10',
+                supplierLotCode: null,
+                unitPrice: '987.6543',
+                currency: 'CZK',
+                vatRate: '21',
+              },
+            ],
+          })
+          .expect(201)
+      ).body as GoodsReceipt;
+      // ADMIN sees everything.
+      expect(receipt.lines[0]).toMatchObject({ unitPrice: '987.6543', currency: 'CZK' });
+      expect(receipt.documents).toHaveLength(1);
+    });
+
+    const leaks = (body: unknown) => {
+      const text = JSON.stringify(body);
+      return ['987.6543', 'unitPrice', 'vatRate', 'currency'].filter((x) => text.includes(x));
+    };
+
+    it.each([
+      ['WAREHOUSE_OPERATOR', { costs: false, documents: false }],
+      ['WAREHOUSE_SUPERVISOR', { costs: false, documents: true }],
+      ['PRODUCTION_OPERATOR', { costs: false, documents: false }],
+      ['PRODUCTION_SUPERVISOR', { costs: false, documents: false }],
+      ['FINANCE', { costs: true, documents: true }],
+      // ADMIN: covered by the setup above (a second ADMIN here would disarm the last-admin test).
+    ] as const)(
+      '%s: receipt costs and documents are filtered by the server (%o)',
+      async (role, may) => {
+        const user = await createUser([role]);
+        const cookie = await session(user.email);
+        const detail = await http()
+          .get(`/api/admin/goods-receipts/${receipt.code}`)
+          .set('Cookie', cookie)
+          .expect(200);
+        const line = detail.body.lines[0];
+        if (may.costs) {
+          expect(line).toMatchObject({ unitPrice: '987.6543', currency: 'CZK', vatRate: '21' });
+        } else {
+          expect(leaks(detail.body)).toEqual([]);
+          expect(Object.keys(line)).not.toContain('unitPrice');
+        }
+        expect('documents' in detail.body).toBe(may.documents);
+        const list = await http()
+          .get(`/api/admin/suppliers/${supplierId}/documents`)
+          .set('Cookie', cookie);
+        expect(list.status).toBe(may.documents ? 200 : 403);
+        const file = await http()
+          .get(`/api/admin/supplier-documents/${documentId}/content`)
+          .set('Cookie', cookie);
+        expect(file.status).toBe(may.documents ? 200 : 403);
+        if (!may.documents) expect(file.text ?? '').not.toContain('%PDF');
+        // The receipt list never carries prices.
+        const receipts = await http().get('/api/admin/goods-receipts').set('Cookie', cookie);
+        expect(receipts.status).toBe(200);
+        expect(leaks(receipts.body)).toEqual([]);
+      },
+    );
+
+    it('write responses and idempotent replays are filtered too', async () => {
+      const operator = await createUser(['WAREHOUSE_OPERATOR']);
+      const cookie = await session(operator.email);
+      const upload = await http()
+        .post('/api/admin/supplier-documents')
+        .set('Cookie', cookie)
+        .field('requestId', randomUUID())
+        .field('supplierId', supplierId)
+        .field('kind', 'DELIVERY_NOTE')
+        .field('documentNumber', 'DL-OP-1')
+        .field('issuedOn', '2026-10-11')
+        .attach('file', PDF_BYTES, 'note.pdf')
+        .expect(201);
+      const body = {
+        requestId: randomUUID(),
+        supplierId,
+        supplierReference: 'DL-OP-1',
+        receivedAt: new Date().toISOString(),
+        note: null,
+        documentIds: [upload.body.id],
+        lines: [
+          {
+            itemId: await newBottleItemId(t),
+            quantity: '1',
+            supplierLotCode: null,
+            unitPrice: '987.6543',
+            currency: 'CZK',
+            vatRate: null,
+          },
+        ],
+      };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await http()
+          .post('/api/admin/goods-receipts')
+          .set('Cookie', cookie)
+          .send(body)
+          .expect(201);
+        expect(leaks(res.body)).toEqual([]);
+        expect('documents' in res.body).toBe(false);
+      }
+      // The same request replayed by an administrator returns the stored values in full.
+      const admin = await http()
+        .post('/api/admin/goods-receipts')
+        .set('Cookie', adminCookie)
+        .send(body)
+        .expect(201);
+      expect(admin.body.lines[0].unitPrice).toBe('987.6543');
+
+      const linked = await http()
+        .post(`/api/admin/goods-receipts/${receipt.code}/documents`)
+        .set('Cookie', cookie)
+        .send({ requestId: randomUUID(), documentId: upload.body.id })
+        .expect(200);
+      expect(leaks(linked.body)).toEqual([]);
+      expect('documents' in linked.body).toBe(false);
+    });
+  });
+
+  it('SALES reads a planning-only stock summary and nothing operational', async () => {
+    const sales = await createUser(['SALES']);
+    const cookie = await session(sales.email);
+    const summary = (
+      await http().get('/api/admin/inventory/stock-summary').set('Cookie', cookie).expect(200)
+    ).body as StockSummary;
+    expect(summary.location.code).toBe('MAIN');
+    expect(summary.items.length).toBeGreaterThan(0);
+    for (const row of summary.items) {
+      expect(Object.keys(row).sort()).toEqual(['available', 'item', 'lowStock', 'reserved']);
+      expect(Object.keys(row.item).sort()).toEqual(['code', 'name', 'unitCode']);
+    }
+    expect(JSON.stringify(summary)).not.toMatch(/supplier|lot|price|document|onHand/i);
+
+    for (const path of [
+      '/api/admin/inventory/stock',
+      '/api/admin/inventory/items',
+      '/api/admin/inventory/lots?item=NEW_BOTTLE',
+      '/api/admin/inventory/movements',
+      '/api/admin/goods-receipts',
+      '/api/admin/suppliers',
+      '/api/admin/bottles',
+      '/api/admin/identity/users',
+    ]) {
+      expect((await http().get(path).set('Cookie', cookie)).status, path).toBe(403);
+    }
+    for (const path of [
+      '/api/admin/goods-receipts',
+      '/api/admin/goods-receipts/GR-000001/corrections',
+      '/api/admin/supplier-documents',
+      '/api/admin/suppliers',
+      '/api/admin/inventory/items/NEW_BOTTLE/settings',
+      '/api/admin/label-applications',
+    ]) {
+      expect((await http().post(path).set('Cookie', cookie).send({})).status, path).toBe(403);
+    }
+    // Warehouse-scoped like every stock read: without the warehouse no summary either.
+    const unscoped = await createUser(['SALES'], []);
+    const unscopedCookie = await session(unscoped.email);
+    await http()
+      .get('/api/admin/inventory/stock-summary')
+      .set('Cookie', unscopedCookie)
+      .expect(403);
   });
 
   it('identity is never taken from headers', async () => {

@@ -7,6 +7,7 @@ import type {
   MovementListQuery,
   RecentLabelApplication,
   StockOverview,
+  StockSummary,
   UpdateItemSettingsRequest,
 } from '@ayvo/types';
 import { BottlesService } from '../assets/bottles.service.js';
@@ -87,6 +88,23 @@ export class WarehouseReadService {
             .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
         };
       }),
+    };
+  }
+
+  /**
+   * Planning view of the same numbers (SALES, doc 021): item, available, reserved, low stock.
+   * Built as an explicit allow-list so no lot, supplier or other operational field leaks.
+   */
+  async stockSummary(): Promise<StockSummary> {
+    const overview = await this.stock();
+    return {
+      location: overview.location,
+      items: overview.items.map((s) => ({
+        item: { code: s.item.code, name: s.item.name, unitCode: s.item.unit.code },
+        available: s.available,
+        reserved: s.reserved,
+        lowStock: s.lowStock,
+      })),
     };
   }
 

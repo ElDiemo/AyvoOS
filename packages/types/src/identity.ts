@@ -27,10 +27,13 @@ export const PERMISSION_CODES = [
   'identity:users_read',
   'identity:users_manage',
   'inventory:read',
+  'inventory:stock_summary',
   'inventory:receive',
   'inventory:correct',
   'inventory:items_manage',
   'procurement:suppliers_manage',
+  'procurement:cost_read',
+  'procurement:documents_read',
   'production:read',
   'production:bottles_create',
   'production:labels_print',
@@ -43,6 +46,7 @@ export type PermissionCode = z.infer<typeof permissionCodeSchema>;
 /** Permissions that also require a warehouse scope for the warehouse they act on. */
 export const WAREHOUSE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'inventory:read',
+  'inventory:stock_summary',
   'inventory:receive',
   'inventory:correct',
   'inventory:items_manage',

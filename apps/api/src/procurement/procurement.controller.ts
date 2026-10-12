@@ -39,13 +39,17 @@ import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ProcurementService } from './procurement.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
+import { CurrentPrincipal } from '../identity/access.guard.js';
+import type { Principal } from '../identity/principal.js';
+import { receiptForViewer } from './receipt-visibility.js';
 
 const RECEIPT_CODE = new ZodValidationPipe(goodsReceiptCodeSchema);
 const supplierListQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 
 /**
- * Admin API: suppliers, supplier documents, goods receipts (doc 018). Future permissions:
- * procurement.suppliers.manage, inventory.receive, inventory.correct, inventory.read(.prices).
+ * Admin API: suppliers, supplier documents, goods receipts (doc 018). Supplier documents need
+ * procurement:documents_read; receipt responses omit prices without procurement:cost_read and
+ * linked documents without procurement:documents_read (receiptForViewer, doc 021).
  */
 @Controller(ADMIN_PREFIX)
 export class ProcurementController {
@@ -78,7 +82,7 @@ export class ProcurementController {
     return this.procurement.archiveSupplier(id, body.requestId);
   }
 
-  @RequirePermission('inventory:read')
+  @RequirePermission('procurement:documents_read')
   @Get('suppliers/:id/documents')
   documents(@Param('id', ParseUUIDPipe) id: string): Promise<SupplierDocument[]> {
     return this.procurement.listDocuments(id);
@@ -97,7 +101,7 @@ export class ProcurementController {
     return this.procurement.uploadDocument(fields, file);
   }
 
-  @RequirePermission('inventory:read')
+  @RequirePermission('procurement:documents_read')
   @Get('supplier-documents/:id/content')
   @Header('Cache-Control', 'private, no-store')
   @Header('Content-Security-Policy', "default-src 'none'; sandbox")
@@ -120,38 +124,44 @@ export class ProcurementController {
 
   @RequirePermission('inventory:receive')
   @Post('goods-receipts')
-  createReceipt(
+  async createReceipt(
     @Body(new ZodValidationPipe(createGoodsReceiptRequestSchema)) body: CreateGoodsReceiptRequest,
+    @CurrentPrincipal() principal: Principal,
   ): Promise<GoodsReceipt> {
-    return this.procurement.createReceipt(body);
+    return receiptForViewer(await this.procurement.createReceipt(body), principal.permissions);
   }
 
   @RequirePermission('inventory:read')
   @Get('goods-receipts/:code')
-  receipt(@Param('code', RECEIPT_CODE) code: string): Promise<GoodsReceipt> {
-    return this.procurement.getReceipt(code);
+  async receipt(
+    @Param('code', RECEIPT_CODE) code: string,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<GoodsReceipt> {
+    return receiptForViewer(await this.procurement.getReceipt(code), principal.permissions);
   }
 
   /** Append-only: adds a document (e.g. the invoice that arrived after the goods). */
   @RequirePermission('inventory:receive')
   @Post('goods-receipts/:code/documents')
   @HttpCode(200)
-  linkDocument(
+  async linkDocument(
     @Param('code', RECEIPT_CODE) code: string,
     @Body(new ZodValidationPipe(linkReceiptDocumentRequestSchema)) body: LinkReceiptDocumentRequest,
+    @CurrentPrincipal() principal: Principal,
   ): Promise<GoodsReceipt> {
-    return this.procurement.linkDocument(code, body);
+    return receiptForViewer(await this.procurement.linkDocument(code, body), principal.permissions);
   }
 
   /** Compensating correction of a receipt line (warehouse manager; reason required). */
   @RequirePermission('inventory:correct')
   @Post('goods-receipts/:code/corrections')
   @HttpCode(200)
-  correct(
+  async correct(
     @Param('code', RECEIPT_CODE) code: string,
     @Body(new ZodValidationPipe(createReceiptCorrectionRequestSchema))
     body: CreateReceiptCorrectionRequest,
+    @CurrentPrincipal() principal: Principal,
   ): Promise<GoodsReceipt> {
-    return this.procurement.correctLine(code, body);
+    return receiptForViewer(await this.procurement.correctLine(code, body), principal.permissions);
   }
 }
