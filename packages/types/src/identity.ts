@@ -189,6 +189,35 @@ export const userRoleGrantSchema = z.object({
 
 export const roleRefSchema = z.object({ code: roleCodeSchema, name: z.string() });
 
+/** Invitation states (doc 021 §7b); a pending invitation past its expiry is shown as EXPIRED. */
+export const invitationStateSchema = z.enum([
+  'SENDING',
+  'PENDING',
+  'ACCEPTED',
+  'EXPIRED',
+  'REVOKED',
+  'FAILED',
+]);
+export type InvitationState = z.infer<typeof invitationStateSchema>;
+
+/** What an administrator sees of an invitation — never its token or link. */
+export const userInvitationViewSchema = z.object({
+  state: invitationStateSchema,
+  expiresAt: z.iso.datetime().nullable(),
+  sentAt: z.iso.datetime().nullable(),
+  acceptedAt: z.iso.datetime().nullable(),
+  revokedAt: z.iso.datetime().nullable(),
+  failureCode: z.string().nullable(),
+});
+export type UserInvitationView = z.infer<typeof userInvitationViewSchema>;
+
+/** POST …/users/:id/invitations{,/resend,/revoke} — idempotent per request id. */
+export const invitationActionRequestSchema = z.object({
+  requestId: z.uuid(),
+  reason: reasonSchema,
+});
+export type InvitationActionRequest = z.infer<typeof invitationActionRequestSchema>;
+
 export const adminUserSummarySchema = z.object({
   id: z.uuid(),
   email: z.string(),
@@ -196,6 +225,8 @@ export const adminUserSummarySchema = z.object({
   status: userStatusSchema,
   roles: z.array(roleRefSchema),
   linked: z.boolean(),
+  /** State of the latest invitation (null: none — e.g. the bootstrap administrator). */
+  invitationState: invitationStateSchema.nullable(),
   lastLoginAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
 });
@@ -221,6 +252,7 @@ export const effectiveAccessSchema = z.object({
 export type EffectiveAccess = z.infer<typeof effectiveAccessSchema>;
 
 export const adminUserDetailSchema = adminUserSummarySchema.extend({
+  invitation: userInvitationViewSchema.nullable(),
   roleGrants: z.array(userRoleGrantSchema),
   scopes: z.array(userScopeSchema),
   effectiveAccess: effectiveAccessSchema,
@@ -293,10 +325,8 @@ export const updateRoleRequestSchema = z.object({
 export type UpdateRoleRequest = z.infer<typeof updateRoleRequestSchema>;
 
 export const createUserRequestSchema = z.object({
-  email: z
-    .email()
-    .max(254)
-    .transform((e) => e.trim().toLowerCase()),
+  // Normalized (trimmed, lower-case) before it is validated, stored or sent to the provider.
+  email: z.string().trim().toLowerCase().pipe(z.email().max(254)),
   displayName: z.string().trim().min(1).max(120),
   roles: z.array(roleCodeSchema).max(50),
   /** Sites the user may access; warehouses may narrow a site (they must belong to listed sites). */

@@ -862,23 +862,26 @@ model User {
   deactivationReason String?    @map("deactivation_reason")
   lastLoginAt        DateTime?  @map("last_login_at") @db.Timestamptz(3)
 
-  createdByUser     User?              @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  createdUsers      User[]             @relation("UserCreatedBy")
-  deactivatedByUser User?              @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
-  deactivatedUsers  User[]             @relation("UserDeactivatedBy")
-  identities        UserIdentity[]
-  roles             UserRole[]         @relation("UserRoles")
-  rolesGranted      UserRole[]         @relation("RoleGrantedBy")
-  rolesRevoked      UserRole[]         @relation("RoleRevokedBy")
-  scopes            UserScope[]        @relation("UserScopes")
-  scopesGranted     UserScope[]        @relation("ScopeGrantedBy")
-  scopesRevoked     UserScope[]        @relation("ScopeRevokedBy")
-  sessions          UserSession[]
-  bootstrap         IdentityBootstrap?
-  rolesCreated      Role[]             @relation("RoleCreatedBy")
-  rolesUpdated      Role[]             @relation("RoleUpdatedBy")
-  sitesCreated      Site[]             @relation("SiteCreatedBy")
-  sitesUpdated      Site[]             @relation("SiteUpdatedBy")
+  createdByUser      User?              @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdUsers       User[]             @relation("UserCreatedBy")
+  deactivatedByUser  User?              @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
+  deactivatedUsers   User[]             @relation("UserDeactivatedBy")
+  identities         UserIdentity[]
+  roles              UserRole[]         @relation("UserRoles")
+  rolesGranted       UserRole[]         @relation("RoleGrantedBy")
+  rolesRevoked       UserRole[]         @relation("RoleRevokedBy")
+  scopes             UserScope[]        @relation("UserScopes")
+  scopesGranted      UserScope[]        @relation("ScopeGrantedBy")
+  scopesRevoked      UserScope[]        @relation("ScopeRevokedBy")
+  sessions           UserSession[]
+  bootstrap          IdentityBootstrap?
+  rolesCreated       Role[]             @relation("RoleCreatedBy")
+  rolesUpdated       Role[]             @relation("RoleUpdatedBy")
+  sitesCreated       Site[]             @relation("SiteCreatedBy")
+  invitations        UserInvitation[]   @relation("UserInvitations")
+  invitationsSent    UserInvitation[]   @relation("InvitationCreatedBy")
+  invitationsRevoked UserInvitation[]   @relation("InvitationRevokedBy")
+  sitesUpdated       Site[]             @relation("SiteUpdatedBy")
 
   @@map("users")
 }
@@ -1139,4 +1142,69 @@ model Site {
   updatedByUser  User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@map("sites")
+}
+
+enum UserInvitationState {
+  /// Recorded; the provider call is in progress (or was interrupted and is reconciled on retry).
+  SENDING
+  /// Sent by the provider; the person has not registered yet.
+  PENDING
+  /// The person registered through it and signed in: the identity is linked.
+  ACCEPTED
+  EXPIRED
+  REVOKED
+  /// The provider refused or failed; nothing was sent.
+  FAILED
+}
+
+/// An invitation of a prepared AYVO user to register with the identity provider (doc 021 §7b).
+/// The provider id is stored; invitation tokens and links are never stored or logged.
+/// DB: one open (SENDING/PENDING) invitation per e-mail and per user (partial unique); e-mail =
+/// the user's e-mail; only forward state transitions; identity columns immutable; never deleted.
+model UserInvitation {
+  id                   String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId               String              @map("user_id") @db.Uuid
+  email                String
+  provider             String
+  providerInvitationId String?             @unique @map("provider_invitation_id")
+  state                UserInvitationState @default(SENDING)
+  expiresAt            DateTime?           @map("expires_at") @db.Timestamptz(3)
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy            String?             @map("created_by") @db.Uuid
+  sentAt               DateTime?           @map("sent_at") @db.Timestamptz(3)
+  acceptedAt           DateTime?           @map("accepted_at") @db.Timestamptz(3)
+  /// The provider user that accepted it (must equal the linked identity's subject).
+  acceptedSubject      String?             @map("accepted_subject")
+  revokedAt            DateTime?           @map("revoked_at") @db.Timestamptz(3)
+  revokedBy            String?             @map("revoked_by") @db.Uuid
+  failureCode          String?             @map("failure_code")
+  requestId            String              @unique @map("request_id") @db.Uuid
+
+  user          User                    @relation("UserInvitations", fields: [userId], references: [id], onDelete: Restrict)
+  createdByUser User?                   @relation("InvitationCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  revokedByUser User?                   @relation("InvitationRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  requests      UserInvitationRequest[]
+
+  @@index([userId, createdAt])
+  @@map("user_invitations")
+}
+
+/// One administrative invitation action (send, resend, revoke) by its client request id: makes
+/// every action idempotent and safe to retry. DB: STARTED → DONE once; never deleted.
+model UserInvitationRequest {
+  requestId    String    @id @map("request_id") @db.Uuid
+  invitationId String    @map("invitation_id") @db.Uuid
+  kind         String
+  status       String    @default("STARTED")
+  actorId      String?   @map("actor_id") @db.Uuid
+  reason       String
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt  DateTime? @map("completed_at") @db.Timestamptz(3)
+  /// While set and in the future, one attempt is talking to the provider; others wait.
+  leaseUntil   DateTime? @map("lease_until") @db.Timestamptz(3)
+
+  invitation UserInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+
+  @@index([invitationId])
+  @@map("user_invitation_requests")
 }
