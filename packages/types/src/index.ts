@@ -6,4 +6,5 @@ export * from './inventory.js';
 export * from './labels.js';
 export * from './printing.js';
 export * from './procurement.js';
+export * from './sites.js';
 export * from './warehouse.js';

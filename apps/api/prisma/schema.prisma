@@ -455,10 +455,15 @@ model InventoryItemSetting {
 
 /// Physical stock location. One ("MAIN") for now. DB: code pattern; DELETE rejected.
 model InventoryLocation {
-  id   String @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code String @unique
-  name String
+  id            String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code          String  @unique
+  name          String
+  /// The site (facility) the warehouse belongs to — exactly one, immutable (doc 022).
+  siteId        String  @map("site_id") @db.Uuid
+  /// The warehouse the site's operations act on in v0.1. DB: at most one per site.
+  isSiteDefault Boolean @default(false) @map("is_site_default")
 
+  site       Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
   movements  InventoryMovement[]
   balances   InventoryBalance[]
   userScopes UserScope[]
@@ -685,12 +690,16 @@ model GoodsReceipt {
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   actorId           String?          @map("actor_id") @db.Uuid
   requestId         String           @unique @map("request_id") @db.Uuid
+  /// The site whose warehouse received the goods (doc 022).
+  siteId            String           @map("site_id") @db.Uuid
 
   supplier  Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  site      Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
   lines     GoodsReceiptLine[]
   documents GoodsReceiptDocument[]
 
   @@index([supplierId])
+  @@index([siteId, receivedAt])
   @@map("goods_receipts")
 }
 
@@ -824,6 +833,10 @@ model User {
   scopesRevoked     UserScope[]        @relation("ScopeRevokedBy")
   sessions          UserSession[]
   bootstrap         IdentityBootstrap?
+  rolesCreated      Role[]             @relation("RoleCreatedBy")
+  rolesUpdated      Role[]             @relation("RoleUpdatedBy")
+  sitesCreated      Site[]             @relation("SiteCreatedBy")
+  sitesUpdated      Site[]             @relation("SiteUpdatedBy")
 
   @@map("users")
 }
@@ -848,14 +861,28 @@ model UserIdentity {
   @@map("user_identities")
 }
 
-/// Role catalogue. DB: seeded by migration; changes only by migration.
+/// Roles. System roles (is_system) are seeded and change only by migration; custom roles are
+/// created by ADMIN (doc 021 §7a). DB: never deleted; code, id and is_system immutable; a role
+/// with open grants cannot be deactivated; an inactive role cannot be granted.
 model Role {
-  code        String @id
-  name        String
-  description String
+  code          String    @id
+  /// Stable identifier (the code is the human-readable key).
+  id            String    @unique @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// Czech display name.
+  name          String
+  description   String
+  isSystem      Boolean   @default(false) @map("is_system")
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy     String?   @map("created_by") @db.Uuid
+  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy     String?   @map("updated_by") @db.Uuid
+  deactivatedAt DateTime? @map("deactivated_at") @db.Timestamptz(3)
 
-  permissions RolePermission[]
-  grants      UserRole[]
+  permissions   RolePermission[]
+  grants        UserRole[]
+  createdByUser User?            @relation("RoleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedByUser User?            @relation("RoleUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@map("roles")
 }
@@ -864,15 +891,18 @@ model Role {
 model Permission {
   code            String  @id
   description     String
-  /// Also requires a warehouse scope for the warehouse the request acts on.
+  /// Also requires access to the active site and its warehouse (doc 022).
   warehouseScoped Boolean @map("warehouse_scoped")
+  /// Security administration: only the ADMIN system role may hold it (never a custom role).
+  securityAdmin   Boolean @default(false) @map("security_admin")
 
   roles RolePermission[]
 
   @@map("permissions")
 }
 
-/// Which permissions a role grants. DB: seeded by migration.
+/// Which permissions a role grants. DB: system roles change only by migration; custom roles by
+/// ADMIN (audited); a custom role never holds a security-administration permission.
 model RolePermission {
   roleCode       String @map("role_code")
   permissionCode String @map("permission_code")
@@ -908,18 +938,21 @@ model UserRole {
 
 enum ScopeType {
   WAREHOUSE
+  SITE
   HOTEL_ORGANIZATION
   HOTEL_SITE
 }
 
-/// Data access scope of a user. WAREHOUSE references an inventory location; hotel scopes
+/// Data access scope of a user (doc 022). SITE references a site (facility); WAREHOUSE narrows a
+/// site to listed warehouses and needs an open SITE scope of the warehouse's site; hotel scopes
 /// reference hotel organizations/sites once those modules exist (no FK yet).
-/// DB: WAREHOUSE ⇔ location_id set; hotel scopes ⇔ scope_ref set; at most one open scope per
-/// target (partial unique); revocation closes once; DELETE rejected.
+/// DB: SITE ⇔ site_id set; WAREHOUSE ⇔ location_id set; hotel scopes ⇔ scope_ref set; at most
+/// one open scope per target (partial unique); revocation closes once; DELETE rejected.
 model UserScope {
   id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   userId     String    @map("user_id") @db.Uuid
   type       ScopeType
+  siteId     String?   @map("site_id") @db.Uuid
   locationId String?   @map("location_id") @db.Uuid
   scopeRef   String?   @map("scope_ref") @db.Uuid
   grantedAt  DateTime  @default(now()) @map("granted_at") @db.Timestamptz(3)
@@ -928,6 +961,7 @@ model UserScope {
   revokedBy  String?   @map("revoked_by") @db.Uuid
 
   user          User               @relation("UserScopes", fields: [userId], references: [id], onDelete: Restrict)
+  site          Site?              @relation(fields: [siteId], references: [id], onDelete: Restrict)
   location      InventoryLocation? @relation(fields: [locationId], references: [id], onDelete: Restrict)
   grantedByUser User?              @relation("ScopeGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
   revokedByUser User?              @relation("ScopeRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
@@ -951,9 +985,12 @@ model UserSession {
   absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
   revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
   revokeReason      String?   @map("revoke_reason")
+  /// The site the user works at in this session (validated against the scopes on every request).
+  activeSiteId      String?   @map("active_site_id") @db.Uuid
 
-  user     User         @relation(fields: [userId], references: [id], onDelete: Restrict)
-  identity UserIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  identity   UserIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)
+  activeSite Site?        @relation(fields: [activeSiteId], references: [id], onDelete: Restrict)
 
   @@index([userId])
   @@map("user_sessions")
@@ -999,8 +1036,56 @@ model AuditEvent {
   reason       String?
   payload      Json     @default("{}")
   occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  /// The site a site-specific event concerns (doc 022).
+  siteId       String?  @map("site_id") @db.Uuid
+
+  site Site? @relation(fields: [siteId], references: [id], onDelete: Restrict)
 
   @@index([targetUserId, occurredAt])
+  @@index([siteId, occurredAt])
   @@index([occurredAt])
   @@map("audit_events")
+}
+
+enum SiteCapability {
+  WAREHOUSE
+  PRODUCTION
+  RETURNS
+}
+
+/// A physical AYVO facility — the top-level operational boundary (doc 022, ADR 0023). Not a
+/// country and not a legal entity. DB: code unique and immutable; never deleted; a valid IANA
+/// time zone; deactivation keeps history and blocks new operational changes.
+model Site {
+  id              String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code            String           @unique
+  name            String
+  /// ISO 3166-1 alpha-2.
+  countryCode     String           @map("country_code") @db.Char(2)
+  addressLine1    String?          @map("address_line1")
+  addressLine2    String?          @map("address_line2")
+  postalCode      String?          @map("postal_code")
+  city            String?
+  /// IANA time zone used to present this site's timestamps (stored in UTC).
+  timeZone        String           @map("time_zone")
+  defaultLocale   String           @map("default_locale")
+  /// ISO 4217.
+  defaultCurrency String           @map("default_currency") @db.Char(3)
+  capabilities    SiteCapability[]
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy       String?          @map("created_by") @db.Uuid
+  updatedAt       DateTime         @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy       String?          @map("updated_by") @db.Uuid
+  deactivatedAt   DateTime?        @map("deactivated_at") @db.Timestamptz(3)
+
+  locations      InventoryLocation[]
+  goodsReceipts  GoodsReceipt[]
+  userScopes     UserScope[]
+  activeSessions UserSession[]
+  auditEvents    AuditEvent[]
+  createdByUser  User?               @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedByUser  User?               @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  @@map("sites")
 }
