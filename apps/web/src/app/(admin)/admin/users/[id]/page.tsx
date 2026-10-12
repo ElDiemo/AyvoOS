@@ -5,7 +5,7 @@ import { AccessPreview } from '@/components/admin/access-preview';
 import { AdminHeader } from '@/components/admin/admin-header';
 import { AuditList } from '@/components/admin/audit-list';
 import { UserActions } from '@/components/admin/user-actions';
-import { Card, Field, FieldList } from '@/components/ui';
+import { Card, Field, FieldList, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiGet } from '@/lib/api';
@@ -30,6 +30,16 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
         subtitle={<span className="wrap-anywhere">{user.email}</span>}
         back={{ href: '/admin/users', label: t.back }}
       />
+      {user.invitation?.state === 'FAILED' && (
+        <div className="mb-4" data-testid="invitation-warning">
+          <Notice tone="warning">{t.invitationFailed}</Notice>
+        </div>
+      )}
+      {user.invitation?.state === 'SENDING' && (
+        <div className="mb-4" data-testid="invitation-warning">
+          <Notice tone="warning">{t.invitationUnconfirmed}</Notice>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <div className="flex min-w-0 flex-col gap-6">
           <Card>

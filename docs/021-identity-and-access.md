@@ -388,6 +388,21 @@ Reliability and safety:
   only an accepted, matching invitation links an identity.
 - One open invitation per normalized e-mail and per user (partial unique indexes); the invitation
   e-mail must equal the user's; states only move forward; nothing is deleted.
+- **Truthful outcomes.** After every provider call the invitation is re-read under lock. A revoke
+  or resend that loses against a simultaneous acceptance (or a closed invitation) is reported as
+  `409 INVITATION_ACCEPTED` / `INVITATION_CLOSED` and audited as `INVITATION_ACTION_SKIPPED`
+  (with the real outcome) — never as revoked or resent. A request's outcome is stored, so
+  repeating the same request id gives the same answer (also for `FAILED` → `502`).
+- An unanswered provider call is audited as `INVITATION_INTERRUPTED` (not as failed or sent);
+  a definite refusal as `INVITATION_FAILED`. Both write a structured log line (event, user id,
+  action, error class — no e-mail, key, token or link).
+- The administration keeps one request id per user attempt and repeats it after a network error
+  or `503`/`INVITATION_IN_PROGRESS` until the action ends with success or a definite result.
+- If the automatic invitation at user creation fails, the user stays prepared but unable to sign
+  in (`FAILED` or `SENDING`); the user page shows a warning and "Poslat pozvánku znovu"; the
+  failure is logged and audited, never swallowed.
+- A pending provider invitation is adopted only when the e-mail the provider reports for it equals
+  the user's normalized e-mail (WorkOS list responses carry `email`).
 - Only the provider's invitation id is stored — never its token or acceptance link; errors and
   logs carry no key, token or link.
 - The endpoints are ADMIN-only; the sign-in answer never reveals whether an e-mail exists.
@@ -433,6 +448,17 @@ that bootstraps.
 8. Then the DEV deployment can run (`scripts/deploy-dev.sh` refuses without the three values) and
    the one-time bootstrap (section 8). After the first sign-in, complete the address of the
    initial site `CZ-PREROV-01` in **Správa systému → Provozovny** (doc 022 §5).
+
+**DEV acceptance checklist for invitations (WorkOS Staging, after deployment):**
+
+1. Invite a test colleague from AYVO; WorkOS shows the invitation as pending for exactly that
+   e-mail, and AYVO shows "Čeká na přijetí".
+2. Accept it, register with MFA and sign in: AYVO links the account ("Přijata").
+3. Confirm with a WorkOS `GET /user_management/invitations/{id}` (dashboard or API) that the
+   accepted invitation carries a non-empty `accepted_user_id` equal to the signed-in user's id
+   (`sub`). If WorkOS did not return it, AYVO refuses the link (fail closed) — report it before
+   relying on invitations.
+4. Revoke an unused invitation and confirm that signing up with it is refused by WorkOS and AYVO.
 
 Optional server env values (defaults shown; not secrets): `AUTH_RATE_LIMIT_WINDOW_SECONDS=600`,
 `AUTH_RATE_LIMIT_LOGIN_MAX=30`, `AUTH_RATE_LIMIT_CALLBACK_MAX=30`,

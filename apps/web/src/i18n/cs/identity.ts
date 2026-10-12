@@ -125,6 +125,10 @@ export const identityCs = {
     } as Record<string, string>,
     noInvitation: 'Bez pozvánky (první administrátor)',
     invitationExpires: (date: string) => `platí do ${date}`,
+    invitationFailed:
+      'Pozvánku se nepodařilo odeslat. Uživatel se zatím nemůže přihlásit – zkontrolujte e-mail a pošlete pozvánku znovu.',
+    invitationUnconfirmed:
+      'Odeslání pozvánky nebylo potvrzeno (poskytovatel neodpověděl). Pošlete ji znovu – opakování nevytvoří druhou pozvánku.',
     sendInvitation: 'Poslat pozvánku',
     resendInvitation: 'Poslat pozvánku znovu',
     revokeInvitation: 'Zrušit pozvánku',
@@ -189,6 +193,7 @@ export const identityCs = {
       INVITATION_PROVIDER_UNAVAILABLE:
         'Poskytovatel identity neodpověděl. Akci zopakujte – je to bezpečné.',
       IDEMPOTENCY_CONFLICT: 'Požadavek už byl použit pro jinou akci.',
+      INVITATION_CLOSED: 'Pozvánka už není otevřená.',
       SITE_WITHOUT_WAREHOUSE: 'Vybraná provozovna nemá sklad.',
       SITE_WITHOUT_PRODUCTION: 'Vybraná provozovna nevyrábí.',
       LAST_ADMIN: 'Poslední aktivní administrátor nemůže přijít o přístup.',

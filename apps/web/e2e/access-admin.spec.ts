@@ -203,3 +203,27 @@ test('a revoked invitation cannot be used to sign in', async ({ browser }) => {
   await person.close();
   await admin.close();
 });
+
+test('a failed first invitation is shown with a safe way to send it again', async ({ browser }) => {
+  const admin = await browser.newContext({ storageState: ADMIN });
+  const page = await admin.newPage();
+  await page.goto('/admin/users/new');
+  // "+fail": the fake identity provider refuses to send (APP_ENV=test only).
+  await page.getByLabel('E-mail').fill('e2e-invite+fail@ayvo.test');
+  await page.getByLabel('Jméno').fill('Neodeslaná pozvánka');
+  await page.getByLabel('Skladník').check();
+  await page.getByLabel(/Přerov 1/).check();
+  await page.getByLabel('Důvod (povinný)').fill('new colleague');
+  await page.getByRole('button', { name: 'Založit uživatele' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Neodeslaná pozvánka');
+  await expect(page.getByTestId('invitation-state')).toHaveText('Nepodařilo se odeslat');
+  await expect(page.getByTestId('invitation-warning')).toContainText(
+    'Pozvánku se nepodařilo odeslat',
+  );
+  await expect(page.getByTestId('user-audit')).toContainText('Neúspěšné odeslání pozvánky');
+  const actions = page.getByTestId('user-actions');
+  await actions.getByLabel('Důvod (povinný)').fill('second attempt');
+  await actions.getByRole('button', { name: 'Poslat pozvánku znovu' }).click();
+  await expect(actions).toContainText('Poskytovatel identity pozvánku odmítl.');
+  await admin.close();
+});

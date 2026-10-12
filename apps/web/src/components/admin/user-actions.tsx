@@ -10,7 +10,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { buttonClass, Card, ErrorNote, inputClass } from '@/components/ui';
 import { identityCs } from '@/i18n/cs/identity';
-import { apiSend } from '@/lib/client-api';
+import { apiSend, ClientApiError } from '@/lib/client-api';
 import { errorText } from './create-user-form';
 
 const t = identityCs.admin;
@@ -40,6 +40,7 @@ export function UserActions({
   const [site, setSite] = useState('');
   const [warehouse, setWarehouse] = useState('');
   const [busy, setBusy] = useState(false);
+  const [attempt, setAttempt] = useState<{ path: string; requestId: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const reasonOk = reason.trim().length >= 3;
   const held = new Set(user.roles.map((r) => r.code));
@@ -53,7 +54,7 @@ export function UserActions({
     .flatMap((s) => s.warehouses.map((w) => ({ ...w, site: s })))
     .filter((w) => !warehouseScopes.some((x) => x.locationCode === w.code));
 
-  async function run(path: string, body: Record<string, unknown>) {
+  async function run(path: string, body: Record<string, unknown>): Promise<unknown> {
     setBusy(true);
     setError(null);
     try {
@@ -63,16 +64,30 @@ export function UserActions({
       });
       setReason('');
       router.refresh();
+      return null;
     } catch (err) {
       setError(errorText(err));
+      return err;
     } finally {
       setBusy(false);
     }
   }
 
-  /** Invitation actions are idempotent: one request id per click, reused if retried. */
+  /**
+   * Invitation actions are idempotent per request id. One user attempt keeps its request id —
+   * repeating it after a network error or an unanswered provider call continues the same action
+   * on the server — until it ends with success or a definite result.
+   */
   async function invite(path: string) {
-    await run(path, { requestId: crypto.randomUUID() });
+    const requestId = attempt?.path === path ? attempt.requestId : crypto.randomUUID();
+    setAttempt({ path, requestId });
+    const error = await run(path, { requestId });
+    const retryable =
+      error !== null &&
+      (!(error instanceof ClientApiError) ||
+        error.code === 'INVITATION_PROVIDER_UNAVAILABLE' ||
+        error.code === 'INVITATION_IN_PROGRESS');
+    if (!retryable) setAttempt(null);
   }
 
   const disabled = busy || !reasonOk;
