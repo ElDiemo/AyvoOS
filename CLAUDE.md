@@ -65,7 +65,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   identity only from the `ayvo_session` cookie, never from headers or unverified claims.
   **Every API route must declare `@Public()`, `@Authenticated()` or `@RequirePermission(...)`** —
   the global guard denies everything else, and `test/identity.e2e.test.ts` fails on an undeclared
-  route. New permissions are added to the catalogue by migration (and to `packages/types`).
+  route. New permissions are added to the catalogue by migration (and to `packages/types`) and
+  granted to `ADMIN` explicitly in the same migration (ADMIN = whole system, never a code bypass;
+  the role-matrix test fails otherwise). Purchase prices and supplier documents need
+  `procurement:cost_read` / `procurement:documents_read` and are omitted server-side otherwise.
+  WorkOS tokens: exact `WORKOS_JWT_ISSUER` (required), `client_id`, `sid`, RS256 only (doc 021 §5a).
   `AUTH_PROVIDER=test` exists only with `APP_ENV=test`; never add another bypass. The first
   ADMIN is bootstrapped once (`node dist/identity/bootstrap-admin.js`).
 - Bottle **internal ID ≠ public QR identity**. The public QR identity is opaque, practically
