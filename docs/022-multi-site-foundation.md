@@ -57,9 +57,11 @@ the database:
   The database also allows only one default per site and never changes or deletes a warehouse.
 - Refused for an inactive site (`409 SITE_INACTIVE`) and a site without WAREHOUSE
   (`409 SITE_NOT_WAREHOUSE`).
-- Idempotent per `requestId`: the creation and its audit event `WAREHOUSE_CREATED` (reason, site,
-  code, name, request id) commit together; a repeated request returns the same result, a reused id
-  with other data answers `409 IDEMPOTENCY_CONFLICT`.
+- Idempotent per site and `requestId`: the creation and its audit event `WAREHOUSE_CREATED`
+  (reason, site, code, name, request id) commit together. The same request id at the same site
+  with the same data returns the original result; with other data it answers
+  `409 IDEMPOTENCY_CONFLICT`. At another site the same request id is an independent operation that
+  never reveals or reuses the first site's result.
 - Nothing else changes: no stock, lots, receipts, documents, movements or balances; the site's
   capabilities, users and roles stay as they are. Users with access to the site reach the new
   warehouse through their existing site scope; until it exists, warehouse operations there answer

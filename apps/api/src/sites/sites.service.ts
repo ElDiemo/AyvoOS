@@ -184,8 +184,9 @@ export class SitesService {
    * Refused unless the site is active, has the WAREHOUSE capability and no warehouse yet; the code
    * is globally unique. The site lock (all sites, the same lock as every site change) serialises
    * concurrent attempts, so two requests can never create two warehouses for one site. Creation and
-   * the audit event (reason, request id) commit together; a repeated request id returns the result
-   * of the first request (same site, code, name and reason) instead of a conflict. No stock, lots,
+   * the audit event (reason, request id) commit together. Idempotency is per site: the same
+   * request id at the same site returns the first result (same code, name and reason) or
+   * IDEMPOTENCY_CONFLICT (other data); at another site it is an independent operation. No stock, lots,
    * receipts or movements are created; the site's capabilities, users and roles stay unchanged.
    */
   async createWarehouse(
@@ -196,20 +197,19 @@ export class SitesService {
     await this.prisma.$transaction(async (tx) => {
       const site = await this.lock(tx, siteId);
       // The request id lives in the append-only audit event of the creation (no separate request
-      // table for site administration); checked under the lock, so it is race-free.
+      // table for site administration) and is scoped to the site: the same id at another site is
+      // an independent operation. Checked under the lock, so it is race-free.
       const previous = await tx.auditEvent.findFirst({
         where: {
           type: 'WAREHOUSE_CREATED',
+          siteId,
           payload: { path: ['requestId'], equals: input.requestId },
         },
       });
       if (previous) {
         const p = previous.payload as Record<string, unknown>;
         const same =
-          previous.siteId === siteId &&
-          p.warehouse === input.code &&
-          p.name === input.name &&
-          previous.reason === input.reason;
+          p.warehouse === input.code && p.name === input.name && previous.reason === input.reason;
         if (same) return;
         throw idempotencyConflict();
       }

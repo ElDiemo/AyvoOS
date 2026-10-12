@@ -191,7 +191,7 @@ describe.skipIf(!hasDatabase)('site warehouses', () => {
     ).toBe(0);
   });
 
-  it('is idempotent per request id; a reused id with other data is a conflict', async () => {
+  it('is idempotent per site and request id; a reused id with other data is a conflict', async () => {
     const site = await createSite();
     const requestId = randomUUID();
     const first = await createWarehouse(site, { requestId });
@@ -207,9 +207,66 @@ describe.skipIf(!hasDatabase)('site warehouses', () => {
     const changed = await createWarehouse(site, { requestId, name: 'Jiný sklad' });
     expect(changed.status).toBe(409);
     expect(changed.body.code).toBe('IDEMPOTENCY_CONFLICT');
-    const elsewhere = await createWarehouse(await createSite(), { requestId });
-    expect(elsewhere.status).toBe(409);
-    expect(elsewhere.body.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+
+  it('the same request id at another site is an independent operation, also concurrently', async () => {
+    // Sequential: a request id already used at one site creates the other site's own warehouse.
+    const first = await createSite();
+    const requestId = randomUUID();
+    expect((await createWarehouse(first, { requestId })).status).toBe(201);
+    const second = await createSite();
+    const independent = await createWarehouse(second, { requestId });
+    expect(independent.status, JSON.stringify(independent.body)).toBe(201);
+    expect(independent.body.warehouses).toEqual([
+      { code: `${second.code}-MAIN`, name: 'Hlavní sklad', default: true },
+    ]);
+    expect(JSON.stringify(independent.body)).not.toContain(first.code);
+
+    // Concurrent: one request id, two sites, two globally unique codes.
+    const sites = [await createSite(), await createSite()];
+    const shared = randomUUID();
+    const results = await Promise.all(
+      sites.map((site, i) =>
+        createWarehouse(site, { requestId: shared, name: `Sklad ${i}`, reason: `site ${i}` }),
+      ),
+    );
+    for (const [i, site] of sites.entries()) {
+      const res = results[i]!;
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      const detail = res.body as SiteDetail;
+      expect(detail.id).toBe(site.id);
+      expect(detail.warehouses).toEqual([
+        { code: `${site.code}-MAIN`, name: `Sklad ${i}`, default: true },
+      ]);
+      // Its own audit record only; nothing of the other site.
+      const other = sites[1 - i]!;
+      expect(detail.audit.filter((a) => a.type === 'WAREHOUSE_CREATED')).toEqual([
+        expect.objectContaining({
+          reason: `site ${i}`,
+          details: expect.objectContaining({ site: site.code, requestId: shared }),
+        }),
+      ]);
+      expect(JSON.stringify(detail)).not.toContain(other.code);
+      const locations = await t.prisma.inventoryLocation.findMany({ where: { siteId: site.id } });
+      expect(locations.map((l) => [l.code, l.isSiteDefault])).toEqual([
+        [`${site.code}-MAIN`, true],
+      ]);
+      expect(
+        await t.prisma.auditEvent.count({ where: { type: 'WAREHOUSE_CREATED', siteId: site.id } }),
+      ).toBe(1);
+    }
+    // A replay at each site still returns that site's own result.
+    for (const [i, site] of sites.entries()) {
+      const replay = await createWarehouse(site, {
+        requestId: shared,
+        name: `Sklad ${i}`,
+        reason: `site ${i}`,
+      });
+      expect(replay.status).toBe(201);
+      expect(replay.body.warehouses).toEqual([
+        { code: `${site.code}-MAIN`, name: `Sklad ${i}`, default: true },
+      ]);
+    }
   });
 
   it('allows exactly one warehouse per site; a second one is refused', async () => {
