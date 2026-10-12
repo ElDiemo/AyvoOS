@@ -37,6 +37,7 @@ CREATE TABLE "user_invitation_requests" (
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "completed_at" TIMESTAMPTZ(3),
     "lease_until" TIMESTAMPTZ(3),
+    "outcome" TEXT,
 
     CONSTRAINT "user_invitation_requests_pkey" PRIMARY KEY ("request_id")
 );
@@ -137,7 +138,10 @@ CREATE TRIGGER "user_invitations_no_truncate" BEFORE TRUNCATE ON "user_invitatio
 ALTER TABLE "user_invitation_requests"
   ADD CONSTRAINT "user_invitation_requests_kind_check" CHECK ("kind" IN ('SEND', 'RESEND', 'REVOKE')),
   ADD CONSTRAINT "user_invitation_requests_status_check" CHECK (
-    "status" IN ('STARTED', 'DONE') AND (("status" = 'DONE') = ("completed_at" IS NOT NULL))),
+    "status" IN ('STARTED', 'DONE') AND (("status" = 'DONE') = ("completed_at" IS NOT NULL))
+    AND (("status" = 'DONE') = ("outcome" IS NOT NULL))),
+  ADD CONSTRAINT "user_invitation_requests_outcome_check" CHECK ("outcome" IN
+    ('SENT', 'RESENT', 'REVOKED', 'FAILED', 'SKIPPED_ACCEPTED', 'SKIPPED_CLOSED')),
   ADD CONSTRAINT "user_invitation_requests_reason_check" CHECK (length(btrim("reason")) BETWEEN 3 AND 500);
 CREATE FUNCTION user_invitation_requests_complete_once() RETURNS trigger
   LANGUAGE plpgsql
@@ -145,8 +149,8 @@ CREATE FUNCTION user_invitation_requests_complete_once() RETURNS trigger
 BEGIN
   -- While STARTED only the attempt lease may change; completion happens once.
   IF OLD."status" <> 'STARTED'
-     OR (to_jsonb(NEW) - ARRAY['status', 'completed_at', 'lease_until'])
-        IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['status', 'completed_at', 'lease_until']) THEN
+     OR (to_jsonb(NEW) - ARRAY['status', 'completed_at', 'lease_until', 'outcome'])
+        IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['status', 'completed_at', 'lease_until', 'outcome']) THEN
     RAISE EXCEPTION 'AYVO: an invitation request completes once' USING ERRCODE = 'restrict_violation';
   END IF;
   RETURN NEW;

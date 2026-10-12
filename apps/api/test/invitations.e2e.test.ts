@@ -108,8 +108,19 @@ describe.skipIf(!hasDatabase)('user invitations', () => {
   it('a lost provider response is reconciled on retry — never a second invitation', async () => {
     const address = email('+lost');
     const user = await create(address);
-    // The provider created it but the answer never arrived: still SENDING, not FAILED.
+    // The provider created it but the answer never arrived: still SENDING, not FAILED — and the
+    // audit says exactly that.
     expect(user.invitation?.state).toBe('SENDING');
+    expect(
+      await t.prisma.auditEvent.count({
+        where: { type: 'INVITATION_INTERRUPTED', targetUserId: user.id },
+      }),
+    ).toBe(1);
+    expect(
+      await t.prisma.auditEvent.count({
+        where: { type: 'INVITATION_FAILED', targetUserId: user.id },
+      }),
+    ).toBe(0);
     expect((await action(user.id, '')).body.code).toBe('INVITATION_OPEN');
     const requestId = randomUUID();
     const first = await action(user.id, '/resend', requestId);
@@ -137,9 +148,23 @@ describe.skipIf(!hasDatabase)('user invitations', () => {
         where: { type: 'INVITATION_FAILED', targetUserId: user.id },
       }),
     ).toBe(1);
-    const retry = await action(user.id, '/resend');
+    const retryId = randomUUID();
+    const retry = await action(user.id, '/resend', retryId);
     expect(retry.status).toBe(502);
     expect(retry.body.code).toBe('INVITATION_PROVIDER_FAILED');
+    // The same attempt repeated answers the same — deterministically, without a new provider call.
+    const repeated = await action(user.id, '/resend', retryId);
+    expect(repeated.status).toBe(502);
+    expect(
+      await t.prisma.auditEvent.count({
+        where: { type: 'INVITATION_FAILED', targetUserId: user.id },
+      }),
+    ).toBe(2);
+    // The administrator sees the failed state and can safely try again.
+    const shown = (
+      await http().get(`/api/admin/identity/users/${user.id}`).set('Cookie', admin).expect(200)
+    ).body as AdminUserDetail;
+    expect(shown.invitation).toMatchObject({ state: 'FAILED', failureCode: 'PROVIDER_REFUSED' });
     expect((await complete(await signIn(address))).headers.location).toBe(
       '/account-inactive?reason=no-access',
     );
@@ -278,5 +303,82 @@ describe.skipIf(!hasDatabase)('user invitations', () => {
     const a = await complete(await signIn(email('-unknown')));
     const b = await complete(await signIn(known.email));
     expect(a.headers.location).toBe(b.headers.location);
+  });
+
+  describe('acceptance racing an administrative action', () => {
+    /** Runs the person's registration + first sign-in while the provider call is in flight. */
+    function acceptDuring(
+      method: 'revokeInvitation' | 'resendInvitation',
+      address: string,
+    ): () => void {
+      const p = provider();
+      const original = p[method].bind(p);
+      p[method] = async (id: string) => {
+        const res = await complete(await signIn(address));
+        expect(res.headers.location).toBe('/');
+        return original(id);
+      };
+      return () => {
+        p[method] = original;
+      };
+    }
+
+    it('a revocation that loses against the acceptance says so and audits the truth', async () => {
+      const address = email();
+      const user = await create(address);
+      const restore = acceptDuring('revokeInvitation', address);
+      const requestId = randomUUID();
+      let res;
+      try {
+        res = await action(user.id, '/revoke', requestId);
+      } finally {
+        restore();
+      }
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('INVITATION_ACCEPTED');
+      expect(
+        await t.prisma.auditEvent.count({
+          where: { type: 'INVITATION_REVOKED', targetUserId: user.id },
+        }),
+      ).toBe(0);
+      const skipped = await t.prisma.auditEvent.findFirstOrThrow({
+        where: { type: 'INVITATION_ACTION_SKIPPED', targetUserId: user.id },
+      });
+      expect(skipped.payload).toMatchObject({ kind: 'REVOKE', outcome: 'SKIPPED_ACCEPTED' });
+      const detail = (
+        await http().get(`/api/admin/identity/users/${user.id}`).set('Cookie', admin).expect(200)
+      ).body as AdminUserDetail;
+      expect(detail).toMatchObject({ linked: true, invitation: { state: 'ACCEPTED' } });
+      // The same request repeated gets the same answer.
+      expect((await action(user.id, '/revoke', requestId)).body.code).toBe('INVITATION_ACCEPTED');
+    });
+
+    it('a resend that loses against the acceptance says so and audits the truth', async () => {
+      const address = email();
+      const user = await create(address);
+      const restore = acceptDuring('resendInvitation', address);
+      let res;
+      try {
+        res = await action(user.id, '/resend');
+      } finally {
+        restore();
+      }
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('INVITATION_ACCEPTED');
+      expect(
+        await t.prisma.auditEvent.count({
+          where: { type: 'INVITATION_RESENT', targetUserId: user.id },
+        }),
+      ).toBe(0);
+      expect(
+        await t.prisma.auditEvent.count({
+          where: { type: 'INVITATION_FAILED', targetUserId: user.id },
+        }),
+      ).toBe(0);
+      const skipped = await t.prisma.auditEvent.findFirstOrThrow({
+        where: { type: 'INVITATION_ACTION_SKIPPED', targetUserId: user.id },
+      });
+      expect(skipped.payload).toMatchObject({ kind: 'RESEND', outcome: 'SKIPPED_ACCEPTED' });
+    });
   });
 });

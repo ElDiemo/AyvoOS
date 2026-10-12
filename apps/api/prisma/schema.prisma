@@ -1202,6 +1202,9 @@ model UserInvitationRequest {
   completedAt  DateTime? @map("completed_at") @db.Timestamptz(3)
   /// While set and in the future, one attempt is talking to the provider; others wait.
   leaseUntil   DateTime? @map("lease_until") @db.Timestamptz(3)
+  /// The real result once DONE (SENT, RESENT, REVOKED, FAILED, SKIPPED_ACCEPTED, SKIPPED_CLOSED):
+  /// a retry of the same request answers the same.
+  outcome      String?
 
   invitation UserInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
 

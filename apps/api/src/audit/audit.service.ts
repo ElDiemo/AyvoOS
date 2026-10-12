@@ -33,7 +33,9 @@ export type AuditType =
   | 'INVITATION_RESENT'
   | 'INVITATION_REVOKED'
   | 'INVITATION_FAILED'
-  | 'INVITATION_ACCEPTED';
+  | 'INVITATION_ACCEPTED'
+  | 'INVITATION_INTERRUPTED'
+  | 'INVITATION_ACTION_SKIPPED';
 
 export interface AuditInput {
   type: AuditType;

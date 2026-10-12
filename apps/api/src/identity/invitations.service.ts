@@ -16,6 +16,7 @@ import {
 export const INVITATION_EXPIRES_IN_DAYS = 7;
 
 type Kind = 'SEND' | 'RESEND' | 'REVOKE';
+type Outcome = 'SENT' | 'RESENT' | 'REVOKED' | 'FAILED' | 'SKIPPED_ACCEPTED' | 'SKIPPED_CLOSED';
 
 const inProgress = () =>
   domainError(409, 'INVITATION_IN_PROGRESS', 'The same action is running; retry shortly');
@@ -29,6 +30,17 @@ const providerUnavailable = () =>
     'INVITATION_PROVIDER_UNAVAILABLE',
     'The identity provider did not answer; retry the same action (it is safe to repeat)',
   );
+
+/** Unsuccessful outcomes become deterministic errors (also for every retry of the request). */
+function throwForOutcome(outcome: Outcome): void {
+  if (outcome === 'FAILED') throw providerFailed();
+  if (outcome === 'SKIPPED_ACCEPTED') {
+    throw domainError(409, 'INVITATION_ACCEPTED', 'The invitation was already accepted');
+  }
+  if (outcome === 'SKIPPED_CLOSED') {
+    throw domainError(409, 'INVITATION_CLOSED', 'The invitation is no longer open');
+  }
+}
 
 /** The state an administrator sees: a pending invitation past its expiry reads as EXPIRED. */
 export function invitationView(invitation: UserInvitation | null): UserInvitationView | null {
@@ -234,7 +246,11 @@ export class InvitationsService {
     if (prior.kind !== kind || prior.invitation.userId !== userId) {
       throw domainError(409, 'IDEMPOTENCY_CONFLICT', 'This request id was used for another action');
     }
-    if (prior.status === 'DONE') return true;
+    if (prior.status === 'DONE') {
+      // The same answer as the first time.
+      throwForOutcome(prior.outcome as Outcome);
+      return true;
+    }
     if (kind === 'REVOKE') await this.cancel(actorId, prior.invitationId, requestId, reason);
     else await this.deliver(actorId, prior.invitationId, requestId, reason, kind);
     return true;
@@ -309,7 +325,9 @@ export class InvitationsService {
 
   /**
    * Sends (or resends) at the provider. A SENDING invitation is first reconciled with the
-   * provider's pending invitations of the e-mail, so a lost response never creates a second one.
+   * provider's pending invitations of the same e-mail, so a lost response never creates a second
+   * one. After the provider call the invitation is re-read under lock: an invitation accepted in
+   * the meantime is reported and audited as such, never as resent.
    */
   private async deliver(
     actorId: string | null,
@@ -322,57 +340,71 @@ export class InvitationsService {
     const invitation = await this.prisma.userInvitation.findUniqueOrThrow({
       where: { id: invitationId },
     });
-    let remote: ProviderInvitation;
-    let resent = false;
+    let remote: ProviderInvitation | null = null;
+    let refused = false;
+    const resending = invitation.state === 'PENDING';
     try {
       if (invitation.state === 'SENDING') {
-        const [existing] = await this.provider.findPendingInvitations(invitation.email);
+        const existing = (await this.provider.findPendingInvitations(invitation.email)).find(
+          // The provider reports the e-mail of each invitation: adopt only an exact match.
+          (i) => i.email === invitation.email,
+        );
         remote =
           existing ??
           (await this.provider.sendInvitation({
             email: invitation.email,
             expiresInDays: INVITATION_EXPIRES_IN_DAYS,
           }));
-      } else if (invitation.state === 'PENDING' && invitation.providerInvitationId) {
+      } else if (resending && invitation.providerInvitationId) {
         remote = await this.provider.resendInvitation(invitation.providerInvitationId);
-        resent = true;
-      } else {
-        await this.complete(requestId);
-        return;
       }
     } catch (error) {
       if (error instanceof IdentityProviderError && error.ambiguous) {
-        // The provider may have acted: keep SENDING and the request open; a retry reconciles.
-        this.logger.warn(`Invitation delivery interrupted: ${error.message}`);
+        // The provider may have acted: keep SENDING and the request open; a retry with the same
+        // request id reconciles. Recorded truthfully as interrupted, not as failed or sent.
+        this.logOperational('invitation_delivery_interrupted', invitation.userId, kind, error);
+        await this.audit.record({
+          type: 'INVITATION_INTERRUPTED',
+          actorUserId: actorId,
+          targetUserId: invitation.userId,
+          reason,
+          payload: { kind },
+        });
         await this.release(requestId);
         throw providerUnavailable();
       }
-      this.logger.warn(`Invitation delivery refused: ${(error as Error).message}`);
-      await this.prisma.$transaction(async (tx) => {
-        if (invitation.state === 'SENDING') {
-          await tx.userInvitation.updateMany({
-            where: { id: invitationId, state: 'SENDING' },
+      this.logOperational('invitation_delivery_refused', invitation.userId, kind, error);
+      refused = true;
+    }
+
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const current = await this.lockInvitation(tx, invitationId);
+      const linked = await tx.userIdentity.count({
+        where: { userId: invitation.userId, unlinkedAt: null },
+      });
+      if (current.state === 'ACCEPTED' || linked > 0) {
+        return this.finish(
+          tx,
+          requestId,
+          'SKIPPED_ACCEPTED',
+          actorId,
+          invitation.userId,
+          reason,
+          kind,
+        );
+      }
+      if (refused) {
+        if (current.state === 'SENDING') {
+          await tx.userInvitation.update({
+            where: { id: invitationId },
             data: { state: 'FAILED', failureCode: 'PROVIDER_REFUSED' },
           });
         }
-        await this.completeIn(tx, requestId);
-        await this.audit.record(
-          {
-            type: 'INVITATION_FAILED',
-            actorUserId: actorId,
-            targetUserId: invitation.userId,
-            reason,
-            payload: { kind },
-          },
-          tx,
-        );
-      });
-      throw providerFailed();
-    }
-    await this.prisma.$transaction(async (tx) => {
-      if (invitation.state === 'SENDING') {
-        await tx.userInvitation.updateMany({
-          where: { id: invitationId, state: 'SENDING' },
+        return this.finish(tx, requestId, 'FAILED', actorId, invitation.userId, reason, kind);
+      }
+      if (current.state === 'SENDING' && remote) {
+        await tx.userInvitation.update({
+          where: { id: invitationId },
           data: {
             state: 'PENDING',
             providerInvitationId: remote.id,
@@ -380,27 +412,31 @@ export class InvitationsService {
             sentAt: new Date(),
           },
         });
-      } else {
-        await tx.userInvitation.updateMany({
-          where: { id: invitationId, state: 'PENDING' },
-          data: { expiresAt: remote.expiresAt },
+        return this.finish(tx, requestId, 'SENT', actorId, invitation.userId, reason, kind, {
+          provider: invitation.provider,
+          expiresAt: remote.expiresAt.toISOString(),
         });
       }
-      await this.completeIn(tx, requestId);
-      await this.audit.record(
-        {
-          type: resent ? 'INVITATION_RESENT' : 'INVITATION_SENT',
-          actorUserId: actorId,
-          targetUserId: invitation.userId,
-          reason,
-          payload: { provider: invitation.provider, expiresAt: remote.expiresAt.toISOString() },
-        },
-        tx,
-      );
+      if (current.state === 'PENDING' && resending && remote) {
+        await tx.userInvitation.update({
+          where: { id: invitationId },
+          data: { expiresAt: remote.expiresAt },
+        });
+        return this.finish(tx, requestId, 'RESENT', actorId, invitation.userId, reason, kind, {
+          provider: invitation.provider,
+          expiresAt: remote.expiresAt.toISOString(),
+        });
+      }
+      // Revoked, expired or failed meanwhile: nothing was (re)sent for this invitation.
+      return this.finish(tx, requestId, 'SKIPPED_CLOSED', actorId, invitation.userId, reason, kind);
     });
+    throwForOutcome(outcome);
   }
 
-  /** Revokes at the provider (when it knows the invitation), then in AYVO. */
+  /**
+   * Revokes at the provider (when it knows the invitation), then in AYVO — unless the invitation
+   * was accepted in the meantime: that is reported and audited as such, never as revoked.
+   */
   private async cancel(
     actorId: string | null,
     invitationId: string,
@@ -411,44 +447,133 @@ export class InvitationsService {
     const invitation = await this.prisma.userInvitation.findUniqueOrThrow({
       where: { id: invitationId },
     });
-    if (invitation.state === 'REVOKED') {
-      await this.complete(requestId);
-      return;
-    }
-    try {
-      const providerIds = invitation.providerInvitationId
-        ? [invitation.providerInvitationId]
-        : (await this.provider.findPendingInvitations(invitation.email)).map((i) => i.id);
-      for (const id of providerIds) {
-        try {
-          await this.provider.revokeInvitation(id);
-        } catch (error) {
-          if (error instanceof IdentityProviderError && error.ambiguous) throw error;
-          // Refused: it is no longer pending there (expired, accepted or revoked) — AYVO's
-          // revocation below is what blocks linking.
+    if (invitation.state === 'SENDING' || invitation.state === 'PENDING') {
+      try {
+        const providerIds = invitation.providerInvitationId
+          ? [invitation.providerInvitationId]
+          : (await this.provider.findPendingInvitations(invitation.email))
+              .filter((i) => i.email === invitation.email)
+              .map((i) => i.id);
+        for (const id of providerIds) {
+          try {
+            await this.provider.revokeInvitation(id);
+          } catch (error) {
+            if (error instanceof IdentityProviderError && error.ambiguous) throw error;
+            // Refused: no longer pending there (accepted, expired or revoked) — the state is
+            // re-read below; AYVO's own revocation is what blocks linking.
+          }
         }
-      }
-    } catch (error) {
-      this.logger.warn(`Invitation revocation interrupted: ${(error as Error).message}`);
-      await this.release(requestId);
-      throw providerUnavailable();
-    }
-    await this.prisma.$transaction(async (tx) => {
-      await tx.userInvitation.updateMany({
-        where: { id: invitationId, state: { in: ['SENDING', 'PENDING'] } },
-        data: { state: 'REVOKED', revokedAt: new Date(), revokedBy: actorId },
-      });
-      await this.completeIn(tx, requestId);
-      await this.audit.record(
-        {
-          type: 'INVITATION_REVOKED',
+      } catch (error) {
+        this.logOperational(
+          'invitation_revocation_interrupted',
+          invitation.userId,
+          'REVOKE',
+          error,
+        );
+        await this.audit.record({
+          type: 'INVITATION_INTERRUPTED',
           actorUserId: actorId,
           targetUserId: invitation.userId,
           reason,
-        },
+          payload: { kind: 'REVOKE' },
+        });
+        await this.release(requestId);
+        throw providerUnavailable();
+      }
+    }
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const current = await this.lockInvitation(tx, invitationId);
+      const linked = await tx.userIdentity.count({
+        where: { userId: invitation.userId, unlinkedAt: null },
+      });
+      if (current.state === 'ACCEPTED' || linked > 0) {
+        return this.finish(
+          tx,
+          requestId,
+          'SKIPPED_ACCEPTED',
+          actorId,
+          invitation.userId,
+          reason,
+          'REVOKE',
+        );
+      }
+      if (current.state === 'SENDING' || current.state === 'PENDING') {
+        await tx.userInvitation.update({
+          where: { id: invitationId },
+          data: { state: 'REVOKED', revokedAt: new Date(), revokedBy: actorId },
+        });
+        return this.finish(tx, requestId, 'REVOKED', actorId, invitation.userId, reason, 'REVOKE');
+      }
+      if (current.state === 'REVOKED') {
+        // Already revoked (e.g. a second revocation): nothing new happened; no new audit event.
+        await this.completeIn(tx, requestId, 'REVOKED');
+        return 'REVOKED' as const;
+      }
+      return this.finish(
         tx,
+        requestId,
+        'SKIPPED_CLOSED',
+        actorId,
+        invitation.userId,
+        reason,
+        'REVOKE',
       );
     });
+    throwForOutcome(outcome);
+  }
+
+  private async lockInvitation(tx: Prisma.TransactionClient, id: string) {
+    const rows = await tx.$queryRaw<{ state: UserInvitation['state'] }[]>`
+      SELECT "state"::text AS "state" FROM "user_invitations" WHERE "id" = ${id}::uuid FOR UPDATE`;
+    return rows[0]!;
+  }
+
+  /** Completes the request with its real outcome and audits exactly that outcome. */
+  private async finish(
+    tx: Prisma.TransactionClient,
+    requestId: string,
+    outcome: Outcome,
+    actorId: string | null,
+    userId: string,
+    reason: string,
+    kind: Kind,
+    payload: Prisma.InputJsonObject = {},
+  ): Promise<Outcome> {
+    await this.completeIn(tx, requestId, outcome);
+    const type =
+      outcome === 'SENT'
+        ? 'INVITATION_SENT'
+        : outcome === 'RESENT'
+          ? 'INVITATION_RESENT'
+          : outcome === 'REVOKED'
+            ? 'INVITATION_REVOKED'
+            : outcome === 'FAILED'
+              ? 'INVITATION_FAILED'
+              : 'INVITATION_ACTION_SKIPPED';
+    await this.audit.record(
+      {
+        type,
+        actorUserId: actorId,
+        targetUserId: userId,
+        reason,
+        payload: { kind, ...(type === 'INVITATION_ACTION_SKIPPED' ? { outcome } : {}), ...payload },
+      },
+      tx,
+    );
+    return outcome;
+  }
+
+  /** A structured operational log line: no e-mail, API key, token or invitation link. */
+  private logOperational(event: string, userId: string, kind: Kind, error: unknown): void {
+    this.logger.warn(
+      JSON.stringify({
+        event,
+        userId,
+        kind,
+        error: error instanceof Error ? error.name : 'unknown',
+        message: error instanceof IdentityProviderError ? error.message : 'unexpected error',
+      }),
+    );
   }
 
   /** One attempt at a time per request: concurrent retries never call the provider twice. */
@@ -468,14 +593,10 @@ export class InvitationsService {
     });
   }
 
-  private complete(requestId: string) {
-    return this.completeIn(this.prisma, requestId);
-  }
-
-  private completeIn(db: Prisma.TransactionClient, requestId: string) {
+  private completeIn(db: Prisma.TransactionClient, requestId: string, outcome: Outcome) {
     return db.userInvitationRequest.updateMany({
       where: { requestId, status: 'STARTED' },
-      data: { status: 'DONE', completedAt: new Date(), leaseUntil: null },
+      data: { status: 'DONE', completedAt: new Date(), leaseUntil: null, outcome },
     });
   }
 }

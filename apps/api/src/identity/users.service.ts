@@ -6,7 +6,7 @@ import type {
   PermissionCode,
   RoleCode,
 } from '@ayvo/types';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { domainError } from '../common/domain-error.js';
 import { PrismaService } from '../database/prisma.service.js';
@@ -33,6 +33,8 @@ export interface Actor {
  */
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -156,12 +158,23 @@ export class UsersService {
       }
       return user.id;
     });
-    // Roles and sites are in place before the invitation is sent. A provider failure leaves a
-    // prepared user without any way to sign in (FAILED invitation, shown to the administrator,
-    // resendable) — never a partially authorized account.
-    await this.invitations
-      .send(actor.userId, id, randomUUID(), request.reason)
-      .catch(() => undefined);
+    // Roles and sites are in place before the invitation is sent. If sending fails, the prepared
+    // user stays without any way to sign in — FAILED (refused) or SENDING (no answer; retry is
+    // safe) — the failure is audited by the invitation service, logged here and shown to the
+    // administrator with a "send again" action; never a partially authorized account.
+    try {
+      await this.invitations.send(actor.userId, id, randomUUID(), request.reason);
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'invitation_send_on_create_failed',
+          userId: id,
+          code:
+            (error as { getResponse?: () => { code?: string } }).getResponse?.().code ??
+            'UNEXPECTED',
+        }),
+      );
+    }
     return this.get(id);
   }
 
