@@ -88,18 +88,44 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'production',
     section: 'operations',
-    permissions: ['production:read'],
+    // The company-wide catalogue (doc 023) is part of Výroba, readable without production access:
+    // a catalogue-only user sees just that page (issue #17).
+    permissions: ['production:read', 'catalog:read'],
     label: p.label,
     href: '/production',
     description: p.description,
     pages: [
-      { id: 'overview', href: '/production', label: p.pages.overview, exact: true },
-      { id: 'bottles', href: '/bottles', label: p.pages.bottles, prefixes: ['/batches'] },
-      { id: 'templates', href: '/label-templates', label: p.pages.templates },
+      {
+        id: 'overview',
+        href: '/production',
+        label: p.pages.overview,
+        exact: true,
+        permission: 'production:read',
+      },
+      {
+        id: 'bottles',
+        href: '/bottles',
+        label: p.pages.bottles,
+        prefixes: ['/batches'],
+        permission: 'production:read',
+      },
+      {
+        id: 'templates',
+        href: '/label-templates',
+        label: p.pages.templates,
+        permission: 'production:read',
+      },
       {
         id: 'label-activation',
         href: '/production/label-activation',
         label: p.pages.labelActivation,
+        permission: 'production:read',
+      },
+      {
+        id: 'catalog',
+        href: '/production/catalog',
+        label: p.pages.catalog,
+        permission: 'catalog:read',
       },
     ],
   },
@@ -135,7 +161,8 @@ export const MODULES: readonly NavModule[] = [
 
 export type WarehousePageId =
   'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
-export type ProductionPageId = 'overview' | 'bottles' | 'templates' | 'label-activation';
+export type ProductionPageId =
+  'overview' | 'bottles' | 'templates' | 'label-activation' | 'catalog';
 export type AdminPageId = 'users' | 'roles' | 'sites';
 
 /**

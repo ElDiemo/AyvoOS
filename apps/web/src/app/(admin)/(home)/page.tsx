@@ -11,6 +11,7 @@ import { unstable_rethrow } from 'next/navigation';
 import { z } from 'zod';
 import { buttonClass, Notice, PageHeader, Stat } from '@/components/ui';
 import { formatQuantityCs, unitCs } from '@/i18n/cs/format';
+import { catalogCs } from '@/i18n/cs/catalog';
 import { identityCs } from '@/i18n/cs/identity';
 import { shellCs } from '@/i18n/cs/shell';
 import { apiGet } from '@/lib/api';
@@ -88,6 +89,8 @@ export default async function HomePage() {
     siteHasWarehouse && !canWarehouse && hasPermission(user, 'inventory:stock_summary');
   const canProduction =
     !!activeSite?.capabilities.includes('PRODUCTION') && hasPermission(user, 'production:read');
+  // The company-wide catalogue needs no site (doc 023); shown when production itself is not.
+  const canCatalog = !canProduction && hasPermission(user, 'catalog:read');
   const [health, warehouse, availability, production] = await Promise.all([
     fetchApiHealth(serverEnv.API_URL),
     canWarehouse ? settle(warehouseFigures) : null,
@@ -108,7 +111,7 @@ export default async function HomePage() {
             </Link>
           </Notice>
         )}
-        {!needsSite && !canWarehouse && !canAvailability && !canProduction && (
+        {!needsSite && !canWarehouse && !canAvailability && !canProduction && !canCatalog && (
           <Notice tone="info">{h.noModules}</Notice>
         )}
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -185,6 +188,19 @@ export default async function HomePage() {
               ) : (
                 <Notice>{shellCs.common.errorTitle}</Notice>
               )}
+            </ModulePanel>
+          )}
+
+          {canCatalog && (
+            <ModulePanel
+              href="/production/catalog"
+              title={shellCs.modules.production.pages.catalog}
+              description={h.catalogDescription}
+              testId="module-catalog"
+              openLabel={h.openCatalog}
+              actions={null}
+            >
+              <p className="text-sm text-stone-600">{catalogCs.scopeNote}</p>
             </ModulePanel>
           )}
 

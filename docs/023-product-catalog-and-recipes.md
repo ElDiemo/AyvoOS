@@ -154,6 +154,7 @@ stable `code`; database messages never reach the client.
 | Method | Route (`/api/admin/catalog/…`)                           | Permission               | Body / result                                                                                                     |
 | ------ | -------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | GET    | `categories`                                             | `catalog:read`           | `ProductCategory[]`                                                                                               |
+| GET    | `units`                                                  | `catalog:read`           | `CatalogUnit[]` (reference units: code, name, decimals, dimension — for the catalogue forms)                      |
 | GET    | `components`                                             | `catalog:read`           | `CatalogComponent[]` (items of component kinds + profile)                                                         |
 | POST   | `components`                                             | `catalog:product_manage` | `{requestId, code, name, kind, unitCode, lotTracked, categoryCode, packageCapacity, reason}` → 201                |
 | GET    | `crate-types`                                            | `catalog:read`           | `CrateType[]`                                                                                                     |
@@ -233,22 +234,45 @@ any change to the ledger, balances or the label-application path; product-label 
 crate QR identities, crate labels and cycles; item archiving/editing; monthly
 inventory and liquid weighing; billing, hotel portal, commissions; any DEV data.
 
-## 9. Next phase — administration UI (proposal)
+## 9. Administration UI (implemented, issue #17)
 
-Under **Výroba → Produkty a receptury** (doc 020 §14 step 7, doc 019 — no new top-level entity
-navigation):
+**Výroba → Produkty a receptury** (`/production/catalog`, doc 019 — no new top-level module), with
+three views — **Produkty**, **Komponenty**, **Typy beden** — and the permanent note: _Katalog platí
+pro celou firmu. Zásoby patří jednotlivým provozovnám. Tyto změny nepřijímají ani nespotřebovávají
+materiál._
 
-1. **Katalog komponent** — list (kind, unit, category, packaging capacity "neznámá"), "Nová
-   komponenta" form with the kind/unit rules in Czech.
-2. **Produkty** — list with the active version; product detail with the version history
-   (draft/aktivní/archivovaná, revision, based on, who and when).
-3. **Kusovník (verze)** — draft editor: four fixed rows (lahev, etiketa, kapalina, pumpička) with
-   item pickers filtered by kind and category, crate type, Czech validation messages, a summary
-   "Co se uloží" and a mandatory reason (the pattern of the access editor, doc 021 §7);
-   "Nová verze" (copy), "Aktivovat" (shows the version it will replace) and "Archivovat".
-4. **Výpočet materiálu** — number of bottles → table of components and crates (full + partial).
-5. Playwright: four widths, keyboard, no horizontal overflow; permissions hide nothing the server
-   would allow.
+| URL                                                   | Needs                             | Content                                                                                                           |
+| ----------------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `/production/catalog`                                 | `catalog:read`                    | products: name, code, category, nominal content, active version                                                   |
+| `/production/catalog/components` (`/new`)             | `catalog:read` (`product_manage`) | components: kind, unit, category, lot tracking, packaging capacity or "Neznámá"; form with the kind rules         |
+| `/production/catalog/crate-types` (`/new`)            | `catalog:read` (`product_manage`) | crate types (definitions, not physical crates): capacity entered by the user, categories                          |
+| `/production/catalog/products/new`                    | `catalog:product_manage`          | new product                                                                                                       |
+| `/production/catalog/products/:code`                  | `catalog:read`                    | immutable identity, name correction, archiving (explained refusal with a link to the active version), versions    |
+| `/production/catalog/products/:code/recipes/:version` | `catalog:read`                    | draft editor (manage) or read-only view; activate / archive (`recipe_approve`), new version, material calculation |
+
+- **Navigation by permission:** Výroba is visible with `production:read` **or** `catalog:read`;
+  every production page needs `production:read`, the catalogue `catalog:read` (page guards per
+  section, not one guard for `/production`). A catalogue-only user sees just this page, needs no
+  site, and is refused every operational page.
+- **Editor:** four rows for one finished bottle (Lahev, Etiketa, Kapalina, Pumpička) with the
+  planned stage of each, items filtered by kind, category and archive, the unit taken from the
+  item, the bottle body fixed at 1, the crate type filtered by category; "Co se uloží", mandatory
+  reason, "Neuložené změny" with the shared leave guard (issue #11, PR #14); activation only for a
+  saved, complete draft, with a confirmation naming the version it replaces and
+  `expectedActiveVersion` from the page; `ACTIVE_VERSION_CHANGED` is explained with "Načíst
+  aktuální stav" (never retried with a new expectation).
+- **Exactness:** Czech decimal input is converted to exact decimal strings (refused, never
+  rounded); totals come from the API and are only formatted.
+- **Idempotency in the browser:** one attempt keeps its request id while the request is unchanged
+  and the answer was not definite (network error, double click); a definite answer or changed data
+  starts a new attempt.
+- **Units:** `GET /api/admin/catalog/units` (`catalog:read`) lists the reference units for the
+  forms — no other inventory permission is needed.
+- **Known limits:** no author per version in the UI (the API does not expose it; changes are in
+  the audit); a draft update has no `expectedRevision` (two people editing one draft: the last
+  save wins — said in the editor); new components also appear (with nothing on hand) in the stock
+  overview and in receiving, because they are inventory items; on phones the module tabs scroll
+  and the active one may be off-screen (issue #11, UI-08).
 
 ## 10. Later phases (not designed here beyond doc 020)
 
@@ -296,6 +320,15 @@ navigation):
 
 ## 12. Tests
 
+- `apps/web/src/lib/catalog-forms.test.ts` — exact Czech decimals (unit scale, no rounding),
+  compatible items per row, draft request and Czech change summary, request ids per attempt,
+  navigation for a catalogue-only user.
+- `apps/web/e2e/catalog.spec.ts` (issue #17, real app and fresh database) — first set-up from an
+  empty catalogue, incomplete draft with what is missing, unsaved-changes guard, activation of V1,
+  exact calculation (40, 41, 1 000 000; capacity 24), V2 from V1 replacing it, the conflicting
+  activation, a lost response and a double click (one product, one request id), product
+  rename/archive, catalogue-only/editor/no-access roles, 320–1440 px without page overflow, stock
+  unchanged; screenshots with AYVO_SCREENSHOT_DIR (docs/screenshots/issue-17).
 - `apps/api/src/catalog/material-requirements.test.ts` — exact totals for 1, 40, 41, 79–81,
   999 999 and 1 000 000 bottles, fractional quantities, capacity as data (24), crate rounding up,
   invalid input, overflow refused.

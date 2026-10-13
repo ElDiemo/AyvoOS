@@ -329,6 +329,15 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
       versions: [],
     });
     expect((await as(admin).get(`${api}/products/${p.code}`)).body).toEqual(p);
+    // The reference units for the forms (read-only, catalog:read): exactly the seeded ones.
+    const units = (await as(admin).get(`${api}/units`)).body as {
+      code: string;
+      dimension: string;
+    }[];
+    expect(units.map((u) => `${u.code}:${u.dimension}`)).toEqual(
+      expect.arrayContaining(['pcs:COUNT', 'ml:VOLUME']),
+    );
+    expect((await http().get(`${api}/units`)).status).toBe(401);
     expect((await as(admin).get(`${api}/categories`)).body).toEqual([
       { code: 'HAND_SOAP', name: 'Tekuté mýdlo' },
       { code: 'SHOWER_GEL', name: 'Sprchový gel' },
@@ -775,6 +784,7 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
     expect((await http().get(`${api}/products`)).status).toBe(401);
     expect((await http().post(`${api}/products`).send({})).status).toBe(401);
     expect((await as(warehouse).get(`${api}/products`)).status).toBe(403);
+    expect((await as(warehouse).get(`${api}/units`)).status).toBe(403);
     expect(
       (await as(warehouse).get(`${api}/products/${p.code}/recipes/1/requirements?bottles=40`))
         .status,
@@ -784,6 +794,7 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
     for (const reader of [operator, supervisor]) {
       expect((await as(reader).get(`${api}/products/${p.code}`)).status).toBe(200);
       expect((await as(reader).get(`${api}/components`)).status).toBe(200);
+      expect((await as(reader).get(`${api}/units`)).status).toBe(200);
       expect(
         (await as(reader).get(`${api}/products/${p.code}/recipes/1/requirements?bottles=40`))
           .status,

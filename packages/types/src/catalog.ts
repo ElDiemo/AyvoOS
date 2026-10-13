@@ -55,6 +55,12 @@ export const recipeStatusSchema = z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED']);
 export type RecipeStatus = z.infer<typeof recipeStatusSchema>;
 
 const unitSchema = z.object({ code: z.string(), name: z.string(), decimalPlaces: z.number() });
+
+/** GET /api/admin/catalog/units — the reference units (doc 018), for the catalogue forms. */
+export const catalogUnitSchema = unitSchema.extend({
+  dimension: z.enum(['COUNT', 'VOLUME', 'MASS']),
+});
+export type CatalogUnit = z.infer<typeof catalogUnitSchema>;
 export const productCategorySchema = z.object({ code: z.string(), name: z.string() });
 export type ProductCategory = z.infer<typeof productCategorySchema>;
 

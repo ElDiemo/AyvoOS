@@ -46,6 +46,7 @@ export const shellCs = {
         bottles: 'Lahve',
         templates: 'Šablony etiket',
         labelActivation: 'Nalepení etiket',
+        catalog: 'Produkty a receptury',
       },
     },
   },
@@ -57,6 +58,9 @@ export const shellCs = {
     availabilityDescription: 'Dostupnost zásob pro plánování (pouze pro čtení).',
     allAvailable: 'Všechny položky jsou nad minimální zásobou.',
     openProduction: 'Otevřít výrobu',
+    openCatalog: 'Otevřít katalog',
+    catalogDescription:
+      'Celofiremní katalog produktů, komponent, typů beden a kusovníků s výpočtem materiálu.',
     newBottlesOnHand: 'Nové lahve na skladě',
     receiptsPendingInvoice: 'Příjmy čekající na fakturu',
     suppliers: 'Aktivní dodavatelé',

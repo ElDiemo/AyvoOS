@@ -84,6 +84,7 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Lahve',
       'Šablony etiket',
       'Nalepení etiket',
+      'Produkty a receptury',
     ]);
     expect(warehouse.pages.some((p) => p.href.includes('label'))).toBe(false);
   });

@@ -1,6 +1,7 @@
 import {
   COMPONENT_KINDS,
   type CatalogComponent,
+  type CatalogUnit,
   type CreateComponentRequest,
   type ArchiveProductRequest,
   type CreateProductRequest,
@@ -118,6 +119,14 @@ export class CatalogService {
     private readonly audit: AuditService,
     private readonly inventory: InventoryService,
   ) {}
+
+  /** Reference units (read-only, doc 018) — what the component and product forms may choose. */
+  async units(): Promise<CatalogUnit[]> {
+    return (await this.inventory.listUnits()).map((u) => ({
+      ...toUnit(u),
+      dimension: u.dimension,
+    }));
+  }
 
   categories(): Promise<ProductCategory[]> {
     return this.prisma.productCategory
