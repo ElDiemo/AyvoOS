@@ -76,6 +76,7 @@ export const warehouseCs = {
     documentsHelp:
       'Přiložte fakturu nebo dodací list (PDF, JPEG nebo PNG). Bez faktury bude příjem označen „Čeká na fakturu“.',
     documentRequired: 'Přiložte alespoň fakturu nebo dodací list.',
+    chooseSupplierFirst: 'Nejprve vyberte dodavatele (krok 1) – potom půjde nahrát jeho doklad.',
     stepLines: 'Položky příjmu',
     item: 'Položka',
     quantity: 'Množství',

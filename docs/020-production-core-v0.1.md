@@ -1,7 +1,10 @@
 # 020 — Production Core v0.1 (design)
 
 Status: **Approved design — not implemented** (owner decisions 2026-10-11). Implementation starts
-only PR by PR as authorized (section 14). Architecture decisions: [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)
+only PR by PR as authorized (section 14). **Implemented since:** the catalogue part of step 3 —
+product categories, products, recipe versions and crate types ([doc 023](023-product-catalog-and-recipes.md);
+recipe statuses named `ACTIVE`/`ARCHIVED` instead of `APPROVED`/`RETIRED`, at most one active
+version per product, append-only recipe revisions; permissions as in §12). Architecture decisions: [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)
 (crate capacity 40 and the full-circulation crate cycle, superseding ADR 0004) and
 [ADR 0022](adr/0022-external-oidc-authentication.md) (external OIDC authentication, superseding the
 provider question of ADR 0017).
@@ -537,8 +540,8 @@ only as an **emergency override** with an explicit reason and an `EMERGENCY_OVER
 | `production:replacement_create`                                |                |        ✓         |              |                | emergency  |
 | `labels:item_void_single` + reprint request                    |       ✓        |        ✓         |              |                |            |
 | `labels:item_void_bulk` / exceptional                          |                |        ✓         |              |                | emergency  |
-| `catalog:recipe_approve`                                       |                |        ✓         |              |                | emergency  |
-| `catalog:product_manage`, label approvals                      |                |        ✓         |              |                | emergency  |
+| `catalog:recipe_approve` ¹                                     |                |        ✓         |              |                | emergency  |
+| `catalog:product_manage`, label approvals ¹                    |                |        ✓         |              |                | emergency  |
 | `crates:register`, crate labels                                |                |        ✓         |              |       ✓        |     ✓      |
 | `crates:read` (internal detail)                                |       ✓        |        ✓         |      ✓       |       ✓        |     ✓      |
 | `inventory:receive`, supplier documents                        |                |                  |      ✓       |       ✓        |            |
@@ -547,6 +550,11 @@ only as an **emergency override** with an explicit reason and an `EMERGENCY_OVER
 | `inventory:reservation_reallocate` (pin/unpin, reason + audit) |                |                  |              |       ✓        | emergency  |
 | `inventory:read`                                               |       ✓        |        ✓         |      ✓       |       ✓        |     ✓      |
 | `identity:users_manage`, roles, config                         |                |                  |              |                |     ✓      |
+
+¹ Implemented with these names and grants in doc 023 (PRODUCTION_SUPERVISOR and ADMIN; ADMIN
+holds every permission per doc 021, no separate emergency override exists yet), plus a new
+`catalog:read`. Open owner question: should a site-bound supervisor keep changing company-wide
+catalogue data (doc 023 §7)?
 
 "Single" label void = one unused, damaged label of an identity not yet activated (operator);
 anything else (several items at once, an already activated identity, a whole series) is
@@ -564,7 +572,7 @@ not usable in the transaction that adds them — same as Milestone 2A).
 | 1   | identity                | users, user_identities, roles (seed), role_permissions (seed), user_roles, user_scopes, audit_events                                                                                                                                                                                                                                 |
 | 2   | enum values             | bottle events `ASSIGNED_TO_CRATE`, `REMOVED_FROM_CRATE`, `QUARANTINED`, `IDENTITY_VOIDED`, `REPLACEMENT_REQUESTED`; consumption stage `FILL`; print-job kind; new operation kinds                                                                                                                                                    |
 | 3   | catalog                 | product_categories (seed 2), products, product_label_approvals, recipe_versions, recipe_version_stages                                                                                                                                                                                                                               |
-| 4   | crates                  | crate_types (seed 2, capacity 40), crate_type_categories, qr_identities (+ copy of existing bottle tokens), crate_registrations, crates, crate label print jobs/items, crate_events                                                                                                                                                  |
+| 4   | crates                  | crate_types (seed 2, capacity 40 — _doc 023: created through the API instead, no seed_), crate_type_categories, qr_identities (+ copy of existing bottle tokens), crate_registrations, crates, crate label print jobs/items, crate_events                                                                                            |
 | 5   | orders and reservations | production_orders (kind, priority, ready_at, counters), production_order_series, production_order_replacements, inventory_reservations (coverage status, manual pin), reservation movements, coverage events and totals (+ triggers, commit-time coverage check), label_print_item_voids, print-job kind rule, bottle_identity_voids |
 | 6   | work sessions           | production_work_sessions, production_session_events, partial unique indexes                                                                                                                                                                                                                                                          |
 | 7   | cycles and assignment   | crate_cycles, crate_assignments, bottle_category_bindings, bottle_holds, new nullable bottle_events columns, all commit-time checks, "LABEL_APPLIED only with an order"                                                                                                                                                              |

@@ -63,6 +63,9 @@ export const PERMISSION_CODES = [
   'production:labels_print',
   'production:templates_manage',
   'production:label_apply',
+  'catalog:read',
+  'catalog:product_manage',
+  'catalog:recipe_approve',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -84,6 +87,7 @@ export const PERMISSION_MODULES = [
   'inventory',
   'procurement',
   'production',
+  'catalog',
   'identity',
   'sites',
 ] as const;

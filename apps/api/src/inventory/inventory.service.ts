@@ -5,6 +5,7 @@ import { assertUnitScale, quantity } from '../common/quantity.js';
 import {
   Prisma,
   type ConsumptionStage,
+  type InventoryItemKind,
   type InventoryMovementType,
 } from '../generated/prisma/client.js';
 import { PrismaService } from '../database/prisma.service.js';
@@ -117,6 +118,72 @@ export class InventoryService {
         purchaseMultiple: parse(input.purchaseMultiple, 'Purchase multiple'),
         requestId: input.requestId,
       },
+    });
+  }
+
+  /** All units (reference data). */
+  listUnits(db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryUnit.findMany({ orderBy: { code: 'asc' } });
+  }
+
+  /** Items with their base unit, by codes and/or kinds (catalogue reads, doc 023). */
+  itemsWithUnit(
+    filter: { codes?: readonly string[]; kinds?: readonly InventoryItemKind[] },
+    db: Prisma.TransactionClient = this.prisma,
+  ) {
+    return db.inventoryItem.findMany({
+      where: {
+        ...(filter.codes && { code: { in: [...filter.codes] } }),
+        ...(filter.kinds && { kind: { in: [...filter.kinds] } }),
+      },
+      include: { baseUnit: true },
+      orderBy: { code: 'asc' },
+    });
+  }
+
+  /** An item with its base unit, or null. */
+  findItemByCode(code: string, db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryItem.findUnique({ where: { code }, include: { baseUnit: true } });
+  }
+
+  /** BOM versions with their lines, items and units (e.g. a product recipe's BOMs). */
+  bomsWithLines(ids: readonly string[], db: Prisma.TransactionClient = this.prisma) {
+    return db.bomVersion.findMany({
+      where: { id: { in: [...ids] } },
+      include: {
+        lines: { orderBy: { lineNo: 'asc' }, include: { item: { include: { baseUnit: true } } } },
+      },
+    });
+  }
+
+  /** A unit by code (reference data), or null. */
+  getUnitByCode(code: string, db: Prisma.TransactionClient = this.prisma) {
+    return db.inventoryUnit.findUnique({ where: { code } });
+  }
+
+  /**
+   * Creates a catalogue entry of quantity-tracked material (doc 023). Never a receipt: no lot,
+   * movement or balance is written — stock only ever enters through the ledger.
+   */
+  createItem(
+    tx: Prisma.TransactionClient,
+    input: {
+      code: string;
+      name: string;
+      kind: InventoryItemKind;
+      unitId: string;
+      lotTracked: boolean;
+    },
+  ) {
+    return tx.inventoryItem.create({
+      data: {
+        code: input.code,
+        name: input.name,
+        kind: input.kind,
+        baseUnitId: input.unitId,
+        lotTracking: input.lotTracked ? 'REQUIRED' : 'NONE',
+      },
+      include: itemInclude,
     });
   }
 
@@ -332,12 +399,14 @@ export class InventoryService {
 
   // --- consumption rules -----------------------------------------------------------------------
 
-  /** The BOM version valid now for a stage, with its lines (immutable rows). */
+  /** The global stage rule valid now (not a product recipe's BOM), with its lines (immutable). */
   async activeBom(stage: ConsumptionStage, db: Prisma.TransactionClient = this.prisma) {
     const now = new Date();
     const bom = await db.bomVersion.findFirst({
       where: {
         stage,
+        // Recipe BOMs belong to their product recipe (doc 023) and are found through it only.
+        recipe: { is: null },
         validFrom: { lte: now },
         OR: [{ validTo: null }, { validTo: { gt: now } }],
       },
@@ -348,6 +417,37 @@ export class InventoryService {
       throw new Error(`No active consumption rule for stage ${stage}`);
     }
     return bom;
+  }
+
+  /**
+   * Creates an immutable BOM version with its lines. A product recipe's BOM (doc 023) is linked to
+   * its recipe revision by the caller in the same transaction; the database then seals it.
+   */
+  async createBomVersion(
+    tx: Prisma.TransactionClient,
+    input: {
+      code: string;
+      version: number;
+      stage: ConsumptionStage;
+      lines: readonly { itemId: string; unitId: string; quantity: Prisma.Decimal }[];
+    },
+  ) {
+    return tx.bomVersion.create({
+      data: {
+        code: input.code,
+        version: input.version,
+        stage: input.stage,
+        validFrom: new Date(),
+        lines: {
+          create: input.lines.map((l, i) => ({
+            lineNo: i + 1,
+            itemId: l.itemId,
+            unitId: l.unitId,
+            quantity: l.quantity,
+          })),
+        },
+      },
+    });
   }
 
   /** Drift check (expected empty): balances that differ from Σ ledger. */

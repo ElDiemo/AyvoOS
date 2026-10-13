@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - ops/*
 
 # Only these dependencies may run install scripts (supply-chain hardening).
 allowBuilds:
