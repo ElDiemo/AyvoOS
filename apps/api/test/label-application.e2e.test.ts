@@ -90,6 +90,79 @@ describe.skipIf(!hasDatabase)('physical label application (warehouse, doc 018)',
     ]);
   });
 
+  it('an active product recipe (doc 023) never changes what label application consumes', async () => {
+    // A complete, active recipe whose LABEL_APPLICATION BOM holds the bottle body and a label.
+    const sfx = randomUUID().slice(0, 6).toUpperCase();
+    const post = (path: string, body: object) =>
+      http()
+        .post(`/api/admin/catalog/${path}`)
+        .send({ requestId: randomUUID(), reason: 'recipe next to label application', ...body });
+    const component = (kind: string, unitCode: string, categoryCode: string | null) =>
+      post('components', {
+        code: `LA-${kind.slice(0, 5)}-${sfx}`,
+        name: kind,
+        kind,
+        unitCode,
+        lotTracked: kind === 'NEW_BOTTLE',
+        categoryCode,
+        packageCapacity: null,
+      }).expect(201);
+    await component('LABEL_MEDIA', 'pcs', 'HAND_SOAP');
+    await component('BULK_LIQUID', 'ml', 'HAND_SOAP');
+    await component('PUMP', 'pcs', null);
+    await post('crate-types', {
+      code: `LA-CRATE-${sfx}`,
+      name: 'Bedna',
+      capacity: 40,
+      categoryCodes: ['HAND_SOAP'],
+    }).expect(201);
+    await post('products', {
+      code: `LA-${sfx}`,
+      name: 'Tekuté mýdlo 330 ml',
+      categoryCode: 'HAND_SOAP',
+      nominalQuantity: '330',
+      nominalUnitCode: 'ml',
+    }).expect(201);
+    await post(`products/LA-${sfx}/recipes`, {
+      crateTypeCode: `LA-CRATE-${sfx}`,
+      components: [
+        { itemCode: 'NEW_BOTTLE', quantity: '1', unitCode: 'pcs' },
+        { itemCode: `LA-LABEL-${sfx}`, quantity: '1', unitCode: 'pcs' },
+        { itemCode: `LA-BULK_-${sfx}`, quantity: '330', unitCode: 'ml' },
+        { itemCode: `LA-PUMP-${sfx}`, quantity: '1', unitCode: 'pcs' },
+      ],
+    }).expect(201);
+    await http()
+      .post(`/api/admin/catalog/products/LA-${sfx}/recipes/1/activate`)
+      .send({ requestId: randomUUID(), reason: 'aktivní', expectedActiveVersion: null })
+      .expect(200);
+
+    const receipt = await receiveBottles(t, 2);
+    const lot = receipt.lines[0]!.lot!;
+    const [bottle] = await printedBottles(t, 1);
+    await applyLabel(t, {
+      lotId: lot.id,
+      seriesCode: bottle!.seriesCode,
+      scannedValue: bottle!.url,
+    }).expect(200);
+    const event = await t.prisma.bottleEvent.findFirstOrThrow({
+      where: { bottleId: bottle!.id, type: 'LABEL_APPLIED' },
+    });
+    // Exactly one movement: one bottle body from the selected lot, by the global rule v1 —
+    // no label, liquid or pump of the recipe is consumed.
+    const movements = await t.prisma.inventoryMovement.findMany({
+      where: { bottleEventId: event.id },
+      include: { bomLine: { include: { bomVersion: true } } },
+    });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]!.bomLine!.bomVersion).toMatchObject({
+      code: 'LABEL_APPLICATION',
+      version: 1,
+    });
+    expect(movements[0]!.quantityDelta.toFixed()).toBe('-1');
+    expect(await lotOnHand(lot.id)).toBe('1');
+  });
+
   it('a duplicate scan is ALREADY_APPLIED and consumes nothing; a retried request replays', async () => {
     const lot = (await receiveBottles(t, 5)).lines[0]!.lot!;
     const [bottle] = await printedBottles(t, 1);
