@@ -334,6 +334,26 @@ test('unsaved draft changes are guarded; a completed draft activates as V1 and c
   await expect(calc.getByTestId('total-BULK_LIQUID')).toHaveText('330 000 000 ml');
   await calculate(page, '41');
   await shot(page, '05-recipe-active-calculation-desktop');
+  // Review P2: an answer that arrives after the number changed is never shown.
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const held = '**/requirements?bottles=40';
+  await page.route(held, async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await calc.getByLabel('Počet hotových lahví').fill('40');
+  await calc.getByRole('button', { name: 'Spočítat' }).click();
+  await calc.getByLabel('Počet hotových lahví').fill('41');
+  const late = page.waitForResponse((r) => r.url().includes('requirements?bottles=40'));
+  release();
+  await late;
+  await page.waitForTimeout(300); // let the late answer reach the component
+  await expect(calc.getByTestId('calc-result')).toHaveCount(0);
+  await expect(calc.getByLabel('Počet hotových lahví')).toHaveValue('41');
+  await page.unroute(held);
+  await calc.getByRole('button', { name: 'Spočítat' }).click();
+  await expect(calc.getByTestId('total-BULK_LIQUID')).toHaveText('13 530 ml');
   await calc.getByLabel('Počet hotových lahví').fill('1,5');
   await calc.getByRole('button', { name: 'Spočítat' }).click();
   await expect(calc.getByText('Zadejte celé číslo 1–1 000 000.')).toBeVisible();
@@ -348,12 +368,19 @@ test('a new version from V1 replaces it; V1 stays archived, unchanged and calcul
   await confirmIn(page, 'new-draft-dialog', 'Založit koncept', 'menší náplň');
   await expect(page).toHaveURL(new RegExp(`${VERSION_URL(2)}$`));
   await expect(page.getByTestId('recipe-missing')).toHaveText('Kusovník je kompletní.');
+  const before = await calculate(page, '40');
+  await expect(before.getByTestId('total-BULK_LIQUID')).toHaveText('13 200 ml');
   await row(page, 'BULK_LIQUID', null, '300');
   await page
     .getByTestId('recipe-editor')
     .getByLabel('Typ bedny')
     .selectOption({ label: 'Malá bedna 24 (CRATE-24) – kapacita (lahví) 24' });
   await saveDraft(page, 'menší náplň a menší bedna');
+  // Review P2: the calculation belongs to one revision — a saved change drops the old totals.
+  await expect(page.getByTestId('calc-result')).toHaveCount(0);
+  const fresh = await calculate(page, '40');
+  await expect(fresh.getByTestId('total-BULK_LIQUID')).toHaveText('12 000 ml');
+  await expect(fresh.getByTestId('calc-crates')).toContainText('2 × Malá bedna 24');
   await page.getByRole('button', { name: 'Aktivovat' }).click();
   await expect(page.getByTestId('recipe-dialog-text')).toHaveText(
     'Verze V2 produktu „Tekuté mýdlo 330 ml“ se stane aktivní. Dosud aktivní V1 se archivuje.',

@@ -1,7 +1,7 @@
 'use client';
 
 import { materialRequirementsSchema, type MaterialRequirements } from '@ayvo/types';
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { buttonClass, Card } from '@/components/ui';
 import { catalogCs } from '@/i18n/cs/catalog';
 import { formatQuantityCs, unitCs } from '@/i18n/cs/format';
@@ -31,6 +31,9 @@ export function RequirementsCalculator({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<MaterialRequirements | null>(null);
   const [busy, setBusy] = useState(false);
+  // Every input change or new request bumps the generation; an answer for an older generation is
+  // dropped, so the totals always belong to the number on screen (issue #17 review).
+  const generation = useRef(0);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -40,19 +43,22 @@ export function RequirementsCalculator({
       return;
     }
     setError(null);
+    setResult(null);
+    const mine = ++generation.current;
     setBusy(true);
     try {
-      setResult(
-        await apiGet(
-          `admin/catalog/products/${encodeURIComponent(productCode)}/recipes/${version}/requirements?bottles=${bottles}`,
-          materialRequirementsSchema,
-        ),
+      const value = await apiGet(
+        `admin/catalog/products/${encodeURIComponent(productCode)}/recipes/${version}/requirements?bottles=${bottles}`,
+        materialRequirementsSchema,
       );
+      if (mine === generation.current) setResult(value);
     } catch (err) {
-      setResult(null);
-      setError(catalogErrorText(err));
+      if (mine === generation.current) {
+        setResult(null);
+        setError(catalogErrorText(err));
+      }
     } finally {
-      setBusy(false);
+      if (mine === generation.current) setBusy(false);
     }
   }
 
@@ -74,8 +80,10 @@ export function RequirementsCalculator({
                   value={input}
                   onChange={(e) => {
                     setInput(e.target.value);
-                    setResult(null); // never show totals of another number
+                    generation.current += 1; // a pending answer is for another number now
+                    setResult(null);
                     setError(null);
+                    setBusy(false);
                   }}
                   aria-invalid={!!error}
                   aria-describedby={describedBy(`${id}-bottles`, false, !!error)}

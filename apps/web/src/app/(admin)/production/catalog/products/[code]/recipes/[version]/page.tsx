@@ -154,6 +154,8 @@ export default async function RecipeVersionPage({
           </Card>
         )}
         <RequirementsCalculator
+          // A new revision (saved draft) or status is another source: start a fresh calculation.
+          key={`${recipe.product.code}:${recipe.version}:${recipe.revision}:${recipe.status}`}
           productCode={recipe.product.code}
           version={recipe.version}
           complete={complete}
