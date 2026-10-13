@@ -11,10 +11,14 @@ fi
 
 echo "$(date -u +%FT%TZ) AYVO Night Shift started"
 
+# Owner-approved runs first (signed manifest: implement → review → CI → merge → DEV deploy).
+# A refused or blocked run never prevents the PR-only queue below from being reported.
+( cd "$root" && /usr/bin/python3 -m night_shift.cli scheduled ) || echo "$(date -u +%FT%TZ) approved runs: see runs/*/report.md" >&2
+
 # Process at most two independently reviewed PRs in one shift. A failure stops
 # the chain immediately; later work never continues on top of a blocked job.
 for job_number in 1 2; do
-  /usr/bin/python3 "$root/bin/night_shift.py" prepare
+  ( cd "$root" && /usr/bin/python3 -m night_shift.legacy prepare )
   phase=$(/usr/bin/python3 - "$root/state.json" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -29,8 +33,8 @@ PY
     echo "$(date -u +%FT%TZ) active job is blocked; stopping chain" >&2
     exit 1
   fi
-  /usr/bin/python3 "$root/bin/night_shift.py" work
-  /usr/bin/python3 "$root/bin/night_shift.py" publish
+  ( cd "$root" && /usr/bin/python3 -m night_shift.legacy work )
+  ( cd "$root" && /usr/bin/python3 -m night_shift.legacy publish )
 done
 
 echo "$(date -u +%FT%TZ) AYVO Night Shift finished"

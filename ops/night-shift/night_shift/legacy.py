@@ -128,6 +128,43 @@ def git(*args: str, cwd: Path = REPO, timeout: int = 900, check: bool = True) ->
     return command(["git", *args], cwd=cwd, timeout=timeout, check=check).stdout.strip()
 
 
+# Git in a worktree the model could modify (issue #13 review, P0): never let git discover the
+# repository through the worktree's own `.git` file (the model can replace it with a directory
+# whose config runs commands: core.fsmonitor, hooks, …). The controller passes the trusted
+# per-worktree git dir from the main repository (mounted read-only into the runner) and disables
+# every configuration that executes programs.
+SAFE_GIT_OPTIONS = (
+    "-c", "core.fsmonitor=false",
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "core.untrackedCache=false",
+    "-c", "core.pager=cat",
+    "-c", "diff.external=",
+    "-c", "protocol.ext.allow=never",
+)
+
+
+def trusted_gitdir(worktree: Path) -> Path:
+    """The main repository's git dir of exactly this worktree (found from the trusted side)."""
+    resolved = worktree.resolve(strict=True)
+    if resolved.parent != WORKTREES.resolve() and resolved != WORKTREES.resolve().parent / "night-shift-deploy":
+        raise NightShiftError(f"Refusing git outside the worktree root: {worktree}")
+    expected = str(resolved / ".git")
+    for candidate in sorted((REPO / ".git" / "worktrees").glob("*")):
+        back = candidate / "gitdir"
+        if back.is_file() and not back.is_symlink() and back.read_text(encoding="utf-8").strip() == expected:
+            return candidate
+    raise NightShiftError(f"No trusted git dir for worktree {worktree}")
+
+
+def worktree_git_argv(worktree: Path, *args: str) -> list[str]:
+    gitdir = trusted_gitdir(worktree)
+    return ["git", "--git-dir", str(gitdir), "--work-tree", str(worktree.resolve()), *SAFE_GIT_OPTIONS, *args]
+
+
+def wgit(worktree: Path, *args: str, timeout: int = 900, check: bool = True) -> str:
+    return command(worktree_git_argv(worktree, *args), cwd=worktree, timeout=timeout, check=check).stdout.strip()
+
+
 def load_state() -> dict[str, Any] | None:
     return load_json(STATE) if STATE.exists() else None
 
@@ -303,6 +340,23 @@ def run_gates(worktree: Path, log_dir: Path) -> None:
         )
 
 
+def runner_cpus() -> int:
+    """Docker refuses more CPUs than the host has (the 2026-10-12 shift failed with exit 125:
+    "range of CPUs is from 0.01 to 2.00"); leave one CPU to the DEV preview when possible."""
+    available = os.cpu_count() or 1
+    return max(1, min(4, available - 1 if available > 2 else available))
+
+
+def runner_memory() -> str:
+    """At most 10 GiB and at most 60 % of the host's memory (the DEV preview shares it)."""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            total_kib = int(next(line for line in handle if line.startswith("MemTotal:")).split()[1])
+    except (OSError, StopIteration, ValueError):
+        return "2g"
+    return f"{max(1024, min(10 * 1024, total_kib * 6 // 10 // 1024))}m"
+
+
 def runner_argv(
     worktree: Path, *, include_claude_auth: bool = False, env_extra: dict[str, str] | None = None
 ) -> list[str]:
@@ -323,8 +377,8 @@ def runner_argv(
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--pids-limit=768",
-        "--memory=10g",
-        "--cpus=4",
+        f"--memory={runner_memory()}",
+        f"--cpus={runner_cpus()}",
         "--tmpfs",
         "/tmp:rw,nosuid,nodev,size=2g",
         "--workdir",
@@ -437,7 +491,7 @@ def important_findings(review: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def changed_paths(worktree: Path) -> list[str]:
-    output = git("status", "--porcelain=v1", cwd=worktree)
+    output = wgit(worktree, "status", "--porcelain=v1")
     paths: list[str] = []
     for line in output.splitlines():
         if not line:
@@ -450,18 +504,21 @@ def changed_paths(worktree: Path) -> list[str]:
 
 
 def validate_changes(worktree: Path) -> list[str]:
+    dot_git = worktree / ".git"
+    if dot_git.is_symlink() or not dot_git.is_file():
+        raise NightShiftError("The worktree's .git was replaced; refusing to continue")
     paths = changed_paths(worktree)
     if not paths:
         raise NightShiftError("Implementation produced no changes")
     for path in paths:
-        normalized = path.lstrip("./")
+        normalized = path[2:] if path.startswith("./") else path  # never strip characters
         name = Path(normalized).name
         forbidden_env = name.startswith(".env") and name != ".env.example"
         if forbidden_env or any(normalized.startswith(prefix) for prefix in FORBIDDEN_PATHS):
             raise NightShiftError(f"Forbidden path changed: {normalized}")
         if "secret" in normalized.lower() and normalized.endswith((".env", ".pem", ".key")):
             raise NightShiftError(f"Possible secret file changed: {normalized}")
-    command(["git", "diff", "--check"], cwd=worktree, timeout=300)
+    command(worktree_git_argv(worktree, "diff", "--check"), cwd=worktree, timeout=300)
     return paths
 
 
@@ -535,9 +592,9 @@ local checks. Findings:\n{json.dumps(blockers, ensure_ascii=False, indent=2)}"""
         run_gates(worktree, log_dir)
 
     paths = validate_changes(worktree)
-    command(["git", "add", "--all"], cwd=worktree, timeout=300)
-    command(["git", "commit", "-m", job["commit_message"]], cwd=worktree, timeout=600)
-    head = git("rev-parse", "HEAD", cwd=worktree)
+    command(worktree_git_argv(worktree, "add", "--all"), cwd=worktree, timeout=300)
+    command(worktree_git_argv(worktree, "commit", "--no-verify", "-m", job["commit_message"]), cwd=worktree, timeout=600)
+    head = wgit(worktree, "rev-parse", "HEAD")
     save_state(
         state,
         "ready_to_publish",
@@ -596,13 +653,13 @@ def publish() -> None:
         raise NightShiftError("Refusing invalid publish branch")
     if worktree.parent != WORKTREES or not worktree.is_dir():
         raise NightShiftError("Refusing unexpected worktree")
-    if git("status", "--porcelain", cwd=worktree):
+    if wgit(worktree, "status", "--porcelain"):
         raise NightShiftError("Refusing to publish a dirty worktree")
-    head = git("rev-parse", "HEAD", cwd=worktree)
+    head = wgit(worktree, "rev-parse", "HEAD")
     if head != state.get("head_commit"):
         raise NightShiftError("Worktree HEAD differs from reviewed commit")
     ancestor = command(
-        ["git", "merge-base", "--is-ancestor", job["base_commit"], head],
+        worktree_git_argv(worktree, "merge-base", "--is-ancestor", job["base_commit"], head),
         cwd=worktree,
         check=False,
     )
@@ -610,7 +667,7 @@ def publish() -> None:
         raise NightShiftError("Reviewed commit is not descended from the approved base")
 
     if not state.get("pr_number"):
-        command(["git", "push", "--set-upstream", "origin", branch], cwd=worktree, timeout=1200)
+        command(worktree_git_argv(worktree, "push", "--set-upstream", "origin", branch), cwd=worktree, timeout=1200)
         body_path = LOGS / job["id"] / "pr-body.md"
         body_path.write_text(
             "\n".join(

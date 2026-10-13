@@ -7,7 +7,9 @@ It creates an isolated Git worktree, lets Claude Sonnet implement, runs local qu
 isolated container, sends critical changes through an independent Fable review/fix loop, commits
 the reviewed result, pushes a dedicated branch, opens a pull request and waits for GitHub CI.
 
-It never merges a pull request and never deploys DEV or production.
+The PR-only queue below never merges a pull request and never deploys. **Approved runs** (doc 024,
+installed separately) may merge and deploy to DEV — only what a manifest signed by the owner
+allows, through the deterministic gates of `night_shift/gates.py`. Production is never a target.
 
 ## Safety boundaries
 
@@ -32,6 +34,19 @@ Job definitions are mode-600 JSON files in `queue/ready`; task bodies are mode-6
 in `jobs`. Preparation atomically moves a selected job to `queue/running`. Successful publication
 moves it to `queue/done`. A blocked job remains in `queue/running` with the reason in `state.json`
 and `reports/<job-id>.md`.
+
+## Approved runs (doc 024)
+
+`approved/<run_id>/` holds `manifest.json`, `manifest.json.sig` and one `<slug>.md` task per part.
+`run-night.sh` runs them first (`python3 -m night_shift.cli scheduled`); their state, event log
+and report live in `runs/<run_id>/`. Revoke with `touch revoked/<manifest-sha256>`.
+
+```text
+/opt/ayvo/bin/ayvo-night-shift delivery hash approved/<run_id>/manifest.json
+/opt/ayvo/bin/ayvo-night-shift delivery verify approved/<run_id>/manifest.json approved/<run_id>/manifest.json.sig
+/opt/ayvo/bin/ayvo-night-shift delivery status
+/opt/ayvo/bin/ayvo-night-shift delivery resume <run_id>
+```
 
 ## Operator commands
 
