@@ -33,9 +33,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   links, corrections), bottle component attachments, operation requests. Milestone 2C (doc 021):
   users, user identities, roles (system + custom, ADR 0024), permissions, user roles, user scopes
   (site + warehouse), user sessions (with the active site), login states, identity bootstrap,
-  audit events, **sites** (doc 022, ADR 0023), user invitations (doc 021 §7b). **Approved design, not
-  implemented** (Production Core v0.1, doc 020): users/roles/scopes (ADR 0022), product
-  categories, products, product-label approvals, recipe versions, crate types, crates, crate
+  audit events, **sites** (doc 022, ADR 0023), user invitations (doc 021 §7b). Catalogue core
+  (requested by the owner 2026-10-13, doc 023; table design subject to the owner's PR review):
+  product categories, catalogue components, crate types (+ categories), products, recipe
+  versions / revisions / revision BOMs. **Approved design, not
+  implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,
   bottle category bindings, holds and identity voids — implement only PR by PR as the owner
   authorizes (doc 020 §14). Do not add other domain models (FillBatch, Hotel, Delivery, Billing,
@@ -159,7 +161,9 @@ Tailwind 4 · Vitest · Playwright.
   `labels` ← `assets` ← `label-production` (doc 016); `inventory` ← `procurement`; `warehouse`
   composes assets, label-production, inventory and procurement (doc 018); `sites` (facilities,
   doc 022) ← `identity` (users, roles, scopes, sessions, global access guard — doc 021); `audit`
-  (shared security audit); `storage` = FileStorage abstraction.
+  (shared security audit); `storage` = FileStorage abstraction; `catalog` (components, products,
+  recipes, material calculation — doc 023) uses `inventory` (items, BOM tables) and `crates`
+  (crate types).
   Routes: `/api/admin/*` (staff) and `/api/public/*` (anonymous passport only).
 - `apps/web` — Next.js App Router. Server-only env in `src/lib/env.ts`. Admin pages in
   `src/app/(admin)`, public passport in `src/app/q/[token]`. The internal app is organized by

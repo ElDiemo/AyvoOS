@@ -41,8 +41,13 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
           <Notice tone="warning">{t.invitationUnconfirmed}</Notice>
         </div>
       )}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
-        <div className="flex min-w-0 flex-col gap-6">
+      {/*
+        Three blocks (issue #11, UI-03): overview, editing, audit. One column (phones, tablets):
+        overview → editing → audit, so a long audit never pushes the editor down. Wide screens: the
+        editing column on the right spans both rows; the second row absorbs its extra height.
+      */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem] xl:grid-rows-[auto_1fr]">
+        <div className="flex min-w-0 flex-col gap-6 xl:col-start-1 xl:row-start-1">
           <Card>
             <FieldList>
               <Field label={t.status}>
@@ -82,16 +87,22 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
               global={user.effectiveAccess.globalSiteAccess}
             />
           </Card>
-          <Card title={t.audit} className="relative overflow-x-auto">
-            <AuditList events={user.audit} testId="user-audit" />
-          </Card>
         </div>
         {hasPermission(me, 'identity:users_manage') && (
-          <div className="flex min-w-0 flex-col gap-6">
+          <div
+            className="flex min-w-0 flex-col gap-6 xl:col-start-2 xl:row-span-2 xl:row-start-1"
+            data-testid="user-editing"
+          >
             <UserAccessEditor user={user} roles={roles} sites={sites} />
             <UserActions user={user} isSelf={me.user.id === user.id} />
           </div>
         )}
+        <Card
+          title={t.audit}
+          className="relative min-w-0 self-start overflow-x-auto xl:col-start-1 xl:row-start-2"
+        >
+          <AuditList events={user.audit} testId="user-audit" />
+        </Card>
       </div>
     </>
   );

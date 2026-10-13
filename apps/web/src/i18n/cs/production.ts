@@ -90,7 +90,8 @@ export const productionCs = {
     downloadPdf: 'Stáhnout PDF',
     details: 'Detail',
     labelsAndDetails: 'Etikety a detail',
-    noCreator: 'Autor vytvoření se zatím neukládá: AYVO OS na DEV nemá uživatelské účty.',
+    // Series record no author (no column, no audit event); history is never guessed (issue #11).
+    noCreator: 'Autor vytvoření série se v AYVO OS neeviduje.',
   },
   bottle: {
     subtitle: 'Vratná lahev AYVO',

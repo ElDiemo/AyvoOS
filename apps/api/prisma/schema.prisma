@@ -398,7 +398,8 @@ model InventoryUnit {
   /// Quantities in this unit may have at most this many decimals ("pcs" = 0: whole pieces).
   decimalPlaces Int           @map("decimal_places") @db.SmallInt
 
-  items InventoryItem[]
+  items    InventoryItem[]
+  products Product[]
 
   @@map("inventory_units")
 }
@@ -439,6 +440,8 @@ model InventoryItem {
   movements    InventoryMovement[]
   balances     InventoryBalance[]
   bomLines     BomLine[]
+  /// Catalogue profile (doc 023) — category designation, package capacity.
+  component    CatalogComponent?
 
   @@unique([id, baseUnitId])
   @@map("inventory_items")
@@ -589,6 +592,8 @@ model InventoryBalance {
 
 enum ConsumptionStage {
   LABEL_APPLICATION
+  /// Filling (2B): liquid and pump. Recipe BOMs may hold FILL lines now; nothing consumes them yet.
+  FILL
 }
 
 /// A versioned consumption rule (BOM). Now: stage rules; later also product recipes.
@@ -602,7 +607,9 @@ model BomVersion {
   validTo   DateTime?        @map("valid_to") @db.Timestamptz(3)
   createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  lines BomLine[]
+  lines  BomLine[]
+  /// Set for a BOM that belongs to a product recipe (doc 023); never chosen by `activeBom`.
+  recipe RecipeRevisionBom?
 
   @@unique([code, version])
   @@map("bom_versions")
@@ -822,6 +829,15 @@ enum OperationKind {
   ITEM_SETTINGS
   LABEL_APPLICATION
   RECEIPT_LINE_COST
+  CATALOG_COMPONENT_CREATE
+  CRATE_TYPE_CREATE
+  PRODUCT_CREATE
+  PRODUCT_RENAME
+  PRODUCT_ARCHIVE
+  RECIPE_DRAFT_CREATE
+  RECIPE_DRAFT_UPDATE
+  RECIPE_ACTIVATE
+  RECIPE_ARCHIVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -832,6 +848,12 @@ model OperationRequest {
   payloadSha256 String        @map("payload_sha256") @db.Char(64)
   result        Json?
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  catalogComponents CatalogComponent[]
+  crateTypes        CrateType[]
+  products          Product[]
+  recipeVersions    RecipeVersion[]
+  recipeRevisions   RecipeRevision[]
 
   @@map("operation_requests")
 }
@@ -882,6 +904,14 @@ model User {
   invitationsSent    UserInvitation[]   @relation("InvitationCreatedBy")
   invitationsRevoked UserInvitation[]   @relation("InvitationRevokedBy")
   sitesUpdated       Site[]             @relation("SiteUpdatedBy")
+  componentsCreated  CatalogComponent[]
+  crateTypesCreated  CrateType[]
+  productsCreated    Product[]          @relation("ProductCreatedBy")
+  productsArchived   Product[]          @relation("ProductArchivedBy")
+  recipesCreated     RecipeVersion[]    @relation("RecipeCreatedBy")
+  recipesActivated   RecipeVersion[]    @relation("RecipeActivatedBy")
+  recipesArchived    RecipeVersion[]    @relation("RecipeArchivedBy")
+  recipeRevisions    RecipeRevision[]
 
   @@map("users")
 }
@@ -1210,4 +1240,194 @@ model UserInvitationRequest {
 
   @@index([invitationId])
   @@map("user_invitation_requests")
+}
+
+// ---------------------------------------------------------------------------------------------
+// catalog module — product categories, catalogue components, products and their versioned
+// recipes (= product BOMs); crate types (crates module). Company-wide master data (doc 023): no
+// stock quantity and no site — quantities stay in the ledger of each site's warehouses.
+// ---------------------------------------------------------------------------------------------
+
+/// Confirmed reference data (HAND_SOAP, SHOWER_GEL; doc 020), seeded by migration.
+/// DB: code pattern; UPDATE/DELETE/TRUNCATE rejected.
+model ProductCategory {
+  code String @id
+  name String
+
+  components CatalogComponent[]
+  products   Product[]
+  crateTypes CrateTypeCategory[]
+
+  @@map("product_categories")
+}
+
+/// Catalogue profile of an inventory item used as a product component. The item itself (code,
+/// kind, base unit, lot tracking) stays the inventory catalogue entry; quantities stay in the
+/// ledger. DB: immutable; liquid and label items name a category; package capacity only for
+/// packaging (NULL = not known yet).
+model CatalogComponent {
+  itemId             String   @id @map("item_id") @db.Uuid
+  /// The product category the component is made for (NULL = usable for every category).
+  categoryCode       String?  @map("category_code")
+  /// Bottles per package (PACKAGING only); NULL = not known yet — never guessed.
+  packageCapacity    Int?     @map("package_capacity")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String   @map("created_by") @db.Uuid
+  operationRequestId String   @map("operation_request_id") @db.Uuid
+
+  item      InventoryItem    @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  category  ProductCategory? @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
+  creator   User             @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@map("catalog_components")
+}
+
+/// A returnable production crate type (ADR 0021): capacity is data, never a constant.
+/// DB: code pattern; capacity 1–1000; immutable; DELETE rejected.
+model CrateType {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String   @unique
+  name               String
+  capacity           Int
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String   @map("created_by") @db.Uuid
+  operationRequestId String   @map("operation_request_id") @db.Uuid
+
+  categories CrateTypeCategory[]
+  creator    User                @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  operation  OperationRequest    @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@map("crate_types")
+}
+
+/// The product categories a crate type carries. DB: insert-only.
+model CrateTypeCategory {
+  crateTypeId  String @map("crate_type_id") @db.Uuid
+  categoryCode String @map("category_code")
+
+  crateType CrateType        @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  category  ProductCategory  @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
+  revisions RecipeRevision[]
+
+  @@id([crateTypeId, categoryCode])
+  @@map("crate_type_categories")
+}
+
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// A sellable product variant ("Tekuté mýdlo 330 ml"); not a label template (doc 020).
+/// DB: code pattern; nominal quantity > 0 in its unit's scale; code, category, nominal quantity
+/// and creation immutable; the name may be corrected while ACTIVE (audited); status forward-only;
+/// DELETE rejected.
+model Product {
+  id                 String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String        @unique
+  name               String
+  categoryCode       String        @map("category_code")
+  nominalQuantity    Decimal       @map("nominal_quantity") @db.Decimal(19, 3)
+  nominalUnitId      String        @map("nominal_unit_id") @db.Uuid
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String        @map("created_by") @db.Uuid
+  operationRequestId String        @map("operation_request_id") @db.Uuid
+  /// ACTIVE → ARCHIVED (forward only). An archived product gets no new recipe work.
+  status             ProductStatus @default(ACTIVE)
+  archivedAt         DateTime?     @map("archived_at") @db.Timestamptz(3)
+  archivedBy         String?       @map("archived_by") @db.Uuid
+
+  category    ProductCategory  @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
+  nominalUnit InventoryUnit    @relation(fields: [nominalUnitId], references: [id], onDelete: Restrict)
+  creator     User             @relation("ProductCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  archiver    User?            @relation("ProductArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  operation   OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  recipes     RecipeVersion[]
+
+  @@unique([id, categoryCode])
+  @@map("products")
+}
+
+enum RecipeStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/// One version of a product's recipe (= its bill of materials per finished bottle).
+/// DB: (product, version) unique; at most one ACTIVE per product (partial unique); forward-only
+/// status DRAFT → ACTIVE → ARCHIVED (or DRAFT → ARCHIVED); activation only when complete;
+/// identity columns immutable; DELETE rejected. Only a DRAFT gains revisions.
+model RecipeVersion {
+  id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  productId          String       @map("product_id") @db.Uuid
+  /// Copy of the product's category (composite FK) so components and crates can be checked.
+  categoryCode       String       @map("category_code")
+  version            Int
+  status             RecipeStatus @default(DRAFT)
+  /// The version this one was copied from ("new version"), if any — same product.
+  basedOnId          String?      @map("based_on_id") @db.Uuid
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String       @map("created_by") @db.Uuid
+  operationRequestId String       @map("operation_request_id") @db.Uuid
+  activatedAt        DateTime?    @map("activated_at") @db.Timestamptz(3)
+  activatedBy        String?      @map("activated_by") @db.Uuid
+  archivedAt         DateTime?    @map("archived_at") @db.Timestamptz(3)
+  archivedBy         String?      @map("archived_by") @db.Uuid
+
+  product   Product          @relation(fields: [productId, categoryCode], references: [id, categoryCode], onDelete: Restrict)
+  basedOn   RecipeVersion?   @relation("RecipeBasedOn", fields: [basedOnId, productId], references: [id, productId], onDelete: Restrict)
+  copies    RecipeVersion[]  @relation("RecipeBasedOn")
+  creator   User             @relation("RecipeCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  activator User?            @relation("RecipeActivatedBy", fields: [activatedBy], references: [id], onDelete: Restrict)
+  archiver  User?            @relation("RecipeArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  revisions RecipeRevision[]
+
+  @@unique([productId, version])
+  @@unique([id, productId])
+  @@unique([id, categoryCode])
+  @@map("recipe_versions")
+}
+
+/// The content of a recipe version at one revision: its crate type and, per stage, one
+/// recipe-owned BOM version (immutable bom_versions/bom_lines). Editing a draft appends the next
+/// revision; the highest revision is current and is frozen by activation. DB: insert-only;
+/// revisions consecutive and only while DRAFT; crate type must carry the product's category.
+model RecipeRevision {
+  recipeVersionId    String   @map("recipe_version_id") @db.Uuid
+  revision           Int
+  categoryCode       String   @map("category_code")
+  /// Returnable crate type the finished bottles go into (required for activation).
+  crateTypeId        String?  @map("crate_type_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String   @map("created_by") @db.Uuid
+  operationRequestId String   @map("operation_request_id") @db.Uuid
+
+  recipeVersion RecipeVersion       @relation(fields: [recipeVersionId, categoryCode], references: [id, categoryCode], onDelete: Restrict)
+  crateType     CrateTypeCategory?  @relation(fields: [crateTypeId, categoryCode], references: [crateTypeId, categoryCode], onDelete: Restrict)
+  creator       User                @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  operation     OperationRequest    @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  boms          RecipeRevisionBom[]
+
+  @@id([recipeVersionId, revision])
+  @@map("recipe_revisions")
+}
+
+/// One stage BOM of a recipe revision (doc 020 §3.3: RecipeComponent = bom_lines). A BOM version
+/// belongs to at most one recipe revision, ever. DB: insert-only; the BOM's stage equals `stage`;
+/// its lines are checked against the stage, the unit dimension and the product category, and no
+/// item or component kind repeats within the revision; no line can be added afterwards.
+model RecipeRevisionBom {
+  recipeVersionId String           @map("recipe_version_id") @db.Uuid
+  revision        Int
+  stage           ConsumptionStage
+  bomVersionId    String           @unique @map("bom_version_id") @db.Uuid
+
+  recipeRevision RecipeRevision @relation(fields: [recipeVersionId, revision], references: [recipeVersionId, revision], onDelete: Restrict)
+  bomVersion     BomVersion     @relation(fields: [bomVersionId], references: [id], onDelete: Restrict)
+
+  @@id([recipeVersionId, revision, stage])
+  @@map("recipe_revision_boms")
 }

@@ -52,11 +52,15 @@ export const identityCs = {
     'production:labels_print': 'Tisknout etikety',
     'production:templates_manage': 'Spravovat šablony etiket',
     'production:label_apply': 'Nalepovat etikety (spotřeba ze skladu)',
+    'catalog:read': 'Zobrazit produktový katalog, kusovníky a výpočet materiálu',
+    'catalog:product_manage': 'Spravovat komponenty, typy beden, produkty a návrhy kusovníků',
+    'catalog:recipe_approve': 'Aktivovat a archivovat verze kusovníků',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
     procurement: 'Nákup',
     production: 'Výroba',
+    catalog: 'Produktový katalog',
     identity: 'Uživatelé a role',
     sites: 'Provozovny',
   } as Record<string, string>,
@@ -133,6 +137,7 @@ export const identityCs = {
     effectiveNone: 'Žádná oprávnění.',
     globalAccess: 'Všechny provozovny a sklady (globální přístup administrátora)',
     noSites: 'Bez přístupu k provozovně',
+    sitesPerUser: 'Provozovny se přidělují jednotlivým uživatelům.',
     customRole: 'vlastní',
     invitation: 'Pozvánka',
     invitationHelp:

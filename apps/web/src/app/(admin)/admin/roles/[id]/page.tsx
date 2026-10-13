@@ -70,6 +70,7 @@ export default async function RolePage({ params }: { params: Promise<{ id: strin
               <AccessPreview
                 permissions={role.permissions}
                 sites={[]}
+                sitesPerUser
                 global={role.permissions.includes('sites:all_access')}
                 testId="role-permissions-view"
               />

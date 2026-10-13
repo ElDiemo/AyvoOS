@@ -194,6 +194,11 @@ export function GoodsReceiptForm({
             ))}
           </ul>
         )}
+        {!supplierId && !reviewing && (
+          <p className="text-sm text-stone-600" data-testid="document-needs-supplier">
+            {r.chooseSupplierFirst}
+          </p>
+        )}
         {supplierId && !reviewing && (
           <SupplierDocumentUpload
             supplierId={supplierId}

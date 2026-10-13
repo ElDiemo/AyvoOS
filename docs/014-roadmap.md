@@ -41,7 +41,9 @@ Status: Draft — Phase 0 complete; Milestones 1, 2A and 2A.1 merged and on DEV;
    preferred), roles and permissions in AYVO's database (doc 020 §12). Required before the
    production workflows and before any pilot use; Basic Auth stays only the outer DEV gate.
 3. **Catalog and crates** — products, product-label approvals, recipes, crate types, crate
-   registration and labels.
+   registration and labels. _Catalogue core implemented (doc 023): components, products,
+   versioned recipes, crate types, material calculation — API only; the admin UI, label
+   approvals and crates follow._
 4. **Production orders and material reservations.**
 5. **Server-side production work sessions** (15-minute lease, supervised takeover).
 6. **Atomic activation + crate assignment** (the production scan); the standalone label

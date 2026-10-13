@@ -301,6 +301,9 @@ test('a creation whose result was never shown is finished safely after a reload'
   // Still exactly one creation and 50 bottles; the pending entry is gone.
   await page.goto('/bottles/history');
   await expect(page.getByTestId('creation-history').locator('tbody tr')).toHaveCount(1);
+  // No author is recorded for series — said plainly, never guessed (issue #11, UI-04).
+  await expect(page.getByText('Autor vytvoření série se v AYVO OS neeviduje.')).toBeVisible();
+  await expect(page.locator('main')).not.toContainText('nemá uživatelské účty');
   await page.goto('/bottles');
   await expect(page.getByText('50 lahví', { exact: true })).toBeVisible();
   await page.goto('/bottles/new');
