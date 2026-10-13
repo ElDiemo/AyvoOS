@@ -45,6 +45,8 @@ ENV NODE_ENV=production \
 # Files stay owned by root: the unprivileged `node` user can read but not modify the app.
 COPY --from=build /app/apps/web/.next/standalone ./
 COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
+# Next standalone does not copy public assets automatically (including the AYVO wordmark).
+COPY --from=build /app/apps/web/public ./apps/web/public
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
