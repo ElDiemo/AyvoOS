@@ -22,6 +22,8 @@ import {
   toggleWarehouse,
   type AccessDraft,
 } from '@/lib/access-draft';
+import { UnsavedChangesGuard } from '@/components/unsaved-changes-guard';
+import { shellCs } from '@/i18n/cs/shell';
 import { apiSend, ClientApiError } from '@/lib/client-api';
 import { AccessPreview } from './access-preview';
 import { errorText, PlannedRoles } from './create-user-form';
@@ -58,6 +60,7 @@ function ChangeList({ title, items }: { title: string; items: string[] }) {
  * One form for a user's whole access (doc 021 §7): roles, sites and narrower warehouses are
  * edited as a draft, summarised in Czech and saved with one button and one reason — atomically on
  * the server. Nothing is silently disabled: what prevents saving is written next to the button.
+ * Unsaved changes are marked and protected against leaving the page (issue #11, UI-01).
  */
 export function UserAccessEditor({
   user,
@@ -145,6 +148,22 @@ export function UserAccessEditor({
           void save();
         }}
       >
+        <UnsavedChangesGuard
+          dirty={!changes.empty}
+          onDiscard={() => {
+            edit(initial);
+            setAttempted(false);
+            setReason('');
+          }}
+        />
+        {!changes.empty && (
+          <p
+            className="self-start rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900"
+            data-testid="unsaved-badge"
+          >
+            {shellCs.unsaved.badge}
+          </p>
+        )}
         <p className="text-sm text-stone-600">{t.help}</p>
 
         <fieldset className="flex flex-col gap-2">

@@ -5,6 +5,7 @@ import { cn } from '@ayvo/ui';
 import { useState } from 'react';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiSend } from '@/lib/client-api';
+import { confirmLeave } from '@/lib/leave-guard';
 import { z } from 'zod';
 
 const t = identityCs.shell;
@@ -12,9 +13,12 @@ const t = identityCs.shell;
 /**
  * Chooses the site this session works at (doc 022). Always visible in the shell. The server
  * validates the choice; afterwards the page reloads completely and browser-held station state is
- * cleared, so nothing of the previous site stays on screen.
+ * cleared, so nothing of the previous site stays on screen. Unsaved form changes are confirmed
+ * first (the reload would lose them).
  */
-export async function selectSite(siteId: string, next?: string): Promise<void> {
+export async function selectSite(siteId: string, next?: string): Promise<boolean> {
+  // A form with unsaved changes asks first (issue #11, UI-01); "continue editing" keeps the site.
+  if (!(await confirmLeave())) return false;
   await apiSend('POST', 'auth/active-site', z.object({ activeSiteId: z.uuid() }), { siteId });
   try {
     sessionStorage.clear();
@@ -22,6 +26,7 @@ export async function selectSite(siteId: string, next?: string): Promise<void> {
     // storage unavailable: nothing to clear
   }
   window.location.assign(next ?? window.location.pathname + window.location.search);
+  return true;
 }
 
 export function SiteSwitcher({ user, className }: { user: CurrentUser; className?: string }) {

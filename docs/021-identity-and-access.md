@@ -401,6 +401,14 @@ the single `ROLE_*`/`SCOPE_*` events are recorded too). Invitations and deactiva
 stay separate account actions with their own reason. The single grant/revoke endpoints remain for
 API clients.
 
+Unsaved access changes (issue #11): the editor marks them ("Neuložené změny"); an in-app link or
+switching the active site asks "Pokračovat v úpravách / Zahodit změny"; reload, closing the tab and
+external navigation get the browser's standard `beforeunload` prompt. A clean form, a saved one or
+one discarded with the editor's own button asks nothing. The browser's back/forward buttons are
+not intercepted (the Next.js router offers no supported way). On one-column screens the editor
+comes before the audit. A role's detail does not show sites ("Provozovny se přidělují jednotlivým
+uživatelům.") — roles say what, users' scopes say where.
+
 ### 7a. Custom roles (`/admin/roles`, ADR 0024)
 
 - **System roles** (the 8 of section 4) are protected templates: not renamed, edited, deactivated

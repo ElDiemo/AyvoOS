@@ -45,6 +45,12 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
   await page.getByRole('link', { name: 'Skladník', exact: true }).click();
   await expect(page.getByText('Systémovou roli nelze upravit v aplikaci')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Duplikovat jako vlastní roli' })).toBeVisible();
+  // Roles say what, users' scopes say where (issue #11, UI-02): no false "no site access".
+  const roleView = page.getByTestId('role-permissions-view');
+  await expect(roleView.getByTestId('sites-per-user')).toHaveText(
+    'Provozovny se přidělují jednotlivým uživatelům.',
+  );
+  await expect(roleView).not.toContainText('Bez přístupu k provozovně');
 
   // A custom role from checkboxes, grouped by module; security administration is not selectable.
   await page.goto('/admin/roles/new');

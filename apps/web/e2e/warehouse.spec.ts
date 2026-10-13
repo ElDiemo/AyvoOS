@@ -133,9 +133,15 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
     .getByRole('navigation', { name: 'Sklad' })
     .getByRole('link', { name: 'Příjem zboží' })
     .click();
+  // The document upload needs the supplier first, and says so (issue #11, UI-05).
+  await expect(page.getByTestId('document-needs-supplier')).toHaveText(
+    'Nejprve vyberte dodavatele (krok 1) – potom půjde nahrát jeho doklad.',
+  );
+  await expect(page.getByLabel('Soubor')).toHaveCount(0);
   await page
     .getByRole('combobox', { name: 'Dodavatel' })
     .selectOption({ label: 'Lahve Test s.r.o.' });
+  await expect(page.getByTestId('document-needs-supplier')).toHaveCount(0);
   await page.getByLabel('Dodací list / faktura č.').fill('DL-2026-001');
   await page.getByLabel('Číslo dokladu').fill('DL-2026-001');
   await page

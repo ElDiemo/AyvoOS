@@ -137,6 +137,7 @@ export const identityCs = {
     effectiveNone: 'Žádná oprávnění.',
     globalAccess: 'Všechny provozovny a sklady (globální přístup administrátora)',
     noSites: 'Bez přístupu k provozovně',
+    sitesPerUser: 'Provozovny se přidělují jednotlivým uživatelům.',
     customRole: 'vlastní',
     invitation: 'Pozvánka',
     invitationHelp:
