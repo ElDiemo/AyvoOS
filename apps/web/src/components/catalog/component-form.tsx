@@ -20,7 +20,7 @@ import {
   describedBy,
   ErrorSummary,
   fieldClass,
-  focusFirstError,
+  useFocusFirstError,
   FormField,
   ReasonField,
   reasonError,
@@ -45,6 +45,7 @@ export function ComponentForm({
   const router = useRouter();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
+  const focusError = useFocusFirstError(form);
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<ComponentKind>('NEW_BOTTLE');
@@ -89,7 +90,7 @@ export function ComponentForm({
     setErrors(next);
     setFormError(null);
     if (Object.values(next).some(Boolean)) {
-      requestAnimationFrame(() => focusFirstError(form.current));
+      focusError();
       return;
     }
     const body = {

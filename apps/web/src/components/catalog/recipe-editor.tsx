@@ -29,7 +29,7 @@ import {
   catalogErrorText,
   ErrorSummary,
   fieldClass,
-  focusFirstError,
+  useFocusFirstError,
   labelClass,
   ReasonField,
   reasonError,
@@ -55,11 +55,12 @@ export function RecipeEditor({
   crateTypes: CrateType[];
   onDirtyChange?: (dirty: boolean) => void;
   /** Called after a successful save (the page refreshes; the editor is re-created per revision). */
-  onSaved?: () => void;
+  onSaved?: (revision: number) => void;
 }) {
   const router = useRouter();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
+  const focusError = useFocusFirstError(form);
   const category = recipe.product.category.code;
   // The last saved content: the server's answer to our own save, else the page's version. The
   // workspace re-creates the editor for every new revision, so a refresh never leaves it stale.
@@ -104,7 +105,7 @@ export function RecipeEditor({
     setFormError(dirty ? null : t.noChanges);
     if (!dirty) return;
     if (Object.values(next).some(Boolean)) {
-      requestAnimationFrame(() => focusFirstError(form.current));
+      focusError();
       return;
     }
     const body = { ...payload, reason: reason.trim() };
@@ -120,8 +121,9 @@ export function RecipeEditor({
       setReason('');
       setSavedRecipe(result.value);
       setDraft(draftFromRecipe(result.value));
-      onSaved?.();
-      router.refresh();
+      // The workspace records the saved revision in the URL, which also reloads the page data.
+      if (onSaved) onSaved(result.value.revision);
+      else router.refresh();
     } else if (result.error) setFormError(catalogErrorText(result.error));
   }
 

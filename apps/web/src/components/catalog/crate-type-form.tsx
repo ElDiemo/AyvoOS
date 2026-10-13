@@ -12,7 +12,7 @@ import {
   describedBy,
   ErrorSummary,
   fieldClass,
-  focusFirstError,
+  useFocusFirstError,
   FormField,
   labelClass,
   ReasonField,
@@ -28,6 +28,7 @@ export function CrateTypeForm({ categories }: { categories: ProductCategory[] })
   const router = useRouter();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
+  const focusError = useFocusFirstError(form);
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [capacity, setCapacity] = useState('');
@@ -51,7 +52,7 @@ export function CrateTypeForm({ categories }: { categories: ProductCategory[] })
     setErrors(next);
     setFormError(null);
     if (Object.values(next).some(Boolean)) {
-      requestAnimationFrame(() => focusFirstError(form.current));
+      focusError();
       return;
     }
     const body = {

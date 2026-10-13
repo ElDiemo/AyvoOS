@@ -139,6 +139,33 @@ test('first set-up: components, crate types, product and an incomplete draft tha
   page,
 }) => {
   stockBefore = await stockSnapshot(page);
+  // Regression (CI, PR #18): a browser may run animation-frame callbacks late — in CI one ran
+  // just as the reason field got focus, so the reason was typed into another field. Reproduce it:
+  // animation frames requested while a form is submitted are held until a reason field gets
+  // focus (a slow timer releases them too); every other frame runs normally.
+  await page.addInitScript(() => {
+    const raf = window.requestAnimationFrame.bind(window);
+    const held: FrameRequestCallback[] = [];
+    let submitting = false;
+    const flush = () => held.splice(0).forEach((cb) => cb(performance.now()));
+    document.addEventListener(
+      'submit',
+      () => {
+        submitting = true;
+        window.setTimeout(() => (submitting = false), 0);
+      },
+      true,
+    );
+    window.requestAnimationFrame = (cb) => (submitting ? held.push(cb) : raf(cb));
+    window.setInterval(flush, 20_000);
+    document.addEventListener(
+      'focusin',
+      (e) => {
+        if ((e.target as HTMLElement).id?.endsWith('-reason')) window.setTimeout(flush, 0);
+      },
+      true,
+    );
+  });
   await page.goto('/production/catalog');
   await expect(page.getByTestId('catalog-scope')).toHaveText(
     'Katalog platí pro celou firmu. Zásoby patří jednotlivým provozovnám. Tyto změny nepřijímají ani nespotřebovávají materiál.',
@@ -248,8 +275,13 @@ test('first set-up: components, crate types, product and an incomplete draft tha
   await expect(
     page.getByTestId('recipe-editor').getByText('Vyplňte důvod (alespoň 3 znaky).'),
   ).toBeVisible();
+  // Focus went to the first invalid field at once; typing elsewhere stays there.
+  await expect(page.getByTestId('recipe-editor').getByLabel('Kapalina – Množství')).toBeFocused();
   await row(page, 'BULK_LIQUID', null, '330');
   await saveDraft(page, 'lahev a náplň');
+  await expect(page.getByTestId('recipe-editor').getByLabel('Kapalina – Množství')).toHaveValue(
+    '330',
+  );
   await expect(page.getByTestId('recipe-missing')).toHaveText(
     'Pro aktivaci chybí: etiketa, pumpička, typ bedny',
   );

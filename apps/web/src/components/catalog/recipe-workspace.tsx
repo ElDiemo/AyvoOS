@@ -1,6 +1,7 @@
 'use client';
 
 import type { CatalogComponent, CrateType, RecipeVersion } from '@ayvo/types';
+import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { catalogCs } from '@/i18n/cs/catalog';
 import { SuccessNote } from './form-kit';
@@ -21,10 +22,16 @@ export function RecipeWorkspace(props: {
   canApprove: boolean;
   productActive: boolean;
   editable: boolean;
+  /** `?saved=<revision>` of the URL: survives the page re-rendering after a save. */
+  savedRevision: number | null;
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
   const [dirty, setDirty] = useState(false);
-  // Shown right after our own save (not only once the refresh lands); hidden by the next edit.
+  // Shown right after our own save and — through the URL — after the page re-renders (the
+  // loading boundary may re-create this component); hidden by the next edit.
   const [saved, setSaved] = useState(false);
+  const showSaved = (saved || props.savedRevision === props.recipe.revision) && !dirty;
   return (
     <div className="flex flex-col gap-6">
       <RecipeActions
@@ -37,7 +44,7 @@ export function RecipeWorkspace(props: {
       />
       {props.editable && (
         <>
-          {saved && !dirty && (
+          {showSaved && (
             <div data-testid="recipe-saved">
               <SuccessNote>{catalogCs.recipe.saved}</SuccessNote>
             </div>
@@ -48,7 +55,10 @@ export function RecipeWorkspace(props: {
             components={props.components}
             crateTypes={props.crateTypes}
             onDirtyChange={setDirty}
-            onSaved={() => setSaved(true)}
+            onSaved={(revision) => {
+              setSaved(true);
+              router.replace(`${pathname}?saved=${revision}`, { scroll: false });
+            }}
           />
         </>
       )}

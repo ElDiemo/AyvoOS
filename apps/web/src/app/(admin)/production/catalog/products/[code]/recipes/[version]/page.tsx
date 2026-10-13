@@ -29,10 +29,12 @@ const t = catalogCs.recipe;
  */
 export default async function RecipeVersionPage({
   params,
+  searchParams,
 }: {
+  searchParams: Promise<{ saved?: string }>;
   params: Promise<{ code: string; version: string }>;
 }) {
-  const { code, version: raw } = await params;
+  const [{ code, version: raw }, { saved }] = await Promise.all([params, searchParams]);
   const parsedVersion = recipeVersionNumberSchema.safeParse(raw);
   if (!productCodeSchema.safeParse(code).success || !parsedVersion.success) notFound();
   const version = parsedVersion.data;
@@ -106,6 +108,7 @@ export default async function RecipeVersionPage({
           canApprove={canApprove}
           productActive={productActive}
           editable={editable}
+          savedRevision={Number.isSafeInteger(Number(saved)) ? Number(saved) : null}
         />
         {!editable && (
           <Card title={t.perBottle} testId="recipe-view">

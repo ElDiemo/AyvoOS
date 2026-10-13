@@ -19,7 +19,7 @@ import {
   describedBy,
   ErrorSummary,
   fieldClass,
-  focusFirstError,
+  useFocusFirstError,
   FormField,
   ReasonField,
   reasonError,
@@ -40,6 +40,7 @@ export function ProductForm({
   const router = useRouter();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
+  const focusError = useFocusFirstError(form);
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [categoryCode, setCategoryCode] = useState('');
@@ -66,7 +67,7 @@ export function ProductForm({
     setErrors(next);
     setFormError(null);
     if (Object.values(next).some(Boolean)) {
-      requestAnimationFrame(() => focusFirstError(form.current));
+      focusError();
       return;
     }
     const body = {

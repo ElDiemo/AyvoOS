@@ -100,6 +100,19 @@ export function focusFirstError(form: HTMLElement | null) {
   first?.focus();
 }
 
+/**
+ * Moves focus to the first invalid field right after the errors are rendered — in an effect, not
+ * in a requestAnimationFrame callback, which a browser may run much later (e.g. while the user is
+ * already typing in another field, so the text would land in the wrong field).
+ */
+export function useFocusFirstError(form: React.RefObject<HTMLFormElement | null>) {
+  const [request, setRequest] = useState(0);
+  useEffect(() => {
+    if (request > 0) focusFirstError(form.current);
+  }, [request, form]);
+  return () => setRequest((n) => n + 1);
+}
+
 /** The mandatory reason of every catalogue change (audited on the server). */
 export function ReasonField({
   id,
