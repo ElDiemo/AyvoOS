@@ -50,6 +50,9 @@ describe('exact Czech quantities (no float, no rounding)', () => {
     expect(normalizeDecimal('0,5')).toBe('0.5');
     expect(normalizeDecimal(' 1 000,25 ')).toBe('1000.25');
     expect(normalizeDecimal('330,125')).toBe('330.125');
+    expect(normalizeDecimal('2', 0)).toBe('2');
+    expect(normalizeDecimal('1,5', 0)).toBeNull(); // pieces are whole
+    expect(normalizeDecimal('0,25', 1)).toBeNull();
   });
   it('refuses instead of rounding', () => {
     for (const bad of ['', '0', '0,0', '-1', '1e3', '330,1255', 'abc', '1,2,3', '01'])

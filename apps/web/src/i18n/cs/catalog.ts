@@ -32,7 +32,11 @@ export const catalogCs = {
       'Kód: 2–40 znaků, velká písmena A–Z, číslice, „-“ nebo „_“, začíná písmenem nebo číslicí.',
     immutable: 'Po založení nelze kód, druh, jednotku, kategorii ani sledování šarží měnit.',
     networkRetry:
-      'Spojení se přerušilo – nevíme, jestli se změna uložila. Zkuste to znovu stejným tlačítkem: stejný požadavek se nikdy neprovede dvakrát.',
+      'Spojení se přerušilo – nevíme, jestli se změna uložila. Zkuste to znovu stejným tlačítkem beze změny údajů: stejný požadavek se neprovede dvakrát.',
+    invalidData: 'Údaje nejsou platné. Zkontrolujte vyplněná pole.',
+    notFound: 'Záznam nebyl nalezen – mohl být mezitím změněn. Načtěte stránku znovu.',
+    failed: 'Akce se nezdařila. Zkuste to prosím znovu.',
+    actionsBlocked: 'Nejdřív uložte nebo zahoďte neuložené změny.',
     yes: 'Ano',
     no: 'Ne',
     none: '—',
@@ -93,6 +97,7 @@ export const catalogCs = {
     submit: 'Založit typ bedny',
     capacityInvalid: 'Kapacita: celé číslo 1–1000.',
   },
+  packageCapacityInvalid: 'Kapacita obalu: celé číslo 1–100 000, nebo nechte prázdné.',
   products: {
     title: 'Produkty',
     empty: 'Zatím žádné produkty. Nejdřív založte komponenty a typ bedny, potom produkt.',
@@ -108,6 +113,10 @@ export const catalogCs = {
     codeHelp: 'Velká písmena, číslice, „-“ a „_“, nejvýše 24 znaků; po založení se nemění.',
     codeInvalid: 'Kód produktu: 2–24 znaků, velká písmena A–Z, číslice, „-“ nebo „_“.',
     quantityInvalid: 'Zadejte kladné číslo (nejvýše 3 desetinná místa), např. 330 nebo 0,5.',
+    quantityScale: (places: number) =>
+      places === 0
+        ? 'Tato jednotka se počítá celými kusy – zadejte celé kladné číslo.'
+        : `Zadejte kladné číslo s nejvýše ${places} desetinnými místy.`,
     created: (name: string) => `Produkt „${name}“ byl založen.`,
     submit: 'Založit produkt',
     immutable: 'Kód, kategorie a nominální obsah se po založení nemění.',
@@ -123,6 +132,8 @@ export const catalogCs = {
     archivedNote: 'Produkt je archivovaný: historie je jen pro čtení.',
     hasActive: (version: number) =>
       `Produkt má aktivní kusovník V${version}. Nejdřív archivujte tuto verzi, potom produkt.`,
+    hasActiveUnknown:
+      'Produkt má mezitím aktivní kusovník. Stránka se načetla znovu – nejdřív archivujte aktivní verzi, potom produkt.',
     openActive: 'Otevřít aktivní verzi',
     versions: 'Verze kusovníku',
     noVersions: 'Zatím žádná verze kusovníku.',

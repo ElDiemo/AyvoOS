@@ -121,7 +121,7 @@ async function saveDraft(page: Page, reason: string) {
   const editor = page.getByTestId('recipe-editor');
   await editor.getByLabel('Důvod (povinný)').fill(reason);
   await editor.getByRole('button', { name: 'Uložit koncept' }).click();
-  await expect(editor.getByTestId('success')).toHaveText('Koncept byl uložen (nová revize).');
+  await expect(page.getByTestId('recipe-saved')).toHaveText('Koncept byl uložen (nová revize).');
   await expect(editor.getByTestId('unsaved-badge')).toHaveCount(0);
 }
 
@@ -275,9 +275,24 @@ test('unsaved draft changes are guarded; a completed draft activates as V1 and c
   await expect(page).toHaveURL(new RegExp(`${VERSION_URL(1)}$`));
   await expect(page.getByTestId('recipe-summary')).toContainText('Etiketa');
   // Activation waits for the save.
-  await expect(page.getByTestId('activate-blocked')).toHaveText(
+  await expect(page.getByTestId('actions-blocked')).toHaveText(
     'Nejdřív uložte nebo zahoďte neuložené změny.',
   );
+  // While the screen differs from the saved draft, nothing may copy or archive it.
+  await expect(page.getByRole('button', { name: 'Nová verze z této' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Archivovat verzi' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Aktivovat' })).toBeDisabled();
+  // Pieces are whole: 1,5 pumps are refused (unit scale), nothing is rounded.
+  await row(page, 'PUMP', 'Pumpička černá (PUMP-BLACK)', '1,5');
+  await page.getByTestId('recipe-editor').getByLabel('Důvod (povinný)').fill('pokus');
+  await page.getByTestId('recipe-editor').getByRole('button', { name: 'Uložit koncept' }).click();
+  await expect(
+    page
+      .getByTestId('recipe-editor')
+      .getByText('Tato jednotka se počítá celými kusy – zadejte celé kladné číslo.'),
+  ).toBeVisible();
+  await expect(page.getByTestId('recipe-title')).toBeVisible();
+  await expect(page.getByText('Revize 2')).toBeVisible(); // nothing was saved
   await row(page, 'PUMP', 'Pumpička černá (PUMP-BLACK)', '1');
   await page
     .getByTestId('recipe-editor')
@@ -322,6 +337,7 @@ test('unsaved draft changes are guarded; a completed draft activates as V1 and c
   await calc.getByLabel('Počet hotových lahví').fill('1,5');
   await calc.getByRole('button', { name: 'Spočítat' }).click();
   await expect(calc.getByText('Zadejte celé číslo 1–1 000 000.')).toBeVisible();
+  await expect(calc.getByTestId('calc-result')).toHaveCount(0); // no totals of another number
 });
 
 test('a new version from V1 replaces it; V1 stays archived, unchanged and calculable', async ({
@@ -431,7 +447,9 @@ test('a lost response and a double click create exactly one product', async ({ p
   await expect(form.getByTestId('form-errors')).toContainText('nevíme, jestli se změna uložila');
   await form.getByRole('button', { name: 'Založit produkt' }).click();
   await expect(page).toHaveURL(/\/products\/GEL-330\?created=1/);
-  expect(new Set(ids).size).toBe(1); // one attempt, one request id
+  // The double click sent nothing extra; the retry reused the attempt's request id.
+  expect(ids).toHaveLength(2);
+  expect(new Set(ids).size).toBe(1);
   const all = (await (await page.request.get('/api/admin/catalog/products')).json()) as {
     code: string;
   }[];
@@ -531,6 +549,8 @@ test('catalog:read alone sees the catalogue and nothing operational; writes are 
     '/label-templates',
     '/production/label-activation',
     '/production/catalog/products/new',
+    '/production/catalog/components/new',
+    '/production/catalog/crate-types/new',
     '/warehouse/stock',
   ]) {
     await reader.goto(path);
@@ -595,6 +615,8 @@ test('screens fit 320–1440 px; stock and the ledger never moved', async ({ pag
     ['recipe', VERSION_URL(1)],
     ['draft', '/production/catalog/products/GEL-330/recipes/1'],
     ['new-component', '/production/catalog/components/new'],
+    ['new-crate-type', '/production/catalog/crate-types/new'],
+    ['new-product', '/production/catalog/products/new'],
   ] as const;
   for (const width of [320, 390, 820, 1440]) {
     await page.setViewportSize({ width, height: 900 });

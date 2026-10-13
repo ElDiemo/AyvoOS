@@ -134,8 +134,10 @@ export function ArchiveProduct({ product }: { product: Product }) {
         result.error instanceof ClientApiError &&
         result.error.code === 'PRODUCT_HAS_ACTIVE_RECIPE'
       ) {
-        setBlockedBy(product.activeVersion);
+        // Always say so — the page may predate the activation (then without a version link).
+        setBlockedBy(product.activeVersion ?? 0);
         setError(null);
+        router.refresh();
       } else setError(catalogErrorText(result.error));
     }
   }
@@ -145,19 +147,25 @@ export function ArchiveProduct({ product }: { product: Product }) {
       <button
         type="button"
         className={`${buttonClass.danger} self-start`}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setReason('');
+          setReasonErr(null);
+          setOpen(true);
+        }}
       >
         {t.archive}
       </button>
       {blockedBy !== null && (
         <p role="alert" className="text-sm text-amber-900" data-testid="archive-blocked">
-          {t.hasActive(blockedBy)}{' '}
-          <Link
-            className="underline"
-            href={`/production/catalog/products/${encodeURIComponent(product.code)}/recipes/${blockedBy}`}
-          >
-            {t.openActive}
-          </Link>
+          {blockedBy > 0 ? t.hasActive(blockedBy) : t.hasActiveUnknown}{' '}
+          {blockedBy > 0 && (
+            <Link
+              className="underline"
+              href={`/production/catalog/products/${encodeURIComponent(product.code)}/recipes/${blockedBy}`}
+            >
+              {t.openActive}
+            </Link>
+          )}
         </p>
       )}
       {error && (
@@ -189,12 +197,15 @@ export function NewDraftButton({
   label,
   title,
   help,
+  disabled = false,
 }: {
   productCode: string;
   basedOn: number | null;
   label: string;
   title: string;
   help: string;
+  /** e.g. while the draft on screen has unsaved changes (the copy would not include them). */
+  disabled?: boolean;
 }) {
   const router = useRouter();
   const id = useId();
@@ -240,7 +251,12 @@ export function NewDraftButton({
       <button
         type="button"
         className={`${buttonClass.secondary} self-start`}
-        onClick={() => setOpen(true)}
+        disabled={disabled}
+        onClick={() => {
+          setReason('');
+          setReasonErr(null);
+          setOpen(true);
+        }}
       >
         {label}
       </button>

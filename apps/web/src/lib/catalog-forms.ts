@@ -1,4 +1,5 @@
 import {
+  MAX_REQUIREMENT_BOTTLES,
   REQUIRED_RECIPE_KINDS,
   RECIPE_STAGE_OF_KIND,
   type CatalogComponent,
@@ -21,13 +22,15 @@ const DECIMAL = /^(0|[1-9]\d{0,15})(\.\d{1,3})?$/;
  * non-breaking spaces as thousands separators); refuses zero, negatives, exponents and more
  * than three decimals instead of rounding.
  */
-export function normalizeDecimal(input: string): string | null {
+export function normalizeDecimal(input: string, decimalPlaces = 3): string | null {
   const value = input
     .trim()
     .replace(/[\s  ]/g, '')
     .replace(',', '.');
   if (!DECIMAL.test(value)) return null;
   if (/^0(\.0+)?$/.test(value)) return null;
+  // The unit's scale (pieces are whole): refused, never rounded.
+  if ((value.split('.')[1]?.length ?? 0) > decimalPlaces) return null;
   return value;
 }
 
@@ -41,7 +44,7 @@ export function decimalToInput(value: string): string {
   return value.replace('.', ',');
 }
 
-export const MAX_BOTTLES = 1_000_000;
+export const MAX_BOTTLES = MAX_REQUIREMENT_BOTTLES;
 
 /** Number of finished bottles for the calculation: a whole number 1 … 1 000 000, or null. */
 export function parseBottles(input: string): number | null {
@@ -114,7 +117,12 @@ export function draftPayload(
     const row = draft.rows[kind];
     if (!row.itemCode) continue;
     const item = components.find((c) => c.code === row.itemCode);
-    const quantity = kind === 'NEW_BOTTLE' ? '1' : normalizeDecimal(row.quantity);
+    const quantity =
+      kind === 'NEW_BOTTLE'
+        ? '1'
+        : item
+          ? normalizeDecimal(row.quantity, item.unit.decimalPlaces)
+          : null;
     if (!item || !quantity) {
       invalid.push(kind);
       continue;

@@ -72,7 +72,11 @@ export function RequirementsCalculator({
                   id={`${id}-bottles`}
                   inputMode="numeric"
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    setResult(null); // never show totals of another number
+                    setError(null);
+                  }}
                   aria-invalid={!!error}
                   aria-describedby={describedBy(`${id}-bottles`, false, !!error)}
                   className={fieldClass(!!error)}
@@ -85,59 +89,61 @@ export function RequirementsCalculator({
             {historic && <p className="text-xs text-stone-500">{t.historic}</p>}
           </form>
         )}
-        {result && (
-          <div className="flex flex-col gap-3" data-testid="calc-result" aria-live="polite">
-            <ul className="flex flex-col" aria-label={t.title}>
-              {result.components.map((c) => (
-                <li
-                  key={c.itemCode}
-                  className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 border-t border-stone-100 py-2 text-sm first:border-t-0"
-                  data-kind={c.kind}
-                >
-                  <span className="min-w-0 wrap-anywhere">
-                    <span className="font-medium">
-                      {catalogCs.recipe.rows[c.kind as keyof typeof catalogCs.recipe.rows]}
-                    </span>{' '}
-                    <span className="text-stone-600">{c.itemName}</span>
-                  </span>
-                  <span
-                    className="text-right font-semibold whitespace-nowrap tabular-nums"
-                    data-testid={`total-${c.kind}`}
+        <div aria-live="polite">
+          {result && (
+            <div className="flex flex-col gap-3" data-testid="calc-result">
+              <ul className="flex flex-col" aria-label={t.title}>
+                {result.components.map((c) => (
+                  <li
+                    key={c.itemCode}
+                    className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 border-t border-stone-100 py-2 text-sm first:border-t-0"
+                    data-kind={c.kind}
                   >
-                    {formatQuantityCs(c.totalQuantity)} {unitCs(c.unit.code)}
-                  </span>
-                  <span className="text-xs text-stone-500">
-                    {t.perBottle}: {formatQuantityCs(c.quantity)} {unitCs(c.unit.code)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <div
-              className="rounded-md border border-stone-200 p-3 text-sm"
-              data-testid="calc-crates"
-            >
-              <p className="font-medium">
-                {t.crates}:{' '}
-                {t.crateLine(
-                  result.crates.count,
-                  result.crates.crateType.capacity,
-                  result.crates.crateType.name,
-                )}
-              </p>
-              <p>{t.full(result.crates.full)}</p>
-              <p>
-                {result.crates.partialCrateBottles > 0
-                  ? t.partial(result.crates.partialCrateBottles)
-                  : t.allFull}
-              </p>
-              {result.crates.partialCrateBottles > 0 && (
-                <p className="mt-2 text-amber-900" data-testid="partial-warning">
-                  {t.partialWarning}
+                    <span className="min-w-0 wrap-anywhere">
+                      <span className="font-medium">
+                        {catalogCs.recipe.rows[c.kind as keyof typeof catalogCs.recipe.rows]}
+                      </span>{' '}
+                      <span className="text-stone-600">{c.itemName}</span>
+                    </span>
+                    <span
+                      className="text-right font-semibold whitespace-nowrap tabular-nums"
+                      data-testid={`total-${c.kind}`}
+                    >
+                      {formatQuantityCs(c.totalQuantity)} {unitCs(c.unit.code)}
+                    </span>
+                    <span className="text-xs text-stone-500">
+                      {t.perBottle}: {formatQuantityCs(c.quantity)} {unitCs(c.unit.code)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div
+                className="rounded-md border border-stone-200 p-3 text-sm"
+                data-testid="calc-crates"
+              >
+                <p className="font-medium">
+                  {t.crates}:{' '}
+                  {t.crateLine(
+                    result.crates.count,
+                    result.crates.crateType.capacity,
+                    result.crates.crateType.name,
+                  )}
                 </p>
-              )}
+                <p>{t.full(result.crates.full)}</p>
+                <p>
+                  {result.crates.partialCrateBottles > 0
+                    ? t.partial(result.crates.partialCrateBottles)
+                    : t.allFull}
+                </p>
+                {result.crates.partialCrateBottles > 0 && (
+                  <p className="mt-2 text-amber-900" data-testid="partial-warning">
+                    {t.partialWarning}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </Card>
   );

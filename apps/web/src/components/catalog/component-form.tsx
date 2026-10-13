@@ -72,7 +72,7 @@ export function ComponentForm({
     const capacityValue =
       capacity.trim() === ''
         ? null
-        : /^[1-9]\d{0,5}$/.test(capacity.trim())
+        : /^[1-9]\d{0,5}$/.test(capacity.trim()) && Number(capacity.trim()) <= 100_000
           ? Number(capacity.trim())
           : NaN;
     const next = {
@@ -82,7 +82,7 @@ export function ComponentForm({
       category: needsCategory && !categoryCode ? t.categoryRequired : null,
       capacity:
         kind === 'PACKAGING' && Number.isNaN(capacityValue)
-          ? catalogCs.crateTypes.capacityInvalid
+          ? catalogCs.packageCapacityInvalid
           : null,
       reason: reasonError(reason),
     };

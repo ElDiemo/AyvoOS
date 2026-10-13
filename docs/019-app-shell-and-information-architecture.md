@@ -36,7 +36,9 @@ and implementation order, not how AYVO works. AYVO OS is organized by **company 
 - Each module has its own **contextual navigation** (tabs, one URL per page): wraps on wide screens
   (never a scrollbar), scrolls sideways without a visible scrollbar on phones.
   - Sklad: Přehled skladu · Příjem zboží · Příjmy · Stav skladu · Pohyby · Dodavatelé.
-  - Výroba: Přehled výroby · Lahve · Šablony etiket · Nalepení etiket.
+  - Výroba: Přehled výroby · Lahve · Šablony etiket · Nalepení etiket · Produkty a receptury
+    (doc 023 §9). Each page is listed by its own permission: the first four need
+    `production:read`, the catalogue `catalog:read` — a catalogue-only user sees only it.
 - Environment badge from `APP_ENV` of the web server: `DEV` / `TEST`; production shows none; an
   unset value counts as development so a misconfigured server never looks like production.
 - No user name, role or login state is shown: application accounts do not exist (ADR 0017).

@@ -15,10 +15,21 @@ export function catalogErrorText(error: unknown): string {
   if (error instanceof ClientApiError) {
     if (error.code && catalogCs.errors[error.code]) return catalogCs.errors[error.code]!;
     if (error.status === 403) return catalogCs.errors.FORBIDDEN!;
-    if (error.status === 400) return error.message;
-    return error.message;
+    // Never raw server text (Zod paths, English messages) in the Czech UI.
+    if (error.status === 400 || error.status === 422) return t.invalidData;
+    if (error.status === 404) return t.notFound;
+    if (uncertain(error)) return t.networkRetry;
+    return t.failed;
   }
   return t.networkRetry;
+}
+
+/**
+ * No definite answer: a network error, or a 5xx (e.g. a gateway timeout after the commit). The
+ * attempt keeps its request id, so a retry continues the same operation instead of repeating it.
+ */
+export function uncertain(error: unknown): boolean {
+  return !(error instanceof ClientApiError) || error.status >= 500;
 }
 
 /** A labelled input with help text and an inline error (aria-invalid + aria-describedby). */
@@ -142,7 +153,7 @@ export function useAttempt() {
       attempt.current = null;
       return { ok: true, value };
     } catch (error) {
-      if (error instanceof ClientApiError) attempt.current = null; // definite answer
+      if (!uncertain(error)) attempt.current = null; // definite answer
       return { ok: false, error };
     } finally {
       setBusy(false);

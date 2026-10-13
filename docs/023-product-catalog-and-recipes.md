@@ -257,7 +257,7 @@ materiál._
 - **Editor:** four rows for one finished bottle (Lahev, Etiketa, Kapalina, Pumpička) with the
   planned stage of each, items filtered by kind, category and archive, the unit taken from the
   item, the bottle body fixed at 1, the crate type filtered by category; "Co se uloží", mandatory
-  reason, "Neuložené změny" with the shared leave guard (doc 021 §7); activation only for a
+  reason, "Neuložené změny" with the shared leave guard (issue #11, PR #14); activation only for a
   saved, complete draft, with a confirmation naming the version it replaces and
   `expectedActiveVersion` from the page; `ACTIVE_VERSION_CHANGED` is explained with "Načíst
   aktuální stav" (never retried with a new expectation).
@@ -320,6 +320,15 @@ materiál._
 
 ## 12. Tests
 
+- `apps/web/src/lib/catalog-forms.test.ts` — exact Czech decimals (unit scale, no rounding),
+  compatible items per row, draft request and Czech change summary, request ids per attempt,
+  navigation for a catalogue-only user.
+- `apps/web/e2e/catalog.spec.ts` (issue #17, real app and fresh database) — first set-up from an
+  empty catalogue, incomplete draft with what is missing, unsaved-changes guard, activation of V1,
+  exact calculation (40, 41, 1 000 000; capacity 24), V2 from V1 replacing it, the conflicting
+  activation, a lost response and a double click (one product, one request id), product
+  rename/archive, catalogue-only/editor/no-access roles, 320–1440 px without page overflow, stock
+  unchanged; screenshots with AYVO_SCREENSHOT_DIR (docs/screenshots/issue-17).
 - `apps/api/src/catalog/material-requirements.test.ts` — exact totals for 1, 40, 41, 79–81,
   999 999 and 1 000 000 bottles, fractional quantities, capacity as data (24), crate rounding up,
   invalid input, overflow refused.

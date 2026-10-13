@@ -33,7 +33,6 @@ import {
   labelClass,
   ReasonField,
   reasonError,
-  SuccessNote,
   useAttempt,
 } from './form-kit';
 
@@ -49,22 +48,27 @@ export function RecipeEditor({
   components,
   crateTypes,
   onDirtyChange,
+  onSaved,
 }: {
   recipe: RecipeVersion;
   components: CatalogComponent[];
   crateTypes: CrateType[];
   onDirtyChange?: (dirty: boolean) => void;
+  /** Called after a successful save (the page refreshes; the editor is re-created per revision). */
+  onSaved?: () => void;
 }) {
   const router = useRouter();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
   const category = recipe.product.category.code;
-  const initial = useMemo(() => draftFromRecipe(recipe), [recipe]);
+  // The last saved content: the server's answer to our own save, else the page's version. The
+  // workspace re-creates the editor for every new revision, so a refresh never leaves it stale.
+  const [savedRecipe, setSavedRecipe] = useState(recipe);
+  const initial = useMemo(() => draftFromRecipe(savedRecipe), [savedRecipe]);
   const [draft, setDraft] = useState<RecipeDraft>(initial);
   const [reason, setReason] = useState('');
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [formError, setFormError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const { busy, run } = useAttempt();
   const labels = { rows: t.rows, crate: t.crate, empty: t.empty };
   const changes = draftChanges(initial, draft, components, crateTypes, labels);
@@ -83,17 +87,18 @@ export function RecipeEditor({
     kind: RecipeComponentKind,
     patch: Partial<RecipeDraft['rows'][RecipeComponentKind]>,
   ) => {
-    setSaved(false);
     setDraft((d) => ({ ...d, rows: { ...d.rows, [kind]: { ...d.rows[kind], ...patch } } }));
   };
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    setSaved(false);
     const { payload, invalid } = draftPayload(draft, components);
     const next: Record<string, string | null> = { reason: dirty ? reasonError(reason) : null };
     for (const kind of REQUIRED_RECIPE_KINDS) {
-      next[kind] = invalid.includes(kind) ? catalogCs.products.quantityInvalid : null;
+      const unit = components.find((c) => c.code === draft.rows[kind].itemCode)?.unit;
+      next[kind] = invalid.includes(kind)
+        ? catalogCs.products.quantityScale(unit?.decimalPlaces ?? 3)
+        : null;
     }
     setErrors(next);
     setFormError(dirty ? null : t.noChanges);
@@ -113,8 +118,9 @@ export function RecipeEditor({
     );
     if (result.ok) {
       setReason('');
+      setSavedRecipe(result.value);
       setDraft(draftFromRecipe(result.value));
-      setSaved(true);
+      onSaved?.();
       router.refresh();
     } else if (result.error) setFormError(catalogErrorText(result.error));
   }
@@ -169,7 +175,14 @@ export function RecipeEditor({
                     onChange={(e) =>
                       setRow(kind, {
                         itemCode: e.target.value,
-                        quantity: kind === 'NEW_BOTTLE' ? '1' : row.quantity,
+                        // Another unit: the old number would mean something else — enter it again.
+                        quantity:
+                          kind === 'NEW_BOTTLE'
+                            ? '1'
+                            : components.find((c) => c.code === e.target.value)?.unit.code ===
+                                item?.unit.code
+                              ? row.quantity
+                              : '',
                       })
                     }
                     className={fieldClass(false)}
@@ -205,12 +218,15 @@ export function RecipeEditor({
                       disabled={!row.itemCode}
                       onChange={(e) => setRow(kind, { quantity: e.target.value })}
                       aria-invalid={!!errors[kind]}
+                      aria-describedby={errors[kind] ? `${f(kind)}-error` : undefined}
                       aria-label={`${t.rows[kind]} – ${t.quantity}`}
                       className={fieldClass(!!errors[kind])}
                     />
                   )}
                   {errors[kind] && (
-                    <span className="text-xs font-medium text-red-700">{errors[kind]}</span>
+                    <span id={`${f(kind)}-error`} className="text-xs font-medium text-red-700">
+                      {errors[kind]}
+                    </span>
                   )}
                 </label>
                 <div className="flex min-w-0 flex-col gap-1">
@@ -227,7 +243,6 @@ export function RecipeEditor({
             <select
               value={draft.crateTypeCode}
               onChange={(e) => {
-                setSaved(false);
                 setDraft((d) => ({ ...d, crateTypeCode: e.target.value }));
               }}
               className={fieldClass(false)}
@@ -274,7 +289,6 @@ export function RecipeEditor({
           label={catalogCs.common.reason}
         />
         <ErrorSummary errors={errors} formError={formError} />
-        {saved && <SuccessNote>{t.saved}</SuccessNote>}
         <p className="text-xs text-stone-500">{t.concurrencyNote}</p>
         <div className="flex flex-wrap gap-2">
           <button type="submit" disabled={busy} className={buttonClass.primary}>

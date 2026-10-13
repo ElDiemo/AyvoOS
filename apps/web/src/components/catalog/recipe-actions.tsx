@@ -99,6 +99,8 @@ export function RecipeActions({
             aria-describedby={activateBlocked ? `${id}-blocked` : undefined}
             onClick={() => {
               setChanged(false);
+              setReason('');
+              setReasonErr(null);
               setDialog('activate');
             }}
           >
@@ -107,6 +109,7 @@ export function RecipeActions({
         )}
         {canManage && productActive && (
           <NewDraftButton
+            disabled={dirty}
             productCode={recipe.product.code}
             basedOn={recipe.version}
             label={t.copy}
@@ -115,12 +118,26 @@ export function RecipeActions({
           />
         )}
         {canApprove && recipe.status !== 'ARCHIVED' && (
-          <button type="button" className={buttonClass.danger} onClick={() => setDialog('archive')}>
+          <button
+            type="button"
+            className={buttonClass.danger}
+            disabled={dirty}
+            onClick={() => {
+              setReason('');
+              setReasonErr(null);
+              setDialog('archive');
+            }}
+          >
             {t.archive}
           </button>
         )}
       </div>
-      {activateBlocked && canApprove && productActive && (
+      {dirty && (canManage || canApprove) && (
+        <p id={`${id}-blocked`} className="text-sm text-stone-600" data-testid="actions-blocked">
+          {catalogCs.common.actionsBlocked}
+        </p>
+      )}
+      {activateBlocked && !dirty && canApprove && productActive && (
         <p id={`${id}-blocked`} className="text-sm text-stone-600" data-testid="activate-blocked">
           {activateBlocked}
         </p>
