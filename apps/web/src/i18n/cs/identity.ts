@@ -53,8 +53,8 @@ export const identityCs = {
     'production:templates_manage': 'Spravovat šablony etiket',
     'production:label_apply': 'Nalepovat etikety (spotřeba ze skladu)',
     'catalog:read': 'Zobrazit produktový katalog, kusovníky a výpočet materiálu',
-    'catalog:manage': 'Zakládat komponenty, typy beden, produkty a návrhy kusovníků',
-    'catalog:recipes_activate': 'Aktivovat a archivovat verze kusovníků',
+    'catalog:product_manage': 'Spravovat komponenty, typy beden, produkty a návrhy kusovníků',
+    'catalog:recipe_approve': 'Aktivovat a archivovat verze kusovníků',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',

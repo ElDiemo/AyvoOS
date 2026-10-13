@@ -4,7 +4,7 @@ Status: **Approved design — not implemented** (owner decisions 2026-10-11). Im
 only PR by PR as authorized (section 14). **Implemented since:** the catalogue part of step 3 —
 product categories, products, recipe versions and crate types ([doc 023](023-product-catalog-and-recipes.md);
 recipe statuses named `ACTIVE`/`ARCHIVED` instead of `APPROVED`/`RETIRED`, at most one active
-version per product, catalogue changes ADMIN-only by default). Architecture decisions: [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)
+version per product, append-only recipe revisions; permissions as in §12). Architecture decisions: [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)
 (crate capacity 40 and the full-circulation crate cycle, superseding ADR 0004) and
 [ADR 0022](adr/0022-external-oidc-authentication.md) (external OIDC authentication, superseding the
 provider question of ADR 0017).
@@ -551,11 +551,10 @@ only as an **emergency override** with an explicit reason and an `EMERGENCY_OVER
 | `inventory:read`                                               |       ✓        |        ✓         |      ✓       |       ✓        |     ✓      |
 | `identity:users_manage`, roles, config                         |                |                  |              |                |     ✓      |
 
-¹ **Proposed change, awaiting the owner's confirmation** (doc 023 §7): implemented as
-`catalog:manage` (components, crate types, products, drafts) and `catalog:recipes_activate`
-(activate, archive), held by ADMIN only by default like the company-wide label templates (doc 021
-§4); `catalog:read` for both production roles and the warehouse supervisor. If the owner keeps
-this table instead, a migration grants both to `PRODUCTION_SUPERVISOR`.
+¹ Implemented with these names and grants in doc 023 (PRODUCTION_SUPERVISOR and ADMIN; ADMIN
+holds every permission per doc 021, no separate emergency override exists yet), plus a new
+`catalog:read`. Open owner question: should a site-bound supervisor keep changing company-wide
+catalogue data (doc 023 §7)?
 
 "Single" label void = one unused, damaged label of an identity not yet activated (operator);
 anything else (several items at once, an already activated identity, a whole series) is

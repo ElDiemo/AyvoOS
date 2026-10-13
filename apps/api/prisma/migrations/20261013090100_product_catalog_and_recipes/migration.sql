@@ -6,6 +6,9 @@
 -- CreateEnum
 CREATE TYPE "RecipeStatus" AS ENUM ('DRAFT', 'ACTIVE', 'ARCHIVED');
 
+-- CreateEnum
+CREATE TYPE "ProductStatus" AS ENUM ('ACTIVE', 'ARCHIVED');
+
 -- CreateTable
 CREATE TABLE "product_categories" (
     "code" TEXT NOT NULL,
@@ -58,6 +61,9 @@ CREATE TABLE "products" (
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_by" UUID NOT NULL,
     "operation_request_id" UUID NOT NULL,
+    "status" "ProductStatus" NOT NULL DEFAULT 'ACTIVE',
+    "archived_at" TIMESTAMPTZ(3),
+    "archived_by" UUID,
 
     CONSTRAINT "products_pkey" PRIMARY KEY ("id")
 );
@@ -160,6 +166,9 @@ ALTER TABLE "products" ADD CONSTRAINT "products_created_by_fkey" FOREIGN KEY ("c
 
 -- AddForeignKey
 ALTER TABLE "products" ADD CONSTRAINT "products_operation_request_id_fkey" FOREIGN KEY ("operation_request_id") REFERENCES "operation_requests"("request_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "products" ADD CONSTRAINT "products_archived_by_fkey" FOREIGN KEY ("archived_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "recipe_versions" ADD CONSTRAINT "recipe_versions_product_id_category_code_fkey" FOREIGN KEY ("product_id", "category_code") REFERENCES "products"("id", "category_code") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -284,7 +293,10 @@ CREATE CONSTRAINT TRIGGER "crate_types_has_category" AFTER INSERT ON "crate_type
 ALTER TABLE "products"
   ADD CONSTRAINT "products_code_check" CHECK ("code" ~ '^[A-Z0-9][A-Z0-9_-]{1,23}$'),
   ADD CONSTRAINT "products_name_check" CHECK (length(btrim("name")) BETWEEN 1 AND 200),
-  ADD CONSTRAINT "products_nominal_quantity_check" CHECK ("nominal_quantity" > 0);
+  ADD CONSTRAINT "products_nominal_quantity_check" CHECK ("nominal_quantity" > 0),
+  ADD CONSTRAINT "products_status_check" CHECK (
+    ("status" = 'ACTIVE' AND "archived_at" IS NULL AND "archived_by" IS NULL)
+    OR ("status" = 'ARCHIVED' AND "archived_at" IS NOT NULL AND "archived_by" IS NOT NULL));
 CREATE FUNCTION products_scale() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
@@ -295,8 +307,39 @@ END
 $$;
 CREATE TRIGGER "products_scale" BEFORE INSERT ON "products"
   FOR EACH ROW EXECUTE FUNCTION products_scale();
-CREATE TRIGGER "products_immutable" BEFORE UPDATE OR DELETE ON "products"
-  FOR EACH ROW EXECUTE FUNCTION ayvo_reject_modification();
+-- Code, category, nominal quantity and creation never change; the name may be corrected while
+-- the product is ACTIVE; ACTIVE → ARCHIVED only, and only without an ACTIVE recipe version.
+-- Every change is audited by the application in the same transaction (PRODUCT_RENAMED/ARCHIVED).
+CREATE FUNCTION products_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'AYVO: products are never deleted' USING ERRCODE = 'restrict_violation';
+  END IF;
+  IF NEW."id" <> OLD."id" OR NEW."code" <> OLD."code" OR NEW."category_code" <> OLD."category_code"
+     OR NEW."nominal_quantity" <> OLD."nominal_quantity" OR NEW."nominal_unit_id" <> OLD."nominal_unit_id"
+     OR NEW."created_at" <> OLD."created_at" OR NEW."created_by" <> OLD."created_by"
+     OR NEW."operation_request_id" <> OLD."operation_request_id" THEN
+    RAISE EXCEPTION 'AYVO: product identity is immutable' USING ERRCODE = 'restrict_violation';
+  END IF;
+  IF OLD."status" = 'ARCHIVED' THEN
+    RAISE EXCEPTION 'AYVO: an archived product never changes' USING ERRCODE = 'restrict_violation';
+  END IF;
+  IF NEW."status" = 'ARCHIVED' THEN
+    IF NEW."name" <> OLD."name" THEN
+      RAISE EXCEPTION 'AYVO: archiving does not rename' USING ERRCODE = 'restrict_violation';
+    END IF;
+    IF EXISTS (SELECT 1 FROM "recipe_versions" WHERE "product_id" = NEW."id" AND "status" = 'ACTIVE') THEN
+      RAISE EXCEPTION 'AYVO: archive the active recipe version before the product'
+        USING ERRCODE = 'restrict_violation';
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER "products_guard" BEFORE UPDATE OR DELETE ON "products"
+  FOR EACH ROW EXECUTE FUNCTION products_guard();
 CREATE TRIGGER "products_no_truncate" BEFORE TRUNCATE ON "products"
   FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
 
@@ -360,6 +403,10 @@ BEGIN
   IF NEW."status" <> 'DRAFT' THEN
     RAISE EXCEPTION 'AYVO: a recipe version starts as a draft' USING ERRCODE = 'check_violation';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM "products" WHERE "id" = NEW."product_id" AND "status" = 'ACTIVE') THEN
+    RAISE EXCEPTION 'AYVO: an archived product gets no new recipe version'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
   RETURN NEW;
 END
 $$;
@@ -396,6 +443,12 @@ BEGIN
     RAISE EXCEPTION 'AYVO: only activation records an activation' USING ERRCODE = 'restrict_violation';
   END IF;
   IF NEW."status" = 'ACTIVE' THEN
+    -- The product row lock orders this against archiving the product.
+    IF NOT EXISTS (SELECT 1 FROM "products" WHERE "id" = NEW."product_id" AND "status" = 'ACTIVE'
+                   FOR UPDATE) THEN
+      RAISE EXCEPTION 'AYVO: a recipe of an archived product is not activated'
+        USING ERRCODE = 'restrict_violation';
+    END IF;
     PERFORM ayvo_assert_recipe_complete(NEW."id");
   END IF;
   RETURN NEW;
@@ -437,6 +490,12 @@ BEGIN
   SELECT "status" INTO st FROM "recipe_versions" WHERE "id" = NEW."recipe_version_id" FOR UPDATE;
   IF st IS DISTINCT FROM 'DRAFT' THEN
     RAISE EXCEPTION 'AYVO: only a draft recipe version is edited' USING ERRCODE = 'restrict_violation';
+  END IF;
+  -- The product row lock orders this against archiving the product.
+  IF NOT EXISTS (SELECT 1 FROM "products" p JOIN "recipe_versions" v ON v."product_id" = p."id"
+                 WHERE v."id" = NEW."recipe_version_id" AND p."status" = 'ACTIVE' FOR SHARE OF p) THEN
+    RAISE EXCEPTION 'AYVO: the recipe of an archived product is not edited'
+      USING ERRCODE = 'restrict_violation';
   END IF;
   SELECT coalesce(max("revision"), 0) INTO last FROM "recipe_revisions"
     WHERE "recipe_version_id" = NEW."recipe_version_id";
@@ -482,8 +541,11 @@ BEGIN
     RAISE EXCEPTION 'AYVO: only the current revision of a draft gains BOMs'
       USING ERRCODE = 'restrict_violation';
   END IF;
+  -- Sealing: the BOM row lock serialises this link with any concurrent insert of a line into the
+  -- same BOM (bom_lines_recipe_sealed takes a conflicting lock first). Lines committed before
+  -- the lock are validated below; lines attempted after the link see it and are refused.
   SELECT "stage", "code", "version" INTO bom_stage, bom_code, bom_version
-    FROM "bom_versions" WHERE "id" = NEW."bom_version_id";
+    FROM "bom_versions" WHERE "id" = NEW."bom_version_id" FOR UPDATE;
   IF bom_stage IS DISTINCT FROM NEW."stage" THEN
     RAISE EXCEPTION 'AYVO: a recipe BOM has the stage it is linked for' USING ERRCODE = 'check_violation';
   END IF;
@@ -563,6 +625,9 @@ CREATE FUNCTION bom_lines_recipe_sealed() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 BEGIN
+  -- Conflicts with the FOR UPDATE of a concurrent link (recipe_revision_boms_check): either this
+  -- line is committed first (and validated by the link), or it sees the link and is refused.
+  PERFORM 1 FROM "bom_versions" WHERE "id" = NEW."bom_version_id" FOR SHARE;
   IF EXISTS (SELECT 1 FROM "recipe_revision_boms" WHERE "bom_version_id" = NEW."bom_version_id") THEN
     RAISE EXCEPTION 'AYVO: a recipe BOM is sealed once linked to its recipe'
       USING ERRCODE = 'restrict_violation';
@@ -574,23 +639,25 @@ CREATE TRIGGER "bom_lines_recipe_sealed" BEFORE INSERT ON "bom_lines"
   FOR EACH ROW EXECUTE FUNCTION bom_lines_recipe_sealed();
 
 -- =============================================================================================
--- Permissions (doc 021 §4, doc 023 §8): company-wide catalogue, not site- or warehouse-scoped.
--- ADMIN holds every permission explicitly; changing the catalogue stays an ADMIN decision (like
--- company-wide label templates); operational roles read it.
+-- Permissions (doc 020 §12 as approved, doc 021 §4, doc 023 §7): company-wide catalogue, not
+-- site- or warehouse-scoped. Names and the PRODUCTION_SUPERVISOR grants follow the approved
+-- doc 020 §12; ADMIN holds every permission explicitly (doc 021); catalog:read is new.
 -- =============================================================================================
 
 SELECT set_config('ayvo.catalogue_migration', 'on', false);
 
 INSERT INTO "permissions" ("code", "description", "warehouse_scoped", "security_admin", "site_scoped") VALUES
   ('catalog:read', 'Read the company-wide product catalogue, recipes and material requirements', false, false, false),
-  ('catalog:manage', 'Create catalogue components, crate types, products and recipe drafts', false, false, false),
-  ('catalog:recipes_activate', 'Activate and archive recipe versions', false, false, false);
+  ('catalog:product_manage', 'Create and maintain catalogue components, crate types, products and recipe drafts', false, false, false),
+  ('catalog:recipe_approve', 'Activate and archive recipe versions', false, false, false);
 
 INSERT INTO "role_permissions" ("role_code", "permission_code") VALUES
   ('ADMIN', 'catalog:read'),
-  ('ADMIN', 'catalog:manage'),
-  ('ADMIN', 'catalog:recipes_activate'),
+  ('ADMIN', 'catalog:product_manage'),
+  ('ADMIN', 'catalog:recipe_approve'),
   ('PRODUCTION_SUPERVISOR', 'catalog:read'),
+  ('PRODUCTION_SUPERVISOR', 'catalog:product_manage'),
+  ('PRODUCTION_SUPERVISOR', 'catalog:recipe_approve'),
   ('PRODUCTION_OPERATOR', 'catalog:read'),
   ('WAREHOUSE_SUPERVISOR', 'catalog:read');
 

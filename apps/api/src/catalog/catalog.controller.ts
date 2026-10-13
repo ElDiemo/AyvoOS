@@ -1,5 +1,6 @@
 import {
   activateRecipeRequestSchema,
+  archiveProductRequestSchema,
   archiveRecipeRequestSchema,
   createComponentRequestSchema,
   createCrateTypeRequestSchema,
@@ -8,8 +9,10 @@ import {
   materialRequirementsQuerySchema,
   productCodeSchema,
   recipeVersionNumberSchema,
+  renameProductRequestSchema,
   updateRecipeDraftRequestSchema,
   type ActivateRecipeRequest,
+  type ArchiveProductRequest,
   type ArchiveRecipeRequest,
   type CatalogComponent,
   type CrateType,
@@ -21,6 +24,7 @@ import {
   type Product,
   type ProductCategory,
   type RecipeVersion,
+  type RenameProductRequest,
   type UpdateRecipeDraftRequest,
 } from '@ayvo/types';
 import { Body, Controller, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
@@ -39,8 +43,9 @@ const VERSION = new ZodValidationPipe(recipeVersionNumberSchema);
 
 /**
  * The company-wide product catalogue API (doc 023 §7): reading needs `catalog:read`; creating
- * components, crate types, products and recipe drafts needs `catalog:manage`; activating and
- * archiving recipe versions needs `catalog:recipes_activate`. Every change carries a request id
+ * and maintaining components, crate types, products and recipe drafts needs
+ * `catalog:product_manage`; activating and archiving recipe versions needs
+ * `catalog:recipe_approve` (doc 020 §12). Every change carries a request id
  * (idempotency) and a reason (audit). No route reads or writes stock.
  */
 @Controller(`${ADMIN_PREFIX}/catalog`)
@@ -63,7 +68,7 @@ export class CatalogController {
     return this.catalog.components();
   }
 
-  @RequirePermission('catalog:manage')
+  @RequirePermission('catalog:product_manage')
   @Post('components')
   createComponent(
     @Body(new ZodValidationPipe(createComponentRequestSchema)) body: CreateComponentRequest,
@@ -78,7 +83,7 @@ export class CatalogController {
     return this.crateTypes.list();
   }
 
-  @RequirePermission('catalog:manage')
+  @RequirePermission('catalog:product_manage')
   @Post('crate-types')
   createCrateType(
     @Body(new ZodValidationPipe(createCrateTypeRequestSchema)) body: CreateCrateTypeRequest,
@@ -93,7 +98,7 @@ export class CatalogController {
     return this.catalog.products();
   }
 
-  @RequirePermission('catalog:manage')
+  @RequirePermission('catalog:product_manage')
   @Post('products')
   createProduct(
     @Body(new ZodValidationPipe(createProductRequestSchema)) body: CreateProductRequest,
@@ -108,7 +113,29 @@ export class CatalogController {
     return this.catalog.product(code);
   }
 
-  @RequirePermission('catalog:manage')
+  @RequirePermission('catalog:product_manage')
+  @Post('products/:code/rename')
+  @HttpCode(200)
+  renameProduct(
+    @Param('code', PRODUCT) code: string,
+    @Body(new ZodValidationPipe(renameProductRequestSchema)) body: RenameProductRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<Product> {
+    return this.catalog.renameProduct(principal.userId, code, body);
+  }
+
+  @RequirePermission('catalog:product_manage')
+  @Post('products/:code/archive')
+  @HttpCode(200)
+  archiveProduct(
+    @Param('code', PRODUCT) code: string,
+    @Body(new ZodValidationPipe(archiveProductRequestSchema)) body: ArchiveProductRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<Product> {
+    return this.catalog.archiveProduct(principal.userId, code, body);
+  }
+
+  @RequirePermission('catalog:product_manage')
   @Post('products/:code/recipes')
   createDraft(
     @Param('code', PRODUCT) code: string,
@@ -127,7 +154,7 @@ export class CatalogController {
     return this.recipes.get(code, version);
   }
 
-  @RequirePermission('catalog:manage')
+  @RequirePermission('catalog:product_manage')
   @Put('products/:code/recipes/:version')
   updateDraft(
     @Param('code', PRODUCT) code: string,
@@ -138,7 +165,7 @@ export class CatalogController {
     return this.recipes.updateDraft(principal.userId, code, version, body);
   }
 
-  @RequirePermission('catalog:recipes_activate')
+  @RequirePermission('catalog:recipe_approve')
   @Post('products/:code/recipes/:version/activate')
   @HttpCode(200)
   activate(
@@ -150,7 +177,7 @@ export class CatalogController {
     return this.recipes.activate(principal.userId, code, version, body);
   }
 
-  @RequirePermission('catalog:recipes_activate')
+  @RequirePermission('catalog:recipe_approve')
   @Post('products/:code/recipes/:version/archive')
   @HttpCode(200)
   archive(

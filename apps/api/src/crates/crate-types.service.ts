@@ -56,7 +56,8 @@ export class CrateTypesService {
     const { result } = await this.operations.run(
       'CRATE_TYPE_CREATE',
       input.requestId,
-      input,
+      // Bound to the author: another user's replay is a conflict (doc 023 §7).
+      { actorId, ...input },
       async (tx) => {
         const known = await tx.productCategory.count({
           where: { code: { in: input.categoryCodes } },

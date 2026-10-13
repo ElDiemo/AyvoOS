@@ -9,6 +9,7 @@ import type {
 } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Prisma } from '../src/generated/prisma/client.js';
 import { InventoryService } from '../src/inventory/inventory.service.js';
 import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
@@ -527,6 +528,84 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
     expect(await t.prisma.inventoryItem.count({ where: { code: pumpCode } })).toBe(1);
   });
 
+  it('a product name is corrected and a product archived without losing history', async () => {
+    const k = await kit();
+    const p = await product();
+    const rename = (name: string) =>
+      as(admin).post(`${api}/products/${p.code}/rename`, {
+        requestId: randomUUID(),
+        name,
+        reason: 'překlep v názvu',
+      });
+    const renamed = await rename('Tekuté mýdlo 330 ml (opraveno)');
+    expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
+    expect(renamed.body).toMatchObject({
+      code: p.code,
+      name: 'Tekuté mýdlo 330 ml (opraveno)',
+      status: 'ACTIVE',
+      category: p.category,
+      nominalQuantity: '330',
+    });
+    expect((await rename('Tekuté mýdlo 330 ml (opraveno)')).body.code).toBe('NO_CHANGES');
+    expect(
+      await t.prisma.auditEvent.findFirstOrThrow({
+        where: { type: 'PRODUCT_RENAMED', payload: { path: ['product'], equals: p.code } },
+      }),
+    ).toMatchObject({
+      reason: 'překlep v názvu',
+      payload: expect.objectContaining({
+        before: 'Tekuté mýdlo 330 ml',
+        after: 'Tekuté mýdlo 330 ml (opraveno)',
+      }),
+    });
+
+    // Archiving waits for the active recipe to be archived first (an explicit step).
+    await draft(p.code, { crateTypeCode: k.crate.code, components: k.lines });
+    expect((await activate(p.code, 1, null)).status).toBe(200);
+    await draft(p.code, { basedOnVersion: 1 });
+    const archiveProduct = () =>
+      as(admin).post(`${api}/products/${p.code}/archive`, {
+        requestId: randomUUID(),
+        reason: 'produkt se už nevyrábí',
+      });
+    const blocked = await archiveProduct();
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('PRODUCT_HAS_ACTIVE_RECIPE');
+    expect((await archive(p.code, 1)).status).toBe(200);
+    const archived = await archiveProduct();
+    expect(archived.status, JSON.stringify(archived.body)).toBe(200);
+    expect(archived.body).toMatchObject({ status: 'ARCHIVED', activeVersion: null });
+    expect(archived.body.archivedAt).not.toBeNull();
+
+    // Afterwards: nothing changes, everything stays readable and calculable.
+    expect((await rename('Jiný název')).body.code).toBe('PRODUCT_ARCHIVED');
+    expect((await archiveProduct()).body.code).toBe('PRODUCT_ARCHIVED');
+    expect((await draft(p.code, { basedOnVersion: 1 })).body.code).toBe('PRODUCT_ARCHIVED');
+    expect((await activate(p.code, 2, null)).body.code).toBe('PRODUCT_ARCHIVED');
+    const edit = await as(admin).put(`${api}/products/${p.code}/recipes/2`, {
+      requestId: randomUUID(),
+      reason: 'úprava',
+      crateTypeCode: null,
+      components: [],
+    });
+    expect(edit.body.code).toBe('PRODUCT_ARCHIVED');
+    const old = await as(admin).get(`${api}/products/${p.code}/recipes/1`);
+    expect(old.status).toBe(200);
+    expect((old.body as RecipeVersion).components).toHaveLength(4);
+    expect(
+      (await as(admin).get(`${api}/products/${p.code}/recipes/1/requirements?bottles=40`)).status,
+    ).toBe(200);
+    // The database refuses the same on its own.
+    const row = await t.prisma.product.findUniqueOrThrow({ where: { code: p.code } });
+    await expect(
+      t.prisma.$executeRaw`UPDATE products SET name = 'X' WHERE id = ${row.id}::uuid`,
+    ).rejects.toThrow(/archived product never changes/);
+    await expect(
+      t.prisma
+        .$executeRaw`UPDATE products SET status = 'ACTIVE', archived_at = NULL, archived_by = NULL WHERE id = ${row.id}::uuid`,
+    ).rejects.toThrow(/archived product never changes/);
+  });
+
   it('two concurrent activations of two versions: exactly one wins', async () => {
     const k = await kit();
     const p = await product();
@@ -687,7 +766,7 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
 
   // --- authorization and reasons ------------------------------------------------------------------
 
-  it('reading needs catalog:read; changes need catalog:manage or catalog:recipes_activate', async () => {
+  it('reading needs catalog:read; changes need catalog:product_manage or catalog:recipe_approve', async () => {
     const { k, p } = await activeRecipe();
     const operator = await createUser(['PRODUCTION_OPERATOR']);
     const warehouse = await createUser(['WAREHOUSE_OPERATOR']);
@@ -710,34 +789,38 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
           .status,
       ).toBe(200);
     }
-    // …but only ADMIN (or a custom role ADMIN creates) changes it.
+    // …but only ADMIN and the production supervisor change it (doc 020 §12); an operator cannot.
     const before = await catalogCounts();
-    for (const writer of [operator, supervisor]) {
-      expect(
-        (await as(writer).post(`${api}/components`, { requestId: randomUUID(), kind: 'PUMP' }))
-          .status,
-      ).toBe(403);
-      expect((await as(writer).post(`${api}/products`, {})).status).toBe(403);
-      expect((await as(writer).post(`${api}/crate-types`, {})).status).toBe(403);
-      expect((await draft(p.code, { basedOnVersion: 1 }, writer)).status).toBe(403);
-      expect((await activate(p.code, 1, null, writer)).status).toBe(403);
-    }
+    expect(
+      (await as(operator).post(`${api}/components`, { requestId: randomUUID(), kind: 'PUMP' }))
+        .status,
+    ).toBe(403);
+    expect((await as(operator).post(`${api}/products`, {})).status).toBe(403);
+    expect((await as(operator).post(`${api}/crate-types`, {})).status).toBe(403);
+    expect((await as(operator).post(`${api}/products/${p.code}/archive`, {})).status).toBe(403);
+    expect((await draft(p.code, { basedOnVersion: 1 }, operator)).status).toBe(403);
+    expect((await activate(p.code, 1, null, operator)).status).toBe(403);
     expect(await catalogCounts()).toEqual(before);
+    const supervised = await draft(p.code, { basedOnVersion: 1 }, supervisor);
+    expect(supervised.status, JSON.stringify(supervised.body)).toBe(201);
+    const v2version = (supervised.body as RecipeVersion).version;
+    expect((await activate(p.code, v2version, 1, supervisor)).status).toBe(200);
 
-    // A custom role with catalog:manage only drafts; activation needs catalog:recipes_activate.
+    // A custom role with catalog:product_manage only drafts; activation needs catalog:recipe_approve.
     const role = await as(admin).post('/api/admin/identity/roles', {
       code: `CATALOG_EDITOR_${sfx()}`,
       name: 'Editor katalogu',
       description: 'Zakládá návrhy kusovníků',
-      permissions: ['catalog:read', 'catalog:manage'],
+      permissions: ['catalog:read', 'catalog:product_manage'],
       reason: 'test role',
     });
     expect(role.status, JSON.stringify(role.body)).toBe(201);
     const editor = await createUser([role.body.code as string]);
-    const v2 = await draft(p.code, { basedOnVersion: 1 }, editor);
-    expect(v2.status, JSON.stringify(v2.body)).toBe(201);
-    expect((await activate(p.code, 2, 1, editor)).status).toBe(403);
-    expect((await activate(p.code, 2, 1)).status).toBe(200);
+    const v3 = await draft(p.code, { basedOnVersion: 1 }, editor);
+    expect(v3.status, JSON.stringify(v3.body)).toBe(201);
+    const v3version = (v3.body as RecipeVersion).version;
+    expect((await activate(p.code, v3version, v2version, editor)).status).toBe(403);
+    expect((await activate(p.code, v3version, v2version)).status).toBe(200);
 
     // The reason is mandatory everywhere.
     const noReason = [
@@ -765,6 +848,8 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
         expectedActiveVersion: 2,
       }),
       as(admin).post(`${api}/products/${p.code}/recipes/2/archive`, { requestId: randomUUID() }),
+      as(admin).post(`${api}/products/${p.code}/rename`, { requestId: randomUUID(), name: 'Nový' }),
+      as(admin).post(`${api}/products/${p.code}/archive`, { requestId: randomUUID() }),
       as(admin).put(`${api}/products/${p.code}/recipes/1`, {
         requestId: randomUUID(),
         crateTypeCode: k.crate.code,
@@ -798,6 +883,12 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
     });
     expect(conflict.status).toBe(409);
     expect(conflict.body.code).toBe('IDEMPOTENCY_CONFLICT');
+    // Bound to the author: another user with the same permission gets a conflict, not the result.
+    const other = await createUser(['PRODUCTION_SUPERVISOR']);
+    const foreign = await as(other).post(`${api}/products/${p.code}/recipes`, body);
+    expect(foreign.status).toBe(409);
+    expect(foreign.body.code).toBe('IDEMPOTENCY_CONFLICT');
+    expect(await catalogCounts()).toEqual(counts);
 
     // Concurrent duplicates of one activation: one effect, the same answer twice.
     const act = {
@@ -879,7 +970,10 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
           .$executeRaw`UPDATE products SET category_code = 'SHOWER_GEL' WHERE code = ${p.code}`,
         /immutable/,
       );
-      await rejects(t.prisma.$executeRaw`DELETE FROM products WHERE code = ${p.code}`, /immutable/);
+      await rejects(
+        t.prisma.$executeRaw`DELETE FROM products WHERE code = ${p.code}`,
+        /never deleted/,
+      );
       await rejects(
         t.prisma.$executeRaw`TRUNCATE recipe_versions CASCADE`,
         /immutable|not allowed/,
@@ -1255,6 +1349,112 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
         }),
         /names its crate type/,
       );
+    });
+
+    it('sealing a recipe BOM and adding a line to it are serialised (two connections)', async () => {
+      const k = await kit();
+      const p = await product();
+      expect((await draft(p.code, { crateTypeCode: null, components: [k.lines[1]!] })).status).toBe(
+        201,
+      );
+      const productRow = await t.prisma.product.findUniqueOrThrow({ where: { code: p.code } });
+      const v = await t.prisma.recipeVersion.findFirstOrThrow({
+        where: { productId: productRow.id },
+      });
+      const liquid = await t.prisma.inventoryItem.findUniqueOrThrow({
+        where: { code: k.liquid.code },
+      });
+      const pump = await t.prisma.inventoryItem.findUniqueOrThrow({ where: { code: k.pump.code } });
+      const op = randomUUID();
+      await t.prisma.operationRequest.create({
+        data: { requestId: op, kind: 'RECIPE_DRAFT_UPDATE', payloadSha256: '0'.repeat(64) },
+      });
+      /** A committed, still unlinked FILL BOM of the next revision (the race's subject). */
+      async function unlinkedBom(revision: number) {
+        await t.prisma.recipeRevision.create({
+          data: {
+            recipeVersionId: v.id,
+            revision,
+            categoryCode: 'HAND_SOAP',
+            createdBy: adminId,
+            operationRequestId: op,
+          },
+        });
+        return t.prisma.bomVersion.create({
+          data: {
+            code: `R-${p.code}-V1-FL`,
+            version: revision,
+            stage: 'FILL',
+            validFrom: new Date(),
+            lines: {
+              create: [{ lineNo: 1, itemId: liquid.id, unitId: liquid.baseUnitId, quantity: 330 }],
+            },
+          },
+        });
+      }
+      const deferred = () => {
+        let release!: () => void;
+        const promise = new Promise<void>((r) => (release = r));
+        return { promise, release };
+      };
+      const settled = async (p: Promise<unknown>, ms = 400) =>
+        Promise.race([
+          p.then(
+            () => true,
+            () => true,
+          ),
+          new Promise((r) => setTimeout(() => r(false), ms)),
+        ]);
+      const addPump = (bomId: string) =>
+        t.prisma
+          .$executeRaw`INSERT INTO bom_lines (bom_version_id, line_no, item_id, unit_id, quantity)
+          VALUES (${bomId}::uuid, 2, ${pump.id}::uuid, ${pump.baseUnitId}::uuid, 1)`;
+      const link = (tx: Prisma.TransactionClient, revision: number, bomId: string) =>
+        tx.$executeRaw`INSERT INTO recipe_revision_boms (recipe_version_id, revision, stage, bom_version_id)
+          VALUES (${v.id}::uuid, ${revision}, 'FILL', ${bomId}::uuid)`;
+
+      // 1. The link holds its lock first: the concurrent line waits, then sees the seal.
+      const bom2 = await unlinkedBom(2);
+      const linked = deferred();
+      const commit = deferred();
+      const sealing = t.prisma.$transaction(
+        async (tx) => {
+          await link(tx, 2, bom2.id);
+          linked.release();
+          await commit.promise;
+        },
+        { timeout: 20_000 },
+      );
+      await linked.promise;
+      const late = addPump(bom2.id);
+      expect(await settled(late)).toBe(false); // blocked by the seal's lock
+      commit.release();
+      await sealing;
+      await expect(late).rejects.toThrow(/sealed/);
+      expect(await t.prisma.bomLine.count({ where: { bomVersionId: bom2.id } })).toBe(1);
+
+      // 2. The line holds its lock first: the link waits and then validates it too.
+      const bom3 = await unlinkedBom(3);
+      const added = deferred();
+      const commitLine = deferred();
+      const adding = t.prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`INSERT INTO bom_lines (bom_version_id, line_no, item_id, unit_id, quantity)
+            VALUES (${bom3.id}::uuid, 2, ${pump.id}::uuid, ${pump.baseUnitId}::uuid, 1)`;
+          added.release();
+          await commitLine.promise;
+        },
+        { timeout: 20_000 },
+      );
+      await added.promise;
+      const sealing3 = t.prisma.$transaction((tx) => link(tx, 3, bom3.id), { timeout: 20_000 });
+      expect(await settled(sealing3)).toBe(false); // waits for the line's transaction
+      commitLine.release();
+      await adding;
+      await sealing3;
+      // Sealed with both lines, each validated; nothing can be added any more.
+      expect(await t.prisma.bomLine.count({ where: { bomVersionId: bom3.id } })).toBe(2);
+      await expect(addPump(bom3.id)).rejects.toThrow(/sealed/);
     });
 
     it('the global label-application rule is never replaced by a recipe BOM', async () => {

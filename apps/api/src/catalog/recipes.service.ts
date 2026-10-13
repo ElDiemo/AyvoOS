@@ -24,7 +24,7 @@ import {
 } from '../crates/crate-types.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
-import { CatalogService, toUnit, unitAllowedFor } from './catalog.service.js';
+import { CatalogService, productArchived, toUnit, unitAllowedFor } from './catalog.service.js';
 import { materialRequirements, RequirementTooLargeError } from './material-requirements.js';
 
 const recipeInclude = {
@@ -55,7 +55,7 @@ interface RecipeContent {
   }[];
 }
 
-type ProductRow = { id: string; code: string; category_code: string };
+type ProductRow = { id: string; code: string; category_code: string; status: string };
 
 function toRecipe(
   r: RecipeRow,
@@ -183,9 +183,10 @@ export class RecipesService {
     const { result } = await this.operations.run(
       'RECIPE_DRAFT_CREATE',
       input.requestId,
-      { productCode, ...input },
+      { actorId, productCode, ...input },
       async (tx) => {
         const product = await this.lockProduct(tx, productCode);
+        if (product.status !== 'ACTIVE') throw productArchived();
         let basedOn: RecipeRecord | null = null;
         let wanted: UpdateRecipeDraftRequest['components'];
         let crateTypeCode: string | null;
@@ -267,9 +268,10 @@ export class RecipesService {
     const { result } = await this.operations.run(
       'RECIPE_DRAFT_UPDATE',
       input.requestId,
-      { productCode, version, ...input },
+      { actorId, productCode, version, ...input },
       async (tx) => {
         const product = await this.lockProduct(tx, productCode);
+        if (product.status !== 'ACTIVE') throw productArchived();
         const current = await this.lockVersion(tx, product, version);
         if (current.status !== 'DRAFT') throw notDraft(current);
         const before = current.view;
@@ -334,9 +336,10 @@ export class RecipesService {
     const { result } = await this.operations.run(
       'RECIPE_ACTIVATE',
       input.requestId,
-      { productCode, version, ...input },
+      { actorId, productCode, version, ...input },
       async (tx) => {
         const product = await this.lockProduct(tx, productCode);
+        if (product.status !== 'ACTIVE') throw productArchived();
         const target = await this.lockVersion(tx, product, version);
         if (target.status !== 'DRAFT') throw notDraft(target);
         const active = await tx.recipeVersion.findFirst({
@@ -425,7 +428,7 @@ export class RecipesService {
     const { result } = await this.operations.run(
       'RECIPE_ARCHIVE',
       input.requestId,
-      { productCode, version, ...input },
+      { actorId, productCode, version, ...input },
       async (tx) => {
         const product = await this.lockProduct(tx, productCode);
         const target = await this.lockVersion(tx, product, version);
@@ -461,7 +464,8 @@ export class RecipesService {
 
   private async lockProduct(tx: Prisma.TransactionClient, code: string): Promise<ProductRow> {
     const rows = await tx.$queryRaw<ProductRow[]>`
-      SELECT "id", "code", "category_code" FROM "products" WHERE "code" = ${code} FOR UPDATE`;
+      SELECT "id", "code", "category_code", "status"::text FROM "products"
+      WHERE "code" = ${code} FOR UPDATE`;
     if (!rows[0]) throw new NotFoundException('Product not found');
     return rows[0];
   }

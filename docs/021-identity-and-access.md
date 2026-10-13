@@ -90,8 +90,8 @@ migration nobody can sign in until the administrator is bootstrapped (section 8)
 | `production:label_apply`       | site + wh. |   ✓   |       |        |         |    ✓     |       |         |       |
 | `production:templates_manage`  |   global   |   ✓   |       |        |         |          |       |         |       |
 | `catalog:read`                 |   global   |   ✓   |       |   ✓    |    ✓    |    ✓     |       |         |       |
-| `catalog:manage`               |   global   |   ✓   |       |        |         |          |       |         |       |
-| `catalog:recipes_activate`     |   global   |   ✓   |       |        |         |          |       |         |       |
+| `catalog:product_manage`       |   global   |   ✓   |       |        |         |    ✓     |       |         |       |
+| `catalog:recipe_approve`       |   global   |   ✓   |       |        |         |    ✓     |       |         |       |
 
 ⚿ security administration — only the ADMIN system role may hold it (database-enforced).
 **Where** — _site + wh._: the session's active site must be accessible (site scope, or global
@@ -138,11 +138,12 @@ refused. A user may hold several roles (system and custom); the permissions add 
 - **FINANCE** reads stock and receipts (`inventory:read`) with prices and documents of its sites
   and records/corrects prices there; no stock operation.
 - `HOTEL_USER` has no permission in the internal application (the hotel portal is separate).
-- **The product catalogue is company-wide** (doc 023 §3): components, crate types, products and
+- **The product catalogue is company-wide** (doc 023 §2): components, crate types, products and
   recipes have no site and hold no stock. Operational roles read it (`catalog:read`); changing it
-  (`catalog:manage`) and activating or archiving recipe versions (`catalog:recipes_activate`) is an
-  ADMIN decision by default, like label templates — a custom role may grant either deliberately
-  (drafting and activation are separate permissions).
+  (`catalog:product_manage`) and activating or archiving recipe versions (`catalog:recipe_approve`)
+  follow the approved doc 020 §12: `PRODUCTION_SUPERVISOR` and ADMIN. Whether a site-bound
+  supervisor should keep changing company-wide catalogue data (as decided for label templates) is
+  an open owner question (doc 023 §7).
 - The standalone label application is supervisor-only until the production scan replaces it
   (doc 020). The Production Core permissions of doc 020 §12 are added by their own migrations.
 
@@ -276,17 +277,19 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | GET    | `/api/admin/bottles/:code/physical`                               | `production:read`                           | active site                 |
 | GET    | `/api/admin/catalog/categories`                                   | `catalog:read`                              | global                      |
 | GET    | `/api/admin/catalog/components`                                   | `catalog:read`                              | global                      |
-| POST   | `/api/admin/catalog/components`                                   | `catalog:manage`                            | global                      |
+| POST   | `/api/admin/catalog/components`                                   | `catalog:product_manage`                    | global                      |
 | GET    | `/api/admin/catalog/crate-types`                                  | `catalog:read`                              | global                      |
-| POST   | `/api/admin/catalog/crate-types`                                  | `catalog:manage`                            | global                      |
+| POST   | `/api/admin/catalog/crate-types`                                  | `catalog:product_manage`                    | global                      |
 | GET    | `/api/admin/catalog/products`                                     | `catalog:read`                              | global                      |
-| POST   | `/api/admin/catalog/products`                                     | `catalog:manage`                            | global                      |
+| POST   | `/api/admin/catalog/products`                                     | `catalog:product_manage`                    | global                      |
 | GET    | `/api/admin/catalog/products/:code`                               | `catalog:read`                              | global                      |
-| POST   | `/api/admin/catalog/products/:code/recipes`                       | `catalog:manage`                            | global                      |
+| POST   | `/api/admin/catalog/products/:code/archive`                       | `catalog:product_manage`                    | global                      |
+| POST   | `/api/admin/catalog/products/:code/rename`                        | `catalog:product_manage`                    | global                      |
+| POST   | `/api/admin/catalog/products/:code/recipes`                       | `catalog:product_manage`                    | global                      |
 | GET    | `/api/admin/catalog/products/:code/recipes/:version`              | `catalog:read`                              | global                      |
-| PUT    | `/api/admin/catalog/products/:code/recipes/:version`              | `catalog:manage`                            | global                      |
-| POST   | `/api/admin/catalog/products/:code/recipes/:version/activate`     | `catalog:recipes_activate`                  | global                      |
-| POST   | `/api/admin/catalog/products/:code/recipes/:version/archive`      | `catalog:recipes_activate`                  | global                      |
+| PUT    | `/api/admin/catalog/products/:code/recipes/:version`              | `catalog:product_manage`                    | global                      |
+| POST   | `/api/admin/catalog/products/:code/recipes/:version/activate`     | `catalog:recipe_approve`                    | global                      |
+| POST   | `/api/admin/catalog/products/:code/recipes/:version/archive`      | `catalog:recipe_approve`                    | global                      |
 | GET    | `/api/admin/catalog/products/:code/recipes/:version/requirements` | `catalog:read`                              | global                      |
 | GET    | `/api/admin/goods-receipts`                                       | `inventory:read`                            | active site + its warehouse |
 | POST   | `/api/admin/goods-receipts`                                       | `inventory:receive`                         | active site + its warehouse |

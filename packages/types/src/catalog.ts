@@ -142,9 +142,29 @@ export const recipeVersionSummarySchema = z.object({
 });
 export type RecipeVersionSummary = z.infer<typeof recipeVersionSummarySchema>;
 
+export const productStatusSchema = z.enum(['ACTIVE', 'ARCHIVED']);
+export type ProductStatus = z.infer<typeof productStatusSchema>;
+
+/** POST /api/admin/catalog/products/:code/rename — corrects the name (code, category and nominal quantity never change). */
+export const renameProductRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  name: nameSchema,
+  reason: reasonSchema,
+});
+export type RenameProductRequest = z.infer<typeof renameProductRequestSchema>;
+
+/** POST /api/admin/catalog/products/:code/archive — only without an ACTIVE recipe version. */
+export const archiveProductRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  reason: reasonSchema,
+});
+export type ArchiveProductRequest = z.infer<typeof archiveProductRequestSchema>;
+
 export const productSchema = z.object({
   code: z.string(),
   name: z.string(),
+  status: productStatusSchema,
+  archivedAt: z.iso.datetime().nullable(),
   category: productCategorySchema,
   nominalQuantity: decimalStringSchema,
   nominalUnit: unitSchema,

@@ -2,8 +2,10 @@ import {
   COMPONENT_KINDS,
   type CatalogComponent,
   type CreateComponentRequest,
+  type ArchiveProductRequest,
   type CreateProductRequest,
   type Product,
+  type RenameProductRequest,
   type ProductCategory,
 } from '@ayvo/types';
 import { Injectable, NotFoundException } from '@nestjs/common';
@@ -68,6 +70,8 @@ export function toProduct(p: ProductRecord, units: ReadonlyMap<string, Inventory
   return {
     code: p.code,
     name: p.name,
+    status: p.status,
+    archivedAt: p.archivedAt?.toISOString() ?? null,
     category: toCategory(p.category),
     nominalQuantity: formatQuantity(p.nominalQuantity),
     nominalUnit: toUnit(units.get(p.nominalUnitId)!),
@@ -85,6 +89,10 @@ export function toProduct(p: ProductRecord, units: ReadonlyMap<string, Inventory
   };
 }
 
+/**
+ * Idempotency is bound to the author: the payload of every catalogue operation includes the
+ * actor, so another user's replay of a request id is IDEMPOTENCY_CONFLICT, never their result.
+ */
 const codeTaken = (what: string) =>
   domainError(409, 'CODE_TAKEN', `${what} with this code already exists`);
 
@@ -164,7 +172,7 @@ export class CatalogService {
     const { result } = await this.operations.run(
       'CATALOG_COMPONENT_CREATE',
       input.requestId,
-      input,
+      { actorId, ...input },
       async (tx) => {
         const unit = await this.inventory.getUnitByCode(input.unitCode, tx);
         if (!unit) throw domainError(422, 'UNKNOWN_UNIT', 'Unknown unit');
@@ -277,7 +285,7 @@ export class CatalogService {
     const { result } = await this.operations.run(
       'PRODUCT_CREATE',
       input.requestId,
-      input,
+      { actorId, ...input },
       async (tx) => {
         if (!(await tx.productCategory.findUnique({ where: { code: input.categoryCode } }))) {
           throw domainError(422, 'UNKNOWN_CATEGORY', 'Unknown product category');
@@ -332,4 +340,115 @@ export class CatalogService {
     );
     return result;
   }
+
+  /** Corrects a product's name (typo); code, category and nominal quantity never change. */
+  async renameProduct(
+    actorId: string,
+    code: string,
+    input: RenameProductRequest,
+  ): Promise<Product> {
+    const { result } = await this.operations.run(
+      'PRODUCT_RENAME',
+      input.requestId,
+      { actorId, code, ...input },
+      async (tx) => {
+        const product = await this.lockActiveProduct(tx, code);
+        if (product.name === input.name) {
+          throw domainError(422, 'NO_CHANGES', 'The product already has this name');
+        }
+        await tx.product.update({ where: { id: product.id }, data: { name: input.name } });
+        await this.audit.record(
+          {
+            type: 'PRODUCT_RENAMED',
+            actorUserId: actorId,
+            reason: input.reason,
+            payload: {
+              product: code,
+              before: product.name,
+              after: input.name,
+              requestId: input.requestId,
+            },
+          },
+          tx,
+        );
+        return toProduct(
+          await tx.product.findUniqueOrThrow({
+            where: { id: product.id },
+            include: productInclude,
+          }),
+          await this.unitsById(tx),
+        );
+      },
+    );
+    return result;
+  }
+
+  /**
+   * Archives a product: no new or changed recipe versions afterwards; every version, BOM and
+   * reference stays readable. Refused while a recipe version is ACTIVE (archive it first) — an
+   * explicit step, never an implicit side effect.
+   */
+  async archiveProduct(
+    actorId: string,
+    code: string,
+    input: ArchiveProductRequest,
+  ): Promise<Product> {
+    const { result } = await this.operations.run(
+      'PRODUCT_ARCHIVE',
+      input.requestId,
+      { actorId, code, ...input },
+      async (tx) => {
+        const product = await this.lockActiveProduct(tx, code);
+        const active = await tx.recipeVersion.findFirst({
+          where: { productId: product.id, status: 'ACTIVE' },
+          select: { version: true },
+        });
+        if (active) {
+          throw domainError(
+            409,
+            'PRODUCT_HAS_ACTIVE_RECIPE',
+            `Archive the active recipe version ${active.version} first`,
+          );
+        }
+        await tx.product.update({
+          where: { id: product.id },
+          data: { status: 'ARCHIVED', archivedAt: new Date(), archivedBy: actorId },
+        });
+        await this.audit.record(
+          {
+            type: 'PRODUCT_ARCHIVED',
+            actorUserId: actorId,
+            reason: input.reason,
+            payload: { product: code, requestId: input.requestId },
+          },
+          tx,
+        );
+        return toProduct(
+          await tx.product.findUniqueOrThrow({
+            where: { id: product.id },
+            include: productInclude,
+          }),
+          await this.unitsById(tx),
+        );
+      },
+    );
+    return result;
+  }
+
+  /** The product row, locked (same lock as every recipe change); refused once archived. */
+  private async lockActiveProduct(tx: Prisma.TransactionClient, code: string) {
+    const rows = await tx.$queryRaw<{ id: string; name: string; status: string }[]>`
+      SELECT "id", "name", "status"::text FROM "products" WHERE "code" = ${code} FOR UPDATE`;
+    const product = rows[0];
+    if (!product) throw new NotFoundException('Product not found');
+    if (product.status !== 'ACTIVE') throw productArchived();
+    return product;
+  }
 }
+
+export const productArchived = () =>
+  domainError(
+    409,
+    'PRODUCT_ARCHIVED',
+    'The product is archived: its history can be read, not changed',
+  );

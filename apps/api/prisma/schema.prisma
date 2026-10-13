@@ -832,6 +832,8 @@ enum OperationKind {
   CATALOG_COMPONENT_CREATE
   CRATE_TYPE_CREATE
   PRODUCT_CREATE
+  PRODUCT_RENAME
+  PRODUCT_ARCHIVE
   RECIPE_DRAFT_CREATE
   RECIPE_DRAFT_UPDATE
   RECIPE_ACTIVATE
@@ -904,7 +906,8 @@ model User {
   sitesUpdated       Site[]             @relation("SiteUpdatedBy")
   componentsCreated  CatalogComponent[]
   crateTypesCreated  CrateType[]
-  productsCreated    Product[]
+  productsCreated    Product[]          @relation("ProductCreatedBy")
+  productsArchived   Product[]          @relation("ProductArchivedBy")
   recipesCreated     RecipeVersion[]    @relation("RecipeCreatedBy")
   recipesActivated   RecipeVersion[]    @relation("RecipeActivatedBy")
   recipesArchived    RecipeVersion[]    @relation("RecipeArchivedBy")
@@ -1311,22 +1314,34 @@ model CrateTypeCategory {
   @@map("crate_type_categories")
 }
 
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 /// A sellable product variant ("Tekuté mýdlo 330 ml"); not a label template (doc 020).
-/// DB: code pattern; nominal quantity > 0 in its unit's scale; immutable; DELETE rejected.
+/// DB: code pattern; nominal quantity > 0 in its unit's scale; code, category, nominal quantity
+/// and creation immutable; the name may be corrected while ACTIVE (audited); status forward-only;
+/// DELETE rejected.
 model Product {
-  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code               String   @unique
+  id                 String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String        @unique
   name               String
-  categoryCode       String   @map("category_code")
-  nominalQuantity    Decimal  @map("nominal_quantity") @db.Decimal(19, 3)
-  nominalUnitId      String   @map("nominal_unit_id") @db.Uuid
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String   @map("created_by") @db.Uuid
-  operationRequestId String   @map("operation_request_id") @db.Uuid
+  categoryCode       String        @map("category_code")
+  nominalQuantity    Decimal       @map("nominal_quantity") @db.Decimal(19, 3)
+  nominalUnitId      String        @map("nominal_unit_id") @db.Uuid
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String        @map("created_by") @db.Uuid
+  operationRequestId String        @map("operation_request_id") @db.Uuid
+  /// ACTIVE → ARCHIVED (forward only). An archived product gets no new recipe work.
+  status             ProductStatus @default(ACTIVE)
+  archivedAt         DateTime?     @map("archived_at") @db.Timestamptz(3)
+  archivedBy         String?       @map("archived_by") @db.Uuid
 
   category    ProductCategory  @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
   nominalUnit InventoryUnit    @relation(fields: [nominalUnitId], references: [id], onDelete: Restrict)
-  creator     User             @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  creator     User             @relation("ProductCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  archiver    User?            @relation("ProductArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
   operation   OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   recipes     RecipeVersion[]
 

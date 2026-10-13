@@ -54,6 +54,8 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'production:label_apply',
     'inventory:read',
     'catalog:read',
+    'catalog:product_manage',
+    'catalog:recipe_approve',
   ],
   SALES: ['inventory:stock_summary'],
   FINANCE: [
