@@ -88,7 +88,10 @@ a merge method or without authorization.
 ## Explicit merge authorization
 
 Merging is never automatic — not even when every check is green. Only after the owner has
-explicitly said to merge a specific pull request:
+explicitly said to merge a specific pull request. **Pending owner decision (doc 024 §11.1):** once
+the extended night shift is installed, a run manifest signed with the owner's approval key counts
+as that explicit authorization for the pull requests created by that run — and only after every
+gate of doc 024 §7 holds. Until then:
 
 ```bash
 AYVO_GH_ALLOW_MERGE=<pr-number> /opt/ayvo/bin/ayvo-gh pr merge <pr-number> --merge

@@ -1,0 +1,9 @@
+{
+  "name": "@ayvo/night-shift",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AYVO night shift controller (issue #13, doc 024) — Python standard library only",
+  "scripts": {
+    "test": "cd tests && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=..:. python3 -m unittest discover -s . -t ."
+  }
+}

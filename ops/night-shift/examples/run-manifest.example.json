@@ -1,0 +1,47 @@
+{
+  "schema": "ayvo-night-shift-run/1",
+  "run_id": "20261015-example-feature",
+  "repository": "ElDiemo/AyvoOS",
+  "feature": {
+    "issue": 1,
+    "title": "Example feature",
+    "brief_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "base_commit": "0000000000000000000000000000000000000000",
+  "parts": [
+    {
+      "slug": "example-ui",
+      "title": "Example UI part",
+      "task_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "risk": "normal"
+    }
+  ],
+  "scope": {
+    "allowed_paths": ["apps/web/**", "docs/**"],
+    "forbidden_paths": []
+  },
+  "migrations": {
+    "allowed": false,
+    "max_new": 0,
+    "destructive": false
+  },
+  "permissions": {
+    "allow_merge": true,
+    "allow_deploy_dev": true
+  },
+  "ci": {
+    "required_checks": ["quality", "test", "e2e"]
+  },
+  "acceptance": ["Scenario that the owner can try on DEV in the morning"],
+  "budget": {
+    "max_minutes": 480,
+    "max_repair_rounds": 1,
+    "max_attempts_per_step": 2
+  },
+  "target": {
+    "environment": "dev-preview",
+    "url": "https://dev.ayvo.co"
+  },
+  "valid_from": "2026-10-14T18:00:00+00:00",
+  "valid_until": "2026-10-15T08:00:00+00:00"
+}

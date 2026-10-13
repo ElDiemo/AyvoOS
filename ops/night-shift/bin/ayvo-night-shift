@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-status}" in
+  run-now)
+    exec /opt/ayvo/night-shift/bin/run-night.sh
+    ;;
+  delivery)
+    # Approved runs with merge and DEV deploy (issue #13, doc 024).
+    shift
+    cd /opt/ayvo/night-shift && exec /usr/bin/python3 -m night_shift.cli "$@"
+    ;;
+  prepare|work|publish|check|status)
+    cd /opt/ayvo/night-shift && exec /usr/bin/python3 -m night_shift.legacy "${1:-status}"
+    ;;
+  *)
+    echo 'usage: ayvo-night-shift {status|check|run-now|prepare|work|publish|delivery …}' >&2
+    exit 2
+    ;;
+esac

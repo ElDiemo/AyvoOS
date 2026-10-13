@@ -176,6 +176,8 @@ Tailwind 4 · Vitest · Playwright.
 - `packages/ui` — shared React components; exported as TS source, transpiled by Next.
 - `packages/config` — shared tsconfig and ESLint config.
 - `docker/compose.yml` — dev PostgreSQL + Redis only.
+- `ops/night-shift` — the night-shift controller (doc 024; Python standard library, tests run by
+  `pnpm test`). The live copy in `/opt/ayvo/night-shift` changes only by the owner's installation.
 - `deploy/dev/` — DEV preview Compose stack + Caddyfile; `apps/*/Dockerfile` — app images (build
   context = repo root, `.dockerignore` keeps `.env*` out); `scripts/deploy-dev.sh` — manual deploy.
 
