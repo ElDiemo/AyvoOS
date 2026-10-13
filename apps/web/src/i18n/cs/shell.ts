@@ -11,6 +11,14 @@ export const shellCs = {
   closeMenu: 'Zavřít navigaci',
   overview: 'Přehled',
   operations: 'Provoz',
+  /** Leaving a form with unsaved changes (issue #11, UI-01). */
+  unsaved: {
+    badge: 'Neuložené změny',
+    title: 'Neuložené změny',
+    text: 'Změny v tomto formuláři nejsou uložené. Pokud odejdete, ztratí se.',
+    stay: 'Pokračovat v úpravách',
+    discard: 'Zahodit změny',
+  },
   environment: {
     development: { badge: 'DEV', label: 'Vývojové prostředí – neslouží pro skutečný provoz' },
     test: { badge: 'TEST', label: 'Testovací prostředí – neslouží pro skutečný provoz' },

@@ -18,6 +18,7 @@ export function AccessPreview({
   permissions,
   sites,
   global,
+  sitesPerUser = false,
   testId = 'effective-access',
 }: {
   permissions: readonly PermissionCode[];
@@ -26,6 +27,11 @@ export function AccessPreview({
     'id' | 'code' | 'name' | 'active' | 'warehouses' | 'allWarehouses'
   >[];
   global: boolean;
+  /**
+   * A role, not a user: roles say what, sites are granted to each user (doc 022) — so instead of a
+   * (false) "no site access" the preview says so.
+   */
+  sitesPerUser?: boolean;
   testId?: string;
 }) {
   const groups = PERMISSION_MODULES.map((module) => ({
@@ -61,6 +67,10 @@ export function AccessPreview({
         <h3 className={label}>{t.sites}</h3>
         {global ? (
           <p data-testid="global-access">{t.globalAccess}</p>
+        ) : sitesPerUser ? (
+          <p className="text-stone-600" data-testid="sites-per-user">
+            {t.sitesPerUser}
+          </p>
         ) : sites.length === 0 ? (
           <p className="text-stone-500">{t.noSites}</p>
         ) : (
