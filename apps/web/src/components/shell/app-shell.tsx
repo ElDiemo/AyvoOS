@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { CurrentUser } from '@ayvo/types';
 import { useEffect, useRef, useState } from 'react';
+import { BrandLogo } from '@/components/brand-logo';
 import { identityCs } from '@/i18n/cs/identity';
 import { shellCs } from '@/i18n/cs/shell';
 import { locate, visibleModules, type NavModule } from '@/lib/navigation';
@@ -147,10 +148,9 @@ function SidebarContent({
   const administration = modules.filter((m) => m.section === 'administration');
   return (
     <>
-      <div className="flex items-center justify-between gap-2 px-5 pt-5 pb-6">
+      <div className="mb-3 flex items-center justify-between gap-2 border-b border-white/10 px-5 pt-5 pb-6">
         <Link href="/" className="flex items-baseline gap-2 text-white">
-          <span className="text-lg font-semibold tracking-[0.25em]">{shellCs.brand}</span>
-          <span className="text-sm text-stone-400">{shellCs.brandSuffix}</span>
+          <BrandLogo inverse compact />
         </Link>
         <div className="flex items-center gap-1">
           <EnvironmentBadge environment={environment} />
