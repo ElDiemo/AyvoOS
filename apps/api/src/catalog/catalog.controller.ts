@@ -15,6 +15,7 @@ import {
   type ArchiveProductRequest,
   type ArchiveRecipeRequest,
   type CatalogComponent,
+  type CatalogUnit,
   type CrateType,
   type CreateComponentRequest,
   type CreateCrateTypeRequest,
@@ -55,6 +56,12 @@ export class CatalogController {
     private readonly recipes: RecipesService,
     private readonly crateTypes: CrateTypesService,
   ) {}
+
+  @RequirePermission('catalog:read')
+  @Get('units')
+  units(): Promise<CatalogUnit[]> {
+    return this.catalog.units();
+  }
 
   @RequirePermission('catalog:read')
   @Get('categories')

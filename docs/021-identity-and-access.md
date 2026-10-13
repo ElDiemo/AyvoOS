@@ -276,6 +276,7 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | GET    | `/api/admin/bottles/:code`                                        | `production:read`                           | active site                 |
 | GET    | `/api/admin/bottles/:code/physical`                               | `production:read`                           | active site                 |
 | GET    | `/api/admin/catalog/categories`                                   | `catalog:read`                              | global                      |
+| GET    | `/api/admin/catalog/units`                                        | `catalog:read`                              | global                      |
 | GET    | `/api/admin/catalog/components`                                   | `catalog:read`                              | global                      |
 | POST   | `/api/admin/catalog/components`                                   | `catalog:product_manage`                    | global                      |
 | GET    | `/api/admin/catalog/crate-types`                                  | `catalog:read`                              | global                      |

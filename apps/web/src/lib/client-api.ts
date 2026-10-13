@@ -47,8 +47,9 @@ async function readError(res: Response): Promise<ClientApiError> {
   return new ClientApiError(res.status, message, code);
 }
 
+/** POST for creations and actions; PUT only where the API replaces a resource (recipe drafts). */
 export async function apiSend<T extends z.ZodType>(
-  method: 'POST',
+  method: 'POST' | 'PUT',
   path: string,
   schema: T,
   body?: unknown,

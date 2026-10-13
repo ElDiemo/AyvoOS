@@ -149,6 +149,11 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
     .setInputFiles({ name: 'dodaci-list.pdf', mimeType: 'application/pdf', buffer: PDF });
   await page.getByRole('button', { name: 'Nahrát doklad' }).click();
   await expect(page.getByTestId('receipt-documents')).toContainText('Dodací list DL-2026-001');
+  // Other items may exist (e.g. catalogue components): choose the new bottles explicitly.
+  await page
+    .getByTestId('receipt-line-1')
+    .getByLabel('Položka')
+    .selectOption({ label: 'Nová prázdná lahev (NEW_BOTTLE)' });
   await page
     .getByTestId('receipt-line-1')
     .getByLabel(/Množství/)
