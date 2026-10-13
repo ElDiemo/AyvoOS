@@ -17,6 +17,10 @@ timestamps are `timestamptz(3)` in UTC; lengths in millimetres are `numeric(6,2)
 > **Production Core v0.1 tables** (identity, catalog, crates, production, reservations, bottle
 > category bindings, holds) are designed in [020](020-production-core-v0.1.md) §3 and not yet
 > implemented; they are added here when their migrations exist.
+>
+> **Catalogue tables** (product categories, catalogue components, crate types, products, recipe
+> versions, revisions and revision BOMs) are documented in
+> [023](023-product-catalog-and-recipes.md) §3 and §6.
 
 ## Shared
 

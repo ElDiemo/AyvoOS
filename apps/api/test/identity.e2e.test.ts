@@ -38,8 +38,14 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'inventory:items_manage',
     'procurement:suppliers_manage',
     'procurement:documents_read',
+    'catalog:read',
   ],
-  PRODUCTION_OPERATOR: ['production:read', 'production:labels_print', 'inventory:read'],
+  PRODUCTION_OPERATOR: [
+    'production:read',
+    'production:labels_print',
+    'inventory:read',
+    'catalog:read',
+  ],
   // Label templates are company-wide brand data: not changed by a site-bound role.
   PRODUCTION_SUPERVISOR: [
     'production:read',
@@ -47,6 +53,7 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'production:bottles_create',
     'production:label_apply',
     'inventory:read',
+    'catalog:read',
   ],
   SALES: ['inventory:stock_summary'],
   FINANCE: [
