@@ -23,7 +23,8 @@ export function RecipeWorkspace(props: {
   editable: boolean;
 }) {
   const [dirty, setDirty] = useState(false);
-  const [savedRevision, setSavedRevision] = useState<number | null>(null);
+  // Shown right after our own save (not only once the refresh lands); hidden by the next edit.
+  const [saved, setSaved] = useState(false);
   return (
     <div className="flex flex-col gap-6">
       <RecipeActions
@@ -36,7 +37,7 @@ export function RecipeWorkspace(props: {
       />
       {props.editable && (
         <>
-          {savedRevision !== null && savedRevision <= props.recipe.revision && !dirty && (
+          {saved && !dirty && (
             <div data-testid="recipe-saved">
               <SuccessNote>{catalogCs.recipe.saved}</SuccessNote>
             </div>
@@ -47,7 +48,7 @@ export function RecipeWorkspace(props: {
             components={props.components}
             crateTypes={props.crateTypes}
             onDirtyChange={setDirty}
-            onSaved={() => setSavedRevision(props.recipe.revision + 1)}
+            onSaved={() => setSaved(true)}
           />
         </>
       )}
