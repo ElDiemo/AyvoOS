@@ -1,9 +1,8 @@
 # 026 — A2: Workstations and work sessions (proposal, issue #19)
 
-Status: **Proposal — model, contracts and UI for review; no table, migration or permission exists
-yet.** Implementation starts only after the owner approves this model (doc 025 §11, A2) and the
-role matrix (doc 025 §13 B4), in an isolated PR based on `main` (or, if A1 is still unmerged, on
-an explicitly named base).
+Status: **Approved by the owner (2026-10-14) as the basis for implementing A2** in its own PR,
+including its migrations; role matrix doc 025 §13 B4. Receiving by supplier codes, PPL, orders
+and returns are not part of A2.
 
 ## 1. Purpose
 
@@ -41,7 +40,12 @@ an authorized takeover. Expiry never touches a crate cycle, lot or bottle.
 4. A second user scanning a station in use gets `STATION_IN_USE` (holder name, last activity). A
    takeover is an explicit operation (`production:session_takeover`, reason), audited; the previous
    session ends `TAKEN_OVER` and its holder sees that on the next request.
-5. The same user scanning the same station resumes their session (after reload, sign-in, lost
+5. **Voluntary handover** (owner B4): the holder releases the station ("Předat / Opustit
+   pracoviště"); any authorized operator then opens it with a normal scan — no supervisor. The
+   crate in progress (A3/A4) belongs to its cycle, not to the session, so it continues unchanged
+   under the next session. A **forced takeover** of an occupied station needs
+   `production:session_takeover` (supervisor/ADMIN) and a reason.
+6. The same user scanning the same station resumes their session (after reload, sign-in, lost
    connection); scanning another station first releases the current one explicitly
    ("Opustit pracoviště") — a station change never silently changes a crate, lot or bottle.
 
