@@ -435,6 +435,162 @@ describe.skipIf(!hasDatabase)('workstations and work sessions', () => {
     expect([scan.status, scan.body.code]).toEqual([409, 'STATION_OF_ANOTHER_SITE']);
   });
 
+  it('never offers a stale station context: site switch, lost permission, lost PRODUCTION', async () => {
+    // A user with two sites opens a station at the first one, then switches the active site.
+    const site = (
+      await as(admin).post('/api/admin/sites', {
+        code: `PL-${randomUUID().slice(0, 4).toUpperCase()}`,
+        name: 'Zakład',
+        countryCode: 'PL',
+        addressLine1: 'ul. Testowa 1',
+        addressLine2: null,
+        postalCode: '00-001',
+        city: 'Warszawa',
+        timeZone: 'Europe/Warsaw',
+        defaultLocale: 'pl-PL',
+        defaultCurrency: 'PLN',
+        capabilities: ['WAREHOUSE', 'PRODUCTION'],
+        reason: 'second site for scope tests',
+      })
+    ).body as SiteDetail;
+    await as(admin).post(`/api/admin/sites/${site.id}/warehouses`, {
+      requestId: randomUUID(),
+      code: `${site.code}-W`,
+      name: 'Magazyn',
+      reason: 'first warehouse',
+    });
+    const created = await as(admin).post('/api/admin/identity/users', {
+      email: `ws-multi-${randomUUID().slice(0, 8)}@ayvo.test`,
+      displayName: 'Dvě provozovny',
+      roles: ['PRODUCTION_OPERATOR'],
+      siteIds: [INITIAL_SITE_ID, site.id],
+      warehouseCodes: [],
+      reason: 'two-site operator',
+    });
+    const multiUser = created.body as AdminUserDetail;
+    const multi = await sessionCookie(t, multiUser.email);
+    await as(multi).post('/api/auth/active-site', { siteId: INITIAL_SITE_ID }).expect(200);
+    const ws = await station();
+    const held = (await open(multi, ws.qrUrl).expect(201)).body as StationSessionResult;
+
+    await as(multi).post('/api/auth/active-site', { siteId: site.id }).expect(200);
+    const switched = (await as(multi).get('/api/admin/station-sessions/current').expect(200))
+      .body as CurrentStationSession;
+    expect(switched).toEqual({
+      current: null,
+      blocked: { sessionId: held.session.id, code: 'STATION_OF_ANOTHER_SITE' },
+      endedByOther: null,
+    });
+    const beat = await as(multi).post(`/api/admin/station-sessions/${held.session.id}/heartbeat`);
+    expect([beat.status, beat.body.code]).toEqual([409, 'STATION_OF_ANOTHER_SITE']);
+    // Leaving stays possible (cleanup), so a scope change never locks the user in.
+    await release(multi, held.session.id).expect(200);
+
+    // Lost mode permission: the role is revoked while a session is open.
+    await as(multi).post('/api/auth/active-site', { siteId: INITIAL_SITE_ID }).expect(200);
+    const again = (await open(multi, ws.qrUrl).expect(201)).body as StationSessionResult;
+    await as(admin)
+      .post(`/api/admin/identity/users/${multiUser.id}/roles/revoke`, {
+        role: 'PRODUCTION_OPERATOR',
+        reason: 'role removed during work',
+      })
+      .expect(200);
+    const revoked = (await as(multi).get('/api/admin/station-sessions/current').expect(200))
+      .body as CurrentStationSession;
+    expect([revoked.current, revoked.blocked?.code]).toEqual([null, 'MODE_NOT_PERMITTED']);
+    expect(
+      (await as(multi).post(`/api/admin/station-sessions/${again.session.id}/heartbeat`)).status,
+    ).toBe(403);
+    await release(multi, again.session.id).expect(200);
+
+    // The site stops producing (capability removed through the real site administration).
+    await as(admin).post('/api/auth/active-site', { siteId: site.id }).expect(200);
+    let foreign: ManagedWorkstation;
+    try {
+      foreign = await station();
+    } finally {
+      await as(admin).post('/api/auth/active-site', { siteId: INITIAL_SITE_ID }).expect(200);
+    }
+    const plOperator = await createUser(
+      ['PRODUCTION_OPERATOR', 'PRODUCTION_SUPERVISOR'],
+      [site.id],
+    );
+    const plHeld = (await open(plOperator, foreign.qrUrl).expect(201)).body as StationSessionResult;
+    const detail = (await as(admin).get(`/api/admin/sites/${site.id}`).expect(200))
+      .body as SiteDetail;
+    await as(admin)
+      .post(`/api/admin/sites/${site.id}`, {
+        name: detail.name,
+        countryCode: detail.countryCode,
+        addressLine1: detail.addressLine1,
+        addressLine2: detail.addressLine2,
+        postalCode: detail.postalCode,
+        city: detail.city,
+        timeZone: detail.timeZone,
+        defaultLocale: detail.defaultLocale,
+        defaultCurrency: detail.defaultCurrency,
+        capabilities: ['WAREHOUSE'],
+        reason: 'site stops producing',
+      })
+      .expect(200);
+    const noProd = (await as(plOperator).get('/api/admin/station-sessions/current').expect(200))
+      .body as CurrentStationSession;
+    expect([noProd.current, noProd.blocked?.code]).toEqual([null, 'SITE_WITHOUT_PRODUCTION']);
+    const refusedBeat = await as(plOperator).post(
+      `/api/admin/station-sessions/${plHeld.session.id}/heartbeat`,
+    );
+    expect([refusedBeat.status, refusedBeat.body.code]).toEqual([409, 'SITE_WITHOUT_PRODUCTION']);
+    const refusedOpen = await open(plOperator, foreign.qrUrl);
+    expect([refusedOpen.status, refusedOpen.body.code]).toEqual([409, 'SITE_WITHOUT_PRODUCTION']);
+    const refusedTakeover = await as(plOperator).post(
+      `/api/admin/station-sessions/${plHeld.session.id}/takeover`,
+      { requestId: randomUUID(), reason: 'test převzetí' },
+    );
+    expect(refusedTakeover.status).toBe(409);
+    await release(plOperator, plHeld.session.id).expect(200);
+  });
+
+  it('replays open, takeover and release by request id: one change, one event', async () => {
+    const ws = await station();
+    const openId = randomUUID();
+    const first = (await open(operator, ws.qrUrl, openId).expect(201)).body as StationSessionResult;
+    const replay = (await open(operator, ws.qrUrl, openId).expect(201))
+      .body as StationSessionResult;
+    expect(replay).toEqual(first);
+
+    const takeoverId = randomUUID();
+    const body = { requestId: takeoverId, reason: 'převzetí s výpadkem odpovědi' };
+    const path = `/api/admin/station-sessions/${first.session.id}/takeover`;
+    const taken = (await as(supervisor).post(path, body).expect(201)).body as StationSessionResult;
+    // The response was "lost": the same attempt again returns the stored result, not SESSION_ENDED.
+    const retried = (await as(supervisor).post(path, body).expect(201))
+      .body as StationSessionResult;
+    expect(retried).toEqual(taken);
+    expect(
+      await t.prisma.workstationSessionEvent.count({
+        where: { sessionId: first.session.id, type: 'TAKEN_OVER' },
+      }),
+    ).toBe(1);
+    expect(
+      await t.prisma.workstationSession.count({
+        where: { workstation: { code: ws.code }, status: 'ACTIVE' },
+      }),
+    ).toBe(1);
+
+    const releaseId = randomUUID();
+    const rel = (id: string) =>
+      as(supervisor).post(`/api/admin/station-sessions/${taken.session.id}/release`, {
+        requestId: id,
+      });
+    await rel(releaseId).expect(200);
+    await rel(releaseId).expect(200);
+    expect(
+      await t.prisma.workstationSessionEvent.count({
+        where: { sessionId: taken.session.id, type: 'RELEASED' },
+      }),
+    ).toBe(1);
+  });
+
   it('enforces the session and station invariants in the database', async () => {
     const ws = await station();
     const row = await t.prisma.workstation.findUniqueOrThrow({ where: { code: ws.code } });

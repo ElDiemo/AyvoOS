@@ -84,6 +84,14 @@ export const workstationsCs = {
     endedByOther: (station: string, by: string, at: string, reason: string | null) =>
       `Vaše práce na pracovišti ${station} byla ukončena (${by}, ${at})${reason ? `: ${reason}` : ''}.`,
     endedTitle: 'Pracoviště už není vaše',
+    verifiedOpened: (name: string) =>
+      `Odpověď serveru se ztratila, ale ověřili jsme stav: pracoviště ${name} je vaše.`,
+    verifiedLeft: 'Odpověď serveru se ztratila, ale ověřili jsme stav: pracoviště jste opustili.',
+    uncertain:
+      'Spojení se serverem selhalo a výsledek se nepodařilo ověřit. Zkuste to znovu – opakování stejného pokusu nic nezdvojí.',
+    retry: 'Zkusit znovu',
+    blockedTitle: 'Máte otevřené pracoviště, na kterém teď nemůžete pracovat.',
+    blockedText: (reason: string) => `Důvod: ${reason} Pracoviště můžete bezpečně opustit.`,
     lostSession:
       'Pracoviště vám bylo mezitím odebráno (převzetí nebo vyřazení). Naskenujte QR pracoviště znovu.',
   },
@@ -105,6 +113,8 @@ export const workstationsCs = {
     ALREADY_ACTIVE: 'Pracoviště je už v provozu.',
     SITE_WITHOUT_WAREHOUSE: 'Provozovna nemá sklad.',
     SITE_REQUIRED: 'Nejprve zvolte provozovnu, ve které pracujete.',
+    SITE_WITHOUT_PRODUCTION: 'Provozovna, ve které pracujete, nevyrábí.',
+    SITE_INACTIVE: 'Provozovna je neaktivní.',
     FORBIDDEN: 'K této akci nemáte oprávnění.',
     IDEMPOTENCY_CONFLICT: 'Požadavek se změnil během odesílání. Odešlete jej znovu.',
   } as Record<string, string>,

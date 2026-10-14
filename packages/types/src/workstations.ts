@@ -87,6 +87,12 @@ export type StationSessionResult = z.infer<typeof stationSessionResultSchema>;
 /** GET /api/admin/station-sessions/current */
 export const currentStationSessionSchema = z.object({
   current: z.object({ session: stationSessionSchema, station: workstationSchema }).nullable(),
+  /**
+   * The user's own ACTIVE session at a station they may no longer work at (site switched,
+   * permission or scope removed, site no longer producing): no station details, only what is
+   * needed to leave it safely. Never treated as a usable station context.
+   */
+  blocked: z.object({ sessionId: z.uuid(), code: z.string() }).nullable(),
   /** The user's last session, when someone else ended it (takeover, deactivation). */
   endedByOther: z
     .object({

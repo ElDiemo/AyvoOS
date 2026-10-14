@@ -15,7 +15,7 @@ import { PrismaService } from '../database/prisma.service.js';
 import { QrRegistryService } from '../database/qr-registry.service.js';
 import type { Prisma, WorkstationSession } from '../generated/prisma/client.js';
 import type { Principal } from '../identity/principal.js';
-import { assertMayWorkAt } from './workstation-access.js';
+import { assertMayWorkAt, workRefusal } from './workstation-access.js';
 import {
   toWorkstation,
   workstationInclude,
@@ -247,7 +247,11 @@ export class StationSessionsService {
     return result;
   }
 
-  /** Voluntary leave/handover: the holder ends their own session (no supervisor needed). */
+  /**
+   * Voluntary leave/handover: the holder ends their own session (no supervisor needed). Only the
+   * owner check applies — leaving must stay possible after the user lost access to the station
+   * (site switched, permission removed), so a scope change never locks anyone in.
+   */
   async release(principal: Principal, sessionId: string, requestId: string): Promise<void> {
     await this.operations.run(
       'STATION_SESSION_RELEASE',
@@ -316,7 +320,12 @@ export class StationSessionsService {
     return { session: renewed, station: session.workstation };
   }
 
-  /** The caller's active session, or — once — the last one someone else ended. */
+  /**
+   * The caller's active session — only if they may still work at its station right now (mode
+   * permission, active site, PRODUCTION capability, warehouse); otherwise just `blocked` with the
+   * refusal code, so the UI never shows a stale station context but the user can still leave it.
+   * Also, once, the last session someone else ended (only for a station they may work at).
+   */
   async current(principal: Principal): Promise<CurrentStationSession> {
     const active = await this.prisma.workstationSession.findFirst({
       where: { userId: principal.userId, status: 'ACTIVE' },
@@ -326,10 +335,17 @@ export class StationSessionsService {
       },
     });
     if (active) {
-      return {
-        current: { session: this.toSession(active), station: toWorkstation(active.workstation) },
-        endedByOther: null,
-      };
+      const refusal = workRefusal(principal, active.workstation);
+      return refusal
+        ? { current: null, blocked: { sessionId: active.id, code: refusal }, endedByOther: null }
+        : {
+            current: {
+              session: this.toSession(active),
+              station: toWorkstation(active.workstation),
+            },
+            blocked: null,
+            endedByOther: null,
+          };
     }
     const last = await this.prisma.workstationSession.findFirst({
       where: { userId: principal.userId },
@@ -344,7 +360,8 @@ export class StationSessionsService {
       last.closedBy &&
       last.closedBy !== principal.userId &&
       last.closedAt &&
-      Date.now() - last.closedAt.getTime() < ENDED_BY_OTHER_WINDOW_MS
+      Date.now() - last.closedAt.getTime() < ENDED_BY_OTHER_WINDOW_MS &&
+      !workRefusal(principal, last.workstation)
         ? {
             station: toWorkstation(last.workstation),
             status: last.status,
@@ -353,7 +370,7 @@ export class StationSessionsService {
             reason: last.closeReason,
           }
         : null;
-    return { current: null, endedByOther };
+    return { current: null, blocked: null, endedByOther };
   }
 
   private async openIn(

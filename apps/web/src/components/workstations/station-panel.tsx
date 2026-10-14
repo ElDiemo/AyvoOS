@@ -20,8 +20,12 @@ import { scanFeedback } from '@/lib/scan-feedback';
 const t = workstationsCs.station;
 const HEARTBEAT_MS = 60_000;
 const elsewhereSchema = z.object({ station: z.object({ code: z.string(), name: z.string() }) });
+const releasedSchema = z.object({ status: z.literal('RELEASED') });
 
-type Notice = { tone: 'ok' | 'error' | 'info'; text: string } | null;
+type Notice = { tone: 'ok' | 'error' | 'info'; text: string; retry?: () => void } | null;
+
+/** No definite answer: a network error or a 5xx (the server may have committed). */
+const uncertain = (error: unknown) => !(error instanceof ClientApiError) || error.status >= 500;
 
 function errorText(error: unknown): string {
   if (error instanceof ClientApiError) {
@@ -37,8 +41,13 @@ function errorText(error: unknown): string {
  * Výroba → Pracoviště (doc 026): scan the station QR once; the station, its mode/category and the
  * site stay visible in a permanent banner. Leaving hands the station over (no supervisor); a
  * station in use names its holder, and only a user with `production:session_takeover` may take
- * it over with a reason. The server re-validates the stored station on every request; a
- * heartbeat keeps the lease and notices when the station was taken over or deactivated.
+ * it over with a reason. The server re-validates the stored station on every request.
+ *
+ * Uncertain answers (lost response, 5xx): the attempt keeps its request id, so a retry continues
+ * the SAME server operation (replayed by the server); the page first asks the server for the
+ * real state and reports success only when the server confirms it. A late heartbeat answer of an
+ * older session never overwrites a newer one; a session the user may no longer work at is shown
+ * only as "blocked", with a safe way to leave it.
  */
 export function StationPanel({
   initial,
@@ -51,6 +60,7 @@ export function StationPanel({
 }) {
   const id = useId();
   const [current, setCurrent] = useState(initial.current);
+  const [blocked, setBlocked] = useState(initial.blocked);
   const [ended, setEnded] = useState(initial.endedByOther);
   const [notice, setNotice] = useState<Notice>(null);
   const [inUse, setInUse] = useState<StationInUse | null>(null);
@@ -60,6 +70,34 @@ export function StationPanel({
   const [reason, setReason] = useState('');
   const [reasonErr, setReasonErr] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const attempts = useRef(new Map<string, string>());
+  const currentId = useRef<string | null>(initial.current?.session.id ?? null);
+
+  useEffect(() => {
+    currentId.current = current?.session.id ?? null;
+  }, [current]);
+
+  /** One user attempt = one request id, kept while its answer is uncertain. */
+  const attemptId = (key: string) => {
+    const existing = attempts.current.get(key);
+    if (existing) return existing;
+    const fresh = crypto.randomUUID();
+    attempts.current.set(key, fresh);
+    return fresh;
+  };
+
+  /** The server's truth (after an uncertain answer or a refusal of the old session). */
+  async function reconcile() {
+    const fresh = await apiGet('admin/station-sessions/current', currentStationSessionSchema).catch(
+      () => null,
+    );
+    if (fresh) {
+      setCurrent(fresh.current);
+      setBlocked(fresh.blocked);
+      setEnded(fresh.endedByOther);
+    }
+    return fresh;
+  }
 
   // The scanner types into whatever has focus: keep the field focused whenever it is usable,
   // after the render that enables it (never in an animation frame).
@@ -67,21 +105,22 @@ export function StationPanel({
     if (!current && !busy && !dialog) input.current?.focus();
   }, [current, busy, dialog, notice]);
 
-  // Heartbeat: keeps the lease and detects a takeover or deactivation while the page is open.
+  // Heartbeat: keeps the lease and detects a takeover, deactivation or lost access.
   useEffect(() => {
     if (!current) return;
     const sessionId = current.session.id;
     const timer = setInterval(() => {
       apiSend('POST', `admin/station-sessions/${sessionId}/heartbeat`, stationSessionSchema)
-        .then((session) => setCurrent((c) => (c ? { ...c, session } : c)))
+        .then((session) =>
+          setCurrent((c) => (c && c.session.id === session.id ? { ...c, session } : c)),
+        )
         .catch(async (error: unknown) => {
-          if (error instanceof ClientApiError && error.status < 500) {
-            const fresh = await apiGet(
-              'admin/station-sessions/current',
-              currentStationSessionSchema,
-            ).catch(() => null);
-            setCurrent(fresh?.current ?? null);
-            setEnded(fresh?.endedByOther ?? null);
+          if (
+            error instanceof ClientApiError &&
+            error.status < 500 &&
+            currentId.current === sessionId
+          ) {
+            await reconcile();
             setNotice({ tone: 'error', text: t.lostSession });
             scanFeedback('error');
           }
@@ -92,15 +131,18 @@ export function StationPanel({
 
   async function scan(raw: string) {
     if (busy || raw.trim() === '') return;
+    const key = `open:${raw.trim()}`;
     setBusy(true);
     setInUse(null);
     setEnded(null);
     try {
       const result = await apiSend('POST', 'admin/station-sessions', stationSessionResultSchema, {
-        requestId: crypto.randomUUID(),
+        requestId: attemptId(key),
         scannedValue: raw,
       });
+      attempts.current.delete(key);
       setCurrent({ session: result.session, station: result.station });
+      setBlocked(null);
       setNotice({
         tone: 'ok',
         text:
@@ -110,6 +152,19 @@ export function StationPanel({
       });
       scanFeedback('ok');
     } catch (error) {
+      if (uncertain(error)) {
+        const fresh = await reconcile();
+        if (fresh?.current) {
+          attempts.current.delete(key);
+          setNotice({ tone: 'ok', text: t.verifiedOpened(fresh.current.station.name) });
+          scanFeedback('ok');
+        } else {
+          setNotice({ tone: 'error', text: t.uncertain, retry: () => void scan(raw) });
+          scanFeedback('error');
+        }
+        return;
+      }
+      attempts.current.delete(key);
       scanFeedback('error');
       if (error instanceof ClientApiError && error.code === 'STATION_IN_USE') {
         const details = stationInUseSchema.safeParse(error.details);
@@ -133,22 +188,37 @@ export function StationPanel({
     }
   }
 
-  async function leave() {
-    if (!current || busy) return;
+  async function leave(sessionId: string) {
+    if (busy) return;
+    const key = `release:${sessionId}`;
     setBusy(true);
     try {
-      await apiSend(
-        'POST',
-        `admin/station-sessions/${current.session.id}/release`,
-        z.object({ status: z.literal('RELEASED') }),
-        { requestId: crypto.randomUUID() },
-      );
+      await apiSend('POST', `admin/station-sessions/${sessionId}/release`, releasedSchema, {
+        requestId: attemptId(key),
+      });
+      attempts.current.delete(key);
       setCurrent(null);
+      setBlocked(null);
       setNotice({ tone: 'info', text: t.left });
     } catch (error) {
+      if (uncertain(error)) {
+        const fresh = await reconcile();
+        if (
+          fresh &&
+          fresh.current?.session.id !== sessionId &&
+          fresh.blocked?.sessionId !== sessionId
+        ) {
+          attempts.current.delete(key);
+          setNotice({ tone: 'info', text: t.verifiedLeft });
+        } else {
+          setNotice({ tone: 'error', text: t.uncertain, retry: () => void leave(sessionId) });
+        }
+        return;
+      }
+      attempts.current.delete(key);
       if (error instanceof ClientApiError && error.code === 'SESSION_NOT_OWNED') {
         // Taken over or deactivated meanwhile: the station is no longer this user's.
-        setCurrent(null);
+        await reconcile();
         setNotice({ tone: 'error', text: t.lostSession });
       } else setNotice({ tone: 'error', text: errorText(error) });
     } finally {
@@ -160,14 +230,16 @@ export function StationPanel({
     const r = reasonError(reason);
     setReasonErr(r);
     if (r || !inUse) return;
+    const key = `takeover:${inUse.sessionId}:${reason.trim()}`;
     setBusy(true);
     try {
       const result = await apiSend(
         'POST',
         `admin/station-sessions/${inUse.sessionId}/takeover`,
         stationSessionResultSchema,
-        { requestId: crypto.randomUUID(), reason: reason.trim() },
+        { requestId: attemptId(key), reason: reason.trim() },
       );
+      attempts.current.delete(key);
       setDialog(false);
       setInUse(null);
       setReason('');
@@ -176,6 +248,21 @@ export function StationPanel({
       scanFeedback('ok');
     } catch (error) {
       setDialog(false);
+      if (uncertain(error)) {
+        const fresh = await reconcile();
+        if (fresh?.current) {
+          attempts.current.delete(key);
+          setInUse(null);
+          setReason('');
+          setNotice({ tone: 'ok', text: t.verifiedOpened(fresh.current.station.name) });
+          scanFeedback('ok');
+        } else {
+          setNotice({ tone: 'error', text: t.uncertain, retry: () => setDialog(true) });
+          scanFeedback('error');
+        }
+        return;
+      }
+      attempts.current.delete(key);
       setNotice({ tone: 'error', text: errorText(error) });
       scanFeedback('error');
     } finally {
@@ -199,6 +286,16 @@ export function StationPanel({
         {notice.tone === 'ok' ? '✔ ' : notice.tone === 'error' ? '✖ ' : 'ℹ '}
       </span>
       {notice.text}
+      {notice.retry && (
+        <button
+          type="button"
+          className={`${buttonClass.secondary} ml-2`}
+          onClick={notice.retry}
+          disabled={busy}
+        >
+          {t.retry}
+        </button>
+      )}
     </div>
   );
 
@@ -229,7 +326,7 @@ export function StationPanel({
           <button
             type="button"
             className={`${buttonClass.secondary} shrink-0`}
-            onClick={() => void leave()}
+            onClick={() => void leave(current.session.id)}
             disabled={busy}
           >
             {t.leave}
@@ -249,6 +346,24 @@ export function StationPanel({
 
   return (
     <div className="flex flex-col gap-4">
+      {blocked && (
+        <div
+          role="alert"
+          className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+          data-testid="station-blocked"
+        >
+          <p className="font-medium">{t.blockedTitle}</p>
+          <p>{t.blockedText(workstationsCs.errors[blocked.code] ?? workstationsCs.failed)}</p>
+          <button
+            type="button"
+            className={`${buttonClass.secondary} self-start`}
+            onClick={() => void leave(blocked.sessionId)}
+            disabled={busy}
+          >
+            {t.leave}
+          </button>
+        </div>
+      )}
       {ended && (
         <div
           role="alert"
@@ -310,7 +425,6 @@ export function StationPanel({
               type="button"
               className={`${buttonClass.danger} self-start`}
               onClick={() => {
-                setReason('');
                 setReasonErr(null);
                 setDialog(true);
               }}

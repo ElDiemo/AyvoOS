@@ -208,3 +208,107 @@ test('a deactivated station refuses work; reactivation restores it', async ({ pa
   await expect(page.getByTestId('public-internal')).toHaveText('Internal AYVO mark');
   await expect(page.locator('body')).not.toContainText(FILL);
 });
+
+/** Lets the request reach the server (it commits), then drops the response — once. */
+async function loseResponseAfterCommit(page: Page, pattern: RegExp, bodies: string[] = []) {
+  let done = false;
+  await page.route(pattern, async (route) => {
+    if (done || route.request().method() !== 'POST') return route.fallback();
+    done = true;
+    bodies.push(route.request().postData() ?? '');
+    await route.fetch();
+    await route.abort('failed');
+  });
+}
+
+async function activeHolder(admin: Page): Promise<string | null> {
+  const list = (await (await admin.request.get('/api/admin/workstations')).json()) as {
+    code: string;
+    activeSession: { user: string } | null;
+  }[];
+  return list.find((w) => w.code === FILL)!.activeSession?.user ?? null;
+}
+
+test('lost responses after the server committed: the page verifies, nothing doubles', async ({
+  page,
+}) => {
+  // Open: committed, response lost → the page asks the server and shows the verified state.
+  await pageA.goto('/production/station');
+  await loseResponseAfterCommit(pageA, /\/api\/admin\/station-sessions$/);
+  await scan(pageA, fillUrl);
+  await expect(pageA.getByTestId('station-notice')).toContainText('ověřili jsme stav');
+  await expect(pageA.getByTestId('station-banner')).toContainText('Operátor A');
+  expect(await activeHolder(page)).toBe('Operátor A');
+
+  // Takeover: committed, response AND the verification lost → retry with the same attempt.
+  await page.goto('/production/station');
+  await scan(page, fillUrl);
+  await page
+    .getByTestId('station-in-use')
+    .getByRole('button', { name: 'Převzít pracoviště' })
+    .click();
+  const bodies: string[] = [];
+  await loseResponseAfterCommit(page, /\/takeover$/, bodies);
+  let verifyLost = false;
+  await page.route(/\/api\/admin\/station-sessions\/current$/, async (route) => {
+    if (verifyLost) return route.fallback();
+    verifyLost = true;
+    await route.abort('failed');
+  });
+  const dialog = page.getByTestId('takeover-dialog');
+  await dialog.getByLabel('Důvod převzetí (povinný)').fill('převzetí při výpadku sítě');
+  await dialog.getByRole('button', { name: 'Převzít pracoviště' }).click();
+  const notice = page.getByTestId('station-notice');
+  await expect(notice).toContainText('výsledek se nepodařilo ověřit');
+  expect(await activeHolder(page)).toBe('E2E Admin'); // the server did commit
+  const retried = page.waitForRequest(
+    (r) => r.url().endsWith('/takeover') && r.method() === 'POST',
+  );
+  await notice.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await dialog.getByRole('button', { name: 'Převzít pracoviště' }).click();
+  bodies.push((await retried).postData() ?? '');
+  await expect(page.getByTestId('station-banner')).toContainText('E2E Admin');
+  await expect(notice).toContainText('Převzali jste pracoviště');
+  const [lost, again] = bodies.map((b) => JSON.parse(b) as { requestId: string });
+  expect(again!.requestId).toBe(lost!.requestId); // the same attempt, replayed by the server
+
+  // Release: committed, response lost → verified as left.
+  await loseResponseAfterCommit(page, /\/release$/);
+  await page.getByRole('button', { name: 'Opustit pracoviště' }).click();
+  await expect(page.getByTestId('station-notice')).toContainText('pracoviště jste opustili');
+  expect(await activeHolder(page)).toBeNull();
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await pageA.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('a session the user may no longer work at is only shown as blocked and can be left', async ({
+  page,
+}) => {
+  await page.goto('/production/station');
+  await scan(page, fillUrl);
+  await expect(page.getByTestId('station-banner')).toBeVisible();
+  // The admin switches the active site: the old station is not offered as a usable context.
+  const deSite = '01990000-0000-7000-8000-0000000000e2';
+  expect(
+    (await page.request.post('/api/auth/active-site', { data: { siteId: deSite } })).status(),
+  ).toBe(200);
+  try {
+    await page.reload();
+    const blocked = page.getByTestId('station-blocked');
+    await expect(blocked).toContainText('nemůžete pracovat');
+    await expect(blocked).toContainText('jiné provozovně');
+    await expect(page.getByTestId('station-banner')).toHaveCount(0);
+    await shot(page, 'station-blocked');
+    await blocked.getByRole('button', { name: 'Opustit pracoviště' }).click();
+    await expect(page.getByTestId('station-notice')).toContainText('Pracoviště jste opustili');
+  } finally {
+    expect(
+      (
+        await page.request.post('/api/auth/active-site', {
+          data: { siteId: '01990000-0000-7000-8000-000000000001' },
+        })
+      ).status(),
+    ).toBe(200);
+  }
+  expect(await activeHolder(page)).toBeNull();
+});
