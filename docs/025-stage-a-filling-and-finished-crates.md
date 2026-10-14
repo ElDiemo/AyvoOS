@@ -220,45 +220,54 @@ Stage A consumes exact recipe quantities; history is never recalculated.
   bottles stay "not returned"; a bottle returned in another crate never rewrites dispatch history;
   washing and refill eligibility are real operations (doc 009, criteria open).
 
-## 10. Weights (separate PR after A4; nothing invented, no seeded values)
+## 10. Weights (PR W1 after A4; nothing invented, no seeded values)
 
-The owner's latest clarification is primary: the **measured reference weight of one finished
-bottle** (bottle + content + pump + label) per product is the basic source; component weights are
-complementary, never a prerequisite.
+The owner requires **both** capabilities in the weight feature: the **measured reference weight
+of one finished bottle** (bottle + content + pump + label) per product, **and** reference weights
+of the individual components, plus the crate tare. Every value may stay **unknown** until it is
+measured — optional _entry_, not an optional _capability_. A missing component weight never blocks
+recording the finished-bottle weight, and vice versa. For the expected shipment mass the measured
+finished-bottle weight is the source; component weights are shown beside it (and their sum as a
+cross-check), never added to it.
 
-| Record (append-only, audited)              | Content                                                                                                                                                       |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `product_reference_weights`                | product, gross weight in **g** (`NUMERIC(19,3)`), measured_at, measured_by, method/conditions note, number of bottles weighed; a correction is a new row      |
-| `crate_type_tare_weights`                  | crate type, tare in g of the empty crate **including its dividers**, configuration description, measured_at/by                                                |
-| `item_reference_weights` (optional, later) | component weight per piece (bottle, pump, label) — liquids only with a documented density; never used together with the finished-bottle reference for one sum |
-| snapshots                                  | at Hotovo the crate cycle stores the reference-weight row ids used; dispatch (C) snapshots again; later corrections never rewrite them                        |
-| actual weighings (stage C)                 | a concrete crate/shipment weighed: who, when, scale/tare conditions — kept apart from expected values                                                         |
+| Record (append-only, audited) | Content                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `product_reference_weights`   | product, gross weight in **g** (`NUMERIC(19,3)`), measured_at, measured_by, method/conditions note, number of bottles weighed; a correction is a new row                                                      |
+| `crate_type_tare_weights`     | crate type, tare in g of the empty crate **including its dividers**, configuration description, measured_at/by                                                                                                |
+| `item_reference_weights`      | per catalogue component: weight per piece (bottle body, pump, label) or, for a liquid, the measured mass of a stated volume (e.g. 330 ml weighed directly); measured_at/by, method; a correction is a new row |
+| snapshots                     | at Hotovo the crate cycle stores the reference-weight row ids used; dispatch (C) snapshots again; later corrections never rewrite them                                                                        |
+| actual weighings (stage C)    | a concrete crate/shipment weighed: who, when, scale/tare conditions — kept apart from expected values                                                                                                         |
 
 - **Expected full crate** = finished bottles × product reference weight + crate tare (+ only
   packaging not already in the tare). Shown as _expected/calculated_, never as weighed. If any
   input is unknown the result is unknown — never 0, never estimated.
+- Liquids: a directly weighed sample of a known volume is a measurement in its own right (no
+  density needed to record it). A documented density/method is needed only to **convert** arbitrary
+  stock quantities between kg and ml (inventory, §8) — never implicitly.
 - Units: stored in g, displayed in kg where useful, exact decimal conversion; 330 ml is never
   330 g; recording a weight never changes an item's stock unit and never creates stock or
   consumption; it never unlocks editing an active recipe.
-- Primary UX: product detail → **Referenční hmotnost hotové lahve** (value, unit, date, author,
-  history); crate type → **Tára prázdné bedny s přepážkami**. Carrier (e.g. PPL) limits and
+- UX: product detail → **Referenční hmotnost hotové lahve** (value, unit, date, author,
+  history); component detail → **Referenční hmotnost komponenty** (per piece, or for a liquid the
+  weighed volume and its mass); crate type → **Tára prázdné bedny s přepážkami**; the recipe shows
+  the finished-bottle reference and, beside it, the component sum with its unknown parts named. Carrier (e.g. PPL) limits and
   formats are verified only at integration. Weighing never replaces scanning identities; no
   tolerance or blocking is proposed (owner, open).
-- Tests: exact sums, unit conversion, unknown values, no double counting (finished bottle vs.
-  components, tare vs. dividers), snapshot unchanged after a correction, permissions, origin.
+- Tests: exact sums, unit conversion, unknown values (finished bottle known with components
+  unknown and vice versa), no double counting (finished bottle vs. components, tare vs. dividers), snapshot unchanged after a correction, permissions, origin.
 
 ## 11. PR split
 
-| PR     | Content                                                                                                                          | Gate                  |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| A0     | this document                                                                                                                    | owner review          |
-| **A1** | physical crates, QR registry, crate labels (PR #21)                                                                              | doc 020 — in review   |
-| A2     | workstations + station QR + server-side sessions (lease, resume, release, takeover)                                              | approval + O7         |
-| A3     | labelling at a station with category/product binding (+ label stock if O1)                                                       | approval + O1, O2, O4 |
-| A4     | filling: cycles `FILLING`/`FILLED`, finished-bottle scan with FILL consumption and lot switch, Hotovo, exceptions §4.2, ADR 0025 | approval + O3, O5, O6 |
-| A5     | Bedny overview of ready crates and finished bottles outside crates per site; full Playwright flow labelling → filling → ready    | after A4              |
-| W1     | reference weights of finished bottles and crate tares, expected crate weight, snapshot at Hotovo                                 | approval + O8         |
-| later  | inventory counting (§8), orders/dispatch/exports/hotel history (§9), returns, Quality                                            | own designs           |
+| PR     | Content                                                                                                                                        | Gate                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| A0     | this document                                                                                                                                  | owner review          |
+| **A1** | physical crates, QR registry, crate labels (PR #21)                                                                                            | doc 020 — in review   |
+| A2     | workstations + station QR + server-side sessions (lease, resume, release, takeover)                                                            | approval + O7         |
+| A3     | labelling at a station with category/product binding (+ label stock if O1)                                                                     | approval + O1, O2, O4 |
+| A4     | filling: cycles `FILLING`/`FILLED`, finished-bottle scan with FILL consumption and lot switch, Hotovo, exceptions §4.2, ADR 0025               | approval + O3, O5, O6 |
+| A5     | Bedny overview of ready crates and finished bottles outside crates per site; full Playwright flow labelling → filling → ready                  | after A4              |
+| W1     | reference weights of finished bottles, of components (incl. weighed liquid samples) and crate tares; expected crate weight; snapshot at Hotovo | approval + O8         |
+| later  | inventory counting (§8), orders/dispatch/exports/hotel history (§9), returns, Quality                                                          | own designs           |
 
 ## 12. Honest limits
 
@@ -274,12 +283,17 @@ complementary, never a prerequisite.
 
 ## 13. Owner decisions still open (one list; recommendation and impact)
 
+None of these is approved by technical review; the recommendations are proposals only.
+
 1. **O1 — label stock:** consumed at application (one per bottle at Potvrdit nalepení), at
    printing, or not tracked? _Recommendation:_ at application. _Impact:_ stock matches labelled
    bottles; misprints need a separate write-off.
 2. **O2 — what labelling binds:** category only, or the product (label design approved for exactly
-   one product)? _Recommendation:_ product. _Impact:_ the filling station can refuse a wrong
-   bottle before pouring; needs label-design approval per product.
+   one product)? _Recommendation:_ product. _Impact:_ the required finished-bottle scan — which
+   happens **after** filling — can refuse a bottle of the wrong product before it is assigned and
+   consumed against the crate; only the optional check scan can test the label **before** filling.
+   Neither scan detects which liquid was actually poured (§12). Needs label-design approval per
+   product.
 3. **O3 — internal production orders/reservations in stage A:** _Recommendation:_ none in A;
    product + recipe chosen at the session and snapshotted on the crate. _Impact:_ no material
    reservation (availability checked at each scan); planning comes later.
@@ -295,9 +309,10 @@ complementary, never a prerequisite.
 7. **O7 — permission matrix §7:** _Recommendation:_ as proposed. _Impact:_ new permissions
    `production:fill`, `production:cycle_correct`, `production:workstations_manage`,
    `catalog:weights_record`.
-8. **O8 — reference weight before Hotovo:** required or optional? _Recommendation:_ optional; the
-   expected crate weight shows "neznámá" until measured. _Impact:_ filling is not blocked by
-   missing measurements.
+8. **O8 — reference weight before Hotovo:** must a measured finished-bottle weight exist before
+   Hotovo? _Recommendation:_ no; the expected crate weight shows "neznámá" until measured.
+   _Impact:_ filling is not blocked by missing measurements (the weight capability itself is part
+   of W1 either way).
 9. **O9 — crate label size** (A1): _Recommendation:_ entered per print job until a test print is
    approved. _Impact:_ none on data.
 10. **O10 — public crate page text/contact** (A1): _Recommendation:_ keep the neutral "Property of
