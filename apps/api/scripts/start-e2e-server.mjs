@@ -5,18 +5,23 @@
 //   3. bootstraps the first administrator (e2e-admin@ayvo.test) with the one-time command,
 //   4. adds a second, clearly fictional test site with its own warehouse (multi-site browser
 //      tests; warehouses are created by migrations in v0.1, so the test database gets one here),
-//   5. runs dist/main.js with a temporary file store and the fake identity provider (APP_ENV=test).
+//   5. runs dist/main.js with a fresh temporary file store (scripts/e2e-storage.mjs) and the fake
+//      identity provider (APP_ENV=test).
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { createE2eStorage } from './e2e-storage.mjs';
 
 const apiRoot = resolve(import.meta.dirname, '..');
 const envFile = resolve(apiRoot, '../../.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
+
+// File storage first, before any other stateful step: a fresh unique directory (never a
+// caller-supplied one, nothing deleted); an unacceptable pointer stops the start right here.
+const storageDir = createE2eStorage(process.env.E2E_FILE_STORAGE_POINTER);
 
 const serverUrl = process.env.AYVO_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!serverUrl) throw new Error('Set DATABASE_URL (pnpm infra:up) or AYVO_TEST_DATABASE_URL');
@@ -72,7 +77,7 @@ const child = spawn(process.execPath, ['dist/main.js'], {
   env: {
     ...testEnv,
     API_PORT: port,
-    FILE_STORAGE_DIR: mkdtempSync(join(tmpdir(), 'ayvo-e2e-files-')),
+    FILE_STORAGE_DIR: storageDir,
     PUBLIC_QR_BASE_URL: process.env.E2E_PUBLIC_QR_BASE_URL ?? 'http://localhost:3100/q',
   },
 });

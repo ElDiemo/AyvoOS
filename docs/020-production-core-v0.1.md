@@ -4,7 +4,12 @@ Status: **Approved design — not implemented** (owner decisions 2026-10-11). Im
 only PR by PR as authorized (section 14). **Implemented since:** the catalogue part of step 3 —
 product categories, products, recipe versions and crate types ([doc 023](023-product-catalog-and-recipes.md);
 recipe statuses named `ACTIVE`/`ARCHIVED` instead of `APPROVED`/`RETIRED`, at most one active
-version per product, append-only recipe revisions; permissions as in §12). Architecture decisions: [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)
+version per product, append-only recipe revisions; permissions as in §12); and the physical-crate
+part of §3.4 (issue #19, doc 025 PR A1): `qr_identities`, `crate_registrations`, `crates` (with
+`site_id`, doc 022), crate label print jobs (size chosen per job, shared `PJ-` counter) and
+`crate_events` (`REGISTERED`, `LABEL_PRINT_JOB_CREATED` — named for what is provable instead of
+`LABEL_PRINTED`), permissions `crates:read`/`crates:register` as in §12. Crate cycles and
+assignments are not implemented. Architecture decisions: [ADR 0021](adr/0021-crate-capacity-and-circulation-cycle.md)
 (crate capacity 40 and the full-circulation crate cycle, superseding ADR 0004) and
 [ADR 0022](adr/0022-external-oidc-authentication.md) (external OIDC authentication, superseding the
 provider question of ADR 0017).

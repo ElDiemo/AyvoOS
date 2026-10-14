@@ -84,9 +84,18 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Lahve',
       'Šablony etiket',
       'Nalepení etiket',
+      'Bedny',
       'Produkty a receptury',
     ]);
     expect(warehouse.pages.some((p) => p.href.includes('label'))).toBe(false);
+  });
+
+  it('opens Výroba → Bedny to warehouse roles with crates:read only (doc 025 A1)', () => {
+    const modules = visibleModules(['inventory:read', 'inventory:receive', 'crates:read']);
+    expect(modules.map((m) => m.id)).toEqual(['warehouse', 'production']);
+    const production = modules.find((m) => m.id === 'production')!;
+    expect(production.pages.map((p) => p.id)).toEqual(['crates']);
+    expect(production.href).toBe('/production/crates');
   });
 
   it('places every existing URL in its module and page', () => {

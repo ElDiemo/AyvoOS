@@ -2,14 +2,19 @@ import type { Prisma } from '../generated/prisma/client.js';
 
 /** Names of the rows in `code_counters` (seeded by the migration). */
 export type CodeCounterName =
-  'bottle' | 'bottle_creation_batch' | 'label_print_job' | 'goods_receipt';
+  | 'bottle'
+  | 'bottle_creation_batch'
+  | 'label_print_job'
+  | 'goods_receipt'
+  | 'crate_registration'
+  | 'crate';
 
 /**
  * Allocates `count` consecutive serials from a gapless counter. Must run inside the business
  * transaction: the UPDATE takes a row lock that serialises concurrent allocations until commit,
  * and a rollback returns the range, so codes are unique, contiguous per call and gapless.
  * Callers that allocate from several counters must always lock them in the same order
- * (bottle_creation_batch → bottle → label_print_job) to avoid deadlocks.
+ * (bottle_creation_batch → bottle → label_print_job; crate_registration → crate) to avoid deadlocks.
  */
 export async function allocateSerials(
   tx: Prisma.TransactionClient,
