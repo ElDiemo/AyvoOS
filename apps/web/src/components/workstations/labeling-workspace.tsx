@@ -8,6 +8,7 @@ import {
   type LabelingState,
 } from '@ayvo/types';
 import { useEffect, useId, useRef, useState } from 'react';
+import { UnsavedChangesGuard } from '@/components/unsaved-changes-guard';
 import { buttonClass, Card, inputClass } from '@/components/ui';
 import { labelingCs } from '@/i18n/cs/labeling';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
@@ -141,12 +142,11 @@ export function LabelingWorkspace({
     stateRef.current = state;
   }, [state]);
   const unresolved = waiting > 0 || blocked !== null;
+  // Leaving is blocked while scans wait or one is uncertain: in-app links and the site switch are
+  // stopped by the shared leave guard (rendered below, nothing can be discarded), reload and
+  // closing the tab get the browser's prompt.
   useEffect(() => {
     onUnresolvedChange?.(unresolved);
-    if (!unresolved) return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
   }, [unresolved, onUnresolvedChange]);
 
   function submit(raw: string) {
@@ -435,6 +435,12 @@ export function LabelingWorkspace({
           )}
         </Card>
       )}
+      <UnsavedChangesGuard
+        dirty={unresolved}
+        texts={t.scan.leaveGuard}
+        // A scanner series continues into the scan field, never into the menu link.
+        onStay={() => input.current?.focus()}
+      />
       {unresolved && (
         <div
           role="alert"

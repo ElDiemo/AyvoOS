@@ -13,21 +13,32 @@ const t = shellCs.unsaved;
  * switch asks "continue editing / discard changes" in a modal dialog; reload, closing the tab and
  * external navigation get the browser's standard `beforeunload` prompt (its text is the
  * browser's). Nothing is asked for a clean form. "Discard" calls `onDiscard` and then leaves.
+ *
+ * Without `onDiscard` there is nothing that may be discarded (e.g. labelling scans whose result is
+ * not known yet): the dialog only leads back to resolve them and the in-app navigation never
+ * happens — the page stays mounted and a site switch is not even sent to the server.
  */
 export function UnsavedChangesGuard({
   dirty,
   onDiscard,
+  onStay,
+  texts = t,
 }: {
   dirty: boolean;
-  onDiscard: () => void;
+  onDiscard?: () => void;
+  /** After "stay": e.g. return the focus to a scan field (the dialog gives it back to the link). */
+  onStay?: () => void;
+  texts?: { title: string; text: string; stay: string; discard?: string };
 }) {
   const router = useRouter();
   const dialog = useRef<HTMLDialogElement>(null);
   const answer = useRef<((leave: boolean) => void) | null>(null);
   const [open, setOpen] = useState(false);
   const discard = useRef(onDiscard);
+  const stay = useRef(onStay);
   useEffect(() => {
     discard.current = onDiscard;
+    stay.current = onStay;
   });
 
   useEffect(() => {
@@ -77,10 +88,12 @@ export function UnsavedChangesGuard({
   }, [open]);
 
   const close = (leave: boolean) => {
-    if (leave) discard.current();
+    if (leave) discard.current?.();
     setOpen(false);
     answer.current?.(leave);
     answer.current = null;
+    // After the dialog has closed (and restored the focus to the link or select).
+    if (!leave) setTimeout(() => stay.current?.(), 0);
   };
 
   return (
@@ -97,10 +110,10 @@ export function UnsavedChangesGuard({
       }}
     >
       <h2 id="unsaved-title" className="text-base font-semibold">
-        {t.title}
+        {texts.title}
       </h2>
       <p id="unsaved-text" className="mt-2 text-sm text-stone-600">
-        {t.text}
+        {texts.text}
       </p>
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button
@@ -109,11 +122,13 @@ export function UnsavedChangesGuard({
           className={buttonClass.primary}
           onClick={() => close(false)}
         >
-          {t.stay}
+          {texts.stay}
         </button>
-        <button type="button" className={buttonClass.danger} onClick={() => close(true)}>
-          {t.discard}
-        </button>
+        {onDiscard && (
+          <button type="button" className={buttonClass.danger} onClick={() => close(true)}>
+            {texts.discard ?? t.discard}
+          </button>
+        )}
       </div>
     </dialog>
   );

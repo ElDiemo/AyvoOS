@@ -48,6 +48,11 @@ export const labelingCs = {
     blockedTitle: 'Výsledek posledního scanu není jistý.',
     blockedText:
       'Spojení se serverem selhalo. Lahev nechte stranou ve stejné bedně a klepněte na „Zkusit znovu“ – stejný pokus se nikdy neodepíše dvakrát. Bednu ani kontext do vyřešení měnit nelze.',
+    leaveGuard: {
+      title: 'Scany nejsou vyřešené',
+      text: 'Některý scan čeká na odeslání nebo jeho výsledek není jistý. Stránku ani provozovnu nyní nelze opustit – vraťte se a scan dokončete („Zkusit znovu“).',
+      stay: 'Zpět k vyřešení scanu',
+    },
     waiting: (n: number) => (n === 0 ? 'Žádné další scany nečekají.' : `Čeká na odeslání: ${n}`),
   },
   errors: {

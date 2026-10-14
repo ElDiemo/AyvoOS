@@ -107,7 +107,7 @@ async function printedBottles(request: APIRequestContext, name: string, n: numbe
 test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
   const request = context.request;
-  const main = await printedBottles(request, `lepeni-${Date.now()}`, 8);
+  const main = await printedBottles(request, `lepeni-${Date.now()}`, 11);
   const other = await printedBottles(request, `jiny-${Date.now()}`, 1);
   designLabel = main.version.label;
   urls = main.urls;
@@ -118,7 +118,7 @@ test.beforeAll(async ({ browser }) => {
     capacity: 3,
     approve: false,
   });
-  // New bottles for this run: one lot of 10.
+  // New bottles for this run: one lot of 20.
   const items = await json<{ id: string; code: string }[]>(
     await request.get('/api/admin/inventory/items'),
   );
@@ -156,7 +156,7 @@ test.beforeAll(async ({ browser }) => {
         lines: [
           {
             itemId: items.find((i) => i.code === 'NEW_BOTTLE')!.id,
-            quantity: '10',
+            quantity: '20',
             supplierLotCode: null,
             unitPrice: null,
             currency: null,
@@ -206,7 +206,7 @@ test('labels bottles into a crate at the station: content, duplicate, wrong desi
     .getByLabel('Produkt')
     .selectOption({ label: `${kit.productName} (${kit.productCode})` });
   await ctx.getByLabel('Schválený design etikety').selectOption({ label: designLabel });
-  await ctx.getByLabel('Šarže nových lahví').selectOption({ label: `${lotCode} (zbývá 10 ks)` });
+  await ctx.getByLabel('Šarže nových lahví').selectOption({ label: `${lotCode} (zbývá 20 ks)` });
   await shot(page, 'labeling-context');
   await ctx.getByRole('button', { name: 'Použít' }).click();
   await expect(page.getByTestId('labeling-context')).toContainText(designLabel);
@@ -225,10 +225,10 @@ test('labels bottles into a crate at the station: content, duplicate, wrong desi
   await scan(urls[0]!);
   await expect(notice).toContainText(`${codes[0]} nalepena a vložena (1/3)`);
   await expect(page.getByTestId('crate-content')).toContainText('1/3');
-  await expect(page.getByTestId('labeling-context')).toContainText('zbývá 9 ks');
+  await expect(page.getByTestId('labeling-context')).toContainText('zbývá 19 ks');
   await scan(urls[0]!);
   await expect(notice).toContainText('už v této bedně je – nic se neodepsalo');
-  await expect(page.getByTestId('labeling-context')).toContainText('zbývá 9 ks');
+  await expect(page.getByTestId('labeling-context')).toContainText('zbývá 19 ks');
   await scan(otherUrl);
   await expect(notice).toContainText('Etiketa má jiný design');
   await scan('nesmysl');
@@ -322,10 +322,107 @@ test('an uncertain scan stops the queue; nothing is lost, doubled or moved to an
   await page.unroute(/\/label-scans$/);
   await page.reload();
   await expect(page.getByTestId('crate-content')).toContainText('2/3');
+  // The scanner types only once the reloaded page has focused its scan field.
+  await expect(page.getByTestId('bottle-scan').getByRole('textbox')).toBeFocused();
   await typeScan(urls[7]!);
   await expect(page.getByTestId('labeling-notice')).toContainText('už v této bedně je');
   await expect(page.getByTestId('crate-content')).toContainText('2/3');
   expect(await lotLeft()).toBe(before - 5);
+});
+
+test('unresolved scans block in-app links and the site switch until they are resolved', async ({
+  page,
+  request,
+}) => {
+  const lotLeft = async () =>
+    Number(/zbývá (\d+) ks/.exec(await page.getByTestId('labeling-context').innerText())![1]);
+  const typeScan = async (value: string) => {
+    await page.keyboard.type(value);
+    await page.keyboard.press('Enter');
+  };
+  await page.goto('/production/station');
+  // A crate left loaded by an earlier test is replaced by a new, empty one.
+  await expect(page.getByTestId('crate-scan').or(page.getByTestId('bottle-scan'))).toBeVisible();
+  if (await page.getByTestId('bottle-scan').isVisible()) {
+    await page.getByRole('button', { name: 'Jiná bedna' }).click();
+  }
+  await expect(page.getByTestId('crate-scan')).toBeVisible();
+  await typeScan(await crateUrl(request, kit.crateTypeCode));
+  await expect(page.getByTestId('crate-content')).toContainText('0/3');
+  const before = await lotLeft();
+  const dialog = page.getByTestId('unsaved-dialog');
+  const cratesLink = page.locator('a[href="/production/crates"]').first();
+  const switcher = page.getByTestId('site-switcher');
+  const site = await switcher.inputValue();
+  const otherSite = await switcher
+    .locator('option')
+    .evaluateAll(
+      (o, current) => (o as HTMLOptionElement[]).find((x) => x.value && x.value !== current)?.value,
+      site,
+    );
+  expect(otherSite).toBeTruthy();
+  const sitePosts: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith('/api/auth/active-site')) sitePosts.push(r.url());
+  });
+
+  // 1. A scan still IN FLIGHT (no answer yet): an in-app link does not leave the station.
+  const bodies: { requestId: string; contextRevision: number }[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let holdFirst = true;
+  await page.route(/\/label-scans$/, async (route) => {
+    bodies.push(JSON.parse(route.request().postData() ?? '{}'));
+    if (holdFirst) {
+      holdFirst = false;
+      await held;
+      await route.abort('failed'); // ... and then it is lost: the result is uncertain
+    } else await route.fallback();
+  });
+  await typeScan(urls[8]!);
+  await expect(page.getByTestId('labeling-waiting')).toBeVisible();
+  await cratesLink.click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Scany nejsou vyřešené');
+  await expect(dialog.getByRole('button', { name: 'Zahodit změny' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Zpět k vyřešení scanu' }).click();
+  await expect(page).toHaveURL(/\/production\/station$/);
+
+  // 2. Lost; two more scans wait. Neither a link nor the site switch leaves, no site POST.
+  release();
+  const unresolved = page.getByTestId('labeling-unresolved');
+  await expect(unresolved).toContainText('Výsledek posledního scanu není jistý');
+  // The dialog gave the focus back to the scan field: the scanner series continues there.
+  await expect(page.getByTestId('bottle-scan').getByRole('textbox')).toBeFocused();
+  await typeScan(urls[9]!);
+  await typeScan(urls[10]!);
+  await expect(page.getByTestId('labeling-waiting')).toHaveText('Čeká na odeslání: 2');
+  await cratesLink.click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Zpět k vyřešení scanu' }).click();
+  await switcher.selectOption(otherSite!);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Zpět k vyřešení scanu' }).click();
+  await expect(switcher).toHaveValue(site);
+  expect(sitePosts).toHaveLength(0);
+  await expect(page).toHaveURL(/\/production\/station$/);
+  await expect(page.getByTestId('labeling-waiting')).toHaveText('Čeká na odeslání: 2');
+  expect(bodies).toHaveLength(1);
+
+  // 3. Retry: the SAME attempt, then the waiting scans — exact consumption, the same crate.
+  await unresolved.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(unresolved).toHaveCount(0);
+  await expect(page.getByTestId('crate-content')).toContainText('3/3');
+  expect(bodies[1]!.requestId).toBe(bodies[0]!.requestId);
+  expect(new Set(bodies.map((b) => b.contextRevision)).size).toBe(1);
+  expect(await lotLeft()).toBe(before - 3);
+  await page.unroute(/\/label-scans$/);
+
+  // 4. Resolved: navigation works normally again, without a dialog.
+  await cratesLink.click();
+  await expect(page).toHaveURL(/\/production\/crates/);
+  await expect(dialog).toHaveCount(0);
+  expect(sitePosts).toHaveLength(0);
 });
 
 test('the labelling station works at phone width', async ({ page }) => {
