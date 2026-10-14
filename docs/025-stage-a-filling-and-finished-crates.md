@@ -1,319 +1,294 @@
 # 025 — Stage A: labelling → filling → finished crates (design gate, issue #19)
 
-Status: **Proposal for owner review — not approved, not implemented** (revision 2,
-2026-10-14). Only §11 PR A1 (physical crates and their QR labels, PR #21) rests on already
-approved design (doc 020 §3.4, ADR 0021 §6, doc 022). Every other new table, state, permission
-or consumption change below waits for the owner's approval of this document and the answers in
-§13.
+Status: **Proposal for owner review — the model is not approved, nothing beyond A1 is
+implemented** (revision 3, 2026-10-14). PR A1 (physical crates and their QR labels, PR #21) rests
+on already approved design (doc 020 §3.4, ADR 0021 §6, doc 022). Every other new table, state,
+permission or migration below waits for approval of this document; ADR 0025 (proposed) records
+the process decision; doc 026 proposes the next unit A2 (workstations and sessions).
 
-**Confirmed by the owner (2026-10-14), not asked again:** station QR once → crate QR → scan of
-each **finished** (filled and completed) bottle → explicit **Hotovo**. Labelling is a separate,
-earlier station. The liquid lot may change between bottles of one crate.
+## 0. Confirmed by the owner (2026-10-14) — not asked again
 
-Builds on docs 016, 018, 020, 022, 023 and ADR 0006, 0011, 0014, 0019, 0021. Production to stock
-is independent of hotel orders; hotels, plans, orders and dispatch (stages B–D), returns,
-washing, inventory counting and weights are designed here only as far as stage A must not block
-them (§8–§10).
+1. **The same physical crate from labelling through filling to dispatch, with two per-bottle
+   scans.** At labelling, each bottle is scanned after its label is physically applied and put
+   into the selected crate: it becomes a labelled **empty** member of that crate. At filling, the
+   same crate is loaded again and each completed bottle is scanned again: the server checks it is
+   already an eligible member of **that** crate. The second scan exists to catch bottles a
+   previous worker placed wrongly. (Supersedes the "assign only finished bottles" variant of
+   revision 2.)
+2. **Exact moments of stock consumption:**
 
-Terminology: **plnění bedny** (filling work on one crate cycle) is never called "objednávka";
-**vychystávání objednávky** (picking for a hotel order) is stage C.
+   | Step                                                                                          | Stock change                                                                                         |
+   | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+   | creating identities / generating the PDF / printing labels                                    | nothing                                                                                              |
+   | label physically applied, confirmed by a successful bottle scan into the selected crate       | −1 new bottle body from the chosen source lot + the recipe's label quantity (today 1 pc)             |
+   | bottle physically filled and pump installed, confirmed by a successful scan in the SAME crate | −recipe liquid from the explicitly selected current lot (today 330 ml) + recipe pump quantity (1 pc) |
+   | Hotovo                                                                                        | nothing further; the crate becomes ready finished stock                                              |
+   | allocation of a ready crate to a hotel order (stage C)                                        | no component consumption; reservation/assignment of the finished content                             |
+   | dispatch (stage C)                                                                            | the finished crate and its bottles leave the recorded warehouse; no second component deduction       |
 
-## 1. Physical process supported in stage A
+   A rejected, replayed or duplicate scan never adds consumption. Breakage, damaged labels,
+   spills and count differences are separate audited write-offs/corrections. Historical body
+   deductions (today's `LABEL_APPLIED`) stay as they are and are never repeated. The returnable
+   crate is not a consumable.
 
-1. **Crates** — physical returnable crates are registered and get a permanent QR label (A1).
-2. **Labelling station** — labels are printed, then applied to empty bottle bodies. Printing
-   proves nothing physical; the confirmed application ("Potvrdit nalepení") makes the bottle a
-   labelled empty bottle that can be handed to filling.
-3. **Filling station** (one per category; several may run in parallel) — station QR once, then
-   the crate QR opens or continues the crate's filling; each bottle is scanned only **after** it
-   is filled and completed ("Potvrdit hotovou lahev"): one finished bottle, its assignment to the
-   crate and its one-time FILL consumption. No mandatory pre-scan.
-4. **Hotovo** — the only way a crate becomes ready: the server checks exactly the snapshotted
-   capacity of compatible finished bottles and no blocker, then marks it ready atomically.
-   40/40 without Hotovo is **not** ready.
-5. **Ready crates** — a filtered view of the same crate records per site; dispatch (stage C)
-   accepts only these.
+3. The liquid lot may change between bottles of one crate; the switch applies to the following
+   bottles only and each bottle keeps the lot actually consumed for it.
+4. Two scans are two physical steps, not a rule that two different user accounts must do them.
 
-## 2. Earlier design vs. the owner's latest statements
+Not decided by these confirmations (§13): whether labelling binds the bottle to the product /
+label design or only to the category; legacy bottles; internal production orders/reservations;
+roles; schema and migrations; merge/deploy.
 
-| #   | Earlier design                                                                            | Owner (2026-10-14)                                        | Resolution                                                                                                                                                                           |
-| --- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | ADR 0021: empty bottles assembled into the crate before filling; 40th = ready             | crate first, finished bottles scanned in, explicit Hotovo | **Confirmed.** ADR 0025 (written with the A4 PR) supersedes ADR 0021 §2–3 for assembly order and readiness; capacity as data, one cycle = one circulation, snapshots, ordinals stay. |
-| 2   | Label application consumes one `NEW_BOTTLE`; recipe puts the label in `LABEL_APPLICATION` | material follows the physical step                        | Body at labelling (unchanged), liquid + pump at the finished-bottle scan; nothing twice. Label stock timing = owner decision (§13 O1).                                               |
-| 3   | Two crate types                                                                           | one shared `CRATE-40`                                     | Already possible (doc 023); a cycle stays single-product by its snapshot.                                                                                                            |
-| 4   | Doc 020 v0.1 excludes filling                                                             | stage A fills                                             | This document is the extension.                                                                                                                                                      |
-| 5   | Doc 020 labelling inside production orders with reservations                              | production to stock                                       | Production to stock does **not** by itself rule out internal orders: owner decision (§13 O3).                                                                                        |
+Terminology: **plnění bedny** = production work on one crate cycle; **vychystávání objednávky** =
+picking for a hotel order (stage C).
+
+## 1. Process
+
+| Step | Where              | Context chosen once (re-validated by the server on every scan)                                        | Per bottle                                                                   |
+| ---- | ------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 1    | Bedny (A1)         | —                                                                                                     | crates registered, QR labels printed                                         |
+| 2    | labelling station  | station QR · source lot of new bottles · product (§13 B1) · crate QR                                  | apply the label → scan → put into the crate = **Potvrdit nalepení**          |
+| 3    | handover           | the crate with 40 labelled empties goes to filling (ADR 0021: the 40th member makes it ready to fill) | —                                                                            |
+| 4    | filling station    | station QR (mode + category) · the SAME crate QR · liquid lot (switchable between bottles)            | fill, install pump → scan → back into the same crate = **Potvrdit naplnění** |
+| 5    | Hotovo             | the crate                                                                                             | server: 40 members, 40 filled, all compatible, no blocker → ready            |
+| 6    | Bedny — Připravené | per site                                                                                              | ready crates; dispatch (stage C) accepts only these                          |
+
+The crate QR alone proves nothing about content; the comparison is each bottle's scan against
+the recorded membership. Without sensors the system proves neither the poured liquid, nor the
+exact amount, nor where a station physically stands (§12).
+
+## 2. Earlier design vs. this revision
+
+| Topic                       | Earlier                                                             | Now                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| assembly (ADR 0021)         | empties scanned into the crate before filling; 40th = READY_TO_FILL | **kept** (owner confirmed the same crate and the scan at labelling)                                                             |
+| filling / readiness         | ADR 0021 lists FILLING → FILLED as future                           | the filling scan accepts only members of that crate; **FILLED only by Hotovo** with 40 members all filled — ADR 0025 (proposed) |
+| revision 2 (variant B)      | bottles assigned only when finished                                 | **superseded**                                                                                                                  |
+| consumption                 | body at activation; label open; liquid/pump "2B"                    | body + label at labelling, liquid + pump at filling (§0.2)                                                                      |
+| crate types                 | two                                                                 | one shared `CRATE-40` possible; a cycle stays single-product by its snapshot                                                    |
+| production orders (doc 020) | labelling inside released orders with reservations                  | open (§13 B2)                                                                                                                   |
 
 ## 3. States
 
-### 3.1 Bottle (`bottles.status`, ADR 0011 unchanged)
+### 3.1 Bottle (`bottles.status`; ADR 0011 unchanged)
 
 ```
-CREATED ──Potvrdit nalepení (LABEL_APPLIED)──► LABELED_EMPTY ──Potvrdit hotovou lahev (FILLED)──► FILLED
+CREATED ──Potvrdit nalepení (LABEL_APPLIED + ASSIGNED_TO_CRATE)──► LABELED_EMPTY ──Potvrdit naplnění (FILLED)──► FILLED
 ```
 
-- New status `FILLED` ("Naplněná – hotová") and event `FILLED` carrying the consumed liquid lot.
-  A FILLED bottle is **never** set back to empty; its history is never reset.
-- **First fill only** in stage A: a bottle with a `FILLED` event is refused at the fill scan
-  (`ALREADY_FILLED`); refilling after return/washing is a later, approved flow.
-- **Category binding** (doc 020 `bottle_category_bindings`) once at labelling (product binding:
-  §13 O2), never changed. Bottles labelled before this change: §13 O4.
-- Holds (doc 020 `bottle_holds`) make a bottle ineligible for assignment, Hotovo and dispatch.
+- `FILLED` ("Naplněná – hotová") and event `FILLED` carry the consumed liquid lot. A FILLED bottle
+  is never set back to empty; history is never reset.
+- Stage A fills only bottles never filled before (`ALREADY_FILLED` otherwise); refilling after
+  return and washing is a later approved flow.
+- Category binding (doc 020 `bottle_category_bindings`) at labelling, never changed; whether the
+  product is bound too: §13 B1. Holds (doc 020 `bottle_holds`) make a bottle ineligible.
 
-### 3.2 Crate cycle (`crate_cycles.status`; crate lifetime is separate)
+### 3.2 Crate cycle — one circulation of one crate (ADR 0021, ADR 0025 proposed)
 
 ```
-(crate QR at a filling station) ──► FILLING ──Hotovo (active = capacity, all compatible)──► FILLED
+first labelling scan ──► OPEN_ASSEMBLY ──40th member──► READY_TO_FILL ──first Potvrdit naplnění──► FILLING
+FILLING ──Hotovo (members = capacity, filled = capacity, no blocker)──► FILLED (Připravená)
+READY_TO_FILL ──Vyjmout lahev (supervisor)──► OPEN_ASSEMBLY      FILLING ──Vyjmout lahev──► FILLING (39 members)
 FILLED ──Vrátit do rozpracování (supervisor, reason; before ALLOCATED)──► FILLING
-FILLING ──Zrušit plnění bedny (supervisor, reason)──► ABORTED
+OPEN_ASSEMBLY / READY_TO_FILL / FILLING ──Zrušit oběh (supervisor, reason)──► ABORTED
+later on the same row: FILLED → ALLOCATED → DISPATCHED → AT_HOTEL → RETURNING → RECEIVED → CLOSED
 ```
 
-- `FILLING` holds 0…capacity finished bottles; **40/40 is still FILLING** until Hotovo.
-- `FILLED` = ready finished stock ("Připravená"). Later on the same row: `ALLOCATED →
-DISPATCHED → AT_HOTEL → RETURNING → RECEIVED → CLOSED` (ADR 0021).
-- At most one open cycle per crate; only `ABORTED`/`CLOSED` free it.
-- Crate list state is derived: no open cycle = **Prázdná**, `FILLING` = **Rozpracovaná n/40**,
-  `FILLED` = **Připravená**.
+Two separate figures, always shown together: **Obsah n/40** (active members = labelled bottles
+in the crate) and **Naplněno m/40** (members that are FILLED). 40/40 with 26/40 filled is
+FILLING, not ready; 40/40 labelled empties are READY_TO_FILL, not ready stock. Only Hotovo makes
+`FILLED`. A partial crate never becomes READY_TO_FILL manually (ADR 0021 §3).
 
-### 3.3 Finished bottles outside a crate
+Derived list state: no open cycle = **Prázdná**; OPEN_ASSEMBLY = **Skládá se (lepení)**;
+READY_TO_FILL = **Čeká na plnění**; FILLING = **Plní se**; FILLED = **Připravená**.
 
-A finished bottle whose assignment was released (crate aborted, bottle removed for repacking)
-stays `FILLED` with **no active assignment**: it is finished stock **outside a crate** and is
-listed as such per site ("Hotové lahve mimo bednu"). It can only be **repacked** (§4.2) — never
-filled again, never counted as empty, never dispatched without a crate.
+### 3.3 Bottles outside a crate
 
-### 3.4 Workstation session
+A labelled empty or a finished bottle whose membership was released (crate aborted, bottle
+removed) has no active assignment. It keeps its status and is listed per site ("Označené prázdné
+mimo bednu", "Hotové lahve mimo bednu"). It returns into a crate only by an explicit operation
+(§4.2) — never by a silent move, never with a second consumption.
 
-```
-ACTIVE ──release / station change──► RELEASED      ACTIVE ──takeover (authorized, reason)──► TAKEN_OVER
-```
+### 3.4 Workstation session (doc 026)
 
-Lease 15 min (configuration, doc 020 §6). Expiry releases only station ownership — never a crate
-cycle, a lot or a bottle. Interrupted work stays stored: the same user resumes, another
-authorized user takes over (audited); two owners of one crate are impossible (partial unique).
+`ACTIVE → RELEASED | TAKEN_OVER | CLOSED`; lease with heartbeat; expiry releases only station
+ownership — never a crate cycle, lot or bottle. Interrupted work stays stored and is resumed by
+its owner or taken over by an authorized user (audited); two owners of one station are
+impossible.
 
-## 4. Step → scan → event → stock matrix
+## 4. Step → scan → event → stock
 
 ### 4.1 Normal flow
 
-| Physical step                   | Scan / confirmation             | Records (one transaction, one operation id)                                                             | Stock movement                                                       |
-| ------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Register crates / print QR (A1) | form                            | registration, crates, QR registry, crate events                                                         | none                                                                 |
-| Print bottle labels             | existing                        | existing print jobs                                                                                     | none (O1)                                                            |
-| Label applied to an empty body  | bottle QR = Potvrdit nalepení   | `LABELED_EMPTY`, `LABEL_APPLIED`, LABEL attachment, category binding                                    | −1 `NEW_BOTTLE` from the selected lot (existing); label stock per O1 |
-| Open filling station            | station QR, product, liquid lot | session (station, product + recipe-version snapshot, liquid lot)                                        | none                                                                 |
-| Change liquid lot               | explicit action at the station  | session event `LIQUID_LOT_CHANGED` (from, to)                                                           | none — applies only to the **following** confirmed bottles           |
-| Start / continue a crate        | crate QR                        | new cycle `FILLING` with snapshot (crate type, capacity, product, category, recipe version) or continue | none                                                                 |
-| Check a bottle (optional)       | bottle QR in "Ověřit" mode      | nothing (read-only answer: right product/category or not)                                               | none                                                                 |
-| Bottle filled and completed     | bottle QR = Potvrdit hotovou    | `FILLED` (+ liquid lot), PUMP attachment, assignment (lowest free ordinal), `ASSIGNED_TO_CRATE`         | −recipe liquid from **the session's current lot**, −1 pump           |
-| Crate complete                  | **Hotovo**                      | cycle `FILLED`, crate event `CRATE_FILLED`, weight snapshot (§10) if a reference exists                 | none                                                                 |
+| Physical step                         | Scan                                      | Records (one transaction, one operation id)                                                                                                                      | Stock                                                                                    |
+| ------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| print bottle labels                   | existing                                  | print jobs                                                                                                                                                       | none                                                                                     |
+| open the labelling context            | station QR, source lot, product, crate QR | session context; crate: new cycle `OPEN_ASSEMBLY` with snapshot (crate type, capacity, product, category, recipe version, label template version) or continue it | none                                                                                     |
+| label applied, bottle into the crate  | bottle QR = Potvrdit nalepení             | `LABELED_EMPTY`, `LABEL_APPLIED`, LABEL attachment, binding, assignment (lowest free ordinal), `ASSIGNED_TO_CRATE`; 40th → `READY_TO_FILL`                       | −1 body (session source lot) + label lines of the cycle recipe's `LABEL_APPLICATION` BOM |
+| open the filling context              | station QR, crate QR, liquid lot          | session context; the crate must be `READY_TO_FILL`/`FILLING` with category = station category                                                                    | none                                                                                     |
+| switch the liquid lot                 | explicit action                           | session event `LIQUID_LOT_CHANGED`                                                                                                                               | none; applies to the following bottles                                                   |
+| bottle filled, pump on, back in crate | bottle QR = Potvrdit naplnění             | `FILLED` (+ lot), PUMP attachment; first one → cycle `FILLING`; **no new assignment**                                                                            | −`FILL` BOM lines of the cycle's recipe: liquid from the session's current lot, pump     |
+| crate complete                        | Hotovo                                    | cycle `FILLED`, crate event `CRATE_FILLED`, weight snapshot if references exist (§10)                                                                            | none                                                                                     |
 
-The finished-goods stock is the `FILLED` crate cycles with their assignments plus the finished
-bottles outside a crate (§3.3) — no second piece-stock of filled bottles in the ledger.
+Labelling and filling consume the BOMs of the **same recipe version** (the cycle snapshot): a
+recipe activated meanwhile never changes an open crate. Finished stock = `FILLED` cycles with
+their members, plus finished bottles outside a crate (§3.3) — no second piece-stock in the
+ledger.
 
-The optional check scan only tells whether the **labelled bottle** matches the station; it never
-writes and cannot detect which liquid is poured later (§12). The required confirmation scan comes
-after filling and therefore detects a wrong bottle only after pouring (owner accepted). Proposed
-gesture (UX, not a new mandatory scan): one large mode switch **Ověřit / Potvrdit hotovou**,
-default Potvrdit hotovou.
+Optional check scan at either station ("Ověřit"): read-only answer about the scanned bottle; it
+never writes. Proposed gesture (UX only): a mode switch Ověřit / Potvrdit, default Potvrdit.
 
-### 4.2 Exceptions (supervised, audited, never a free status edit or DELETE)
+### 4.2 Refusals and exceptions
 
-| Situation                                        | Operation                                                                                                                                                                                                      | Stock                                                   |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Wrong/damaged finished bottle in a FILLING crate | **Vyjmout lahev** (supervisor, reason): release assignment, `REMOVED_FROM_CRATE`; damaged → open hold (`QUARANTINED`); good → finished bottle outside a crate                                                  | none — the FILL consumption stays history               |
-| Defect found in a FILLED (ready) crate           | **Vrátit do rozpracování** (supervisor, reason) → `FILLING`, then Vyjmout lahev; refused once `ALLOCATED` (stage C defines removal from picked orders: 39/40 is never dispatchable)                            | none                                                    |
-| Stop / restart a crate's filling                 | **Zrušit plnění bedny** (supervisor, reason): every assignment released one by one (`REMOVED_FROM_CRATE`), cycle `ABORTED`; finished bottles stay `FILLED` outside a crate; the crate starts a new cycle later | none — nothing is returned to stock, nothing re-emptied |
-| Finished bottle outside a crate                  | **Přeložit hotovou lahev** (explicit mode at a filling station): assigns it to an open `FILLING` cycle whose snapshot (product, category, recipe version) matches; event `REPACKED`                            | **none** — never a second liquid/pump consumption       |
-| Scrap a bottle / remove an installed pump        | later Quality/repair flows (RETIRED vs DISPOSED/DESTROYED per ADR 0011; removed pump = attachment end, never a second new-pump consumption)                                                                    | per the later design                                    |
+The normal filling scan **refuses without any write**: a bottle of another crate
+(`IN_ANOTHER_CRATE`, naming that crate), a bottle in no crate (`NOT_IN_THIS_CRATE`), another
+product/category (`WRONG_PRODUCT` / `WRONG_CATEGORY`), not labelled (`BOTTLE_NOT_LABELED`),
+already filled (`ALREADY_FILLED`), on hold (`BOTTLE_ON_HOLD`), another site
+(`BOTTLE_OF_ANOTHER_SITE`). There is **no silent reassignment**.
 
-Who may repack: §13 O6. A single bottle filled from two liquid lots (refilling the tank): §13 O5.
+| Situation                                        | Operation (separate, authorized, reason, audited)                                                                                                           | Stock                                                              |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| a labelled empty bottle is in the wrong crate    | **Přeřadit lahev**: release from crate X, assign to crate Y (same snapshot, free ordinal); states recomputed (READY_TO_FILL → OPEN_ASSEMBLY below capacity) | none                                                               |
+| damaged / missing bottle in a crate              | **Vyjmout lahev**: release membership, `REMOVED_FROM_CRATE`; damaged → hold `QUARANTINED`; a filled one keeps FILLED                                        | none; a broken body is written off by the separate scrap operation |
+| a crate in FILLING lost a member                 | **Doplnit lahev**: a labelled empty with the same snapshot into the free ordinal                                                                            | none                                                               |
+| defect found in a ready crate                    | **Vrátit do rozpracování** → FILLING (before `ALLOCATED`), then Vyjmout/Doplnit                                                                             | none                                                               |
+| restart a crate                                  | **Zrušit oběh**: every membership released one by one; bottles keep their status, outside a crate; cycle `ABORTED`                                          | none — nothing returned to stock, nothing re-emptied               |
+| bottle outside a crate                           | **Vrátit lahev do bedny** (repack): into an open cycle with the same snapshot; a filled bottle only into READY_TO_FILL/FILLING                              | **none**, never a second consumption                               |
+| breakage, damaged label, spill, count difference | scrap / write-off / inventory correction (§8), audited                                                                                                      | own movement type, never a hidden recipe increase                  |
 
-## 5. Proposed models (new — approval required except A1)
+Every exception re-checks site, snapshot and holds; a refusal writes nothing.
 
-| Table                               | Purpose and key rules                                                                                                                                       | Basis              |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| A1 tables                           | `qr_identities`, `crate_registrations`, `crates`, crate label print jobs, `crate_events` (PR #21)                                                           | doc 020            |
-| `workstations`                      | code, name, site, warehouse, **mode** `LABELING`/`FILLING`, category (FILLING), status, QR token (registry kind `WORKSTATION`)                              | **new**            |
-| `workstation_sessions` (+events)    | user, station, lease, product + recipe-version snapshot, current liquid lot, current cycle; one active session per crate and per user (partial unique)      | doc 020 §6 adapted |
-| `crate_cycles`, `crate_assignments` | doc 020 §3.4 with §3.2 states; assignment source `FILL` or `REPACK`                                                                                         | doc 020            |
-| `bottle_category_bindings`          | doc 020 §3.5 (+ product, O2)                                                                                                                                | doc 020            |
-| `bottle_holds`                      | doc 020 §3.5                                                                                                                                                | doc 020            |
-| `product_label_approvals`           | label template version ↔ product (doc 020 §3.3), if O2 = product binding                                                                                    | doc 020            |
-| weight tables (§10)                 | append-only reference measurements + snapshots                                                                                                              | **new**, later PR  |
-| enums                               | bottle status `FILLED`; bottle events `FILLED`, `ASSIGNED_TO_CRATE`, `REMOVED_FROM_CRATE`, `REPACKED`, `QUARANTINED`; movement type `FILL`; operation kinds | new values         |
+## 5. Proposed models (approval required except A1)
 
-A station is a **work mode at a site**, never a site or warehouse. Its QR names the station only:
-not a login, permission or secret. Public QR pages: station → "Interní označení AYVO"; crate →
-"Returnable AYVO crate" (A1).
+| Table                                            | Purpose and key rules                                                                                                                                             | Basis              |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| A1 tables                                        | `qr_identities`, `crate_registrations`, `crates`, crate label print jobs, `crate_events` (PR #21)                                                                 | doc 020            |
+| `workstations`, `workstation_sessions` (+events) | doc 026 (A2)                                                                                                                                                      | **new**            |
+| `crate_cycles`                                   | doc 020 §3.4 states + `FILLING`, `FILLED`; snapshot incl. recipe version; counters `member_count`, `filled_count` (current state, changed only with their events) | doc 020 + ADR 0025 |
+| `crate_assignments`                              | doc 020 §3.4; source `LABELING` / `REASSIGNED` / `REPACKED` / `REPLACEMENT`; one active assignment per bottle                                                     | doc 020            |
+| `bottle_category_bindings`                       | doc 020 §3.5 (+ product if §13 B1)                                                                                                                                | doc 020            |
+| `bottle_holds`                                   | doc 020 §3.5                                                                                                                                                      | doc 020            |
+| weight tables                                    | §10 (PR W1)                                                                                                                                                       | **new**            |
+| enums                                            | bottle status `FILLED`; events `FILLED`, `ASSIGNED_TO_CRATE`, `REMOVED_FROM_CRATE`, `REASSIGNED`, `REPACKED`, `QUARANTINED`; movement type `FILL`                 | new values         |
 
-## 6. Server rules and database invariants
+## 6. Invariants and server rules
 
-Requests carry only `{requestId, sessionId, scannedValue}`; station, mode, category, product,
-recipe snapshot, liquid lot, crate and site come from the session. Lock order (doc 020 §8):
-operation request → session → crate → cycle → bottle → balances.
+Scans carry `{requestId, sessionId, scannedValue}`; station, mode, category, product, recipe
+snapshot, lots, crate and site come from the session and are re-validated on every scan. Lock
+order (doc 020 §8): operation request → session → crate → cycle → bottle → balances.
 
-Refusals (Czech text + sound + visible state; scanner keeps focus), without any write:
-`STATION_INACTIVE`, `STATION_OF_ANOTHER_SITE`, `SESSION_NOT_OWNED`, `WRONG_STATION_MODE`,
-`WRONG_CATEGORY`, `PRODUCT_MISMATCH`, `BOTTLE_NOT_LABELED`, `ALREADY_FILLED`, `BOTTLE_ON_HOLD`,
-`BOTTLE_OF_ANOTHER_SITE`, `IN_ANOTHER_CRATE`, `CRATE_FULL` (41st), `CRATE_IN_USE`,
-`CRATE_NOT_FILLING`, `LOT_EXHAUSTED`, `LOT_NOT_ALLOWED` (wrong item/site), `INSUFFICIENT_STOCK`
-(pump), `CRATE_INCOMPLETE` (Hotovo below capacity), `REPACK_INCOMPATIBLE`. A newer recipe version
-never switches an open cycle; only a new cycle takes the then active version.
+| Invariant                                                                                               | Enforcement                                                                                   |
+| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| never more than capacity members                                                                        | `CHECK ordinal BETWEEN 1 AND cycle_capacity`; partial unique (cycle, ordinal) of active ones  |
+| a bottle in at most one active cycle                                                                    | partial unique on active assignments                                                          |
+| `READY_TO_FILL` ⇔ members = capacity and none filled; `OPEN_ASSEMBLY` ⇒ members < capacity, none filled | commit-time trigger                                                                           |
+| `FILLING` ⇒ ≥ 1 filled member; 40/40 members and even 40/40 filled are still not ready                  | readiness is never derived from counts                                                        |
+| `FILLED` ⇒ members = filled = capacity, all hold-free and matching the snapshot                         | commit-time trigger                                                                           |
+| `FILLING → FILLED` only by Hotovo                                                                       | transition trigger requires a `CRATE_FILLED` event of the same operation                      |
+| the filling scan never assigns                                                                          | a `FILLED` event requires an existing active assignment of the bottle in the session's cycle  |
+| body + label consumed exactly once                                                                      | one `LABEL_APPLIED` per bottle (existing) + its `LABEL_APPLICATION` movements reference it    |
+| liquid + pump consumed exactly once                                                                     | one `FILLED` event per bottle (stage A) + `FILL` movements reference it (unique per BOM line) |
+| the bottle keeps its liquid lot                                                                         | the `FILLED` event and its liquid movement name the same lot                                  |
+| counters ⇔ assignments and events                                                                       | commit-time check                                                                             |
 
-| Invariant                                                                                         | Enforcement                                                                                                 |
-| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| never more than capacity                                                                          | `CHECK ordinal BETWEEN 1 AND cycle_capacity`, partial unique (cycle, ordinal) of active assignments         |
-| `FILLING` may hold 0…capacity (40/40 allowed, **not** ready)                                      | no lower bound on FILLING; readiness is not derived from the count                                          |
-| `FILLED` ⇒ active assignments = capacity, each a `FILLED`, hold-free bottle matching the snapshot | commit-time constraint trigger on cycles and assignments                                                    |
-| readiness only by Hotovo                                                                          | transition trigger: `FILLING → FILLED` only with a `CRATE_FILLED` crate event of the same operation         |
-| assignments only into `FILLING`                                                                   | insert trigger                                                                                              |
-| a bottle in at most one active cycle                                                              | partial unique `crate_assignments(bottle_id) WHERE released_at IS NULL`                                     |
-| one `FILLED` event per bottle (stage A)                                                           | partial unique on bottle events                                                                             |
-| FILL consumption exactly once                                                                     | each `FILL` movement references the `FILLED` event (unique per item); `REPACK` assignments have no movement |
-| the bottle keeps its lot                                                                          | `FILLED` event and its liquid movement name the same lot (commit-time)                                      |
-| no assignment while on hold                                                                       | guard + commit-time check                                                                                   |
+Retries and races: same request id → stored result; a new request id for a step already done →
+`ALREADY_APPLIED` / `ALREADY_FILLED` under the bottle lock, no write; two Hotovo → the cycle lock.
 
-Concurrency and retries: same request id → stored result; another request id for a finished
-bottle → `ALREADY_FILLED` under the bottle lock; two stations → the crate's session; two Hotovo →
-the cycle lock (second gets the stored state); a scan racing Hotovo → the cycle lock decides.
+**Tests (A3/A4):** a foreign bottle from another crate refused at filling, no stock change; double
+scan at each station, one consumption each; body + label exactly once and liquid + pump exactly
+once per bottle; 40 labelled / 0 filled not ready; 40 / 26 not ready; 39/40 Hotovo refused;
+40/40 after Hotovo ready; 41st member refused; lot switch after 23/40 with exact lots; abort →
+bottles outside crates, stock unchanged, repack without consumption; takeover/resume; wrong
+category/site; a recipe activated during an open crate.
 
-**Tests (A4):** 39/40 Hotovo refused; 40/40 before Hotovo not ready (not in ready list, not
-dispatchable); 40/40 after Hotovo ready; 41st scan refused; lot switch after 23/40 → bottles
-1–23 lot X, 24–40 lot Y, exact movements; abort of a partial crate → bottles FILLED outside a
-crate, stock unchanged, no second consumption on repack; takeover and resume; wrong category;
-retries/races; Vrátit do rozpracování.
+## 7. Permissions (proposal, §13 B4; ADMIN by migration, doc 021)
 
-## 7. Permissions (proposal; ADMIN granted by migration, doc 021) — §13 O7
+| Permission                                                                                | PROD. OPERATOR | PROD. SUPERVISOR | WH. OPERATOR | WH. SUPERVISOR | ADMIN |
+| ----------------------------------------------------------------------------------------- | :------------: | :--------------: | :----------: | :------------: | :---: |
+| `crates:read` / `crates:register` (A1)                                                    |      read      |        ✓         |     read     |       ✓        |   ✓   |
+| `production:workstations_manage` (new)                                                    |                |        ✓         |              |                |   ✓   |
+| `production:label_apply` (exists; labelling station)                                      |       ✓        |        ✓         |              |                |   ✓   |
+| `production:fill` (new; filling station, lot switch, Hotovo)                              |       ✓        |        ✓         |              |                |   ✓   |
+| `production:cycle_correct` (new; Přeřadit, Vyjmout, Doplnit, Vrátit, Zrušit oběh, repack) |                |        ✓         |              |                |   ✓   |
+| `production:session_takeover` (doc 020)                                                   |                |        ✓         |              |                |   ✓   |
+| `catalog:weights_record` (new, W1)                                                        |                |        ✓         |              |       ✓        |   ✓   |
 
-| Permission                                                                       | PROD. OPERATOR | PROD. SUPERVISOR | WH. OPERATOR | WH. SUPERVISOR | ADMIN |
-| -------------------------------------------------------------------------------- | :------------: | :--------------: | :----------: | :------------: | :---: |
-| `crates:read` (A1)                                                               |       ✓        |        ✓         |      ✓       |       ✓        |   ✓   |
-| `crates:register` + crate labels (A1)                                            |                |        ✓         |              |       ✓        |   ✓   |
-| `production:workstations_manage` (new)                                           |                |        ✓         |              |                |   ✓   |
-| `production:label_apply` (exists, at a station)                                  |       ✓        |        ✓         |              |                |   ✓   |
-| `production:fill` (new: crate, finished scan, lot change, Hotovo, repack)        |       ✓        |        ✓         |              |                |   ✓   |
-| `production:cycle_correct` (new: Vyjmout, Vrátit do rozpracování, Zrušit plnění) |                |        ✓         |              |                |   ✓   |
-| `production:session_takeover` (doc 020)                                          |                |        ✓         |              |                |   ✓   |
-| `catalog:weights_record` (new, §10)                                              |                |        ✓         |              |       ✓        |   ✓   |
+## 8. Inventory counting (separate follow-up)
 
-## 8. Inventory counting (separate follow-up, not stage A)
-
-A separate **Inventura** section: recorded stock vs. physically counted stock, difference, and an
-audited correction movement (append-only ledger, never a balance overwrite), distinct from
-production consumption and from spoilage. Count snapshots carry their cut-off time; a confirmation
-re-checks movements after the cut-off and refuses a stale correction. Liquids: counted in their
-base unit (ml); a mass-to-volume conversion needs an approved method/density — never kg minus ml.
-Stage A consumes exact recipe quantities; history is never recalculated.
+Recorded vs. counted stock, difference, audited correction (append-only ledger), separate from
+production consumption and spoilage; counts carry a cut-off and refuse a stale correction; liquid
+kg ↔ ml only with an approved method/density. Stage A consumes exact recipe quantities.
 
 ## 9. Later stages this design must not block
 
-- **Orders (B) and dispatch (C):** human order numbers, hotel, date, state and lines
-  (requested/prepared/dispatched pieces and crates); generation from plans idempotent by a
-  business key; one scan of a `FILLED` crate allocates its exact assignments (historical links);
-  allocation ≠ dispatch; a bottle scrapped while allocated releases it in the same transaction,
-  shows the shortage and blocks dispatch (39/40); dispatched content is never rewritten;
-  cancelling picking never touches production. Export and hotel history (plan / ordered /
-  dispatched / delivered / returned kept apart; no consumption claimed) and the later hotel
-  portal with only own data — stages B–D.
-- **Returns:** a crate scan records only the crate; bottles are identified one by one; missing
-  bottles stay "not returned"; a bottle returned in another crate never rewrites dispatch history;
-  washing and refill eligibility are real operations (doc 009, criteria open).
+- **Orders (B) / dispatch (C):** order numbers, lines with requested/prepared/dispatched pieces and
+  crates; idempotent plan generation; one scan of a ready crate allocates its exact members as
+  historical links; allocation ≠ dispatch; a scrapped allocated bottle releases it in the same
+  transaction and blocks dispatch (39/40); dispatched content is never rewritten.
+- **Returns:** a crate scan records only the crate; bottles are identified one by one
+  (mixed/partial returns); missing bottles stay "not returned"; a return or the crate's next cycle
+  never rewrites a dispatched cycle's content; washing/refill eligibility are real operations
+  (criteria open).
 
-## 10. Weights (PR W1 after A4; nothing invented, no seeded values)
+## 10. Weights (PR W1; nothing invented, no seeded values)
 
-The owner requires **both** capabilities in the weight feature: the **measured reference weight
-of one finished bottle** (bottle + content + pump + label) per product, **and** reference weights
-of the individual components, plus the crate tare. Every value may stay **unknown** until it is
-measured — optional _entry_, not an optional _capability_. A missing component weight never blocks
-recording the finished-bottle weight, and vice versa. For the expected shipment mass the measured
-finished-bottle weight is the source; component weights are shown beside it (and their sum as a
-cross-check), never added to it.
+W1 delivers **all** of: reference weights of the individual components (bottle body, pump,
+label; a liquid as the measured mass of a stated volume), the **measured weight of one finished
+bottle** per product, the **crate tare** with dividers, and historical snapshots. Every value may
+be unknown until measured — unknown is never 0 and never estimated.
 
-| Record (append-only, audited) | Content                                                                                                                                                                                                       |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `product_reference_weights`   | product, gross weight in **g** (`NUMERIC(19,3)`), measured_at, measured_by, method/conditions note, number of bottles weighed; a correction is a new row                                                      |
-| `crate_type_tare_weights`     | crate type, tare in g of the empty crate **including its dividers**, configuration description, measured_at/by                                                                                                |
-| `item_reference_weights`      | per catalogue component: weight per piece (bottle body, pump, label) or, for a liquid, the measured mass of a stated volume (e.g. 330 ml weighed directly); measured_at/by, method; a correction is a new row |
-| snapshots                     | at Hotovo the crate cycle stores the reference-weight row ids used; dispatch (C) snapshots again; later corrections never rewrite them                                                                        |
-| actual weighings (stage C)    | a concrete crate/shipment weighed: who, when, scale/tare conditions — kept apart from expected values                                                                                                         |
+| Record (append-only, audited) | Content                                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `item_reference_weights`      | per component: g per piece, or for a liquid the weighed mass of a stated volume; measured_at/by, method |
+| `product_reference_weights`   | finished bottle (body + content + pump + label) in g; measured_at/by, method, bottles weighed           |
+| `crate_type_tare_weights`     | empty crate with dividers in g; configuration; measured_at/by                                           |
+| snapshots                     | Hotovo stores the reference rows used; dispatch snapshots again; corrections never rewrite them         |
+| actual weighings (stage C)    | a concrete crate/shipment: who, when, scale/tare conditions — apart from expected values                |
 
-- **Expected full crate** = finished bottles × product reference weight + crate tare (+ only
-  packaging not already in the tare). Shown as _expected/calculated_, never as weighed. If any
-  input is unknown the result is unknown — never 0, never estimated.
-- Liquids: a directly weighed sample of a known volume is a measurement in its own right (no
-  density needed to record it). A documented density/method is needed only to **convert** arbitrary
-  stock quantities between kg and ml (inventory, §8) — never implicitly.
-- Units: stored in g, displayed in kg where useful, exact decimal conversion; 330 ml is never
-  330 g; recording a weight never changes an item's stock unit and never creates stock or
-  consumption; it never unlocks editing an active recipe.
-- UX: product detail → **Referenční hmotnost hotové lahve** (value, unit, date, author,
-  history); component detail → **Referenční hmotnost komponenty** (per piece, or for a liquid the
-  weighed volume and its mass); crate type → **Tára prázdné bedny s přepážkami**; the recipe shows
-  the finished-bottle reference and, beside it, the component sum with its unknown parts named. Carrier (e.g. PPL) limits and
-  formats are verified only at integration. Weighing never replaces scanning identities; no
-  tolerance or blocking is proposed (owner, open).
-- Tests: exact sums, unit conversion, unknown values (finished bottle known with components
-  unknown and vice versa), no double counting (finished bottle vs. components, tare vs. dividers), snapshot unchanged after a correction, permissions, origin.
+- **Expected full crate** = filled bottles × finished-bottle reference + crate tare (+ only
+  packaging not in the tare). Components are shown beside it as a cross-check sum (unknown parts
+  named), never added on top: no double counting.
+- Units stored in g, displayed in kg where useful; 330 ml is not 330 g; a weighed liquid sample
+  needs no density; converting stock kg ↔ ml does (§8). Recording weights never changes stock
+  units, never creates stock or consumption, never unlocks an active recipe.
+- Tests: exact sums, conversions, unknown parts, no double counting, snapshot preserved after a
+  correction, permissions, origin.
 
 ## 11. PR split
 
-| PR     | Content                                                                                                                                        | Gate                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| A0     | this document                                                                                                                                  | owner review          |
-| **A1** | physical crates, QR registry, crate labels (PR #21)                                                                                            | doc 020 — in review   |
-| A2     | workstations + station QR + server-side sessions (lease, resume, release, takeover)                                                            | approval + O7         |
-| A3     | labelling at a station with category/product binding (+ label stock if O1)                                                                     | approval + O1, O2, O4 |
-| A4     | filling: cycles `FILLING`/`FILLED`, finished-bottle scan with FILL consumption and lot switch, Hotovo, exceptions §4.2, ADR 0025               | approval + O3, O5, O6 |
-| A5     | Bedny overview of ready crates and finished bottles outside crates per site; full Playwright flow labelling → filling → ready                  | after A4              |
-| W1     | reference weights of finished bottles, of components (incl. weighed liquid samples) and crate tares; expected crate weight; snapshot at Hotovo | approval + O8         |
-| later  | inventory counting (§8), orders/dispatch/exports/hotel history (§9), returns, Quality                                                          | own designs           |
+| PR     | Content                                                                                                | Gate                  |
+| ------ | ------------------------------------------------------------------------------------------------------ | --------------------- |
+| A0     | this document, ADR 0025 (proposed), doc 026                                                            | owner review          |
+| **A1** | physical crates, QR registry, crate labels (PR #21)                                                    | technical review done |
+| A2     | workstations, station QR, sessions (doc 026)                                                           | model approval + B4   |
+| A3     | labelling station: context, Potvrdit nalepení into the crate, body + label consumption, binding        | approval + B1, B2, B3 |
+| A4     | filling station: same crate, Potvrdit naplnění, liquid + pump, lot switch, Hotovo, exceptions §4.2     | approval + B5         |
+| A5     | Bedny: states with both counts, ready crates and bottles outside crates per site; full Playwright flow | after A4              |
+| W1     | all weights (§10)                                                                                      | approval + B6         |
+| later  | inventory (§8), orders/dispatch/exports/hotel history (§9), returns, Quality                           | own designs           |
 
 ## 12. Honest limits
 
-- The station scan does not prove which liquid a person poured or where the station stands; a
-  wrong liquid is not detected by software before pouring. Mitigation: visible station signage,
-  the liquid lot chosen explicitly and shown permanently, physically separate liquid stocks. No
-  sensor or hardware lock exists.
-- A wrongly labelled bottle is detected at its finished scan, i.e. after filling (accepted); the
-  optional check scan reduces this.
-- Crate location is the last recorded location only; registration records the site, not a
-  warehouse.
-- Weights are references and expectations unless a concrete weighing is recorded.
+- No scan proves the poured liquid, the exact amount or a station's physical position. A wrong
+  liquid is not detected by software; mitigation: station signage, the liquid lot chosen
+  explicitly and shown permanently, separate physical stocks. No sensor or hardware lock exists.
+- The crate QR does not prove content; each bottle's second scan is compared with the recorded
+  membership.
+- Crate and bottle locations are the last recorded ones, not sensed positions.
+- Weights are references/expectations unless a concrete weighing is recorded.
 
-## 13. Owner decisions still open (one list; recommendation and impact)
+## 13. Open owner decisions that block a concrete next step
 
-None of these is approved by technical review; the recommendations are proposals only.
+Nothing below is approved; recommendations are proposals.
 
-1. **O1 — label stock:** consumed at application (one per bottle at Potvrdit nalepení), at
-   printing, or not tracked? _Recommendation:_ at application. _Impact:_ stock matches labelled
-   bottles; misprints need a separate write-off.
-2. **O2 — what labelling binds:** category only, or the product (label design approved for exactly
-   one product)? _Recommendation:_ product. _Impact:_ the required finished-bottle scan — which
-   happens **after** filling — can refuse a bottle of the wrong product before it is assigned and
-   consumed against the crate; only the optional check scan can test the label **before** filling.
-   Neither scan detects which liquid was actually poured (§12). Needs label-design approval per
-   product.
-3. **O3 — internal production orders/reservations in stage A:** _Recommendation:_ none in A;
-   product + recipe chosen at the session and snapshotted on the crate. _Impact:_ no material
-   reservation (availability checked at each scan); planning comes later.
-4. **O4 — bottles labelled before this change (no binding):** _Recommendation:_ refuse at
-   filling. _Impact:_ none on DEV data; a supervised one-time binding would need its own audit
-   rules.
-5. **O5 — one bottle filled from two liquid lots** (tank refilled mid-bottle): _Recommendation:_
-   not supported — the lot switch takes effect before the next bottle; operators finish a bottle
-   from one lot. _Impact:_ lot traceability stays exact; a mixed bottle would need a separate rule.
-6. **O6 — who may repack a finished bottle outside a crate:** _Recommendation:_ operator in the
-   explicit "Přeložit" mode; removal, Vrátit do rozpracování and Zrušit plnění only supervisor.
-   _Impact:_ fast repacking without supervisor, corrections stay controlled.
-7. **O7 — permission matrix §7:** _Recommendation:_ as proposed. _Impact:_ new permissions
-   `production:fill`, `production:cycle_correct`, `production:workstations_manage`,
-   `catalog:weights_record`.
-8. **O8 — reference weight before Hotovo:** must a measured finished-bottle weight exist before
-   Hotovo? _Recommendation:_ no; the expected crate weight shows "neznámá" until measured.
-   _Impact:_ filling is not blocked by missing measurements (the weight capability itself is part
-   of W1 either way).
-9. **O9 — crate label size** (A1): _Recommendation:_ entered per print job until a test print is
-   approved. _Impact:_ none on data.
-10. **O10 — public crate page text/contact** (A1): _Recommendation:_ keep the neutral "Property of
-    AYVO. This crate is reused." until a contact/return instruction is approved.
+| #   | Decision                                                                                                                               | Recommendation                                                                           | Impact / blocks                                                                                                                         |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| B1  | Labelling binds the bottle permanently to the **product** (label design approved for exactly one product) or only to the **category**? | product, via approved label designs (doc 020 `product_label_approvals`)                  | product: the server can refuse a bottle whose printed design belongs to another product; needs design approvals per product. Blocks A3. |
+| B2  | Internal production orders / material reservations in stage A?                                                                         | none in A; product + recipe chosen at the labelling context and snapshotted on the crate | no reservation; availability checked at each scan. Blocks A3.                                                                           |
+| B3  | Bottles already labelled before this change (no crate, no binding)                                                                     | refuse at filling; no guessed binding                                                    | they stay labelled empties outside crates. Blocks A3/A4 handling of existing data.                                                      |
+| B4  | Role matrix §7 (incl. who manages stations and who performs corrections)                                                               | as proposed                                                                              | new permissions by migration. Blocks A2.                                                                                                |
+| B5  | One bottle filled from two liquid lots (tank refilled mid-bottle)                                                                      | not supported; a switch applies before the next bottle                                   | lot traceability stays exact. Blocks A4 edge handling.                                                                                  |
+| B6  | Must a finished-bottle reference weight exist before Hotovo?                                                                           | no; the expected weight shows "neznámá"                                                  | filling not blocked. Blocks only W1 rules.                                                                                              |
+
+Lower priority, not blocking A2–A4: crate label size (entered per print job until a test print
+is approved) and the public crate page text (neutral until a contact is approved).
