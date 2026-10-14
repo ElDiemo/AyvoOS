@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 // Dedicated ports, so a running `pnpm dev` (3000/4000, dev database) is never reused by tests.
@@ -5,6 +6,8 @@ const WEB_PORT = 3100;
 /** Session of the e2e operator (all operational roles, MAIN warehouse) — see e2e/auth.setup.ts. */
 export const OPERATOR_STATE = 'e2e/.auth/operator.json';
 const API_PORT = 4100;
+/** File storage of the e2e API (fresh per run); crates.spec.ts makes it read-only for a moment. */
+export const E2E_FILE_STORAGE_DIR = resolve(import.meta.dirname, 'e2e/.files');
 
 export default defineConfig({
   testDir: './e2e',
@@ -32,6 +35,7 @@ export default defineConfig({
       env: {
         E2E_API_PORT: String(API_PORT),
         E2E_PUBLIC_QR_BASE_URL: `http://localhost:${WEB_PORT}/q`,
+        E2E_FILE_STORAGE_DIR,
       },
       reuseExistingServer: false,
       timeout: 120_000,

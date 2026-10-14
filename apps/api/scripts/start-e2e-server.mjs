@@ -9,7 +9,7 @@
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -65,6 +65,15 @@ await fixtures.$executeRawUnsafe(`
   VALUES ('E2E-DE-W', 'Testovací sklad DE', '01990000-0000-7000-8000-0000000000e2', true)`);
 await fixtures.$disconnect();
 
+// File storage of this run: a fresh directory. Playwright may name it (E2E_FILE_STORAGE_DIR) so a
+// spec can simulate a storage failure (e.g. a read-only disk) — never a path outside the test run.
+const storageDir =
+  process.env.E2E_FILE_STORAGE_DIR ?? mkdtempSync(join(tmpdir(), 'ayvo-e2e-files-'));
+if (process.env.E2E_FILE_STORAGE_DIR) {
+  rmSync(storageDir, { recursive: true, force: true });
+  mkdirSync(storageDir, { recursive: true });
+}
+
 const port = process.env.E2E_API_PORT ?? '4100';
 const child = spawn(process.execPath, ['dist/main.js'], {
   cwd: apiRoot,
@@ -72,7 +81,7 @@ const child = spawn(process.execPath, ['dist/main.js'], {
   env: {
     ...testEnv,
     API_PORT: port,
-    FILE_STORAGE_DIR: mkdtempSync(join(tmpdir(), 'ayvo-e2e-files-')),
+    FILE_STORAGE_DIR: storageDir,
     PUBLIC_QR_BASE_URL: process.env.E2E_PUBLIC_QR_BASE_URL ?? 'http://localhost:3100/q',
   },
 });

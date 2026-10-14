@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { E2E_FILE_STORAGE_DIR } from '../playwright.config';
 
 /**
  * Výroba → Bedny (doc 025 A1) on the real built app, a fresh database and synthetic data:
@@ -26,6 +27,14 @@ async function shot(page: Page, name: string) {
   await page.setViewportSize({ width: size.width, height: Math.min(height, 4000) });
   await page.screenshot({ path: join(SHOTS, `${name}.png`) });
   await page.setViewportSize(size);
+}
+
+/** Simulated disk failure of the e2e API's file storage: every directory read-only (or back). */
+function storageWritable(writable: boolean, dir = E2E_FILE_STORAGE_DIR) {
+  chmodSync(dir, writable ? 0o750 : 0o550);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) storageWritable(writable, join(dir, entry.name));
+  }
 }
 
 async function noOverflow(page: Page, what: string) {
@@ -86,7 +95,8 @@ test('registers crates and prints their QR labels at an entered size', async ({ 
   const form = page.getByTestId('register-crates');
   await form.getByRole('button', { name: 'Zaevidovat bedny' }).click();
   await expect(page.getByTestId('form-errors')).toBeVisible();
-  await expect(form.getByLabel('Typ bedny')).toBeFocused();
+  // Focus is on the first invalid field (the type is preselected when only one exists).
+  await expect(form.locator('[aria-invalid="true"]').first()).toBeFocused();
   await form.getByLabel('Typ bedny').selectOption(TYPE);
   await form.getByLabel('Počet beden').fill('3');
   await shot(page, 'crates-register-form');
@@ -180,6 +190,41 @@ test('reprints one crate label: a new job, the same QR URL, recorded history', a
   await expect(page.locator('body')).not.toContainText(codes[0]!);
   await expect(page.locator('body')).not.toContainText('E2E');
   await shot(page, 'crate-public-page');
+});
+
+test('a failed print job survives a reload and is rendered again as the same job', async ({
+  page,
+}) => {
+  await page.goto(`/production/crates/${codes[2]}`);
+  const list = page.getByTestId('print-job-list');
+  const jobsBefore = await list.locator('li').count();
+  const print = page.getByTestId('print-labels');
+  await print.getByLabel('Šířka štítku (mm)').fill('80');
+  await print.getByLabel('Výška štítku (mm)').fill('40');
+  storageWritable(false);
+  try {
+    await print.getByRole('button', { name: 'Vytvořit PDF (1 štítek)' }).click();
+    await expect(page.getByTestId('print-result')).toContainText(/Generování PJ-\d{6} selhalo/);
+  } finally {
+    storageWritable(true);
+  }
+  const failedCode = /PJ-\d{6}/.exec(await page.getByTestId('print-result').innerText())![0];
+
+  // Reload / come back later: the stored job, not the form's memory, offers the recovery.
+  await page.reload();
+  const row = page.getByTestId(`print-job-${failedCode}`);
+  await expect(row.getByTestId('print-job-status')).toHaveText('Generování selhalo');
+  await expect(list.locator('li')).toHaveCount(jobsBefore + 1);
+  await shot(page, 'crate-print-job-failed');
+  await row.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(row.getByTestId('print-job-status')).toHaveText('Vygenerováno');
+  await expect(row.getByRole('link', { name: 'Stáhnout PDF' })).toBeVisible();
+  // The same job: no new print job, no new crate.
+  await expect(list.locator('li')).toHaveCount(jobsBefore + 1);
+  const crates = (await (await page.request.get('/api/admin/crates?pageSize=100')).json()) as {
+    total: number;
+  };
+  expect(crates.total).toBe(codes.length);
 });
 
 test('works at phone width', async ({ page }) => {

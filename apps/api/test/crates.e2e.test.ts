@@ -381,6 +381,75 @@ describe.skipIf(!hasDatabase)('physical crates and crate QR labels', () => {
     expect(again.status).toBe(409);
   });
 
+  it('resumes a STORED failed or abandoned job after a reload — the same job, never a new one', async () => {
+    const reg = await register(admin, 2);
+    t.storage.failPutsRemaining = 1;
+    const failed = (await print(admin, reg.crateCodes, 90, 45)).body as CrateLabelPrintJob;
+    expect(failed).toMatchObject({ status: 'FAILED', retryable: true });
+    const jobsBefore = await t.prisma.crateLabelPrintJob.count();
+    const cratesBefore = await t.prisma.crate.count();
+    const itemsBefore = await t.prisma.crateLabelPrintJobItem.findMany({
+      where: { printJob: { code: failed.code } },
+      orderBy: { position: 'asc' },
+    });
+
+    // "Reload": the stored job is read back with its state and the retry decision of the server.
+    const detail = (await as(admin).get(`/api/admin/crates/${reg.crateCodes[0]}`).expect(200))
+      .body as CrateDetail;
+    expect(detail.printJobs[0]).toMatchObject({
+      code: failed.code,
+      status: 'FAILED',
+      retryable: true,
+    });
+
+    const done = (
+      await as(admin).post(`/api/admin/crate-label-print-jobs/${failed.code}/generate`).expect(200)
+    ).body as CrateLabelPrintJob;
+    expect(done).toMatchObject({
+      code: failed.code,
+      status: 'COMPLETED',
+      retryable: false,
+      widthMm: 90,
+      heightMm: 45,
+      crateCodes: reg.crateCodes,
+    });
+    expect(await t.prisma.crateLabelPrintJob.count()).toBe(jobsBefore);
+    expect(await t.prisma.crate.count()).toBe(cratesBefore);
+    expect(
+      await t.prisma.crateLabelPrintJobItem.findMany({
+        where: { printJob: { code: failed.code } },
+        orderBy: { position: 'asc' },
+      }),
+    ).toEqual(itemsBefore);
+
+    // A job that is generating right now is not retryable; one abandoned past the stale limit is.
+    const running = (await print(admin, [reg.crateCodes[0]!])).body as CrateLabelPrintJob;
+    const job = await t.prisma.crateLabelPrintJob.findUniqueOrThrow({
+      where: { code: running.code },
+    });
+    await t.prisma.crateLabelPrintJob.update({
+      where: { id: job.id },
+      data: { status: 'GENERATING', startedAt: new Date(), completedAt: null },
+    });
+    const fresh = (await as(admin).get(`/api/admin/crate-label-print-jobs/${running.code}`))
+      .body as CrateLabelPrintJob;
+    expect(fresh).toMatchObject({ status: 'GENERATING', retryable: false });
+    expect(
+      (await as(admin).post(`/api/admin/crate-label-print-jobs/${running.code}/generate`)).status,
+    ).toBe(409);
+    await t.prisma.crateLabelPrintJob.update({
+      where: { id: job.id },
+      data: { startedAt: new Date(Date.now() - 11 * 60 * 1000) },
+    });
+    const stale = (await as(admin).get(`/api/admin/crate-label-print-jobs/${running.code}`))
+      .body as CrateLabelPrintJob;
+    expect(stale).toMatchObject({ status: 'GENERATING', retryable: true });
+    const recovered = (
+      await as(admin).post(`/api/admin/crate-label-print-jobs/${running.code}/generate`).expect(200)
+    ).body as CrateLabelPrintJob;
+    expect(recovered).toMatchObject({ code: running.code, status: 'COMPLETED' });
+  });
+
   it('previews a size with a placeholder QR, marked PREVIEW, without recording anything', async () => {
     const jobs = await t.prisma.crateLabelPrintJob.count();
     const events = await t.prisma.crateEvent.count();

@@ -104,12 +104,18 @@ export const crateLabelPrintJobSchema = z.object({
   attempts: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
   createdBy: z.string(),
+  startedAt: z.iso.datetime().nullable(),
   completedAt: z.iso.datetime().nullable(),
   failureReason: z.string().nullable(),
   environment: z.enum(['development', 'test', 'production']),
   qrErrorCorrection: qrErrorCorrectionSchema,
   /** Same-origin download URL when COMPLETED, else null. */
   downloadUrl: z.string().nullable(),
+  /**
+   * The server would render this stored job now (PENDING, FAILED, or GENERATING abandoned for
+   * longer than the stale limit) — the same rule as its claim. A running job is not retryable.
+   */
+  retryable: z.boolean(),
 });
 export type CrateLabelPrintJob = z.infer<typeof crateLabelPrintJobSchema>;
 

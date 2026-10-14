@@ -309,6 +309,17 @@ export class CrateLabelPrintJobsService {
   }
 }
 
+/** Exactly the states the claim in `generate` accepts. */
+function claimable(job: CrateLabelPrintJob, now: Date): boolean {
+  return (
+    job.status === 'PENDING' ||
+    job.status === 'FAILED' ||
+    (job.status === 'GENERATING' &&
+      !!job.startedAt &&
+      job.startedAt.getTime() < now.getTime() - STALE_GENERATION_MS)
+  );
+}
+
 function toDto(job: JobRecord): CrateLabelPrintJobDto {
   return {
     code: job.code,
@@ -320,11 +331,13 @@ function toDto(job: JobRecord): CrateLabelPrintJobDto {
     attempts: job.attempts,
     createdAt: job.createdAt.toISOString(),
     createdBy: job.creator.displayName,
+    startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
     failureReason: job.failureReason,
     environment: job.appEnvironment,
     qrErrorCorrection: job.qrErrorCorrection,
     downloadUrl:
       job.status === 'COMPLETED' ? `${ADMIN_API}/crate-label-print-jobs/${job.code}/pdf` : null,
+    retryable: claimable(job, new Date()),
   };
 }

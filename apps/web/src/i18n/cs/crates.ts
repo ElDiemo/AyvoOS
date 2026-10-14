@@ -105,6 +105,9 @@ export const cratesCs = {
   job: {
     size: (w: number, h: number) => `${w} × ${h} mm`,
     by: (name: string) => `vytvořil(a) ${name}`,
+    failed: 'Generování PDF selhalo. Úlohu lze vygenerovat znovu se stejnými štítky.',
+    running:
+      'PDF se právě generuje. Obnovte stránku za chvíli; pokud generování uvázne, půjde po 10 minutách zopakovat.',
   },
   printJobStatus: {
     PENDING: 'Čeká na vygenerování',

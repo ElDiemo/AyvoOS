@@ -236,10 +236,6 @@ CREATE TRIGGER "qr_identities_no_truncate" BEFORE TRUNCATE ON "qr_identities"
 ALTER TABLE "qr_identities"
   ADD CONSTRAINT "qr_identities_token_check" CHECK ("token" ~ '^[A-Za-z0-9_-]{22}$');
 
--- Existing bottle tokens are copied in; the bottle rows are not touched.
-INSERT INTO "qr_identities" ("token", "kind", "created_at")
-  SELECT "public_token", 'BOTTLE', "created_at" FROM "bottles";
-
 -- Every new bottle or crate registers its token first; a token already used by any kind is a
 -- unique violation and the insert (and its whole transaction) fails.
 CREATE FUNCTION qr_identity_register() RETURNS trigger
@@ -255,8 +251,23 @@ BEGIN
 END
 $$;
 
+-- Registry gap protection (PR #21 review): the old application may still create bottles while
+-- this migration runs (scripts/deploy-dev.sh migrates before it swaps the API). The migration is
+-- one transaction (Prisma applies each migration file as one; LOCK TABLE outside a transaction
+-- block would fail loudly). Order: lock → trigger → copy, all before COMMIT:
+-- - SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE lock of every INSERT: an insert that
+--   started earlier is waited for (its row is then visible to the copy), a later one waits until
+--   COMMIT and then runs with the trigger in place. Reads of bottles are not blocked.
+-- - No bottle can be inserted between the copy and the trigger, so none can miss the registry.
+-- Deploy impact: bottle registration waits for the few milliseconds of this migration.
+LOCK TABLE "bottles" IN SHARE ROW EXCLUSIVE MODE;
+
 CREATE TRIGGER "bottles_qr_identity" BEFORE INSERT ON "bottles"
   FOR EACH ROW EXECUTE FUNCTION qr_identity_register();
+
+-- Existing bottle tokens are copied in; the bottle rows are not touched.
+INSERT INTO "qr_identities" ("token", "kind", "created_at")
+  SELECT "public_token", 'BOTTLE', "created_at" FROM "bottles";
 
 -- =============================================================================================
 -- Registrations and crates
