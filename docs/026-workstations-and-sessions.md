@@ -23,8 +23,9 @@ secret.
 | `workstation_session_events` | append-only: `OPENED`, `RESUMED`, `HEARTBEAT_GAP`, `RELEASED`, `TAKEN_OVER` (reason), `CLOSED`; later `CONTEXT_CHANGED` (A3/A4); actor, operation id                                                                                                                                                                                                                                                   |
 | `qr_identities`              | (A1) gains kind `WORKSTATION`                                                                                                                                                                                                                                                                                                                                                                          |
 
-Lease: configuration (default 15 min, doc 020 §6). Expiry is not a status change; it only allows
-an authorized takeover. Expiry never touches a crate cycle, lot or bottle.
+Lease: configuration (default 15 min, doc 020 §6). Expiry is not a status change: the session stays
+ACTIVE until release, takeover or deactivation; expiry is only shown (e.g. to a supervisor
+deciding on a takeover). It never touches a crate cycle, lot or bottle.
 
 ## 3. Rules checked by the server on every operation
 

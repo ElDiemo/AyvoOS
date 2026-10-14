@@ -30,7 +30,7 @@ bottles) is withdrawn.
    another crate or none is refused without any write; correcting membership is a separate,
    authorized, audited operation.
 3. The cycle carries two separate figures: members and filled members. The first filled member
-   moves it to `FILLING`; `FILLED` (ready finished stock) is reached **only** by Hotovo, and only
+   moves it to `FILLING`, which it keeps whatever its counts until Hotovo or an abort; `FILLED` (ready finished stock) is reached **only** by Hotovo, and only
    when members = filled = capacity, all hold-free and compatible. Counts alone never make a
    crate ready.
 4. Consumption moments: printing nothing; labelling scan −1 body (selected lot) + recipe label;

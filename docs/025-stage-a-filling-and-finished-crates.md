@@ -1,10 +1,13 @@
 # 025 — Stage A: labelling → filling → finished crates (design gate, issue #19)
 
-Status: **Proposal for owner review — the model is not approved, nothing beyond A1 is
-implemented** (revision 3, 2026-10-14). PR A1 (physical crates and their QR labels, PR #21) rests
-on already approved design (doc 020 §3.4, ADR 0021 §6, doc 022). Every other new table, state,
-permission or migration below waits for approval of this document; ADR 0025 (proposed) records
-the process decision; doc 026 proposes the next unit A2 (workstations and sessions).
+Status (revision 4, 2026-10-14):
+
+- **Approved by the owner:** the process and consumption moments (§0), the decisions B1–B6 (§13),
+  the role matrix (§7) and the A2 model of doc 026 (workstations and sessions — PR #22).
+- **Implemented:** A1 physical crates and their QR labels (PR #21, on DEV since 2026-10-14).
+- **Not yet approved:** the tables and migrations of A3, A4 and W1 (§5, §10). Each is proposed
+  here and needs the owner's approval of its model before its own implementation PR. ADR 0025
+  (proposed) records the process decision.
 
 ## 0. Confirmed by the owner (2026-10-14) — not asked again
 
@@ -35,9 +38,9 @@ the process decision; doc 026 proposes the next unit A2 (workstations and sessio
    bottles only and each bottle keeps the lot actually consumed for it.
 4. Two scans are two physical steps, not a rule that two different user accounts must do them.
 
-Not decided by these confirmations (§13): whether labelling binds the bottle to the product /
-label design or only to the category; legacy bottles; internal production orders/reservations;
-roles; schema and migrations; merge/deploy.
+The owner's later decisions B1–B6 (product binding, no internal orders in stage A, legacy
+bottles, roles, one lot per bottle, weights) are recorded in §13. Schemas and migrations of A3,
+A4 and W1 still need approval of their models; merge and deploy are authorized per PR.
 
 Terminology: **plnění bedny** = production work on one crate cycle; **vychystávání objednávky** =
 picking for a hotel order (stage C).
@@ -66,7 +69,7 @@ exact amount, nor where a station physically stands (§12).
 | revision 2 (variant B)      | bottles assigned only when finished                                 | **superseded**                                                                                                                  |
 | consumption                 | body at activation; label open; liquid/pump "2B"                    | body + label at labelling, liquid + pump at filling (§0.2)                                                                      |
 | crate types                 | two                                                                 | one shared `CRATE-40` possible; a cycle stays single-product by its snapshot                                                    |
-| production orders (doc 020) | labelling inside released orders with reservations                  | open (§13 B2)                                                                                                                   |
+| production orders (doc 020) | labelling inside released orders with reservations                  | none in stage A (§13 B2): product + recipe version on the crate cycle                                                           |
 
 ## 3. States
 
@@ -86,13 +89,21 @@ CREATED ──Potvrdit nalepení (LABEL_APPLIED + ASSIGNED_TO_CRATE)──► LA
 ### 3.2 Crate cycle — one circulation of one crate (ADR 0021, ADR 0025 proposed)
 
 ```
-first labelling scan ──► OPEN_ASSEMBLY ──40th member──► READY_TO_FILL ──first Potvrdit naplnění──► FILLING
-FILLING ──Hotovo (members = capacity, filled = capacity, no blocker)──► FILLED (Připravená)
-READY_TO_FILL ──Vyjmout lahev (supervisor)──► OPEN_ASSEMBLY      FILLING ──Vyjmout lahev──► FILLING (39 members)
+first labelling scan ──► OPEN_ASSEMBLY ──40th member──► READY_TO_FILL
+OPEN_ASSEMBLY / READY_TO_FILL ──first filled member (fill scan, or repack of a filled bottle)──► FILLING
+READY_TO_FILL ──Vyjmout / Přeřadit an empty member (supervisor)──► OPEN_ASSEMBLY
+empty crate ──Přeložit hotové lahve (supervisor; opens the cycle with the bottles' snapshot)──► FILLING
+FILLING ──Hotovo (members = capacity, filled = capacity, all compatible, no blocker)──► FILLED (Připravená)
 FILLED ──Vrátit do rozpracování (supervisor, reason; before ALLOCATED)──► FILLING
 OPEN_ASSEMBLY / READY_TO_FILL / FILLING ──Zrušit oběh (supervisor, reason)──► ABORTED
 later on the same row: FILLED → ALLOCATED → DISPATCHED → AT_HOTEL → RETURNING → RECEIVED → CLOSED
 ```
+
+**FILLING is sticky:** once a cycle has had a filled member it stays `FILLING` whatever its
+counts — 0…40 members, 0…members filled — until Hotovo or Zrušit oběh; removing the last filled
+bottle (40/1 → 39/0) leaves it `FILLING`. `OPEN_ASSEMBLY` and `READY_TO_FILL` never hold a filled
+bottle. In `FILLING`, the normal filling scan fills its empty members; new members come only by
+the supervised operations (Doplnit, Přeložit) — never by the normal labelling scan.
 
 Two separate figures, always shown together: **Obsah n/40** (active members = labelled bottles
 in the crate) and **Naplněno m/40** (members that are FILLED). 40/40 with 26/40 filled is
@@ -109,12 +120,12 @@ removed) has no active assignment. It keeps its status and is listed per site ("
 mimo bednu", "Hotové lahve mimo bednu"). It returns into a crate only by an explicit operation
 (§4.2) — never by a silent move, never with a second consumption.
 
-### 3.4 Workstation session (doc 026)
+### 3.4 Workstation session (doc 026, implemented in A2)
 
-`ACTIVE → RELEASED | TAKEN_OVER | CLOSED`; lease with heartbeat; expiry releases only station
-ownership — never a crate cycle, lot or bottle. Interrupted work stays stored and is resumed by
-its owner or taken over by an authorized user (audited); two owners of one station are
-impossible.
+`ACTIVE → RELEASED | TAKEN_OVER | CLOSED`. The session stays ACTIVE until its holder leaves
+(voluntary handover), a supervisor takes it over (reason) or the station is deactivated; lease
+expiry changes nothing by itself — it is only shown. A crate cycle, lot or bottle never depends
+on a session (owner B4): interrupted work stays stored and continues under the next session.
 
 ## 4. Step → scan → event → stock
 
@@ -146,15 +157,15 @@ product/category (`WRONG_PRODUCT` / `WRONG_CATEGORY`), not labelled (`BOTTLE_NOT
 already filled (`ALREADY_FILLED`), on hold (`BOTTLE_ON_HOLD`), another site
 (`BOTTLE_OF_ANOTHER_SITE`). There is **no silent reassignment**.
 
-| Situation                                        | Operation (separate, authorized, reason, audited)                                                                                                           | Stock                                                              |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| a labelled empty bottle is in the wrong crate    | **Přeřadit lahev**: release from crate X, assign to crate Y (same snapshot, free ordinal); states recomputed (READY_TO_FILL → OPEN_ASSEMBLY below capacity) | none                                                               |
-| damaged / missing bottle in a crate              | **Vyjmout lahev**: release membership, `REMOVED_FROM_CRATE`; damaged → hold `QUARANTINED`; a filled one keeps FILLED                                        | none; a broken body is written off by the separate scrap operation |
-| a crate in FILLING lost a member                 | **Doplnit lahev**: a labelled empty with the same snapshot into the free ordinal                                                                            | none                                                               |
-| defect found in a ready crate                    | **Vrátit do rozpracování** → FILLING (before `ALLOCATED`), then Vyjmout/Doplnit                                                                             | none                                                               |
-| restart a crate                                  | **Zrušit oběh**: every membership released one by one; bottles keep their status, outside a crate; cycle `ABORTED`                                          | none — nothing returned to stock, nothing re-emptied               |
-| bottle outside a crate                           | **Vrátit lahev do bedny** (repack): into an open cycle with the same snapshot; a filled bottle only into READY_TO_FILL/FILLING                              | **none**, never a second consumption                               |
-| breakage, damaged label, spill, count difference | scrap / write-off / inventory correction (§8), audited                                                                                                      | own movement type, never a hidden recipe increase                  |
+| Situation                                        | Operation (separate, authorized, reason, audited)                                                                                                                                                                                                                                                                                                                                                                                                                        | Stock                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| a labelled empty bottle is in the wrong crate    | **Přeřadit lahev**: release from crate X, assign to crate Y (same snapshot, free ordinal); states recomputed (READY_TO_FILL → OPEN_ASSEMBLY below capacity)                                                                                                                                                                                                                                                                                                              | none                                                               |
+| damaged / missing bottle in a crate              | **Vyjmout lahev**: release membership, `REMOVED_FROM_CRATE`; damaged → hold `QUARANTINED`; a filled one keeps FILLED                                                                                                                                                                                                                                                                                                                                                     | none; a broken body is written off by the separate scrap operation |
+| a crate in FILLING lost a member                 | **Doplnit lahev** (supervisor): a labelled empty outside a crate, with the same snapshot, into the free ordinal; the cycle stays FILLING                                                                                                                                                                                                                                                                                                                                 | none                                                               |
+| defect found in a ready crate                    | **Vrátit do rozpracování** → FILLING (before `ALLOCATED`), then Vyjmout/Doplnit                                                                                                                                                                                                                                                                                                                                                                                          | none                                                               |
+| restart a crate                                  | **Zrušit oběh**: every membership released one by one; bottles keep their status, outside a crate; cycle `ABORTED`                                                                                                                                                                                                                                                                                                                                                       | none — nothing returned to stock, nothing re-emptied               |
+| bottle outside a crate                           | **Přeložit lahev** (supervisor, repack): into an open cycle with the same snapshot and a free ordinal — an empty bottle into OPEN_ASSEMBLY/READY_TO_FILL/FILLING, a filled one into any of them (the cycle becomes FILLING) — or, for **Přeložit hotové lahve**, into an **empty crate**: the first repacked bottle opens a new cycle in `FILLING` with that bottle's snapshot (product, category, recipe version, label template version) and the crate type's capacity | **none**, never a second consumption                               |
+| breakage, damaged label, spill, count difference | scrap / write-off / inventory correction (§8), audited                                                                                                                                                                                                                                                                                                                                                                                                                   | own movement type, never a hidden recipe increase                  |
 
 Every exception re-checks site, snapshot and holds; a refusal writes nothing.
 
@@ -177,19 +188,19 @@ Scans carry `{requestId, sessionId, scannedValue}`; station, mode, category, pro
 snapshot, lots, crate and site come from the session and are re-validated on every scan. Lock
 order (doc 020 §8): operation request → session → crate → cycle → bottle → balances.
 
-| Invariant                                                                                               | Enforcement                                                                                   |
-| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| never more than capacity members                                                                        | `CHECK ordinal BETWEEN 1 AND cycle_capacity`; partial unique (cycle, ordinal) of active ones  |
-| a bottle in at most one active cycle                                                                    | partial unique on active assignments                                                          |
-| `READY_TO_FILL` ⇔ members = capacity and none filled; `OPEN_ASSEMBLY` ⇒ members < capacity, none filled | commit-time trigger                                                                           |
-| `FILLING` ⇒ ≥ 1 filled member; 40/40 members and even 40/40 filled are still not ready                  | readiness is never derived from counts                                                        |
-| `FILLED` ⇒ members = filled = capacity, all hold-free and matching the snapshot                         | commit-time trigger                                                                           |
-| `FILLING → FILLED` only by Hotovo                                                                       | transition trigger requires a `CRATE_FILLED` event of the same operation                      |
-| the filling scan never assigns                                                                          | a `FILLED` event requires an existing active assignment of the bottle in the session's cycle  |
-| body + label consumed exactly once                                                                      | one `LABEL_APPLIED` per bottle (existing) + its `LABEL_APPLICATION` movements reference it    |
-| liquid + pump consumed exactly once                                                                     | one `FILLED` event per bottle (stage A) + `FILL` movements reference it (unique per BOM line) |
-| the bottle keeps its liquid lot                                                                         | the `FILLED` event and its liquid movement name the same lot                                  |
-| counters ⇔ assignments and events                                                                       | commit-time check                                                                             |
+| Invariant                                                                                                                                        | Enforcement                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| never more than capacity members                                                                                                                 | `CHECK ordinal BETWEEN 1 AND cycle_capacity`; partial unique (cycle, ordinal) of active ones  |
+| a bottle in at most one active cycle                                                                                                             | partial unique on active assignments                                                          |
+| `OPEN_ASSEMBLY` ⇒ members < capacity and none filled; `READY_TO_FILL` ⇒ members = capacity and none filled                                       | commit-time trigger                                                                           |
+| `FILLING` ⇒ members ≤ capacity (no lower bound on members or filled); entered only with a filled member and never left except by Hotovo or abort | transition trigger; readiness is never derived from counts                                    |
+| `FILLED` ⇒ members = filled = capacity, all hold-free and matching the snapshot                                                                  | commit-time trigger                                                                           |
+| `FILLING → FILLED` only by Hotovo                                                                                                                | transition trigger requires a `CRATE_FILLED` event of the same operation                      |
+| the filling scan never assigns                                                                                                                   | a `FILLED` event requires an existing active assignment of the bottle in the session's cycle  |
+| body + label consumed exactly once                                                                                                               | one `LABEL_APPLIED` per bottle (existing) + its `LABEL_APPLICATION` movements reference it    |
+| liquid + pump consumed exactly once                                                                                                              | one `FILLED` event per bottle (stage A) + `FILL` movements reference it (unique per BOM line) |
+| the bottle keeps its liquid lot                                                                                                                  | the `FILLED` event and its liquid movement name the same lot                                  |
+| counters ⇔ assignments and events                                                                                                                | commit-time check                                                                             |
 
 Retries and races: same request id → stored result; a new request id for a step already done →
 `ALREADY_APPLIED` / `ALREADY_FILLED` under the bottle lock, no write; two Hotovo → the cycle lock.
@@ -199,7 +210,12 @@ scan at each station, one consumption each; body + label exactly once and liquid
 once per bottle; 40 labelled / 0 filled not ready; 40 / 26 not ready; 39/40 Hotovo refused;
 40/40 after Hotovo ready; 41st member refused; lot switch after 23/40 with exact lots; abort →
 bottles outside crates, stock unchanged, repack without consumption; takeover/resume; wrong
-category/site; a recipe activated during an open crate.
+category/site; a recipe activated during an open crate. Two exception scenarios end to end:
+(1) Zrušit oběh of a crate with 40 filled bottles → all 40 listed outside a crate → Přeložit
+hotové lahve into another empty crate (new cycle FILLING, 1…40) → Hotovo → ready; ledger
+unchanged by every step after the original fills. (2) 40 members / 1 filled → Vyjmout the only
+filled bottle → 39/0 still FILLING → Doplnit a labelled empty → 40/0 → fill all 40 by normal scans
+→ Hotovo; each bottle consumed liquid + pump exactly once (the removed one keeps its single fill).
 
 ## 7. Permissions (proposal, §13 B4; ADMIN by migration, doc 021)
 
