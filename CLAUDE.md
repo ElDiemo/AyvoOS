@@ -38,6 +38,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   product categories, catalogue components, crate types (+ categories), products, recipe
   versions / revisions / revision BOMs. Physical crates (doc 020 §3.4, issue #19 PR A1, doc 025):
   QR identity registry, crate registrations, crates, crate label print jobs, crate events.
+  Workstations and work sessions (doc 026, A2, model approved 2026-10-14): workstations,
+  workstation events, workstation sessions (one active per station and per user), session events.
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

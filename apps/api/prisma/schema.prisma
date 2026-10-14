@@ -479,11 +479,12 @@ model InventoryLocation {
   /// The warehouse the site's operations act on in v0.1. DB: at most one per site.
   isSiteDefault Boolean @default(false) @map("is_site_default")
 
-  site        Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  movements   InventoryMovement[]
-  balances    InventoryBalance[]
-  userScopes  UserScope[]
-  crateEvents CrateEvent[]
+  site         Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  movements    InventoryMovement[]
+  balances     InventoryBalance[]
+  userScopes   UserScope[]
+  crateEvents  CrateEvent[]
+  workstations Workstation[]
 
   @@map("inventory_locations")
 }
@@ -841,6 +842,12 @@ enum OperationKind {
   RECIPE_ARCHIVE
   CRATE_REGISTER
   CRATE_LABEL_PRINT
+  WORKSTATION_CREATE
+  WORKSTATION_DEACTIVATE
+  WORKSTATION_REACTIVATE
+  STATION_SESSION_OPEN
+  STATION_SESSION_RELEASE
+  STATION_SESSION_TAKEOVER
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -852,14 +859,17 @@ model OperationRequest {
   result        Json?
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  catalogComponents   CatalogComponent[]
-  crateTypes          CrateType[]
-  products            Product[]
-  recipeVersions      RecipeVersion[]
-  recipeRevisions     RecipeRevision[]
-  crateRegistrations  CrateRegistration[]
-  crateLabelPrintJobs CrateLabelPrintJob[]
-  crateEvents         CrateEvent[]
+  catalogComponents        CatalogComponent[]
+  crateTypes               CrateType[]
+  products                 Product[]
+  recipeVersions           RecipeVersion[]
+  recipeRevisions          RecipeRevision[]
+  crateRegistrations       CrateRegistration[]
+  crateLabelPrintJobs      CrateLabelPrintJob[]
+  crateEvents              CrateEvent[]
+  workstations             Workstation[]
+  workstationEvents        WorkstationEvent[]
+  workstationSessionEvents WorkstationSessionEvent[]
 
   @@map("operation_requests")
 }
@@ -890,37 +900,42 @@ model User {
   deactivationReason String?    @map("deactivation_reason")
   lastLoginAt        DateTime?  @map("last_login_at") @db.Timestamptz(3)
 
-  createdByUser       User?                @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  createdUsers        User[]               @relation("UserCreatedBy")
-  deactivatedByUser   User?                @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
-  deactivatedUsers    User[]               @relation("UserDeactivatedBy")
-  identities          UserIdentity[]
-  roles               UserRole[]           @relation("UserRoles")
-  rolesGranted        UserRole[]           @relation("RoleGrantedBy")
-  rolesRevoked        UserRole[]           @relation("RoleRevokedBy")
-  scopes              UserScope[]          @relation("UserScopes")
-  scopesGranted       UserScope[]          @relation("ScopeGrantedBy")
-  scopesRevoked       UserScope[]          @relation("ScopeRevokedBy")
-  sessions            UserSession[]
-  bootstrap           IdentityBootstrap?
-  rolesCreated        Role[]               @relation("RoleCreatedBy")
-  rolesUpdated        Role[]               @relation("RoleUpdatedBy")
-  sitesCreated        Site[]               @relation("SiteCreatedBy")
-  invitations         UserInvitation[]     @relation("UserInvitations")
-  invitationsSent     UserInvitation[]     @relation("InvitationCreatedBy")
-  invitationsRevoked  UserInvitation[]     @relation("InvitationRevokedBy")
-  sitesUpdated        Site[]               @relation("SiteUpdatedBy")
-  componentsCreated   CatalogComponent[]
-  crateTypesCreated   CrateType[]
-  productsCreated     Product[]            @relation("ProductCreatedBy")
-  productsArchived    Product[]            @relation("ProductArchivedBy")
-  recipesCreated      RecipeVersion[]      @relation("RecipeCreatedBy")
-  recipesActivated    RecipeVersion[]      @relation("RecipeActivatedBy")
-  recipesArchived     RecipeVersion[]      @relation("RecipeArchivedBy")
-  recipeRevisions     RecipeRevision[]
-  crateRegistrations  CrateRegistration[]
-  crateLabelPrintJobs CrateLabelPrintJob[]
-  crateEvents         CrateEvent[]
+  createdByUser             User?                     @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdUsers              User[]                    @relation("UserCreatedBy")
+  deactivatedByUser         User?                     @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
+  deactivatedUsers          User[]                    @relation("UserDeactivatedBy")
+  identities                UserIdentity[]
+  roles                     UserRole[]                @relation("UserRoles")
+  rolesGranted              UserRole[]                @relation("RoleGrantedBy")
+  rolesRevoked              UserRole[]                @relation("RoleRevokedBy")
+  scopes                    UserScope[]               @relation("UserScopes")
+  scopesGranted             UserScope[]               @relation("ScopeGrantedBy")
+  scopesRevoked             UserScope[]               @relation("ScopeRevokedBy")
+  sessions                  UserSession[]
+  bootstrap                 IdentityBootstrap?
+  rolesCreated              Role[]                    @relation("RoleCreatedBy")
+  rolesUpdated              Role[]                    @relation("RoleUpdatedBy")
+  sitesCreated              Site[]                    @relation("SiteCreatedBy")
+  invitations               UserInvitation[]          @relation("UserInvitations")
+  invitationsSent           UserInvitation[]          @relation("InvitationCreatedBy")
+  invitationsRevoked        UserInvitation[]          @relation("InvitationRevokedBy")
+  sitesUpdated              Site[]                    @relation("SiteUpdatedBy")
+  componentsCreated         CatalogComponent[]
+  crateTypesCreated         CrateType[]
+  productsCreated           Product[]                 @relation("ProductCreatedBy")
+  productsArchived          Product[]                 @relation("ProductArchivedBy")
+  recipesCreated            RecipeVersion[]           @relation("RecipeCreatedBy")
+  recipesActivated          RecipeVersion[]           @relation("RecipeActivatedBy")
+  recipesArchived           RecipeVersion[]           @relation("RecipeArchivedBy")
+  recipeRevisions           RecipeRevision[]
+  crateRegistrations        CrateRegistration[]
+  crateLabelPrintJobs       CrateLabelPrintJob[]
+  crateEvents               CrateEvent[]
+  workstationsCreated       Workstation[]
+  workstationEvents         WorkstationEvent[]
+  workstationSessions       WorkstationSession[]      @relation("SessionUser")
+  workstationSessionsClosed WorkstationSession[]      @relation("SessionClosedBy")
+  workstationSessionEvents  WorkstationSessionEvent[]
 
   @@map("users")
 }
@@ -1181,6 +1196,8 @@ model Site {
   crates              Crate[]
   crateLabelPrintJobs CrateLabelPrintJob[]
   crateEvents         CrateEvent[]
+  workstations        Workstation[]
+  workstationSessions WorkstationSession[]
   createdByUser       User?                  @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   updatedByUser       User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
@@ -1267,9 +1284,10 @@ model ProductCategory {
   code String @id
   name String
 
-  components CatalogComponent[]
-  products   Product[]
-  crateTypes CrateTypeCategory[]
+  components   CatalogComponent[]
+  products     Product[]
+  crateTypes   CrateTypeCategory[]
+  workstations Workstation[]
 
   @@map("product_categories")
 }
@@ -1455,6 +1473,7 @@ model RecipeRevisionBom {
 enum QrIdentityKind {
   BOTTLE
   CRATE
+  WORKSTATION
 }
 
 /// One registry of every public QR token, so a token is unique across bottles and crates
@@ -1465,7 +1484,8 @@ model QrIdentity {
   kind      QrIdentityKind
   createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  crates Crate[]
+  crates       Crate[]
+  workstations Workstation[]
 
   @@unique([token, kind])
   @@map("qr_identities")
@@ -1619,4 +1639,134 @@ model CrateEvent {
 
   @@index([crateId, occurredAt])
   @@map("crate_events")
+}
+
+// ---------------------------------------------------------------------------------------------
+// workstations module — stations as work modes at a site and their work sessions (doc 026, A2).
+// A station QR identifies the station only: never a login, permission or secret.
+// ---------------------------------------------------------------------------------------------
+
+enum WorkstationMode {
+  LABELING
+  FILLING
+}
+
+enum WorkstationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// A work mode at one site, e.g. "Plnicí linka gel 1". Never a site or warehouse.
+/// DB: identity columns immutable; the warehouse belongs to the site; FILLING ⇔ category; a
+/// status change needs its event in the same transaction; DELETE rejected.
+model Workstation {
+  id                 String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String            @unique
+  name               String
+  siteId             String            @map("site_id") @db.Uuid
+  locationId         String            @map("location_id") @db.Uuid
+  mode               WorkstationMode
+  categoryCode       String?           @map("category_code")
+  status             WorkstationStatus @default(ACTIVE)
+  qrToken            String            @unique @map("qr_token")
+  /// Always WORKSTATION: composite FK to the registry row of this token.
+  qrKind             QrIdentityKind    @default(WORKSTATION) @map("qr_kind")
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String            @map("created_by") @db.Uuid
+  operationRequestId String            @unique @map("operation_request_id") @db.Uuid
+
+  site       Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  location   InventoryLocation    @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  category   ProductCategory?     @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
+  qrIdentity QrIdentity           @relation(fields: [qrToken, qrKind], references: [token, kind], onDelete: Restrict)
+  creator    User                 @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  operation  OperationRequest     @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  events     WorkstationEvent[]
+  sessions   WorkstationSession[]
+
+  @@index([siteId, code])
+  @@map("workstations")
+}
+
+enum WorkstationEventType {
+  CREATED
+  DEACTIVATED
+  REACTIVATED
+}
+
+/// Append-only station history. DB: immutable; (de)activation needs a reason.
+model WorkstationEvent {
+  id                 String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  workstationId      String               @map("workstation_id") @db.Uuid
+  type               WorkstationEventType
+  occurredAt         DateTime             @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  actorId            String               @map("actor_id") @db.Uuid
+  operationRequestId String               @map("operation_request_id") @db.Uuid
+  reason             String?
+
+  workstation Workstation      @relation(fields: [workstationId], references: [id], onDelete: Restrict)
+  actor       User             @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  operation   OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@index([workstationId, occurredAt])
+  @@map("workstation_events")
+}
+
+enum WorkstationSessionStatus {
+  ACTIVE
+  RELEASED
+  TAKEN_OVER
+  CLOSED
+}
+
+/// One user working at one station. DB: at most one ACTIVE session per station and per user
+/// (partial unique); the site is the station's; only ACTIVE → RELEASED/TAKEN_OVER/CLOSED, once,
+/// with its event; identity columns immutable; DELETE rejected. Lease expiry is not a status.
+model WorkstationSession {
+  id             String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  workstationId  String                   @map("workstation_id") @db.Uuid
+  userId         String                   @map("user_id") @db.Uuid
+  siteId         String                   @map("site_id") @db.Uuid
+  status         WorkstationSessionStatus @default(ACTIVE)
+  openedAt       DateTime                 @default(now()) @map("opened_at") @db.Timestamptz(3)
+  leaseExpiresAt DateTime                 @map("lease_expires_at") @db.Timestamptz(3)
+  lastActivityAt DateTime                 @default(now()) @map("last_activity_at") @db.Timestamptz(3)
+  closedAt       DateTime?                @map("closed_at") @db.Timestamptz(3)
+  closedBy       String?                  @map("closed_by") @db.Uuid
+  closeReason    String?                  @map("close_reason")
+
+  workstation Workstation               @relation(fields: [workstationId], references: [id], onDelete: Restrict)
+  user        User                      @relation("SessionUser", fields: [userId], references: [id], onDelete: Restrict)
+  closer      User?                     @relation("SessionClosedBy", fields: [closedBy], references: [id], onDelete: Restrict)
+  site        Site                      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  events      WorkstationSessionEvent[]
+
+  @@index([userId, openedAt])
+  @@map("workstation_sessions")
+}
+
+enum WorkstationSessionEventType {
+  OPENED
+  RESUMED
+  RELEASED
+  TAKEN_OVER
+  CLOSED
+}
+
+/// Append-only session history. DB: immutable; a takeover or close needs a reason.
+model WorkstationSessionEvent {
+  id                 String                      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId          String                      @map("session_id") @db.Uuid
+  type               WorkstationSessionEventType
+  occurredAt         DateTime                    @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  actorId            String                      @map("actor_id") @db.Uuid
+  operationRequestId String                      @map("operation_request_id") @db.Uuid
+  reason             String?
+
+  session   WorkstationSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  actor     User               @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  operation OperationRequest   @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@index([sessionId, occurredAt])
+  @@map("workstation_session_events")
 }

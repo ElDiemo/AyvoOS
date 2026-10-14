@@ -48,6 +48,7 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'inventory:read',
     'catalog:read',
     'crates:read',
+    'production:fill',
   ],
   // Label templates are company-wide brand data: not changed by a site-bound role.
   PRODUCTION_SUPERVISOR: [
@@ -61,6 +62,9 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'catalog:recipe_approve',
     'crates:read',
     'crates:register',
+    'production:workstations_manage',
+    'production:fill',
+    'production:session_takeover',
   ],
   SALES: ['inventory:stock_summary'],
   FINANCE: [
@@ -204,6 +208,8 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/public/bottles/:token',
       // Only "an AYVO returnable crate" (doc 020 §3.4, doc 025 A1).
       'GET /api/public/crates/:token',
+      // Only "an internal AYVO mark" (doc 026).
+      'GET /api/public/workstations/:token',
     ]);
     // Without a session every other route answers 401 — guards run before any parameter parsing.
     for (const r of routes.filter((x) => x.rule!.kind !== 'public')) {

@@ -57,6 +57,9 @@ export const identityCs = {
     'catalog:recipe_approve': 'Aktivovat a archivovat verze kusovníků',
     'crates:read': 'Zobrazit fyzické bedny provozovny, jejich historii a tisk QR',
     'crates:register': 'Evidovat nové bedny a tisknout jejich QR štítky',
+    'production:workstations_manage': 'Spravovat pracoviště provozovny a tisknout jejich QR',
+    'production:fill': 'Pracovat na plnicím pracovišti (plnění, změna šarže, Hotovo)',
+    'production:session_takeover': 'Vynuceně převzít obsazené pracoviště (s důvodem)',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',

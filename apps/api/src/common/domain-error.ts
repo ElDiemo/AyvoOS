@@ -9,6 +9,16 @@ export function domainError(status: number, code: string, message: string): Http
   return new HttpException({ statusCode: status, code, message }, status);
 }
 
+/** Like domainError, with safe, whitelisted details for the UI (e.g. who holds a station). */
+export function domainErrorWithDetails(
+  status: number,
+  code: string,
+  message: string,
+  details: Record<string, unknown>,
+): HttpException {
+  return new HttpException({ statusCode: status, code, message, details }, status);
+}
+
 export const idempotencyConflict = () =>
   domainError(
     409,

@@ -1,4 +1,8 @@
-import { publicBottlePassportSchema, publicCrateSchema } from '@ayvo/types';
+import {
+  publicBottlePassportSchema,
+  publicCrateSchema,
+  publicWorkstationSchema,
+} from '@ayvo/types';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { apiGetPublic } from '@/lib/api';
@@ -10,14 +14,19 @@ export const metadata: Metadata = { title: 'AYVO' };
 /**
  * Public QR target. A bottle token shows the bottle passport (whitelisted public DTO: no internal
  * ids, no operator, warehouse or hotel data, no CO2e — doc 011). A crate token shows only that
- * this is a returnable AYVO crate (doc 020 §3.4): no code, site, hotel, contents or history.
+ * this is a returnable AYVO crate (doc 020 §3.4): no code, site, hotel, contents or history. A
+ * workstation token shows only "Internal AYVO mark" (doc 026).
  */
 export default async function PublicQrPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const path = encodeURIComponent(token);
   const passport = await apiGetPublic(`public/bottles/${path}`, publicBottlePassportSchema);
   const crate = passport ? null : await apiGetPublic(`public/crates/${path}`, publicCrateSchema);
-  if (!passport && !crate) notFound();
+  const station =
+    passport || crate
+      ? null
+      : await apiGetPublic(`public/workstations/${path}`, publicWorkstationSchema);
+  if (!passport && !crate && !station) notFound();
   return (
     <main
       lang="en"
@@ -36,6 +45,10 @@ export default async function PublicQrPage({ params }: { params: Promise<{ token
               </p>
             </div>
           </>
+        ) : station ? (
+          <h1 className="mt-10 text-lg font-medium" data-testid="public-internal">
+            Internal AYVO mark
+          </h1>
         ) : (
           <>
             <h1 className="mt-10 text-lg font-medium" data-testid="public-crate">
