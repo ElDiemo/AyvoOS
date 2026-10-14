@@ -46,6 +46,7 @@ export const shellCs = {
         bottles: 'Lahve',
         templates: 'Šablony etiket',
         labelActivation: 'Nalepení etiket',
+        crates: 'Bedny',
         catalog: 'Produkty a receptury',
       },
     },

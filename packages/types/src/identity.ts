@@ -66,6 +66,8 @@ export const PERMISSION_CODES = [
   'catalog:read',
   'catalog:product_manage',
   'catalog:recipe_approve',
+  'crates:read',
+  'crates:register',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -88,6 +90,7 @@ export const PERMISSION_MODULES = [
   'procurement',
   'production',
   'catalog',
+  'crates',
   'identity',
   'sites',
 ] as const;
@@ -106,6 +109,8 @@ export const SITE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'production:read',
   'production:bottles_create',
   'production:labels_print',
+  'crates:read',
+  'crates:register',
 ];
 
 /** Permissions that also need the active site and access to its warehouse (doc 022). */

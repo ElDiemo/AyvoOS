@@ -8,6 +8,8 @@ export const CODE_PREFIX = {
   bottleCreationBatch: 'BC-',
   labelPrintJob: 'PJ-',
   goodsReceipt: 'GR-',
+  crate: 'AYV-C-',
+  crateRegistration: 'CR-',
 } as const;
 
 export function formatCode(prefix: string, serial: bigint): string {

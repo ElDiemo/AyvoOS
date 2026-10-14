@@ -111,7 +111,10 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await colleaguePage.goto('/bottles');
   await expect(colleaguePage).toHaveURL(/\/forbidden$/);
   await colleaguePage.goto('/');
-  await expect(colleagueNav.getByRole('link')).toHaveText(['Přehled', 'Sklad']);
+  // A warehouse operator still reads the site's physical crates (Výroba → Bedny, doc 020 §12).
+  await expect(colleagueNav.getByRole('link')).toHaveText(['Přehled', 'Sklad', 'Výroba']);
+  await colleaguePage.goto('/production/crates');
+  await expect(colleaguePage.getByRole('heading', { level: 1 })).toHaveText('Bedny');
 
   // Deactivation ends access at once.
   const actions = page.getByTestId('user-actions');

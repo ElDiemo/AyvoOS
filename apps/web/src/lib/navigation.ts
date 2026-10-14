@@ -90,7 +90,8 @@ export const MODULES: readonly NavModule[] = [
     section: 'operations',
     // The company-wide catalogue (doc 023) is part of Výroba, readable without production access:
     // a catalogue-only user sees just that page (issue #17).
-    permissions: ['production:read', 'catalog:read'],
+    // Bedny (physical crates, doc 025 A1) are readable by warehouse roles as well.
+    permissions: ['production:read', 'catalog:read', 'crates:read'],
     label: p.label,
     href: '/production',
     description: p.description,
@@ -120,6 +121,12 @@ export const MODULES: readonly NavModule[] = [
         href: '/production/label-activation',
         label: p.pages.labelActivation,
         permission: 'production:read',
+      },
+      {
+        id: 'crates',
+        href: '/production/crates',
+        label: p.pages.crates,
+        permission: 'crates:read',
       },
       {
         id: 'catalog',
@@ -162,7 +169,7 @@ export const MODULES: readonly NavModule[] = [
 export type WarehousePageId =
   'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId =
-  'overview' | 'bottles' | 'templates' | 'label-activation' | 'catalog';
+  'overview' | 'bottles' | 'templates' | 'label-activation' | 'crates' | 'catalog';
 export type AdminPageId = 'users' | 'roles' | 'sites';
 
 /**

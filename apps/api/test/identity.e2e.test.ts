@@ -30,7 +30,7 @@ import { newBottleItemId, PDF_BYTES } from './support/warehouse-fixtures.js';
  */
 const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
   ADMIN: [...PERMISSION_CODES],
-  WAREHOUSE_OPERATOR: ['inventory:read', 'inventory:receive'],
+  WAREHOUSE_OPERATOR: ['inventory:read', 'inventory:receive', 'crates:read'],
   WAREHOUSE_SUPERVISOR: [
     'inventory:read',
     'inventory:receive',
@@ -39,12 +39,15 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'procurement:suppliers_manage',
     'procurement:documents_read',
     'catalog:read',
+    'crates:read',
+    'crates:register',
   ],
   PRODUCTION_OPERATOR: [
     'production:read',
     'production:labels_print',
     'inventory:read',
     'catalog:read',
+    'crates:read',
   ],
   // Label templates are company-wide brand data: not changed by a site-bound role.
   PRODUCTION_SUPERVISOR: [
@@ -56,6 +59,8 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'catalog:read',
     'catalog:product_manage',
     'catalog:recipe_approve',
+    'crates:read',
+    'crates:register',
   ],
   SALES: ['inventory:stock_summary'],
   FINANCE: [
@@ -197,6 +202,8 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/auth/test-provider/authorize',
       'GET /api/health',
       'GET /api/public/bottles/:token',
+      // Only "an AYVO returnable crate" (doc 020 §3.4, doc 025 A1).
+      'GET /api/public/crates/:token',
     ]);
     // Without a session every other route answers 401 — guards run before any parameter parsing.
     for (const r of routes.filter((x) => x.rule!.kind !== 'public')) {

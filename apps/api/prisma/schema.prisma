@@ -479,10 +479,11 @@ model InventoryLocation {
   /// The warehouse the site's operations act on in v0.1. DB: at most one per site.
   isSiteDefault Boolean @default(false) @map("is_site_default")
 
-  site       Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  movements  InventoryMovement[]
-  balances   InventoryBalance[]
-  userScopes UserScope[]
+  site        Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  movements   InventoryMovement[]
+  balances    InventoryBalance[]
+  userScopes  UserScope[]
+  crateEvents CrateEvent[]
 
   @@map("inventory_locations")
 }
@@ -838,6 +839,8 @@ enum OperationKind {
   RECIPE_DRAFT_UPDATE
   RECIPE_ACTIVATE
   RECIPE_ARCHIVE
+  CRATE_REGISTER
+  CRATE_LABEL_PRINT
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -849,11 +852,14 @@ model OperationRequest {
   result        Json?
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  catalogComponents CatalogComponent[]
-  crateTypes        CrateType[]
-  products          Product[]
-  recipeVersions    RecipeVersion[]
-  recipeRevisions   RecipeRevision[]
+  catalogComponents   CatalogComponent[]
+  crateTypes          CrateType[]
+  products            Product[]
+  recipeVersions      RecipeVersion[]
+  recipeRevisions     RecipeRevision[]
+  crateRegistrations  CrateRegistration[]
+  crateLabelPrintJobs CrateLabelPrintJob[]
+  crateEvents         CrateEvent[]
 
   @@map("operation_requests")
 }
@@ -884,34 +890,37 @@ model User {
   deactivationReason String?    @map("deactivation_reason")
   lastLoginAt        DateTime?  @map("last_login_at") @db.Timestamptz(3)
 
-  createdByUser      User?              @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  createdUsers       User[]             @relation("UserCreatedBy")
-  deactivatedByUser  User?              @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
-  deactivatedUsers   User[]             @relation("UserDeactivatedBy")
-  identities         UserIdentity[]
-  roles              UserRole[]         @relation("UserRoles")
-  rolesGranted       UserRole[]         @relation("RoleGrantedBy")
-  rolesRevoked       UserRole[]         @relation("RoleRevokedBy")
-  scopes             UserScope[]        @relation("UserScopes")
-  scopesGranted      UserScope[]        @relation("ScopeGrantedBy")
-  scopesRevoked      UserScope[]        @relation("ScopeRevokedBy")
-  sessions           UserSession[]
-  bootstrap          IdentityBootstrap?
-  rolesCreated       Role[]             @relation("RoleCreatedBy")
-  rolesUpdated       Role[]             @relation("RoleUpdatedBy")
-  sitesCreated       Site[]             @relation("SiteCreatedBy")
-  invitations        UserInvitation[]   @relation("UserInvitations")
-  invitationsSent    UserInvitation[]   @relation("InvitationCreatedBy")
-  invitationsRevoked UserInvitation[]   @relation("InvitationRevokedBy")
-  sitesUpdated       Site[]             @relation("SiteUpdatedBy")
-  componentsCreated  CatalogComponent[]
-  crateTypesCreated  CrateType[]
-  productsCreated    Product[]          @relation("ProductCreatedBy")
-  productsArchived   Product[]          @relation("ProductArchivedBy")
-  recipesCreated     RecipeVersion[]    @relation("RecipeCreatedBy")
-  recipesActivated   RecipeVersion[]    @relation("RecipeActivatedBy")
-  recipesArchived    RecipeVersion[]    @relation("RecipeArchivedBy")
-  recipeRevisions    RecipeRevision[]
+  createdByUser       User?                @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdUsers        User[]               @relation("UserCreatedBy")
+  deactivatedByUser   User?                @relation("UserDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
+  deactivatedUsers    User[]               @relation("UserDeactivatedBy")
+  identities          UserIdentity[]
+  roles               UserRole[]           @relation("UserRoles")
+  rolesGranted        UserRole[]           @relation("RoleGrantedBy")
+  rolesRevoked        UserRole[]           @relation("RoleRevokedBy")
+  scopes              UserScope[]          @relation("UserScopes")
+  scopesGranted       UserScope[]          @relation("ScopeGrantedBy")
+  scopesRevoked       UserScope[]          @relation("ScopeRevokedBy")
+  sessions            UserSession[]
+  bootstrap           IdentityBootstrap?
+  rolesCreated        Role[]               @relation("RoleCreatedBy")
+  rolesUpdated        Role[]               @relation("RoleUpdatedBy")
+  sitesCreated        Site[]               @relation("SiteCreatedBy")
+  invitations         UserInvitation[]     @relation("UserInvitations")
+  invitationsSent     UserInvitation[]     @relation("InvitationCreatedBy")
+  invitationsRevoked  UserInvitation[]     @relation("InvitationRevokedBy")
+  sitesUpdated        Site[]               @relation("SiteUpdatedBy")
+  componentsCreated   CatalogComponent[]
+  crateTypesCreated   CrateType[]
+  productsCreated     Product[]            @relation("ProductCreatedBy")
+  productsArchived    Product[]            @relation("ProductArchivedBy")
+  recipesCreated      RecipeVersion[]      @relation("RecipeCreatedBy")
+  recipesActivated    RecipeVersion[]      @relation("RecipeActivatedBy")
+  recipesArchived     RecipeVersion[]      @relation("RecipeArchivedBy")
+  recipeRevisions     RecipeRevision[]
+  crateRegistrations  CrateRegistration[]
+  crateLabelPrintJobs CrateLabelPrintJob[]
+  crateEvents         CrateEvent[]
 
   @@map("users")
 }
@@ -1158,18 +1167,22 @@ model Site {
   updatedBy       String?          @map("updated_by") @db.Uuid
   deactivatedAt   DateTime?        @map("deactivated_at") @db.Timestamptz(3)
 
-  locations      InventoryLocation[]
-  goodsReceipts  GoodsReceipt[]
-  bottleBatches  BottleCreationBatch[]
-  bottles        Bottle[]
-  printJobs      LabelPrintJob[]
-  documents      SupplierDocument[]
-  receiptCosts   GoodsReceiptLineCost[]
-  userScopes     UserScope[]
-  activeSessions UserSession[]
-  auditEvents    AuditEvent[]
-  createdByUser  User?                  @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  updatedByUser  User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  locations           InventoryLocation[]
+  goodsReceipts       GoodsReceipt[]
+  bottleBatches       BottleCreationBatch[]
+  bottles             Bottle[]
+  printJobs           LabelPrintJob[]
+  documents           SupplierDocument[]
+  receiptCosts        GoodsReceiptLineCost[]
+  userScopes          UserScope[]
+  activeSessions      UserSession[]
+  auditEvents         AuditEvent[]
+  crateRegistrations  CrateRegistration[]
+  crates              Crate[]
+  crateLabelPrintJobs CrateLabelPrintJob[]
+  crateEvents         CrateEvent[]
+  createdByUser       User?                  @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedByUser       User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@map("sites")
 }
@@ -1294,9 +1307,11 @@ model CrateType {
   createdBy          String   @map("created_by") @db.Uuid
   operationRequestId String   @map("operation_request_id") @db.Uuid
 
-  categories CrateTypeCategory[]
-  creator    User                @relation(fields: [createdBy], references: [id], onDelete: Restrict)
-  operation  OperationRequest    @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  categories    CrateTypeCategory[]
+  registrations CrateRegistration[]
+  crates        Crate[]
+  creator       User                @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  operation     OperationRequest    @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
 
   @@map("crate_types")
 }
@@ -1430,4 +1445,178 @@ model RecipeRevisionBom {
 
   @@id([recipeVersionId, revision, stage])
   @@map("recipe_revision_boms")
+}
+
+// ---------------------------------------------------------------------------------------------
+// crates module — physical returnable crates and their QR labels (doc 020 §3.4, ADR 0021 §6,
+// doc 025 PR A1). Crate cycles, assignments and filling are later PRs (doc 025 §9).
+// ---------------------------------------------------------------------------------------------
+
+enum QrIdentityKind {
+  BOTTLE
+  CRATE
+}
+
+/// One registry of every public QR token, so a token is unique across bottles and crates
+/// (doc 020 §3.4). Rows are written only by the database (insert triggers on bottles and
+/// crates; existing bottle tokens copied by the migration). DB: immutable.
+model QrIdentity {
+  token     String         @id
+  kind      QrIdentityKind
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  crates Crate[]
+
+  @@unique([token, kind])
+  @@map("qr_identities")
+}
+
+enum CrateStatus {
+  ACTIVE
+  /// Reserved: crate retirement is a later, approved workflow (doc 005); never set in A1.
+  RETIRED
+}
+
+/// One registration of 1–1000 physical crates of one type at one site ("CR-000001").
+/// DB: immutable; code derived from serial; last − first + 1 = quantity.
+model CrateRegistration {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt   @unique
+  code               String   @unique
+  crateTypeId        String   @map("crate_type_id") @db.Uuid
+  quantity           Int
+  firstCrateSerial   BigInt   @map("first_crate_serial")
+  lastCrateSerial    BigInt   @map("last_crate_serial")
+  siteId             String   @map("site_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String   @map("created_by") @db.Uuid
+  operationRequestId String   @unique @map("operation_request_id") @db.Uuid
+
+  crateType CrateType        @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  site      Site             @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator   User             @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  crates    Crate[]
+  events    CrateEvent[]
+
+  @@unique([id, siteId])
+  @@map("crate_registrations")
+}
+
+/// A physical returnable crate: permanent internal id, human code "AYV-C-000001" and an opaque
+/// QR token (scan identity; never the code or the id). The crate lives for years; its
+/// circulations are crate cycles (later PR). site_id = the site it belongs to (doc 022).
+/// DB: identity columns immutable; DELETE rejected; token registered as kind CRATE.
+model Crate {
+  id             String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial         BigInt         @unique
+  code           String         @unique
+  qrToken        String         @unique @map("qr_token")
+  /// Always CRATE: composite FK to the registry row of this token.
+  qrKind         QrIdentityKind @default(CRATE) @map("qr_kind")
+  crateTypeId    String         @map("crate_type_id") @db.Uuid
+  registrationId String         @map("registration_id") @db.Uuid
+  siteId         String         @map("site_id") @db.Uuid
+  status         CrateStatus    @default(ACTIVE)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  qrIdentity    QrIdentity               @relation(fields: [qrToken, qrKind], references: [token, kind], onDelete: Restrict)
+  crateType     CrateType                @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  registration  CrateRegistration        @relation(fields: [registrationId, siteId], references: [id, siteId], onDelete: Restrict)
+  site          Site                     @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  printJobItems CrateLabelPrintJobItem[]
+  events        CrateEvent[]
+
+  @@index([siteId, serial])
+  @@index([crateTypeId])
+  @@map("crates")
+}
+
+/// One rendering of crate QR labels for a fixed set of crates of one site, at a chosen physical
+/// size (not yet physically approved, doc 025 Q7). A reprint is a new job with the same tokens,
+/// hence the same URLs. Code shares the "PJ-" counter with bottle print jobs.
+/// DB: identity columns immutable; DELETE rejected; QR environment CHECK (ADR 0014).
+model CrateLabelPrintJob {
+  id                 String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt                 @unique
+  code               String                 @unique
+  siteId             String                 @map("site_id") @db.Uuid
+  labelCount         Int                    @map("label_count")
+  widthMm            Int                    @map("width_mm")
+  heightMm           Int                    @map("height_mm")
+  publicBaseUrl      String                 @map("public_base_url")
+  appEnvironment     AppEnvironment         @map("app_environment")
+  qrErrorCorrection  QrErrorCorrectionLevel @map("qr_error_correction")
+  status             LabelPrintJobStatus    @default(PENDING)
+  attempts           Int                    @default(0)
+  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String                 @map("created_by") @db.Uuid
+  operationRequestId String                 @unique @map("operation_request_id") @db.Uuid
+  startedAt          DateTime?              @map("started_at") @db.Timestamptz(3)
+  completedAt        DateTime?              @map("completed_at") @db.Timestamptz(3)
+  failedAt           DateTime?              @map("failed_at") @db.Timestamptz(3)
+  failureReason      String?                @map("failure_reason")
+  fileStorageKey     String?                @map("file_storage_key")
+  fileByteSize       Int?                   @map("file_byte_size")
+  fileSha256         String?                @map("file_sha256") @db.Char(64)
+
+  site      Site                     @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator   User                     @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  operation OperationRequest         @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  items     CrateLabelPrintJobItem[]
+  events    CrateEvent[]
+
+  @@index([siteId, serial])
+  @@map("crate_label_print_jobs")
+}
+
+/// The exact crates of a crate print job, in page order. DB: immutable; the QR URL is exactly the
+/// job's base URL + "/" + the crate's token; the crate belongs to the job's site.
+model CrateLabelPrintJobItem {
+  printJobId String @map("print_job_id") @db.Uuid
+  position   Int
+  crateId    String @map("crate_id") @db.Uuid
+  qrUrl      String @map("qr_url")
+
+  printJob CrateLabelPrintJob @relation(fields: [printJobId], references: [id], onDelete: Restrict)
+  crate    Crate              @relation(fields: [crateId], references: [id], onDelete: Restrict)
+
+  @@id([printJobId, position])
+  @@unique([printJobId, crateId])
+  @@index([crateId])
+  @@map("crate_label_print_job_items")
+}
+
+enum CrateEventType {
+  REGISTERED
+  /// A crate label print job including this crate was created. Printing itself is not provable.
+  LABEL_PRINT_JOB_CREATED
+}
+
+/// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
+/// the operation does not record one (registration records only the site). DB: immutable.
+model CrateEvent {
+  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  crateId            String         @map("crate_id") @db.Uuid
+  type               CrateEventType
+  occurredAt         DateTime       @map("occurred_at") @db.Timestamptz(3)
+  recordedAt         DateTime       @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  actorId            String         @map("actor_id") @db.Uuid
+  siteId             String         @map("site_id") @db.Uuid
+  locationId         String?        @map("location_id") @db.Uuid
+  operationRequestId String         @map("operation_request_id") @db.Uuid
+  registrationId     String?        @map("registration_id") @db.Uuid
+  printJobId         String?        @map("print_job_id") @db.Uuid
+  payload            Json           @default("{}")
+
+  crate        Crate               @relation(fields: [crateId], references: [id], onDelete: Restrict)
+  actor        User                @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  site         Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  location     InventoryLocation?  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  operation    OperationRequest    @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  registration CrateRegistration?  @relation(fields: [registrationId], references: [id], onDelete: Restrict)
+  printJob     CrateLabelPrintJob? @relation(fields: [printJobId], references: [id], onDelete: Restrict)
+
+  @@index([crateId, occurredAt])
+  @@map("crate_events")
 }

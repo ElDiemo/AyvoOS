@@ -60,6 +60,7 @@ test('Warehouse and Production are separate; label application belongs to Produc
     'Lahve',
     'Šablony etiket',
     'Nalepení etiket',
+    'Bedny',
     'Produkty a receptury',
   ]);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled výroby');
