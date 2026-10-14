@@ -66,7 +66,7 @@ export const workstationsCs = {
       'Opuštěním pracoviště ho předáte: další oprávněný pracovník pak jen naskenuje jeho QR. Rozpracované bedny se tím nemění.',
     left: 'Pracoviště jste opustili. Může na něm pokračovat jiný pracovník.',
     nextSteps:
-      'Lepení etiket do bedny a plnění se na pracovišti zapnou v navazujícím kroku (A3/A4). Teď lze pracoviště otevřít, předat a převzít.',
+      'Plnění se na plnicím pracovišti zapne v navazujícím kroku (A4). Teď lze pracoviště otevřít, předat a převzít.',
     inUseTitle: (holder: string) => `Na tomto pracovišti pracuje ${holder}.`,
     inUseText: (since: string, expired: boolean) =>
       expired

@@ -34,10 +34,19 @@ export const cratesCs = {
     lastChange: 'Poslední změna',
   },
   capacity: (n: number) => `kapacita ${n}`,
-  /** A1 has no crate cycles yet: say exactly that, never "empty" or "ready". */
-  noCirculation: 'Bez evidovaného oběhu',
+  /** No open crate cycle: nothing recorded in the crate (doc 025 §3.2). */
+  noCirculation: 'Prázdná – bez otevřeného oběhu',
   noCirculationHelp:
-    'Plnění beden a připravené bedny zatím systém neeviduje (navazující etapa). Obsah bedny proto není známý.',
+    'Obsah bedny se eviduje od lepení (sken lahve do bedny). Plnění a připravené bedny přidá navazující krok.',
+  cycleStatus: {
+    OPEN_ASSEMBLY: 'Skládá se (lepení)',
+    READY_TO_FILL: 'Čeká na plnění',
+    FILLING: 'Plní se',
+    FILLED: 'Připravená',
+    ABORTED: 'Zrušený oběh',
+  } as Record<string, string>,
+  cycleLine: (status: string, members: number, capacity: number, product: string) =>
+    `${status} · obsah ${members}/${capacity} · ${product}`,
   notRecorded: 'Neevidováno',
   notRecordedHelp:
     'Umístění se zapisuje až skutečnou operací ve skladu. Registrace zaznamenává jen provozovnu.',
@@ -52,6 +61,8 @@ export const cratesCs = {
   eventType: {
     REGISTERED: 'Bedna zaevidována',
     LABEL_PRINT_JOB_CREATED: 'Vytvořena tisková úloha QR štítku',
+    CYCLE_OPENED: 'Začal oběh (první lahev vložena)',
+    READY_TO_FILL: 'Bedna plná – čeká na plnění',
   } as Record<string, string>,
   eventBy: (actor: string) => `Provedl(a): ${actor}`,
   crateStatus: 'Stav bedny',

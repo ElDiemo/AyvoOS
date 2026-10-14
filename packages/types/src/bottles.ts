@@ -19,7 +19,7 @@ export const publicTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
 export const bottleStatusSchema = z.enum(['CREATED', 'LABELED_EMPTY']);
 export type BottleStatus = z.infer<typeof bottleStatusSchema>;
 
-export const bottleEventTypeSchema = z.enum(['CREATED', 'LABEL_APPLIED']);
+export const bottleEventTypeSchema = z.enum(['CREATED', 'LABEL_APPLIED', 'ASSIGNED_TO_CRATE']);
 export type BottleEventType = z.infer<typeof bottleEventTypeSchema>;
 
 /** POST /api/admin/bottle-registrations */

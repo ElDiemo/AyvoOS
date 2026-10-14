@@ -39,14 +39,24 @@ describe.skipIf(!hasDatabase)('bottle components (database invariants)', () => {
       throw new Error('ROLLBACK_OK');
     });
 
+  /** Context columns a new LABEL_APPLIED needs since doc 025 A3 (copied from a real one). */
+  async function labelingColumns() {
+    const e = await t.prisma.bottleEvent.findFirstOrThrow({
+      where: { bottleId: applied.id, type: 'LABEL_APPLIED' },
+    });
+    return `'${e.crateCycleId}', '${e.workstationSessionId}', '${e.operationRequestId}', '${e.actorId}'`;
+  }
+
   it('a label printed for another bottle can never be installed on this body', async () => {
     const item = await t.prisma.labelPrintJobItem.findFirstOrThrow({
       where: { bottleId: other.id },
     });
     await expect(
       inTransaction([
-        `INSERT INTO bottle_events (id, bottle_id, type, occurred_at)
-           VALUES ('00000000-0000-4000-8000-00000000e001', '${fresh.id}', 'LABEL_APPLIED', now())`,
+        `INSERT INTO bottle_events
+           (id, bottle_id, type, occurred_at, crate_cycle_id, workstation_session_id, operation_request_id, actor_id)
+           VALUES ('00000000-0000-4000-8000-00000000e001', '${fresh.id}', 'LABEL_APPLIED', now(),
+                   ${await labelingColumns()})`,
         `INSERT INTO bottle_component_attachments
            (bottle_id, component_type, label_qr_url, print_job_id, print_job_position, installed_at, installed_event_id)
            VALUES ('${fresh.id}', 'LABEL', '${other.url}', '${item.printJobId}', ${item.position}, now(),
@@ -61,8 +71,10 @@ describe.skipIf(!hasDatabase)('bottle components (database invariants)', () => {
     });
     await expect(
       inTransaction([
-        `INSERT INTO bottle_events (id, bottle_id, type, occurred_at)
-           VALUES ('00000000-0000-4000-8000-00000000e002', '${fresh.id}', 'LABEL_APPLIED', now())`,
+        `INSERT INTO bottle_events
+           (id, bottle_id, type, occurred_at, crate_cycle_id, workstation_session_id, operation_request_id, actor_id)
+           VALUES ('00000000-0000-4000-8000-00000000e002', '${fresh.id}', 'LABEL_APPLIED', now(),
+                   ${await labelingColumns()})`,
         `UPDATE bottles SET status = 'LABELED_EMPTY' WHERE id = '${fresh.id}'`,
         `INSERT INTO bottle_component_attachments
            (bottle_id, component_type, label_qr_url, print_job_id, print_job_position, installed_at, installed_event_id)

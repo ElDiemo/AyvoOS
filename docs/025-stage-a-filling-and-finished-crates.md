@@ -4,7 +4,10 @@ Status (revision 4, 2026-10-14):
 
 - **Approved by the owner:** the process and consumption moments (§0), the decisions B1–B6 (§13),
   the role matrix (§7) and the A2 model of doc 026 (workstations and sessions — PR #22).
-- **Implemented:** A1 physical crates and their QR labels (PR #21, on DEV since 2026-10-14).
+- **Implemented:** A1 physical crates and their QR labels (PR #21, on DEV since 2026-10-14); A2
+  workstations and sessions (PR #22); A3 labelling into crates (its PR, in review): product label
+  approvals, crate cycles (`OPEN_ASSEMBLY` → `READY_TO_FILL`), assignments, product bindings, body +
+  label consumption at the labelling scan, the standalone label application retired (410).
 - **Not yet approved:** the tables and migrations of A3, A4 and W1 (§5, §10). Each is proposed
   here and needs the owner's approval of its model before its own implementation PR. ADR 0025
   (proposed) records the process decision.

@@ -123,12 +123,6 @@ export const MODULES: readonly NavModule[] = [
         permission: 'production:read',
       },
       {
-        id: 'label-activation',
-        href: '/production/label-activation',
-        label: p.pages.labelActivation,
-        permission: 'production:read',
-      },
-      {
         id: 'station',
         href: '/production/station',
         label: p.pages.station,
@@ -187,14 +181,7 @@ export const MODULES: readonly NavModule[] = [
 export type WarehousePageId =
   'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId =
-  | 'overview'
-  | 'bottles'
-  | 'templates'
-  | 'label-activation'
-  | 'station'
-  | 'crates'
-  | 'workstations'
-  | 'catalog';
+  'overview' | 'bottles' | 'templates' | 'station' | 'crates' | 'workstations' | 'catalog';
 export type AdminPageId = 'users' | 'roles' | 'sites';
 
 /**

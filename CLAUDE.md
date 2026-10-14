@@ -40,6 +40,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   QR identity registry, crate registrations, crates, crate label print jobs, crate events.
   Workstations and work sessions (doc 026, A2, model approved 2026-10-14): workstations,
   workstation events, workstation sessions (one active per station and per user), session events.
+  Labelling into crates (doc 025 A3, owner B1–B4 2026-10-14): product label approvals, crate
+  cycles, crate assignments, bottle product bindings, the labelling context on sessions; a new
+  LABEL_APPLIED only into a crate cycle (the standalone label application answers 410).
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

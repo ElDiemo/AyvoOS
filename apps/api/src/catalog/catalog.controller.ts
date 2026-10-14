@@ -1,4 +1,9 @@
 import {
+  approveProductLabelRequestSchema,
+  revokeProductLabelRequestSchema,
+  type ApproveProductLabelRequest,
+  type ProductLabelApproval,
+  type RevokeProductLabelRequest,
   activateRecipeRequestSchema,
   archiveProductRequestSchema,
   archiveRecipeRequestSchema,
@@ -28,7 +33,17 @@ import {
   type RenameProductRequest,
   type UpdateRecipeDraftRequest,
 } from '@ayvo/types';
-import { Body, Controller, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import type { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -37,6 +52,7 @@ import { RequirePermission } from '../identity/access.decorators.js';
 import { CurrentPrincipal } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import { CatalogService } from './catalog.service.js';
+import { ProductLabelApprovalsService } from './product-label-approvals.service.js';
 import { RecipesService } from './recipes.service.js';
 
 const PRODUCT = new ZodValidationPipe(productCodeSchema);
@@ -55,6 +71,7 @@ export class CatalogController {
     private readonly catalog: CatalogService,
     private readonly recipes: RecipesService,
     private readonly crateTypes: CrateTypesService,
+    private readonly approvals: ProductLabelApprovalsService,
   ) {}
 
   @RequirePermission('catalog:read')
@@ -112,6 +129,35 @@ export class CatalogController {
     @CurrentPrincipal() principal: Principal,
   ): Promise<Product> {
     return this.catalog.createProduct(principal.userId, body);
+  }
+
+  @RequirePermission('catalog:read')
+  @Get('products/:code/label-approvals')
+  labelApprovals(@Param('code', PRODUCT) code: string): Promise<ProductLabelApproval[]> {
+    return this.approvals.list(code);
+  }
+
+  /** Approves an exact label design (template version) for this product only (owner B1). */
+  @RequirePermission('catalog:product_manage')
+  @Post('products/:code/label-approvals')
+  approveLabel(
+    @Param('code', PRODUCT) code: string,
+    @Body(new ZodValidationPipe(approveProductLabelRequestSchema)) body: ApproveProductLabelRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<ProductLabelApproval> {
+    return this.approvals.approve(principal.userId, code, body);
+  }
+
+  @RequirePermission('catalog:product_manage')
+  @Post('products/:code/label-approvals/:id/revoke')
+  @HttpCode(200)
+  revokeLabel(
+    @Param('code', PRODUCT) code: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(revokeProductLabelRequestSchema)) body: RevokeProductLabelRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<ProductLabelApproval> {
+    return this.approvals.revoke(principal.userId, code, id, body);
   }
 
   @RequirePermission('catalog:read')

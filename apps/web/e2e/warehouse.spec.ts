@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { crateUrl, labelingSetup, lotId, openStation, releaseOwnStation } from './labeling-setup';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 /**
@@ -18,6 +19,10 @@ let receiptCode = '';
 let lotCode = '';
 let seriesCode = '';
 let foreignUrl = '';
+let versionId = '';
+let stationUrl = '';
+let productName = '';
+let productCode = '';
 
 async function json<T>(res: Awaited<ReturnType<APIRequestContext['get']>>): Promise<T> {
   expect(res.ok(), `${res.url()} -> ${res.status()}`).toBe(true);
@@ -80,6 +85,7 @@ test.beforeAll(async ({ request }) => {
   await json(
     await request.post(`/api/admin/label-print-jobs/${registration.printJob.code}/generate`),
   );
+  versionId = version.versionId;
   seriesCode = registration.batch.code;
   const first = Number(registration.batch.firstBottleCode.slice(6));
   codes = [0, 1, 2].map((i) => `AYV-B-${String(first + i).padStart(6, '0')}`);
@@ -170,76 +176,61 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
   await expect(page.getByTestId('line-1')).toContainText(lotCode);
 });
 
-test('apply labels by scanning: session series and lot, applied, duplicate, rejections, lot exhausted', async ({
+test('labels are applied at a labelling station into a crate; the old URLs lead there', async ({
   page,
+  request,
 }) => {
-  // The old warehouse URL leads to the Production station.
+  // The old warehouse and production URLs lead to the station (doc 025 A3).
   await page.goto('/warehouse/labels');
-  await expect(page).toHaveURL(/\/production\/label-activation$/);
+  await expect(page).toHaveURL(/\/production\/station$/);
   await expect(
     page.getByRole('navigation', { name: 'Hlavní navigace' }).getByRole('link', { name: 'Výroba' }),
   ).toHaveAttribute('aria-current', 'page');
-  await page
-    .getByTestId('series-choices')
-    .getByRole('button', { name: new RegExp(seriesCode) })
-    .click();
-  await page
-    .getByTestId('lot-choices')
-    .getByRole('button', { name: new RegExp(lotCode) })
-    .click();
-  await expect(page.getByTestId('active-series')).toContainText(seriesCode);
-  await expect(page.getByTestId('active-lot')).toContainText(lotCode);
-  await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 2 ks');
 
-  // The session lot survives a refresh; the scan field has focus; Enter submits.
-  await page.reload();
-  await expect(page.getByTestId('active-lot')).toContainText(lotCode);
-  const scan = page.getByTestId('scan-input');
-  await expect(scan).toBeFocused();
-  await scan.fill(urls[0]!);
-  await scan.press('Enter');
-  await expect(page.getByTestId('scan-outcome')).toContainText(`${codes[0]} – etiketa nalepena`);
-  await expect(page.getByTestId('scan-outcome')).toContainText(`ze šarže ${lotCode}. Zbývá 1 ks.`);
-  await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 1 ks');
-  await expect(scan).toHaveValue('');
-  await expect(scan).toBeFocused();
-
-  // From here on, scan like a handheld scanner: keystrokes go to whatever has focus, followed by
-  // Enter — no mouse, no fill(). Every result must leave the field empty and focused again.
-  const scanByKeyboard = async (value: string) => {
-    await page.keyboard.type(value);
-    await page.keyboard.press('Enter');
-  };
-  await scanByKeyboard(urls[0]!);
-  await expect(page.getByTestId('scan-outcome')).toContainText('etiketa už byla nalepena');
-  await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 1 ks');
-  await expect(scan).toHaveValue('');
-  await expect(scan).toBeFocused();
-
-  // A label of another series is refused by the server; nothing is consumed.
-  await scanByKeyboard(foreignUrl);
-  await expect(page.getByTestId('scan-outcome')).toContainText('Lahev nepatří do zvolené série');
-  await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 1 ks');
-  await expect(scan).toBeFocused();
-
-  await scanByKeyboard(`https://qr.ayvo.co/${urls[1]!.split('/').pop()}`);
-  await expect(page.getByTestId('scan-outcome')).toContainText('Etiketa patří do jiného prostředí');
-  await expect(scan).toBeFocused();
-  await scanByKeyboard('AYV-B-000001');
-  await expect(page.getByTestId('scan-outcome')).toContainText('Toto není etiketa AYVO');
-  await expect(scan).toHaveValue('');
-  await expect(scan).toBeFocused();
-
-  await scanByKeyboard(urls[1]!);
-  await expect(page.getByTestId('scan-outcome')).toContainText(`${codes[1]} – etiketa nalepena`);
-  await expect(page.getByTestId('active-lot-remaining')).toHaveText('zbývá 0 ks');
-  await expect(page.getByText('Šarže je vyčerpaná', { exact: true })).toBeVisible();
-  await expect(page.getByTestId('scan-input')).toHaveCount(0); // scanning stops; no silent switch
-  await expect(page.getByTestId('session-results').locator('li')).toHaveCount(6);
-  await expect(page.locator('body')).not.toContainText('qr.ayvo.co/'); // never echoed back
-
-  await page.getByRole('button', { name: 'Změnit šarži' }).click();
-  await expect(page.getByTestId('no-lots')).toBeVisible();
+  // Synthetic catalogue + approved design + labelling station; bottles of this file's design.
+  const kit = await labelingSetup(request, { versionId });
+  stationUrl = kit.stationUrl;
+  productName = kit.productName;
+  productCode = kit.productCode;
+  const sessionId = await openStation(request, kit.stationUrl);
+  const base = `/api/admin/station-sessions/${sessionId}`;
+  expect(
+    (
+      await request.post(`${base}/labeling-context`, {
+        data: {
+          requestId: crypto.randomUUID(),
+          productCode: kit.productCode,
+          labelTemplateVersionId: versionId,
+          sourceLotId: await lotId(request, lotCode),
+        },
+      })
+    ).status(),
+  ).toBe(200);
+  const crate = await crateUrl(request, kit.crateTypeCode);
+  expect(
+    (
+      await request.post(`${base}/crate`, {
+        data: { requestId: crypto.randomUUID(), scannedValue: crate },
+      })
+    ).status(),
+  ).toBe(200);
+  const scan = (url: string) =>
+    request.post(`${base}/label-scans`, {
+      data: { requestId: crypto.randomUUID(), scannedValue: url },
+    });
+  expect(((await (await scan(urls[0]!)).json()) as { outcome: string }).outcome).toBe('APPLIED');
+  expect(((await (await scan(urls[0]!)).json()) as { outcome: string }).outcome).toBe(
+    'ALREADY_APPLIED',
+  );
+  expect(((await (await scan(urls[1]!)).json()) as { outcome: string }).outcome).toBe('APPLIED');
+  const exhausted = await scan(urls[2]!);
+  expect([exhausted.status(), ((await exhausted.json()) as { code: string }).code]).toEqual([
+    409,
+    'LOT_EXHAUSTED',
+  ]);
+  void foreignUrl;
+  void seriesCode;
+  await releaseOwnStation(request);
 });
 
 test('invoice linked later, stock and ledger, bottle physical facts, phone width', async ({
@@ -282,7 +273,7 @@ test('invoice linked later, stock and ledger, bottle physical facts, phone width
     await page.setViewportSize({ width, height: 900 });
     for (const path of [
       '/warehouse',
-      '/production/label-activation',
+      '/production/station',
       '/warehouse/receipts/new',
       '/warehouse/receipts',
       `/warehouse/receipts/${receiptCode}`,
@@ -295,7 +286,7 @@ test('invoice linked later, stock and ledger, bottle physical facts, phone width
   }
 });
 
-test('long supplier and lot names wrap; the scan button stays on one line', async ({
+test('long supplier and lot names wrap; the labelling station stays within the screen', async ({
   page,
   request,
 }) => {
@@ -345,38 +336,21 @@ test('long supplier and lot names wrap; the scan button stays on one line', asyn
     }),
   );
 
+  await openStation(request, stationUrl);
   for (const width of [320, 390, 820, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     for (const path of ['/', '/warehouse', '/warehouse/stock', '/warehouse/receipts']) {
       await page.goto(path);
       await noOverflow(page, `${path} at ${width}px`);
     }
-    // Station setup lists the long lot and supplier; the active session shows them too.
-    await page.goto('/production/label-activation');
-    await page.evaluate(() => sessionStorage.clear());
-    await page.reload();
-    await expect(page.getByTestId('lot-choices')).toContainText(supplierLot);
-    await noOverflow(page, `label activation setup at ${width}px`);
-    await page
-      .getByTestId('series-choices')
-      .getByRole('button', { name: new RegExp(seriesCode) })
-      .click();
-    await page
-      .getByTestId('lot-choices')
-      .getByRole('button', { name: new RegExp(supplierLot) })
-      .click();
-    await expect(page.getByTestId('active-lot')).toContainText(supplierLot);
-    await noOverflow(page, `label activation session at ${width}px`);
-
-    // "Aktivovat" is rendered on exactly one line at every width.
-    await page.getByTestId('scan-input').fill('x');
-    const lines = await page.getByTestId('scan-submit').evaluate((el) => {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
-    });
-    expect(lines, `Aktivovat lines at ${width}px`).toBe(1);
+    // The labelling station lists the long lot (its supplier lot code) without overflowing.
+    await page.goto('/production/station');
+    const ctx = page.getByTestId('labeling-context-form');
+    await ctx.getByLabel('Produkt').selectOption({ label: `${productName} (${productCode})` });
+    await expect(ctx.getByLabel('Šarže nových lahví')).toContainText(supplierLot);
+    await noOverflow(page, `labelling station at ${width}px`);
   }
+  await releaseOwnStation(request);
   await expect(page.locator('body')).not.toContainText('qr.ayvo.co');
 });
 

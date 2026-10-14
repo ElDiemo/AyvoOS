@@ -156,7 +156,7 @@ test('lists the crates with honest state and location, and finds one by number',
   for (const code of codes) {
     const row = page.getByTestId(`crate-${code}`);
     await expect(row).toContainText(`${TYPE} · kapacita 40`);
-    await expect(row).toContainText('Bez evidovaného oběhu');
+    await expect(row).toContainText('Prázdná – bez otevřeného oběhu');
     await expect(row).toContainText('Neevidováno');
   }
   await shot(page, 'crates-list');
@@ -172,7 +172,7 @@ test('lists the crates with honest state and location, and finds one by number',
 
 test('reprints one crate label: a new job, the same QR URL, recorded history', async ({ page }) => {
   await page.goto(`/production/crates/${codes[0]}`);
-  await expect(page.getByTestId('crate-circulation')).toHaveText('Bez evidovaného oběhu');
+  await expect(page.getByTestId('crate-circulation')).toHaveText('Prázdná – bez otevřeného oběhu');
   await expect(page.getByTestId('crate-location')).toHaveText('Neevidováno');
   const url = await page.getByTestId('crate-qr-url').innerText();
   expect(url).toMatch(/^http:\/\/localhost:3100\/q\/[A-Za-z0-9_-]{22}$/);

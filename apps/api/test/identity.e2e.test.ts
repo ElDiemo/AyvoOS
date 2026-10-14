@@ -49,6 +49,7 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'catalog:read',
     'crates:read',
     'production:fill',
+    'production:label_apply',
   ],
   // Label templates are company-wide brand data: not changed by a site-bound role.
   PRODUCTION_SUPERVISOR: [

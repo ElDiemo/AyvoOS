@@ -198,9 +198,9 @@ export class CratesService {
     return (await this.prisma.crate.count({ where: { qrToken: token } })) > 0;
   }
 
-  /** Latest event time and last recorded location per crate (a fixed number of queries). */
+  /** Latest event time, last recorded location and open cycle per crate (fixed query count). */
   private async eventFacts(crateIds: string[]) {
-    const [latest, located] = await Promise.all([
+    const [latest, located, cycles] = await Promise.all([
       this.prisma.crateEvent.findMany({
         where: { crateId: { in: crateIds } },
         distinct: ['crateId'],
@@ -213,21 +213,39 @@ export class CratesService {
         orderBy: [{ crateId: 'asc' }, { occurredAt: 'desc' }, { id: 'desc' }],
         select: { crateId: true, location: { select: { code: true, name: true } } },
       }),
+      this.prisma.crateCycle.findMany({
+        where: { crateId: { in: crateIds }, status: { not: 'ABORTED' } },
+        select: {
+          crateId: true,
+          status: true,
+          memberCount: true,
+          capacity: true,
+          product: { select: { code: true, name: true } },
+        },
+      }),
     ]);
     const locations = new Map(located.map((e) => [e.crateId, e.location]));
+    const open = new Map(cycles.map(({ crateId, ...cycle }) => [crateId, cycle]));
     return new Map(
       latest.map((e) => [
         e.crateId,
-        { lastEventAt: e.occurredAt, lastLocation: locations.get(e.crateId) ?? null },
+        {
+          lastEventAt: e.occurredAt,
+          lastLocation: locations.get(e.crateId) ?? null,
+          cycle: open.get(e.crateId) ?? null,
+        },
       ]),
     );
   }
 }
 
-function toSummary(
-  c: CrateRecord,
-  facts: { lastEventAt: Date; lastLocation: { code: string; name: string } | null },
-): CrateSummary {
+type CrateFacts = {
+  lastEventAt: Date;
+  lastLocation: { code: string; name: string } | null;
+  cycle: CrateSummary['cycle'];
+};
+
+function toSummary(c: CrateRecord, facts: CrateFacts): CrateSummary {
   return {
     code: c.code,
     crateType: { code: c.crateType.code, name: c.crateType.name, capacity: c.crateType.capacity },
@@ -235,6 +253,7 @@ function toSummary(
     site: c.site,
     registrationCode: c.registration.code,
     lastLocation: facts.lastLocation,
+    cycle: facts.cycle,
     lastEventAt: facts.lastEventAt.toISOString(),
     createdAt: c.createdAt.toISOString(),
   };

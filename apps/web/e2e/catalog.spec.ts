@@ -606,7 +606,7 @@ test('catalog:read alone sees the catalogue and nothing operational; writes are 
     '/production',
     '/bottles',
     '/label-templates',
-    '/production/label-activation',
+    '/production/station',
     '/production/catalog/products/new',
     '/production/catalog/components/new',
     '/production/catalog/crate-types/new',

@@ -47,7 +47,7 @@ export default async function ProductionOverviewPage() {
         subtitle={o.subtitle}
         actions={
           <>
-            <Link href="/production/label-activation" className={buttonClass.primary}>
+            <Link href="/production/station" className={buttonClass.primary}>
               {shellCs.actions.labelActivation}
             </Link>
             <Link href="/bottles/new" className={buttonClass.secondary}>
@@ -139,9 +139,7 @@ export default async function ProductionOverviewPage() {
 
           <Card
             title={o.recentApplications}
-            action={
-              <CardLink href="/production/label-activation">{pages.labelActivation}</CardLink>
-            }
+            action={<CardLink href="/production/station">{pages.labelActivation}</CardLink>}
           >
             {recent.items.length === 0 ? (
               <p className="text-sm text-stone-500" data-testid="no-applications">
@@ -180,11 +178,7 @@ export default async function ProductionOverviewPage() {
                 ['/bottles', pages.bottles, o.capability.bottles],
                 ['/label-templates', pages.templates, o.capability.templates],
                 ['/bottles/history', o.printJobsLink, o.capability.printJobs],
-                [
-                  '/production/label-activation',
-                  pages.labelActivation,
-                  o.capability.labelActivation,
-                ],
+                ['/production/station', pages.labelActivation, o.capability.labelActivation],
               ] as const
             ).map(([href, label, text]) => (
               <li key={href} className="min-w-0">

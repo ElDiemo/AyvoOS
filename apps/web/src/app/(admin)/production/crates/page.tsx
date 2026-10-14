@@ -127,7 +127,16 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
                 <RowValue label={t.columns.type}>
                   {c.crateType.code} · {t.capacity(c.crateType.capacity)}
                 </RowValue>
-                <RowValue label={t.columns.circulation}>{t.noCirculation}</RowValue>
+                <RowValue label={t.columns.circulation}>
+                  {c.cycle
+                    ? t.cycleLine(
+                        t.cycleStatus[c.cycle.status] ?? c.cycle.status,
+                        c.cycle.memberCount,
+                        c.cycle.capacity,
+                        c.cycle.product.name,
+                      )
+                    : t.noCirculation}
+                </RowValue>
                 <RowValue label={t.columns.location}>
                   {c.lastLocation
                     ? `${c.lastLocation.name} (${c.lastLocation.code})`

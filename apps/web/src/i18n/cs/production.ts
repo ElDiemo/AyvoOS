@@ -16,6 +16,7 @@ export const productionCs = {
   eventType: {
     CREATED: 'Identita vytvořena',
     LABEL_APPLIED: 'Etiketa nalepena na lahev',
+    ASSIGNED_TO_CRATE: 'Vložena do bedny',
   } as Record<string, string>,
   printJobStatus: {
     PENDING: 'Čeká na vygenerování',
@@ -51,7 +52,7 @@ export const productionCs = {
       templates: 'Grafika etiket a umístění QR kódu. Každá změna je nová neměnná verze.',
       printJobs: 'Tisková PDF etiket se vytvářejí u každé série lahví.',
       labelActivation:
-        'Nalepení vytištěné etikety na novou lahev a ověřovací sken. Odečte lahev ze skladové šarže.',
+        'Na lepicím pracovišti: po nalepení etikety sken vloží lahev do bedny a odečte tělo lahve a etiketu.',
     },
     printJobsLink: 'Tisk etiket v historii sérií',
   },

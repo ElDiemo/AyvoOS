@@ -569,7 +569,7 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
       ).rejects.toThrow(/never changes|violates foreign key/);
     });
 
-    it('a bottle is labelled only at its own site', async () => {
+    it('the standalone label application is retired at every site (doc 025 A3)', async () => {
       const lot = (await receive(cz.cookie, '5')).lines[0]!.lot!;
       const res = await as(cz.cookie).post('/api/admin/label-applications', {
         requestId: randomUUID(),
@@ -577,8 +577,7 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
         seriesCode: deReg.batch.code,
         scannedValue: `${TEST_QR_BASE_URL}/${deBottle.publicToken}`,
       });
-      expect(res.status).toBe(422);
-      expect(res.body.code).toBe('BOTTLE_OF_ANOTHER_SITE');
+      expect([res.status, res.body.code]).toEqual([410, 'LABEL_APPLICATION_RETIRED']);
     });
 
     it('templates are global brand data: readable at every site, changed only with the global permission', async () => {

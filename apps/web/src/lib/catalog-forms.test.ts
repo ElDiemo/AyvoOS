@@ -165,12 +165,7 @@ describe('navigation for a catalogue-only user (issue #17)', () => {
   });
   it('production users keep their pages; the catalogue only with catalog:read', () => {
     const plain = visibleModules(['production:read']).find((m) => m.id === 'production')!;
-    expect(plain.pages.map((p) => p.id)).toEqual([
-      'overview',
-      'bottles',
-      'templates',
-      'label-activation',
-    ]);
+    expect(plain.pages.map((p) => p.id)).toEqual(['overview', 'bottles', 'templates']);
     const both = visibleModules(['production:read', 'catalog:read']).find(
       (m) => m.id === 'production',
     )!;

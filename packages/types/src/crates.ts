@@ -26,7 +26,12 @@ export const CRATE_LABEL_MIN_QR_MM = 10;
 
 export const crateStatusSchema = z.enum(['ACTIVE', 'RETIRED']);
 export type CrateStatus = z.infer<typeof crateStatusSchema>;
-export const crateEventTypeSchema = z.enum(['REGISTERED', 'LABEL_PRINT_JOB_CREATED']);
+export const crateEventTypeSchema = z.enum([
+  'REGISTERED',
+  'LABEL_PRINT_JOB_CREATED',
+  'CYCLE_OPENED',
+  'READY_TO_FILL',
+]);
 export type CrateEventType = z.infer<typeof crateEventTypeSchema>;
 
 const crateTypeRefSchema = z.object({ code: z.string(), name: z.string(), capacity: z.number() });
@@ -63,6 +68,15 @@ export const crateSummarySchema = z.object({
    * recorded one yet ("Neevidováno") — never an estimate.
    */
   lastLocation: locationRefSchema.nullable(),
+  /** The open crate cycle (doc 025 A3), or null: no open circulation. */
+  cycle: z
+    .object({
+      status: z.enum(['OPEN_ASSEMBLY', 'READY_TO_FILL', 'FILLING', 'FILLED', 'ABORTED']),
+      memberCount: z.number().int(),
+      capacity: z.number().int(),
+      product: z.object({ code: z.string(), name: z.string() }),
+    })
+    .nullable(),
   /** Time of the latest crate event. */
   lastEventAt: z.iso.datetime(),
   createdAt: z.iso.datetime(),

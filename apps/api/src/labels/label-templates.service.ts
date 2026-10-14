@@ -234,8 +234,9 @@ export class LabelTemplatesService {
   /** Display references ("mydlo1 v1") for a set of version ids. */
   async getVersionRefs(
     versionIds: readonly string[],
+    db: Prisma.TransactionClient = this.prisma,
   ): Promise<Map<string, LabelTemplateVersionRef>> {
-    const versions = await this.prisma.labelTemplateVersion.findMany({
+    const versions = await db.labelTemplateVersion.findMany({
       where: { id: { in: [...new Set(versionIds)] } },
       include: { template: true },
     });

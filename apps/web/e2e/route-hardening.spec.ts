@@ -94,7 +94,7 @@ test('long template names wrap: no horizontal page scroll at 320, 390, tablet an
     `/batches/${batchCode}`,
     `/bottles/${bottleCode}`,
     '/production',
-    '/production/label-activation',
+    '/production/station',
   ];
   for (const width of [320, 390, 820, 1280]) {
     await page.setViewportSize({ width, height: 900 });

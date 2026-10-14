@@ -16,6 +16,7 @@ import { formatDateTimeCs } from '@/i18n/cs/format';
 import { workstationsCs } from '@/i18n/cs/workstations';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
+import { LabelingWorkspace } from './labeling-workspace';
 
 const t = workstationsCs.station;
 const HEARTBEAT_MS = 60_000;
@@ -333,13 +334,16 @@ export function StationPanel({
           </button>
         </div>
         {noticeBox}
-        <Card>
-          <p className="text-sm text-stone-700">{t.nextSteps}</p>
-          <p className="mt-2 text-xs text-stone-500">{t.leaveHelp}</p>
-          <p className="mt-2 text-xs text-stone-500">
-            {t.since}: {formatDateTimeCs(current.session.openedAt, timeZone)}
-          </p>
-        </Card>
+        {s.mode === 'LABELING' ? (
+          <LabelingWorkspace key={current.session.id} sessionId={current.session.id} />
+        ) : (
+          <Card>
+            <p className="text-sm text-stone-700">{t.nextSteps}</p>
+          </Card>
+        )}
+        <p className="text-xs text-stone-500">
+          {t.leaveHelp} {t.since}: {formatDateTimeCs(current.session.openedAt, timeZone)}
+        </p>
       </div>
     );
   }

@@ -20,10 +20,12 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       { source: '/batches', destination: '/bottles/history', permanent: false },
-      // Label application belongs to Production, not to the warehouse (doc 019).
+      // Labels are applied at a labelling station into a crate (doc 025 A3); the old standalone
+      // label application (and its warehouse alias) lead there.
+      { source: '/warehouse/labels', destination: '/production/station', permanent: false },
       {
-        source: '/warehouse/labels',
-        destination: '/production/label-activation',
+        source: '/production/label-activation',
+        destination: '/production/station',
         permanent: false,
       },
     ];
