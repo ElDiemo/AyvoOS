@@ -66,6 +66,12 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     expect(loaded.status, JSON.stringify(loaded.body)).toBe(200);
     return crateUrl;
   }
+  /** A labelling scan that must succeed (200). */
+  async function scanOk(...args: Parameters<typeof labelScan>) {
+    const res = await labelScan(...args);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return res;
+  }
   const movementsOf = (bottleId: string) =>
     t.prisma.inventoryMovement.findMany({
       where: { bottleEvent: { bottleId } },
@@ -152,11 +158,10 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     const { bottles, versionId } = await designBottles(1);
     await ready(versionId, await newLot(3));
     const requestId = randomUUID();
-    const first = (await labelScan(t, sessionId, bottles[0]!.url, requestId).expect(200)).body;
-    const replay = (await labelScan(t, sessionId, bottles[0]!.url, requestId).expect(200)).body;
+    const first = (await scanOk(t, sessionId, bottles[0]!.url, requestId)).body;
+    const replay = (await scanOk(t, sessionId, bottles[0]!.url, requestId)).body;
     expect(replay).toEqual(first);
-    const again = (await labelScan(t, sessionId, bottles[0]!.url).expect(200))
-      .body as LabelScanResult;
+    const again = (await scanOk(t, sessionId, bottles[0]!.url)).body as LabelScanResult;
     expect([again.outcome, again.cycle.memberCount]).toEqual(['ALREADY_APPLIED', 1]);
     expect(await movementsOf(bottles[0]!.id)).toHaveLength(2);
     expect(
@@ -173,7 +178,7 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     await approveDesign(t, small.productCode, versionId);
     await ready(versionId, await newLot(10), small.crateTypeCode, small.productCode);
     for (const [i, b] of bottles.slice(0, 3).entries()) {
-      const r = (await labelScan(t, sessionId, b.url).expect(200)).body as LabelScanResult;
+      const r = (await scanOk(t, sessionId, b.url)).body as LabelScanResult;
       expect(r.cycle.memberCount).toBe(i + 1);
       expect(r.cycle.status).toBe(i === 2 ? 'READY_TO_FILL' : 'OPEN_ASSEMBLY');
     }
@@ -230,7 +235,7 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     const { bottles, versionId } = await designBottles(2);
     const lotId = await newLot(5);
     await ready(versionId, lotId);
-    await labelScan(t, sessionId, bottles[0]!.url).expect(200);
+    await scanOk(t, sessionId, bottles[0]!.url);
     const firstCrate = (
       await http().get(`/api/admin/station-sessions/${sessionId}/labeling`).expect(200)
     ).body as LabelingState;
@@ -258,7 +263,7 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
   it('never switches lots and refuses when label stock is missing, without partial writes', async () => {
     const { bottles, versionId } = await designBottles(2);
     await ready(versionId, await newLot(1));
-    await labelScan(t, sessionId, bottles[0]!.url).expect(200);
+    await scanOk(t, sessionId, bottles[0]!.url);
     const exhausted = await labelScan(t, sessionId, bottles[1]!.url);
     expect([exhausted.status, exhausted.body.code]).toEqual([409, 'LOT_EXHAUSTED']);
 
@@ -314,25 +319,46 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     expect(await movementsOf(one.bottles[0]!.id)).toHaveLength(2);
   });
 
-  it('an open crate keeps its recipe version when a newer one is activated (owner B2)', async () => {
+  it('an open crate keeps its recipe; a NEW crate never starts on a stale or archived one (B2)', async () => {
     const own = await labelingKit(t);
-    const bottles = await printedBottles(t, 2);
+    const bottles = await printedBottles(t, 3);
     const versionId = await versionOf(bottles[0]!);
     await approveDesign(t, own.productCode, versionId);
     const lotId = await newLot(5);
-    const crateUrl = await ready(versionId, lotId, own.crateTypeCode, own.productCode);
-    await labelScan(t, sessionId, bottles[0]!.url).expect(200);
-    // Version 2 (a second label line quantity would be odd: change the pump instead).
-    const v2 = await http()
-      .post(`/api/admin/catalog/products/${own.productCode}/recipes`)
+    await ready(versionId, lotId, own.crateTypeCode, own.productCode);
+    await scanOk(t, sessionId, bottles[0]!.url);
+    const recipes = `/api/admin/catalog/products/${own.productCode}/recipes`;
+    await http()
+      .post(recipes)
       .send({ requestId: randomUUID(), reason: 'nová verze', basedOnVersion: 1 })
       .expect(201);
-    expect(v2.body.version).toBe(2);
     await http()
-      .post(`/api/admin/catalog/products/${own.productCode}/recipes/2/activate`)
+      .post(`${recipes}/2/activate`)
       .send({ requestId: randomUUID(), reason: 'schváleno', expectedActiveVersion: 1 })
       .expect(200);
-    // The station context now offers version 2, but the open crate continues with version 1.
+
+    // Without choosing the context again: crate A continues with ITS version 1.
+    const second = (await scanOk(t, sessionId, bottles[1]!.url)).body as LabelScanResult;
+    expect(second.cycle.recipeVersion).toBe(1);
+    const bomCodes = async (bottleId: string) =>
+      new Set(
+        (
+          await t.prisma.inventoryMovement.findMany({
+            where: { bottleEvent: { bottleId } },
+            include: { bomLine: { include: { bomVersion: true } } },
+          })
+        ).map((m) => m.bomLine!.bomVersion.code),
+      );
+    expect(await bomCodes(bottles[1]!.id)).toEqual(new Set([`R-${own.productCode}-V1-LA`]));
+
+    // An empty crate B would start a NEW cycle: the stale context (version 1) is refused.
+    const cyclesBefore = await t.prisma.crateCycle.count();
+    const crateB = await registerCrate(t, own.crateTypeCode);
+    const stale = await loadCrate(t, sessionId, crateB);
+    expect([stale.status, stale.body.code]).toEqual([409, 'CONTEXT_STALE']);
+    expect(await t.prisma.crateCycle.count()).toBe(cyclesBefore);
+
+    // After choosing the context again, crate B starts with version 2.
     const ctx = (
       await setContext(t, sessionId, {
         productCode: own.productCode,
@@ -341,17 +367,71 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
       }).expect(200)
     ).body as LabelingState;
     expect(ctx.recipeVersion).toBe(2);
-    await loadCrate(t, sessionId, crateUrl).expect(200);
-    const second = (await labelScan(t, sessionId, bottles[1]!.url).expect(200))
-      .body as LabelScanResult;
-    expect(second.cycle.recipeVersion).toBe(1);
-    const lines = await t.prisma.inventoryMovement.findMany({
-      where: { bottleEvent: { bottleId: bottles[1]!.id } },
-      include: { bomLine: { include: { bomVersion: true } } },
-    });
-    expect(new Set(lines.map((l) => l.bomLine!.bomVersion.code))).toEqual(
-      new Set([`R-${own.productCode}-V1-LA`]),
+    await loadCrate(t, sessionId, crateB).expect(200);
+    const third = (await scanOk(t, sessionId, bottles[2]!.url)).body as LabelScanResult;
+    expect(third.cycle.recipeVersion).toBe(2);
+    expect(await bomCodes(bottles[2]!.id)).toEqual(new Set([`R-${own.productCode}-V2-LA`]));
+
+    // Version 2 archived without a replacement: no new crate starts on it.
+    await http()
+      .post(`${recipes}/2/archive`)
+      .send({ requestId: randomUUID(), reason: 'stažena' })
+      .expect(200);
+    const crateC = await registerCrate(t, own.crateTypeCode);
+    const archived = await loadCrate(t, sessionId, crateC);
+    expect([archived.status, archived.body.code]).toEqual([409, 'CONTEXT_STALE']);
+  });
+
+  it('accepts only the recipe\u2019s exact crate type, not another type of the same category', async () => {
+    const own = await labelingKit(t);
+    const bottles = await printedBottles(t, 1);
+    const versionId = await versionOf(bottles[0]!);
+    await approveDesign(t, own.productCode, versionId);
+    await setContext(t, sessionId, {
+      productCode: own.productCode,
+      labelTemplateVersionId: versionId,
+      sourceLotId: await newLot(2),
+    }).expect(200);
+    const other = (
+      await http()
+        .post('/api/admin/catalog/crate-types')
+        .send({
+          requestId: randomUUID(),
+          code: `CT24-${randomUUID().slice(0, 6).toUpperCase()}`,
+          name: 'Menší bedna',
+          capacity: 24,
+          categoryCodes: ['HAND_SOAP'],
+          reason: 'jiný typ téže kategorie',
+        })
+        .expect(201)
+    ).body as { code: string };
+    const eventsBefore = await t.prisma.crateEvent.count();
+    const wrong = await loadCrate(t, sessionId, await registerCrate(t, other.code));
+    expect([wrong.status, wrong.body.code]).toEqual([422, 'CRATE_TYPE_MISMATCH']);
+    // Registration wrote REGISTERED; loading wrote nothing more.
+    expect(await t.prisma.crateEvent.count()).toBe(eventsBefore + 1);
+    expect(await movementsOf(bottles[0]!.id)).toHaveLength(0);
+  });
+
+  it('refuses a scan made in an older context (crate changed meanwhile), without writes', async () => {
+    const { bottles, versionId } = await designBottles(1);
+    await ready(versionId, await newLot(3));
+    const before = (
+      await http().get(`/api/admin/station-sessions/${sessionId}/labeling`).expect(200)
+    ).body as LabelingState;
+    await loadCrate(t, sessionId, await registerCrate(t, kit.crateTypeCode)).expect(200);
+    const stale = await labelScan(
+      t,
+      sessionId,
+      bottles[0]!.url,
+      randomUUID(),
+      before.contextRevision,
     );
+    expect([stale.status, stale.body.code]).toEqual([409, 'CONTEXT_CHANGED']);
+    expect(
+      (await t.prisma.bottle.findUniqueOrThrow({ where: { id: bottles[0]!.id } })).status,
+    ).toBe('CREATED');
+    expect(await movementsOf(bottles[0]!.id)).toHaveLength(0);
   });
 
   it('validates the context and the crate: lot, mode, crate type, mixing, non-crate QR', async () => {
@@ -376,7 +456,7 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     // A crate assembling another design refuses this context (one crate never mixes).
     const other = await designBottles(1);
     const otherCrate = await ready(other.versionId, lotId);
-    await labelScan(t, sessionId, other.bottles[0]!.url).expect(200);
+    await scanOk(t, sessionId, other.bottles[0]!.url);
     await setContext(t, sessionId, {
       productCode: kit.productCode,
       labelTemplateVersionId: versionId,
@@ -406,7 +486,7 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
   it('enforces the A3 rules in the database on their own', async () => {
     const { bottles, versionId } = await designBottles(1);
     await ready(versionId, await newLot(2));
-    await labelScan(t, sessionId, bottles[0]!.url).expect(200);
+    await scanOk(t, sessionId, bottles[0]!.url);
     const [bottle] = await printedBottles(t, 1);
     // A new LABEL_APPLIED without a crate cycle (the old path) is refused.
     await expect(

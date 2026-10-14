@@ -188,15 +188,27 @@ export const loadCrate = (t: TestApp, sessionId: string, scannedValue: string) =
     .post(`/api/admin/station-sessions/${sessionId}/crate`)
     .send({ requestId: randomUUID(), scannedValue });
 
-export const labelScan = (
+/** The current labelling context revision of a session (labelling scans must name it). */
+export async function contextRevision(t: TestApp, sessionId: string, cookie?: string) {
+  const req = http(t).get(`/api/admin/station-sessions/${sessionId}/labeling`);
+  if (cookie) req.set('Cookie', cookie);
+  return ((await req.expect(200)).body as LabelingState).contextRevision;
+}
+
+/** A labelling scan; the context revision is read first unless given (e.g. for a replay). */
+export async function labelScan(
   t: TestApp,
   sessionId: string,
   scannedValue: string,
   requestId: string = randomUUID(),
-) =>
-  http(t)
+  revision?: number,
+) {
+  // Read the revision BEFORE building the request (supertest starts a request when created).
+  const rev = revision ?? (await contextRevision(t, sessionId));
+  return http(t)
     .post(`/api/admin/station-sessions/${sessionId}/label-scans`)
-    .send({ requestId, scannedValue });
+    .send({ requestId, scannedValue, contextRevision: rev });
+}
 
 // --- the legacy-compatible helper (applyLabel) --------------------------------------------------
 

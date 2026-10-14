@@ -82,6 +82,16 @@ export const scanRequestSchema = z.strictObject({
 });
 export type ScanRequest = z.infer<typeof scanRequestSchema>;
 
+/**
+ * A labelling scan names the context revision it was made in (the labelling state returns it):
+ * a retry after the station's context or crate changed is refused (CONTEXT_CHANGED), so a
+ * physical bottle never lands in another crate than the one it was scanned for.
+ */
+export const labelScanRequestSchema = scanRequestSchema.extend({
+  contextRevision: z.number().int().min(0),
+});
+export type LabelScanRequest = z.infer<typeof labelScanRequestSchema>;
+
 export const cycleStateSchema = z.object({
   status: crateCycleStatusSchema,
   memberCount: z.number().int(),
@@ -93,8 +103,13 @@ export const cycleStateSchema = z.object({
 export type CycleState = z.infer<typeof cycleStateSchema>;
 
 export const labelingStateSchema = z.object({
+  /** Changes with every context change or crate load; labelling scans must name it. */
+  contextRevision: z.number().int(),
   product: ref.extend({ category: ref }).nullable(),
-  /** The recipe version a NEW crate cycle would snapshot (an open cycle keeps its own). */
+  /**
+   * The recipe version a NEW crate cycle would snapshot (an open cycle keeps its own — shown in
+   * crate.cycle.recipeVersion).
+   */
   recipeVersion: z.number().int().nullable(),
   design: labelTemplateVersionRefSchema.nullable(),
   sourceLot: z.object({ id: z.uuid(), code: z.string(), onHand: z.string() }).nullable(),

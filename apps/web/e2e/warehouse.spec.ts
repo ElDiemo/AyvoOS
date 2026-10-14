@@ -207,16 +207,14 @@ test('labels are applied at a labelling station into a crate; the old URLs lead 
     ).status(),
   ).toBe(200);
   const crate = await crateUrl(request, kit.crateTypeCode);
-  expect(
-    (
-      await request.post(`${base}/crate`, {
-        data: { requestId: crypto.randomUUID(), scannedValue: crate },
-      })
-    ).status(),
-  ).toBe(200);
+  const loaded = await request.post(`${base}/crate`, {
+    data: { requestId: crypto.randomUUID(), scannedValue: crate },
+  });
+  expect(loaded.status()).toBe(200);
+  const contextRevision = ((await loaded.json()) as { contextRevision: number }).contextRevision;
   const scan = (url: string) =>
     request.post(`${base}/label-scans`, {
-      data: { requestId: crypto.randomUUID(), scannedValue: url },
+      data: { requestId: crypto.randomUUID(), scannedValue: url, contextRevision },
     });
   expect(((await (await scan(urls[0]!)).json()) as { outcome: string }).outcome).toBe('APPLIED');
   expect(((await (await scan(urls[0]!)).json()) as { outcome: string }).outcome).toBe(

@@ -1,6 +1,7 @@
 import type {
   LabelingOptions,
   LabelingState,
+  LabelScanRequest,
   LabelScanResult,
   ScanRequest,
   SetLabelingContextRequest,
@@ -128,6 +129,7 @@ export class LabelingService {
     sessionId: string,
     input: SetLabelingContextRequest,
   ): Promise<LabelingState> {
+    await this.authorize(principal, sessionId);
     const { result } = await this.operations.run(
       'STATION_LABELING_CONTEXT',
       input.requestId,
@@ -188,6 +190,7 @@ export class LabelingService {
     input: ScanRequest,
   ): Promise<LabelingState> {
     const token = this.tokenOf(input.scannedValue);
+    await this.authorize(principal, sessionId);
     const { result } = await this.operations.run(
       'STATION_CRATE_LOAD',
       input.requestId,
@@ -210,16 +213,11 @@ export class LabelingService {
           throw domainError(409, 'CRATE_OF_ANOTHER_SITE', 'This crate belongs to another site');
         }
         await this.cycles.lockCrate(tx, crate.id);
-        const product = await tx.product.findUniqueOrThrow({ where: { id: session.productId } });
-        if (!crate.crateType.categories.some((c) => c.categoryCode === product.categoryCode)) {
-          throw domainError(
-            422,
-            'CRATE_TYPE_MISMATCH',
-            'This crate type does not carry the product',
-          );
-        }
         const open = await this.cycles.openCycle(tx, crate.id, true);
         this.assertAssemblable(open, session);
+        // An empty crate will start a new cycle: it needs the current recipe and its exact crate
+        // type (an open cycle keeps its own snapshot, whose type is that crate's).
+        if (!open) await this.assertNewCycleAllowed(tx, session, crate.crateTypeId);
         await this.sessions.loadCrate(tx, sessionId, crate.id, principal.userId, input.requestId);
         const updated = await tx.workstationSession.findUniqueOrThrow({ where: { id: sessionId } });
         return this.stateOf(tx, updated, station);
@@ -233,7 +231,7 @@ export class LabelingService {
   async scan(
     principal: Principal,
     sessionId: string,
-    input: ScanRequest,
+    input: LabelScanRequest,
   ): Promise<LabelScanResult> {
     const scan = classifyScannedQr(input.scannedValue, this.env.PUBLIC_QR_BASE_URL);
     if (scan.kind === 'NOT_AYVO_QR') {
@@ -246,10 +244,18 @@ export class LabelingService {
         'This QR code belongs to another AYVO environment',
       );
     }
+    // The caller must be allowed to work at this station NOW — also before a stored result is
+    // replayed (operations.run skips the callback for a replay).
+    await this.authorize(principal, sessionId);
     const { result } = await this.operations.run(
       'LABEL_SCAN',
       input.requestId,
-      { actorId: principal.userId, sessionId, url: scan.url },
+      {
+        actorId: principal.userId,
+        sessionId,
+        url: scan.url,
+        contextRevision: input.contextRevision,
+      },
       async (tx) => {
         // 1. session (locked, re-validated, lease renewed) and its complete context
         const { session, station } = await this.sessions.requireActiveSession(
@@ -262,6 +268,15 @@ export class LabelingService {
           session;
         if (!productId || !recipeVersionId || !labelTemplateVersionId || !sourceLotId || !crateId) {
           throw contextIncomplete();
+        }
+        // The scan belongs to the context it was made in; never to a newer one (other crate,
+        // product, design or lot) — e.g. a delayed retry after the operator changed the crate.
+        if (session.labelingContextRevision !== input.contextRevision) {
+          throw domainError(
+            409,
+            'CONTEXT_CHANGED',
+            'The station context changed since this scan; nothing was recorded',
+          );
         }
         // 2. crate → 3. cycle (locked)
         const crate = await this.cycles.crateById(tx, crateId);
@@ -337,6 +352,7 @@ export class LabelingService {
         const occurredAt = new Date();
         const product = await tx.product.findUniqueOrThrow({ where: { id: productId } });
         if (!cycle) {
+          await this.assertNewCycleAllowed(tx, session, crate.crateTypeId);
           cycle = await this.cycles.createCycle(tx, {
             crate: {
               id: crate.id,
@@ -459,6 +475,40 @@ export class LabelingService {
     return scan.token;
   }
 
+  /** May the caller work at the session's labelling station right now (no lock, no write)? */
+  private async authorize(principal: Principal, sessionId: string): Promise<void> {
+    const { station } = await this.sessions.readActiveSession(principal, sessionId);
+    if (station.mode !== 'LABELING') throw notLabeling();
+  }
+
+  /**
+   * A NEW cycle starts only with the product's current ACTIVE recipe of an active product (a
+   * context chosen earlier may be stale — refused, never silently used, owner B2) and only in a
+   * crate of exactly the recipe's crate type (same category is not enough).
+   */
+  private async assertNewCycleAllowed(
+    tx: Prisma.TransactionClient,
+    session: Pick<WorkstationSession, 'productId' | 'recipeVersionId'>,
+    crateTypeId: string,
+  ): Promise<void> {
+    const product = await tx.product.findUniqueOrThrow({ where: { id: session.productId! } });
+    const active = await this.recipes.activeVersion(tx, product.id);
+    if (product.status !== 'ACTIVE' || !active || active.id !== session.recipeVersionId) {
+      throw domainError(
+        409,
+        'CONTEXT_STALE',
+        'The product or its active recipe changed: choose the labelling context again',
+      );
+    }
+    if ((await this.recipes.crateTypeOf(tx, active.id)) !== crateTypeId) {
+      throw domainError(
+        422,
+        'CRATE_TYPE_MISMATCH',
+        'This crate type is not the recipe\u2019s crate type',
+      );
+    }
+  }
+
   /** A crate accepts labelled bottles only while assembling the same product and design. */
   private assertAssemblable(
     open: CycleRecord | null,
@@ -546,6 +596,7 @@ export class LabelingService {
       };
     }
     return {
+      contextRevision: session.labelingContextRevision,
       product: product
         ? {
             code: product.code,

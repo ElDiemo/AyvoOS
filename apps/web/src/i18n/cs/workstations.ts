@@ -62,6 +62,7 @@ export const workstationsCs = {
     worker: 'Pracuje',
     since: 'Od',
     leave: 'Opustit pracoviště',
+    leaveBlocked: 'Nejprve vyřešte čekající nebo nejistý scan.',
     leaveHelp:
       'Opuštěním pracoviště ho předáte: další oprávněný pracovník pak jen naskenuje jeho QR. Rozpracované bedny se tím nemění.',
     left: 'Pracoviště jste opustili. Může na něm pokračovat jiný pracovník.',

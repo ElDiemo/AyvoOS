@@ -107,7 +107,7 @@ async function printedBottles(request: APIRequestContext, name: string, n: numbe
 test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
   const request = context.request;
-  const main = await printedBottles(request, `lepeni-${Date.now()}`, 4);
+  const main = await printedBottles(request, `lepeni-${Date.now()}`, 8);
   const other = await printedBottles(request, `jiny-${Date.now()}`, 1);
   designLabel = main.version.label;
   urls = main.urls;
@@ -250,6 +250,82 @@ test('labels bottles into a crate at the station: content, duplicate, wrong desi
   await page.goto(`/bottles/${codes[0]}`);
   await expect(page.locator('body')).toContainText('Vložena do bedny');
   await expect(page.locator('body')).toContainText('Etiketa nalepena – prázdná lahev');
+});
+
+test('an uncertain scan stops the queue; nothing is lost, doubled or moved to another crate', async ({
+  page,
+  request,
+}) => {
+  const lotLeft = async () =>
+    Number(/zbývá (\d+) ks/.exec(await page.getByTestId('labeling-context').innerText())![1]);
+  const typeScan = async (value: string) => {
+    await page.keyboard.type(value);
+    await page.keyboard.press('Enter');
+  };
+  await page.goto('/production/station');
+  await expect(page.getByTestId('crate-scan')).toBeVisible();
+  await typeScan(await crateUrl(request, kit.crateTypeCode));
+  await expect(page.getByTestId('labeling-notice')).toContainText('je připravená k vkládání lahví');
+  const before = await lotLeft();
+
+  // 1. Lost BEFORE the server: the queue stops; later scans wait visibly and are not sent.
+  const bodies: { requestId: string; contextRevision: number }[] = [];
+  let dropNext = true;
+  await page.route(/\/label-scans$/, async (route) => {
+    bodies.push(JSON.parse(route.request().postData() ?? '{}'));
+    if (dropNext) {
+      dropNext = false;
+      await route.abort('failed');
+    } else await route.fallback();
+  });
+  await typeScan(urls[3]!);
+  const unresolved = page.getByTestId('labeling-unresolved');
+  await expect(unresolved).toContainText('Výsledek posledního scanu není jistý');
+  await typeScan(urls[4]!);
+  await typeScan(urls[5]!);
+  await expect(page.getByTestId('labeling-waiting')).toHaveText('Čeká na odeslání: 2');
+  expect(bodies).toHaveLength(1);
+  await expect(page.getByRole('button', { name: 'Jiná bedna' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Změnit' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Opustit pracoviště' })).toBeDisabled();
+  await shot(page, 'labeling-uncertain');
+  await unresolved.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(unresolved).toHaveCount(0);
+  await expect(page.getByTestId('crate-content')).toContainText('3/3');
+  expect(bodies[1]!.requestId).toBe(bodies[0]!.requestId); // the same attempt
+  expect(bodies).toHaveLength(4);
+  expect(await lotLeft()).toBe(before - 3);
+  await page.unroute(/\/label-scans$/);
+
+  // 2. Lost AFTER the server committed: the retry is replayed, never consumed twice.
+  await typeScan(await crateUrl(request, kit.crateTypeCode));
+  await expect(page.getByTestId('crate-content')).toContainText('0/3');
+  let lostAfter = true;
+  await page.route(/\/label-scans$/, async (route) => {
+    if (!lostAfter) return route.fallback();
+    lostAfter = false;
+    await route.fetch();
+    await route.abort('failed');
+  });
+  await typeScan(urls[6]!);
+  await expect(unresolved).toContainText('není jistý');
+  await unresolved.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(page.getByTestId('labeling-notice')).toContainText('nalepena a vložena (1/3)');
+  expect(await lotLeft()).toBe(before - 4);
+
+  // 3. Committed, response lost, then the page is reloaded: scanning the bottle again only
+  //    confirms it is already in THIS crate.
+  lostAfter = true;
+  await typeScan(urls[7]!);
+  await expect(unresolved).toContainText('není jistý');
+  page.once('dialog', (d) => void d.accept());
+  await page.unroute(/\/label-scans$/);
+  await page.reload();
+  await expect(page.getByTestId('crate-content')).toContainText('2/3');
+  await typeScan(urls[7]!);
+  await expect(page.getByTestId('labeling-notice')).toContainText('už v této bedně je');
+  await expect(page.getByTestId('crate-content')).toContainText('2/3');
+  expect(await lotLeft()).toBe(before - 5);
 });
 
 test('the labelling station works at phone width', async ({ page }) => {

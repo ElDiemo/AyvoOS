@@ -34,7 +34,14 @@ function errorText(error: unknown): string {
  * everything on every scan. Uncertain answers keep their request id, so a retry is replayed by
  * the server and never consumes twice; one scan field at a time keeps the scanner's focus.
  */
-export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
+export function LabelingWorkspace({
+  sessionId,
+  onUnresolvedChange,
+}: {
+  sessionId: string;
+  /** True while scans wait or an uncertain one is unresolved: the station must not be left. */
+  onUnresolvedChange?: (unresolved: boolean) => void;
+}) {
   const id = useId();
   const base = `admin/station-sessions/${sessionId}`;
   const [state, setState] = useState<LabelingState | null>(null);
@@ -118,48 +125,90 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
     }
   }
 
-  // Scanner series (issue #19: "rychlá série"): the field never blocks; every scan is queued and
-  // sent in order with the kind it had when it was scanned (a bottle scanned after the crate
-  // became full is still sent as a bottle and refused by the server — never lost or misread).
-  const queue = useRef<{ kind: 'crate' | 'scan'; raw: string }[]>([]);
+  // Scanner series (issue #19: "rychlá série"): the field never blocks; every scan is queued
+  // with the kind and the context revision it had when scanned, and sent in order. An UNCERTAIN
+  // answer (network, 5xx) stops the queue: that scan stays visible with its request id until it
+  // is retried (the server replays a committed one, never consumes twice); later scans wait,
+  // visibly, and the context, the crate and the station cannot be changed meanwhile.
+  type Item = { kind: 'crate' | 'scan'; raw: string; revision: number; requestId: string };
+  const queue = useRef<Item[]>([]);
   const draining = useRef(false);
+  const blockedRef = useRef(false);
+  const [waiting, setWaiting] = useState(0);
+  const [blocked, setBlocked] = useState<Item | null>(null);
+  const stateRef = useRef<LabelingState | null>(null);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  const unresolved = waiting > 0 || blocked !== null;
+  useEffect(() => {
+    onUnresolvedChange?.(unresolved);
+    if (!unresolved) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [unresolved, onUnresolvedChange]);
 
-  function submit(raw: string, kind: 'crate' | 'scan' = phase === 'crate' ? 'crate' : 'scan') {
+  function submit(raw: string) {
     if (raw.trim() === '') return;
-    queue.current.push({ kind, raw });
+    queue.current.push({
+      kind: phase === 'crate' ? 'crate' : 'scan',
+      raw,
+      revision: stateRef.current?.contextRevision ?? 0,
+      requestId: crypto.randomUUID(),
+    });
+    setWaiting(queue.current.length);
     setValue('');
-    if (!draining.current) void drain();
+    if (!draining.current && !blockedRef.current) void drain();
   }
 
   async function drain() {
     draining.current = true;
     setBusy(true);
     try {
-      while (queue.current.length > 0) await process(queue.current.shift()!);
+      while (queue.current.length > 0 && !blockedRef.current) {
+        const item = queue.current[0]!;
+        const definite = await process(item);
+        if (!definite) {
+          blockedRef.current = true;
+          setBlocked(item);
+          break;
+        }
+        queue.current.shift();
+        setWaiting(queue.current.length);
+      }
     } finally {
       draining.current = false;
       setBusy(false);
+      setWaiting(queue.current.length);
     }
   }
 
-  async function process({ kind, raw }: { kind: 'crate' | 'scan'; raw: string }) {
-    const key = `${kind}:${raw.trim()}`;
+  /** Retries the SAME uncertain scan (same request id and context revision), then continues. */
+  function retryBlocked() {
+    blockedRef.current = false;
+    setBlocked(null);
+    if (!draining.current) void drain();
+  }
+
+  /** Sends one scan; false = no definite answer (the queue stops on it). */
+  async function process(item: Item): Promise<boolean> {
+    const { kind, raw } = item;
     try {
       if (kind === 'crate') {
         const s = await apiSend('POST', `${base}/crate`, labelingStateSchema, {
-          requestId: attemptId(key),
+          requestId: item.requestId,
           scannedValue: raw,
         });
-        attempts.current.delete(key);
         setState(s);
         setNotice({ tone: 'ok', text: t.crate.loaded(s.crate!.code) });
         scanFeedback('ok');
       } else {
         const r = await apiSend('POST', `${base}/label-scans`, labelScanResultSchema, {
-          requestId: attemptId(key),
+          requestId: item.requestId,
           scannedValue: raw,
+          contextRevision: item.revision,
         });
-        attempts.current.delete(key);
         setState((s) =>
           s
             ? {
@@ -183,16 +232,17 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
         push(r.outcome === 'APPLIED' ? 'ok' : 'warn', text);
         scanFeedback(r.outcome === 'APPLIED' ? 'ok' : 'error');
       }
+      return true;
     } catch (error) {
       scanFeedback('error');
       if (uncertain(error)) {
-        setNotice({ tone: 'error', text: t.scan.uncertain, retry: () => submit(raw, kind) });
-      } else {
-        attempts.current.delete(key);
-        const text = errorText(error);
-        setNotice({ tone: 'error', text });
-        push('error', text);
+        push('error', t.scan.uncertainLog);
+        return false;
       }
+      const text = errorText(error);
+      setNotice({ tone: 'error', text });
+      push('error', text);
+      return true;
     }
   }
 
@@ -210,13 +260,14 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
             <p className="text-sm font-medium" data-testid="labeling-context">
               {t.context.current(state.product!.name, state.design!.label, state.sourceLot!.code)}
               <span className="block text-xs text-stone-500">
-                {t.context.recipe(state.recipeVersion!)} ·{' '}
+                {t.context.recipe(cycle?.recipeVersion ?? state.recipeVersion!)} ·{' '}
                 {t.scan.lotLeft(state.sourceLot!.code, state.sourceLot!.onHand)}
               </span>
             </p>
             <button
               type="button"
               className={buttonClass.secondary}
+              disabled={unresolved}
               onClick={() => {
                 setProduct(
                   options.products.find((p) => p.code === state.product!.code)?.code ?? '',
@@ -376,12 +427,39 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
             <button
               type="button"
               className={`${buttonClass.secondary} mt-3`}
+              disabled={unresolved}
               onClick={() => setState((s) => (s ? { ...s, crate: null } : s))}
             >
               {t.crate.change}
             </button>
           )}
         </Card>
+      )}
+      {unresolved && (
+        <div
+          role="alert"
+          className="flex flex-col gap-2 rounded-md border-2 border-red-400 bg-red-50 p-3 text-sm text-red-950"
+          data-testid="labeling-unresolved"
+        >
+          {blocked && (
+            <>
+              <p className="font-semibold">{t.scan.blockedTitle}</p>
+              <p>{t.scan.blockedText}</p>
+            </>
+          )}
+          <p data-testid="labeling-waiting">
+            {t.scan.waiting(Math.max(0, waiting - (blocked ? 1 : 0)))}
+          </p>
+          {blocked && (
+            <button
+              type="button"
+              className={`${buttonClass.primary} self-start`}
+              onClick={retryBlocked}
+            >
+              {t.scan.retry}
+            </button>
+          )}
+        </div>
       )}
       {notice && <NoticeBox notice={notice} busy={busy} />}
       {log.length > 0 && (

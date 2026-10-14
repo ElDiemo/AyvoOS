@@ -500,6 +500,16 @@ export class RecipesService {
     return { ...row, view: toRecipe(row, boms, crate) };
   }
 
+  /** The crate type of a recipe version (its latest, sealed revision), or null. */
+  async crateTypeOf(db: Prisma.TransactionClient, recipeVersionId: string): Promise<string | null> {
+    const revision = await db.recipeRevision.findFirst({
+      where: { recipeVersionId },
+      orderBy: { revision: 'desc' },
+      select: { crateTypeId: true },
+    });
+    return revision?.crateTypeId ?? null;
+  }
+
   /** The product's ACTIVE recipe version (id and number), or null. */
   activeVersion(db: Prisma.TransactionClient, productId: string) {
     return db.recipeVersion.findFirst({

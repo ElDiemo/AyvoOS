@@ -44,6 +44,11 @@ export const labelingCs = {
       'Spojení se serverem selhalo a výsledek není jistý. Zkuste to znovu – stejný pokus se nezdvojí.',
     retry: 'Zkusit znovu',
     checking: 'Ověřuji… další scan můžete hned načíst.',
+    uncertainLog: 'Scan bez jisté odpovědi serveru – čeká na ověření.',
+    blockedTitle: 'Výsledek posledního scanu není jistý.',
+    blockedText:
+      'Spojení se serverem selhalo. Lahev nechte stranou ve stejné bedně a klepněte na „Zkusit znovu“ – stejný pokus se nikdy neodepíše dvakrát. Bednu ani kontext do vyřešení měnit nelze.',
+    waiting: (n: number) => (n === 0 ? 'Žádné další scany nečekají.' : `Čeká na odeslání: ${n}`),
   },
   errors: {
     NOT_AYVO_QR: 'Toto není QR kód AYVO tohoto prostředí.',

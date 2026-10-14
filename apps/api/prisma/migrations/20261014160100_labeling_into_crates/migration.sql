@@ -30,6 +30,7 @@ ALTER TABLE "crate_events" ADD COLUMN     "cycle_id" UUID;
 
 -- AlterTable
 ALTER TABLE "workstation_sessions" ADD COLUMN     "crate_id" UUID,
+ADD COLUMN     "labeling_context_revision" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN     "label_template_version_id" UUID,
 ADD COLUMN     "product_id" UUID,
 ADD COLUMN     "recipe_version_id" UUID,
@@ -320,6 +321,22 @@ BEGIN
                   WHERE p."id" = NEW."product_id" AND p."category_code" = NEW."category_code"
                     AND r."id" = NEW."recipe_version_id") THEN
     RAISE EXCEPTION 'AYVO: cycle snapshot: recipe of another product or category' USING ERRCODE = 'check_violation';
+  END IF;
+  -- A NEW cycle starts only with the product's current ACTIVE recipe of an active product (owner
+  -- B2: an open cycle keeps its snapshot, a new one never takes a stale or archived recipe).
+  IF NOT EXISTS (SELECT 1 FROM "products" p JOIN "recipe_versions" r ON r."product_id" = p."id"
+                  WHERE p."id" = NEW."product_id" AND p."status" = 'ACTIVE'
+                    AND r."id" = NEW."recipe_version_id" AND r."status" = 'ACTIVE') THEN
+    RAISE EXCEPTION 'AYVO: a new crate cycle needs the product''s active recipe of an active product'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  -- The crate type is exactly the one of that recipe (its latest, sealed revision), not just a
+  -- type of the same category.
+  IF NEW."crate_type_id" IS DISTINCT FROM (
+       SELECT rr."crate_type_id" FROM "recipe_revisions" rr
+        WHERE rr."recipe_version_id" = NEW."recipe_version_id"
+        ORDER BY rr."revision" DESC LIMIT 1) THEN
+    RAISE EXCEPTION 'AYVO: the crate type differs from the crate type of the recipe' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
 END

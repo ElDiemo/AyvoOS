@@ -353,7 +353,11 @@ export class StationSessionsService {
     const { keepCrate, ...fields } = context;
     await tx.workstationSession.update({
       where: { id: sessionId },
-      data: { ...fields, ...(keepCrate ? {} : { crateId: null }) },
+      data: {
+        ...fields,
+        ...(keepCrate ? {} : { crateId: null }),
+        labelingContextRevision: { increment: 1 },
+      },
     });
     await tx.workstationSessionEvent.create({
       data: { sessionId, type: 'CONTEXT_CHANGED', actorId, operationRequestId: operationId },
@@ -378,7 +382,10 @@ export class StationSessionsService {
         station: holder.workstation.name,
       });
     }
-    await tx.workstationSession.update({ where: { id: sessionId }, data: { crateId } });
+    await tx.workstationSession.update({
+      where: { id: sessionId },
+      data: { crateId, labelingContextRevision: { increment: 1 } },
+    });
     await tx.workstationSessionEvent.create({
       data: { sessionId, type: 'CRATE_LOADED', actorId, operationRequestId: operationId },
     });

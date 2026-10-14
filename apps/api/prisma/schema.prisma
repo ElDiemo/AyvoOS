@@ -1773,29 +1773,32 @@ enum WorkstationSessionStatus {
 /// with its event; identity columns immutable; DELETE rejected. Lease expiry is not a status.
 model WorkstationSession {
   /// Labelling context (doc 025, A3): chosen once, re-validated on every scan.
-  productId              String?                  @map("product_id") @db.Uuid
-  recipeVersionId        String?                  @map("recipe_version_id") @db.Uuid
-  labelTemplateVersionId String?                  @map("label_template_version_id") @db.Uuid
-  sourceLotId            String?                  @map("source_lot_id") @db.Uuid
+  productId               String?                  @map("product_id") @db.Uuid
+  recipeVersionId         String?                  @map("recipe_version_id") @db.Uuid
+  labelTemplateVersionId  String?                  @map("label_template_version_id") @db.Uuid
+  sourceLotId             String?                  @map("source_lot_id") @db.Uuid
+  /// Bumped by every context change or crate load: a labelling scan names the revision it was
+  /// made in, so a retry from an older context is refused (PR #23 review).
+  labelingContextRevision Int                      @default(0) @map("labeling_context_revision")
   /// The crate loaded at the station (at most one active session per crate).
-  crateId                String?                  @map("crate_id") @db.Uuid
-  product                Product?                 @relation(fields: [productId], references: [id], onDelete: Restrict)
-  recipeVersion          RecipeVersion?           @relation(fields: [recipeVersionId], references: [id], onDelete: Restrict)
-  labelTemplateVersion   LabelTemplateVersion?    @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
-  sourceLot              InventoryLot?            @relation(fields: [sourceLotId], references: [id], onDelete: Restrict)
-  crate                  Crate?                   @relation(fields: [crateId], references: [id], onDelete: Restrict)
-  bottleEvents           BottleEvent[]
-  id                     String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  workstationId          String                   @map("workstation_id") @db.Uuid
-  userId                 String                   @map("user_id") @db.Uuid
-  siteId                 String                   @map("site_id") @db.Uuid
-  status                 WorkstationSessionStatus @default(ACTIVE)
-  openedAt               DateTime                 @default(now()) @map("opened_at") @db.Timestamptz(3)
-  leaseExpiresAt         DateTime                 @map("lease_expires_at") @db.Timestamptz(3)
-  lastActivityAt         DateTime                 @default(now()) @map("last_activity_at") @db.Timestamptz(3)
-  closedAt               DateTime?                @map("closed_at") @db.Timestamptz(3)
-  closedBy               String?                  @map("closed_by") @db.Uuid
-  closeReason            String?                  @map("close_reason")
+  crateId                 String?                  @map("crate_id") @db.Uuid
+  product                 Product?                 @relation(fields: [productId], references: [id], onDelete: Restrict)
+  recipeVersion           RecipeVersion?           @relation(fields: [recipeVersionId], references: [id], onDelete: Restrict)
+  labelTemplateVersion    LabelTemplateVersion?    @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  sourceLot               InventoryLot?            @relation(fields: [sourceLotId], references: [id], onDelete: Restrict)
+  crate                   Crate?                   @relation(fields: [crateId], references: [id], onDelete: Restrict)
+  bottleEvents            BottleEvent[]
+  id                      String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  workstationId           String                   @map("workstation_id") @db.Uuid
+  userId                  String                   @map("user_id") @db.Uuid
+  siteId                  String                   @map("site_id") @db.Uuid
+  status                  WorkstationSessionStatus @default(ACTIVE)
+  openedAt                DateTime                 @default(now()) @map("opened_at") @db.Timestamptz(3)
+  leaseExpiresAt          DateTime                 @map("lease_expires_at") @db.Timestamptz(3)
+  lastActivityAt          DateTime                 @default(now()) @map("last_activity_at") @db.Timestamptz(3)
+  closedAt                DateTime?                @map("closed_at") @db.Timestamptz(3)
+  closedBy                String?                  @map("closed_by") @db.Uuid
+  closeReason             String?                  @map("close_reason")
 
   workstation Workstation               @relation(fields: [workstationId], references: [id], onDelete: Restrict)
   user        User                      @relation("SessionUser", fields: [userId], references: [id], onDelete: Restrict)

@@ -1,8 +1,10 @@
 import {
+  labelScanRequestSchema,
   scanRequestSchema,
   setLabelingContextRequestSchema,
   type LabelingOptions,
   type LabelingState,
+  type LabelScanRequest,
   type LabelScanResult,
   type ScanRequest,
   type SetLabelingContextRequest,
@@ -73,7 +75,7 @@ export class LabelingController {
   @HttpCode(200)
   scan(
     @Param('id', SESSION) id: string,
-    @Body(new ZodValidationPipe(scanRequestSchema)) body: ScanRequest,
+    @Body(new ZodValidationPipe(labelScanRequestSchema)) body: LabelScanRequest,
     @CurrentPrincipal() principal: Principal,
   ): Promise<LabelScanResult> {
     return this.labeling.scan(principal, id, body);

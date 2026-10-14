@@ -68,6 +68,8 @@ export function StationPanel({
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState(false);
+  /** Labelling scans waiting or uncertain: the station cannot be left until they are resolved. */
+  const [unresolved, setUnresolved] = useState(false);
   const [reason, setReason] = useState('');
   const [reasonErr, setReasonErr] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -328,14 +330,19 @@ export function StationPanel({
             type="button"
             className={`${buttonClass.secondary} shrink-0`}
             onClick={() => void leave(current.session.id)}
-            disabled={busy}
+            disabled={busy || unresolved}
+            title={unresolved ? t.leaveBlocked : undefined}
           >
             {t.leave}
           </button>
         </div>
         {noticeBox}
         {s.mode === 'LABELING' ? (
-          <LabelingWorkspace key={current.session.id} sessionId={current.session.id} />
+          <LabelingWorkspace
+            key={current.session.id}
+            sessionId={current.session.id}
+            onUnresolvedChange={setUnresolved}
+          />
         ) : (
           <Card>
             <p className="text-sm text-stone-700">{t.nextSteps}</p>
