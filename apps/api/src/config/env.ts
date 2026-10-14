@@ -37,6 +37,15 @@ export const envSchema = z
     LABEL_QR_MIN_SIZE_MM: z.coerce.number().min(5).max(100).optional(),
     LABEL_QR_ERROR_CORRECTION: z.enum(QR_ERROR_CORRECTION_LEVELS).optional(),
 
+    // Workstation session lease (doc 026): inactivity after which another authorized user may
+    // take the station over (never automatic). Configuration, not a code constant (doc 020 §6).
+    STATION_SESSION_LEASE_MINUTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 60)
+      .default(15),
+
     // Upper limit for uploaded label artwork, in bytes.
     LABEL_ARTWORK_MAX_BYTES: z.coerce
       .number()

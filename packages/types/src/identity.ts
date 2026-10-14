@@ -68,6 +68,9 @@ export const PERMISSION_CODES = [
   'catalog:recipe_approve',
   'crates:read',
   'crates:register',
+  'production:workstations_manage',
+  'production:fill',
+  'production:session_takeover',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -111,6 +114,8 @@ export const SITE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'production:labels_print',
   'crates:read',
   'crates:register',
+  'production:workstations_manage',
+  'production:session_takeover',
 ];
 
 /** Permissions that also need the active site and access to its warehouse (doc 022). */
@@ -122,6 +127,7 @@ export const WAREHOUSE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'inventory:items_manage',
   'procurement:suppliers_manage',
   'production:label_apply',
+  'production:fill',
 ];
 
 export const userStatusSchema = z.enum(['ACTIVE', 'DEACTIVATED']);

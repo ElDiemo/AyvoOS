@@ -84,10 +84,29 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Lahve',
       'Šablony etiket',
       'Nalepení etiket',
+      'Pracoviště',
       'Bedny',
+      'Správa pracovišť',
       'Produkty a receptury',
     ]);
     expect(warehouse.pages.some((p) => p.href.includes('label'))).toBe(false);
+  });
+
+  it('shows Pracoviště to production operators and Správa pracovišť only to managers (doc 026)', () => {
+    const pages = (perms: string[]) =>
+      visibleModules(perms)
+        .find((m) => m.id === 'production')
+        ?.pages.map((p) => p.id);
+    expect(pages(['production:read', 'production:fill', 'crates:read'])).toEqual([
+      'overview',
+      'bottles',
+      'templates',
+      'label-activation',
+      'station',
+      'crates',
+    ]);
+    expect(pages(['production:fill'])).toEqual(['station']);
+    expect(pages(['production:workstations_manage'])).toEqual(['workstations']);
   });
 
   it('opens Výroba → Bedny to warehouse roles with crates:read only (doc 025 A1)', () => {

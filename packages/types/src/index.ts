@@ -10,3 +10,4 @@ export * from './printing.js';
 export * from './procurement.js';
 export * from './sites.js';
 export * from './warehouse.js';
+export * from './workstations.js';

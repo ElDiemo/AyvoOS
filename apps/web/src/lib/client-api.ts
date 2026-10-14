@@ -8,6 +8,8 @@ export class ClientApiError extends Error {
     message: string,
     /** Stable domain error code from the API (e.g. "LOT_EXHAUSTED"), if any. */
     readonly code: string | null = null,
+    /** Whitelisted details of some refusals (e.g. who holds a station); validate before use. */
+    readonly details: unknown = null,
   ) {
     super(message);
   }
@@ -16,13 +18,16 @@ export class ClientApiError extends Error {
 async function readError(res: Response): Promise<ClientApiError> {
   let message = `Požadavek se nezdařil (HTTP ${res.status})`;
   let code: string | null = null;
+  let details: unknown = null;
   try {
     const body = (await res.json()) as {
       message?: unknown;
       code?: unknown;
+      details?: unknown;
       issues?: { path: string; message: string }[];
     };
     if (typeof body.code === 'string') code = body.code;
+    details = body.details ?? null;
     if (body.issues?.length) {
       message = body.issues.map((i) => (i.path ? `${i.path}: ${i.message}` : i.message)).join('; ');
     } else if (typeof body.message === 'string') {
@@ -44,7 +49,7 @@ async function readError(res: Response): Promise<ClientApiError> {
       window.location.assign('/account-inactive');
     }
   }
-  return new ClientApiError(res.status, message, code);
+  return new ClientApiError(res.status, message, code, details);
 }
 
 /** POST for creations and actions; PUT only where the API replaces a resource (recipe drafts). */
