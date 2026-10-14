@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { E2E_FILE_STORAGE_DIR } from '../playwright.config';
+import { E2E_FILE_STORAGE_POINTER } from '../playwright.config';
 
 /**
  * Výroba → Bedny (doc 025 A1) on the real built app, a fresh database and synthetic data:
@@ -29,8 +29,17 @@ async function shot(page: Page, name: string) {
   await page.setViewportSize(size);
 }
 
+/** The e2e API's storage directory of this run (fresh temp dir, recorded in the pointer). */
+function storageDir(): string {
+  const [marker, dir] = readFileSync(E2E_FILE_STORAGE_POINTER, 'utf8').split('\n');
+  if (marker !== '# ayvo e2e file storage pointer' || !dir?.includes('ayvo-e2e-files-')) {
+    throw new Error('unexpected e2e storage pointer');
+  }
+  return dir;
+}
+
 /** Simulated disk failure of the e2e API's file storage: every directory read-only (or back). */
-function storageWritable(writable: boolean, dir = E2E_FILE_STORAGE_DIR) {
+function storageWritable(writable: boolean, dir = storageDir()) {
   chmodSync(dir, writable ? 0o750 : 0o550);
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) storageWritable(writable, join(dir, entry.name));

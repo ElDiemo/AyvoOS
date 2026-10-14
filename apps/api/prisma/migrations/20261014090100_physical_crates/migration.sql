@@ -259,7 +259,9 @@ $$;
 --   started earlier is waited for (its row is then visible to the copy), a later one waits until
 --   COMMIT and then runs with the trigger in place. Reads of bottles are not blocked.
 -- - No bottle can be inserted between the copy and the trigger, so none can miss the registry.
--- Deploy impact: bottle registration waits for the few milliseconds of this migration.
+-- Deploy impact: the lock is first queued behind bottle inserts already in progress; once held,
+-- new bottle inserts wait until this migration commits. Expected to be brief, but the duration
+-- depends on concurrent activity and on the number of existing bottles copied — no fixed bound.
 LOCK TABLE "bottles" IN SHARE ROW EXCLUSIVE MODE;
 
 CREATE TRIGGER "bottles_qr_identity" BEFORE INSERT ON "bottles"

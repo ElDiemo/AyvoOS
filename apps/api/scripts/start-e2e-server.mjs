@@ -5,18 +5,23 @@
 //   3. bootstraps the first administrator (e2e-admin@ayvo.test) with the one-time command,
 //   4. adds a second, clearly fictional test site with its own warehouse (multi-site browser
 //      tests; warehouses are created by migrations in v0.1, so the test database gets one here),
-//   5. runs dist/main.js with a temporary file store and the fake identity provider (APP_ENV=test).
+//   5. runs dist/main.js with a fresh temporary file store (scripts/e2e-storage.mjs) and the fake
+//      identity provider (APP_ENV=test).
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { createE2eStorage } from './e2e-storage.mjs';
 
 const apiRoot = resolve(import.meta.dirname, '..');
 const envFile = resolve(apiRoot, '../../.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
+
+// File storage first, before any other stateful step: a fresh unique directory (never a
+// caller-supplied one, nothing deleted); an unacceptable pointer stops the start right here.
+const storageDir = createE2eStorage(process.env.E2E_FILE_STORAGE_POINTER);
 
 const serverUrl = process.env.AYVO_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!serverUrl) throw new Error('Set DATABASE_URL (pnpm infra:up) or AYVO_TEST_DATABASE_URL');
@@ -64,15 +69,6 @@ await fixtures.$executeRawUnsafe(`
   INSERT INTO "inventory_locations" ("code", "name", "site_id", "is_site_default")
   VALUES ('E2E-DE-W', 'Testovací sklad DE', '01990000-0000-7000-8000-0000000000e2', true)`);
 await fixtures.$disconnect();
-
-// File storage of this run: a fresh directory. Playwright may name it (E2E_FILE_STORAGE_DIR) so a
-// spec can simulate a storage failure (e.g. a read-only disk) — never a path outside the test run.
-const storageDir =
-  process.env.E2E_FILE_STORAGE_DIR ?? mkdtempSync(join(tmpdir(), 'ayvo-e2e-files-'));
-if (process.env.E2E_FILE_STORAGE_DIR) {
-  rmSync(storageDir, { recursive: true, force: true });
-  mkdirSync(storageDir, { recursive: true });
-}
 
 const port = process.env.E2E_API_PORT ?? '4100';
 const child = spawn(process.execPath, ['dist/main.js'], {
