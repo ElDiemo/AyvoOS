@@ -115,4 +115,74 @@ describe.skipIf(!hasDatabase)('migrations', () => {
       ),
     ).toBe(0);
   });
+
+  it('the crates migration keeps existing bottles unchanged and registers their QR tokens', async () => {
+    const url = await newDatabase();
+    const all = await migrationNames();
+    const first = all.indexOf('20261014090000_crate_enum_values');
+    expect(first).toBeGreaterThan(0);
+    const partial = join(scratch, 'before-crates');
+    await cp(join(migrationsDir, 'migration_lock.toml'), join(partial, 'migration_lock.toml'));
+    for (const name of all.slice(0, first)) {
+      await cp(join(migrationsDir, name), join(partial, name), { recursive: true });
+    }
+    const config = join(scratch, 'before-crates.config.ts');
+    await writeFile(
+      config,
+      `export default { schema: ${JSON.stringify(join(apiRoot, 'prisma/schema.prisma'))}, migrations: { path: ${JSON.stringify(partial)} }, datasource: { url: process.env.DATABASE_URL } };\n`,
+    );
+    expect(prisma(['migrate', 'deploy', '--config', config], url)).toBe(0);
+
+    // Synthetic history created before the migration: two bottles of one series.
+    const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+    try {
+      await db.$executeRawUnsafe(`
+        INSERT INTO "label_artworks" ("id", "format", "content_type", "byte_size", "sha256", "storage_key",
+          "original_filename", "intrinsic_width", "intrinsic_height")
+        VALUES ('01990000-0000-7000-8000-00000000a001', 'SVG', 'image/svg+xml', 10, repeat('a', 64),
+          'label-artworks/2026/10/01990000-0000-7000-8000-00000000a001.svg', 'a.svg', 70, 110)`);
+      await db.$executeRawUnsafe(`
+        INSERT INTO "label_templates" ("id", "name") VALUES ('01990000-0000-7000-8000-00000000a002', 'mig-test')`);
+      await db.$executeRawUnsafe(`
+        INSERT INTO "label_template_versions" ("id", "template_id", "version_number", "width_mm", "height_mm", "artwork_id")
+        VALUES ('01990000-0000-7000-8000-00000000a003', '01990000-0000-7000-8000-00000000a002', 1, 70, 110,
+          '01990000-0000-7000-8000-00000000a001')`);
+      await db.$executeRawUnsafe(`
+        INSERT INTO "bottle_creation_batches" ("id", "serial", "code", "quantity_requested", "quantity_created",
+          "label_template_version_id", "first_bottle_serial", "last_bottle_serial", "site_id")
+        VALUES ('01990000-0000-7000-8000-00000000a004', 1, 'BC-000001', 2, 2,
+          '01990000-0000-7000-8000-00000000a003', 1, 2, '01990000-0000-7000-8000-000000000001')`);
+      await db.$executeRawUnsafe(`
+        INSERT INTO "bottles" ("serial", "code", "public_token", "status", "creation_batch_id", "site_id") VALUES
+          (1, 'AYV-B-000001', 'AAAAAAAAAAAAAAAAAAAAAA', 'CREATED', '01990000-0000-7000-8000-00000000a004', '01990000-0000-7000-8000-000000000001'),
+          (2, 'AYV-B-000002', 'BBBBBBBBBBBBBBBBBBBBBB', 'CREATED', '01990000-0000-7000-8000-00000000a004', '01990000-0000-7000-8000-000000000001')`);
+      const before = await db.$queryRawUnsafe<unknown[]>(
+        `SELECT * FROM "bottles" ORDER BY "serial"`,
+      );
+
+      expect(prisma(['migrate', 'deploy'], url)).toBe(0);
+
+      expect(await db.$queryRawUnsafe(`SELECT * FROM "bottles" ORDER BY "serial"`)).toEqual(before);
+      expect(
+        await db.$queryRawUnsafe(
+          `SELECT "token", "kind"::text FROM "qr_identities" ORDER BY "token"`,
+        ),
+      ).toEqual([
+        { token: 'AAAAAAAAAAAAAAAAAAAAAA', kind: 'BOTTLE' },
+        { token: 'BBBBBBBBBBBBBBBBBBBBBB', kind: 'BOTTLE' },
+      ]);
+      for (const table of [
+        'crates',
+        'crate_registrations',
+        'crate_events',
+        'crate_label_print_jobs',
+      ]) {
+        expect(await db.$queryRawUnsafe(`SELECT count(*)::int AS n FROM "${table}"`)).toEqual([
+          { n: 0 },
+        ]);
+      }
+    } finally {
+      await db.$disconnect();
+    }
+  });
 });

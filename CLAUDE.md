@@ -36,7 +36,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   audit events, **sites** (doc 022, ADR 0023), user invitations (doc 021 §7b). Catalogue core
   (requested by the owner 2026-10-13, doc 023; table design subject to the owner's PR review):
   product categories, catalogue components, crate types (+ categories), products, recipe
-  versions / revisions / revision BOMs. **Approved design, not
+  versions / revisions / revision BOMs. Physical crates (doc 020 §3.4, issue #19 PR A1, doc 025):
+  QR identity registry, crate registrations, crates, crate label print jobs, crate events.
+  **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,
   bottle category bindings, holds and identity voids — implement only PR by PR as the owner
