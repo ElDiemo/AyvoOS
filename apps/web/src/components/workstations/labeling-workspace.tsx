@@ -90,8 +90,8 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
 
   // The scanner types into whatever has focus: keep the active scan field focused.
   useEffect(() => {
-    if (phase !== 'context' && !busy) input.current?.focus();
-  }, [phase, busy, notice]);
+    if (phase !== 'context') input.current?.focus();
+  }, [phase, notice]);
 
   const push = (tone: string, text: string) =>
     setLog((l) => [{ id: Date.now() + Math.random(), tone, text }, ...l].slice(0, 15));
@@ -118,11 +118,32 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
     }
   }
 
-  async function submit(raw: string) {
-    if (busy || raw.trim() === '') return;
-    const kind = phase === 'crate' ? 'crate' : 'scan';
-    const key = `${kind}:${raw.trim()}`;
+  // Scanner series (issue #19: "rychlá série"): the field never blocks; every scan is queued and
+  // sent in order with the kind it had when it was scanned (a bottle scanned after the crate
+  // became full is still sent as a bottle and refused by the server — never lost or misread).
+  const queue = useRef<{ kind: 'crate' | 'scan'; raw: string }[]>([]);
+  const draining = useRef(false);
+
+  function submit(raw: string, kind: 'crate' | 'scan' = phase === 'crate' ? 'crate' : 'scan') {
+    if (raw.trim() === '') return;
+    queue.current.push({ kind, raw });
+    setValue('');
+    if (!draining.current) void drain();
+  }
+
+  async function drain() {
+    draining.current = true;
     setBusy(true);
+    try {
+      while (queue.current.length > 0) await process(queue.current.shift()!);
+    } finally {
+      draining.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function process({ kind, raw }: { kind: 'crate' | 'scan'; raw: string }) {
+    const key = `${kind}:${raw.trim()}`;
     try {
       if (kind === 'crate') {
         const s = await apiSend('POST', `${base}/crate`, labelingStateSchema, {
@@ -165,16 +186,13 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
     } catch (error) {
       scanFeedback('error');
       if (uncertain(error)) {
-        setNotice({ tone: 'error', text: t.scan.uncertain, retry: () => void submit(raw) });
+        setNotice({ tone: 'error', text: t.scan.uncertain, retry: () => submit(raw, kind) });
       } else {
         attempts.current.delete(key);
         const text = errorText(error);
         setNotice({ tone: 'error', text });
         push('error', text);
       }
-    } finally {
-      setBusy(false);
-      setValue('');
     }
   }
 
@@ -334,7 +352,7 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
             className="flex flex-col gap-2"
             onSubmit={(e) => {
               e.preventDefault();
-              void submit(value);
+              submit(value);
             }}
             data-testid={phase === 'crate' ? 'crate-scan' : 'bottle-scan'}
           >
@@ -345,14 +363,13 @@ export function LabelingWorkspace({ sessionId }: { sessionId: string }) {
               id={`${id}-scan`}
               ref={input}
               value={value}
-              disabled={busy}
               autoComplete="off"
               spellCheck={false}
               onChange={(e) => setValue(e.target.value)}
               className={`${inputClass} text-lg`}
             />
-            <p className="text-xs text-stone-500">
-              {phase === 'crate' ? t.crate.help : t.scan.help}
+            <p className="text-xs text-stone-500" aria-live="polite">
+              {busy ? t.scan.checking : phase === 'crate' ? t.crate.help : t.scan.help}
             </p>
           </form>
           {phase === 'bottle' && (

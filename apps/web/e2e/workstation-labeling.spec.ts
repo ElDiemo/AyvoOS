@@ -235,8 +235,10 @@ test('labels bottles into a crate at the station: content, duplicate, wrong desi
   await expect(notice).toContainText('Toto není QR kód AYVO');
   await shot(page, 'labeling-scans');
 
+  // A rapid series like a handheld scanner: no waiting between the two scans, nothing is lost.
   await scan(urls[1]!);
-  await scan(urls[2]!);
+  await page.keyboard.type(urls[2]!);
+  await page.keyboard.press('Enter');
   await expect(notice).toContainText('je plná a čeká na plnění');
   await expect(page.getByTestId('crate-content')).toContainText('3/3');
   await expect(page.getByTestId('crate-scan')).toBeVisible();

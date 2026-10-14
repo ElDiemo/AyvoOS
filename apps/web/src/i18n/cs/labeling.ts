@@ -43,6 +43,7 @@ export const labelingCs = {
     uncertain:
       'Spojení se serverem selhalo a výsledek není jistý. Zkuste to znovu – stejný pokus se nezdvojí.',
     retry: 'Zkusit znovu',
+    checking: 'Ověřuji… další scan můžete hned načíst.',
   },
   errors: {
     NOT_AYVO_QR: 'Toto není QR kód AYVO tohoto prostředí.',
