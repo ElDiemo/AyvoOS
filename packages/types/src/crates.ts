@@ -31,6 +31,12 @@ export const crateEventTypeSchema = z.enum([
   'LABEL_PRINT_JOB_CREATED',
   'CYCLE_OPENED',
   'READY_TO_FILL',
+  'FILLING_STARTED',
+  'CRATE_FILLED',
+  'RETURNED_TO_FILLING',
+  'CYCLE_ABORTED',
+  'MEMBER_REMOVED',
+  'MEMBER_ADDED',
 ]);
 export type CrateEventType = z.infer<typeof crateEventTypeSchema>;
 

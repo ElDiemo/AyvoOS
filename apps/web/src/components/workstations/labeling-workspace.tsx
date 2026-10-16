@@ -8,11 +8,11 @@ import {
   type LabelingState,
 } from '@ayvo/types';
 import { useEffect, useId, useRef, useState } from 'react';
-import { UnsavedChangesGuard } from '@/components/unsaved-changes-guard';
 import { buttonClass, Card, inputClass } from '@/components/ui';
 import { labelingCs } from '@/i18n/cs/labeling';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
+import { ScanQueueStatus, useScanQueue, type QueueItem } from './use-scan-queue';
 
 const t = labelingCs;
 type Notice = { tone: 'ok' | 'warn' | 'error'; text: string; retry?: () => void } | null;
@@ -126,73 +126,14 @@ export function LabelingWorkspace({
     }
   }
 
-  // Scanner series (issue #19: "rychlá série"): the field never blocks; every scan is queued
-  // with the kind and the context revision it had when scanned, and sent in order. An UNCERTAIN
-  // answer (network, 5xx) stops the queue: that scan stays visible with its request id until it
-  // is retried (the server replays a committed one, never consumes twice); later scans wait,
-  // visibly, and the context, the crate and the station cannot be changed meanwhile.
-  type Item = { kind: 'crate' | 'scan'; raw: string; revision: number; requestId: string };
-  const queue = useRef<Item[]>([]);
-  const draining = useRef(false);
-  const blockedRef = useRef(false);
-  const [waiting, setWaiting] = useState(0);
-  const [blocked, setBlocked] = useState<Item | null>(null);
+  // Scanner series: the shared queue (stops on an uncertain answer, keeps the request id and the
+  // context revision of each scan; see useScanQueue).
   const stateRef = useRef<LabelingState | null>(null);
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
-  const unresolved = waiting > 0 || blocked !== null;
-  // Leaving is blocked while scans wait or one is uncertain: in-app links and the site switch are
-  // stopped by the shared leave guard (rendered below, nothing can be discarded), reload and
-  // closing the tab get the browser's prompt.
-  useEffect(() => {
-    onUnresolvedChange?.(unresolved);
-  }, [unresolved, onUnresolvedChange]);
-
-  function submit(raw: string) {
-    if (raw.trim() === '') return;
-    queue.current.push({
-      kind: phase === 'crate' ? 'crate' : 'scan',
-      raw,
-      revision: stateRef.current?.contextRevision ?? 0,
-      requestId: crypto.randomUUID(),
-    });
-    setWaiting(queue.current.length);
-    setValue('');
-    if (!draining.current && !blockedRef.current) void drain();
-  }
-
-  async function drain() {
-    draining.current = true;
-    setBusy(true);
-    try {
-      while (queue.current.length > 0 && !blockedRef.current) {
-        const item = queue.current[0]!;
-        const definite = await process(item);
-        if (!definite) {
-          blockedRef.current = true;
-          setBlocked(item);
-          break;
-        }
-        queue.current.shift();
-        setWaiting(queue.current.length);
-      }
-    } finally {
-      draining.current = false;
-      setBusy(false);
-      setWaiting(queue.current.length);
-    }
-  }
-
-  /** Retries the SAME uncertain scan (same request id and context revision), then continues. */
-  function retryBlocked() {
-    blockedRef.current = false;
-    setBlocked(null);
-    if (!draining.current) void drain();
-  }
-
   /** Sends one scan; false = no definite answer (the queue stops on it). */
-  async function process(item: Item): Promise<boolean> {
+  async function process(item: QueueItem): Promise<boolean> {
     const { kind, raw } = item;
     try {
       if (kind === 'crate') {
@@ -244,6 +185,18 @@ export function LabelingWorkspace({
       push('error', text);
       return true;
     }
+  }
+
+  const q = useScanQueue((item) => process(item), onUnresolvedChange);
+  const unresolved = q.unresolved;
+
+  function submit(raw: string) {
+    q.enqueue({
+      kind: phase === 'crate' ? 'crate' : 'scan',
+      raw,
+      revision: stateRef.current?.contextRevision ?? 0,
+    });
+    setValue('');
   }
 
   if (!state || !options) return notice ? <NoticeBox notice={notice} busy={busy} /> : null;
@@ -391,7 +344,7 @@ export function LabelingWorkspace({
               {t.crate.filled}
             </span>
             <span className="text-2xl font-bold tabular-nums text-stone-500">
-              0/{state.crate?.capacity ?? '—'}
+              {cycle?.filledCount ?? 0}/{state.crate?.capacity ?? '—'}
             </span>
           </p>
         </div>
@@ -420,7 +373,7 @@ export function LabelingWorkspace({
               className={`${inputClass} text-lg`}
             />
             <p className="text-xs text-stone-500" aria-live="polite">
-              {busy ? t.scan.checking : phase === 'crate' ? t.crate.help : t.scan.help}
+              {busy || q.busy ? t.scan.checking : phase === 'crate' ? t.crate.help : t.scan.help}
             </p>
           </form>
           {phase === 'bottle' && (
@@ -435,38 +388,12 @@ export function LabelingWorkspace({
           )}
         </Card>
       )}
-      <UnsavedChangesGuard
-        dirty={unresolved}
-        texts={t.scan.leaveGuard}
+      <ScanQueueStatus
+        queue={q}
+        testIdPrefix="labeling"
         // A scanner series continues into the scan field, never into the menu link.
-        onStay={() => input.current?.focus()}
+        focusScan={() => input.current?.focus()}
       />
-      {unresolved && (
-        <div
-          role="alert"
-          className="flex flex-col gap-2 rounded-md border-2 border-red-400 bg-red-50 p-3 text-sm text-red-950"
-          data-testid="labeling-unresolved"
-        >
-          {blocked && (
-            <>
-              <p className="font-semibold">{t.scan.blockedTitle}</p>
-              <p>{t.scan.blockedText}</p>
-            </>
-          )}
-          <p data-testid="labeling-waiting">
-            {t.scan.waiting(Math.max(0, waiting - (blocked ? 1 : 0)))}
-          </p>
-          {blocked && (
-            <button
-              type="button"
-              className={`${buttonClass.primary} self-start`}
-              onClick={retryBlocked}
-            >
-              {t.scan.retry}
-            </button>
-          )}
-        </div>
-      )}
       {notice && <NoticeBox notice={notice} busy={busy} />}
       {log.length > 0 && (
         <ol className="flex flex-col gap-1 text-sm" data-testid="labeling-log">

@@ -66,6 +66,7 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'production:workstations_manage',
     'production:fill',
     'production:session_takeover',
+    'production:cycle_correct',
   ],
   SALES: ['inventory:stock_summary'],
   FINANCE: [

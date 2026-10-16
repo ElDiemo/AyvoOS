@@ -17,7 +17,11 @@ export function PrintJobStatus({ status }: { status: LabelPrintJobStatus }) {
   );
 }
 
-const bottleTone: Record<BottleStatus, StatusTone> = { CREATED: 'neutral', LABELED_EMPTY: 'ok' };
+const bottleTone: Record<BottleStatus, StatusTone> = {
+  CREATED: 'neutral',
+  LABELED_EMPTY: 'ok',
+  FILLED: 'ok',
+};
 
 export function BottleStatusBadge({ status }: { status: BottleStatus }) {
   return (

@@ -16,10 +16,16 @@ export const bottleCreationBatchCodeSchema = z
 /** Opaque public QR token: 128 random bits, base64url without padding (22 characters). */
 export const publicTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
 
-export const bottleStatusSchema = z.enum(['CREATED', 'LABELED_EMPTY']);
+export const bottleStatusSchema = z.enum(['CREATED', 'LABELED_EMPTY', 'FILLED']);
 export type BottleStatus = z.infer<typeof bottleStatusSchema>;
 
-export const bottleEventTypeSchema = z.enum(['CREATED', 'LABEL_APPLIED', 'ASSIGNED_TO_CRATE']);
+export const bottleEventTypeSchema = z.enum([
+  'CREATED',
+  'LABEL_APPLIED',
+  'ASSIGNED_TO_CRATE',
+  'FILLED',
+  'REMOVED_FROM_CRATE',
+]);
 export type BottleEventType = z.infer<typeof bottleEventTypeSchema>;
 
 /** POST /api/admin/bottle-registrations */
