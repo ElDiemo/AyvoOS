@@ -299,8 +299,8 @@ export function FillingWorkspace({
         </Card>
       )}
 
-      {phase !== 'lot' && (
-        <Card>
+      <Card>
+        {phase !== 'lot' && (
           <form
             className="flex flex-col gap-2"
             onSubmit={(e) => {
@@ -329,38 +329,47 @@ export function FillingWorkspace({
                   : t.scan.help}
             </p>
           </form>
-          {phase === 'bottle' && (
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className={buttonClass.primary}
-                disabled={unresolved || !complete}
-                onClick={() =>
-                  q.enqueue({ kind: 'finish', raw: '', revision: state.contextRevision })
-                }
-                data-testid="filling-finish"
-              >
-                {t.finish.button}
-              </button>
-              <button
-                type="button"
-                className={buttonClass.secondary}
-                disabled={unresolved}
-                onClick={() => setState((s) => (s ? { ...s, crate: null } : s))}
-              >
-                {t.crate.change}
-              </button>
-              <p className="w-full text-xs text-stone-500">
-                {complete
-                  ? t.finish.help
-                  : cycle
-                    ? t.finish.notYet(cycle.memberCount, cycle.filledCount, cycle.capacity)
-                    : t.finish.help}
-              </p>
-            </div>
-          )}
-        </Card>
-      )}
+        )}
+        {/* The crate's own controls never depend on a liquid lot chosen for the NEXT bottle: a
+            completely filled crate (e.g. repacked finished bottles) is finished, and another crate
+            loaded, even when no liquid is in stock (PR #24 review A4-R2). */}
+        {state.crate && (
+          <div
+            className={`${phase === 'lot' ? '' : 'mt-3 '}flex flex-wrap items-center gap-3`}
+            data-testid="filling-crate-actions"
+          >
+            <button
+              type="button"
+              className={buttonClass.primary}
+              disabled={unresolved || !complete}
+              onClick={() =>
+                q.enqueue({ kind: 'finish', raw: '', revision: state.contextRevision })
+              }
+              data-testid="filling-finish"
+            >
+              {t.finish.button}
+            </button>
+            <button
+              type="button"
+              className={buttonClass.secondary}
+              disabled={unresolved}
+              onClick={() => {
+                setEditingLot(false);
+                setState((s) => (s ? { ...s, crate: null } : s));
+              }}
+            >
+              {t.crate.change}
+            </button>
+            <p className="w-full text-xs text-stone-500">
+              {complete
+                ? t.finish.help
+                : cycle
+                  ? t.finish.notYet(cycle.memberCount, cycle.filledCount, cycle.capacity)
+                  : t.finish.help}
+            </p>
+          </div>
+        )}
+      </Card>
       <ScanQueueStatus queue={q} testIdPrefix="filling" focusScan={() => input.current?.focus()} />
       {notice && <NoticeBox notice={notice} />}
       {log.length > 0 && (

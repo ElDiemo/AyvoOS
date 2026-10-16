@@ -252,6 +252,71 @@ describe.skipIf(!hasDatabase)('filling access and corrections (real sign-in)', (
     expect(other.status).toBe(404);
   });
 
+  it('refuses a liquid lot of another site — nothing stored, nothing of it returned (A4-R1)', async () => {
+    // The same liquid received ONLY at a second site (by the administrator working there).
+    const site = await secondSite('SKL');
+    await as(admin).post('/api/auth/active-site', { siteId: site.id }).expect(200);
+    let foreignLot: { id: string; code: string };
+    try {
+      const supplier = await as(admin).post('/api/admin/suppliers', {
+        requestId: randomUUID(),
+        name: `Cizí dodavatel ${randomUUID().slice(0, 4)}`,
+        companyId: null,
+        vatId: null,
+      });
+      expect(supplier.status, JSON.stringify(supplier.body)).toBe(201);
+      const doc = await http()
+        .post('/api/admin/supplier-documents')
+        .set('Cookie', admin)
+        .field('requestId', randomUUID())
+        .field('supplierId', supplier.body.id)
+        .field('kind', 'DELIVERY_NOTE')
+        .field('documentNumber', `DL-${randomUUID().slice(0, 6)}`)
+        .field('issuedOn', '2026-10-16')
+        .attach('file', Buffer.from('%PDF-1.4\n%%EOF\n'), 'dl.pdf');
+      expect(doc.status, JSON.stringify(doc.body)).toBe(201);
+      const receipt = await as(admin).post('/api/admin/goods-receipts', {
+        requestId: randomUUID(),
+        supplierId: supplier.body.id,
+        supplierReference: `DL-${randomUUID().slice(0, 6)}`,
+        receivedAt: new Date().toISOString(),
+        note: null,
+        documentIds: [doc.body.id],
+        lines: [
+          {
+            itemId: kit.liquidItemId,
+            quantity: '5000',
+            supplierLotCode: `FOREIGN-${randomUUID().slice(0, 6)}`,
+            unitPrice: null,
+            currency: null,
+            vatRate: null,
+          },
+        ],
+      });
+      expect(receipt.status, JSON.stringify(receipt.body)).toBe(201);
+      foreignLot = receipt.body.lines[0].lot;
+    } finally {
+      await as(admin).post('/api/auth/active-site', { siteId: INITIAL_SITE_ID }).expect(200);
+    }
+    const { crateUrl } = await readyCrate();
+    const op = await createUser(['PRODUCTION_OPERATOR']);
+    const { base } = await fillingAt(op.cookie, crateUrl);
+    const before = await as(op.cookie).get(`${base}/filling`).expect(200);
+    const events = await su.prisma.workstationSessionEvent.count();
+    const movements = await su.prisma.inventoryMovement.count();
+    const refused = await as(op.cookie).post(`${base}/liquid-lot`, {
+      requestId: randomUUID(),
+      liquidLotId: foreignLot.id,
+    });
+    expect([refused.status, refused.body.code]).toEqual([422, 'WRONG_LOT']);
+    expect(JSON.stringify(refused.body)).not.toContain(foreignLot.code);
+    const after = await as(op.cookie).get(`${base}/filling`).expect(200);
+    expect(after.body).toEqual(before.body); // context (lot, revision) unchanged
+    expect(JSON.stringify(after.body)).not.toContain(foreignLot.code);
+    expect(await su.prisma.workstationSessionEvent.count()).toBe(events);
+    expect(await su.prisma.inventoryMovement.count()).toBe(movements);
+  });
+
   it('refuses a bottle of another site at a filling scan — nothing written', async () => {
     const { crateUrl } = await readyCrate();
     const site = await secondSite('SKF');

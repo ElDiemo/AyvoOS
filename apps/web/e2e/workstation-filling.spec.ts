@@ -6,6 +6,7 @@ import {
   fillingStation,
   labelingSetup,
   labelledCrate,
+  newCrate,
   openStation,
   receiveStock,
   releaseOwnStation,
@@ -247,4 +248,97 @@ test('the filling station works at phone width', async ({ page }) => {
   await expect(page.getByTestId('crate-filled')).toContainText('1/3');
   await noOverflow(page);
   await shot(page, 'filling-mobile');
+});
+
+test('a completely filled crate finishes without a liquid lot; another crate loads before a lot is chosen', async ({
+  page,
+}) => {
+  const request = page.request;
+  // Own product and liquid: exactly two bottles' worth, used up by the fills below.
+  const printed = await printedBottles(request, `bez-sarze-${Date.now()}`, 4);
+  const k = await labelingSetup(request, {
+    versionId: printed.version.versionId,
+    capacity: 2,
+    productName: 'Mýdlo bez šarže (E2E)',
+  });
+  const bottleLot = (await receiveStock(request, 'NEW_BOTTLE', '10'))!;
+  const liquidCode = (await receiveStock(request, k.liquidCode, '660'))!;
+  await receiveStock(request, k.pumpCode, '10');
+  const labelled = (slice: string[]) =>
+    labelledCrate(request, k, {
+      versionId: printed.version.versionId,
+      bottleLotCode: bottleLot,
+      urls: slice,
+    });
+  const a = await labelled(printed.urls.slice(0, 2));
+  const c = await labelled(printed.urls.slice(2, 4)); // waits for filling, no liquid left later
+
+  // Fill A completely through the API, abort it and repack both finished bottles into empty B.
+  const lots = await json<{ id: string; code: string; onHand: string }[]>(
+    await request.get(`/api/admin/inventory/lots?item=${k.liquidCode}&available=false`),
+  );
+  const lot = lots.find((l) => l.code === liquidCode)!;
+  const session = await openStation(request, (await fillingStation(request)).url);
+  const base = `/api/admin/station-sessions/${session}`;
+  await json(
+    await request.post(`${base}/filling-crate`, {
+      data: { requestId: crypto.randomUUID(), scannedValue: a.url },
+    }),
+  );
+  const chosen = await json<{ contextRevision: number }>(
+    await request.post(`${base}/liquid-lot`, {
+      data: { requestId: crypto.randomUUID(), liquidLotId: lot.id },
+    }),
+  );
+  for (const url of printed.urls.slice(0, 2)) {
+    await json(
+      await request.post(`${base}/fill-scans`, {
+        data: {
+          requestId: crypto.randomUUID(),
+          scannedValue: url,
+          contextRevision: chosen.contextRevision,
+        },
+      }),
+    );
+  }
+  await releaseOwnStation(request);
+  await json(
+    await request.post(`/api/admin/crates/${a.code}/abort-cycle`, {
+      data: { requestId: crypto.randomUUID(), reason: 'nová bedna' },
+    }),
+  );
+  const b = await newCrate(request, k.crateTypeCode);
+  for (const code of printed.codes.slice(0, 2)) {
+    await json(
+      await request.post(`/api/admin/crates/${b.code}/add-bottle`, {
+        data: { requestId: crypto.randomUUID(), bottle: code, reason: 'přeložení' },
+      }),
+    );
+  }
+  const movements = async () =>
+    (await json<{ total: number }>(await request.get('/api/admin/inventory/movements?pageSize=1')))
+      .total;
+  const before = await movements();
+
+  // A NEW filling session: no liquid lot chosen, none in stock — Hotovo still works.
+  await openStation(request, (await fillingStation(request)).url);
+  await page.goto('/production/station');
+  await expect(page.getByTestId('crate-scan').getByRole('textbox')).toBeFocused();
+  await typeScan(page, b.url);
+  await expect(page.getByTestId('crate-content')).toContainText('2/2');
+  await expect(page.getByTestId('crate-filled')).toContainText('2/2');
+  await expect(page.getByTestId('filling-lot-form')).toContainText('není žádná šarže');
+  await shot(page, 'filling-finish-without-lot');
+  await page.getByTestId('filling-finish').click();
+  await expect(page.getByTestId('filling-notice')).toContainText(`Bedna ${b.code} je připravená`);
+  expect(await movements()).toBe(before); // Hotovo consumes nothing
+
+  // A crate waiting for filling, no lot to choose: another crate can still be loaded.
+  await expect(page.getByTestId('crate-scan').getByRole('textbox')).toBeFocused();
+  await typeScan(page, c.url);
+  await expect(page.getByTestId('crate-content')).toContainText('2/2');
+  await expect(page.getByTestId('filling-finish')).toBeDisabled();
+  await page.getByRole('button', { name: 'Jiná bedna' }).click();
+  await expect(page.getByTestId('crate-scan')).toBeVisible();
+  expect(await movements()).toBe(before);
 });
