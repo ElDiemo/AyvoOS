@@ -137,8 +137,20 @@ export class FillingService {
         this.assertFillable(cycle, station);
         const liquid = this.liquidLine(await this.fillLines(tx, cycle!));
         const lot = await this.inventory.getLot(input.liquidLotId, tx);
-        if (!lot || lot.itemId !== liquid.itemId) {
-          throw domainError(422, 'WRONG_LOT', 'The lot is not a lot of the recipe’s liquid');
+        // The lot must be the recipe's liquid AND recorded in the station's warehouse (it may be
+        // used up there meanwhile): a lot of another warehouse or site is refused like an unknown
+        // one — nothing stored, nothing of it returned (PR #24 review A4-R1).
+        const local =
+          lot &&
+          (await tx.inventoryBalance.count({
+            where: { lotId: lot.id, locationId: station.locationId },
+          })) > 0;
+        if (!lot || lot.itemId !== liquid.itemId || !local) {
+          throw domainError(
+            422,
+            'WRONG_LOT',
+            'The lot is not a lot of the recipe’s liquid in this station’s warehouse',
+          );
         }
         await this.sessions.setLiquidLot(tx, sessionId, lot.id, principal.userId, input.requestId);
         const updated = await tx.workstationSession.findUniqueOrThrow({ where: { id: sessionId } });
