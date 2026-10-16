@@ -290,11 +290,12 @@ describe.skipIf(!hasDatabase)('inventory foundation and supplier receiving (doc 
 
     // Stock already used cannot be corrected away.
     const [bottle] = await printedBottles(t, 1);
-    await applyLabel(t, {
+    const labelled = await applyLabel(t, {
       lotId: lot.id,
       seriesCode: bottle!.seriesCode,
       scannedValue: bottle!.url,
-    }).expect(200);
+    });
+    expect(labelled.status, JSON.stringify(labelled.body)).toBe(200);
     expect((await correct('-3').expect(409)).body.code).toBe('INSUFFICIENT_STOCK');
     const requestId = randomUUID();
     await correct('-2', requestId).expect(200);

@@ -300,10 +300,23 @@ export class BottlesService {
       labelQrUrl: string;
       printJobId: string;
       printJobPosition: number;
+      /** Labelling into a crate (doc 025 A3) — required by the database for new applications. */
+      actorId: string;
+      crateCycleId: string;
+      workstationSessionId: string;
+      operationRequestId: string;
     },
   ): Promise<{ eventId: string }> {
     const event = await tx.bottleEvent.create({
-      data: { bottleId: input.bottleId, type: 'LABEL_APPLIED', occurredAt: input.occurredAt },
+      data: {
+        bottleId: input.bottleId,
+        type: 'LABEL_APPLIED',
+        occurredAt: input.occurredAt,
+        actorId: input.actorId,
+        crateCycleId: input.crateCycleId,
+        workstationSessionId: input.workstationSessionId,
+        operationRequestId: input.operationRequestId,
+      },
       select: { id: true },
     });
     await tx.bottle.update({ where: { id: input.bottleId }, data: { status: 'LABELED_EMPTY' } });
@@ -319,6 +332,57 @@ export class BottlesService {
       },
     });
     return { eventId: event.id };
+  }
+
+  /** The bottle was put into a crate cycle (labelling scan): its ASSIGNED_TO_CRATE event. */
+  async assignedToCrateEvent(
+    tx: Prisma.TransactionClient,
+    input: {
+      bottleId: string;
+      occurredAt: Date;
+      actorId: string;
+      crateCycleId: string;
+      workstationSessionId: string;
+      operationRequestId: string;
+      crateCode: string;
+    },
+  ): Promise<{ eventId: string }> {
+    const event = await tx.bottleEvent.create({
+      data: {
+        bottleId: input.bottleId,
+        type: 'ASSIGNED_TO_CRATE',
+        occurredAt: input.occurredAt,
+        actorId: input.actorId,
+        crateCycleId: input.crateCycleId,
+        workstationSessionId: input.workstationSessionId,
+        operationRequestId: input.operationRequestId,
+        payload: { crate: input.crateCode },
+      },
+      select: { id: true },
+    });
+    return { eventId: event.id };
+  }
+
+  /** The permanent product binding of a freshly labelled bottle (owner B1). */
+  async bindProduct(
+    tx: Prisma.TransactionClient,
+    input: {
+      bottleId: string;
+      productId: string;
+      categoryCode: string;
+      labelTemplateVersionId: string;
+      labelAppliedEventId: string;
+      crateCycleId: string;
+      operationRequestId: string;
+      boundAt: Date;
+    },
+  ): Promise<void> {
+    await tx.bottleProductBinding.create({ data: input });
+  }
+
+  /** The product binding of a bottle, or null (legacy labelled bottles have none, owner B3). */
+  productBinding(db: Prisma.TransactionClient, bottleId: string) {
+    return db.bottleProductBinding.findUnique({ where: { bottleId } });
   }
 
   async statusAndCode(bottleId: string) {

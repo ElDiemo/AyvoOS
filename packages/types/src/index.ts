@@ -5,6 +5,7 @@ export * from './crates.js';
 export * from './health.js';
 export * from './identity.js';
 export * from './inventory.js';
+export * from './labeling.js';
 export * from './labels.js';
 export * from './printing.js';
 export * from './procurement.js';

@@ -89,13 +89,17 @@ model LabelTemplate {
 /// DB: immutable (UPDATE/DELETE rejected by trigger); UNIQUE (template_id, version_number);
 /// CHECK physical size 10–500 mm.
 model LabelTemplateVersion {
-  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  templateId    String   @map("template_id") @db.Uuid
-  versionNumber Int      @map("version_number")
-  widthMm       Decimal  @map("width_mm") @db.Decimal(6, 2)
-  heightMm      Decimal  @map("height_mm") @db.Decimal(6, 2)
-  artworkId     String   @map("artwork_id") @db.Uuid
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  productApprovals ProductLabelApproval[]
+  cycles           CrateCycle[]
+  bindings         BottleProductBinding[]
+  sessions         WorkstationSession[]
+  id               String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  templateId       String                 @map("template_id") @db.Uuid
+  versionNumber    Int                    @map("version_number")
+  widthMm          Decimal                @map("width_mm") @db.Decimal(6, 2)
+  heightMm         Decimal                @map("height_mm") @db.Decimal(6, 2)
+  artworkId        String                 @map("artwork_id") @db.Uuid
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
 
   template        LabelTemplate          @relation(fields: [templateId], references: [id], onDelete: Restrict)
   artwork         LabelArtwork           @relation(fields: [artworkId], references: [id], onDelete: Restrict)
@@ -152,6 +156,8 @@ enum BottleEventType {
   CREATED
   /// First physical label installation; consumes one NEW_BOTTLE unit of the selected lot (doc 018).
   LABEL_APPLIED
+  /// The labelled empty bottle was put into a crate cycle (labelling scan, doc 025).
+  ASSIGNED_TO_CRATE
 }
 
 /// A group of physical bottle identities registered in one operation (NOT a fill batch).
@@ -193,17 +199,19 @@ model BottleCreationBatch {
 /// created_at) immutable (trigger); code derived from serial (CHECK); public_token unique and
 /// 22 URL-safe characters (CHECK).
 model Bottle {
-  id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial          BigInt       @unique
+  assignments     CrateAssignment[]
+  binding         BottleProductBinding?
+  id              String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial          BigInt                @unique
   /// Human-readable, sequential: "AYV-B-000001". Not a security token.
-  code            String       @unique
+  code            String                @unique
   /// Opaque public QR identity (128 random bits, base64url). Never derived from id or code.
-  publicToken     String       @unique @map("public_token")
+  publicToken     String                @unique @map("public_token")
   status          BottleStatus
-  creationBatchId String       @map("creation_batch_id") @db.Uuid
-  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  creationBatchId String                @map("creation_batch_id") @db.Uuid
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   /// The site the bottle belongs to — its series' site (composite FK). No transfer in v0.1.
-  siteId          String       @map("site_id") @db.Uuid
+  siteId          String                @map("site_id") @db.Uuid
 
   creationBatch BottleCreationBatch         @relation(fields: [creationBatchId, siteId], references: [id, siteId], onDelete: Restrict)
   site          Site                        @relation(fields: [siteId], references: [id], onDelete: Restrict)
@@ -219,18 +227,26 @@ model Bottle {
 /// Append-only lifecycle history (ADR 0006).
 /// DB: UPDATE/DELETE rejected by trigger; at most one CREATED event per bottle (partial unique).
 model BottleEvent {
-  id              String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  bottleId        String          @map("bottle_id") @db.Uuid
-  type            BottleEventType
+  crateCycleId         String?               @map("crate_cycle_id") @db.Uuid
+  workstationSessionId String?               @map("workstation_session_id") @db.Uuid
+  operationRequestId   String?               @map("operation_request_id") @db.Uuid
+  crateCycle           CrateCycle?           @relation(fields: [crateCycleId], references: [id], onDelete: Restrict)
+  workstationSession   WorkstationSession?   @relation(fields: [workstationSessionId], references: [id], onDelete: Restrict)
+  operation            OperationRequest?     @relation("BottleEventOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  assignment           CrateAssignment?      @relation("AssignmentEvent")
+  binding              BottleProductBinding?
+  id                   String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  bottleId             String                @map("bottle_id") @db.Uuid
+  type                 BottleEventType
   /// When it physically happened vs. when the system recorded it (doc 002, "Time").
-  occurredAt      DateTime        @map("occurred_at") @db.Timestamptz(3)
-  recordedAt      DateTime        @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  occurredAt           DateTime              @map("occurred_at") @db.Timestamptz(3)
+  recordedAt           DateTime              @default(now()) @map("recorded_at") @db.Timestamptz(3)
   /// Acting user. NULL until the identity-access module exists (no authentication in v0.1).
-  actorId         String?         @map("actor_id") @db.Uuid
+  actorId              String?               @map("actor_id") @db.Uuid
   /// Context reference for CREATED events. Later event types add their own nullable references.
-  creationBatchId String?         @map("creation_batch_id") @db.Uuid
+  creationBatchId      String?               @map("creation_batch_id") @db.Uuid
   /// Small event-specific data, validated by Zod in the assets module.
-  payload         Json            @default("{}")
+  payload              Json                  @default("{}")
 
   bottle        Bottle                      @relation(fields: [bottleId], references: [id], onDelete: Restrict)
   creationBatch BottleCreationBatch?        @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
@@ -502,16 +518,17 @@ enum InventoryLotKind {
 /// origin_receipt_line_id (unique, deferrable FK) and no supplier lot code; lot item must be
 /// lot-tracked.
 model InventoryLot {
-  id                  String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  itemId              String           @map("item_id") @db.Uuid
+  sessions            WorkstationSession[]
+  id                  String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId              String               @map("item_id") @db.Uuid
   kind                InventoryLotKind
   /// Display code: the supplier lot code, or "GR-000001/1" for an internal lot.
   code                String
-  supplierId          String?          @map("supplier_id") @db.Uuid
-  supplierLotCode     String?          @map("supplier_lot_code")
-  originReceiptLineId String?          @unique @map("origin_receipt_line_id") @db.Uuid
-  expiresOn           DateTime?        @map("expires_on") @db.Date
-  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  supplierId          String?              @map("supplier_id") @db.Uuid
+  supplierLotCode     String?              @map("supplier_lot_code")
+  originReceiptLineId String?              @unique @map("origin_receipt_line_id") @db.Uuid
+  expiresOn           DateTime?            @map("expires_on") @db.Date
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
 
   item              InventoryItem       @relation(fields: [itemId], references: [id], onDelete: Restrict)
   supplier          Supplier?           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
@@ -848,16 +865,28 @@ enum OperationKind {
   STATION_SESSION_OPEN
   STATION_SESSION_RELEASE
   STATION_SESSION_TAKEOVER
+  PRODUCT_LABEL_APPROVE
+  PRODUCT_LABEL_REVOKE
+  STATION_LABELING_CONTEXT
+  STATION_CRATE_LOAD
+  LABEL_SCAN
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
 /// different payload → conflict. DB: insert-only except setting `result` once (NULL → value).
 model OperationRequest {
-  requestId     String        @id @map("request_id") @db.Uuid
-  kind          OperationKind
-  payloadSha256 String        @map("payload_sha256") @db.Char(64)
-  result        Json?
-  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  bottleEvents     BottleEvent[]          @relation("BottleEventOperation")
+  labelApprovals   ProductLabelApproval[] @relation("ApproveOperation")
+  labelRevocations ProductLabelApproval[] @relation("RevokeOperation")
+  cyclesOpened     CrateCycle[]           @relation("CycleOpenOperation")
+  assignments      CrateAssignment[]      @relation("AssignOperation")
+  releases         CrateAssignment[]      @relation("ReleaseOperation")
+  bindings         BottleProductBinding[]
+  requestId        String                 @id @map("request_id") @db.Uuid
+  kind             OperationKind
+  payloadSha256    String                 @map("payload_sha256") @db.Char(64)
+  result           Json?
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
 
   catalogComponents        CatalogComponent[]
   crateTypes               CrateType[]
@@ -888,17 +917,23 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
-  id                 String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  email              String     @unique
-  displayName        String     @map("display_name")
-  status             UserStatus @default(ACTIVE)
-  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  labelApprovals      ProductLabelApproval[] @relation("ApprovalBy")
+  labelRevocations    ProductLabelApproval[] @relation("ApprovalRevokedBy")
+  cyclesOpened        CrateCycle[]           @relation("CycleOpenedBy")
+  cyclesAborted       CrateCycle[]           @relation("CycleAbortedBy")
+  assignmentsMade     CrateAssignment[]      @relation("AssignedBy")
+  assignmentsReleased CrateAssignment[]      @relation("ReleasedBy")
+  id                  String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email               String                 @unique
+  displayName         String                 @map("display_name")
+  status              UserStatus             @default(ACTIVE)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   /// NULL only for the bootstrap administrator.
-  createdBy          String?    @map("created_by") @db.Uuid
-  deactivatedAt      DateTime?  @map("deactivated_at") @db.Timestamptz(3)
-  deactivatedBy      String?    @map("deactivated_by") @db.Uuid
-  deactivationReason String?    @map("deactivation_reason")
-  lastLoginAt        DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  createdBy           String?                @map("created_by") @db.Uuid
+  deactivatedAt       DateTime?              @map("deactivated_at") @db.Timestamptz(3)
+  deactivatedBy       String?                @map("deactivated_by") @db.Uuid
+  deactivationReason  String?                @map("deactivation_reason")
+  lastLoginAt         DateTime?              @map("last_login_at") @db.Timestamptz(3)
 
   createdByUser             User?                     @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   createdUsers              User[]                    @relation("UserCreatedBy")
@@ -1160,6 +1195,7 @@ enum SiteCapability {
 /// country and not a legal entity. DB: code unique and immutable; never deleted; a valid IANA
 /// time zone; deactivation keeps history and blocks new operational changes.
 model Site {
+  crateCycles     CrateCycle[]
   id              String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
   code            String           @unique
   name            String
@@ -1317,13 +1353,14 @@ model CatalogComponent {
 /// A returnable production crate type (ADR 0021): capacity is data, never a constant.
 /// DB: code pattern; capacity 1–1000; immutable; DELETE rejected.
 model CrateType {
-  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code               String   @unique
+  cycles             CrateCycle[]
+  id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String       @unique
   name               String
   capacity           Int
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String   @map("created_by") @db.Uuid
-  operationRequestId String   @map("operation_request_id") @db.Uuid
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String       @map("created_by") @db.Uuid
+  operationRequestId String       @map("operation_request_id") @db.Uuid
 
   categories    CrateTypeCategory[]
   registrations CrateRegistration[]
@@ -1357,19 +1394,23 @@ enum ProductStatus {
 /// and creation immutable; the name may be corrected while ACTIVE (audited); status forward-only;
 /// DELETE rejected.
 model Product {
-  id                 String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code               String        @unique
+  labelApprovals     ProductLabelApproval[]
+  cycles             CrateCycle[]
+  bindings           BottleProductBinding[]
+  sessions           WorkstationSession[]
+  id                 String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String                 @unique
   name               String
-  categoryCode       String        @map("category_code")
-  nominalQuantity    Decimal       @map("nominal_quantity") @db.Decimal(19, 3)
-  nominalUnitId      String        @map("nominal_unit_id") @db.Uuid
-  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String        @map("created_by") @db.Uuid
-  operationRequestId String        @map("operation_request_id") @db.Uuid
+  categoryCode       String                 @map("category_code")
+  nominalQuantity    Decimal                @map("nominal_quantity") @db.Decimal(19, 3)
+  nominalUnitId      String                 @map("nominal_unit_id") @db.Uuid
+  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String                 @map("created_by") @db.Uuid
+  operationRequestId String                 @map("operation_request_id") @db.Uuid
   /// ACTIVE → ARCHIVED (forward only). An archived product gets no new recipe work.
-  status             ProductStatus @default(ACTIVE)
-  archivedAt         DateTime?     @map("archived_at") @db.Timestamptz(3)
-  archivedBy         String?       @map("archived_by") @db.Uuid
+  status             ProductStatus          @default(ACTIVE)
+  archivedAt         DateTime?              @map("archived_at") @db.Timestamptz(3)
+  archivedBy         String?                @map("archived_by") @db.Uuid
 
   category    ProductCategory  @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
   nominalUnit InventoryUnit    @relation(fields: [nominalUnitId], references: [id], onDelete: Restrict)
@@ -1393,21 +1434,23 @@ enum RecipeStatus {
 /// status DRAFT → ACTIVE → ARCHIVED (or DRAFT → ARCHIVED); activation only when complete;
 /// identity columns immutable; DELETE rejected. Only a DRAFT gains revisions.
 model RecipeVersion {
-  id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  productId          String       @map("product_id") @db.Uuid
+  cycles             CrateCycle[]
+  sessions           WorkstationSession[]
+  id                 String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  productId          String               @map("product_id") @db.Uuid
   /// Copy of the product's category (composite FK) so components and crates can be checked.
-  categoryCode       String       @map("category_code")
+  categoryCode       String               @map("category_code")
   version            Int
-  status             RecipeStatus @default(DRAFT)
+  status             RecipeStatus         @default(DRAFT)
   /// The version this one was copied from ("new version"), if any — same product.
-  basedOnId          String?      @map("based_on_id") @db.Uuid
-  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String       @map("created_by") @db.Uuid
-  operationRequestId String       @map("operation_request_id") @db.Uuid
-  activatedAt        DateTime?    @map("activated_at") @db.Timestamptz(3)
-  activatedBy        String?      @map("activated_by") @db.Uuid
-  archivedAt         DateTime?    @map("archived_at") @db.Timestamptz(3)
-  archivedBy         String?      @map("archived_by") @db.Uuid
+  basedOnId          String?              @map("based_on_id") @db.Uuid
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String               @map("created_by") @db.Uuid
+  operationRequestId String               @map("operation_request_id") @db.Uuid
+  activatedAt        DateTime?            @map("activated_at") @db.Timestamptz(3)
+  activatedBy        String?              @map("activated_by") @db.Uuid
+  archivedAt         DateTime?            @map("archived_at") @db.Timestamptz(3)
+  archivedBy         String?              @map("archived_by") @db.Uuid
 
   product   Product          @relation(fields: [productId, categoryCode], references: [id, categoryCode], onDelete: Restrict)
   basedOn   RecipeVersion?   @relation("RecipeBasedOn", fields: [basedOnId, productId], references: [id, productId], onDelete: Restrict)
@@ -1528,17 +1571,19 @@ model CrateRegistration {
 /// circulations are crate cycles (later PR). site_id = the site it belongs to (doc 022).
 /// DB: identity columns immutable; DELETE rejected; token registered as kind CRATE.
 model Crate {
-  id             String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial         BigInt         @unique
-  code           String         @unique
-  qrToken        String         @unique @map("qr_token")
+  cycles         CrateCycle[]
+  sessions       WorkstationSession[]
+  id             String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial         BigInt               @unique
+  code           String               @unique
+  qrToken        String               @unique @map("qr_token")
   /// Always CRATE: composite FK to the registry row of this token.
-  qrKind         QrIdentityKind @default(CRATE) @map("qr_kind")
-  crateTypeId    String         @map("crate_type_id") @db.Uuid
-  registrationId String         @map("registration_id") @db.Uuid
-  siteId         String         @map("site_id") @db.Uuid
-  status         CrateStatus    @default(ACTIVE)
-  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  qrKind         QrIdentityKind       @default(CRATE) @map("qr_kind")
+  crateTypeId    String               @map("crate_type_id") @db.Uuid
+  registrationId String               @map("registration_id") @db.Uuid
+  siteId         String               @map("site_id") @db.Uuid
+  status         CrateStatus          @default(ACTIVE)
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
 
   qrIdentity    QrIdentity               @relation(fields: [qrToken, qrKind], references: [token, kind], onDelete: Restrict)
   crateType     CrateType                @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
@@ -1611,11 +1656,15 @@ enum CrateEventType {
   REGISTERED
   /// A crate label print job including this crate was created. Printing itself is not provable.
   LABEL_PRINT_JOB_CREATED
+  CYCLE_OPENED
+  READY_TO_FILL
 }
 
 /// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
 /// the operation does not record one (registration records only the site). DB: immutable.
 model CrateEvent {
+  cycleId            String?        @map("cycle_id") @db.Uuid
+  cycle              CrateCycle?    @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
   crateId            String         @map("crate_id") @db.Uuid
   type               CrateEventType
@@ -1723,17 +1772,33 @@ enum WorkstationSessionStatus {
 /// (partial unique); the site is the station's; only ACTIVE → RELEASED/TAKEN_OVER/CLOSED, once,
 /// with its event; identity columns immutable; DELETE rejected. Lease expiry is not a status.
 model WorkstationSession {
-  id             String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  workstationId  String                   @map("workstation_id") @db.Uuid
-  userId         String                   @map("user_id") @db.Uuid
-  siteId         String                   @map("site_id") @db.Uuid
-  status         WorkstationSessionStatus @default(ACTIVE)
-  openedAt       DateTime                 @default(now()) @map("opened_at") @db.Timestamptz(3)
-  leaseExpiresAt DateTime                 @map("lease_expires_at") @db.Timestamptz(3)
-  lastActivityAt DateTime                 @default(now()) @map("last_activity_at") @db.Timestamptz(3)
-  closedAt       DateTime?                @map("closed_at") @db.Timestamptz(3)
-  closedBy       String?                  @map("closed_by") @db.Uuid
-  closeReason    String?                  @map("close_reason")
+  /// Labelling context (doc 025, A3): chosen once, re-validated on every scan.
+  productId               String?                  @map("product_id") @db.Uuid
+  recipeVersionId         String?                  @map("recipe_version_id") @db.Uuid
+  labelTemplateVersionId  String?                  @map("label_template_version_id") @db.Uuid
+  sourceLotId             String?                  @map("source_lot_id") @db.Uuid
+  /// Bumped by every context change or crate load: a labelling scan names the revision it was
+  /// made in, so a retry from an older context is refused (PR #23 review).
+  labelingContextRevision Int                      @default(0) @map("labeling_context_revision")
+  /// The crate loaded at the station (at most one active session per crate).
+  crateId                 String?                  @map("crate_id") @db.Uuid
+  product                 Product?                 @relation(fields: [productId], references: [id], onDelete: Restrict)
+  recipeVersion           RecipeVersion?           @relation(fields: [recipeVersionId], references: [id], onDelete: Restrict)
+  labelTemplateVersion    LabelTemplateVersion?    @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  sourceLot               InventoryLot?            @relation(fields: [sourceLotId], references: [id], onDelete: Restrict)
+  crate                   Crate?                   @relation(fields: [crateId], references: [id], onDelete: Restrict)
+  bottleEvents            BottleEvent[]
+  id                      String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  workstationId           String                   @map("workstation_id") @db.Uuid
+  userId                  String                   @map("user_id") @db.Uuid
+  siteId                  String                   @map("site_id") @db.Uuid
+  status                  WorkstationSessionStatus @default(ACTIVE)
+  openedAt                DateTime                 @default(now()) @map("opened_at") @db.Timestamptz(3)
+  leaseExpiresAt          DateTime                 @map("lease_expires_at") @db.Timestamptz(3)
+  lastActivityAt          DateTime                 @default(now()) @map("last_activity_at") @db.Timestamptz(3)
+  closedAt                DateTime?                @map("closed_at") @db.Timestamptz(3)
+  closedBy                String?                  @map("closed_by") @db.Uuid
+  closeReason             String?                  @map("close_reason")
 
   workstation Workstation               @relation(fields: [workstationId], references: [id], onDelete: Restrict)
   user        User                      @relation("SessionUser", fields: [userId], references: [id], onDelete: Restrict)
@@ -1751,6 +1816,8 @@ enum WorkstationSessionEventType {
   RELEASED
   TAKEN_OVER
   CLOSED
+  CONTEXT_CHANGED
+  CRATE_LOADED
 }
 
 /// Append-only session history. DB: immutable; a takeover or close needs a reason.
@@ -1769,4 +1836,147 @@ model WorkstationSessionEvent {
 
   @@index([sessionId, occurredAt])
   @@map("workstation_session_events")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Labelling into crates (doc 025 A3, docs 020 §3.3–§3.5, owner decisions B1–B4 2026-10-14).
+// ---------------------------------------------------------------------------------------------
+
+/// A label design (exact label template version) approved for exactly one product (owner B1).
+/// DB: at most one open approval per design (partial unique); revoke once, with a reason;
+/// identity immutable; DELETE rejected. Revoking blocks new labelling only.
+model ProductLabelApproval {
+  id                     String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  productId              String    @map("product_id") @db.Uuid
+  labelTemplateVersionId String    @map("label_template_version_id") @db.Uuid
+  reason                 String
+  approvedAt             DateTime  @default(now()) @map("approved_at") @db.Timestamptz(3)
+  approvedBy             String    @map("approved_by") @db.Uuid
+  approveOperationId     String    @unique @map("approve_operation_id") @db.Uuid
+  revokedAt              DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy              String?   @map("revoked_by") @db.Uuid
+  revokeReason           String?   @map("revoke_reason")
+  revokeOperationId      String?   @unique @map("revoke_operation_id") @db.Uuid
+
+  product              Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  approver             User                 @relation("ApprovalBy", fields: [approvedBy], references: [id], onDelete: Restrict)
+  revoker              User?                @relation("ApprovalRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  approveOperation     OperationRequest     @relation("ApproveOperation", fields: [approveOperationId], references: [requestId], onDelete: Restrict)
+  revokeOperation      OperationRequest?    @relation("RevokeOperation", fields: [revokeOperationId], references: [requestId], onDelete: Restrict)
+
+  @@index([productId])
+  @@map("product_label_approvals")
+}
+
+enum CrateCycleStatus {
+  OPEN_ASSEMBLY
+  READY_TO_FILL
+  FILLING
+  FILLED
+  ABORTED
+}
+
+/// One circulation of one crate (ADR 0021, ADR 0025): an immutable snapshot (crate type,
+/// capacity, product, category, recipe version, label design) and the current member count.
+/// DB: one open cycle per crate; snapshot immutable; status only along the approved transitions
+/// (A3 uses OPEN_ASSEMBLY → READY_TO_FILL); member_count = active assignments; OPEN_ASSEMBLY ⇒
+/// fewer than capacity, READY_TO_FILL ⇒ exactly capacity (commit-time).
+model CrateCycle {
+  id                     String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  crateId                String           @map("crate_id") @db.Uuid
+  siteId                 String           @map("site_id") @db.Uuid
+  status                 CrateCycleStatus @default(OPEN_ASSEMBLY)
+  crateTypeId            String           @map("crate_type_id") @db.Uuid
+  capacity               Int
+  productId              String           @map("product_id") @db.Uuid
+  categoryCode           String           @map("category_code")
+  recipeVersionId        String           @map("recipe_version_id") @db.Uuid
+  labelTemplateVersionId String           @map("label_template_version_id") @db.Uuid
+  memberCount            Int              @default(0) @map("member_count")
+  openedAt               DateTime         @default(now()) @map("opened_at") @db.Timestamptz(3)
+  openedBy               String           @map("opened_by") @db.Uuid
+  openOperationId        String           @map("open_operation_id") @db.Uuid
+  readyToFillAt          DateTime?        @map("ready_to_fill_at") @db.Timestamptz(3)
+  abortedAt              DateTime?        @map("aborted_at") @db.Timestamptz(3)
+  abortedBy              String?          @map("aborted_by") @db.Uuid
+  abortReason            String?          @map("abort_reason")
+
+  crate                Crate                  @relation(fields: [crateId], references: [id], onDelete: Restrict)
+  site                 Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  crateType            CrateType              @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  product              Product                @relation(fields: [productId], references: [id], onDelete: Restrict)
+  recipeVersion        RecipeVersion          @relation(fields: [recipeVersionId], references: [id], onDelete: Restrict)
+  labelTemplateVersion LabelTemplateVersion   @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  opener               User                   @relation("CycleOpenedBy", fields: [openedBy], references: [id], onDelete: Restrict)
+  aborter              User?                  @relation("CycleAbortedBy", fields: [abortedBy], references: [id], onDelete: Restrict)
+  openOperation        OperationRequest       @relation("CycleOpenOperation", fields: [openOperationId], references: [requestId], onDelete: Restrict)
+  assignments          CrateAssignment[]
+  events               CrateEvent[]
+  bottleEvents         BottleEvent[]
+  bindings             BottleProductBinding[]
+
+  @@unique([id, capacity])
+  @@index([crateId, openedAt])
+  @@map("crate_cycles")
+}
+
+enum CrateAssignmentSource {
+  LABELING
+}
+
+/// A bottle's membership in a crate cycle, with an ordinal (1…capacity; not a physical slot).
+/// Released, never deleted. DB: one active assignment per bottle and per (cycle, ordinal);
+/// ordinal ≤ the cycle's capacity (composite FK); inserted only into OPEN_ASSEMBLY; the bottle's
+/// product binding matches the cycle snapshot; release fields set once.
+model CrateAssignment {
+  id                 String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  cycleId            String                @map("cycle_id") @db.Uuid
+  cycleCapacity      Int                   @map("cycle_capacity")
+  bottleId           String                @map("bottle_id") @db.Uuid
+  ordinal            Int
+  source             CrateAssignmentSource
+  assignedAt         DateTime              @default(now()) @map("assigned_at") @db.Timestamptz(3)
+  assignedBy         String                @map("assigned_by") @db.Uuid
+  operationRequestId String                @map("operation_request_id") @db.Uuid
+  assignedEventId    String                @unique @map("assigned_event_id") @db.Uuid
+  releasedAt         DateTime?             @map("released_at") @db.Timestamptz(3)
+  releasedBy         String?               @map("released_by") @db.Uuid
+  releaseReason      String?               @map("release_reason")
+  releaseOperationId String?               @map("release_operation_id") @db.Uuid
+
+  cycle            CrateCycle        @relation(fields: [cycleId, cycleCapacity], references: [id, capacity], onDelete: Restrict)
+  bottle           Bottle            @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  assigner         User              @relation("AssignedBy", fields: [assignedBy], references: [id], onDelete: Restrict)
+  releaser         User?             @relation("ReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  operation        OperationRequest  @relation("AssignOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  releaseOperation OperationRequest? @relation("ReleaseOperation", fields: [releaseOperationId], references: [requestId], onDelete: Restrict)
+  assignedEvent    BottleEvent       @relation("AssignmentEvent", fields: [assignedEventId], references: [id], onDelete: Restrict)
+
+  @@index([cycleId])
+  @@index([bottleId])
+  @@map("crate_assignments")
+}
+
+/// The permanent product binding of a labelled bottle (owner B1): bound once at its labelling
+/// scan, never changed by a scan (a future relabelling is a separate controlled procedure).
+/// DB: insert-only; the event is that bottle's LABEL_APPLIED; product category = category.
+model BottleProductBinding {
+  bottleId               String   @id @map("bottle_id") @db.Uuid
+  productId              String   @map("product_id") @db.Uuid
+  categoryCode           String   @map("category_code")
+  labelTemplateVersionId String   @map("label_template_version_id") @db.Uuid
+  labelAppliedEventId    String   @unique @map("label_applied_event_id") @db.Uuid
+  crateCycleId           String   @map("crate_cycle_id") @db.Uuid
+  boundAt                DateTime @default(now()) @map("bound_at") @db.Timestamptz(3)
+  operationRequestId     String   @map("operation_request_id") @db.Uuid
+
+  bottle               Bottle               @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  product              Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  labelTemplateVersion LabelTemplateVersion @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  labelAppliedEvent    BottleEvent          @relation(fields: [labelAppliedEventId], references: [id], onDelete: Restrict)
+  crateCycle           CrateCycle           @relation(fields: [crateCycleId], references: [id], onDelete: Restrict)
+  operation            OperationRequest     @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@map("bottle_product_bindings")
 }

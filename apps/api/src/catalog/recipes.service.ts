@@ -500,6 +500,50 @@ export class RecipesService {
     return { ...row, view: toRecipe(row, boms, crate) };
   }
 
+  /** The crate type of a recipe version (its latest, sealed revision), or null. */
+  async crateTypeOf(db: Prisma.TransactionClient, recipeVersionId: string): Promise<string | null> {
+    const revision = await db.recipeRevision.findFirst({
+      where: { recipeVersionId },
+      orderBy: { revision: 'desc' },
+      select: { crateTypeId: true },
+    });
+    return revision?.crateTypeId ?? null;
+  }
+
+  /** The product's ACTIVE recipe version (id and number), or null. */
+  activeVersion(db: Prisma.TransactionClient, productId: string) {
+    return db.recipeVersion.findFirst({
+      where: { productId, status: 'ACTIVE' },
+      select: { id: true, version: true },
+    });
+  }
+
+  /**
+   * The BOM lines of one stage of a recipe version (its latest revision — sealed once active),
+   * found through the recipe, never through the globally active BOM (doc 020 §3.3). Used by the
+   * labelling scan (LABEL_APPLICATION) and later by filling (FILL).
+   */
+  async stageBomLines(
+    db: Prisma.TransactionClient,
+    recipeVersionId: string,
+    stage: 'LABEL_APPLICATION' | 'FILL',
+  ) {
+    const revision = await db.recipeRevision.findFirst({
+      where: { recipeVersionId },
+      orderBy: { revision: 'desc' },
+      include: { boms: { where: { stage } } },
+    });
+    const bomVersionId = revision?.boms[0]?.bomVersionId;
+    if (!bomVersionId) return [];
+    return db.bomLine.findMany({
+      where: { bomVersionId },
+      include: {
+        item: { select: { id: true, code: true, name: true, kind: true, lotTracking: true } },
+      },
+      orderBy: { lineNo: 'asc' },
+    });
+  }
+
   private async load(db: Prisma.TransactionClient, productCode: string, version: number) {
     const product = await db.product.findUnique({
       where: { code: productCode },

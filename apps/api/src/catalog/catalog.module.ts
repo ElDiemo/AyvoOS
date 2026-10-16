@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { CratesModule } from '../crates/crates.module.js';
 import { InventoryModule } from '../inventory/inventory.module.js';
+import { LabelsModule } from '../labels/labels.module.js';
 import { CatalogController } from './catalog.controller.js';
 import { CatalogService } from './catalog.service.js';
+import { ProductLabelApprovalsService } from './product-label-approvals.service.js';
 import { RecipesService } from './recipes.service.js';
 
 /**
@@ -12,8 +14,9 @@ import { RecipesService } from './recipes.service.js';
  * (crate types); never touches stock.
  */
 @Module({
-  imports: [InventoryModule, CratesModule],
+  imports: [InventoryModule, CratesModule, LabelsModule],
   controllers: [CatalogController],
-  providers: [CatalogService, RecipesService],
+  providers: [CatalogService, RecipesService, ProductLabelApprovalsService],
+  exports: [RecipesService, ProductLabelApprovalsService],
 })
 export class CatalogModule {}

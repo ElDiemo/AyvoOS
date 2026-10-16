@@ -213,7 +213,7 @@ export default async function HomePage() {
               openLabel={h.openProduction}
               actions={
                 <>
-                  <Link href="/production/label-activation" className={buttonClass.primary}>
+                  <Link href="/production/station" className={buttonClass.primary}>
                     {shellCs.actions.labelActivation}
                   </Link>
                   {hasPermission(user, 'production:bottles_create') && (

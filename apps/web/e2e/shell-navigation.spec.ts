@@ -59,16 +59,16 @@ test('Warehouse and Production are separate; label application belongs to Produc
     'Přehled výroby',
     'Lahve',
     'Šablony etiket',
-    'Nalepení etiket',
     'Pracoviště',
     'Bedny',
     'Správa pracovišť',
     'Produkty a receptury',
   ]);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled výroby');
-  await production.getByRole('link', { name: 'Nalepení etiket' }).click();
-  await expect(page).toHaveURL(/\/production\/label-activation$/);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Nalepení etiket');
+  // Labelling happens at a station (doc 025 A3): Pracoviště is part of Production.
+  await production.getByRole('link', { name: 'Pracoviště' }).click();
+  await expect(page).toHaveURL(/\/production\/station$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pracoviště');
   await expect(page.getByRole('navigation', { name: 'Sklad' })).toHaveCount(0);
 
   // Templates are a Production page too.
@@ -86,8 +86,9 @@ test('/warehouse is a page; the old label-application URL is a real redirect kee
   const overview = await request.get('/warehouse', { maxRedirects: 0 });
   expect(overview.status()).toBe(200);
   for (const [from, to] of [
-    ['/warehouse/labels', '/production/label-activation'],
-    ['/warehouse/labels?lot=GR-000001%2F1', '/production/label-activation?lot=GR-000001%2F1'],
+    ['/warehouse/labels', '/production/station'],
+    ['/warehouse/labels?lot=GR-000001%2F1', '/production/station?lot=GR-000001%2F1'],
+    ['/production/label-activation', '/production/station'],
   ] as const) {
     const res = await request.get(from, { maxRedirects: 0 });
     expect(res.status(), from).toBe(307);
@@ -101,13 +102,13 @@ test('/warehouse is a page; the old label-application URL is a real redirect kee
   const page = await context.newPage();
   const response = await page.goto('/warehouse/labels?x=1');
   expect(response?.status()).toBe(200);
-  expect(page.url()).toMatch(/\/production\/label-activation\?x=1$/);
+  expect(page.url()).toMatch(/\/production\/station\?x=1$/);
   await context.close();
 });
 
 test('phones use a drawer; the scanner keeps the screen', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto('/production/label-activation');
+  await page.goto('/production/station');
   const drawer = page.getByRole('dialog', { name: 'Hlavní navigace' });
   await expect(drawer).toBeHidden();
   await page.getByRole('button', { name: 'Otevřít navigaci' }).click();
@@ -116,7 +117,7 @@ test('phones use a drawer; the scanner keeps the screen', async ({ page }) => {
   await expect(page).toHaveURL(/\/warehouse$/);
   await expect(drawer).toBeHidden();
   // The top bar stays compact: the scanner page content starts right below it.
-  await page.goto('/production/label-activation');
+  await page.goto('/production/station');
   const top = await page.getByRole('heading', { level: 1 }).boundingBox();
   expect(top!.y).toBeLessThan(200);
 });
@@ -131,7 +132,7 @@ test('no sideways scrolling and no production QR URL on the shell pages', async 
     '/warehouse/movements',
     '/warehouse/suppliers',
     '/production',
-    '/production/label-activation',
+    '/production/station',
     '/bottles',
     '/label-templates',
   ];

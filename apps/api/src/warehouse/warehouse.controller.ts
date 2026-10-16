@@ -1,25 +1,21 @@
 import {
   bottleCodeSchema,
   inventoryItemCodeSchema,
-  labelApplicationRequestSchema,
   movementListQuerySchema,
   updateItemSettingsRequestSchema,
   type BottlePhysical,
   type InventoryItem,
   type InventoryLot,
   type InventoryMovementPage,
-  type LabelApplicationRequest,
-  type LabelApplicationResult,
   type MovementListQuery,
   type StockOverview,
   type StockSummary,
   type UpdateItemSettingsRequest,
 } from '@ayvo/types';
-import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
-import { LabelApplicationService } from './label-application.service.js';
 import { WarehouseReadService } from './warehouse-read.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
 import { OperationalSite, OperationalWarehouse } from '../identity/access.guard.js';
@@ -36,20 +32,27 @@ const lotQuerySchema = z.object({
 @Controller(ADMIN_PREFIX)
 export class WarehouseController {
   constructor(
-    private readonly labels: LabelApplicationService,
     private readonly read: WarehouseReadService,
     private readonly inventory: InventoryService,
   ) {}
 
-  /** The physical label scan. 200 for APPLIED / ALREADY_APPLIED; 4xx with a stable code otherwise. */
+  /**
+   * RETIRED (doc 025 A3, owner B4): a label is applied only at a labelling station into a crate
+   * (POST /api/admin/station-sessions/:id/label-scans). The standalone application answers 410
+   * and writes nothing; the database refuses a new LABEL_APPLIED without a crate cycle as well.
+   */
   @RequirePermission('production:label_apply')
   @Post('label-applications')
-  @HttpCode(200)
-  apply(
-    @Body(new ZodValidationPipe(labelApplicationRequestSchema)) body: LabelApplicationRequest,
-    @OperationalWarehouse() warehouse: WarehouseContext,
-  ): Promise<LabelApplicationResult> {
-    return this.labels.apply(body, warehouse);
+  @HttpCode(410)
+  retired(): never {
+    throw new HttpException(
+      {
+        statusCode: 410,
+        code: 'LABEL_APPLICATION_RETIRED',
+        message: 'Labels are applied at a labelling station into a crate',
+      },
+      410,
+    );
   }
 
   /** Recent applications at the active site's warehouse (production of that site). */

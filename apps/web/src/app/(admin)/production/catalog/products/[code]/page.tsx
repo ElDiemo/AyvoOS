@@ -1,4 +1,9 @@
-import { productCodeSchema, productSchema } from '@ayvo/types';
+import {
+  labelTemplateSummarySchema,
+  productCodeSchema,
+  productLabelApprovalSchema,
+  productSchema,
+} from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CatalogHeader, CatalogRow, RowValue } from '@/components/catalog/catalog-header';
@@ -8,10 +13,12 @@ import {
   NewDraftButton,
   RenameProduct,
 } from '@/components/catalog/product-actions';
+import { ProductLabelApprovals } from '@/components/catalog/product-label-approvals';
 import { RecipeStatusBadge } from '@/components/catalog/recipe-status';
 import { Card, EmptyState, Field, FieldList, Notice } from '@/components/ui';
 import { catalogCs } from '@/i18n/cs/catalog';
 import { formatDateTimeCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
+import { z } from 'zod';
 import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
@@ -35,6 +42,25 @@ export default async function ProductPage({
     siteTimeZone(),
   ]);
   const canManage = hasPermission(me, 'catalog:product_manage');
+  const [approvals, templates] = await Promise.all([
+    apiGet(
+      `admin/catalog/products/${encodeURIComponent(code)}/label-approvals`,
+      z.array(productLabelApprovalSchema),
+    ),
+    // Candidate designs: the latest version of each active template (needs production:read).
+    canManage && hasPermission(me, 'production:read')
+      ? apiGet('admin/label-templates', z.array(labelTemplateSummarySchema))
+      : Promise.resolve([]),
+  ]);
+  const candidates = templates
+    .filter((tpl) => !tpl.archivedAt)
+    .map((tpl) => ({
+      versionId: tpl.latestVersion.versionId,
+      templateId: tpl.latestVersion.templateId,
+      templateName: tpl.latestVersion.templateName,
+      versionNumber: tpl.latestVersion.versionNumber,
+      label: tpl.latestVersion.label,
+    }));
   const active = product.status === 'ACTIVE';
   return (
     <>
@@ -126,6 +152,13 @@ export default async function ProductPage({
                 <p className="text-xs text-stone-500">{t.authorNote}</p>
               </div>
             </Card>
+            <ProductLabelApprovals
+              productCode={product.code}
+              approvals={approvals}
+              candidates={candidates}
+              canManage={canManage && active}
+              timeZone={tz}
+            />
           </div>
           {canManage && active && (
             <div className="flex min-w-0 flex-col gap-6">

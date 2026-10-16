@@ -205,11 +205,13 @@ describe.skipIf(!hasDatabase)('workstations and work sessions', () => {
     expect(current.current?.session.id).toBe(result.session.id);
     await release(operator3, result.session.id).expect(200);
 
-    // Operators do not hold production:label_apply in A2 (granted with labelling, A3).
-    const mode = await open(operator3, labelling.qrUrl);
-    expect([mode.status, mode.body.code]).toEqual([403, 'MODE_NOT_PERMITTED']);
+    // Operators label since A3 (production:label_apply, owner B4); warehouse operators do not.
+    const lab = (await open(operator3, labelling.qrUrl).expect(201)).body as StationSessionResult;
+    await release(operator3, lab.session.id).expect(200);
     const wh = await open(warehouseOperator, filling.qrUrl);
     expect([wh.status, wh.body.code]).toEqual([403, 'MODE_NOT_PERMITTED']);
+    const whLabel = await open(warehouseOperator, labelling.qrUrl);
+    expect([whLabel.status, whLabel.body.code]).toEqual([403, 'MODE_NOT_PERMITTED']);
     // A supervisor may open a labelling station.
     const sup = (await open(supervisor, labelling.qrUrl).expect(201)).body as StationSessionResult;
     await release(supervisor, sup.session.id).expect(200);

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { LabelsModule } from '../labels/labels.module.js';
+import { CrateCyclesService } from './crate-cycles.service.js';
 import { CrateLabelPrintJobsService } from './crate-label-print-jobs.service.js';
 import { CratePassportController } from './crate-passport.controller.js';
 import { CrateTypesService } from './crate-types.service.js';
@@ -14,7 +15,7 @@ import { CratesService } from './crates.service.js';
 @Module({
   imports: [LabelsModule],
   controllers: [CratesController, CratePassportController],
-  providers: [CrateTypesService, CratesService, CrateLabelPrintJobsService],
-  exports: [CrateTypesService, CratesService],
+  providers: [CrateTypesService, CratesService, CrateLabelPrintJobsService, CrateCyclesService],
+  exports: [CrateTypesService, CratesService, CrateCyclesService],
 })
 export class CratesModule {}

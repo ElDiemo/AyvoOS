@@ -83,7 +83,6 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Přehled výroby',
       'Lahve',
       'Šablony etiket',
-      'Nalepení etiket',
       'Pracoviště',
       'Bedny',
       'Správa pracovišť',
@@ -101,7 +100,6 @@ describe('AYVO OS navigation (doc 019)', () => {
       'overview',
       'bottles',
       'templates',
-      'label-activation',
       'station',
       'crates',
     ]);
@@ -126,7 +124,6 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/warehouse/stock')).toBe('warehouse/stock');
     expect(where('/warehouse/availability')).toBe('warehouse/availability');
     expect(where('/production')).toBe('production/overview');
-    expect(where('/production/label-activation')).toBe('production/label-activation');
     // Bottles, series and templates keep their URLs but belong to Production.
     expect(where('/bottles')).toBe('production/bottles');
     expect(where('/bottles/history')).toBe('production/bottles');

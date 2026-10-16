@@ -320,6 +320,77 @@ export class StationSessionsService {
     return { session: renewed, station: session.workstation };
   }
 
+  /** Read-only check of the caller's ACTIVE session at a station they may work at (no lock). */
+  async readActiveSession(
+    principal: Principal,
+    sessionId: string,
+  ): Promise<{ session: WorkstationSession; station: WorkstationRecord }> {
+    const session = await this.prisma.workstationSession.findUnique({
+      where: { id: sessionId },
+      include: { workstation: { include: workstationInclude } },
+    });
+    if (!session) throw domainError(404, 'SESSION_NOT_FOUND', 'Work session not found');
+    if (session.userId !== principal.userId || session.status !== 'ACTIVE') throw sessionNotOwned();
+    assertMayWorkAt(principal, session.workstation, false);
+    const { workstation, ...rest } = session;
+    return { session: rest, station: workstation };
+  }
+
+  /** Sets the labelling context of a locked session (doc 025 A3) with its event. */
+  async setLabelingContext(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    actorId: string,
+    operationId: string,
+    context: {
+      productId: string;
+      recipeVersionId: string;
+      labelTemplateVersionId: string;
+      sourceLotId: string;
+      keepCrate: boolean;
+    },
+  ): Promise<void> {
+    const { keepCrate, ...fields } = context;
+    await tx.workstationSession.update({
+      where: { id: sessionId },
+      data: {
+        ...fields,
+        ...(keepCrate ? {} : { crateId: null }),
+        labelingContextRevision: { increment: 1 },
+      },
+    });
+    await tx.workstationSessionEvent.create({
+      data: { sessionId, type: 'CONTEXT_CHANGED', actorId, operationRequestId: operationId },
+    });
+  }
+
+  /** Loads a crate at a locked session; refused while another active session has it loaded. */
+  async loadCrate(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    crateId: string,
+    actorId: string,
+    operationId: string,
+  ): Promise<void> {
+    const holder = await tx.workstationSession.findFirst({
+      where: { crateId, status: 'ACTIVE', id: { not: sessionId } },
+      include: { user: { select: { displayName: true } }, workstation: { select: { name: true } } },
+    });
+    if (holder) {
+      throw domainErrorWithDetails(409, 'CRATE_IN_USE', 'This crate is loaded at another station', {
+        holder: holder.user.displayName,
+        station: holder.workstation.name,
+      });
+    }
+    await tx.workstationSession.update({
+      where: { id: sessionId },
+      data: { crateId, labelingContextRevision: { increment: 1 } },
+    });
+    await tx.workstationSessionEvent.create({
+      data: { sessionId, type: 'CRATE_LOADED', actorId, operationRequestId: operationId },
+    });
+  }
+
   /**
    * The caller's active session — only if they may still work at its station right now (mode
    * permission, active site, PRODUCTION capability, warehouse); otherwise just `blocked` with the

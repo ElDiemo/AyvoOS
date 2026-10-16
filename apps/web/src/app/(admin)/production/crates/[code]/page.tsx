@@ -33,7 +33,16 @@ export default async function CrateDetailPage({ params }: { params: Promise<{ co
         <Card testId="crate-facts">
           <FieldList>
             <Field label={t.columns.circulation}>
-              <span data-testid="crate-circulation">{t.noCirculation}</span>
+              <span data-testid="crate-circulation">
+                {crate.cycle
+                  ? t.cycleLine(
+                      t.cycleStatus[crate.cycle.status] ?? crate.cycle.status,
+                      crate.cycle.memberCount,
+                      crate.cycle.capacity,
+                      crate.cycle.product.name,
+                    )
+                  : t.noCirculation}
+              </span>
               <span className="mt-1 block text-xs text-stone-500">{t.noCirculationHelp}</span>
             </Field>
             <Field label={t.columns.location}>

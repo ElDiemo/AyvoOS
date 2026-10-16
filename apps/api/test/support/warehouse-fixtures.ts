@@ -8,6 +8,7 @@ import type {
 } from '@ayvo/types';
 import request from 'supertest';
 import { createTemplate, registerBottles } from './fixtures.js';
+import { labelIntoCrate } from './labeling-fixtures.js';
 import { TEST_QR_BASE_URL, type TestApp } from './test-app.js';
 
 /** A minimal valid PDF (magic bytes are what the API checks). */
@@ -57,6 +58,20 @@ export async function receiveBottles(
     documentKind?: SupplierDocumentKind;
   } = {},
 ): Promise<GoodsReceipt> {
+  return receiveItem(t, await newBottleItemId(t), quantity, opts);
+}
+
+/** Receives any item with a delivery note; returns the receipt. */
+export async function receiveItem(
+  t: TestApp,
+  itemId: string,
+  quantity: number | string,
+  opts: {
+    supplierId?: string;
+    supplierLotCode?: string | null;
+    documentKind?: SupplierDocumentKind;
+  } = {},
+): Promise<GoodsReceipt> {
   const supplierId = opts.supplierId ?? (await createSupplier(t)).id;
   const document = await uploadDocument(t, supplierId, opts.documentKind ?? 'DELIVERY_NOTE');
   const res = await request(t.app.getHttpServer())
@@ -70,7 +85,7 @@ export async function receiveBottles(
       documentIds: [document.id],
       lines: [
         {
-          itemId: await newBottleItemId(t),
+          itemId,
           quantity: String(quantity),
           supplierLotCode: opts.supplierLotCode ?? null,
           unitPrice: null,
@@ -105,18 +120,17 @@ export async function printedBottles(t: TestApp, n: number) {
   }));
 }
 
-export function applyLabel(
+/**
+ * Applies the label of a printed bottle the way production does since doc 025 A3: at a
+ * labelling station of the superuser, into a crate, with the bottle's design approved for a test
+ * product (see labeling-fixtures.ts). Returns the HTTP response of the labelling scan (200 for
+ * APPLIED / ALREADY_APPLIED, 4xx with a stable code otherwise).
+ */
+export async function applyLabel(
   t: TestApp,
-  body: { lotId: string; seriesCode: string; scannedValue: string; requestId?: string },
+  body: { lotId: string; seriesCode?: string; scannedValue: string; requestId?: string },
 ) {
-  return request(t.app.getHttpServer())
-    .post('/api/admin/label-applications')
-    .send({
-      requestId: body.requestId ?? randomUUID(),
-      lotId: body.lotId,
-      seriesCode: body.seriesCode,
-      scannedValue: body.scannedValue,
-    });
+  return labelIntoCrate(t, body);
 }
 
 /** Σ ledger = balance for every (item, location, lot); returns the differing rows (expected []). */
