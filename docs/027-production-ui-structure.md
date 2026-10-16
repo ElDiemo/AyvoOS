@@ -1,6 +1,9 @@
 # 027 — Výroba: Práce · Evidence · Nastavení (návrh UI, issue #11)
 
-Status: **proposal for the owner's confirmation** (2026-10-16). Navigation and onboarding of the
+Status: **direction confirmed by the owner (2026-10-16)** — Práce / Evidence / Nastavení výroby,
+the "Připravit výrobu" overview and a read-only aggregation endpoint that exposes nothing beyond
+the user's current permissions and sites. Revision 2 includes the Codex review of PR #26. Not an
+approval to merge or deploy. Navigation and onboarding of the
 Production module only (issue #11 UI-08/12/13/14/15/16). It changes no consumption, state,
 permission or role assignment; Warehouse and System administration stay as they are; dispatch
 and returns get no tabs yet.
@@ -10,7 +13,7 @@ Podklad:
 - main `2f250d9`, k tomu rozpracované PR #24 (A4) a #25 (A5);
 - review z 16. 10. v issue #11.
 
-Jde o **návrh k potvrzení**, nikoli o implementaci. Nemění odpisy, stavy, oprávnění ani jejich přiřazení.
+Návrh nemění odpisy, stavy, výrobní pravidla, oprávnění ani jejich přiřazení.
 
 ### 1. Které nálezy jsou opravené a které ne (kód main + #24/#25)
 
@@ -28,86 +31,134 @@ A4/A5 nebudu kvůli tomu rozdělávat: jejich větve zůstanou beze změny.
 
 ### 2. Strom navigace (jen uvnitř modulu Výroba; URL zůstávají)
 
+Umístění v navigaci je otázka orientace, **ne autorizace**: o tom, co uživatel smí, rozhoduje
+vždy server podle existujících oprávnění, provozovny a skladu. Skrytí nebo přesun položky nikomu
+nic neodebírá ani nepřidává.
+
 ```
 Výroba
-├─ ▶ Pracovat na pracovišti      /production/station          (výrazné tlačítko, ne záložka mezi ostatními)
+├─ ▶ Pracovat na pracovišti      /production/station   (výrazné tlačítko; ANY(label_apply, fill))
 │     QR pracoviště určí lepení / plnění; plocha = aktuální krok, produkt, bedna, šarže, Obsah/Naplněno
 ├─ Evidence
 │   ├─ Bedny                     /production/crates (+ detail, Lahve mimo bednu /production/crates/outside)
-│   │     detail: obsah, historie, tiskové úlohy QR; „Opravy vedoucího“ jako oddělená sekce detailu
-│   └─ Lahve                     /bottles, /batches (+ historie, série, tiskové úlohy etiket)
-└─ Nastavení výroby
-    ├─ Připravit výrobu          /production/setup  (nové, jen čtení – viz bod 4)
+│   │     detail: obsah, historie, tiskové úlohy QR; „Opravy vedoucího“ jako zřetelně oddělená
+│   │     sekce detailu (ne v pracovní ploše, ne vedle skenování)
+│   ├─ Lahve                     /bottles, /batches (+ historie, série, tiskové úlohy etiket)
+│   └─ Katalog (jen pro čtení)   /production/catalog, /label-templates — referenční pohled pro
+│                                uživatele bez správních oprávnění katalogu/šablon
+└─ Nastavení výroby               (jen pro uživatele se správním oprávněním některé položky)
+    ├─ Připravit výrobu          /production/setup  (nové, jen čtení – bod 4)
     ├─ Pracoviště a QR           /production/workstations
     ├─ Produkty a receptury      /production/catalog (komponenty, typy beden, schválené designy)
     └─ Designy etiket            /label-templates
 ```
 
-- **Přehled výroby** (`/production`) zůstane vstupní stránkou modulu. Nahoře bude tlačítko „Pracovat na pracovišti“, pod ním počty rozpracovaných a připravených beden z A5.
-- **Sklad** zůstává samostatný.
-- **Uživatelé, role a provozovny** zůstávají ve Správě systému.
-- **Expedice a Příjem vratek** zatím nedostanou žádnou záložku.
-- **Mobil:** místo sedmi rovnocenných záložek budou tři skupiny s nadpisy. Aktivní položku stránka posune do výřezu (UI-08) a skupinu Práce nahradí tlačítko.
-- **Technicky:** ve `navigation.ts` přibude `group` (`work | records | setup`) a viditelnost stránky podle **libovolného** z oprávnění (`anyOf`), stejně jako stránky samy kontrolují přístup na serveru (UI-15). Nebude to zvláštní natvrdo přidaný odkaz.
+- **Přehled výroby** (`/production`) zůstane vstupní stránkou modulu: nahoře „Pracovat na
+  pracovišti“, pod ním počty rozpracovaných a připravených beden (A5).
+- Katalog a designy mají **jedny stránky**; navigace je jen zařadí podle toho, zda uživatel smí
+  něco spravovat (Nastavení) nebo jen číst (Evidence → Katalog, jen pro čtení). Správní akce
+  (formuláře, aktivace, archivace, schválení designu) se zobrazují jen s příslušným oprávněním a
+  server je bez něj odmítne jako dosud.
+- **Sklad** zůstává samostatný; **uživatelé, role a provozovny** ve Správě systému; **Expedice a
+  Příjem vratek** nedostanou žádnou záložku.
+- **Mobil:** tři skupiny s nadpisy místo sedmi rovnocenných záložek; aktivní položka se posune do
+  výřezu (UI-08); Práce je tlačítko.
+- **Technicky:** `navigation.ts` dostane `group` (`work | records | setup`) a `anyOf` oprávnění
+  (stejná alternativa jako serverová kontrola stránky, UI-15); zařazení do skupiny je oddělené od
+  oprávnění, které stránku zpřístupňuje.
 
 ### 3. Přístupy (existující oprávnění, beze změny přiřazení)
 
-Role určuje činnost; provozovna a sklad uživatele určují, která data vidí (API to kontroluje u každého požadavku, skrytí v UI není hranice).
+Role určuje činnost; provozovna a sklad uživatele určují rozsah dat. API kontroluje oprávnění,
+aktivní provozovnu a sklad u každého požadavku; UI jen zobrazuje, co server dovolí.
 
-| Sekce / akce                                                       | Oprávnění (server)                                                     | Operátor výroby | Vedoucí výroby | Správce (ADMIN) |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------- | :-------------: | :------------: | :-------------: |
-| Pracovat na pracovišti – lepení                                    | `production:label_apply`                                               |        ✓        |       ✓        |        ✓        |
-| Pracovat na pracovišti – plnění, změna šarže, Hotovo               | `production:fill`                                                      |        ✓        |       ✓        |        ✓        |
-| Vynucené převzetí obsazeného pracoviště                            | `production:session_takeover`                                          |        –        |       ✓        |        ✓        |
-| Evidence: Bedny, detail, Lahve mimo bednu                          | `crates:read`                                                          |    ✓ (čtení)    |       ✓        |        ✓        |
-| Evidence: registrace beden a tisk QR beden                         | `crates:register`                                                      |        –        |       ✓        |        ✓        |
-| Opravy vedoucího (vyjmout, doplnit, přeložit, vrátit, zrušit oběh) | `production:cycle_correct` (#24)                                       |        –        |       ✓        |        ✓        |
-| Evidence: Lahve, série, historie                                   | `production:read`                                                      |        ✓        |       ✓        |        ✓        |
-| Tisk etiket lahví                                                  | `production:labels_print`                                              |        ✓        |       ✓        |        ✓        |
-| Založení identit lahví                                             | `production:bottles_create`                                            |        –        |       ✓        |        ✓        |
-| Nastavení: Pracoviště a QR                                         | `production:workstations_manage`                                       |        –        |       ✓        |        ✓        |
-| Nastavení: Produkty a receptury (čtení)                            | `catalog:read`                                                         |        ✓        |       ✓        |        ✓        |
-| Nastavení: úpravy produktů, komponent, schválení designu           | `catalog:product_manage`                                               |        –        |       ✓        |        ✓        |
-| Nastavení: aktivace receptury                                      | `catalog:recipe_approve`                                               |        –        |       ✓        |        ✓        |
-| Nastavení: Designy etiket – čtení / úpravy                         | `production:read` / `production:templates_manage`                      |      čtení      |     čtení      |        ✓        |
-| Připravit výrobu (přehled)                                         | kterékoli z `production:workstations_manage`, `catalog:product_manage` |        –        |       ✓        |        ✓        |
+| Sekce / akce                                                   | Oprávnění (server)                                                     | Operátor výroby | Vedoucí výroby | Správce (ADMIN) |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------- | :-------------: | :------------: | :-------------: |
+| Práce: lepení                                                  | `production:label_apply`                                               |        ✓        |       ✓        |        ✓        |
+| Práce: plnění, změna šarže, Hotovo                             | `production:fill`                                                      |        ✓        |       ✓        |        ✓        |
+| Práce: vynucené převzetí obsazeného pracoviště                 | `production:session_takeover`                                          |        –        |       ✓        |        ✓        |
+| Evidence: Bedny, detail, Lahve mimo bednu                      | `crates:read`                                                          |        ✓        |       ✓        |        ✓        |
+| Evidence: registrace beden a tisk QR beden                     | `crates:register`                                                      |        –        |       ✓        |        ✓        |
+| Evidence (detail bedny): opravy vedoucího                      | `production:cycle_correct` (#24)                                       |        –        |       ✓        |        ✓        |
+| Evidence: Lahve, série, historie                               | `production:read`                                                      |        ✓        |       ✓        |        ✓        |
+| Evidence: generování PDF etiket lahví                          | `production:labels_print`                                              |        ✓        |       ✓        |        ✓        |
+| Evidence: Katalog a designy etiket – **jen čtení**             | `catalog:read`, `production:read`                                      |        ✓        | (v Nastavení)  |  (v Nastavení)  |
+| Nastavení: založení identit lahví                              | `production:bottles_create`                                            |        –        |       ✓        |        ✓        |
+| Nastavení: Pracoviště a QR                                     | `production:workstations_manage`                                       |        –        |       ✓        |        ✓        |
+| Nastavení: produkty, komponenty, typy beden, schválení designu | `catalog:product_manage`                                               |        –        |       ✓        |        ✓        |
+| Nastavení: aktivace receptury                                  | `catalog:recipe_approve`                                               |        –        |       ✓        |        ✓        |
+| Nastavení: úpravy designů etiket                               | `production:templates_manage`                                          |        –        |       –        |        ✓        |
+| Nastavení: Připravit výrobu                                    | kterékoli z `production:workstations_manage`, `catalog:product_manage` |        –        |       ✓        |        ✓        |
 
-- **Skupina Nastavení** se ukáže, jen pokud má uživatel aspoň jedno z jejích oprávnění.
-- **Operátor uvidí z Nastavení jen čtení katalogu.** Pokud by měl Nastavení skryté úplně, šlo by o změnu jeho role (má `catalog:read`), a tu bez schválení nedělám.
-- **Skladové role** vidí ve Výrobě jen Bedny (`crates:read`), jako dosud.
+- Operátor tak **čte** katalog i designy etiket (má `catalog:read` i `production:read`) jako
+  referenci v Evidenci, ale skupinu Nastavení nevidí — jde o volbu zobrazení, **ne o změnu jeho
+  oprávnění**; přímé URL čtení fungují dál, správní akce mu server odmítá jako dosud.
+- Skupina Nastavení se ukáže uživateli s aspoň jedním **správním** oprávněním některé její položky.
+- Skladové role vidí ve Výrobě jen Bedny (`crates:read`), jako dosud.
 
-### 4. „Připravit výrobu“ – návrh obsahu
+### 4. „Připravit výrobu“
 
-Kontrolní seznam pro **aktivní provozovnu** a zvolený produkt. Bude jen pro čtení a každý řádek povede na existující stránku, pokud má uživatel oprávnění; jinak zobrazí „požádejte vedoucího“.
+Read-only přehled pro **aktivní provozovnu** a zvolený produkt. Každý řádek odkazuje na
+existující stránku (je-li k ní oprávnění), jinak „požádejte vedoucího“. Přehled **nic nepovoluje
+ani neblokuje**: není to nová brána operací, nezavádí rezervace ani nové podmínky — lepení i
+plnění dál posuzuje jen server při každém skenu.
 
-1. **Provozovna:** vyrábí a má sklad (`PRODUCTION`, sklad provozovny).
-2. **Produkt:** je aktivní a má **kompletní aktivní recepturu** – to je trvalé nastavení.
-3. **Design etikety:** je pro produkt schválený.
-4. **Fyzické bedny:** existují bedny typu z receptury; ukáže se, kolik je prázdných a použitelných.
-5. **Pracoviště:** existuje lepicí pracoviště a plnicí pracoviště stejné kategorie; QR se dá vytisknout.
-6. **Etikety lahví:** existují vytištěné identity lahví se schváleným designem, které ještě nejsou nalepené.
-7. **Zásoby teď** (aktuální stav, žádná rezervace ani záruka na směnu):
-   - šarže nových lahví;
-   - etikety;
-   - šarže kapaliny;
-   - pumpičky;
-     vždy na skladu příslušného pracoviště.
+**Trvalé nastavení produktu** (samostatné vlastnosti, ne souhrn):
 
-Seznam vždy rozliší „**receptura je kompletní**“ (body 1–3) od „**teď se dá pracovat**“ (body 4–7) a u každého chybějícího předpokladu napíše konkrétně, co chybí.
+- provozovna vyrábí (`PRODUCTION`) a má sklad;
+- produkt je aktivní;
+- **receptura je kompletní** (aktivní verze s kusovníkem lepení i plnění) — jen vlastnost
+  receptury, nic víc;
+- design etikety je pro produkt schválený.
 
-**Data:** k tomu přibude jeden **read-only agregační endpoint** (`GET /api/admin/production/readiness`) nad existujícími službami. Neodhaduje se z neúplných dat a nevzniká žádný nový model ani tabulka. Pokud ho nechcete, zúžím přehled na odkazy bez stavu.
+**Lze začít lepit** (jen předpoklady lepení):
+
+- lepicí pracoviště na provozovně (a jeho QR);
+- etikety lahví **připravené k tisku**: identity se schváleným designem s **vygenerovaným PDF**
+  (dokončená tisková úloha), dosud nenalepené. Systém neeviduje fyzický tisk ani fyzickou existenci
+  štítku — přehled to netvrdí a nabízí odkaz na PDF / tisk; žádný nový povinný scan ani model;
+- bedna typu z receptury, prázdná nebo skládající se se stejným produktem a designem;
+- zásoby teď na skladu pracoviště: šarže nových lahví, etikety.
+
+**Lze začít plnit** (jen předpoklady plnění — lepení na ně nečeká):
+
+- plnicí pracoviště stejné kategorie (a jeho QR);
+- bedny „Čeká na plnění“ nebo „Plní se“ s tímto produktem;
+- zásoby teď na skladu pracoviště: šarže kapaliny, pumpičky.
+
+**Stav beden** — skutečné počty podle stavu (Skládá se, Čeká na plnění, Plní se, Připravená) s
+odkazem do Evidence → Bedny.
+
+Zásoby jsou vždy **aktuální stav**, ne rezervace ani záruka na směnu.
+
+**Endpoint `GET /api/admin/production/readiness`** (read-only, nad existujícími službami, bez nového
+modelu či tabulky):
+
+- vstup: kterékoli z `production:workstations_manage`, `catalog:product_manage`; data jen
+  **aktivní provozovny** uživatele (validovaná session, `@OperationalSite()`), sklady jen v jeho
+  scopes;
+- **každá vracená položka je chráněná vlastním existujícím oprávněním**, které by uživatel
+  potřeboval na příslušné stránce: zásoby a šarže jen s `inventory:read` a přístupem ke skladu
+  pracoviště; bedny s `crates:read`; pracoviště s `production:workstations_manage`; identity a
+  tiskové úlohy s `production:read`; katalog s `catalog:read`;
+- bez oprávnění vrátí položka stav **„nedostupné (bez oprávnění)“** — nikdy nulu, nikdy „splněno“,
+  bez šarží, množství či jiných podrobností; ceny se nevracejí vůbec;
+- žádné nové zpřístupnění dat; kdyby si souhrn nějaké vyžádal, předložím konkrétní rozsah
+  vlastníkovi.
+
+Testy: role s a bez `inventory:read` / přístupu ke skladu (žádná množství ani šarže), cizí
+provozovna (nic), operátor (endpoint odmítnut), lepení připravené bez kapaliny a pumpiček,
+plnění bez etiket, PDF vygenerováno ≠ „vytištěno“.
 
 ### 5. Postup
 
-1. **A4/A5:** čekají na review Codexu (#24, #25). Případné nálezy opravím v nich; jinou práci do nich nepřidávám.
-2. **Implementace návrhu:** jeden samostatný PR **z `main` po merge #24 a #25**, tedy nad stabilním základem a bez řetězení na rozpracované větve. Obsah:
-   - skupiny navigace a `anyOf` (UI-15);
-   - tlačítko Práce;
-   - Připravit výrobu;
-   - UI-14 fokus po zavření menu na skenovacích stránkách;
-   - UI-08 aktivní položka ve výřezu;
-   - UI-16 texty.
-     Testy: role jen lepení / jen plnění / obě / žádná, mobilní 320/390 px, fokus čtečky po zavření menu a srozumitelné hlášení chybějících předpokladů.
-3. **K potvrzení:** prosím potvrďte strom z bodu 2 a obsah bodu 4 (včetně read-only endpointu). Do té doby jen připravuji.
+1. A4/A5 (#24, #25): technické review Codexu, opravy, povinné CI; #25 po merge #24 přesměrovat na
+   `main` a nechat proběhnout CI. Do A4/A5 se redesign nepřidává.
+2. Po schváleném merge A4/A5: **jeden implementační UI PR z aktuálního `main`** podle tohoto
+   dokumentu — skupiny navigace a `anyOf` (UI-15), Práce, Evidence s katalogem jen pro čtení,
+   oddělené opravy vedoucího, Připravit výrobu + endpoint, UI-14 fokus po zavření menu, UI-08
+   aktivní položka ve výřezu, UI-16 texty. Testy: role jen lepení / jen plnění / obě / žádná,
+   operátor vs. vedoucí vs. správce, mobil 320/390 px, fokus čtečky po zavření menu, srozumitelná
+   hlášení. Bez expedice, vratek a PPL; výrobní pravidla a živá data beze změny.
 
 Tento dokument nic nemerguje, nenasazuje ani nemění na DEV.
