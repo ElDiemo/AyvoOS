@@ -99,6 +99,11 @@ test('Výroba: work entry, Evidence and Nastavení; Připravit výrobu lists lab
   await expect(page.getByTestId('readiness-labeling')).toContainText('připravené k tisku');
   await expect(page.getByTestId('readiness-labeling')).not.toContainText('Kapalina');
   await expect(page.getByTestId('readiness-filling')).toContainText('Kapalina na skladě');
+  // No crate waits: filling materials are the active recipe's, shown as the plan for new crates.
+  await expect(page.getByTestId('readiness-filling.liquid')).toContainText(
+    'aktivní receptura V1 – plán pro nové bedny',
+  );
+  await expect(page.getByTestId('readiness-setup.warehouse')).toHaveAttribute('data-state', 'OK');
   // Concrete missing items, with the page to fix them.
   await expect(page.getByTestId('readiness-setup.recipe')).toHaveAttribute('data-state', 'OK');
   await expect(page.getByTestId('readiness-setup.design')).toHaveAttribute('data-state', 'MISSING');

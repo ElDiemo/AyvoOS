@@ -22,6 +22,7 @@ export const readinessCs = {
   } as Record<string, string>,
   items: {
     'setup.site': 'Provozovna vyrábí',
+    'setup.warehouse': 'Sklad provozovny',
     'setup.product': 'Aktivní produkt',
     'setup.recipe': 'Kompletní aktivní receptura',
     'setup.design': 'Schválený design etikety',
@@ -38,6 +39,7 @@ export const readinessCs = {
   } as Record<string, string>,
   count: {
     'setup.design': (n: number) => `${n} schválený design`,
+    'setup.warehouse': (n: number) => `${n} dostupný`,
     'labeling.station': (n: number) => `${n} aktivní`,
     'labeling.labels': (n: number) => `${n} lahví`,
     'labeling.crate': (n: number) => `${n} beden`,
@@ -45,11 +47,14 @@ export const readinessCs = {
     'labeling.labelStock': (n: number) => `${n} ks`,
     'filling.station': (n: number) => `${n} aktivní`,
     'filling.crates': (n: number) => `${n} beden`,
-    'filling.liquid': (n: number) => `na ${n} lahví`,
+    'filling.liquid': (n: number) => `na ${n} lahví (celé dávky z jednotlivých šarží)`,
     'filling.pumps': (n: number) => `${n} ks`,
   } as Record<string, (n: number) => string>,
   printNote:
     'Systém eviduje vygenerované PDF, ne fyzický tisk ani nalepení. Etikety vytiskněte z PDF tiskové úlohy.',
+  noWarehouse: 'Nelze posoudit – provozovna nemá sklad',
+  recipeWaiting: (v: number, n: number) => `receptura V${v} připnutá na ${n} čekajících bednách`,
+  recipePlan: (v: number) => `aktivní receptura V${v} – plán pro nové bedny, žádná nečeká`,
   open: 'Otevřít',
   askSupervisor: 'Požádejte vedoucího',
   crateStates: {

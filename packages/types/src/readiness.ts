@@ -19,6 +19,19 @@ export const readinessItemSchema = z.object({
   count: z.number().int().nullable(),
   /** The existing page where it is set up or seen, when the user may open it. */
   href: z.string().nullable(),
+  /**
+   * Why an UNAVAILABLE item could not be judged: the user lacks its permission, or the site has
+   * no warehouse yet (then stock is unknown — never reported as 0). Null otherwise.
+   */
+  reason: z.enum(['PERMISSION', 'NO_WAREHOUSE']).nullable(),
+  /**
+   * The recipe version a filling material was judged against: the versions pinned on the crates
+   * waiting for filling (`waitingCrates` > 0), or — with no such crate — the product's active
+   * version as the plan for new crates (`waitingCrates` null). Null for other items.
+   */
+  recipe: z
+    .object({ version: z.number().int(), waitingCrates: z.number().int().nullable() })
+    .nullable(),
 });
 export type ReadinessItem = z.infer<typeof readinessItemSchema>;
 

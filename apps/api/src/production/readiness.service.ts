@@ -47,26 +47,47 @@ export class ReadinessService {
     const warehouses = [...site.warehouseIds];
     const db = this.prisma;
 
-    const unavailable = (key: string): ReadinessItem => ({
+    const unavailable = (
+      key: string,
+      reason: 'PERMISSION' | 'NO_WAREHOUSE' = 'PERMISSION',
+    ): ReadinessItem => ({
       key,
       state: 'UNAVAILABLE',
       count: null,
       href: null,
+      reason,
+      recipe: null,
     });
-    const item = (key: string, count: number, href: string | null, ok = count > 0) => ({
+    const item = (key: string, count: number, href: string | null): ReadinessItem => ({
       key,
-      state: ok ? ('OK' as const) : ('MISSING' as const),
+      state: count > 0 ? 'OK' : 'MISSING',
       count,
       href,
+      reason: null,
+      recipe: null,
     });
-    /** Stock of an item in the user's warehouses of the active site (inventory:read only). */
-    const stock = async (itemId: string): Promise<Prisma.Decimal | null> => {
-      if (!has('inventory:read') || warehouses.length === 0) return null;
-      const agg = await db.inventoryBalance.aggregate({
-        where: { itemId, locationId: { in: warehouses } },
-        _sum: { onHand: true },
+    /**
+     * Whole doses of a recipe line in stock (inventory:read only; the user's warehouses of the
+     * active site — with none, the site has no warehouse at all and stock is unknown, never 0).
+     * Every dose comes from ONE lot in ONE warehouse (one bottle = one lot, the operation never
+     * mixes lots), so remainders of different lots/warehouses are never added together.
+     */
+    const doses = async (
+      key: string,
+      line: { itemId: string; quantity: Prisma.Decimal } | undefined,
+    ): Promise<ReadinessItem> => {
+      if (!has('inventory:read')) return unavailable(key);
+      if (warehouses.length === 0) return unavailable(key, 'NO_WAREHOUSE');
+      if (!line) return item(key, 0, '/warehouse/stock');
+      const rows = await db.inventoryBalance.findMany({
+        where: { itemId: line.itemId, locationId: { in: warehouses }, onHand: { gt: quantity(0) } },
+        select: { onHand: true },
       });
-      return agg._sum.onHand ?? quantity(0);
+      const n = rows.reduce(
+        (sum, r) => sum + Math.floor(r.onHand.div(line.quantity).toNumber()),
+        0,
+      );
+      return item(key, n, '/warehouse/stock');
     };
 
     const catalog = has('catalog:read');
@@ -86,7 +107,12 @@ export class ReadinessService {
       product: product
         ? { code: product.code, name: product.name, category: product.categoryCode }
         : null,
-      setup: [item('setup.site', site.capabilities.includes('PRODUCTION') ? 1 : 0, null)],
+      setup: [
+        item('setup.site', site.capabilities.includes('PRODUCTION') ? 1 : 0, null),
+        // A producing site without a warehouse cannot hold stock, stations or crates: say so
+        // instead of reporting zero stock (sites:manage creates warehouses, else ask).
+        item('setup.warehouse', warehouses.length, has('sites:manage') ? '/admin/sites' : null),
+      ],
       labeling: [],
       filling: [],
       crates: null,
@@ -111,7 +137,6 @@ export class ReadinessService {
     const laLines = recipe
       ? await this.recipes.stageBomLines(db, recipe.id, 'LABEL_APPLICATION')
       : [];
-    const flLines = recipe ? await this.recipes.stageBomLines(db, recipe.id, 'FILL') : [];
     const crateTypeId = recipe ? await this.recipes.crateTypeOf(db, recipe.id) : null;
 
     // --- can labelling start? -------------------------------------------------------------------
@@ -183,55 +208,74 @@ export class ReadinessService {
           ? item('labeling.crate', 0, '/production/crates')
           : unavailable('labeling.crate'),
     );
+    // New labelling pins the active recipe version: its materials decide.
     for (const [key, kind] of [
       ['labeling.bottles', 'NEW_BOTTLE'],
       ['labeling.labelStock', 'LABEL_MEDIA'],
     ] as const) {
-      const line = laLines.find((l) => l.item.kind === kind);
-      const onHand = line ? await stock(line.itemId) : null;
       result.labeling.push(
-        !has('inventory:read')
-          ? unavailable(key)
-          : item(
-              key,
-              line && onHand ? Math.floor(onHand.div(line.quantity).toNumber()) : 0,
-              '/warehouse/stock',
-            ),
+        await doses(
+          key,
+          laLines.find((l) => l.item.kind === kind),
+        ),
       );
     }
 
     // --- can filling start? ---------------------------------------------------------------------
     result.filling.push(await stations('FILLING', 'filling.station'));
+    // Crates waiting for filling, per the recipe version pinned on their cycle.
+    const waiting = has('crates:read')
+      ? await db.crateCycle.groupBy({
+          by: ['recipeVersionId'],
+          where: {
+            siteId: site.id,
+            productId: product.id,
+            status: { in: ['READY_TO_FILL', 'FILLING'] },
+          },
+          _count: { _all: true },
+        })
+      : [];
     result.filling.push(
       has('crates:read')
         ? item(
             'filling.crates',
-            await db.crateCycle.count({
-              where: {
-                siteId: site.id,
-                productId: product.id,
-                status: { in: ['READY_TO_FILL', 'FILLING'] },
-              },
-            }),
+            waiting.reduce((n, w) => n + w._count._all, 0),
             '/production/crates?state=READY_TO_FILL',
           )
         : unavailable('filling.crates'),
     );
-    for (const [key, kind] of [
-      ['filling.liquid', 'BULK_LIQUID'],
-      ['filling.pumps', 'PUMP'],
-    ] as const) {
-      const line = flLines.find((l) => l.item.kind === kind);
-      const onHand = line ? await stock(line.itemId) : null;
-      // Bottles' worth of the current stock (not a reservation, not a shift guarantee).
+    // Filling uses the version pinned on each crate's cycle (never the active one), so liquid and
+    // pumps are judged per pinned version of the waiting crates. With no waiting crate (or no
+    // crates:read), the active version is shown as the plan for new crates, marked as such.
+    const versions = await db.recipeVersion.findMany({
+      where: {
+        id: {
+          in:
+            waiting.length > 0 ? waiting.map((w) => w.recipeVersionId) : recipe ? [recipe.id] : [],
+        },
+      },
+      select: { id: true, version: true },
+      orderBy: { version: 'asc' },
+    });
+    for (const version of versions) {
+      const lines = await this.recipes.stageBomLines(db, version.id, 'FILL');
+      const crates = waiting.find((w) => w.recipeVersionId === version.id)?._count._all ?? null;
+      for (const [key, kind] of [
+        ['filling.liquid', 'BULK_LIQUID'],
+        ['filling.pumps', 'PUMP'],
+      ] as const) {
+        // Whole bottles' worth of current stock (not a reservation, not a shift guarantee).
+        const it = await doses(
+          key,
+          lines.find((l) => l.item.kind === kind),
+        );
+        result.filling.push({ ...it, recipe: { version: version.version, waitingCrates: crates } });
+      }
+    }
+    if (versions.length === 0) {
       result.filling.push(
-        !has('inventory:read')
-          ? unavailable(key)
-          : item(
-              key,
-              line && onHand ? Math.floor(onHand.div(line.quantity).toNumber()) : 0,
-              '/warehouse/stock',
-            ),
+        await doses('filling.liquid', undefined),
+        await doses('filling.pumps', undefined),
       );
     }
 

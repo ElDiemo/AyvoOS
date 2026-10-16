@@ -35,9 +35,10 @@ export default async function ProductionSetupPage({
       <ul className="flex flex-col gap-2 text-sm">
         {items.map((i) => (
           <li
-            key={i.key}
+            key={`${i.key}-${i.recipe?.version ?? ''}`}
             data-testid={`readiness-${i.key}`}
             data-state={i.state}
+            data-recipe={i.recipe?.version}
             className={`flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 ${tone[i.state]}`}
           >
             <span className="min-w-0">
@@ -45,9 +46,16 @@ export default async function ProductionSetupPage({
               {i.count !== null && t.count[i.key] && i.state === 'OK' && (
                 <span className="ml-2 text-xs">{t.count[i.key]!(i.count)}</span>
               )}
+              {i.recipe && (
+                <span className="block text-xs opacity-80">
+                  {i.recipe.waitingCrates === null
+                    ? t.recipePlan(i.recipe.version)
+                    : t.recipeWaiting(i.recipe.version, i.recipe.waitingCrates)}
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-3 text-xs">
-              <span>{t.state[i.state]}</span>
+              <span>{i.reason === 'NO_WAREHOUSE' ? t.noWarehouse : t.state[i.state]}</span>
               {i.state === 'MISSING' &&
                 (i.href ? (
                   <Link href={i.href} className="font-medium underline">
