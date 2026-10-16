@@ -149,8 +149,10 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     expect(list.items.find((c) => c.code === body.crate.code)?.cycle).toEqual({
       status: 'OPEN_ASSEMBLY',
       memberCount: 1,
+      filledCount: 0,
       capacity: 40,
       product: { code: kit.productCode, name: 'Tekuté mýdlo 330 ml' },
+      recipeVersion: 1,
     });
   });
 

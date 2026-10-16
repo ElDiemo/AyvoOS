@@ -6,6 +6,8 @@ import { InventoryModule } from '../inventory/inventory.module.js';
 import { LabelProductionModule } from '../label-production/label-production.module.js';
 import { LabelsModule } from '../labels/labels.module.js';
 import { WorkstationsModule } from '../workstations/workstations.module.js';
+import { CrateContentController } from './crate-content.controller.js';
+import { CrateContentService } from './crate-content.service.js';
 import { CycleCorrectionsController } from './cycle-corrections.controller.js';
 import { CycleCorrectionsService } from './cycle-corrections.service.js';
 import { FillingController } from './filling.controller.js';
@@ -28,7 +30,12 @@ import { LabelingService } from './labeling.service.js';
     LabelsModule,
     InventoryModule,
   ],
-  controllers: [LabelingController, FillingController, CycleCorrectionsController],
-  providers: [LabelingService, FillingService, CycleCorrectionsService],
+  controllers: [
+    LabelingController,
+    FillingController,
+    CycleCorrectionsController,
+    CrateContentController,
+  ],
+  providers: [LabelingService, FillingService, CycleCorrectionsService, CrateContentService],
 })
 export class ProductionModule {}

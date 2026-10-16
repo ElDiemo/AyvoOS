@@ -276,6 +276,21 @@ export async function labelledCrate(
   return { url, code: loaded.crate.code };
 }
 
+/** Registers one crate and returns its code and QR URL. */
+export async function newCrate(
+  request: APIRequestContext,
+  crateTypeCode: string,
+): Promise<{ code: string; url: string }> {
+  const reg = await json<{ crateCodes: string[] }>(
+    await request.post('/api/admin/crate-registrations', {
+      data: { requestId: crypto.randomUUID(), crateTypeCode, quantity: 1 },
+    }),
+  );
+  const code = reg.crateCodes[0]!;
+  const detail = await json<{ qrUrl: string }>(await request.get(`/api/admin/crates/${code}`));
+  return { code, url: detail.qrUrl };
+}
+
 /** Registers one crate and returns its QR URL. */
 export async function crateUrl(request: APIRequestContext, crateTypeCode: string): Promise<string> {
   const reg = await json<{ crateCodes: string[] }>(

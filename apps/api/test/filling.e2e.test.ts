@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  CrateContent,
+  CratePage,
   CycleCorrectionResult,
+  OutsideBottles,
   FillingState,
   FillScanResult,
   FinishCrateResult,
@@ -424,6 +427,71 @@ describe.skipIf(!hasDatabase)('filling into the same crate (A4)', () => {
     expect((await fillLoadCrate(t, fs2, a.crateUrl)).status).toBe(200);
     expect((await finishCrate(t, fs2)).status).toBe(200);
     expect((await cycleOf(a.crateCode))!.status).toBe('FILLED');
+  });
+
+  it('overview (A5): states with both counts, crate content with lots, bottles outside a crate', async () => {
+    const a = await labelled(take(3));
+    const lot = await liquidLot(3300);
+    const fs = await filling(a.crateUrl, lot);
+    await fillOk(fs, a.bottles[0]!);
+    const lotCode = (await t.prisma.inventoryLot.findUniqueOrThrow({ where: { id: lot } })).code;
+
+    const page = (
+      await http().get('/api/admin/crates').query({ state: 'FILLING', pageSize: 100 }).expect(200)
+    ).body as CratePage;
+    expect(page.items.find((c) => c.code === a.crateCode)?.cycle).toMatchObject({
+      status: 'FILLING',
+      memberCount: 3,
+      filledCount: 1,
+      recipeVersion: 1,
+    });
+    expect(page.items.every((c) => c.cycle?.status === 'FILLING')).toBe(true);
+    expect(page.stateCounts.FILLING).toBeGreaterThanOrEqual(1);
+    const all = (await http().get('/api/admin/crates').query({ pageSize: 1 }).expect(200))
+      .body as CratePage;
+    expect(Object.values(all.stateCounts).reduce((x, y) => x + y, 0)).toBe(all.total);
+
+    const content = (await http().get(`/api/admin/crates/${a.crateCode}/content`).expect(200))
+      .body as CrateContent;
+    expect(content.cycle).toMatchObject({ status: 'FILLING', memberCount: 3, filledCount: 1 });
+    expect(
+      content.members.map((m) => [m.ordinal, m.bottle.code, m.bottle.status, m.liquidLot]),
+    ).toEqual([
+      [1, a.bottles[0]!.code, 'FILLED', lotCode],
+      [2, a.bottles[1]!.code, 'LABELED_EMPTY', null],
+      [3, a.bottles[2]!.code, 'LABELED_EMPTY', null],
+    ]);
+
+    await correctCrate(t, a.crateCode, 'remove-bottle', {
+      bottle: a.bottles[0]!.code,
+      reason: 'odložena',
+    }).expect(200);
+    await correctCrate(t, a.crateCode, 'remove-bottle', {
+      bottle: a.bottles[1]!.code,
+      reason: 'poškozená',
+    }).expect(200);
+    const outside = (await http().get('/api/admin/bottles-outside-crates').expect(200))
+      .body as OutsideBottles;
+    expect(outside.finished.find((b) => b.code === a.bottles[0]!.code)).toMatchObject({
+      status: 'FILLED',
+      liquidLot: lotCode,
+      lastCrate: a.crateCode,
+      reason: 'odložena',
+      recipeVersion: 1,
+    });
+    expect(outside.labelledEmpty.find((b) => b.code === a.bottles[1]!.code)).toMatchObject({
+      status: 'LABELED_EMPTY',
+      lastCrate: a.crateCode,
+      reason: 'poškozená',
+    });
+    expect(outside.labelledEmpty.some((b) => b.code === a.bottles[2]!.code)).toBe(false);
+    const detail = (await http().get(`/api/admin/crates/${a.crateCode}`).expect(200)).body as {
+      events: { type: string; bottle: string | null; reason: string | null }[];
+    };
+    expect(detail.events.filter((e) => e.type === 'MEMBER_REMOVED')).toEqual([
+      expect.objectContaining({ bottle: a.bottles[0]!.code, reason: 'odložena' }),
+      expect.objectContaining({ bottle: a.bottles[1]!.code, reason: 'poškozená' }),
+    ]);
   });
 
   it('enforces the A4 rules in the database on its own', async () => {

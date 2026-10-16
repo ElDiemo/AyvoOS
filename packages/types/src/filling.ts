@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import { bottleStatusSchema } from './bottles.js';
 import { reasonSchema } from './identity.js';
-import { cycleStateSchema } from './labeling.js';
+import { crateCycleStatusSchema, cycleStateSchema } from './labeling.js';
+import { labelTemplateVersionRefSchema } from './labels.js';
 
 /**
  * Filling into the same crate (doc 025 A4, owner decisions B2–B5): a filling station (mode +
@@ -96,3 +98,75 @@ export const cycleCorrectionResultSchema = z.object({
   cycle: cycleStateSchema.nullable(),
 });
 export type CycleCorrectionResult = z.infer<typeof cycleCorrectionResultSchema>;
+
+// --- overview (doc 025 A5): crate content and bottles outside a crate --------------------------
+
+export const crateContentSchema = z.object({
+  crate: z.object({ code: z.string(), capacity: z.number().int() }),
+  /** The open cycle with its snapshot, or null ("Prázdná"). */
+  cycle: z
+    .object({
+      status: crateCycleStatusSchema,
+      product: ref,
+      category: z.string(),
+      recipeVersion: z.number().int(),
+      design: labelTemplateVersionRefSchema,
+      memberCount: z.number().int(),
+      filledCount: z.number().int(),
+      capacity: z.number().int(),
+      openedAt: z.iso.datetime(),
+      readyToFillAt: z.iso.datetime().nullable(),
+      filledAt: z.iso.datetime().nullable(),
+    })
+    .nullable(),
+  /** The open cycle's members in ordinal order. */
+  members: z.array(
+    z.object({
+      ordinal: z.number().int(),
+      bottle: z.object({ code: z.string(), status: bottleStatusSchema }),
+      source: z.enum(['LABELING', 'REPACKED', 'REPLACEMENT']),
+      assignedAt: z.iso.datetime(),
+      /** The liquid lot of a filled member. */
+      liquidLot: z.string().nullable(),
+    }),
+  ),
+  /** Earlier, aborted circulations of this crate (newest first). */
+  aborted: z.array(
+    z.object({
+      product: ref,
+      openedAt: z.iso.datetime(),
+      abortedAt: z.iso.datetime(),
+      reason: z.string(),
+    }),
+  ),
+});
+export type CrateContent = z.infer<typeof crateContentSchema>;
+
+export const outsideBottleSchema = z.object({
+  code: z.string(),
+  status: bottleStatusSchema,
+  /** Null for a bottle labelled before crates were recorded (no binding, owner B3). */
+  product: ref.nullable(),
+  recipeVersion: z.number().int().nullable(),
+  design: z.string().nullable(),
+  liquidLot: z.string().nullable(),
+  /** The crate it last left, when, and why. */
+  lastCrate: z.string().nullable(),
+  leftAt: z.iso.datetime().nullable(),
+  reason: z.string().nullable(),
+});
+export type OutsideBottle = z.infer<typeof outsideBottleSchema>;
+
+/** Labelled bottles of the active site in no crate (doc 025 §3.3), at most `limit` per group. */
+export const outsideBottlesSchema = z.object({
+  labelledEmpty: z.array(outsideBottleSchema),
+  finished: z.array(outsideBottleSchema),
+  legacy: z.array(outsideBottleSchema),
+  totals: z.object({
+    labelledEmpty: z.number().int(),
+    finished: z.number().int(),
+    legacy: z.number().int(),
+  }),
+  limit: z.number().int(),
+});
+export type OutsideBottles = z.infer<typeof outsideBottlesSchema>;

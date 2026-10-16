@@ -128,7 +128,13 @@ export class CratesService {
       where.serial = serial ?? -1n;
     }
     if (query.crateType) where.crateType = { code: query.crateType };
-    const [total, rows] = await Promise.all([
+    if (query.state) {
+      where.cycles =
+        query.state === 'EMPTY'
+          ? { none: { status: { not: 'ABORTED' } } }
+          : { some: { status: query.state } };
+    }
+    const [total, rows, stateCounts] = await Promise.all([
       this.prisma.crate.count({ where }),
       this.prisma.crate.findMany({
         where,
@@ -137,6 +143,7 @@ export class CratesService {
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),
+      this.stateCounts(siteId),
     ]);
     const facts = await this.eventFacts(rows.map((r) => r.id));
     return {
@@ -144,7 +151,27 @@ export class CratesService {
       page: query.page,
       pageSize: query.pageSize,
       total,
+      stateCounts,
     };
+  }
+
+  /** Crates of the site per derived state: EMPTY (no open cycle) or the open cycle's status. */
+  private async stateCounts(siteId: string): Promise<CratePage['stateCounts']> {
+    const [crates, open] = await Promise.all([
+      this.prisma.crate.count({ where: { siteId } }),
+      this.prisma.crateCycle.groupBy({
+        by: ['status'],
+        where: { siteId, status: { not: 'ABORTED' } },
+        _count: { _all: true },
+      }),
+    ]);
+    const counts = { EMPTY: crates, OPEN_ASSEMBLY: 0, READY_TO_FILL: 0, FILLING: 0, FILLED: 0 };
+    for (const row of open) {
+      if (row.status === 'ABORTED') continue;
+      counts[row.status] = row._count._all;
+      counts.EMPTY -= row._count._all;
+    }
+    return counts;
   }
 
   /** A crate of the given site by code; another site's crate is "not found" (doc 022). */
@@ -188,6 +215,8 @@ export class CratesService {
         location: e.location,
         registrationCode: e.registration?.code ?? null,
         printJobCode: e.printJob?.code ?? null,
+        bottle: payloadText(e.payload, 'bottle'),
+        reason: payloadText(e.payload, 'reason'),
       })),
       printJobs,
     };
@@ -219,13 +248,20 @@ export class CratesService {
           crateId: true,
           status: true,
           memberCount: true,
+          filledCount: true,
           capacity: true,
           product: { select: { code: true, name: true } },
+          recipeVersion: { select: { version: true } },
         },
       }),
     ]);
     const locations = new Map(located.map((e) => [e.crateId, e.location]));
-    const open = new Map(cycles.map(({ crateId, ...cycle }) => [crateId, cycle]));
+    const open = new Map(
+      cycles.map(({ crateId, recipeVersion, ...cycle }) => [
+        crateId,
+        { ...cycle, recipeVersion: recipeVersion.version },
+      ]),
+    );
     return new Map(
       latest.map((e) => [
         e.crateId,
@@ -244,6 +280,12 @@ type CrateFacts = {
   lastLocation: { code: string; name: string } | null;
   cycle: CrateSummary['cycle'];
 };
+
+/** A text field of an event payload, or null. */
+function payloadText(payload: unknown, key: string): string | null {
+  const value = (payload as Record<string, unknown> | null)?.[key];
+  return typeof value === 'string' ? value : null;
+}
 
 function toSummary(c: CrateRecord, facts: CrateFacts): CrateSummary {
   return {

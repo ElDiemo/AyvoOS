@@ -1,4 +1,10 @@
-import { cratePageSchema, crateListQuerySchema, crateTypeSchema, PAGE_SIZE_MAX } from '@ayvo/types';
+import {
+  cratePageSchema,
+  crateListQuerySchema,
+  crateListStateSchema,
+  crateTypeSchema,
+  PAGE_SIZE_MAX,
+} from '@ayvo/types';
 import Link from 'next/link';
 import { z } from 'zod';
 import { RowValue } from '@/components/catalog/catalog-header';
@@ -13,16 +19,17 @@ export const dynamic = 'force-dynamic';
 const t = cratesCs;
 const PAGE_SIZE = 50;
 
-type Search = { page?: string; search?: string; crateType?: string };
+type Search = { page?: string; search?: string; crateType?: string; state?: string };
 
 /**
- * Výroba → Bedny: the physical crates of the active site (doc 025 A1). Crate types are catalogue
- * data; this list is the physical pieces. No cycle state exists yet, and it is said so.
+ * Výroba → Bedny: the physical crates of the active site (doc 025 A1, A5) with their derived state
+ * (Prázdná, Skládá se, Čeká na plnění, Plní se, Připravená) and both counts — Obsah and Naplněno.
+ * The state counts link to the filtered list; bottles outside a crate have their own page.
  */
 export default async function CratesPage({ searchParams }: { searchParams: Promise<Search> }) {
   const raw = await searchParams;
   const params: Search = {};
-  for (const key of ['page', 'search', 'crateType'] as const) {
+  for (const key of ['page', 'search', 'crateType', 'state'] as const) {
     const value = raw[key];
     if (typeof value !== 'string' || value === '') continue;
     if (crateListQuerySchema.shape[key].safeParse(value).success) params[key] = value;
@@ -35,6 +42,7 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
       pageSize: Math.min(PAGE_SIZE, PAGE_SIZE_MAX),
       search: params.search,
       crateType: params.crateType,
+      state: params.state,
     }),
     // Crate type names for the filter; without catalogue access the filter is just hidden.
     hasPermission(me, 'catalog:read')
@@ -43,7 +51,7 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
     siteTimeZone(),
   ]);
   const pages = Math.max(1, Math.ceil(list.total / list.pageSize));
-  const filtered = !!(params.search || params.crateType);
+  const filtered = !!(params.search || params.crateType || params.state);
   const link = (p: number) => {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries({ ...params, page: String(p) })) if (v) q.set(k, v);
@@ -57,16 +65,42 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
         title={t.title}
         subtitle={t.subtitle}
         actions={
-          hasPermission(me, 'crates:register') ? (
-            <Link href="/production/crates/new" className={buttonClass.primary}>
-              {t.register}
+          <>
+            <Link href="/production/crates/outside" className={buttonClass.secondary}>
+              {t.outsideLink}
             </Link>
-          ) : null
+            {hasPermission(me, 'crates:register') && (
+              <Link href="/production/crates/new" className={buttonClass.primary}>
+                {t.register}
+              </Link>
+            )}
+          </>
         }
       />
+      <nav
+        className="mb-4 flex flex-wrap gap-2"
+        aria-label={t.stateFilter}
+        data-testid="crate-states"
+      >
+        {crateListStateSchema.options.map((state) => (
+          <Link
+            key={state}
+            href={`/production/crates?state=${state}`}
+            data-testid={`crate-state-${state}`}
+            aria-current={params.state === state ? 'page' : undefined}
+            className={
+              params.state === state
+                ? 'rounded-full border border-stone-900 bg-stone-900 px-3 py-1 text-sm text-white'
+                : 'rounded-full border border-stone-300 bg-white px-3 py-1 text-sm text-stone-800 hover:border-stone-500'
+            }
+          >
+            {t.stateCount(t.state[state] ?? state, list.stateCounts[state] ?? 0)}
+          </Link>
+        ))}
+      </nav>
       <Card className="mb-6">
         <form
-          className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_14rem_auto]"
+          className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_12rem_auto]"
           action="/production/crates"
           data-testid="crate-filter"
         >
@@ -94,6 +128,19 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
           ) : (
             <span className="hidden sm:block" />
           )}
+          <select
+            name="state"
+            defaultValue={params.state ?? ''}
+            className={inputClass}
+            aria-label={t.stateFilter}
+          >
+            <option value="">{t.allStates}</option>
+            {crateListStateSchema.options.map((state) => (
+              <option key={state} value={state}>
+                {t.state[state] ?? state}
+              </option>
+            ))}
+          </select>
           <div className="flex gap-2">
             <button type="submit" className={buttonClass.secondary}>
               {t.filter}
@@ -132,6 +179,7 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
                     ? t.cycleLine(
                         t.cycleStatus[c.cycle.status] ?? c.cycle.status,
                         c.cycle.memberCount,
+                        c.cycle.filledCount,
                         c.cycle.capacity,
                         c.cycle.product.name,
                       )

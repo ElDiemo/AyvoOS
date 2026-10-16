@@ -16,6 +16,11 @@ Status (revision 4, 2026-10-14):
   authorized yet — Vyjmout releases only the membership), a separate "Přeřadit" (= Vyjmout +
   Doplnit), weights at Hotovo (W1). An empty crate takes only finished bottles; a labelled empty
   bottle returns only into an open crate with exactly its snapshot.
+- **Implemented in review (A5, on top of A4):** Výroba → Bedny with the derived states and both
+  counts (filter and per-state counts of the active site), the crate detail with its snapshot,
+  members (state, liquid lot, origin), aborted circulations, the history with corrections and
+  reasons and the supervisor's corrections, and "Lahve mimo bednu" (labelled empties, finished
+  bottles, bottles labelled before crates were recorded).
 - **Not yet approved:** the tables and migrations of A3, A4 and W1 (§5, §10). Each is proposed
   here and needs the owner's approval of its model before its own implementation PR. ADR 0025
   (proposed) records the process decision.
