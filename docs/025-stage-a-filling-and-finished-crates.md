@@ -8,6 +8,20 @@ Status (revision 4, 2026-10-14):
   workstations and sessions (PR #22); A3 labelling into crates (its PR, in review): product label
   approvals, crate cycles (`OPEN_ASSEMBLY` → `READY_TO_FILL`), assignments, product bindings, body +
   label consumption at the labelling scan, the standalone label application retired (410).
+- **Implemented in review (A4, schema approved by the owner 2026-10-16):** the filling station
+  (same crate, explicit liquid lot, "Potvrdit naplnění" = FILLED + liquid lot + pump, FILL BOM
+  consumed once), Obsah/Naplněno, Hotovo (`FILLED`), and the supervisor's corrections
+  (`production:cycle_correct`): Vyjmout, Doplnit/Přeložit (finished bottles also into an empty
+  crate), Vrátit do rozpracování, Zrušit oběh. Not in A4: holds/quarantine (`bottle_holds` is not
+  authorized yet — Vyjmout releases only the membership), a separate "Přeřadit" (= Vyjmout +
+  Doplnit), weights at Hotovo (W1). An empty crate takes only finished bottles; a labelled empty
+  bottle returns only into an open crate with exactly its snapshot.
+- **Implemented in review (A5, on top of A4):** Výroba → Bedny with the derived states and both
+  counts (filter and per-state counts of the active site), the crate detail with its snapshot,
+  members (state, liquid lot, origin), aborted circulations, the history with corrections and
+  reasons and the supervisor's corrections, and "Lahve mimo bednu" (labelled empties, finished
+  bottles, bottles labelled before crates were recorded) — one group and one bounded page at a
+  time with an exact search by code or QR, so every bottle stays reachable.
 - **Not yet approved:** the tables and migrations of A3, A4 and W1 (§5, §10). Each is proposed
   here and needs the owner's approval of its model before its own implementation PR. ADR 0025
   (proposed) records the process decision.

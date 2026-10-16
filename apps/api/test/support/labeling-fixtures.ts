@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { CrateRegistration, LabelingState, StationSessionResult } from '@ayvo/types';
+import type {
+  CrateRegistration,
+  FillingState,
+  LabelingState,
+  StationSessionResult,
+} from '@ayvo/types';
 import request from 'supertest';
 import { receiveItem } from './warehouse-fixtures.js';
 import { TEST_QR_BASE_URL, SUPERUSER_EMAIL, type TestApp } from './test-app.js';
@@ -17,6 +22,8 @@ export interface LabelingKit {
   crateTypeCode: string;
   labelItemCode: string;
   labelItemId: string;
+  liquidItemId: string;
+  pumpItemId: string;
 }
 
 export async function labelingKit(
@@ -108,11 +115,16 @@ export async function labelingKit(
     .expect(200);
   const labelItem = await t.prisma.inventoryItem.findUniqueOrThrow({ where: { code: label.code } });
   if ((opts.labelStock ?? 1000) > 0) await receiveItem(t, labelItem.id, opts.labelStock ?? 1000);
+  const items = await t.prisma.inventoryItem.findMany({
+    where: { code: { in: [liquid.code, pump.code] } },
+  });
   return {
     productCode: product.code,
     crateTypeCode: crateType.code,
     labelItemCode: label.code,
     labelItemId: labelItem.id,
+    liquidItemId: items.find((i) => i.code === liquid.code)!.id,
+    pumpItemId: items.find((i) => i.code === pump.code)!.id,
   };
 }
 
@@ -129,6 +141,19 @@ export async function approveDesign(
 
 /** A labelling station and an open session of the superuser (any older session released). */
 export async function labelingSession(t: TestApp): Promise<string> {
+  return stationSession(t, 'LABELING', null);
+}
+
+/** A filling station of the category and an open session of the superuser (older released). */
+export async function fillingSession(t: TestApp, categoryCode = 'HAND_SOAP'): Promise<string> {
+  return stationSession(t, 'FILLING', categoryCode);
+}
+
+async function stationSession(
+  t: TestApp,
+  mode: 'LABELING' | 'FILLING',
+  categoryCode: string | null,
+): Promise<string> {
   const user = await t.prisma.user.findUnique({ where: { email: SUPERUSER_EMAIL } });
   if (user) {
     const active = await t.prisma.workstationSession.findMany({
@@ -146,10 +171,10 @@ export async function labelingSession(t: TestApp): Promise<string> {
       .post('/api/admin/workstations')
       .send({
         requestId: randomUUID(),
-        code: `LAB-${sfx()}`,
-        name: 'Lepicí stůl',
-        mode: 'LABELING',
-        categoryCode: null,
+        code: `${mode === 'LABELING' ? 'LAB' : 'FIL'}-${sfx()}`,
+        name: mode === 'LABELING' ? 'Lepicí stůl' : 'Plnicí linka',
+        mode,
+        categoryCode,
         reason: 'testovací pracoviště',
       })
       .expect(201)
@@ -271,3 +296,56 @@ export async function labelIntoCrate(
   }
   return labelScan(t, ctx.sessionId, body.scannedValue, body.requestId);
 }
+
+// --- filling (doc 025 A4) -----------------------------------------------------------------------
+
+export const fillLoadCrate = (t: TestApp, sessionId: string, scannedValue: string) =>
+  http(t)
+    .post(`/api/admin/station-sessions/${sessionId}/filling-crate`)
+    .send({ requestId: randomUUID(), scannedValue });
+
+export const chooseLiquidLot = (t: TestApp, sessionId: string, liquidLotId: string) =>
+  http(t)
+    .post(`/api/admin/station-sessions/${sessionId}/liquid-lot`)
+    .send({ requestId: randomUUID(), liquidLotId });
+
+/** The current context revision of a filling session. */
+export async function fillingRevision(t: TestApp, sessionId: string) {
+  return (
+    (await http(t).get(`/api/admin/station-sessions/${sessionId}/filling`).expect(200))
+      .body as FillingState
+  ).contextRevision;
+}
+
+/** A filling scan; the context revision is read first unless given (e.g. for a replay). */
+export async function fillScan(
+  t: TestApp,
+  sessionId: string,
+  scannedValue: string,
+  requestId: string = randomUUID(),
+  revision?: number,
+) {
+  const rev = revision ?? (await fillingRevision(t, sessionId));
+  return http(t)
+    .post(`/api/admin/station-sessions/${sessionId}/fill-scans`)
+    .send({ requestId, scannedValue, contextRevision: rev });
+}
+
+/** Hotovo at the filling session. */
+export async function finishCrate(t: TestApp, sessionId: string, requestId: string = randomUUID()) {
+  const rev = await fillingRevision(t, sessionId);
+  return http(t)
+    .post(`/api/admin/station-sessions/${sessionId}/finish`)
+    .send({ requestId, contextRevision: rev });
+}
+
+/** A supervised correction of a crate (production:cycle_correct). */
+export const correctCrate = (
+  t: TestApp,
+  crateCode: string,
+  action: 'remove-bottle' | 'add-bottle' | 'reopen' | 'abort-cycle',
+  body: { bottle?: string; reason?: string; requestId?: string } = {},
+) =>
+  http(t)
+    .post(`/api/admin/crates/${crateCode}/${action}`)
+    .send({ requestId: randomUUID(), reason: 'oprava vedoucího', ...body });

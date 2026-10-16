@@ -138,6 +138,7 @@ export const inventoryMovementTypeSchema = z.enum([
   'RECEIPT',
   'RECEIPT_CORRECTION',
   'LABEL_APPLICATION',
+  'FILL',
 ]);
 export type InventoryMovementType = z.infer<typeof inventoryMovementTypeSchema>;
 

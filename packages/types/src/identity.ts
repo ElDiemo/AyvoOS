@@ -71,6 +71,7 @@ export const PERMISSION_CODES = [
   'production:workstations_manage',
   'production:fill',
   'production:session_takeover',
+  'production:cycle_correct',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -116,6 +117,7 @@ export const SITE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'crates:register',
   'production:workstations_manage',
   'production:session_takeover',
+  'production:cycle_correct',
 ];
 
 /** Permissions that also need the active site and access to its warehouse (doc 022). */

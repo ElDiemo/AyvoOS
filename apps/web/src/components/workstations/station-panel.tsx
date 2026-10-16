@@ -16,6 +16,7 @@ import { formatDateTimeCs } from '@/i18n/cs/format';
 import { workstationsCs } from '@/i18n/cs/workstations';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
+import { FillingWorkspace } from './filling-workspace';
 import { LabelingWorkspace } from './labeling-workspace';
 
 const t = workstationsCs.station;
@@ -344,9 +345,11 @@ export function StationPanel({
             onUnresolvedChange={setUnresolved}
           />
         ) : (
-          <Card>
-            <p className="text-sm text-stone-700">{t.nextSteps}</p>
-          </Card>
+          <FillingWorkspace
+            key={current.session.id}
+            sessionId={current.session.id}
+            onUnresolvedChange={setUnresolved}
+          />
         )}
         <p className="text-xs text-stone-500">
           {t.leaveHelp} {t.since}: {formatDateTimeCs(current.session.openedAt, timeZone)}

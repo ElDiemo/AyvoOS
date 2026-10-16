@@ -12,11 +12,14 @@ export const productionCs = {
   bottleStatus: {
     CREATED: 'Vytvořená identita',
     LABELED_EMPTY: 'Etiketa nalepena – prázdná lahev',
+    FILLED: 'Naplněná – hotová',
   } as Record<string, string>,
   eventType: {
     CREATED: 'Identita vytvořena',
     LABEL_APPLIED: 'Etiketa nalepena na lahev',
     ASSIGNED_TO_CRATE: 'Vložena do bedny',
+    FILLED: 'Naplněna, pumpička nasazena',
+    REMOVED_FROM_CRATE: 'Vyjmuta z bedny',
   } as Record<string, string>,
   printJobStatus: {
     PENDING: 'Čeká na vygenerování',
@@ -111,7 +114,7 @@ export const productionCs = {
     notApplied:
       'Pouze identita a etiketa – vytištěná etiketa zatím nebyla nalepena na fyzickou lahev.',
     components: 'Historie komponent',
-    componentType: { LABEL: 'Etiketa' } as Record<string, string>,
+    componentType: { LABEL: 'Etiketa', PUMP: 'Pumpička' } as Record<string, string>,
     installed: (when: string) => `nainstalováno ${when}`,
     removed: (when: string) => `odebráno ${when}`,
     installedNow: 'aktuálně nainstalováno',

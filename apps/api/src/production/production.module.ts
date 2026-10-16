@@ -6,12 +6,18 @@ import { InventoryModule } from '../inventory/inventory.module.js';
 import { LabelProductionModule } from '../label-production/label-production.module.js';
 import { LabelsModule } from '../labels/labels.module.js';
 import { WorkstationsModule } from '../workstations/workstations.module.js';
+import { CrateContentController } from './crate-content.controller.js';
+import { CrateContentService } from './crate-content.service.js';
+import { CycleCorrectionsController } from './cycle-corrections.controller.js';
+import { CycleCorrectionsService } from './cycle-corrections.service.js';
+import { FillingController } from './filling.controller.js';
+import { FillingService } from './filling.service.js';
 import { LabelingController } from './labeling.controller.js';
 import { LabelingService } from './labeling.service.js';
 
 /**
  * production module (doc 020 §2, doc 025): the station work that turns stock into identified
- * products — A3 labelling into crates; filling (A4) follows. Composes workstations, crates,
+ * products — A3 labelling into crates, A4 filling, Hotovo and supervised crate corrections. Composes workstations, crates,
  * assets, catalog, label-production and inventory only through their exported services.
  */
 @Module({
@@ -24,7 +30,12 @@ import { LabelingService } from './labeling.service.js';
     LabelsModule,
     InventoryModule,
   ],
-  controllers: [LabelingController],
-  providers: [LabelingService],
+  controllers: [
+    LabelingController,
+    FillingController,
+    CycleCorrectionsController,
+    CrateContentController,
+  ],
+  providers: [LabelingService, FillingService, CycleCorrectionsService, CrateContentService],
 })
 export class ProductionModule {}

@@ -266,6 +266,22 @@ export class BottlesService {
   // --- physical label application (doc 018; orchestrated by the warehouse module) -------------
 
   /** The bottle behind a public token, or null. Not locked. */
+  /** A bottle by its code (AYV-B-…), or null. Not locked. */
+  findByCode(tx: Prisma.TransactionClient, code: string) {
+    const serial = parseCodeSerial(CODE_PREFIX.bottle, code);
+    if (serial === null) return Promise.resolve(null);
+    return tx.bottle.findUnique({
+      where: { serial },
+      select: {
+        id: true,
+        siteId: true,
+        code: true,
+        status: true,
+        creationBatch: { select: { code: true } },
+      },
+    });
+  }
+
   findByPublicToken(tx: Prisma.TransactionClient, token: string) {
     return tx.bottle.findUnique({
       where: { publicToken: token },
@@ -334,7 +350,10 @@ export class BottlesService {
     return { eventId: event.id };
   }
 
-  /** The bottle was put into a crate cycle (labelling scan): its ASSIGNED_TO_CRATE event. */
+  /**
+   * The bottle was put into a crate cycle: its ASSIGNED_TO_CRATE event — at the labelling scan
+   * (with the station session) or by a supervised repack (source and reason in the payload).
+   */
   async assignedToCrateEvent(
     tx: Prisma.TransactionClient,
     input: {
@@ -342,9 +361,11 @@ export class BottlesService {
       occurredAt: Date;
       actorId: string;
       crateCycleId: string;
-      workstationSessionId: string;
+      workstationSessionId: string | null;
       operationRequestId: string;
       crateCode: string;
+      source?: 'REPACKED' | 'REPLACEMENT';
+      reason?: string;
     },
   ): Promise<{ eventId: string }> {
     const event = await tx.bottleEvent.create({
@@ -356,11 +377,93 @@ export class BottlesService {
         crateCycleId: input.crateCycleId,
         workstationSessionId: input.workstationSessionId,
         operationRequestId: input.operationRequestId,
-        payload: { crate: input.crateCode },
+        payload: {
+          crate: input.crateCode,
+          ...(input.source ? { source: input.source, reason: input.reason } : {}),
+        },
       },
       select: { id: true },
     });
     return { eventId: event.id };
+  }
+
+  /** The bottle left its crate cycle (supervised removal or an aborted cycle), with the reason. */
+  async removedFromCrateEvent(
+    tx: Prisma.TransactionClient,
+    input: {
+      bottleId: string;
+      occurredAt: Date;
+      actorId: string;
+      crateCycleId: string;
+      operationRequestId: string;
+      crateCode: string;
+      reason: string;
+    },
+  ): Promise<void> {
+    await tx.bottleEvent.create({
+      data: {
+        bottleId: input.bottleId,
+        type: 'REMOVED_FROM_CRATE',
+        occurredAt: input.occurredAt,
+        actorId: input.actorId,
+        crateCycleId: input.crateCycleId,
+        operationRequestId: input.operationRequestId,
+        payload: { crate: input.crateCode, reason: input.reason },
+      },
+    });
+  }
+
+  /**
+   * Filled and pump installed (doc 025 A4): LABELED_EMPTY → FILLED, the FILLED event with the one
+   * liquid lot (owner B5) and the open PUMP attachment, in the caller's transaction (which must
+   * also post the FILL consumption — the database refuses the commit otherwise).
+   */
+  async fillInTransaction(
+    tx: Prisma.TransactionClient,
+    input: {
+      bottleId: string;
+      occurredAt: Date;
+      actorId: string;
+      crateCycleId: string;
+      workstationSessionId: string;
+      operationRequestId: string;
+      liquidLotId: string;
+      crateCode: string;
+    },
+  ): Promise<{ eventId: string }> {
+    const event = await tx.bottleEvent.create({
+      data: {
+        bottleId: input.bottleId,
+        type: 'FILLED',
+        occurredAt: input.occurredAt,
+        actorId: input.actorId,
+        crateCycleId: input.crateCycleId,
+        workstationSessionId: input.workstationSessionId,
+        operationRequestId: input.operationRequestId,
+        liquidLotId: input.liquidLotId,
+        payload: { crate: input.crateCode },
+      },
+      select: { id: true },
+    });
+    await tx.bottle.update({ where: { id: input.bottleId }, data: { status: 'FILLED' } });
+    await tx.bottleComponentAttachment.create({
+      data: {
+        bottleId: input.bottleId,
+        componentType: 'PUMP',
+        installedAt: input.occurredAt,
+        installedBy: input.actorId,
+        installedEventId: event.id,
+      },
+    });
+    return { eventId: event.id };
+  }
+
+  /** The liquid lot recorded for a filled bottle (its FILLED event), or null. */
+  filledLot(db: Prisma.TransactionClient, bottleId: string) {
+    return db.bottleEvent.findFirst({
+      where: { bottleId, type: 'FILLED' },
+      select: { liquidLot: { select: { id: true, code: true } } },
+    });
   }
 
   /** The permanent product binding of a freshly labelled bottle (owner B1). */
