@@ -37,7 +37,7 @@ export const cratesCs = {
   /** No open crate cycle: nothing recorded in the crate (doc 025 §3.2). */
   noCirculation: 'Prázdná – bez otevřeného oběhu',
   noCirculationHelp:
-    'Obsah bedny se eviduje od lepení (sken lahve do bedny). Plnění a připravené bedny přidá navazující krok.',
+    'Obsah bedny se eviduje od lepení (sken lahve do bedny); plní se na plnicím pracovišti.',
   cycleStatus: {
     OPEN_ASSEMBLY: 'Skládá se (lepení)',
     READY_TO_FILL: 'Čeká na plnění',
@@ -63,6 +63,12 @@ export const cratesCs = {
     LABEL_PRINT_JOB_CREATED: 'Vytvořena tisková úloha QR štítku',
     CYCLE_OPENED: 'Začal oběh (první lahev vložena)',
     READY_TO_FILL: 'Bedna plná – čeká na plnění',
+    FILLING_STARTED: 'Začalo plnění (první naplněná lahev)',
+    CRATE_FILLED: 'Hotovo – bedna připravená',
+    RETURNED_TO_FILLING: 'Vrácena do rozpracování',
+    CYCLE_ABORTED: 'Oběh zrušen',
+    MEMBER_REMOVED: 'Lahev vyjmuta z bedny',
+    MEMBER_ADDED: 'Lahev přidána do bedny',
   } as Record<string, string>,
   eventBy: (actor: string) => `Provedl(a): ${actor}`,
   crateStatus: 'Stav bedny',

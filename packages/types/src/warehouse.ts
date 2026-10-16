@@ -71,7 +71,7 @@ export type RecentLabelApplication = z.infer<typeof recentLabelApplicationSchema
 
 /** One installed (or removed) replaceable component of a bottle (doc 018 §15). */
 export const bottleComponentSchema = z.object({
-  type: z.enum(['LABEL']),
+  type: z.enum(['LABEL', 'PUMP']),
   /** LABEL: the exact QR URL scanned at installation, and its print job. */
   labelQrUrl: z.string().nullable(),
   printJobCode: z.string().nullable(),

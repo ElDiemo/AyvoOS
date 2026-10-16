@@ -43,6 +43,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   Labelling into crates (doc 025 A3, owner B1–B4 2026-10-14): product label approvals, crate
   cycles, crate assignments, bottle product bindings, the labelling context on sessions; a new
   LABEL_APPLIED only into a crate cycle (the standalone label application answers 410).
+  Filling (doc 025 A4, schema approved 2026-10-16): bottle status/event FILLED with its one liquid
+  lot, PUMP attachments, FILL movements, cycle counters (Obsah/Naplněno), Hotovo (FILLED) and
+  supervised corrections (`production:cycle_correct`) — no holds/quarantine yet.
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

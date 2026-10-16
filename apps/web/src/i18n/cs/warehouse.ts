@@ -170,6 +170,7 @@ export const warehouseCs = {
       RECEIPT: 'Příjem',
       RECEIPT_CORRECTION: 'Oprava příjmu',
       LABEL_APPLICATION: 'Nalepení etikety',
+      FILL: 'Plnění',
     } as Record<string, string>,
     change: 'Změna',
     balance: 'Stav po pohybu',

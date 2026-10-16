@@ -364,13 +364,18 @@ export class StationSessionsService {
     });
   }
 
-  /** Loads a crate at a locked session; refused while another active session has it loaded. */
+  /**
+   * Loads a crate at a locked session; refused while another active session has it loaded. A
+   * filling station may keep its liquid lot only when it is still the lot of the new crate's
+   * liquid (`keepLiquidLot: false` clears it).
+   */
   async loadCrate(
     tx: Prisma.TransactionClient,
     sessionId: string,
     crateId: string,
     actorId: string,
     operationId: string,
+    options: { keepLiquidLot?: boolean } = {},
   ): Promise<void> {
     const holder = await tx.workstationSession.findFirst({
       where: { crateId, status: 'ACTIVE', id: { not: sessionId } },
@@ -384,10 +389,43 @@ export class StationSessionsService {
     }
     await tx.workstationSession.update({
       where: { id: sessionId },
-      data: { crateId, labelingContextRevision: { increment: 1 } },
+      data: {
+        crateId,
+        labelingContextRevision: { increment: 1 },
+        ...(options.keepLiquidLot === false ? { liquidLotId: null } : {}),
+      },
     });
     await tx.workstationSessionEvent.create({
       data: { sessionId, type: 'CRATE_LOADED', actorId, operationRequestId: operationId },
+    });
+  }
+
+  /**
+   * The explicitly chosen liquid lot of a locked filling session (owner B5): applies from the next
+   * bottle; the context revision changes, so a scan made before the switch is refused, never
+   * recorded with the new lot.
+   */
+  async setLiquidLot(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    liquidLotId: string,
+    actorId: string,
+    operationId: string,
+  ): Promise<void> {
+    await tx.workstationSession.update({
+      where: { id: sessionId },
+      data: { liquidLotId, labelingContextRevision: { increment: 1 } },
+    });
+    await tx.workstationSessionEvent.create({
+      data: { sessionId, type: 'LIQUID_LOT_CHANGED', actorId, operationRequestId: operationId },
+    });
+  }
+
+  /** The finished crate leaves the station (after Hotovo); the next crate can be loaded. */
+  async unloadCrate(tx: Prisma.TransactionClient, sessionId: string): Promise<void> {
+    await tx.workstationSession.update({
+      where: { id: sessionId },
+      data: { crateId: null, labelingContextRevision: { increment: 1 } },
     });
   }
 

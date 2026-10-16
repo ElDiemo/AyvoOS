@@ -94,7 +94,10 @@ export type LabelScanRequest = z.infer<typeof labelScanRequestSchema>;
 
 export const cycleStateSchema = z.object({
   status: crateCycleStatusSchema,
+  /** "Obsah": active members (labelled bottles in the crate). */
   memberCount: z.number().int(),
+  /** "Naplněno": active members that are filled (doc 025 §3.2). */
+  filledCount: z.number().int(),
   capacity: z.number().int(),
   product: ref,
   recipeVersion: z.number().int(),

@@ -149,6 +149,8 @@ enum BottleStatus {
   CREATED
   /// The printed QR label is physically on the bottle body; the body is empty (doc 018).
   LABELED_EMPTY
+  /// Filled and pump installed (doc 025 A4); never set back to empty.
+  FILLED
 }
 
 /// Lifecycle event types. FILLED, ASSIGNED_TO_CRATE, … are added in later phases.
@@ -158,6 +160,8 @@ enum BottleEventType {
   LABEL_APPLIED
   /// The labelled empty bottle was put into a crate cycle (labelling scan, doc 025).
   ASSIGNED_TO_CRATE
+  FILLED
+  REMOVED_FROM_CRATE
 }
 
 /// A group of physical bottle identities registered in one operation (NOT a fill batch).
@@ -228,6 +232,9 @@ model Bottle {
 /// DB: UPDATE/DELETE rejected by trigger; at most one CREATED event per bottle (partial unique).
 model BottleEvent {
   crateCycleId         String?               @map("crate_cycle_id") @db.Uuid
+  /// FILLED: the one liquid lot consumed for this bottle (owner B5).
+  liquidLotId          String?               @map("liquid_lot_id") @db.Uuid
+  liquidLot            InventoryLot?         @relation("FilledFromLot", fields: [liquidLotId], references: [id], onDelete: Restrict)
   workstationSessionId String?               @map("workstation_session_id") @db.Uuid
   operationRequestId   String?               @map("operation_request_id") @db.Uuid
   crateCycle           CrateCycle?           @relation(fields: [crateCycleId], references: [id], onDelete: Restrict)
@@ -383,6 +390,7 @@ model BottleComponentAttachment {
 
 enum ComponentType {
   LABEL
+  PUMP
 }
 
 /// What happens to a removed component (removal workflows are deferred; doc 018 §16).
@@ -518,7 +526,9 @@ enum InventoryLotKind {
 /// origin_receipt_line_id (unique, deferrable FK) and no supplier lot code; lot item must be
 /// lot-tracked.
 model InventoryLot {
-  sessions            WorkstationSession[]
+  sessions            WorkstationSession[] @relation("SessionSourceLot")
+  liquidSessions      WorkstationSession[] @relation("SessionLiquidLot")
+  filledBottleEvents  BottleEvent[]        @relation("FilledFromLot")
   id                  String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
   itemId              String               @map("item_id") @db.Uuid
   kind                InventoryLotKind
@@ -545,6 +555,7 @@ enum InventoryMovementType {
   RECEIPT
   RECEIPT_CORRECTION
   LABEL_APPLICATION
+  FILL
 }
 
 /// The append-only stock ledger: the source of truth for every quantity.
@@ -870,6 +881,13 @@ enum OperationKind {
   STATION_LABELING_CONTEXT
   STATION_CRATE_LOAD
   LABEL_SCAN
+  STATION_LIQUID_LOT
+  FILL_SCAN
+  CRATE_FINISH
+  CYCLE_MEMBER_REMOVE
+  CYCLE_MEMBER_ADD
+  CYCLE_REOPEN
+  CYCLE_ABORT
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1658,6 +1676,12 @@ enum CrateEventType {
   LABEL_PRINT_JOB_CREATED
   CYCLE_OPENED
   READY_TO_FILL
+  FILLING_STARTED
+  CRATE_FILLED
+  RETURNED_TO_FILLING
+  CYCLE_ABORTED
+  MEMBER_REMOVED
+  MEMBER_ADDED
 }
 
 /// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
@@ -1777,6 +1801,9 @@ model WorkstationSession {
   recipeVersionId         String?                  @map("recipe_version_id") @db.Uuid
   labelTemplateVersionId  String?                  @map("label_template_version_id") @db.Uuid
   sourceLotId             String?                  @map("source_lot_id") @db.Uuid
+  /// Filling station: the explicitly chosen liquid lot, applies to the following bottles (B5).
+  liquidLotId             String?                  @map("liquid_lot_id") @db.Uuid
+  liquidLot               InventoryLot?            @relation("SessionLiquidLot", fields: [liquidLotId], references: [id], onDelete: Restrict)
   /// Bumped by every context change or crate load: a labelling scan names the revision it was
   /// made in, so a retry from an older context is refused (PR #23 review).
   labelingContextRevision Int                      @default(0) @map("labeling_context_revision")
@@ -1785,7 +1812,7 @@ model WorkstationSession {
   product                 Product?                 @relation(fields: [productId], references: [id], onDelete: Restrict)
   recipeVersion           RecipeVersion?           @relation(fields: [recipeVersionId], references: [id], onDelete: Restrict)
   labelTemplateVersion    LabelTemplateVersion?    @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
-  sourceLot               InventoryLot?            @relation(fields: [sourceLotId], references: [id], onDelete: Restrict)
+  sourceLot               InventoryLot?            @relation("SessionSourceLot", fields: [sourceLotId], references: [id], onDelete: Restrict)
   crate                   Crate?                   @relation(fields: [crateId], references: [id], onDelete: Restrict)
   bottleEvents            BottleEvent[]
   id                      String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -1818,6 +1845,7 @@ enum WorkstationSessionEventType {
   CLOSED
   CONTEXT_CHANGED
   CRATE_LOADED
+  LIQUID_LOT_CHANGED
 }
 
 /// Append-only session history. DB: immutable; a takeover or close needs a reason.
@@ -1894,6 +1922,10 @@ model CrateCycle {
   recipeVersionId        String           @map("recipe_version_id") @db.Uuid
   labelTemplateVersionId String           @map("label_template_version_id") @db.Uuid
   memberCount            Int              @default(0) @map("member_count")
+  /// Active members that are FILLED (doc 025 §3.2 "Naplněno"); changed only with their events.
+  filledCount            Int              @default(0) @map("filled_count")
+  /// Set by Hotovo (FILLED); cleared again by "Vrátit do rozpracování".
+  filledAt               DateTime?        @map("filled_at") @db.Timestamptz(3)
   openedAt               DateTime         @default(now()) @map("opened_at") @db.Timestamptz(3)
   openedBy               String           @map("opened_by") @db.Uuid
   openOperationId        String           @map("open_operation_id") @db.Uuid
@@ -1923,6 +1955,8 @@ model CrateCycle {
 
 enum CrateAssignmentSource {
   LABELING
+  REPACKED
+  REPLACEMENT
 }
 
 /// A bottle's membership in a crate cycle, with an ordinal (1…capacity; not a physical slot).

@@ -19,6 +19,8 @@ export interface LabelingSetup {
   crateTypeCode: string;
   stationUrl: string;
   stationCode: string;
+  liquidCode: string;
+  pumpCode: string;
 }
 
 export async function labelingSetup(
@@ -122,53 +124,7 @@ export async function labelingSetup(
     }),
   );
   // Label stock (not lot-tracked) so that labelling can consume one label per bottle.
-  const items = await json<{ id: string; code: string }[]>(
-    await request.get('/api/admin/inventory/items'),
-  );
-  const supplier = await json<{ id: string }>(
-    await request.post('/api/admin/suppliers', {
-      data: {
-        requestId: crypto.randomUUID(),
-        name: `Etikety E2E ${sfx()}`,
-        companyId: null,
-        vatId: null,
-      },
-    }),
-  );
-  const note = await json<{ id: string }>(
-    await request.post('/api/admin/supplier-documents', {
-      multipart: {
-        requestId: crypto.randomUUID(),
-        supplierId: supplier.id,
-        kind: 'DELIVERY_NOTE',
-        documentNumber: `DL-${sfx()}`,
-        issuedOn: '2026-10-14',
-        file: { name: 'dl.pdf', mimeType: 'application/pdf', buffer: PDF },
-      },
-    }),
-  );
-  await json(
-    await request.post('/api/admin/goods-receipts', {
-      data: {
-        requestId: crypto.randomUUID(),
-        supplierId: supplier.id,
-        supplierReference: `DL-${sfx()}`,
-        receivedAt: new Date().toISOString(),
-        note: null,
-        documentIds: [note.id],
-        lines: [
-          {
-            itemId: items.find((i) => i.code === label.code)!.id,
-            quantity: '100',
-            supplierLotCode: null,
-            unitPrice: null,
-            currency: null,
-            vatRate: null,
-          },
-        ],
-      },
-    }),
-  );
+  await receiveStock(request, label.code, '100');
   if (opts.approve ?? true) {
     await json(
       await request.post(`${api}/products/${product.code}/label-approvals`, {
@@ -199,7 +155,125 @@ export async function labelingSetup(
     crateTypeCode: crateType.code,
     stationUrl: station.qrUrl,
     stationCode,
+    liquidCode: liquid.code,
+    pumpCode: pump.code,
   };
+}
+
+/** Receives stock of an item with a delivery note; returns the lot code (lot-tracked) or null. */
+export async function receiveStock(
+  request: APIRequestContext,
+  itemCode: string,
+  quantity: string,
+): Promise<string | null> {
+  const items = await json<{ id: string; code: string }[]>(
+    await request.get('/api/admin/inventory/items'),
+  );
+  const supplier = await json<{ id: string }>(
+    await request.post('/api/admin/suppliers', {
+      data: {
+        requestId: crypto.randomUUID(),
+        name: `Dodavatel E2E ${sfx()}`,
+        companyId: null,
+        vatId: null,
+      },
+    }),
+  );
+  const note = await json<{ id: string }>(
+    await request.post('/api/admin/supplier-documents', {
+      multipart: {
+        requestId: crypto.randomUUID(),
+        supplierId: supplier.id,
+        kind: 'DELIVERY_NOTE',
+        documentNumber: `DL-${sfx()}`,
+        issuedOn: '2026-10-14',
+        file: { name: 'dl.pdf', mimeType: 'application/pdf', buffer: PDF },
+      },
+    }),
+  );
+  const receipt = await json<{ lines: { lot: { code: string } | null }[] }>(
+    await request.post('/api/admin/goods-receipts', {
+      data: {
+        requestId: crypto.randomUUID(),
+        supplierId: supplier.id,
+        supplierReference: `DL-${sfx()}`,
+        receivedAt: new Date().toISOString(),
+        note: null,
+        documentIds: [note.id],
+        lines: [
+          {
+            itemId: items.find((i) => i.code === itemCode)!.id,
+            quantity,
+            supplierLotCode: null,
+            unitPrice: null,
+            currency: null,
+            vatRate: null,
+          },
+        ],
+      },
+    }),
+  );
+  return receipt.lines[0]!.lot?.code ?? null;
+}
+
+/** A filling station of the category; returns its QR URL and code. */
+export async function fillingStation(request: APIRequestContext, categoryCode = 'HAND_SOAP') {
+  const code = `E2E-FIL-${sfx()}`;
+  const station = await json<{ qrUrl: string }>(
+    await request.post('/api/admin/workstations', {
+      data: {
+        requestId: crypto.randomUUID(),
+        code,
+        name: 'Plnicí linka (E2E)',
+        mode: 'FILLING',
+        categoryCode,
+        reason: 'E2E pracoviště',
+      },
+    }),
+  );
+  return { url: station.qrUrl, code };
+}
+
+/**
+ * Labels the bottles into a new crate at the kit's labelling station through the API (the
+ * admin's open station is released first); returns the crate's QR URL and code.
+ */
+export async function labelledCrate(
+  request: APIRequestContext,
+  kit: LabelingSetup,
+  opts: { versionId: string; bottleLotCode: string; urls: string[] },
+): Promise<{ url: string; code: string }> {
+  const session = await openStation(request, kit.stationUrl);
+  const base = `/api/admin/station-sessions/${session}`;
+  await json(
+    await request.post(`${base}/labeling-context`, {
+      data: {
+        requestId: crypto.randomUUID(),
+        productCode: kit.productCode,
+        labelTemplateVersionId: opts.versionId,
+        sourceLotId: await lotId(request, opts.bottleLotCode),
+      },
+    }),
+  );
+  const url = await crateUrl(request, kit.crateTypeCode);
+  const loaded = await json<{ contextRevision: number; crate: { code: string } }>(
+    await request.post(`${base}/crate`, {
+      data: { requestId: crypto.randomUUID(), scannedValue: url },
+    }),
+  );
+  for (const bottle of opts.urls) {
+    await json(
+      await request.post(`${base}/label-scans`, {
+        data: {
+          requestId: crypto.randomUUID(),
+          scannedValue: bottle,
+          contextRevision: loaded.contextRevision,
+        },
+      }),
+    );
+  }
+  await releaseOwnStation(request);
+  return { url, code: loaded.crate.code };
 }
 
 /** Registers one crate and returns its QR URL. */
