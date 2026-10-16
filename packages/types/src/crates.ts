@@ -79,8 +79,11 @@ export const crateSummarySchema = z.object({
     .object({
       status: z.enum(['OPEN_ASSEMBLY', 'READY_TO_FILL', 'FILLING', 'FILLED', 'ABORTED']),
       memberCount: z.number().int(),
+      /** "Naplněno" (doc 025 §3.2), shown beside "Obsah" (memberCount). */
+      filledCount: z.number().int(),
       capacity: z.number().int(),
       product: z.object({ code: z.string(), name: z.string() }),
+      recipeVersion: z.number().int(),
     })
     .nullable(),
   /** Time of the latest crate event. */
@@ -95,9 +98,16 @@ export const crateListQuerySchema = z.object({
   /** Crate code or number: "AYV-C-000012", "000012" or "12". */
   search: z.string().trim().max(32).optional(),
   crateType: catalogCodeSchema.optional(),
+  /** Derived list state (doc 025 §3.2): EMPTY = no open cycle. */
+  state: z.enum(['EMPTY', 'OPEN_ASSEMBLY', 'READY_TO_FILL', 'FILLING', 'FILLED']).optional(),
 });
 export type CrateListQuery = z.infer<typeof crateListQuerySchema>;
-export const cratePageSchema = pageSchema(crateSummarySchema);
+export const crateListStateSchema = crateListQuerySchema.shape.state.unwrap();
+export type CrateListState = z.infer<typeof crateListStateSchema>;
+export const cratePageSchema = pageSchema(crateSummarySchema).extend({
+  /** Crates of the active site per derived state (independent of the other filters). */
+  stateCounts: z.record(crateListStateSchema, z.number().int()),
+});
 export type CratePage = z.infer<typeof cratePageSchema>;
 
 /** POST /api/admin/crate-label-print-jobs — idempotent per requestId; crates of the active site. */
@@ -146,6 +156,9 @@ export const crateEventSchema = z.object({
   location: locationRefSchema.nullable(),
   registrationCode: z.string().nullable(),
   printJobCode: z.string().nullable(),
+  /** Corrections and their bottles (doc 025 §4.2): bottle code, reason, assignment source. */
+  bottle: z.string().nullable(),
+  reason: z.string().nullable(),
 });
 export type CrateEvent = z.infer<typeof crateEventSchema>;
 
