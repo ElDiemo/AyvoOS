@@ -164,7 +164,7 @@ export const catalogCs = {
     },
     stage: { LABEL_APPLICATION: 'Nalepení etikety', FILL: 'Plnění' },
     stageNote:
-      'Fáze jsou plánovací zařazení. Nyní neprobíhá žádná spotřeba zásob a zařazení etikety nerozhoduje, kdy se bude etiketa skutečně odepisovat.',
+      'Katalog ani kalkulace samy zásoby nemění. Potvrzení nalepení na lepicím pracovišti odepíše tělo lahve a etiketu, potvrzení naplnění na plnicím pracovišti kapalinu a pumpičku – vždy podle receptury bedny.',
     item: 'Položka',
     quantity: 'Množství',
     unit: 'Jednotka',

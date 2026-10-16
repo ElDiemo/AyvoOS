@@ -40,17 +40,20 @@ export const shellCs = {
     production: {
       label: 'Výroba',
       description:
-        'Identity lahví, série a tisk etiket, šablony etiket a fyzické nalepení etiket na lahve.',
+        'Práce na pracovištích (lepení a plnění), evidence beden a lahví a nastavení výroby.',
       pages: {
         overview: 'Přehled výroby',
         bottles: 'Lahve',
         templates: 'Šablony etiket',
         labelActivation: 'Nalepení etiket',
-        station: 'Pracoviště',
+        station: 'Pracovat na pracovišti',
         crates: 'Bedny',
-        workstations: 'Správa pracovišť',
+        workstations: 'Pracoviště a QR',
         catalog: 'Produkty a receptury',
+        setup: 'Připravit výrobu',
       },
+      groups: { records: 'Evidence', setup: 'Nastavení výroby' },
+      readOnly: 'jen pro čtení',
     },
   },
   home: {

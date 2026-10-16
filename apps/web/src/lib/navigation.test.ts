@@ -81,30 +81,77 @@ describe('AYVO OS navigation (doc 019)', () => {
     ]);
     expect(production.pages.map((p) => p.label)).toEqual([
       'Přehled výroby',
-      'Lahve',
-      'Šablony etiket',
-      'Pracoviště',
+      'Pracovat na pracovišti',
       'Bedny',
-      'Správa pracovišť',
+      'Lahve',
+      'Připravit výrobu',
+      'Pracoviště a QR',
       'Produkty a receptury',
+      'Šablony etiket',
     ]);
     expect(warehouse.pages.some((p) => p.href.includes('label'))).toBe(false);
   });
 
-  it('shows Pracoviště to production operators and Správa pracovišť only to managers (doc 026)', () => {
-    const pages = (perms: string[]) =>
-      visibleModules(perms)
-        .find((m) => m.id === 'production')
-        ?.pages.map((p) => p.id);
-    expect(pages(['production:read', 'production:fill', 'crates:read'])).toEqual([
-      'overview',
-      'bottles',
-      'templates',
-      'station',
-      'crates',
+  /** Production pages as `id:group` (+`(ro)` for a read-only listing) for a permission set. */
+  const production = (perms: string[]) =>
+    visibleModules(perms)
+      .find((m) => m.id === 'production')
+      ?.pages.map((p) => `${p.id}:${p.group ?? '-'}${p.readOnly ? '(ro)' : ''}`);
+
+  it('the station is the work entry for EITHER labelling or filling (issue #11 UI-15)', () => {
+    expect(production(['production:label_apply'])).toEqual(['station:work']);
+    expect(production(['production:fill'])).toEqual(['station:work']);
+    expect(production(['production:label_apply', 'production:fill'])).toEqual(['station:work']);
+    expect(production([])).toBeUndefined();
+    // The module opens on the station for a labelling-only role.
+    expect(visibleModules(['production:label_apply'])[0]!.href).toBe('/production/station');
+    expect(production(['production:workstations_manage'])).toEqual([
+      'setup:setup',
+      'workstations:setup',
     ]);
-    expect(pages(['production:fill'])).toEqual(['station']);
-    expect(pages(['production:workstations_manage'])).toEqual(['workstations']);
+  });
+
+  it('operator works and reads; supervisor and ADMIN also set up (doc 027 §3, roles unchanged)', () => {
+    // The system roles' permissions (apps/api/test/identity.e2e.test.ts ROLE_MATRIX).
+    const operator = [
+      'production:read',
+      'production:labels_print',
+      'inventory:read',
+      'catalog:read',
+      'crates:read',
+      'production:fill',
+      'production:label_apply',
+    ];
+    const supervisor = [
+      ...operator,
+      'production:bottles_create',
+      'catalog:product_manage',
+      'catalog:recipe_approve',
+      'crates:register',
+      'production:workstations_manage',
+      'production:session_takeover',
+      'production:cycle_correct',
+    ];
+    // Operator: no Nastavení group — the catalogue and templates are read-only under Evidence.
+    expect(production(operator)).toEqual([
+      'overview:-',
+      'station:work',
+      'crates:records',
+      'bottles:records',
+      'catalog:records(ro)',
+      'templates:records(ro)',
+    ]);
+    expect(production(supervisor)).toEqual([
+      'overview:-',
+      'station:work',
+      'crates:records',
+      'bottles:records',
+      'setup:setup',
+      'workstations:setup',
+      'catalog:setup',
+      'templates:records(ro)', // templates are company-wide: ADMIN edits them
+    ]);
+    expect(production([...supervisor, 'production:templates_manage'])).toContain('templates:setup');
   });
 
   it('opens Výroba → Bedny to warehouse roles with crates:read only (doc 025 A1)', () => {

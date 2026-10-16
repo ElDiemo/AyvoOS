@@ -39,7 +39,7 @@ export const productionCs = {
   overview: {
     title: 'Přehled výroby',
     subtitle:
-      'Identity lahví a jejich série, tisk etiket, šablony etiket a fyzické nalepení etiket na lahve.',
+      'Práce na pracovištích (lepení a plnění), stav beden a identit lahví a poslední série.',
     bottles: 'Identity lahví',
     awaitingLabel: 'Čeká na nalepení etikety',
     labeled: 'S nalepenou etiketou',
@@ -50,12 +50,13 @@ export const productionCs = {
     recentApplications: 'Poslední nalepené etikety',
     noApplications: 'Zatím nebyla nalepena žádná etiketa.',
     capabilities: 'Činnosti výroby',
+    crates: 'Bedny',
     capability: {
       bottles: 'Identity lahví, jejich stav a historie vytvoření sérií.',
       templates: 'Grafika etiket a umístění QR kódu. Každá změna je nová neměnná verze.',
       printJobs: 'Tisková PDF etiket se vytvářejí u každé série lahví.',
       labelActivation:
-        'Na lepicím pracovišti: po nalepení etikety sken vloží lahev do bedny a odečte tělo lahve a etiketu.',
+        'Na lepicím pracovišti sken po nalepení vloží lahev do bedny a odepíše tělo lahve a etiketu; na plnicím pracovišti sken po naplnění odepíše kapalinu a pumpičku, Hotovo označí plnou bednu jako připravenou.',
     },
     printJobsLink: 'Tisk etiket v historii sérií',
   },

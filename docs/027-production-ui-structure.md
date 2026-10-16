@@ -3,7 +3,11 @@
 Status: **direction confirmed by the owner (2026-10-16)** — Práce / Evidence / Nastavení výroby,
 the "Připravit výrobu" overview and a read-only aggregation endpoint that exposes nothing beyond
 the user's current permissions and sites. Revision 2 includes the Codex review of PR #26. Not an
-approval to merge or deploy. Navigation and onboarding of the
+approval to merge or deploy.
+
+Implementation in review (2026-10-16, branch `feat/production-ui-structure`): grouped navigation
+with the work entry and `anyOf`, catalogue/templates read-only under Evidence without a setup
+permission, "Připravit výrobu" with `GET /api/admin/production/readiness`, UI-08, UI-14, UI-16. Navigation and onboarding of the
 Production module only (issue #11 UI-08/12/13/14/15/16). It changes no consumption, state,
 permission or role assignment; Warehouse and System administration stay as they are; dispatch
 and returns get no tabs yet.

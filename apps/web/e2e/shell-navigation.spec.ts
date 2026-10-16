@@ -55,18 +55,22 @@ test('Warehouse and Production are separate; label application belongs to Produc
 
   await page.goto('/production');
   const production = page.getByRole('navigation', { name: 'Výroba' });
+  // Práce (a prominent button), then Evidence and Nastavení výroby (doc 027).
   await expect(production.getByRole('link')).toHaveText([
+    /Pracovat na pracovišti/,
     'Přehled výroby',
-    'Lahve',
-    'Šablony etiket',
-    'Pracoviště',
     'Bedny',
-    'Správa pracovišť',
+    'Lahve',
+    'Připravit výrobu',
+    'Pracoviště a QR',
     'Produkty a receptury',
+    'Šablony etiket',
   ]);
+  await expect(production.getByTestId('nav-group-records')).toHaveText('Evidence');
+  await expect(production.getByTestId('nav-group-setup')).toHaveText('Nastavení výroby');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled výroby');
   // Labelling happens at a station (doc 025 A3): Pracoviště is part of Production.
-  await production.getByRole('link', { name: 'Pracoviště' }).click();
+  await production.getByRole('link', { name: /Pracovat na pracovišti/ }).click();
   await expect(page).toHaveURL(/\/production\/station$/);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pracoviště');
   await expect(page.getByRole('navigation', { name: 'Sklad' })).toHaveCount(0);

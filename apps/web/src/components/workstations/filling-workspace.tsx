@@ -12,6 +12,7 @@ import { fillingCs } from '@/i18n/cs/filling';
 import { labelingCs } from '@/i18n/cs/labeling';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
+import { useScanFocusReturn } from '@/lib/scan-focus';
 import { ScanQueueStatus, useScanQueue, type QueueItem } from './use-scan-queue';
 
 const t = fillingCs;
@@ -54,6 +55,7 @@ export function FillingWorkspace({
   const [log, setLog] = useState<{ id: number; tone: string; text: string }[]>([]);
   const lotAttempt = useRef<{ key: string; id: string } | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  useScanFocusReturn(input);
   const stateRef = useRef<FillingState | null>(null);
   useEffect(() => {
     stateRef.current = state;

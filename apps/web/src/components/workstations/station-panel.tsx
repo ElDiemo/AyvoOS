@@ -16,6 +16,7 @@ import { formatDateTimeCs } from '@/i18n/cs/format';
 import { workstationsCs } from '@/i18n/cs/workstations';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
+import { useScanFocusReturn } from '@/lib/scan-focus';
 import { FillingWorkspace } from './filling-workspace';
 import { LabelingWorkspace } from './labeling-workspace';
 
@@ -74,6 +75,7 @@ export function StationPanel({
   const [reason, setReason] = useState('');
   const [reasonErr, setReasonErr] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  useScanFocusReturn(input);
   const attempts = useRef(new Map<string, string>());
   const currentId = useRef<string | null>(initial.current?.session.id ?? null);
 

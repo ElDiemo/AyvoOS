@@ -1,0 +1,62 @@
+/** Czech strings of "Připravit výrobu" (doc 027 §4). Keys stay language-neutral. */
+export const readinessCs = {
+  title: 'Připravit výrobu',
+  subtitle:
+    'Co už na této provozovně existuje a co chybí k lepení a plnění vybraného produktu. Přehled nic nepovoluje ani neblokuje – každý sken posuzuje server – a zásoby jsou aktuální stav, ne rezervace.',
+  product: 'Produkt',
+  noProduct: 'Žádný aktivní produkt. Založte ho v Produktech a recepturách.',
+  sections: {
+    setup: 'Trvalé nastavení produktu',
+    labeling: 'Lze začít lepit',
+    filling: 'Lze začít plnit',
+    crates: 'Stav beden produktu',
+  },
+  sectionHelp: {
+    labeling: 'Jen předpoklady lepení – lepení nečeká na kapalinu, pumpičky ani plnicí pracoviště.',
+    filling: 'Jen předpoklady plnění.',
+  },
+  state: {
+    OK: 'Připraveno',
+    MISSING: 'Chybí',
+    UNAVAILABLE: 'Nedostupné – nemáte oprávnění',
+  } as Record<string, string>,
+  items: {
+    'setup.site': 'Provozovna vyrábí',
+    'setup.product': 'Aktivní produkt',
+    'setup.recipe': 'Kompletní aktivní receptura',
+    'setup.design': 'Schválený design etikety',
+    'labeling.station': 'Lepicí pracoviště',
+    'labeling.labels': 'Etikety lahví připravené k tisku (vygenerované PDF, dosud nenalepené)',
+    'labeling.crate':
+      'Bedna typu z receptury – prázdná nebo skládaná se stejným produktem, designem a recepturou',
+    'labeling.bottles': 'Nové lahve na skladě',
+    'labeling.labelStock': 'Etikety na skladě',
+    'filling.station': 'Plnicí pracoviště této kategorie',
+    'filling.crates': 'Bedny čekající na plnění nebo rozplněné',
+    'filling.liquid': 'Kapalina na skladě',
+    'filling.pumps': 'Pumpičky na skladě',
+  } as Record<string, string>,
+  count: {
+    'setup.design': (n: number) => `${n} schválený design`,
+    'labeling.station': (n: number) => `${n} aktivní`,
+    'labeling.labels': (n: number) => `${n} lahví`,
+    'labeling.crate': (n: number) => `${n} beden`,
+    'labeling.bottles': (n: number) => `${n} ks`,
+    'labeling.labelStock': (n: number) => `${n} ks`,
+    'filling.station': (n: number) => `${n} aktivní`,
+    'filling.crates': (n: number) => `${n} beden`,
+    'filling.liquid': (n: number) => `na ${n} lahví`,
+    'filling.pumps': (n: number) => `${n} ks`,
+  } as Record<string, (n: number) => string>,
+  printNote:
+    'Systém eviduje vygenerované PDF, ne fyzický tisk ani nalepení. Etikety vytiskněte z PDF tiskové úlohy.',
+  open: 'Otevřít',
+  askSupervisor: 'Požádejte vedoucího',
+  crateStates: {
+    openAssembly: 'Skládají se',
+    readyToFill: 'Čekají na plnění',
+    filling: 'Plní se',
+    filled: 'Připravené',
+  } as Record<string, string>,
+  cratesUnavailable: 'Nedostupné – nemáte oprávnění k bednám.',
+};

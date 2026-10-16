@@ -79,7 +79,7 @@ export function CrateCorrections({
   }
 
   return (
-    <Card title={t.title} testId="crate-corrections">
+    <Card title={t.title} testId="crate-corrections" className="border-l-4 border-l-amber-400">
       <div className="flex flex-col gap-3">
         <p className="text-xs text-stone-500">{t.help}</p>
         <label className="flex flex-col gap-1 text-sm" htmlFor={`${id}-bottle`}>

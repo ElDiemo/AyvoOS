@@ -12,6 +12,7 @@ import { buttonClass, Card, inputClass } from '@/components/ui';
 import { labelingCs } from '@/i18n/cs/labeling';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
+import { useScanFocusReturn } from '@/lib/scan-focus';
 import { ScanQueueStatus, useScanQueue, type QueueItem } from './use-scan-queue';
 
 const t = labelingCs;
@@ -57,6 +58,7 @@ export function LabelingWorkspace({
   const [log, setLog] = useState<{ id: number; tone: string; text: string }[]>([]);
   const attempts = useRef(new Map<string, string>());
   const input = useRef<HTMLInputElement>(null);
+  useScanFocusReturn(input);
 
   const attemptId = (key: string) => {
     const existing = attempts.current.get(key);

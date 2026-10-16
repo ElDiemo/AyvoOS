@@ -6,7 +6,7 @@ export const workstationsCs = {
   mode: { LABELING: 'Lepení etiket', FILLING: 'Plnění' } as Record<string, string>,
   status: { ACTIVE: 'V provozu', INACTIVE: 'Vyřazené z provozu' } as Record<string, string>,
   manage: {
-    title: 'Správa pracovišť',
+    title: 'Pracoviště a QR',
     subtitle:
       'Pracoviště jsou pracovní režimy této provozovny (lepení, plnění jedné kategorie) s vlastním QR. QR pracoviště nikomu nedává oprávnění.',
     empty: 'V této provozovně zatím není žádné pracoviště.',

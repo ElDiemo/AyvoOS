@@ -14,6 +14,8 @@ import { FillingController } from './filling.controller.js';
 import { FillingService } from './filling.service.js';
 import { LabelingController } from './labeling.controller.js';
 import { LabelingService } from './labeling.service.js';
+import { ReadinessController } from './readiness.controller.js';
+import { ReadinessService } from './readiness.service.js';
 
 /**
  * production module (doc 020 §2, doc 025): the station work that turns stock into identified
@@ -35,7 +37,14 @@ import { LabelingService } from './labeling.service.js';
     FillingController,
     CycleCorrectionsController,
     CrateContentController,
+    ReadinessController,
   ],
-  providers: [LabelingService, FillingService, CycleCorrectionsService, CrateContentService],
+  providers: [
+    LabelingService,
+    FillingService,
+    CycleCorrectionsService,
+    CrateContentService,
+    ReadinessService,
+  ],
 })
 export class ProductionModule {}
