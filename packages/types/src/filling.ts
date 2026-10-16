@@ -157,16 +157,29 @@ export const outsideBottleSchema = z.object({
 });
 export type OutsideBottle = z.infer<typeof outsideBottleSchema>;
 
-/** Labelled bottles of the active site in no crate (doc 025 §3.3), at most `limit` per group. */
-export const outsideBottlesSchema = z.object({
-  labelledEmpty: z.array(outsideBottleSchema),
-  finished: z.array(outsideBottleSchema),
-  legacy: z.array(outsideBottleSchema),
-  totals: z.object({
-    labelledEmpty: z.number().int(),
-    finished: z.number().int(),
-    legacy: z.number().int(),
-  }),
-  limit: z.number().int(),
+export const outsideBottleGroupSchema = z.enum(['finished', 'labelledEmpty', 'legacy']);
+export type OutsideBottleGroup = z.infer<typeof outsideBottleGroupSchema>;
+
+/**
+ * GET /api/admin/bottles-outside-crates — one group, one bounded page (doc 025 §3.3, A5); an
+ * optional exact search by bottle code or scanned QR URL. Always the active site only.
+ */
+export const outsideBottlesQuerySchema = z.object({
+  group: outsideBottleGroupSchema.default('finished'),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  search: z.string().trim().max(2048).optional(),
 });
-export type OutsideBottles = z.infer<typeof outsideBottlesSchema>;
+export type OutsideBottlesQuery = z.infer<typeof outsideBottlesQuerySchema>;
+
+export const outsideBottlesPageSchema = z.object({
+  group: outsideBottleGroupSchema,
+  items: z.array(outsideBottleSchema),
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  /** Matching bottles of this group (with the search). */
+  total: z.number().int(),
+  /** All bottles of each group outside a crate (without the search). */
+  totals: z.record(outsideBottleGroupSchema, z.number().int()),
+});
+export type OutsideBottlesPage = z.infer<typeof outsideBottlesPageSchema>;

@@ -83,12 +83,17 @@ export default async function CrateDetailPage({ params }: { params: Promise<{ co
                       data-testid={`member-${m.bottle.code}`}
                     >
                       <span className="tabular-nums text-stone-500">{m.ordinal}.</span>
-                      <Link
-                        href={`/bottles/${m.bottle.code}`}
-                        className="font-mono underline-offset-2 hover:underline"
-                      >
-                        {m.bottle.code}
-                      </Link>
+                      {/* Only users who may open a bottle get a link (warehouse roles read crates). */}
+                      {hasPermission(me, 'production:read') ? (
+                        <Link
+                          href={`/bottles/${m.bottle.code}`}
+                          className="font-mono underline-offset-2 hover:underline"
+                        >
+                          {m.bottle.code}
+                        </Link>
+                      ) : (
+                        <span className="font-mono">{m.bottle.code}</span>
+                      )}
                       <span className="col-start-2 md:col-start-auto">
                         <BottleStatusBadge status={m.bottle.status} />
                       </span>

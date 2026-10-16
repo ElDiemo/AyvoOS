@@ -1,12 +1,19 @@
-import type { CrateContent, OutsideBottle, OutsideBottles } from '@ayvo/types';
-import { Injectable } from '@nestjs/common';
+import type {
+  CrateContent,
+  OutsideBottle,
+  OutsideBottleGroup,
+  OutsideBottlesPage,
+  OutsideBottlesQuery,
+} from '@ayvo/types';
+import { Inject, Injectable } from '@nestjs/common';
+import { CODE_PREFIX, parseCodeSerial } from '../common/codes.js';
+import { classifyScannedQr } from '../common/qr-policy.js';
+import { ENV, type Env } from '../config/env.js';
 import { CrateCyclesService } from '../crates/crate-cycles.service.js';
 import { CratesService } from '../crates/crates.service.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { BottleStatus, Prisma } from '../generated/prisma/client.js';
+import type { Prisma } from '../generated/prisma/client.js';
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
-
-const OUTSIDE_LIMIT = 200;
 
 /**
  * Read models of the crate overview (doc 025 A5), for the active site only: the content of a
@@ -21,6 +28,7 @@ export class CrateContentService {
     private readonly crates: CratesService,
     private readonly cycles: CrateCyclesService,
     private readonly labels: LabelTemplatesService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async content(code: string, siteId: string): Promise<CrateContent> {
@@ -79,53 +87,72 @@ export class CrateContentService {
     };
   }
 
-  async outside(siteId: string): Promise<OutsideBottles> {
-    const base = (status: BottleStatus, bound: boolean): Prisma.BottleWhereInput => ({
-      siteId,
-      status,
-      assignments: { none: { releasedAt: null } },
-      binding: bound ? { isNot: null } : { is: null },
-    });
-    const groups = {
-      labelledEmpty: base('LABELED_EMPTY', true),
-      finished: base('FILLED', true),
-      legacy: { siteId, status: 'LABELED_EMPTY' as const, binding: { is: null } },
+  /**
+   * One group of bottles outside a crate, one bounded page (never the whole list), optionally an
+   * exact search by code or scanned QR URL; the active site only, read-only.
+   */
+  async outside(siteId: string, query: OutsideBottlesQuery): Promise<OutsideBottlesPage> {
+    const groups: Record<OutsideBottleGroup, Prisma.BottleWhereInput> = {
+      finished: {
+        siteId,
+        status: 'FILLED',
+        assignments: { none: { releasedAt: null } },
+        binding: { isNot: null },
+      },
+      labelledEmpty: {
+        siteId,
+        status: 'LABELED_EMPTY',
+        assignments: { none: { releasedAt: null } },
+        binding: { isNot: null },
+      },
+      legacy: { siteId, status: 'LABELED_EMPTY', binding: { is: null } },
     };
-    const result = {} as Record<keyof typeof groups, OutsideBottle[]>;
-    const totals = {} as OutsideBottles['totals'];
-    for (const [key, where] of Object.entries(groups) as [
-      keyof typeof groups,
-      Prisma.BottleWhereInput,
-    ][]) {
-      const [count, rows] = await Promise.all([
-        this.prisma.bottle.count({ where }),
-        this.prisma.bottle.findMany({
-          where,
-          orderBy: { serial: 'asc' },
-          take: OUTSIDE_LIMIT,
-          include: {
-            binding: {
-              include: {
-                product: { select: { code: true, name: true } },
-                crateCycle: { include: { recipeVersion: { select: { version: true } } } },
-              },
-            },
-            events: {
-              where: { type: { in: ['FILLED', 'REMOVED_FROM_CRATE'] } },
-              orderBy: { occurredAt: 'desc' },
-              include: {
-                liquidLot: { select: { code: true } },
-                crateCycle: { select: { crate: { select: { code: true } } } },
-              },
+    const where: Prisma.BottleWhereInput = { ...groups[query.group] };
+    if (query.search) {
+      const scan = classifyScannedQr(query.search, this.env.PUBLIC_QR_BASE_URL);
+      const serial = parseCodeSerial(CODE_PREFIX.bottle, query.search.toUpperCase());
+      // An unparsable search matches nothing (never "everything").
+      if (scan.kind === 'TOKEN') where.publicToken = scan.token;
+      else where.serial = serial ?? -1n;
+    }
+    const [total, rows, ...counts] = await Promise.all([
+      this.prisma.bottle.count({ where }),
+      this.prisma.bottle.findMany({
+        where,
+        orderBy: { serial: 'asc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        include: {
+          binding: {
+            include: {
+              product: { select: { code: true, name: true } },
+              crateCycle: { include: { recipeVersion: { select: { version: true } } } },
             },
           },
-        }),
-      ]);
-      totals[key] = count;
-      const designs = await this.labels.getVersionRefs(
-        rows.flatMap((r) => (r.binding ? [r.binding.labelTemplateVersionId] : [])),
-      );
-      result[key] = rows.map((r) => {
+          events: {
+            where: { type: { in: ['FILLED', 'REMOVED_FROM_CRATE'] } },
+            orderBy: { occurredAt: 'desc' },
+            include: {
+              liquidLot: { select: { code: true } },
+              crateCycle: { select: { crate: { select: { code: true } } } },
+            },
+          },
+        },
+      }),
+      ...(['finished', 'labelledEmpty', 'legacy'] as const).map((g) =>
+        this.prisma.bottle.count({ where: groups[g] }),
+      ),
+    ]);
+    const designs = await this.labels.getVersionRefs(
+      rows.flatMap((r) => (r.binding ? [r.binding.labelTemplateVersionId] : [])),
+    );
+    return {
+      group: query.group,
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+      totals: { finished: counts[0]!, labelledEmpty: counts[1]!, legacy: counts[2]! },
+      items: rows.map((r): OutsideBottle => {
         const filled = r.events.find((e) => e.type === 'FILLED');
         const removed = r.events.find((e) => e.type === 'REMOVED_FROM_CRATE');
         const payload = (removed?.payload ?? {}) as { reason?: unknown };
@@ -140,8 +167,7 @@ export class CrateContentService {
           leftAt: removed?.occurredAt.toISOString() ?? null,
           reason: typeof payload.reason === 'string' ? payload.reason : null,
         };
-      });
-    }
-    return { ...result, totals, limit: OUTSIDE_LIMIT };
+      }),
+    };
   }
 }

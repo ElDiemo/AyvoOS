@@ -1,5 +1,11 @@
-import { crateCodeSchema, type CrateContent, type OutsideBottles } from '@ayvo/types';
-import { Controller, Get, Param } from '@nestjs/common';
+import {
+  crateCodeSchema,
+  outsideBottlesQuerySchema,
+  type CrateContent,
+  type OutsideBottlesPage,
+  type OutsideBottlesQuery,
+} from '@ayvo/types';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
@@ -25,7 +31,10 @@ export class CrateContentController {
 
   @RequirePermission('crates:read')
   @Get('bottles-outside-crates')
-  outside(@OperationalSite() site: SiteContext): Promise<OutsideBottles> {
-    return this.content.outside(site.siteId);
+  outside(
+    @Query(new ZodValidationPipe(outsideBottlesQuerySchema)) query: OutsideBottlesQuery,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OutsideBottlesPage> {
+    return this.content.outside(site.siteId, query);
   }
 }

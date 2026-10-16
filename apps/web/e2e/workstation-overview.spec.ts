@@ -241,6 +241,14 @@ test('the supervisor returns the crate to filling, takes a finished bottle out a
   await expect(row).toContainText(`vyjmuta z ${crateCode}`);
   await expect(row).toContainText('důvod: poškozená pumpička');
   await shot(page, 'outside-bottles');
+  // Exact search by the scanned QR; the other groups have their own pages.
+  await page.getByLabel('Hledat lahev').fill(urls[0]!);
+  await page.getByRole('button', { name: 'Hledat', exact: true }).click();
+  await expect(page.getByTestId('outside-range')).toHaveText('1–1 z 1');
+  await expect(page.getByTestId(`outside-${codes[0]}`)).toBeVisible();
+  await page.getByTestId('outside-group-labelledEmpty').click();
+  await expect(page.getByTestId('outside-labelledEmpty')).toBeVisible();
+  await expect(page.getByTestId(`outside-${codes[0]}`)).toHaveCount(0);
 
   await page.goto(`/production/crates/${crateCode}`);
   await corrections.getByLabel('Lahev (kód nebo naskenovaný QR)').fill(codes[0]!);

@@ -3,7 +3,7 @@ import type {
   CrateContent,
   CratePage,
   CycleCorrectionResult,
-  OutsideBottles,
+  OutsideBottlesPage,
   FillingState,
   FillScanResult,
   FinishCrateResult,
@@ -470,21 +470,31 @@ describe.skipIf(!hasDatabase)('filling into the same crate (A4)', () => {
       bottle: a.bottles[1]!.code,
       reason: 'poškozená',
     }).expect(200);
-    const outside = (await http().get('/api/admin/bottles-outside-crates').expect(200))
-      .body as OutsideBottles;
-    expect(outside.finished.find((b) => b.code === a.bottles[0]!.code)).toMatchObject({
-      status: 'FILLED',
-      liquidLot: lotCode,
-      lastCrate: a.crateCode,
-      reason: 'odložena',
-      recipeVersion: 1,
-    });
-    expect(outside.labelledEmpty.find((b) => b.code === a.bottles[1]!.code)).toMatchObject({
-      status: 'LABELED_EMPTY',
-      lastCrate: a.crateCode,
-      reason: 'poškozená',
-    });
-    expect(outside.labelledEmpty.some((b) => b.code === a.bottles[2]!.code)).toBe(false);
+    const find = async (group: string, search: string) =>
+      (
+        (await http().get('/api/admin/bottles-outside-crates').query({ group, search }).expect(200))
+          .body as OutsideBottlesPage
+      ).items;
+    expect(await find('finished', a.bottles[0]!.code)).toEqual([
+      expect.objectContaining({
+        status: 'FILLED',
+        liquidLot: lotCode,
+        lastCrate: a.crateCode,
+        reason: 'odložena',
+        recipeVersion: 1,
+      }),
+    ]);
+    // Found by the scanned QR as well.
+    expect(await find('labelledEmpty', a.bottles[1]!.url)).toEqual([
+      expect.objectContaining({
+        code: a.bottles[1]!.code,
+        status: 'LABELED_EMPTY',
+        lastCrate: a.crateCode,
+        reason: 'poškozená',
+      }),
+    ]);
+    expect(await find('labelledEmpty', a.bottles[2]!.code)).toEqual([]); // still in the crate
+    expect(await find('finished', 'nesmysl')).toEqual([]); // never "everything"
     const detail = (await http().get(`/api/admin/crates/${a.crateCode}`).expect(200)).body as {
       events: { type: string; bottle: string | null; reason: string | null }[];
     };

@@ -96,8 +96,13 @@ export const cratesCs = {
     legacyHelp:
       'Tyto lahve se plnit nemohou (chybí vazba na produkt). Nic se s nimi automaticky neděje.',
     none: 'Žádné.',
-    shown: (shown: number, total: number) =>
-      shown < total ? `Zobrazeno ${shown} z ${total}.` : `Celkem ${total}.`,
+    groupCount: (label: string, n: number) => `${label}: ${n}`,
+    search: 'Hledat lahev',
+    searchPlaceholder: 'Kód lahve (AYV-B-…) nebo naskenovaný QR',
+    find: 'Hledat',
+    reset: 'Zrušit hledání',
+    noMatch: 'Žádná lahev této skupiny neodpovídá hledání.',
+    range: (from: number, to: number, total: number) => `${from}–${to} z ${total}`,
     lastCrate: (crate: string, at: string) => `vyjmuta z ${crate}, ${at}`,
     reason: (r: string) => `důvod: ${r}`,
     lot: (code: string) => `šarže ${code}`,

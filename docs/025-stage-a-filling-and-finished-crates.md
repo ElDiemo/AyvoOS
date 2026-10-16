@@ -20,7 +20,8 @@ Status (revision 4, 2026-10-14):
   counts (filter and per-state counts of the active site), the crate detail with its snapshot,
   members (state, liquid lot, origin), aborted circulations, the history with corrections and
   reasons and the supervisor's corrections, and "Lahve mimo bednu" (labelled empties, finished
-  bottles, bottles labelled before crates were recorded).
+  bottles, bottles labelled before crates were recorded) — one group and one bounded page at a
+  time with an exact search by code or QR, so every bottle stays reachable.
 - **Not yet approved:** the tables and migrations of A3, A4 and W1 (§5, §10). Each is proposed
   here and needs the owner's approval of its model before its own implementation PR. ADR 0025
   (proposed) records the process decision.
