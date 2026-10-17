@@ -22,13 +22,14 @@ export function ProductWeightsCard({
   timeZone: string;
 }) {
   const e = w.expectation;
-  const bottleValue = (x: { massG: string; bottlesWeighed: number }) =>
-    t.value(formatMass(x.massG)!, x.bottlesWeighed);
+  const bottleValue = (x: { massG: string; bottlesWeighed: number; recipeVersion: number }) =>
+    t.versionValue(x.recipeVersion, formatMass(x.massG)!, x.bottlesWeighed);
   const unknown = <span className="font-semibold">{weightsCs.unknown}</span>;
   return (
     <>
       <Card title={t.title} testId="product-weight">
         <p className="mb-2 text-xs text-stone-500">{t.help}</p>
+        <p className="mb-2 text-xs text-stone-500">{t.perVersion}</p>
         <CurrentMeasurement
           value={w.current ? bottleValue(w.current) : null}
           entry={w.current}
@@ -42,12 +43,18 @@ export function ProductWeightsCard({
         />
         {!canRecord && <p className="mt-3 text-xs text-stone-500">{weightsCs.readOnly}</p>}
       </Card>
-      {canRecord && (
+      {canRecord && w.versions.length > 0 && (
         <WeightForm
           path={`admin/catalog/products/${encodeURIComponent(w.product.code)}/weights`}
-          form={{ kind: 'product' }}
+          form={{
+            kind: 'product',
+            versions: w.versions,
+            latest: Object.fromEntries(
+              [...w.history].reverse().map((h) => [h.recipeVersion, h.id] as const),
+            ),
+          }}
           title={`${weightsCs.form.record}: ${t.title}`}
-          currentId={w.current?.id ?? null}
+          currentId={null}
           testId="product-weight-form"
         />
       )}

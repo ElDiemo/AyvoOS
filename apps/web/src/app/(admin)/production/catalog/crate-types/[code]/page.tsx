@@ -1,4 +1,10 @@
-import { catalogCodeSchema, crateTypeMeasurementsSchema, type CrateDimension } from '@ayvo/types';
+import {
+  catalogCodeSchema,
+  catalogComponentSchema,
+  crateTypeMeasurementsSchema,
+  type CrateDimension,
+} from '@ayvo/types';
+import { z } from 'zod';
 import { notFound } from 'next/navigation';
 import { CatalogHeader } from '@/components/catalog/catalog-header';
 import { Card } from '@/components/ui';
@@ -17,7 +23,10 @@ function dims(d: CrateDimension): string {
   const base = formatDimensions(d.lengthMm, d.widthMm, d.heightMm);
   if (d.subject === 'CRATE' || !d.extraPackaging) return base;
   if (d.extraPackaging === 'NONE') return `${base} · ${t.packaging.NONE}`;
-  const mass = formatMass(d.extraMassG) ?? weightsCs.unknown;
+  // A catalogue packaging item brings its own (current) weight; otherwise the mass entered here.
+  const mass = d.extraItem
+    ? `${d.extraItem.name}: ${formatMass(d.extraItem.massG) ?? weightsCs.unknown}`
+    : (formatMass(d.extraMassG) ?? weightsCs.unknown);
   return `${base} · ${t.packaging[d.extraPackaging]} (${d.extraDescription}), ${t.extraMass.toLowerCase()} ${mass} · ${d.extraInTare ? t.inTare : t.notInTare}`;
 }
 
@@ -25,14 +34,18 @@ function dims(d: CrateDimension): string {
 export default async function CrateTypePage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
   if (!catalogCodeSchema.safeParse(code).success) notFound();
-  const [me, m, tz] = await Promise.all([
+  const [me, m, tz, components] = await Promise.all([
     currentUser(),
     apiGet(
       `admin/catalog/crate-types/${encodeURIComponent(code)}/measurements`,
       crateTypeMeasurementsSchema,
     ),
     siteTimeZone(),
+    apiGet('admin/catalog/components', z.array(catalogComponentSchema)),
   ]);
+  const packagingItems = components
+    .filter((c) => c.kind === 'PACKAGING' && !c.archived)
+    .map((c) => ({ code: c.code, name: c.name }));
   const canRecord = hasPermission(me, 'catalog:weights_record');
   const base = `admin/catalog/crate-types/${encodeURIComponent(m.crateType.code)}`;
   const tareValue = (e: { massG: string; configuration: string }) =>
@@ -110,7 +123,7 @@ export default async function CrateTypePage({ params }: { params: Promise<{ code
         {canRecord && (
           <WeightForm
             path={`${base}/dimensions`}
-            form={{ kind: 'dimensions', subject: 'SHIPPING_PACKAGE' }}
+            form={{ kind: 'dimensions', subject: 'SHIPPING_PACKAGE', packagingItems }}
             title={`${weightsCs.form.record}: ${t.package}`}
             currentId={m.package.current?.id ?? null}
             testId="package-dims-form"

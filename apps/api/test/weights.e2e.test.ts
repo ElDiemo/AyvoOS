@@ -148,7 +148,7 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
 
     await http()
       .post(`/api/admin/catalog/products/${f.kit.productCode}/weights`)
-      .send(base({ massG: '372.5', bottlesWeighed: 10 }))
+      .send(base({ recipeVersion: 1, massG: '372.5', bottlesWeighed: 10 }))
       .expect(201);
     const tare = (
       await http()
@@ -179,6 +179,7 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
           extraPackaging: null,
           extraDescription: null,
           extraMassG: null,
+          extraItemCode: null,
           extraInTare: null,
         }),
       )
@@ -195,6 +196,7 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
             extraPackaging: 'CARTON',
             extraDescription: 'Kartonový přebal',
             extraMassG: null,
+            extraItemCode: null,
             extraInTare: false,
           }),
         )
@@ -218,6 +220,7 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
           extraPackaging: 'CARTON',
           extraDescription: 'Kartonový přebal',
           extraMassG: '450.25',
+          extraItemCode: null,
           extraInTare: false,
           correctionOf: carton.package.current!.id,
           correctionReason: 'Karton dovážen',
@@ -243,6 +246,7 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
           extraPackaging: 'CARTON',
           extraDescription: 'Karton zvážený spolu s bednou',
           extraMassG: '450.25',
+          extraItemCode: null,
           extraInTare: true,
         }),
       )
@@ -264,6 +268,7 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
           extraPackaging: 'CARTON',
           extraDescription: null,
           extraMassG: null,
+          extraItemCode: null,
           extraInTare: null,
         }),
       );
@@ -314,7 +319,7 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
     });
     await http()
       .post(`/api/admin/catalog/products/${f.kit.productCode}/weights`)
-      .send(base({ massG: '375', bottlesWeighed: 20 }))
+      .send(base({ recipeVersion: 1, massG: '375', bottlesWeighed: 20 }))
       .expect(201);
     // The crate finished earlier keeps what was known at its Hotovo.
     snaps = (await http().get(`/api/admin/crates/${crate.crateCode}/weights`).expect(200)).body;
@@ -386,5 +391,241 @@ describe.skipIf(!hasDatabase)('weights and dimensions (W1)', () => {
       .send(body)
       .expect(201);
     expect(await count()).toBe(before + 1);
+  });
+
+  it('Hotovo picks every reference with the same cut-off (one snapshot, no mixing)', async () => {
+    const pending = await f.make('READY_TO_FILL');
+    const product = await t.prisma.product.findUniqueOrThrow({
+      where: { code: f.kit.productCode },
+    });
+    const recipe = await t.prisma.recipeVersion.findFirstOrThrow({
+      where: { productId: product.id, version: 1 },
+    });
+    const type = await t.prisma.crateType.findUniqueOrThrow({
+      where: { code: f.kit.crateTypeCode },
+    });
+    const admin = await t.prisma.user.findFirstOrThrow();
+    // References "recorded after" the Hotovo (a measurement committed concurrently): none of
+    // them may be used — neither the bottle nor the tare nor the package.
+    const later = new Date(Date.now() + 3_600_000);
+    const op = async () => {
+      const requestId = randomUUID();
+      await t.prisma.operationRequest.create({
+        data: { requestId, kind: 'MEASUREMENT_RECORD', payloadSha256: '0'.repeat(64) },
+      });
+      return requestId;
+    };
+    const common = {
+      measuredOn: new Date('2026-10-15T00:00:00Z'),
+      method: 'souběžné měření',
+      recordedBy: admin.id,
+      recordedAt: later,
+    };
+    await t.prisma.productReferenceWeight.create({
+      data: {
+        ...common,
+        productId: product.id,
+        recipeVersionId: recipe.id,
+        massG: '1',
+        bottlesWeighed: 1,
+        operationRequestId: await op(),
+      },
+    });
+    await t.prisma.crateTypeTareWeight.create({
+      data: {
+        ...common,
+        crateTypeId: type.id,
+        massG: '1',
+        configuration: 'x',
+        operationRequestId: await op(),
+      },
+    });
+    await t.prisma.crateTypeDimension.create({
+      data: {
+        ...common,
+        crateTypeId: type.id,
+        subject: 'SHIPPING_PACKAGE',
+        lengthMm: 1,
+        widthMm: 1,
+        heightMm: 1,
+        extraPackaging: 'NONE',
+        operationRequestId: await op(),
+      },
+    });
+    await f.fillAndFinish(pending);
+    const snaps = (await http().get(`/api/admin/crates/${pending.crateCode}/weights`).expect(200))
+      .body as CrateWeightSnapshot[];
+    // The references in force at Hotovo (from the previous test): 375 g, 1 900 g, carton in tare.
+    expect(snaps[0]).toMatchObject({
+      bottleG: '375',
+      tareG: '1900',
+      packaging: 'IN_TARE',
+      expectedCrateG: '2650',
+      expectedPackageG: '2650',
+    });
+  });
+
+  it('the finished bottle belongs to a recipe version: a new version is unknown; a pinned crate uses its own', async () => {
+    const g = await crateFactory(t, { capacity: 2 });
+    await http()
+      .post(`/api/admin/catalog/products/${g.kit.productCode}/weights`)
+      .send(base({ recipeVersion: 1, massG: '370', bottlesWeighed: 5 }))
+      .expect(201);
+    await http()
+      .post(`/api/admin/catalog/crate-types/${g.kit.crateTypeCode}/tare`)
+      .send(base({ massG: '1000', configuration: 'S přepážkami' }))
+      .expect(201);
+    const pinned = await g.make('READY_TO_FILL'); // labelled under V1
+    const code = async (id: string) =>
+      (await t.prisma.inventoryItem.findUniqueOrThrow({ where: { id } })).code;
+    await http()
+      .post(`/api/admin/catalog/products/${g.kit.productCode}/recipes`)
+      .send({
+        requestId: randomUUID(),
+        reason: 'nová verze receptury',
+        crateTypeCode: g.kit.crateTypeCode,
+        components: [
+          { itemCode: 'NEW_BOTTLE', quantity: '1', unitCode: 'pcs' },
+          { itemCode: g.kit.labelItemCode, quantity: '1', unitCode: 'pcs' },
+          { itemCode: await code(g.kit.liquidItemId), quantity: '300', unitCode: 'ml' },
+          { itemCode: await code(g.kit.pumpItemId), quantity: '1', unitCode: 'pcs' },
+        ],
+      })
+      .expect(201);
+    await http()
+      .post(`/api/admin/catalog/products/${g.kit.productCode}/recipes/2/activate`)
+      .send({ requestId: randomUUID(), reason: 'V2 schválena', expectedActiveVersion: 1 })
+      .expect(200);
+    let p = (
+      await http().get(`/api/admin/catalog/products/${g.kit.productCode}/weights`).expect(200)
+    ).body as ProductWeights;
+    expect(p.current).toBeNull(); // V2 not measured yet: unknown, not V1's value
+    expect(p.expectation).toMatchObject({ recipeVersion: 2, bottleG: null, expectedCrateG: null });
+    expect(p.history.map((h) => h.recipeVersion)).toEqual([1]);
+    expect(p.versions.map((v) => [v.version, v.status])).toEqual([
+      [2, 'ACTIVE'],
+      [1, 'ARCHIVED'],
+    ]);
+    // The crate pinned to V1 finishes now and uses V1's bottle (Hotovo is never blocked).
+    await g.fillAndFinish(pinned);
+    const snaps = (await http().get(`/api/admin/crates/${pinned.crateCode}/weights`).expect(200))
+      .body as CrateWeightSnapshot[];
+    expect(snaps[0]).toMatchObject({ bottleG: '370', expectedCrateG: '1740' });
+    // A V2 crate finishing without a V2 measurement: unknown, Hotovo still succeeds.
+    const fresh = await g.make();
+    const v2 = (await http().get(`/api/admin/crates/${fresh.crateCode}/weights`).expect(200))
+      .body as CrateWeightSnapshot[];
+    expect(v2[0]).toMatchObject({ bottleG: null, expectedCrateG: null, tareG: '1000' });
+    // V2 measured: becomes current; a draft or unknown version is refused.
+    await http()
+      .post(`/api/admin/catalog/products/${g.kit.productCode}/weights`)
+      .send(base({ recipeVersion: 2, massG: '345', bottlesWeighed: 5 }))
+      .expect(201);
+    p = (await http().get(`/api/admin/catalog/products/${g.kit.productCode}/weights`).expect(200))
+      .body;
+    expect(p.current).toMatchObject({ recipeVersion: 2, massG: '345' });
+    expect(p.expectation.expectedCrateG).toBe('1690');
+    const unknownVersion = await http()
+      .post(`/api/admin/catalog/products/${g.kit.productCode}/weights`)
+      .send(base({ recipeVersion: 9, massG: '1', bottlesWeighed: 1 }));
+    expect([unknownVersion.status, unknownVersion.body.code]).toEqual([
+      422,
+      'RECIPE_VERSION_NOT_PRODUCED',
+    ]);
+  });
+
+  it('large references never block Hotovo: sums have a wider range than one measurement', async () => {
+    const h = await crateFactory(t, { capacity: 2 });
+    await http()
+      .post(`/api/admin/catalog/products/${h.kit.productCode}/weights`)
+      .send(base({ recipeVersion: 1, massG: '999999999.999', bottlesWeighed: 1 }))
+      .expect(201);
+    await http()
+      .post(`/api/admin/catalog/crate-types/${h.kit.crateTypeCode}/tare`)
+      .send(base({ massG: '999999999.999', configuration: 'mezní hodnota' }))
+      .expect(201);
+    const crate = await h.make(); // Hotovo succeeds
+    const snaps = (await http().get(`/api/admin/crates/${crate.crateCode}/weights`).expect(200))
+      .body as CrateWeightSnapshot[];
+    expect(snaps[0]!.expectedCrateG).toBe('2999999999.997'); // beyond DECIMAL(12,3), exact
+  });
+
+  it('packaging items have weights; a packaging item is never added twice', async () => {
+    const k = await crateFactory(t, { capacity: 2 });
+    const carton = (
+      await http()
+        .post('/api/admin/catalog/components')
+        .send({
+          requestId: randomUUID(),
+          reason: 'přepravní karton',
+          packageCapacity: null,
+          kind: 'PACKAGING',
+          code: `KRT-${randomUUID().slice(0, 6).toUpperCase()}`,
+          name: 'Přepravní karton',
+          unitCode: 'pcs',
+          lotTracked: false,
+          categoryCode: null,
+        })
+        .expect(201)
+    ).body as { code: string };
+    const item = (
+      await http()
+        .post(`/api/admin/catalog/components/${carton.code}/weights`)
+        .send(base({ massG: '450.5', sampleVolume: null }))
+        .expect(201)
+    ).body as ItemWeights;
+    expect(item).toMatchObject({ mode: 'PER_UNIT', current: { massG: '450.5' } });
+    await http()
+      .post(`/api/admin/catalog/products/${k.kit.productCode}/weights`)
+      .send(base({ recipeVersion: 1, massG: '400', bottlesWeighed: 3 }))
+      .expect(201);
+    await http()
+      .post(`/api/admin/catalog/crate-types/${k.kit.crateTypeCode}/tare`)
+      .send(base({ massG: '1000', configuration: 'bez kartonu' }))
+      .expect(201);
+    const pkg = (extra: Record<string, unknown>) =>
+      http()
+        .post(`/api/admin/catalog/crate-types/${k.kit.crateTypeCode}/dimensions`)
+        .send(
+          base({
+            subject: 'SHIPPING_PACKAGE',
+            lengthMm: 620,
+            widthMm: 420,
+            heightMm: 320,
+            extraPackaging: 'CARTON',
+            extraDescription: 'Katalogový karton',
+            extraMassG: null,
+            extraItemCode: carton.code,
+            extraInTare: false,
+            ...extra,
+          }),
+        );
+    // The item's own weight AND a mass entered here would count the same carton twice.
+    expect((await pkg({ extraMassG: '450.5' })).status).toBe(400);
+    const m = (await pkg({}).expect(201)).body as CrateTypeMeasurements;
+    expect(m.package.current!.extraItem).toEqual({
+      code: carton.code,
+      name: 'Přepravní karton',
+      massG: '450.5',
+    });
+    let p = (
+      await http().get(`/api/admin/catalog/products/${k.kit.productCode}/weights`).expect(200)
+    ).body as ProductWeights;
+    // 2 × 400 + 1 000 = 1 800; + the carton once = 2 250.5.
+    expect(p.expectation).toMatchObject({
+      expectedCrateG: '1800',
+      packaging: { state: 'ADDED', extraMassG: '450.5' },
+      expectedPackageG: '2250.5',
+    });
+    // In the tare: not added at all.
+    await pkg({ extraInTare: true }).expect(201);
+    p = (await http().get(`/api/admin/catalog/products/${k.kit.productCode}/weights`).expect(200))
+      .body;
+    expect(p.expectation).toMatchObject({
+      packaging: { state: 'IN_TARE' },
+      expectedPackageG: '1800',
+    });
+    const notPackaging = await pkg({ extraItemCode: 'NEW_BOTTLE', extraInTare: false });
+    expect([notPackaging.status, notPackaging.body.code]).toEqual([422, 'NOT_A_PACKAGING_ITEM']);
   });
 });

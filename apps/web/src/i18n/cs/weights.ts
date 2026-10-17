@@ -21,7 +21,10 @@ export const weightsCs = {
   product: {
     title: 'Hmotnost hotové lahve',
     help: 'Zvážená kompletní naplněná lahev včetně pumpičky a etikety.',
-    value: (g: string, n: number) => `${g} (zváženo ${n} ks)`,
+    value: (g: string, n: number) => `${g} na lahev (průměr z ${n} ks)`,
+    versionValue: (v: number, g: string, n: number) => `V${v}: ${g} na lahev (průměr z ${n} ks)`,
+    perVersion:
+      'Reference platí pro konkrétní verzi receptury. Nová verze bez vlastního měření má hmotnost neznámou; bedny s připnutou starší verzí používají tu svou.',
     expectedTitle: 'Očekávaná hmotnost plné bedny (reference)',
     expectedHelp:
       'Reference z měření, ne skutečné vážení konkrétní bedny. Počet lahví × hotová lahev + tára; další obal jen pokud není v táře. Jedna bedna = jeden balík = jeden přepravní štítek.',
@@ -83,10 +86,19 @@ export const weightsCs = {
     measuredOn: 'Datum měření',
     method: 'Způsob měření (váha, postup, co bylo zahrnuto)',
     massG: 'Hmotnost (g)',
+    bottleMass: 'Hmotnost jedné hotové lahve (g)',
+    bottleMassHelp:
+      'Zadejte průměr na JEDNU lahev (celková hmotnost vzorku ÷ počet lahví). Počet zvážených kusů jen popisuje velikost vzorku.',
+    recipeVersion: 'Verze receptury',
+    recipeVersionOption: (v: number, active: boolean) => `V${v}${active ? ' (aktivní)' : ''}`,
+    extraItem: 'Obal z katalogu (jeho vlastní hmotnost)',
+    extraItemNone: '— zadat hmotnost ručně —',
+    extraItemHelp:
+      'Hmotnost katalogového obalu se bere z jeho měření – nezadává se znovu, aby se nepřičetla dvakrát.',
     massKg: 'Hmotnost (kg)',
     sampleMass: 'Hmotnost vzorku (g)',
     sampleVolume: (unit: string) => `Objem vzorku (${unit})`,
-    bottles: 'Počet zvážených lahví',
+    bottles: 'Počet zvážených lahví (velikost vzorku)',
     configuration: 'Konfigurace bedny (přepážky, vložky)',
     length: 'Délka (mm)',
     width: 'Šířka (mm)',

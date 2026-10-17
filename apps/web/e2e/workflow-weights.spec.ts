@@ -138,6 +138,10 @@ test('crate type: tare in kg, dimensions, a package with an extra carton; a corr
   await pkg.getByLabel('Důvod opravy').fill('Karton dovážen');
   await pkg.getByRole('button', { name: 'Uložit měření' }).click();
   await expect(page.getByTestId('package-dims-current')).toContainText('450 g');
+  // After saving, "already in the tare" starts unchecked again (never carried over).
+  await pkg.getByLabel('Další obal').selectOption('CARTON');
+  await expect(pkg.getByLabel('Obal je už zahrnutý v táře')).not.toBeChecked();
+  await pkg.getByLabel('Další obal').selectOption('NONE');
   await page.getByTestId('package-dims-history').locator('summary').click();
   await expect(page.getByTestId('package-dims-history')).toContainText('Historie měření (2)');
   await expect(page.getByTestId('package-dims-history')).toContainText(
@@ -159,11 +163,16 @@ test('the expected full crate: bottles × finished bottle + tare + carton; compo
   });
   await page.goto(`/production/catalog/products/${kit.productCode}`);
   const form = page.getByTestId('product-weight-form');
-  await form.getByLabel('Hmotnost (g)').fill('372,5');
-  await form.getByLabel('Počet zvážených lahví').fill('10');
+  await expect(form.getByLabel('Verze receptury')).toHaveValue('1');
+  // One bottle's mass: the average; the count only describes the sample.
+  await expect(form).toContainText('průměr na JEDNU lahev');
+  await form.getByLabel('Hmotnost jedné hotové lahve (g)').fill('372,5');
+  await form.getByLabel(/Počet zvážených lahví/).fill('10');
   await form.getByLabel(/Způsob měření/).fill('10 hotových lahví na váze, průměr');
   await form.getByRole('button', { name: 'Uložit měření' }).click();
-  await expect(page.getByTestId('product-weight-current')).toContainText('372,5 g (zváženo 10 ks)');
+  await expect(page.getByTestId('product-weight-current')).toContainText(
+    'V1: 372,5 g na lahev (průměr z 10 ks)',
+  );
   // 40 × 372,5 g + 1 850 g = 16 750 g; + carton 450 g (not in the tare) = 17 200 g.
   await expect(page.getByTestId('expected-crate')).toHaveText('16,75 kg');
   await expect(page.getByTestId('expected-package')).toHaveText('17,2 kg');

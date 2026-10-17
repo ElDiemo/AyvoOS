@@ -7,7 +7,6 @@ CREATE TYPE "DimensionSubject" AS ENUM ('CRATE', 'SHIPPING_PACKAGE');
 -- CreateEnum
 CREATE TYPE "ExtraPackaging" AS ENUM ('NONE', 'CARTON', 'PROTECTIVE_COVER', 'OTHER');
 
--- AlterEnum
 -- CreateTable
 CREATE TABLE "item_reference_weights" (
     "id" UUID NOT NULL DEFAULT uuidv7(),
@@ -29,6 +28,7 @@ CREATE TABLE "item_reference_weights" (
 CREATE TABLE "product_reference_weights" (
     "id" UUID NOT NULL DEFAULT uuidv7(),
     "product_id" UUID NOT NULL,
+    "recipe_version_id" UUID NOT NULL,
     "mass_g" DECIMAL(12,3) NOT NULL,
     "bottles_weighed" INTEGER NOT NULL,
     "measured_on" DATE NOT NULL,
@@ -70,6 +70,7 @@ CREATE TABLE "crate_type_dimensions" (
     "extra_packaging" "ExtraPackaging",
     "extra_description" TEXT,
     "extra_mass_g" DECIMAL(12,3),
+    "extra_item_id" UUID,
     "extra_in_tare" BOOLEAN,
     "measured_on" DATE NOT NULL,
     "method" TEXT NOT NULL,
@@ -91,8 +92,9 @@ CREATE TABLE "crate_cycle_weight_snapshots" (
     "product_weight_id" UUID,
     "tare_weight_id" UUID,
     "package_id" UUID,
-    "expected_crate_g" DECIMAL(12,3),
-    "expected_package_g" DECIMAL(12,3),
+    "package_item_weight_id" UUID,
+    "expected_crate_g" DECIMAL(20,3),
+    "expected_package_g" DECIMAL(20,3),
     "taken_at" TIMESTAMPTZ(3) NOT NULL,
 
     CONSTRAINT "crate_cycle_weight_snapshots_pkey" PRIMARY KEY ("id")
@@ -108,7 +110,7 @@ CREATE INDEX "item_reference_weights_item_id_recorded_at_idx" ON "item_reference
 CREATE UNIQUE INDEX "product_reference_weights_operation_request_id_key" ON "product_reference_weights"("operation_request_id");
 
 -- CreateIndex
-CREATE INDEX "product_reference_weights_product_id_recorded_at_idx" ON "product_reference_weights"("product_id", "recorded_at");
+CREATE INDEX "product_reference_weights_product_id_recipe_version_id_reco_idx" ON "product_reference_weights"("product_id", "recipe_version_id", "recorded_at");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "crate_type_tare_weights_operation_request_id_key" ON "crate_type_tare_weights"("operation_request_id");
@@ -144,6 +146,9 @@ ALTER TABLE "item_reference_weights" ADD CONSTRAINT "item_reference_weights_oper
 ALTER TABLE "product_reference_weights" ADD CONSTRAINT "product_reference_weights_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "product_reference_weights" ADD CONSTRAINT "product_reference_weights_recipe_version_id_fkey" FOREIGN KEY ("recipe_version_id") REFERENCES "recipe_versions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "product_reference_weights" ADD CONSTRAINT "product_reference_weights_correction_of_id_fkey" FOREIGN KEY ("correction_of_id") REFERENCES "product_reference_weights"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -168,6 +173,9 @@ ALTER TABLE "crate_type_tare_weights" ADD CONSTRAINT "crate_type_tare_weights_op
 ALTER TABLE "crate_type_dimensions" ADD CONSTRAINT "crate_type_dimensions_crate_type_id_fkey" FOREIGN KEY ("crate_type_id") REFERENCES "crate_types"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "crate_type_dimensions" ADD CONSTRAINT "crate_type_dimensions_extra_item_id_fkey" FOREIGN KEY ("extra_item_id") REFERENCES "inventory_items"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "crate_type_dimensions" ADD CONSTRAINT "crate_type_dimensions_correction_of_id_fkey" FOREIGN KEY ("correction_of_id") REFERENCES "crate_type_dimensions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -190,6 +198,9 @@ ALTER TABLE "crate_cycle_weight_snapshots" ADD CONSTRAINT "crate_cycle_weight_sn
 
 -- AddForeignKey
 ALTER TABLE "crate_cycle_weight_snapshots" ADD CONSTRAINT "crate_cycle_weight_snapshots_package_id_fkey" FOREIGN KEY ("package_id") REFERENCES "crate_type_dimensions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "crate_cycle_weight_snapshots" ADD CONSTRAINT "crate_cycle_weight_snapshots_package_item_weight_id_fkey" FOREIGN KEY ("package_item_weight_id") REFERENCES "item_reference_weights"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 
 -- =============================================================================================
@@ -245,7 +256,10 @@ ALTER TABLE "crate_type_dimensions"
     AND ("extra_packaging" IS NULL OR "extra_packaging" = 'NONE'
          OR ("extra_description" IS NOT NULL AND btrim("extra_description") <> '' AND "extra_in_tare" IS NOT NULL))
     AND ("subject" = 'SHIPPING_PACKAGE' OR ("extra_description" IS NULL AND "extra_mass_g" IS NULL AND "extra_in_tare" IS NULL))
-    AND ("extra_mass_g" IS NULL OR "extra_mass_g" > 0)),
+    AND ("extra_mass_g" IS NULL OR "extra_mass_g" > 0)
+    -- A catalogue packaging item carries its own weight: never a second mass for the same item.
+    AND ("extra_item_id" IS NULL OR ("extra_mass_g" IS NULL
+         AND "extra_packaging" IS NOT NULL AND "extra_packaging" <> 'NONE'))),
   ADD CONSTRAINT "crate_type_dimensions_correction_check" CHECK (
     ("correction_of_id" IS NULL) = ("correction_reason" IS NULL)
     AND ("correction_reason" IS NULL OR btrim("correction_reason") <> ''));
@@ -262,8 +276,9 @@ BEGIN
   SELECT u."dimension", i."kind" INTO dim, kind
     FROM "inventory_items" i JOIN "inventory_units" u ON u."id" = i."base_unit_id"
    WHERE i."id" = NEW."item_id";
-  IF kind NOT IN ('NEW_BOTTLE', 'PUMP', 'LABEL_MEDIA', 'BULK_LIQUID') THEN
-    RAISE EXCEPTION 'AYVO: reference weights are kept for bottle bodies, pumps, labels and liquids' USING ERRCODE = 'check_violation';
+  -- PACKAGING too (owner 2026-10-17): a counted packaging item, e.g. a shipping carton.
+  IF kind NOT IN ('NEW_BOTTLE', 'PUMP', 'LABEL_MEDIA', 'BULK_LIQUID', 'PACKAGING') THEN
+    RAISE EXCEPTION 'AYVO: reference weights are kept for bottle bodies, pumps, labels, liquids and packaging' USING ERRCODE = 'check_violation';
   END IF;
   IF dim = 'MASS' OR (dim = 'COUNT') <> (NEW."sample_volume" IS NULL) THEN
     RAISE EXCEPTION 'AYVO: a counted item has grams per unit; a volume item a weighed sample of a stated volume' USING ERRCODE = 'check_violation';
@@ -277,13 +292,20 @@ BEGIN
 END
 $$;
 
+-- A finished bottle is weighed for ONE recipe version of the product that was put into
+-- production (ACTIVE or ARCHIVED, never a draft); a correction stays on that version.
 CREATE FUNCTION product_reference_weights_insert_check() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM "recipe_versions" r WHERE r."id" = NEW."recipe_version_id"
+                    AND r."product_id" = NEW."product_id" AND r."status" IN ('ACTIVE', 'ARCHIVED')) THEN
+    RAISE EXCEPTION 'AYVO: a finished bottle is weighed for a produced recipe version of its product' USING ERRCODE = 'check_violation';
+  END IF;
   IF NEW."correction_of_id" IS NOT NULL AND NOT EXISTS (
-       SELECT 1 FROM "product_reference_weights" w WHERE w."id" = NEW."correction_of_id" AND w."product_id" = NEW."product_id") THEN
-    RAISE EXCEPTION 'AYVO: a correction refers to a weight of the same product' USING ERRCODE = 'check_violation';
+       SELECT 1 FROM "product_reference_weights" w WHERE w."id" = NEW."correction_of_id"
+          AND w."product_id" = NEW."product_id" AND w."recipe_version_id" = NEW."recipe_version_id") THEN
+    RAISE EXCEPTION 'AYVO: a correction refers to a weight of the same product and recipe version' USING ERRCODE = 'check_violation';
   END IF;
   PERFORM ayvo_assert_measured_on(NEW."measured_on");
   RETURN NEW;
@@ -307,6 +329,10 @@ CREATE FUNCTION crate_type_dimensions_insert_check() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 BEGIN
+  IF NEW."extra_item_id" IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM "inventory_items" i WHERE i."id" = NEW."extra_item_id" AND i."kind" = 'PACKAGING') THEN
+    RAISE EXCEPTION 'AYVO: the extra packaging item is a PACKAGING component' USING ERRCODE = 'check_violation';
+  END IF;
   IF NEW."correction_of_id" IS NOT NULL AND NOT EXISTS (
        SELECT 1 FROM "crate_type_dimensions" d WHERE d."id" = NEW."correction_of_id"
           AND d."crate_type_id" = NEW."crate_type_id" AND d."subject" = NEW."subject") THEN
@@ -328,10 +354,17 @@ BEGIN
                     AND c."id" = NEW."cycle_id" AND c."capacity" = NEW."bottles") THEN
     RAISE EXCEPTION 'AYVO: a weight snapshot belongs to a Hotovo (CRATE_FILLED) of its full cycle' USING ERRCODE = 'check_violation';
   END IF;
+  -- The finished bottle of the cycle's own (pinned) recipe version.
   IF NEW."product_weight_id" IS NOT NULL AND NOT EXISTS (
-       SELECT 1 FROM "product_reference_weights" w JOIN "crate_cycles" c ON c."product_id" = w."product_id"
+       SELECT 1 FROM "product_reference_weights" w JOIN "crate_cycles" c
+           ON c."product_id" = w."product_id" AND c."recipe_version_id" = w."recipe_version_id"
         WHERE w."id" = NEW."product_weight_id" AND c."id" = NEW."cycle_id") THEN
-    RAISE EXCEPTION 'AYVO: the snapshot uses a weight of the cycle''s product' USING ERRCODE = 'check_violation';
+    RAISE EXCEPTION 'AYVO: the snapshot uses a weight of the cycle''s product and recipe version' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NEW."package_item_weight_id" IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM "item_reference_weights" w JOIN "crate_type_dimensions" d ON d."extra_item_id" = w."item_id"
+        WHERE w."id" = NEW."package_item_weight_id" AND d."id" = NEW."package_id") THEN
+    RAISE EXCEPTION 'AYVO: the snapshot uses the weight of the package''s packaging item' USING ERRCODE = 'check_violation';
   END IF;
   IF NEW."tare_weight_id" IS NOT NULL AND NOT EXISTS (
        SELECT 1 FROM "crate_type_tare_weights" w JOIN "crate_cycles" c ON c."crate_type_id" = w."crate_type_id"

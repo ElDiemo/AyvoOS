@@ -291,9 +291,11 @@ be unknown until measured — unknown is never 0 and never estimated.
 
 - **Records** (append-only; a correction is a new row naming the corrected one and its reason;
   the latest row is the current value; unknown = no row): `item_reference_weights` (bottle body,
-  pump, label: g per base unit; a liquid: the weighed mass of a stated sample volume),
-  `product_reference_weights` (one complete finished bottle incl. pump and label, with the number
-  of bottles weighed), `crate_type_tare_weights` (empty crate incl. dividers, with its
+  pump, label and — owner 2026-10-17 — counted PACKAGING items: g per base unit; a liquid: the
+  weighed mass of a stated sample volume),
+  `product_reference_weights` (one complete finished bottle incl. pump and label **for one recipe
+  version** — owner 2026-10-17; the value is the average per bottle, `bottles_weighed` only
+  describes the sample), `crate_type_tare_weights` (empty crate incl. dividers, with its
   configuration), `crate_type_dimensions` (outer length/width/height in mm of the crate and of the
   final shipping package; for the package an extra carton or protective cover, its mass — may stay
   unknown — and whether the tare already includes it). Each with date, described method and author.
@@ -305,9 +307,18 @@ be unknown until measured — unknown is never 0 and never estimated.
   mass is unknown). The components are summed per bottle as a separate cross-check (a division for
   the liquid sample is rounded to 0.001 g half-up) and never added on top. Reference ≠ an actual
   weighing of a concrete crate (not recorded yet).
-- **Hotovo snapshot** (`crate_cycle_weight_snapshots`, one per CRATE_FILLED): the references in
-  force and the expected crate/package weights; unknown stays null; it never blocks Hotovo and
-  later measurements never change it. Crates finished before W1 get nothing retroactively.
+- **Finished bottle per recipe version** (owner 2026-10-17): a new version without its own
+  measurement is unknown (Hotovo is not blocked); a crate pinned to an older version uses that
+  version's reference.
+- **Packaging** (owner 2026-10-17): the shipping package's extra packaging is either a mass entered
+  on the package record or a catalogue PACKAGING item whose own weight is used — never both (API and
+  database), so the same packaging is added at most once (and not at all when in the tare).
+- **Hotovo snapshot** (`crate_cycle_weight_snapshots`, one per CRATE_FILLED): every reference is
+  chosen in one statement (one database snapshot) with the same cut-off — recorded at or before
+  the Hotovo — the finished bottle of the cycle's pinned version; then the expected crate/package
+  weights. Unknown stays null; it never blocks Hotovo and later measurements never change it.
+  Derived sums are `NUMERIC(20,3)` (wider than one measurement) so a large reference cannot make
+  Hotovo fail; no carrier limit is assumed. Crates finished before W1 get nothing retroactively.
 - **Permissions:** reading with `catalog:read`; recording with `catalog:weights_record`
   (production supervisor, warehouse supervisor, ADMIN — §7, B4). Nothing changes stock, units,
   consumption or production states.
@@ -327,8 +338,8 @@ be unknown until measured — unknown is never 0 and never estimated.
   destination country.
 - Not implemented yet: PPL integration, shipments, tracking, actual weighing of a parcel or crate,
   the dispatch-time snapshot, reading a scale automatically.
-- Open for the owner: is the finished-bottle reference per product enough, or per recipe version
-  (a new recipe may change the filled mass)? Should packaging items (PACKAGING) get weights too?
+- Decided 2026-10-17: the finished-bottle reference belongs to a recipe version; PACKAGING items
+  have weights and are never added twice.
 
 ## 11. PR split
 

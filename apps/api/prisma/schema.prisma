@@ -449,16 +449,17 @@ enum LotTracking {
 /// DELETE rejected. (id, base_unit_id) unique: target of composite FKs that force every
 /// quantity of the item into its base unit.
 model InventoryItem {
-  referenceWeights ItemReferenceWeight[]
-  id               String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  packagingDimensions CrateTypeDimension[]  @relation("PackagingItem")
+  referenceWeights    ItemReferenceWeight[]
+  id                  String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
   /// Language-neutral SKU, e.g. "NEW_BOTTLE".
-  code             String                @unique
-  name             String
-  kind             InventoryItemKind
-  baseUnitId       String                @map("base_unit_id") @db.Uuid
-  lotTracking      LotTracking           @map("lot_tracking")
-  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  archivedAt       DateTime?             @map("archived_at") @db.Timestamptz(3)
+  code                String                @unique
+  name                String
+  kind                InventoryItemKind
+  baseUnitId          String                @map("base_unit_id") @db.Uuid
+  lotTracking         LotTracking           @map("lot_tracking")
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  archivedAt          DateTime?             @map("archived_at") @db.Timestamptz(3)
 
   baseUnit     InventoryUnit          @relation(fields: [baseUnitId], references: [id], onDelete: Restrict)
   settings     InventoryItemSetting[]
@@ -1489,24 +1490,25 @@ enum RecipeStatus {
 /// status DRAFT → ACTIVE → ARCHIVED (or DRAFT → ARCHIVED); activation only when complete;
 /// identity columns immutable; DELETE rejected. Only a DRAFT gains revisions.
 model RecipeVersion {
+  referenceWeights   ProductReferenceWeight[]
   orderLines         OrderLine[]
   cycles             CrateCycle[]
   sessions           WorkstationSession[]
-  id                 String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  productId          String               @map("product_id") @db.Uuid
+  id                 String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  productId          String                   @map("product_id") @db.Uuid
   /// Copy of the product's category (composite FK) so components and crates can be checked.
-  categoryCode       String               @map("category_code")
+  categoryCode       String                   @map("category_code")
   version            Int
-  status             RecipeStatus         @default(DRAFT)
+  status             RecipeStatus             @default(DRAFT)
   /// The version this one was copied from ("new version"), if any — same product.
-  basedOnId          String?              @map("based_on_id") @db.Uuid
-  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String               @map("created_by") @db.Uuid
-  operationRequestId String               @map("operation_request_id") @db.Uuid
-  activatedAt        DateTime?            @map("activated_at") @db.Timestamptz(3)
-  activatedBy        String?              @map("activated_by") @db.Uuid
-  archivedAt         DateTime?            @map("archived_at") @db.Timestamptz(3)
-  archivedBy         String?              @map("archived_by") @db.Uuid
+  basedOnId          String?                  @map("based_on_id") @db.Uuid
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String                   @map("created_by") @db.Uuid
+  operationRequestId String                   @map("operation_request_id") @db.Uuid
+  activatedAt        DateTime?                @map("activated_at") @db.Timestamptz(3)
+  activatedBy        String?                  @map("activated_by") @db.Uuid
+  archivedAt         DateTime?                @map("archived_at") @db.Timestamptz(3)
+  archivedBy         String?                  @map("archived_by") @db.Uuid
 
   product   Product          @relation(fields: [productId, categoryCode], references: [id, categoryCode], onDelete: Restrict)
   basedOn   RecipeVersion?   @relation("RecipeBasedOn", fields: [basedOnId, productId], references: [id, productId], onDelete: Restrict)
@@ -2275,21 +2277,24 @@ model ItemReferenceWeight {
   recordedBy         String   @map("recorded_by") @db.Uuid
   operationRequestId String   @unique @map("operation_request_id") @db.Uuid
 
-  item         InventoryItem         @relation(fields: [itemId], references: [id], onDelete: Restrict)
-  correctionOf ItemReferenceWeight?  @relation("ItemWeightCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
-  corrections  ItemReferenceWeight[] @relation("ItemWeightCorrection")
-  recorder     User                  @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
-  operation    OperationRequest      @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  item             InventoryItem              @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  correctionOf     ItemReferenceWeight?       @relation("ItemWeightCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections      ItemReferenceWeight[]      @relation("ItemWeightCorrection")
+  packageSnapshots CrateCycleWeightSnapshot[] @relation("SnapshotPackageItem")
+  recorder         User                       @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation        OperationRequest           @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
 
   @@index([itemId, recordedAt])
   @@map("item_reference_weights")
 }
 
-/// The weighed mass of ONE complete finished bottle (body + content + pump + label) of a product,
-/// based on `bottles_weighed` bottles. DB: immutable.
+/// The mass of ONE complete finished bottle (body + content + pump + label) of a product made
+/// to ONE recipe version (owner 2026-10-17: a new version is unknown until measured) — the
+/// average of `bottles_weighed` bottles. DB: immutable.
 model ProductReferenceWeight {
   id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   productId          String   @map("product_id") @db.Uuid
+  recipeVersionId    String   @map("recipe_version_id") @db.Uuid
   massG              Decimal  @map("mass_g") @db.Decimal(12, 3)
   bottlesWeighed     Int      @map("bottles_weighed")
   measuredOn         DateTime @map("measured_on") @db.Date
@@ -2300,14 +2305,15 @@ model ProductReferenceWeight {
   recordedBy         String   @map("recorded_by") @db.Uuid
   operationRequestId String   @unique @map("operation_request_id") @db.Uuid
 
-  product      Product                    @relation(fields: [productId], references: [id], onDelete: Restrict)
-  correctionOf ProductReferenceWeight?    @relation("ProductWeightCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
-  corrections  ProductReferenceWeight[]   @relation("ProductWeightCorrection")
-  recorder     User                       @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
-  operation    OperationRequest           @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
-  snapshots    CrateCycleWeightSnapshot[]
+  product       Product                    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  recipeVersion RecipeVersion              @relation(fields: [recipeVersionId], references: [id], onDelete: Restrict)
+  correctionOf  ProductReferenceWeight?    @relation("ProductWeightCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections   ProductReferenceWeight[]   @relation("ProductWeightCorrection")
+  recorder      User                       @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation     OperationRequest           @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  snapshots     CrateCycleWeightSnapshot[]
 
-  @@index([productId, recordedAt])
+  @@index([productId, recipeVersionId, recordedAt])
   @@map("product_reference_weights")
 }
 
@@ -2365,6 +2371,9 @@ model CrateTypeDimension {
   extraPackaging     ExtraPackaging?  @map("extra_packaging")
   extraDescription   String?          @map("extra_description")
   extraMassG         Decimal?         @map("extra_mass_g") @db.Decimal(12, 3)
+  /// Or the extra packaging is a catalogue PACKAGING item: its own reference weight is used and
+  /// no mass is entered here — the same packaging is never counted twice.
+  extraItemId        String?          @map("extra_item_id") @db.Uuid
   extraInTare        Boolean?         @map("extra_in_tare")
   measuredOn         DateTime         @map("measured_on") @db.Date
   method             String
@@ -2375,6 +2384,7 @@ model CrateTypeDimension {
   operationRequestId String           @unique @map("operation_request_id") @db.Uuid
 
   crateType        CrateType                  @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  extraItem        InventoryItem?             @relation("PackagingItem", fields: [extraItemId], references: [id], onDelete: Restrict)
   correctionOf     CrateTypeDimension?        @relation("DimensionCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
   corrections      CrateTypeDimension[]       @relation("DimensionCorrection")
   recorder         User                       @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
@@ -2388,22 +2398,26 @@ model CrateTypeDimension {
 /// The references available at a Hotovo (its CRATE_FILLED event) and the expected weights derived
 /// from them; null = unknown then. Later measurements never rewrite it. DB: immutable.
 model CrateCycleWeightSnapshot {
-  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  cycleId          String   @map("cycle_id") @db.Uuid
-  crateEventId     String   @unique @map("crate_event_id") @db.Uuid
-  bottles          Int
-  productWeightId  String?  @map("product_weight_id") @db.Uuid
-  tareWeightId     String?  @map("tare_weight_id") @db.Uuid
-  packageId        String?  @map("package_id") @db.Uuid
-  expectedCrateG   Decimal? @map("expected_crate_g") @db.Decimal(12, 3)
-  expectedPackageG Decimal? @map("expected_package_g") @db.Decimal(12, 3)
-  takenAt          DateTime @map("taken_at") @db.Timestamptz(3)
+  id                  String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  cycleId             String   @map("cycle_id") @db.Uuid
+  crateEventId        String   @unique @map("crate_event_id") @db.Uuid
+  bottles             Int
+  productWeightId     String?  @map("product_weight_id") @db.Uuid
+  tareWeightId        String?  @map("tare_weight_id") @db.Uuid
+  packageId           String?  @map("package_id") @db.Uuid
+  /// The packaging item's weight used (extra packaging that is a catalogue item).
+  packageItemWeightId String?  @map("package_item_weight_id") @db.Uuid
+  /// Sums of many references: a wider range than one measurement (never blocks Hotovo).
+  expectedCrateG      Decimal? @map("expected_crate_g") @db.Decimal(20, 3)
+  expectedPackageG    Decimal? @map("expected_package_g") @db.Decimal(20, 3)
+  takenAt             DateTime @map("taken_at") @db.Timestamptz(3)
 
-  cycle         CrateCycle              @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  crateEvent    CrateEvent              @relation(fields: [crateEventId], references: [id], onDelete: Restrict)
-  productWeight ProductReferenceWeight? @relation(fields: [productWeightId], references: [id], onDelete: Restrict)
-  tareWeight    CrateTypeTareWeight?    @relation(fields: [tareWeightId], references: [id], onDelete: Restrict)
-  package       CrateTypeDimension?     @relation("SnapshotPackage", fields: [packageId], references: [id], onDelete: Restrict)
+  cycle             CrateCycle              @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  crateEvent        CrateEvent              @relation(fields: [crateEventId], references: [id], onDelete: Restrict)
+  productWeight     ProductReferenceWeight? @relation(fields: [productWeightId], references: [id], onDelete: Restrict)
+  tareWeight        CrateTypeTareWeight?    @relation(fields: [tareWeightId], references: [id], onDelete: Restrict)
+  package           CrateTypeDimension?     @relation("SnapshotPackage", fields: [packageId], references: [id], onDelete: Restrict)
+  packageItemWeight ItemReferenceWeight?    @relation("SnapshotPackageItem", fields: [packageItemWeightId], references: [id], onDelete: Restrict)
 
   @@index([cycleId])
   @@map("crate_cycle_weight_snapshots")

@@ -20,9 +20,19 @@ const t = weightsCs.form;
 
 export type WeightFormKind =
   | { kind: 'item'; mode: 'PER_UNIT' | 'SAMPLE'; unitCode: string }
-  | { kind: 'product' }
+  | {
+      kind: 'product';
+      versions: { version: number; status: 'ACTIVE' | 'ARCHIVED' }[];
+      /** The latest record per recipe version: a correction stays on the chosen version. */
+      latest: Record<number, string>;
+    }
   | { kind: 'tare' }
-  | { kind: 'dimensions'; subject: 'CRATE' | 'SHIPPING_PACKAGE' };
+  | {
+      kind: 'dimensions';
+      subject: 'CRATE' | 'SHIPPING_PACKAGE';
+      /** Catalogue PACKAGING items that may be the extra packaging (their own weight is used). */
+      packagingItems?: { code: string; name: string }[];
+    };
 
 function today(): string {
   const d = new Date();
@@ -53,8 +63,23 @@ export function WeightForm({
   const router = useRouter();
   const id = useId();
   const f = (n: string) => `${id}-${n}`;
-  const [v, setV] = useState<Record<string, string>>({ measuredOn: today(), extra: 'NONE' });
+  const initial = (): Record<string, string> => ({
+    measuredOn: today(),
+    extra: 'NONE',
+    extraItem: '',
+    version:
+      form.kind === 'product'
+        ? String(
+            form.versions.find((x) => x.status === 'ACTIVE')?.version ??
+              form.versions[0]?.version ??
+              '',
+          )
+        : '',
+  });
+  const [v, setV] = useState<Record<string, string>>(initial);
   const [inTare, setInTare] = useState(false);
+  const correctable =
+    form.kind === 'product' ? (form.latest[Number(v.version)] ?? null) : currentId;
   const [correct, setCorrect] = useState(false);
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -78,7 +103,7 @@ export function WeightForm({
     const body: Record<string, unknown> = {
       measuredOn: v.measuredOn,
       method: (v.method ?? '').trim(),
-      correctionOf: correct ? currentId : null,
+      correctionOf: correct ? correctable : null,
       correctionReason: correct ? (v.correctionReason ?? '').trim() : null,
     };
     const grams = (k: string, kg = false) => {
@@ -91,6 +116,9 @@ export function WeightForm({
       body.massG = grams('mass');
       body.sampleVolume = form.mode === 'SAMPLE' ? grams('sampleVolume') : null;
     } else if (form.kind === 'product') {
+      const version = Number(v.version);
+      if (!Number.isInteger(version) || version < 1) next.version = t.required;
+      body.recipeVersion = version;
       body.massG = grams('mass');
       const n = Number(v.bottles);
       if (!Number.isInteger(n) || n < 1) next.bottles = t.required;
@@ -112,7 +140,10 @@ export function WeightForm({
       const real = extra !== null && extra !== 'NONE';
       if (real) req('extraDescription');
       body.extraDescription = real ? (v.extraDescription ?? '').trim() : null;
-      body.extraMassG = real && (v.extraMass ?? '').trim() ? grams('extraMass') : null;
+      const item = real && v.extraItem ? v.extraItem : null;
+      body.extraItemCode = item;
+      // A catalogue packaging item brings its own weight: no second mass for it.
+      body.extraMassG = real && !item && (v.extraMass ?? '').trim() ? grams('extraMass') : null;
       body.extraInTare = real ? inTare : null;
     }
     setErrors(next);
@@ -124,7 +155,8 @@ export function WeightForm({
     );
     if (result.ok) {
       setDone(true);
-      setV({ measuredOn: today(), extra: 'NONE' });
+      setV(initial());
+      setInTare(false);
       setCorrect(false);
       router.refresh();
     } else if (result.error) {
@@ -168,7 +200,36 @@ export function WeightForm({
             ))}
           {form.kind === 'product' && (
             <>
-              {input('mass', t.massG, { inputMode: 'decimal' })}
+              <FormField id={f('version')} label={t.recipeVersion} error={errors.version}>
+                <select
+                  id={f('version')}
+                  value={v.version}
+                  onChange={set('version')}
+                  className={fieldClass(!!errors.version)}
+                >
+                  {form.versions.map((x) => (
+                    <option key={x.version} value={x.version}>
+                      {t.recipeVersionOption(x.version, x.status === 'ACTIVE')}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField
+                id={f('mass')}
+                label={t.bottleMass}
+                help={t.bottleMassHelp}
+                error={errors.mass}
+              >
+                <input
+                  id={f('mass')}
+                  inputMode="decimal"
+                  value={v.mass ?? ''}
+                  onChange={set('mass')}
+                  aria-invalid={!!errors.mass}
+                  aria-describedby={describedBy(f('mass'), true, !!errors.mass)}
+                  className={fieldClass(!!errors.mass)}
+                />
+              </FormField>
               {input('bottles', t.bottles, { inputMode: 'numeric' })}
             </>
           )}
@@ -204,7 +265,25 @@ export function WeightForm({
           {realExtra && (
             <>
               {input('extraDescription', t.extraDescription)}
-              {input('extraMass', t.extraMassG, { inputMode: 'decimal' })}
+              {form.kind === 'dimensions' && (form.packagingItems ?? []).length > 0 && (
+                <FormField id={f('extraItem')} label={t.extraItem} help={t.extraItemHelp}>
+                  <select
+                    id={f('extraItem')}
+                    value={v.extraItem}
+                    onChange={set('extraItem')}
+                    aria-describedby={describedBy(f('extraItem'), true, false)}
+                    className={fieldClass(false)}
+                  >
+                    <option value="">{t.extraItemNone}</option>
+                    {(form.packagingItems ?? []).map((i) => (
+                      <option key={i.code} value={i.code}>
+                        {i.name} ({i.code})
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+              )}
+              {!v.extraItem && input('extraMass', t.extraMassG, { inputMode: 'decimal' })}
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -218,7 +297,7 @@ export function WeightForm({
           {input('measuredOn', t.measuredOn, { type: 'date' })}
           {input('method', t.method)}
         </div>
-        {currentId && (
+        {correctable && (
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

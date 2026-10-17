@@ -43,8 +43,14 @@ export type RecordItemWeightRequest = z.infer<typeof recordItemWeightRequestSche
 export const recordProductWeightRequestSchema = z
   .strictObject({
     ...measurementInput,
-    /** One complete finished bottle (body + content + pump + label). */
+    /** The recipe version the bottles were made to (owner 2026-10-17: per version). */
+    recipeVersion: z.number().int().min(1).max(9999),
+    /**
+     * The mass of ONE complete finished bottle (body + content + pump + label) — the average of
+     * the weighed sample, never the sample's total.
+     */
     massG: gramsSchema,
+    /** How many bottles the average is based on (the sample size). */
     bottlesWeighed: z.number().int().min(1).max(10000),
   })
   .refine(correctionRule, 'A correction needs its reason');
@@ -71,6 +77,8 @@ export const recordDimensionsRequestSchema = z
     extraPackaging: extraPackagingSchema.nullable(),
     extraDescription: textSchema.nullable(),
     extraMassG: gramsSchema.nullable(),
+    /** Or a catalogue PACKAGING item whose own weight is used (then no mass here). */
+    extraItemCode: z.string().trim().min(1).max(40).nullable(),
     extraInTare: z.boolean().nullable(),
   })
   .refine(correctionRule, 'A correction needs its reason')
@@ -81,9 +89,16 @@ export const recordDimensionsRequestSchema = z
   .refine(
     (v) =>
       v.extraPackaging === 'NONE' || v.extraPackaging === null
-        ? v.extraDescription === null && v.extraMassG === null && v.extraInTare === null
+        ? v.extraDescription === null &&
+          v.extraMassG === null &&
+          v.extraItemCode === null &&
+          v.extraInTare === null
         : v.extraDescription !== null && v.extraInTare !== null,
     'Extra packaging needs a description and whether the tare includes it',
+  )
+  .refine(
+    (v) => v.extraItemCode === null || v.extraMassG === null,
+    'A packaging item brings its own weight: never a second mass for it',
   );
 export type RecordDimensionsRequest = z.infer<typeof recordDimensionsRequestSchema>;
 
@@ -120,6 +135,7 @@ export type ItemWeights = z.infer<typeof itemWeightsSchema>;
 
 export const productWeightSchema = z.object({
   ...measurementMeta,
+  recipeVersion: z.number().int(),
   massG: z.string(),
   bottlesWeighed: z.number().int(),
 });
@@ -141,6 +157,10 @@ export const crateDimensionSchema = z.object({
   extraPackaging: extraPackagingSchema.nullable(),
   extraDescription: z.string().nullable(),
   extraMassG: z.string().nullable(),
+  /** The catalogue packaging item and its current weight (null = unknown). */
+  extraItem: z
+    .object({ code: z.string(), name: z.string(), massG: z.string().nullable() })
+    .nullable(),
   extraInTare: z.boolean().nullable(),
 });
 export type CrateDimension = z.infer<typeof crateDimensionSchema>;
@@ -198,6 +218,11 @@ export type CrateExpectation = z.infer<typeof crateExpectationSchema>;
 
 export const productWeightsSchema = z.object({
   product: z.object({ code: z.string(), name: z.string() }),
+  /** Recipe versions a finished bottle can be weighed for (put into production). */
+  versions: z.array(
+    z.object({ version: z.number().int(), status: z.enum(['ACTIVE', 'ARCHIVED']) }),
+  ),
+  /** The current reference of the ACTIVE recipe version (null = unknown). */
   current: productWeightSchema.nullable(),
   history: z.array(productWeightSchema),
   expectation: crateExpectationSchema,
