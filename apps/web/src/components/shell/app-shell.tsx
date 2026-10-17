@@ -9,6 +9,7 @@ import { BrandLogo } from '@/components/brand-logo';
 import { identityCs } from '@/i18n/cs/identity';
 import { shellCs } from '@/i18n/cs/shell';
 import { locate, visibleModules, type NavModule } from '@/lib/navigation';
+import { navigationClosed } from '@/lib/scan-focus';
 import { SiteSwitcher } from './site-switcher';
 
 type Environment = 'development' | 'test' | 'production';
@@ -58,6 +59,8 @@ export function AppShell({
           // A click on the backdrop (outside the panel) closes the drawer.
           if (e.target === e.currentTarget) drawer.current?.close();
         }}
+        // After the dialog restored its focus to the menu button: a scan page may take it back.
+        onClose={() => setTimeout(navigationClosed, 0)}
       >
         <div className="flex h-full flex-col">
           <SidebarContent

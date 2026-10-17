@@ -11,6 +11,13 @@ import { shellCs } from '../i18n/cs/shell';
  * pages keep their established URLs (/bottles, /batches) but belong to Production.
  * `exact`: the page matches only its own URL (module overviews), not everything below it.
  */
+/**
+ * Groups inside a module (doc 027): Práce (the work entry, shown as a prominent button), Evidence
+ * (records) and Nastavení (setup). Placement is orientation only, never authorization: the API
+ * and each page check the permissions on their own.
+ */
+export type NavGroup = 'work' | 'records' | 'setup';
+
 export interface NavPage {
   id: string;
   href: string;
@@ -19,6 +26,17 @@ export interface NavPage {
   prefixes?: readonly string[];
   /** Hidden without this permission (visible to everyone who sees the module otherwise). */
   permission?: PermissionCode;
+  /** Visible with ANY of these permissions — the same alternative the page checks itself. */
+  anyOf?: readonly PermissionCode[];
+  /** Group of the page; none = above the groups (the module overview). */
+  group?: NavGroup;
+  /**
+   * The page belongs to Nastavení only for users who may change something there (any of these);
+   * everyone else who may read it finds it under Evidence, labelled read-only (doc 027 §2).
+   */
+  setupWith?: readonly PermissionCode[];
+  /** Set by visibleModules: the page is listed for reading only (no setup permission). */
+  readOnly?: boolean;
 }
 
 export interface NavModule {
@@ -96,6 +114,7 @@ export const MODULES: readonly NavModule[] = [
       'catalog:read',
       'crates:read',
       'production:fill',
+      'production:label_apply',
       'production:workstations_manage',
     ],
     label: p.label,
@@ -110,41 +129,57 @@ export const MODULES: readonly NavModule[] = [
         permission: 'production:read',
       },
       {
-        id: 'bottles',
-        href: '/bottles',
-        label: p.pages.bottles,
-        prefixes: ['/batches'],
-        permission: 'production:read',
-      },
-      {
-        id: 'templates',
-        href: '/label-templates',
-        label: p.pages.templates,
-        permission: 'production:read',
-      },
-      {
         id: 'station',
         href: '/production/station',
         label: p.pages.station,
-        permission: 'production:fill',
+        group: 'work',
+        // The station page admits either mode (issue #11 UI-15).
+        anyOf: ['production:label_apply', 'production:fill'],
       },
       {
         id: 'crates',
         href: '/production/crates',
         label: p.pages.crates,
+        group: 'records',
         permission: 'crates:read',
+      },
+      {
+        id: 'bottles',
+        href: '/bottles',
+        label: p.pages.bottles,
+        prefixes: ['/batches'],
+        group: 'records',
+        permission: 'production:read',
+      },
+      {
+        id: 'setup',
+        href: '/production/setup',
+        label: p.pages.setup,
+        group: 'setup',
+        anyOf: ['production:workstations_manage', 'catalog:product_manage'],
       },
       {
         id: 'workstations',
         href: '/production/workstations',
         label: p.pages.workstations,
+        group: 'setup',
         permission: 'production:workstations_manage',
       },
       {
         id: 'catalog',
         href: '/production/catalog',
         label: p.pages.catalog,
+        group: 'setup',
         permission: 'catalog:read',
+        setupWith: ['catalog:product_manage', 'catalog:recipe_approve'],
+      },
+      {
+        id: 'templates',
+        href: '/label-templates',
+        label: p.pages.templates,
+        group: 'setup',
+        permission: 'production:read',
+        setupWith: ['production:templates_manage'],
       },
     ],
   },
@@ -181,7 +216,14 @@ export const MODULES: readonly NavModule[] = [
 export type WarehousePageId =
   'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId =
-  'overview' | 'bottles' | 'templates' | 'station' | 'crates' | 'workstations' | 'catalog';
+  | 'overview'
+  | 'bottles'
+  | 'templates'
+  | 'station'
+  | 'crates'
+  | 'workstations'
+  | 'catalog'
+  | 'setup';
 export type AdminPageId = 'users' | 'roles' | 'sites';
 
 /**
@@ -195,7 +237,16 @@ export function visibleModules(permissions: ReadonlySet<string> | readonly strin
       ? permissions.has(p)
       : (permissions as readonly string[]).includes(p);
   return MODULES.filter((m) => m.permissions.some(has)).flatMap((m) => {
-    const pages = m.pages.filter((page) => !page.permission || has(page.permission));
+    const pages = m.pages
+      .filter(
+        (page) =>
+          (!page.permission || has(page.permission)) && (!page.anyOf || page.anyOf.some(has)),
+      )
+      .map((page): NavPage => {
+        if (!page.setupWith || page.setupWith.some(has)) return page;
+        // Readable, nothing to set up: listed under Evidence, read-only (doc 027 §2–3).
+        return { ...page, group: 'records', readOnly: true };
+      });
     // The module link opens the first page the user may see (e.g. SALES: availability only).
     return pages.length > 0 ? [{ ...m, href: pages[0]!.href, pages }] : [];
   });

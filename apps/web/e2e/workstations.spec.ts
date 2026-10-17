@@ -69,7 +69,7 @@ async function scan(page: Page, value: string) {
 
 test('manages stations: create, QR label', async ({ page }) => {
   await page.goto('/production/workstations');
-  await expect(page.getByRole('heading', { name: 'Správa pracovišť' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pracoviště a QR' })).toBeVisible();
   const form = page.getByTestId('workstation-form');
   await form.getByRole('button', { name: 'Založit pracoviště' }).click();
   await expect(page.getByTestId('form-errors')).toBeVisible();
