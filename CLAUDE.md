@@ -46,6 +46,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   Filling (doc 025 A4, schema approved 2026-10-16): bottle status/event FILLED with its one liquid
   lot, PUMP attachments, FILL movements, cycle counters (Obsah/Naplněno), Hotovo (FILLED) and
   supervised corrections (`production:cycle_correct`) — no holds/quarantine yet.
+  Hotels, manual orders and picking (doc 028, owner 2026-10-17): hotels (one delivery address,
+  contact, explicit fulfilment site), orders (site + address snapshot), order lines in whole
+  crates (capacity from the crate type), order crate allocations (+ their bottles), order events;
+  crate cycle `ALLOCATED`; permissions `hotels:*` / `orders:*` for ADMIN only. Ends at
+  "Připraveno k expedici" — no carrier, dispatch, delivery, contracts or hotel users.
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

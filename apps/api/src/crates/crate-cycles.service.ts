@@ -251,6 +251,38 @@ export class CrateCyclesService {
     return updated;
   }
 
+  /**
+   * A finished crate is held by an order (doc 028): FILLED → ALLOCATED with its crate event. The
+   * members stay exactly as they are (the database refuses any member change while ALLOCATED).
+   */
+  async allocate(
+    tx: Prisma.TransactionClient,
+    cycle: CycleRecord,
+    input: { actorId: string; operationId: string; occurredAt: Date; order: string },
+  ): Promise<void> {
+    await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'ALLOCATED' } });
+    await this.event(tx, cycle, 'ALLOCATED_TO_ORDER', input, { order: input.order });
+  }
+
+  /** Removed from an open order or released by its cancellation: ALLOCATED → FILLED. */
+  async releaseAllocation(
+    tx: Prisma.TransactionClient,
+    cycle: CycleRecord,
+    input: {
+      actorId: string;
+      operationId: string;
+      occurredAt: Date;
+      order: string;
+      reason?: string | null;
+    },
+  ): Promise<void> {
+    await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'FILLED' } });
+    await this.event(tx, cycle, 'RELEASED_FROM_ORDER', input, {
+      order: input.order,
+      reason: input.reason ?? undefined,
+    });
+  }
+
   /** The cycle's active assignments, in ordinal order, with their bottles. */
   activeMembers(db: Prisma.TransactionClient, cycleId: string) {
     return db.crateAssignment.findMany({
@@ -327,7 +359,9 @@ export class CrateCyclesService {
       | 'RETURNED_TO_FILLING'
       | 'CYCLE_ABORTED'
       | 'MEMBER_REMOVED'
-      | 'MEMBER_ADDED',
+      | 'MEMBER_ADDED'
+      | 'ALLOCATED_TO_ORDER'
+      | 'RELEASED_FROM_ORDER',
     input: { actorId: string; operationId: string; occurredAt: Date },
     payload: Record<string, string | undefined> = {},
   ): Promise<void> {

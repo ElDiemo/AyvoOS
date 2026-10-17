@@ -68,7 +68,14 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await page.goto('/');
   // The administrator sees the whole system — every module, through ordinary permissions.
   const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
-  await expect(nav.getByRole('link')).toHaveText(['Přehled', 'Sklad', 'Výroba', 'Správa systému']);
+  await expect(nav.getByRole('link')).toHaveText([
+    'Přehled',
+    'Sklad',
+    'Výroba',
+    'Hotely',
+    'Expedice',
+    'Správa systému',
+  ]);
   await expect(page.getByText('nemá přístup k žádnému provoznímu modulu')).toHaveCount(0);
 
   await nav.getByRole('link', { name: 'Správa systému' }).click();

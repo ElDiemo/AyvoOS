@@ -7,7 +7,7 @@ const where = (path: string) => {
 };
 
 describe('AYVO OS navigation (doc 019)', () => {
-  it('has exactly two operational modules: Sklad and Výroba, plus the administration', () => {
+  it('has the operational modules Sklad, Výroba, Hotely and Expedice, plus the administration', () => {
     const all = MODULES.flatMap((m) => [
       ...m.permissions,
       ...m.pages.flatMap((p) => p.permission ?? []),
@@ -16,12 +16,30 @@ describe('AYVO OS navigation (doc 019)', () => {
       visibleModules(all)
         .filter((m) => m.section === 'operations')
         .map((m) => m.label),
-    ).toEqual(['Sklad', 'Výroba']);
+    ).toEqual(['Sklad', 'Výroba', 'Hotely', 'Expedice']);
     expect(
       visibleModules(all)
         .filter((m) => m.section === 'administration')
         .map((m) => m.label),
     ).toEqual(['Správa systému']);
+  });
+
+  it('Hotely and Expedice (doc 028) follow their own permissions only', () => {
+    const ids = (perms: string[]) => visibleModules(perms).map((m) => m.id);
+    // Existing operational permissions never open them.
+    expect(ids(['inventory:read', 'production:read', 'crates:read'])).not.toEqual(
+      expect.arrayContaining(['hotels']),
+    );
+    expect(ids(['inventory:read', 'crates:read', 'production:fill'])).not.toContain('dispatch');
+    const pages = (perms: string[], id: string) =>
+      visibleModules(perms)
+        .find((m) => m.id === id)
+        ?.pages.map((p) => p.id);
+    expect(pages(['hotels:read'], 'hotels')).toEqual(['list']);
+    expect(pages(['hotels:read', 'hotels:manage'], 'hotels')).toEqual(['list', 'new']);
+    expect(pages(['orders:read', 'orders:pick'], 'dispatch')).toEqual(['orders']);
+    expect(pages(['orders:read', 'orders:manage'], 'dispatch')).toEqual(['orders', 'new']);
+    expect(ids(['orders:pick'])).not.toContain('dispatch'); // picking needs the order view too
   });
 
   it('administration pages follow their own permissions', () => {

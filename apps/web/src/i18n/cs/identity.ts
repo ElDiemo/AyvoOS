@@ -62,6 +62,11 @@ export const identityCs = {
     'production:session_takeover': 'Vynuceně převzít obsazené pracoviště (s důvodem)',
     'production:cycle_correct':
       'Opravovat oběhy beden – vyjmout, doplnit a přeložit lahve, vrátit do rozpracování, zrušit oběh (s důvodem)',
+    'hotels:read': 'Zobrazit hotely, jejich doručovací adresu, kontakt a obsluhující provozovnu',
+    'hotels:manage': 'Zakládat hotely',
+    'orders:read': 'Zobrazit objednávky provozovny a jejich načtené bedny',
+    'orders:manage': 'Zakládat a stornovat objednávky provozovny',
+    'orders:pick': 'Kompletovat objednávky – načítat a odebírat hotové bedny, dokončit kompletaci',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
@@ -69,6 +74,8 @@ export const identityCs = {
     production: 'Výroba',
     catalog: 'Produktový katalog',
     crates: 'Bedny',
+    hotels: 'Hotely',
+    orders: 'Objednávky a expedice',
     identity: 'Uživatelé a role',
     sites: 'Provozovny',
   } as Record<string, string>,
@@ -386,6 +393,9 @@ export const identityCs = {
     blockers: 'Deaktivaci teď brání:',
     blocker: {
       STOCK_ON_HAND: 'Ve skladech provozovny jsou zásoby.',
+      HOTELS_SERVED:
+        'Provozovna obsluhuje hotely. Přeřazení hotelů zatím neexistuje, proto ji nelze deaktivovat.',
+      ORDERS_NOT_CLOSED: 'Provozovna má otevřené nebo k expedici připravené objednávky.',
       WAREHOUSES: 'Provozovna má sklady.',
       LAST_ACTIVE_SITE: 'Je to poslední aktivní provozovna.',
     } as Record<string, string>,

@@ -4,6 +4,8 @@ import { AuditModule } from './audit/audit.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
 import { ConfigModule } from './config/config.module.js';
 import { CratesModule } from './crates/crates.module.js';
+import { CustomersModule } from './customers/customers.module.js';
+import { OrdersModule } from './orders/orders.module.js';
 import { WorkstationsModule } from './workstations/workstations.module.js';
 import { ProductionModule } from './production/production.module.js';
 import { DatabaseModule } from './database/database.module.js';
@@ -47,6 +49,8 @@ import { WarehouseModule } from './warehouse/warehouse.module.js';
     WorkstationsModule,
     ProductionModule,
     CatalogModule,
+    CustomersModule,
+    OrdersModule,
   ],
 })
 export class AppModule {}

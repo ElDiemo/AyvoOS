@@ -14,6 +14,8 @@ export const crateCycleStatusSchema = z.enum([
   'FILLING',
   'FILLED',
   'ABORTED',
+  /** Held by an order (doc 028). */
+  'ALLOCATED',
 ]);
 export type CrateCycleStatus = z.infer<typeof crateCycleStatusSchema>;
 

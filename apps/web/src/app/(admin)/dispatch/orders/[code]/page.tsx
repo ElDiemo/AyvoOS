@@ -1,0 +1,147 @@
+import { orderCodeSchema, orderDetailSchema } from '@ayvo/types';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { CancelOrder } from '@/components/dispatch/cancel-order';
+import { DispatchHeader } from '@/components/dispatch/dispatch-header';
+import { OrderLines } from '@/components/dispatch/order-lines';
+import { OrderStatusBadge } from '@/components/dispatch/order-status';
+import { buttonClass, Card, EmptyState, Field, FieldList, Notice } from '@/components/ui';
+import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
+import { ordersCs } from '@/i18n/cs/orders';
+import { apiGet } from '@/lib/api';
+import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
+
+export const dynamic = 'force-dynamic';
+const t = ordersCs.detail;
+
+/** Order detail (doc 028): snapshot, requested vs. loaded per product, crates and history. */
+export default async function OrderPage({ params }: { params: Promise<{ code: string }> }) {
+  const { code } = await params;
+  if (!orderCodeSchema.safeParse(code).success) notFound();
+  const [me, order, timeZone] = await Promise.all([
+    currentUser(),
+    apiGet(`admin/orders/${code}`, orderDetailSchema),
+    siteTimeZone(),
+  ]);
+  const d = order.delivery;
+  return (
+    <>
+      <DispatchHeader
+        active="orders"
+        title={
+          <span className="flex flex-wrap items-center gap-3">
+            <span className="font-mono">{order.code}</span> <OrderStatusBadge order={order} />
+          </span>
+        }
+        subtitle={`${order.hotel.name} · ${t.shipDate}: ${formatDateCs(order.requestedShipDate)}`}
+        back={{ href: '/dispatch', label: ordersCs.title }}
+        actions={
+          <>
+            {order.status === 'OPEN' && hasPermission(me, 'orders:pick') && (
+              <Link
+                href={`/dispatch/orders/${order.code}/pick`}
+                className={buttonClass.primary}
+                data-testid="start-picking"
+              >
+                {order.totals.loadedCrates > 0 ? t.resume : t.pick}
+              </Link>
+            )}
+            {order.status !== 'CANCELLED' && hasPermission(me, 'orders:manage') && (
+              <CancelOrder code={order.code} />
+            )}
+          </>
+        }
+      />
+      {order.status === 'READY_TO_DISPATCH' && (
+        <div className="mb-6">
+          <Notice tone="info">
+            {order.completedBy && t.completed(order.completedBy)} ·{' '}
+            {formatDateTimeCs(order.completedAt, timeZone)}. {t.notDispatched}
+          </Notice>
+        </div>
+      )}
+      {order.status === 'CANCELLED' && order.cancelledBy && order.cancelReason && (
+        <div className="mb-6">
+          <Notice tone="warning">
+            {t.cancelled(order.cancelledBy, order.cancelReason)} ·{' '}
+            {formatDateTimeCs(order.cancelledAt, timeZone)}
+          </Notice>
+        </div>
+      )}
+      <div className="mb-6 grid gap-6 lg:grid-cols-3">
+        <Card title={t.lines} className="lg:col-span-2" testId="order-lines">
+          <OrderLines order={order} />
+        </Card>
+        <Card title={t.delivery} testId="order-delivery">
+          <p className="text-sm">
+            <span className="font-medium">{d.hotelName}</span>
+            <br />
+            {d.addressLine1}
+            {d.addressLine2 && (
+              <>
+                <br />
+                {d.addressLine2}
+              </>
+            )}
+            <br />
+            {d.postalCode} {d.city}, {d.countryCode}
+          </p>
+          <div className="mt-4">
+            <FieldList>
+              <Field label={t.contact}>
+                {order.contact.name}, {order.contact.phone}, {order.contact.email}
+              </Field>
+              <Field label={t.site}>
+                {order.site.name} ({order.site.code})
+              </Field>
+            </FieldList>
+          </div>
+        </Card>
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card title={t.crates} testId="order-crates">
+          {order.crates.length === 0 ? (
+            <EmptyState>{t.noCrates}</EmptyState>
+          ) : (
+            <ul className="flex flex-col gap-2 text-sm">
+              {order.crates.map((c) => (
+                <li
+                  key={c.crate}
+                  data-testid={`order-crate-${c.crate}`}
+                  className="flex flex-wrap gap-x-3"
+                >
+                  <Link
+                    href={`/production/crates/${c.crate}`}
+                    className="font-mono font-medium underline-offset-2 hover:underline"
+                  >
+                    {c.crate}
+                  </Link>
+                  <span>
+                    {c.product.name} · {c.bottles} ks · {t.recipe(c.recipeVersion)}
+                  </span>
+                  <span className="text-stone-500">
+                    {t.loadedBy(c.loadedBy)}, {formatDateTimeCs(c.loadedAt, timeZone)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+        <Card title={t.history} testId="order-history">
+          <ol className="flex flex-col gap-2 text-sm">
+            {order.history.map((e, i) => (
+              <li key={i}>
+                <span className="font-medium">{t.events[e.type] ?? e.type}</span>
+                {e.crate && <span className="font-mono"> · {e.crate}</span>}
+                {e.reason && <span> · {e.reason}</span>}
+                <span className="block text-xs text-stone-500">
+                  {e.actor} · {formatDateTimeCs(e.occurredAt, timeZone)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </Card>
+      </div>
+    </>
+  );
+}

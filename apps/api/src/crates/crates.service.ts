@@ -165,7 +165,14 @@ export class CratesService {
         _count: { _all: true },
       }),
     ]);
-    const counts = { EMPTY: crates, OPEN_ASSEMBLY: 0, READY_TO_FILL: 0, FILLING: 0, FILLED: 0 };
+    const counts = {
+      EMPTY: crates,
+      OPEN_ASSEMBLY: 0,
+      READY_TO_FILL: 0,
+      FILLING: 0,
+      FILLED: 0,
+      ALLOCATED: 0,
+    };
     for (const row of open) {
       if (row.status === 'ABORTED') continue;
       counts[row.status] = row._count._all;
@@ -217,6 +224,7 @@ export class CratesService {
         printJobCode: e.printJob?.code ?? null,
         bottle: payloadText(e.payload, 'bottle'),
         reason: payloadText(e.payload, 'reason'),
+        order: payloadText(e.payload, 'order'),
       })),
       printJobs,
     };
