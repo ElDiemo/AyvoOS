@@ -8,7 +8,7 @@
 # The challenge file is written to the acme-webroot volume, which Caddy serves read-only at
 # /.well-known/acme-challenge/ (and which is empty otherwise).
 #
-#   scripts/verify-dev-acme.sh [domain]     (default: dev.ayvo.co)
+#   scripts/verify-dev-acme.sh [domain]     (default: dev.ayvo.co; AYVO_DEV_ENV_FILE for ACME_EMAIL)
 set -Eeuo pipefail
 umask 077
 
@@ -21,12 +21,20 @@ readonly STAGING=https://acme-staging-v02.api.letsencrypt.org/directory
 docker volume inspect "$VOLUME" >/dev/null 2>&1 ||
   { echo "volume $VOLUME missing: deploy the tailnet-only Caddy first (scripts/deploy-dev.sh --edge)" >&2; exit 1; }
 
-state="$(mktemp -d)"
-trap 'docker run --rm -v "$state:/lego" alpine:3.20 rm -rf /lego/accounts /lego/certificates >/dev/null 2>&1; rm -rf "$state"' EXIT
+# The ACME account contact: ACME_EMAIL from the server env file (lego requires one), never printed.
+env_file=${AYVO_DEV_ENV_FILE:-/opt/ayvo/secrets/dev-preview.env}
+email="$(sed -n "s/^ACME_EMAIL=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" "$env_file" 2>/dev/null | tail -n1)"
+[[ $email =~ ^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$ ]] || { echo "ACME_EMAIL missing or invalid in $env_file" >&2; exit 1; }
+
+# lego's state lives in a throwaway Docker volume (not a host path: the image's binary is /lego,
+# so the state is mounted at /state), removed on exit with the staging certificate in it.
+state="ayvo-acme-staging-$$"
+docker volume create "$state" >/dev/null
+trap 'docker volume rm -f "$state" >/dev/null 2>&1 || true' EXIT
 
 echo "==> Let's Encrypt STAGING, HTTP-01 for $DOMAIN via public IPv4 :80"
 docker run --rm --security-opt no-new-privileges:true \
-  -v "$VOLUME:/webroot" -v "$state:/lego" "$LEGO_IMAGE" \
-  --server "$STAGING" --accept-tos --key-type ec256 \
-  --domains "$DOMAIN" --http --http.webroot /webroot --path /lego run
+  -v "$VOLUME:/webroot" -v "$state:/state" "$LEGO_IMAGE" \
+  --server "$STAGING" --accept-tos --email "$email" --key-type ec256 \
+  --domains "$DOMAIN" --http --http.webroot /webroot --path /state run
 echo " ok staging certificate issued: the public HTTP-01 path works (certificate discarded)"
