@@ -51,7 +51,12 @@ export default async function ComponentsPage({
             {components.map((c) => (
               <CatalogRow key={c.code} testId={`component-${c.code}`}>
                 <div className="min-w-0 wrap-anywhere">
-                  <span className="font-medium">{c.name}</span>{' '}
+                  <Link
+                    href={`/production/catalog/components/${encodeURIComponent(c.code)}`}
+                    className="font-medium underline-offset-2 hover:underline"
+                  >
+                    {c.name}
+                  </Link>{' '}
                   <span className="font-mono text-xs text-stone-500">{c.code}</span>
                   {c.archived && <span className="block text-xs text-amber-800">{t.archived}</span>}
                 </div>

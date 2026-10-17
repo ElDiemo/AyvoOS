@@ -62,6 +62,8 @@ export const identityCs = {
     'production:session_takeover': 'Vynuceně převzít obsazené pracoviště (s důvodem)',
     'production:cycle_correct':
       'Opravovat oběhy beden – vyjmout, doplnit a přeložit lahve, vrátit do rozpracování, zrušit oběh (s důvodem)',
+    'catalog:weights_record':
+      'Zapisovat naměřené hmotnosti a rozměry komponent, produktů a typů beden (oprava zachová původní hodnotu)',
     'hotels:read': 'Zobrazit hotely, jejich doručovací adresu, kontakt a obsluhující provozovnu',
     'hotels:manage': 'Zakládat hotely',
     'orders:read': 'Zobrazit objednávky provozovny a jejich načtené bedny',

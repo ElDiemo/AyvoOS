@@ -32,6 +32,7 @@ export interface MadeCrate {
   crateUrl: string;
   crateCode: string;
   bottleIds: string[];
+  bottleUrls: string[];
 }
 
 /** Makes crates of one product (capacity small for speed) up to the requested state. */
@@ -91,11 +92,29 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
     const crate = await t.prisma.crate.findUniqueOrThrow({
       where: { qrToken: crateUrl.split('/').pop()! },
     });
-    return { crateUrl, crateCode: crate.code, bottleIds: bottles.map((b) => b.id) };
+    return {
+      crateUrl,
+      crateCode: crate.code,
+      bottleIds: bottles.map((b) => b.id),
+      bottleUrls: bottles.map((b) => b.url),
+    };
+  }
+
+  /** Fills every bottle of a READY_TO_FILL crate and finishes it (Hotovo). */
+  async function fillAndFinish(made: MadeCrate, lot: string = liquidLot) {
+    const fs = await fillingSession(t, 'HAND_SOAP');
+    expect((await fillLoadCrate(t, fs, made.crateUrl)).status).toBe(200);
+    expect((await chooseLiquidLot(t, fs, lot)).status).toBe(200);
+    for (const url of made.bottleUrls) {
+      const r = await fillScan(t, fs, url);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
+    const done = await finishCrate(t, fs);
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
   }
 
   /** refill(): the next crates carry a new, approved label design (a new printed series). */
-  return { kit, capacity, make, refill, receiveLiquid };
+  return { kit, capacity, make, fillAndFinish, refill, receiveLiquid };
 }
 
 export function hotelBody(overrides: Partial<CreateHotelRequest> = {}): CreateHotelRequest {

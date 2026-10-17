@@ -1,10 +1,16 @@
-import { crateCodeSchema, crateContentSchema, crateDetailSchema } from '@ayvo/types';
+import {
+  crateCodeSchema,
+  crateContentSchema,
+  crateDetailSchema,
+  crateWeightSnapshotsSchema,
+} from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CrateCorrections } from '@/components/crates/crate-corrections';
 import { PrintJobList } from '@/components/crates/print-job-list';
 import { PrintLabelsForm } from '@/components/crates/print-labels-form';
 import { ProductionHeader } from '@/components/production/production-header';
+import { CrateWeightSnapshots } from '@/components/weights/crate-weight-snapshots';
 import { BottleStatusBadge } from '@/components/status';
 import { Card, Field, FieldList } from '@/components/ui';
 import { cratesCs } from '@/i18n/cs/crates';
@@ -25,11 +31,12 @@ const t = cratesCs;
 export default async function CrateDetailPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
   if (!crateCodeSchema.safeParse(code).success) notFound();
-  const [me, crate, content, timeZone] = await Promise.all([
+  const [me, crate, content, timeZone, weights] = await Promise.all([
     currentUser(),
     apiGet(`admin/crates/${code}`, crateDetailSchema),
     apiGet(`admin/crates/${code}/content`, crateContentSchema),
     siteTimeZone(),
+    apiGet(`admin/crates/${code}/weights`, crateWeightSnapshotsSchema),
   ]);
   const cycle = content.cycle;
   return (
@@ -127,6 +134,7 @@ export default async function CrateDetailPage({ params }: { params: Promise<{ co
             </div>
           )}
         </Card>
+        <CrateWeightSnapshots snapshots={weights} timeZone={timeZone} />
         <Card testId="crate-facts">
           <FieldList>
             <Field label={t.columns.circulation}>
