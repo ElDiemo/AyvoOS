@@ -1,6 +1,6 @@
 import type { PermissionCode, ProductionReadiness, ReadinessItem } from '@ayvo/types';
-import { readinessCs } from '@/i18n/cs/readiness';
-import { setupReturnFor } from '@/lib/setup-return';
+import { readinessCs } from '../../i18n/cs/readiness';
+import { setupReturnFor } from '../../lib/setup-return';
 
 const t = readinessCs.actions;
 
@@ -78,7 +78,13 @@ const STEPS: Record<string, Step> = {
   'labeling.station': station(t.labelingStation),
   // One link per approved, usable design of THIS product — never the first template.
   'labeling.labels': {
-    allOf: ['production:read', 'production:bottles_create', 'catalog:read'],
+    // Identities AND their label PDF: generating the PDF needs production:labels_print.
+    allOf: [
+      'production:read',
+      'production:bottles_create',
+      'production:labels_print',
+      'catalog:read',
+    ],
     links: (c) =>
       (c.item.target?.designs ?? []).map((d) => ({
         label: t.labelsFor(d.label),

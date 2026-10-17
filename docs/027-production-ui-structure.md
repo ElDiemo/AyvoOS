@@ -194,7 +194,8 @@ Orientation only — no production rule, permission or role assignment changed.
   possibly older recipe — not the active one); a station step carries mode and category. Quantity,
   supplier and lot are never filled in and nothing is saved by following a step; the target pages
   validate the parameters again and lead back to the same product ("Zpět na přípravu výroby").
-  A step is offered only with EVERY permission its target page needs (e.g. approving a design also
+  A step is offered only with EVERY permission its target page needs (e.g. QR identities with
+  their PDF need `production:labels_print` besides `production:bottles_create`; approving a design also
   needs `production:read` to list the templates; finishing and activating a recipe needs both
   `catalog:product_manage` and `catalog:recipe_approve`); otherwise "Požádejte vedoucího", with a
   read-only look at the product where the user may read it.

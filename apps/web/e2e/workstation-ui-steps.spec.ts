@@ -210,14 +210,18 @@ test('a filling station for the gel opens with its mode and category', async ({ 
   await shot(page, 'ui30-03-filling-station-gel');
 });
 
-async function limitedUser(browser: Browser, admin: Page) {
+async function limitedUser(
+  browser: Browser,
+  admin: Page,
+  permissions: string[] = ['catalog:read', 'catalog:product_manage'],
+) {
   const code = `E2E_CAT_MGR_${sfx()}`;
   const role = await admin.request.post('/api/admin/identity/roles', {
     data: {
       code,
       name: code,
       description: 'katalog bez výroby',
-      permissions: ['catalog:read', 'catalog:product_manage'],
+      permissions,
       copiedFrom: null,
       reason: 'UI30 limited role',
     },
@@ -266,4 +270,29 @@ test('a limited role is never offered a step it cannot finish (catalog without p
   await expect(user.getByRole('link', { name: /Připravit QR etikety/ })).toHaveCount(0);
   await expect(user.getByRole('link', { name: /Přijmout na sklad/ })).toHaveCount(0);
   await context.close();
+});
+
+test('the QR + PDF step needs production:labels_print as well (identities alone are not enough)', async ({
+  browser,
+  page,
+}) => {
+  const identities = [
+    'catalog:read',
+    'catalog:product_manage',
+    'production:read',
+    'production:bottles_create',
+  ];
+  const without = await limitedUser(browser, page, identities);
+  await without.page.goto(`/production/setup?product=${soap.productCode}`);
+  const labels = step(without.page, 'labeling.labels');
+  await expect(labels.getByTestId('ask-supervisor')).toHaveText('Požádejte vedoucího');
+  await expect(labels.getByRole('link', { name: /Připravit QR etikety/ })).toHaveCount(0);
+  await without.context.close();
+
+  const withPrint = await limitedUser(browser, page, [...identities, 'production:labels_print']);
+  await withPrint.page.goto(`/production/setup?product=${soap.productCode}`);
+  const offered = step(withPrint.page, 'labeling.labels');
+  await expect(offered.getByRole('link', { name: /Připravit QR etikety/ })).toHaveCount(1);
+  await expect(offered.getByTestId('ask-supervisor')).toHaveCount(0);
+  await withPrint.context.close();
 });
