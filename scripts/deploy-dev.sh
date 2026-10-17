@@ -10,6 +10,11 @@
 #   scripts/deploy-dev.sh --rollback TAG   start previously built images TAG (no build, no migration)
 #   scripts/deploy-dev.sh --edge           recreate only Caddy and the private DNS with the RUNNING
 #                                          image tag (no build, no migration, no database step), verify
+#
+# Before anything changes, the running Caddy is backed up exactly as it runs
+# (scripts/dev-edge-backup.sh, into AYVO_DEV_BACKUP_DIR/edge-before-<time>-*); if that fails, nothing
+# is switched. Restore it, also after a partly failed run:
+#   scripts/dev-edge-backup.sh restore <that directory> /opt/ayvo/secrets/dev-preview.env
 #   scripts/deploy-dev.sh --help
 #
 # Environment (all optional):
@@ -63,6 +68,7 @@ STEP="startup"
 VERIFY_PASSWORD=""
 EDGE_BODY=""
 TAILNET_IPV4=""
+EDGE_BACKUP=""
 
 # --- output ------------------------------------------------------------------------------------
 
@@ -100,6 +106,10 @@ on_exit() {
   local good
   good="$(last_good_tag)"
   printf '\nDatabase and other data volumes were NOT touched.\n' >&2
+  if [[ -n $EDGE_BACKUP ]]; then
+    printf 'Edge (Caddy) before this run: %s\nRestore it: scripts/dev-edge-backup.sh restore %s %s\n' \
+      "$EDGE_BACKUP" "$EDGE_BACKUP" "$ENV_FILE" >&2
+  fi
   if [[ -n $good ]]; then
     printf 'Last successful deployment: %s\nRollback: scripts/deploy-dev.sh --rollback %s\n' "$good" "$good" >&2
   fi
@@ -549,6 +559,20 @@ exec 9>"$STATE_DIR/.deploy-dev-preview.lock"
 flock -n 9 || die "another deployment is running (lock: $STATE_DIR/.deploy-dev-preview.lock)"
 
 command -v dig >/dev/null || die "required command not found: dig (verification of the private DNS)"
+
+# The edge exactly as it runs now, verified, BEFORE anything is built, migrated or switched.
+STEP="back up the running edge (Caddy)"
+if [[ -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=caddy")" ]]; then
+  log "$STEP"
+  EDGE_BACKUP="$("$REPO_ROOT/scripts/dev-edge-backup.sh" backup "$PROJECT" "$BACKUP_DIR" "$ENV_FILE")" ||
+    die "the edge backup failed: nothing was changed"
+  [[ -f $EDGE_BACKUP/COMPLETE ]] || die "the edge backup is incomplete: nothing was changed"
+  ok "edge backup: $EDGE_BACKUP"
+elif [[ $MODE == edge ]]; then
+  die "no running caddy to back up; --edge needs the running stack (use a normal deployment)"
+else
+  warn "no running caddy: nothing to back up"
+fi
 
 if [[ $MODE == edge ]]; then
   STEP="edge: running image tag"

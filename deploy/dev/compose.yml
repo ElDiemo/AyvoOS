@@ -94,7 +94,9 @@ services:
       - NET_BIND_SERVICE
     command: ['-conf', '/etc/coredns/Corefile']
     environment:
+      # Every {$VAR} of the Corefile must be passed here (test/deploy-dev-edge.test.ts).
       DEV_DOMAIN: ${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
+      DEV_TAILNET_IPV4: ${DEV_TAILNET_IPV4:?set by scripts/deploy-dev.sh from tailscale ip -4}
     volumes:
       - ./Corefile:/etc/coredns/Corefile:ro
     # Unprivileged port inside the container; :53 only on the Tailscale IPv4 address.

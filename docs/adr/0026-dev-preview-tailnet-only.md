@@ -96,17 +96,30 @@ a generic installer now. Nothing here is production-ready, and production is not
   for ACME HTTP-01. Production has its own decisions (public `qr.ayvo.co`, `portal.ayvo.co`) that
   this ADR does not make.
 
-## Rollback (exact)
+## Backup and rollback (exact)
 
-1. Restore the previous Caddy (saved before the switch in
-   `/opt/ayvo/backups/dev-preview/edge-before-tailnet-<time>/`, with the running tag):
+**Backup (automatic, before every switch).** `scripts/deploy-dev.sh` (`--edge`, deploy, rollback)
+first runs `scripts/dev-edge-backup.sh backup`, which saves the running Caddy exactly as it runs
+into `/opt/ayvo/backups/dev-preview/edge-before-<time>-<id>/`: the Compose file it was created
+from, every bind-mounted file read from inside the running container, the running image tag, the
+published ports and `docker inspect`. It verifies the copies against the container and that the
+saved Compose file reproduces the running image and exactly its ports, writes checksums and only
+then `COMPLETE`. **If any of this fails, the deployment stops before anything is built or
+switched.** The directory is printed by the deploy and repeated in its failure report.
+
+**Rollback** — also after a partly failed switch (new Caddy missing, unhealthy or half-created,
+DNS failing):
+
+1. Restore the previous Caddy and remove the containers that did not exist before (the `dns`):
    ```bash
-   B=/opt/ayvo/backups/dev-preview/edge-before-tailnet-<time>
-   docker stop ayvo-dev-preview-dns-1 && docker rm ayvo-dev-preview-dns-1
-   AYVO_IMAGE_TAG=$(cat $B/tag) docker compose --project-directory $B -f $B/compose.yml \
-     --env-file /opt/ayvo/secrets/dev-preview.env up --detach --no-deps --no-build caddy
+   scripts/dev-edge-backup.sh restore /opt/ayvo/backups/dev-preview/edge-before-<time>-<id> \
+     /opt/ayvo/secrets/dev-preview.env
    ```
-2. `sudo bash deploy/dev/host/uninstall.sh` (removes the guard and resets the sysctl).
+   It checks the checksums first, recreates only `caddy` from the saved files with the saved tag
+   (no build; web, api, database untouched) and fails unless the published ports equal the saved
+   ones. Tested on a throwaway Compose project (`apps/api/test/deploy-dev-edge.test.ts`).
+2. `sudo bash deploy/dev/host/uninstall.sh` (removes the guard and resets the sysctl) — only after
+   step 1.
 3. Tailscale admin console: remove the split-DNS nameserver; restore the saved access policy.
 4. Revert the commit of this ADR before the next normal deployment (otherwise it re-applies the
    tailnet binding — by design).

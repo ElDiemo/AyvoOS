@@ -86,7 +86,7 @@ removes them. `ts:` = the server's Tailscale IPv4 address, read by the deploy sc
 - `scripts/verify-dev-acme.sh` proves certificate renewal (Let's Encrypt staging, HTTP-01 over the
   public IPv4 :80 exception; the test certificate is discarded).
 - Still public: SSH 22 (until the owner closes it), Tailscale UDP 41641, IPv4 TCP 80 (ACME only).
-- Rollback: [ADR 0026 § Rollback](adr/0026-dev-preview-tailnet-only.md#rollback-exact).
+- Rollback: [ADR 0026 § Backup and rollback](adr/0026-dev-preview-tailnet-only.md#backup-and-rollback-exact) (`scripts/dev-edge-backup.sh`).
 
 ### Server-only configuration
 
