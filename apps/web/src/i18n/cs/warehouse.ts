@@ -79,6 +79,12 @@ export const warehouseCs = {
     chooseSupplierFirst: 'Nejprve vyberte dodavatele (krok 1) – potom půjde nahrát jeho doklad.',
     stepLines: 'Položky příjmu',
     item: 'Položka',
+    chooseItem: 'Vyberte položku…',
+    forSetup: (item: string) =>
+      `Příjem pro přípravu výroby: předvybraná položka ${item} z posuzované receptury. Množství, dodavatele a šarži zadejte podle dokladu.`,
+    unknownSetupItem: (code: string) =>
+      `Položka ${code} z přípravy výroby není mezi skladovými položkami – vyberte ji ručně nebo zkontrolujte recepturu.`,
+    backToSetup: 'Zpět na přípravu výroby',
     quantity: 'Množství',
     supplierLot: 'Šarže dodavatele',
     supplierLotHelp: 'Prázdné = systém vytvoří interní šarži pro tuto položku.',

@@ -53,6 +53,19 @@ export const shellCs = {
         setup: 'Připravit výrobu',
       },
       groups: { records: 'Evidence', setup: 'Nastavení výroby' },
+      /** The section switch of Výroba (doc 027, issue #11 UI-20). */
+      sections: {
+        label: 'Části výroby',
+        overview: 'Přehled',
+        work: 'Práce',
+        records: 'Evidence',
+        setup: 'Nastavení výroby',
+      },
+      sectionHelp: {
+        work: 'Lepení a plnění na pracovišti',
+        records: 'Záznamy a jejich historie',
+        setup: 'Příprava, pracoviště, produkty',
+      },
       readOnly: 'jen pro čtení',
     },
     hotels: {
@@ -100,7 +113,7 @@ export const shellCs = {
   actions: {
     newReceipt: 'Příjem zboží',
     labelActivation: 'Nalepit etikety',
-    createBottles: 'Vytvořit lahve',
+    createBottles: 'Připravit QR etikety lahví',
   },
   common: {
     notFoundTitle: 'Stránka nenalezena',

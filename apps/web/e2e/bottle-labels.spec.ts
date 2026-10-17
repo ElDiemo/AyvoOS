@@ -85,7 +85,7 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   ).toBeVisible();
 
   // 33: create 50 bottles using mydlo1 v1 (explicit confirmation required).
-  await page.getByRole('link', { name: 'Vytvořit lahve s touto šablonou' }).click();
+  await page.getByRole('link', { name: 'Připravit QR etikety s touto šablonou' }).click();
   await expect(page.getByLabel('Šablona etiket')).toContainText('mydlo1 v1');
   await page.getByRole('button', { name: '50', exact: true }).click();
   await page.getByRole('button', { name: 'Zkontrolovat' }).click();
@@ -98,7 +98,7 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   await expect(
     page.getByText('každá etiketa nese označení „DEV - NOT FOR PRODUCTION“'),
   ).toBeVisible();
-  const createButton = page.getByRole('button', { name: 'Vytvořit 50 lahví' });
+  const createButton = page.getByRole('button', { name: 'Vytvořit 50 QR identit' });
   await expect(createButton).toBeDisabled();
   await page.getByLabel('Rozumím, že identity lahví jsou trvalé a nikdy se nemažou.').check();
   // The server registers the bottles, but the response is lost on the way back: the outcome is
@@ -186,6 +186,7 @@ test('Bottles live in Production: bottle list, creation history and series detai
   await mainNav.getByRole('link', { name: 'Výroba' }).click();
   await expect(page).toHaveURL(/\/production$/);
   const production = page.getByRole('navigation', { name: 'Výroba' });
+  await production.getByTestId('section-records').click(); // Evidence: Bedny, Lahve
   await production.getByRole('link', { name: 'Lahve' }).click();
   await expect(page).toHaveURL(/\/bottles$/);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lahve');
@@ -204,7 +205,7 @@ test('Bottles live in Production: bottle list, creation history and series detai
   );
   await expect(page.getByText('50 lahví', { exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'AYV-B-000050' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Vytvořit lahve' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Připravit QR etikety lahví' })).toBeVisible();
 
   // Creation history inside Lahve: one creation, its labels and a download.
   await views.getByRole('link', { name: 'Historie vytvoření' }).click();
@@ -317,7 +318,9 @@ test('archived templates are no longer offered for new bottles', async ({ page }
   page.once('dialog', (dialog) => void dialog.accept());
   await page.getByRole('button', { name: 'Archivovat šablonu' }).click();
   await expect(page.getByText(/^Archivováno /)).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Vytvořit lahve s touto šablonou' })).toHaveCount(0);
+  await expect(
+    page.getByRole('link', { name: 'Připravit QR etikety s touto šablonou' }),
+  ).toHaveCount(0);
   await page.goto('/bottles/new');
   await expect(page.getByText('Nejprve vytvořte šablonu etiket')).toBeVisible();
   await expect(page.getByLabel('Šablona etiket')).toHaveCount(0);

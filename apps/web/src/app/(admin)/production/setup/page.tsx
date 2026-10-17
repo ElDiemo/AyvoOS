@@ -5,6 +5,7 @@ import { Card, EmptyState } from '@/components/ui';
 import { readinessCs as t } from '@/i18n/cs/readiness';
 import { apiGet } from '@/lib/api';
 import { requireAnyPermission } from '@/lib/session';
+import { readinessDependency, readinessStep } from '@/components/production/readiness-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,11 +25,41 @@ export default async function ProductionSetupPage({
 }: {
   searchParams: Promise<{ product?: string }>;
 }) {
-  await requireAnyPermission(['production:workstations_manage', 'catalog:product_manage']);
+  const me = await requireAnyPermission([
+    'production:workstations_manage',
+    'catalog:product_manage',
+  ]);
   const { product } = await searchParams;
   const r = await apiGet('admin/production/readiness', productionReadinessSchema, {
     product: typeof product === 'string' && product ? product : undefined,
   });
+  /** The concrete next step of a missing item, or who to ask (issue #11 UI-21). */
+  const Step = ({ item }: { item: ReadinessItem }) => {
+    const dependency = readinessDependency(item, r);
+    const step = readinessStep(item, me.permissions, r.product?.code ?? null);
+    if (!dependency && step.kind === 'none') return null;
+    return (
+      <span className="flex w-full flex-col gap-1 text-xs" data-testid={`step-${item.key}`}>
+        {dependency && <span>{dependency}</span>}
+        {step.kind === 'links' &&
+          step.links.map((l) => (
+            <Link key={l.href} href={l.href} className="self-start font-medium underline">
+              {t.actions.next}: {l.label} →
+            </Link>
+          ))}
+        {step.kind === 'ask' && (
+          <>
+            <span data-testid="ask-supervisor">{t.askSupervisor}</span>
+            {step.read && (
+              <Link href={step.read.href} className="self-start underline">
+                {step.read.label}
+              </Link>
+            )}
+          </>
+        )}
+      </span>
+    );
+  };
   const section = (key: 'setup' | 'labeling' | 'filling', items: ReadinessItem[]) => (
     <Card title={t.sections[key]} testId={`readiness-${key}`}>
       {key !== 'setup' && <p className="mb-3 text-xs text-stone-500">{t.sectionHelp[key]}</p>}
@@ -56,15 +87,8 @@ export default async function ProductionSetupPage({
             </span>
             <span className="flex items-center gap-3 text-xs">
               <span>{i.reason === 'NO_WAREHOUSE' ? t.noWarehouse : t.state[i.state]}</span>
-              {i.state === 'MISSING' &&
-                (i.href ? (
-                  <Link href={i.href} className="font-medium underline">
-                    {t.open}
-                  </Link>
-                ) : (
-                  <span>{t.askSupervisor}</span>
-                ))}
             </span>
+            {i.state !== 'OK' && <Step item={i} />}
           </li>
         ))}
       </ul>

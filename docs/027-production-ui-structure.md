@@ -166,3 +166,46 @@ plnění bez etiket, PDF vygenerováno ≠ „vytištěno“.
    hlášení. Bez expedice, vratek a PPL; výrobní pravidla a živá data beze změny.
 
 Tento dokument nic nemerguje, nenasazuje ani nemění na DEV.
+
+## Follow-up: issue #11 review of 17. 10. (UI-20 … UI-24, UI-08)
+
+Orientation only — no production rule, permission or role assignment changed.
+
+- **UI-20 — real sections.** Výroba shows its sections first — Přehled, Práce, Evidence,
+  Nastavení výroby (only those with a page the user may open) — and below them only the pages of
+  the active section; the section follows the current URL. On a phone the sections are a compact
+  2×2 grid (nothing hidden sideways). A plain production operator sees Přehled, Práce and Evidence;
+  Nastavení appears only with the existing setup permissions. The separate "work button" row is
+  gone (Práce is the section). Modules without groups keep their single strip.
+- **UI-08 follow-up.** The page strip re-centres its active page also when the width changes.
+- **UI-21 — the next step.** Every missing item of "Připravit výrobu" names its concrete step
+  ("Schválit design etikety pro tento produkt", "Založit lepicí pracoviště a vytisknout jeho QR",
+  "Připravit QR etikety lahví (PDF)", "Přijmout etikety na sklad" …) linking to the existing page —
+  only with the permission that page needs, otherwise "Požádejte vedoucího". Dependencies are
+  explained (labels count only with an approved design; crates for filling come from labelling),
+  never turned into new gates. The design step opens the product's design section (`#designs`).
+  "Pracovat na pracovišti" tells a station manager when the site has no active station yet, with
+  the way to create one; others are told to ask the supervisor.
+- **Context and permissions of the steps (PR #30 review UI30-R1/R2).** A step keeps what the
+  overview knows: "Připravit QR etikety" is offered once per approved design of THIS product that
+  can be used for new identities (latest version of an active template) and opens the form with
+  only that design — never the first template; without one, the dependency is explained instead.
+  A stock step preselects the item of the judged recipe line (for a waiting crate: its pinned,
+  possibly older recipe — not the active one); a station step carries mode and category. Quantity,
+  supplier and lot are never filled in and nothing is saved by following a step; the target pages
+  validate the parameters again and lead back to the same product ("Zpět na přípravu výroby").
+  A step is offered only with EVERY permission its target page needs (e.g. QR identities with
+  their PDF need `production:labels_print` besides `production:bottles_create`; approving a design also
+  needs `production:read` to list the templates; finishing and activating a recipe needs both
+  `catalog:product_manage` and `catalog:recipe_approve`); otherwise "Požádejte vedoucího", with a
+  read-only look at the product where the user may read it.
+- **UI-22 — identity ≠ bottle.** "Vytvořit lahve" is now "Připravit QR etikety lahví": it creates
+  permanent identities and their label PDF, consumes nothing and makes no physical bottle; the
+  page lists the three steps (identity + PDF → labelled at the labelling station → filled at the
+  filling station). Internal ids, history and the API are unchanged.
+- **UI-23 — crate list on a phone.** State counts in one sideways row, the search on the first
+  line, crate type and state behind "Další filtry" (open while used): the first crate starts on
+  the first screen.
+- **UI-24 — corrections set apart.** On the crate detail the supervisor corrections are a
+  separate, collapsed section after identity, content, QR printing and history.
+- Screenshots (synthetic data, desktop / 390 / 320 px): `docs/screenshots/issue-11-ui-clarity/`.

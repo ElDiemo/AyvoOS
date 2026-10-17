@@ -32,7 +32,13 @@ for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 800 });
     for (const path of ['/production/catalog', '/label-templates', '/production/workstations']) {
       await page.goto(path);
-      const strip = page.getByRole('navigation', { name: 'Výroba' }).getByTestId('module-tabs');
+      const nav = page.getByRole('navigation', { name: 'Výroba' });
+      // Every section is on screen (a 2×2 grid on phones), none hidden sideways.
+      for (const s of ['overview', 'work', 'records', 'setup']) {
+        await expect(nav.getByTestId(`section-${s}`)).toBeInViewport({ ratio: 1 });
+      }
+      await expect(nav.getByTestId('section-setup')).toHaveAttribute('aria-current', 'true');
+      const strip = nav.getByTestId('module-tabs');
       const active = strip.locator('[aria-current="page"]');
       await expect(active).toBeVisible();
       await expect
@@ -87,9 +93,9 @@ test('Výroba: work entry, Evidence and Nastavení; Připravit výrobu lists lab
   const kit = await labelingSetup(page.request, { versionId: '', approve: false });
   await page.goto('/production');
   const nav = page.getByRole('navigation', { name: 'Výroba' });
-  await expect(nav.getByTestId('work-entry')).toContainText('Pracovat na pracovišti');
+  await expect(nav.getByTestId('section-work')).toContainText('Práce');
   await shot(page, 'production-overview');
-  await nav.getByRole('link', { name: 'Připravit výrobu' }).click();
+  await nav.getByTestId('section-setup').click(); // opens Připravit výrobu first
   await expect(page).toHaveURL(/\/production\/setup/);
   await page.goto(`/production/setup?product=${kit.productCode}`);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Připravit výrobu');
@@ -109,7 +115,7 @@ test('Výroba: work entry, Evidence and Nastavení; Připravit výrobu lists lab
   await expect(page.getByTestId('readiness-setup.design')).toHaveAttribute('data-state', 'MISSING');
   await expect(page.getByTestId('readiness-setup.design').getByRole('link')).toHaveAttribute(
     'href',
-    `/production/catalog/products/${kit.productCode}`,
+    `/production/catalog/products/${kit.productCode}#designs`,
   );
   await shot(page, 'production-setup');
   await page.setViewportSize({ width: 390, height: 844 });

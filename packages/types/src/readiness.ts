@@ -32,6 +32,24 @@ export const readinessItemSchema = z.object({
   recipe: z
     .object({ version: z.number().int(), waitingCrates: z.number().int().nullable() })
     .nullable(),
+  /**
+   * What the next step needs to keep its context (issue #11 UI-21): the stock item of the judged
+   * recipe line, the approved designs of the product usable for new QR identities (latest
+   * version of an active template), the station mode and category. Null when not applicable or
+   * not available to the user.
+   */
+  target: z
+    .object({
+      item: z.object({ code: z.string(), name: z.string() }).nullable(),
+      designs: z.array(z.object({ versionId: z.uuid(), label: z.string() })),
+      station: z
+        .object({
+          mode: z.enum(['LABELING', 'FILLING']),
+          categoryCode: z.string().nullable(),
+        })
+        .nullable(),
+    })
+    .nullable(),
 });
 export type ReadinessItem = z.infer<typeof readinessItemSchema>;
 

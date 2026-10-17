@@ -594,9 +594,14 @@ test('catalog:read alone sees the catalogue and nothing operational; writes are 
   await reader.getByRole('link', { name: 'Výroba', exact: true }).first().click();
   await expect(reader).toHaveURL(/\/production\/catalog$/);
   const production = reader.getByRole('navigation', { name: 'Výroba' });
-  // Reading only: listed under Evidence, marked read-only (doc 027); no Nastavení group.
-  await expect(production.getByRole('link')).toHaveText(['Produkty a receptury (jen pro čtení)']);
-  await expect(production.getByTestId('nav-group-setup')).toHaveCount(0);
+  // Reading only: listed under Evidence, marked read-only (doc 027); no Nastavení section.
+  await expect(production.getByTestId('module-sections').getByRole('link')).toHaveText([
+    /^Evidence/,
+  ]);
+  await expect(production.getByTestId('module-tabs').getByRole('link')).toHaveText([
+    'Produkty a receptury (jen pro čtení)',
+  ]);
+  await expect(production.getByTestId('section-setup')).toHaveCount(0);
   await expect(reader.getByRole('link', { name: 'Nový produkt' })).toHaveCount(0);
   await reader.goto(VERSION_URL(1));
   await expect(reader.getByRole('button', { name: 'Aktivovat' })).toHaveCount(0);

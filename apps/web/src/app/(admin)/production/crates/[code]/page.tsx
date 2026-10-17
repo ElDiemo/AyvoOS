@@ -8,6 +8,7 @@ import { ProductionHeader } from '@/components/production/production-header';
 import { BottleStatusBadge } from '@/components/status';
 import { Card, Field, FieldList } from '@/components/ui';
 import { cratesCs } from '@/i18n/cs/crates';
+import { crateCorrectionsCs } from '@/i18n/cs/filling';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
@@ -126,9 +127,6 @@ export default async function CrateDetailPage({ params }: { params: Promise<{ co
             </div>
           )}
         </Card>
-        {hasPermission(me, 'production:cycle_correct') && (
-          <CrateCorrections crateCode={crate.code} status={cycle?.status ?? null} />
-        )}
         <Card testId="crate-facts">
           <FieldList>
             <Field label={t.columns.circulation}>
@@ -204,6 +202,21 @@ export default async function CrateDetailPage({ params }: { params: Promise<{ co
             ))}
           </ol>
         </Card>
+        {/* Supervised corrections are not a work step (issue #11 UI-24): a separate, collapsed
+            section after the crate's identity, content, QR printing and history. */}
+        {hasPermission(me, 'production:cycle_correct') && (
+          <details className="group lg:col-span-2" data-testid="crate-corrections-section">
+            <summary className="cursor-pointer rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-950 marker:text-amber-700">
+              {crateCorrectionsCs.title}
+              <span className="block text-xs font-normal text-amber-900">
+                {crateCorrectionsCs.summary}
+              </span>
+            </summary>
+            <div className="mt-3">
+              <CrateCorrections crateCode={crate.code} status={cycle?.status ?? null} />
+            </div>
+          </details>
+        )}
       </div>
     </>
   );

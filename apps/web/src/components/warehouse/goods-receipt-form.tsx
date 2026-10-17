@@ -43,9 +43,15 @@ export function GoodsReceiptForm({
   suppliers,
   items,
   canWriteCosts,
+  initialItemId,
 }: {
   suppliers: Supplier[];
   items: InventoryItem[];
+  /**
+   * The first line's item: undefined = the first item (as before); an id = that item (e.g. the
+   * material of a recipe from "Připravit výrobu"); null = none, the user chooses.
+   */
+  initialItemId?: string | null;
   /** Prices are recorded only with procurement:cost_write (the API refuses them otherwise). */
   canWriteCosts: boolean;
 }) {
@@ -58,7 +64,7 @@ export function GoodsReceiptForm({
   const [lines, setLines] = useState<Line[]>([
     {
       key: 1,
-      itemId: items[0]?.id ?? '',
+      itemId: initialItemId === undefined ? (items[0]?.id ?? '') : (initialItemId ?? ''),
       quantity: '',
       supplierLotCode: '',
       unitPrice: '',
@@ -228,6 +234,7 @@ export function GoodsReceiptForm({
                     onChange={(e) => update(line.key, { itemId: e.target.value })}
                     className={inputClass}
                   >
+                    {line.itemId === '' && <option value="">{r.chooseItem}</option>}
                     {items.map((i) => (
                       <option key={i.id} value={i.id}>
                         {i.name} ({i.code})

@@ -82,7 +82,7 @@ export const productionCs = {
     noMatch: 'Filtru neodpovídá žádná lahev.',
     none: 'Zatím nejsou žádné lahve.',
     noneHistory: 'Zatím nebyly vytvořeny žádné lahve.',
-    create: 'Vytvořit lahve',
+    create: 'Připravit QR etikety lahví',
     code: 'Kód lahve',
     status: 'Stav',
     series: 'Série',
@@ -168,8 +168,22 @@ export const productionCs = {
         .join(' · '),
   },
   create: {
-    title: 'Vytvořit lahve',
-    subtitle: 'Každá nová lahev dostane trvalý kód a QR kód; její etikety se připraví k tisku.',
+    title: 'Připravit QR etikety lahví',
+    subtitle:
+      'Vytvoří trvalé identity lahví (kód + QR) a PDF jejich etiket k tisku. Nic se neodepisuje ze skladu a fyzické lahve tím nevznikají: označená lahev se eviduje až scanem po nalepení na lepicím pracovišti, hotová po naplnění.',
+    steps: {
+      identity: '1. QR identita a PDF etikety (tato stránka)',
+      labeled:
+        '2. Nalepení etikety na tělo lahve – sken na lepicím pracovišti (odepíše tělo a etiketu)',
+      filled: '3. Naplnění – sken na plnicím pracovišti (odepíše kapalinu a pumpičku)',
+    },
+    stepsTitle: 'Co se kdy děje',
+    backToSetup: 'Zpět na přípravu výroby',
+    forProduct: (product: string) =>
+      `Pro produkt ${product}: nabízí se jen jeho schválený design (aktuální verze aktivní šablony).`,
+    noApprovedDesign: (product: string) =>
+      `Produkt ${product} nemá schválený design, se kterým lze teď připravit QR etikety (aktuální verze aktivní šablony). Nejdřív ho schvalte u produktu.`,
+    openDesigns: 'Otevřít designy produktu',
     back: 'Lahve',
     quantity: '1 · Počet lahví',
     quantityInvalid: (min: number, max: number) => `Zadejte celé číslo od ${min} do ${max}.`,
@@ -185,7 +199,7 @@ export const productionCs = {
     qrCodes: 'QR kódy',
     devNotice: 'Vývojové prostředí – každá etiketa nese označení „DEV - NOT FOR PRODUCTION“.',
     acknowledge: 'Rozumím, že identity lahví jsou trvalé a nikdy se nemažou.',
-    submit: (n: number) => `Vytvořit ${bottlesWord(n)}`,
+    submit: (n: number) => `Vytvořit ${n} ${plural(n, 'QR identitu', 'QR identity', 'QR identit')}`,
     creating: 'Vytvářím…',
     back2: 'Zpět',
     uncertain: (reason: string) =>
@@ -226,7 +240,7 @@ export const productionCs = {
       `Šablona etiket · ${count} ${plural(count, 'verze', 'verze', 'verzí')}`,
     back: 'Šablony etiket',
     edit: 'Upravit (nová verze)',
-    createBottles: 'Vytvořit lahve s touto šablonou',
+    createBottles: 'Připravit QR etikety s touto šablonou',
     saved: (name: string, version: string) => `Uloženo jako ${name} v${version}.`,
     archivedNotice: (when: string) =>
       `Archivováno ${when}: zůstává pro reprodukci dřívějších etiket, pro nové lahve ji nelze vybrat.`,
