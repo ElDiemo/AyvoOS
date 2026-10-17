@@ -78,6 +78,24 @@ The DEV QR passport (`https://dev.ayvo.co/q/…`) is tailnet-only too.
   rollback is `uninstall.sh` after Caddy no longer binds the tailnet address.
 - If Tailscale is down on the server, the preview is down (fail closed), and deployments stop.
 
+## Reuse as the basis for a separate production server (not implemented)
+
+Owner 2026-10-17: keep this as the starting point for a future production server, without building
+a generic installer now. Nothing here is production-ready, and production is not deployed.
+
+- **Environment values, never in the repo files:** the domain, ACME e-mail and Basic Auth come from
+  the server's env file (`/opt/ayvo/secrets/<env>.env`); the Tailscale IPv4 address
+  (`tailscale ip -4`) and the public interface (the default route) are detected on every run.
+- **Reusable as they are:** `Caddyfile` (tailnet peer check, ACME-only :80), `Corefile`
+  (one name, everything else REFUSED), `deploy/dev/host/` (guard + sysctl), the deploy checks.
+- **DEV-specific names to replace for another environment:** the Compose project and container
+  names (`ayvo-dev-preview-*`), the unit name `ayvo-dev-docker-guard`, the backup path
+  `/var/backups/ayvo-dev-tailnet`, and `APP_ENV=development`.
+- **The only manual steps, all documented here:** the `install.sh` run (sudo), the Tailscale admin
+  console (access policy, split-DNS nameserver restricted to the domain), the public `A` record
+  for ACME HTTP-01. Production has its own decisions (public `qr.ayvo.co`, `portal.ayvo.co`) that
+  this ADR does not make.
+
 ## Rollback (exact)
 
 1. Restore the previous Caddy (saved before the switch in
