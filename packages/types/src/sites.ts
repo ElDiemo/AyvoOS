@@ -110,7 +110,13 @@ export type Site = z.infer<typeof siteSchema>;
 
 /** Why a site cannot be deactivated (or lose a capability) right now. */
 export const siteDependencySchema = z.object({
-  code: z.enum(['STOCK_ON_HAND', 'WAREHOUSES', 'LAST_ACTIVE_SITE']),
+  code: z.enum([
+    'STOCK_ON_HAND',
+    'WAREHOUSES',
+    'LAST_ACTIVE_SITE',
+    'HOTELS_SERVED',
+    'ORDERS_NOT_CLOSED',
+  ]),
   detail: z.string(),
 });
 export type SiteDependency = z.infer<typeof siteDependencySchema>;

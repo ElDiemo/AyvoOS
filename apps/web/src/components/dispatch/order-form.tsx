@@ -1,6 +1,11 @@
 'use client';
 
-import { orderDetailSchema, type HotelSummary, type OrderableProduct } from '@ayvo/types';
+import {
+  orderDetailSchema,
+  type HotelSummary,
+  type OrderableProduct,
+  type OrderCalendar,
+} from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useId, useRef, useState } from 'react';
 import {
@@ -12,34 +17,35 @@ import {
   useFocusFirstError,
 } from '@/components/catalog/form-kit';
 import { buttonClass, Card } from '@/components/ui';
+import { formatDateCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
 import { apiSend } from '@/lib/client-api';
 import { orderErrorText } from './order-errors';
 
 const t = ordersCs.form;
 
-/** Today in the browser's local calendar (the server checks the site's time zone again). */
-function localToday(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
+/**
+ * Nová objednávka. "Today" is the fulfilment (active) site's calendar day supplied by the server —
+ * the same rule the API checks — never the device's time zone.
+ */
 export function OrderForm({
   hotels,
   products,
   initialHotel,
+  calendar,
 }: {
   hotels: HotelSummary[];
   products: OrderableProduct[];
   initialHotel: string;
+  calendar: OrderCalendar;
 }) {
+  const today = calendar.today;
   const router = useRouter();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
   const focusError = useFocusFirstError(form);
   const [hotel, setHotel] = useState(initialHotel);
-  const [date, setDate] = useState(localToday());
+  const [date, setDate] = useState(today);
   const [crates, setCrates] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -58,7 +64,7 @@ export function OrderForm({
     });
     const next = {
       hotel: hotel ? null : t.required,
-      date: !date ? t.required : date < localToday() ? t.dateInvalid : null,
+      date: !date ? t.required : date < today ? t.dateInvalid : null,
       lines: invalid || lines.length === 0 ? t.noLines : null,
     };
     setErrors(next);
@@ -104,16 +110,21 @@ export function OrderForm({
               ))}
             </select>
           </FormField>
-          <FormField id={`${id}-date`} label={t.shipDate} error={errors.date}>
+          <FormField
+            id={`${id}-date`}
+            label={t.shipDate}
+            help={t.shipDateHelp(formatDateCs(today), calendar.site.name)}
+            error={errors.date}
+          >
             <input
               id={`${id}-date`}
               name="requestedShipDate"
               type="date"
               value={date}
-              min={localToday()}
+              min={today}
               onChange={(e) => setDate(e.target.value)}
               aria-invalid={!!errors.date}
-              aria-describedby={describedBy(`${id}-date`, false, !!errors.date)}
+              aria-describedby={describedBy(`${id}-date`, true, !!errors.date)}
               className={fieldClass(!!errors.date)}
             />
           </FormField>

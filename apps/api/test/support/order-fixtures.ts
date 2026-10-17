@@ -40,7 +40,9 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
   const kit: LabelingKit = await labelingKit(t, { capacity });
   await receiveItem(t, kit.pumpItemId, 500);
   const bottleLot = (await receiveBottles(t, 200)).lines[0]!.lot!.id;
-  const liquidLot = (await receiveItem(t, kit.liquidItemId, 330 * 100)).lines[0]!.lot!.id;
+  const receiveLiquid = async () =>
+    (await receiveItem(t, kit.liquidItemId, 330 * 100)).lines[0]!.lot!.id;
+  const liquidLot = await receiveLiquid();
   let pool: Awaited<ReturnType<typeof printedBottles>> = [];
   let versionId = '';
 
@@ -56,6 +58,7 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
 
   async function make(
     state: 'READY_TO_FILL' | 'FILLING' | 'FILLED' = 'FILLED',
+    lot: string = liquidLot,
   ): Promise<MadeCrate> {
     if (pool.length < capacity) await refill();
     const bottles = pool.splice(0, capacity);
@@ -75,7 +78,7 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
     if (state !== 'READY_TO_FILL') {
       const fs = await fillingSession(t, 'HAND_SOAP');
       expect((await fillLoadCrate(t, fs, crateUrl)).status).toBe(200);
-      expect((await chooseLiquidLot(t, fs, liquidLot)).status).toBe(200);
+      expect((await chooseLiquidLot(t, fs, lot)).status).toBe(200);
       for (const b of state === 'FILLING' ? bottles.slice(0, 1) : bottles) {
         const r = await fillScan(t, fs, b.url);
         expect(r.status, JSON.stringify(r.body)).toBe(200);
@@ -91,7 +94,8 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
     return { crateUrl, crateCode: crate.code, bottleIds: bottles.map((b) => b.id) };
   }
 
-  return { kit, capacity, make };
+  /** refill(): the next crates carry a new, approved label design (a new printed series). */
+  return { kit, capacity, make, refill, receiveLiquid };
 }
 
 export function hotelBody(overrides: Partial<CreateHotelRequest> = {}): CreateHotelRequest {

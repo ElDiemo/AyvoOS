@@ -14,7 +14,7 @@ passport.
 | Table                      | Purpose                                                                                                                                                                      |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `hotels`                   | `HT-000001`; name, one delivery address (line 1/2, postal code, city, country ISO-2), contact person, phone, e-mail, **fulfilment site** (`sites.id`), creator, operation id |
-| `orders`                   | `OR-000001`; hotel, **site** (the hotel's fulfilment site at creation), snapshot of hotel name, address and contact, requested ship day, status, completion/cancellation     |
+| `orders`                   | `ORD-000001`; hotel, **site** (the hotel's fulfilment site at creation), snapshot of hotel name, address and contact, requested ship day, status, completion/cancellation    |
 | `order_lines`              | one per product: crates (whole), crate type + capacity snapshot, bottles = crates × capacity, `allocated_crates`                                                             |
 | `order_crate_allocations`  | a concrete crate **cycle** assigned to a line; released (never deleted) on removal or cancellation                                                                           |
 | `order_allocation_bottles` | the cycle's active bottle memberships at allocation time (insert-only) — the per-bottle trace                                                                                |
@@ -39,14 +39,14 @@ from an open order, or the order cancelled). An `ALLOCATED` cycle keeps exactly 
 filled members: no supervised correction, refill, repack or abort applies to it (remove it from
 the order first).
 
-| Operation (idempotent per `requestId`) | Rule                                                                                                                                                                                                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Create hotel                           | fulfilment site chosen explicitly (never from the country), active, with the `WAREHOUSE` capability                                                                                                                                                                            |
-| Create order                           | at the **active site**, for a hotel served by it; requested ship day today or later (site time zone); ≥ 1 product, each once, whole crates ≥ 1; each product active with an active recipe                                                                                      |
-| Scan crate                             | order `OPEN` at the active site; the crate of this site; its cycle `FILLED` (Hotovo: capacity members, all filled); a line for its product with the same crate type/capacity; the line not yet complete. Re-scan of a crate already in this order: no change, answered as such |
-| Remove crate                           | order `OPEN`; the active allocation released, cycle back to `FILLED`                                                                                                                                                                                                           |
-| Complete picking                       | order `OPEN` and **every line exactly complete** → `READY_TO_DISPATCH`                                                                                                                                                                                                         |
-| Cancel (reason)                        | order `OPEN` or `READY_TO_DISPATCH`; all crates released (cycles `FILLED`); history kept                                                                                                                                                                                       |
+| Operation (idempotent per `requestId`) | Rule                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create hotel                           | fulfilment site chosen explicitly (never from the country), active, with the `WAREHOUSE` capability **and a really created warehouse**                                                                                                                                                                                       |
+| Create order                           | at the **active site**, for a hotel served by it; requested ship day today or later (site time zone); ≥ 1 product, each once, whole crates ≥ 1; each product active with an active recipe                                                                                                                                    |
+| Scan crate                             | order `OPEN` at the active site; the crate of this site; its cycle `FILLED` (Hotovo: capacity members, all filled); a line for its product with the same crate type/capacity **and, once the line holds a crate, the same recipe version and label design**; the line not yet complete. Re-scan: no change, answered as such |
+| Remove crate                           | order `OPEN`; the active allocation released, cycle back to `FILLED`; no reason needed, author, time and crate always recorded                                                                                                                                                                                               |
+| Complete picking                       | order `OPEN` and **every line exactly complete** → `READY_TO_DISPATCH`                                                                                                                                                                                                                                                       |
+| Cancel (reason)                        | order `OPEN` or `READY_TO_DISPATCH`; all crates released (cycles `FILLED`); history kept                                                                                                                                                                                                                                     |
 
 Any authorized worker of the site can continue an open picking (no personal lock).
 
@@ -87,14 +87,39 @@ new order; detail with requested vs. loaded crates and bottles per product; pick
 The picking screen is for a mobile terminal: hotel and order always on top, large per-product
 counters, a focused scan field, Czech errors, a retry of the same request after an uncertain answer.
 
-## 6. Open questions for the owner
+## 6. Owner decisions (2026-10-17)
 
-1. Order number format `OR-000001` (global, like `GR-`) — keep or another prefix?
-2. Fulfilment site must have the `WAREHOUSE` capability (dispatch from its warehouse) — correct?
-3. Ship day must be today or later when the order is created — or may orders be back-dated?
-4. Mixed recipe or label versions of one product within one order are allowed (each crate keeps
-   its own snapshot) — correct?
-5. Removing a crate before completion needs no reason (a scanning mistake) — should it?
+1. **Order number `ORD-000001`** — language-neutral for every country; only the word
+   (Objednávka / Order / Bestellung) is translated. Internal ids unchanged; country, hotel and
+   site are separate columns and are never derived from the number. (No `OR-` number existed
+   anywhere — the slice was never deployed — so nothing was renumbered.)
+2. **The fulfilment site needs a really created warehouse**, not only the `WAREHOUSE` capability
+   (API, the site list of the form and the database trigger).
+3. **Today or later, by the fulfilment site's time zone**; no back-dated orders. The form takes
+   "today" from the server (`GET /api/admin/orders/calendar`), never from the device's clock.
+4. **One order line never mixes recipe versions or label designs.** The first loaded crate pins
+   them on the line (`order_lines.recipe_version_id`, `label_template_version_id`), every further
+   crate must match (`LINE_VERSION_MISMATCH`, checked by the API and the database), and the pin is
+   released only when the line is empty again. Different liquid lots between bottles are allowed —
+   a lot is not a version.
+5. **Removing a crate needs no reason**, but author, time and crate are always recorded (order
+   event + released allocation). **Cancelling an order always needs a reason.**
+
+## 6a. Review fixes (PR #29, Codex 2026-10-17)
+
+- **Picking never loses a scan** (ORD-R1): the scan field never blocks; every QR is queued with
+  its own stable request id and sent in order (the shared station queue). An uncertain answer stops
+  the queue until "Zkusit znovu" sends the same attempt; unresolved attempts are kept in this tab's
+  session storage across a reload, block removing crates and completing, and the existing leave
+  guard holds back in-app links and the site switch before anything is sent.
+- **Site deactivation** (ORD-R2): a site serving hotels (`HOTELS_SERVED`) or with orders still
+  open or ready to dispatch (`ORDERS_NOT_CLOSED`) cannot be deactivated — modules register their
+  checks with the sites module (no table access across modules); hotel and order creation take a
+  share lock on the site row, so a concurrent deactivation never acts on a stale check; the
+  database refuses it as well. No hotel deactivation/reassignment is introduced.
+- **Paging** (ORD-R3): the order tabs and a hotel's orders are paged (`page`, `pageSize` ≤ 100,
+  `total`) in a stable order; nothing is cut off silently.
+- **One calendar day** (ORD-R4): see decision 3.
 
 ## 7. Implementation status (PR, 2026-10-17)
 
@@ -105,6 +130,9 @@ counters, a focused scan field, Czech errors, a retry of the same request after 
 - Web: modules **Hotely** (`/hotels`) and **Expedice** (`/dispatch`, picking at
   `/dispatch/orders/<code>/pick`) — owner-approved additions to the company functions of doc 019.
 - Tests: `orders.e2e.test.ts` (rules, idempotency, concurrency, database invariants, no stock
-  movement), `orders-access.e2e.test.ts` (real sign-in: ADMIN only, site isolation, resuming by
-  another worker), Playwright `workflow-dispatch.spec.ts` (whole flow on a 390/320 px terminal).
+  movement, warehouse requirement, version pins, paging beyond 200), `orders-access.e2e.test.ts`
+  (real sign-in: ADMIN only, site isolation, resuming by another worker, deactivation blockers and
+  their race with hotel creation), Playwright `workflow-dispatch.spec.ts` (whole flow on a
+  390/320 px terminal; rapid scans with a held answer; answers lost before and after the commit;
+  leave guard, site switch and reload; device time zones UTC+14 / UTC−11).
 - Screenshots (synthetic data): `docs/screenshots/dispatch/`.

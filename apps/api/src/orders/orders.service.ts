@@ -2,7 +2,11 @@ import type {
   CancelOrderRequest,
   CompleteOrderRequest,
   CreateOrderRequest,
+  HotelOrders,
+  HotelOrdersQuery,
   HotelSummary,
+  OrderCalendar,
+  OrderListQuery,
   OrderableProduct,
   OrderDetail,
   OrderList,
@@ -12,7 +16,7 @@ import type {
   OrderView,
   RemoveOrderCrateRequest,
 } from '@ayvo/types';
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { RecipesService } from '../catalog/recipes.service.js';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
@@ -26,6 +30,8 @@ import { PrismaService } from '../database/prisma.service.js';
 import { QrRegistryService } from '../database/qr-registry.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import type { SiteContext } from '../inventory/warehouse-context.js';
+import { LabelTemplatesService } from '../labels/label-templates.service.js';
+import { lockSiteShared, SiteDependencyRegistry } from '../sites/site-dependencies.js';
 
 const summaryInclude = {
   hotel: { select: { code: true, name: true } },
@@ -33,8 +39,6 @@ const summaryInclude = {
   lines: { select: { crates: true, capacity: true, allocatedCrates: true } },
 } satisfies Prisma.OrderInclude;
 type SummaryRecord = Prisma.OrderGetPayload<{ include: typeof summaryInclude }>;
-
-const LIST_LIMIT = 200;
 
 const orderNotOpen = (status: string) =>
   domainErrorWithDetails(409, 'ORDER_NOT_OPEN', 'This order is not open for picking', { status });
@@ -47,20 +51,52 @@ const orderNotOpen = (status: string) =>
  * no bottle status; it ends at "Připraveno k expedici" (no carrier, dispatch or delivery).
  */
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly operations: OperationRequestsService,
     private readonly hotels: HotelsService,
     private readonly cycles: CrateCyclesService,
     private readonly recipes: RecipesService,
+    private readonly labels: LabelTemplatesService,
     private readonly registry: QrRegistryService,
+    private readonly siteDependencies: SiteDependencyRegistry,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
+  /**
+   * A site with orders not yet closed stays active: they could no longer be picked or cancelled
+   * there (doc 022 §7). READY_TO_DISPATCH counts too — nothing is dispatched yet.
+   */
+  onModuleInit(): void {
+    this.siteDependencies.register(async (siteId, db) => {
+      const n = await db.order.count({
+        where: { siteId, status: { in: ['OPEN', 'READY_TO_DISPATCH'] } },
+      });
+      return n > 0
+        ? [{ code: 'ORDERS_NOT_CLOSED', detail: `${n} order(s) are open or ready to dispatch` }]
+        : [];
+    });
+  }
+
+  /** The active site's calendar day: the form's default and minimum (same rule as the API). */
+  async calendar(site: SiteContext): Promise<OrderCalendar> {
+    const row = await this.prisma.site.findUniqueOrThrow({
+      where: { id: site.siteId },
+      select: { code: true, name: true, timeZone: true },
+    });
+    return {
+      today: localDate(new Date(), row.timeZone),
+      timeZone: row.timeZone,
+      site: { code: row.code, name: row.name },
+    };
+  }
+
   // --- reading ------------------------------------------------------------------------------
 
-  async list(site: SiteContext, view: OrderView): Promise<OrderList> {
+  /** One page of a tab, in a stable order (ship day, then number); totals of every tab. */
+  async list(site: SiteContext, query: OrderListQuery): Promise<OrderList> {
+    const { view, page, pageSize } = query;
     const today = await this.today(site.siteId);
     const where = (v: OrderView): Prisma.OrderWhereInput => {
       const date = new Date(`${today}T00:00:00Z`);
@@ -79,31 +115,50 @@ export class OrdersService {
           view === 'closed'
             ? [{ requestedShipDate: 'desc' }, { serial: 'desc' }]
             : [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
-        take: LIST_LIMIT,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
       ...(['today', 'future', 'overdue', 'closed'] as const).map((v) =>
         this.prisma.order.count({ where: where(v) }),
       ),
     ]);
+    const total = {
+      today: counts[0]!,
+      future: counts[1]!,
+      overdue: counts[2]!,
+      closed: counts[3]!,
+    };
     return {
       view,
       today,
       items: rows.map(toSummary),
-      counts: { today: counts[0]!, future: counts[1]!, overdue: counts[2]!, closed: counts[3]! },
+      page,
+      pageSize,
+      total: total[view],
+      counts: total,
     };
   }
 
-  /** The orders of a hotel at the active site, newest first (hotel detail). */
-  async ofHotel(site: SiteContext, hotelCode: string): Promise<OrderSummary[]> {
+  /** The orders of a hotel at the active site, newest first, one page (hotel detail). */
+  async ofHotel(
+    site: SiteContext,
+    hotelCode: string,
+    query: HotelOrdersQuery,
+  ): Promise<HotelOrders> {
     const hotel = await this.hotels.byCode(hotelCode);
     if (!hotel) throw new NotFoundException('Hotel not found');
-    const rows = await this.prisma.order.findMany({
-      where: { siteId: site.siteId, hotelId: hotel.id },
-      include: summaryInclude,
-      orderBy: { serial: 'desc' },
-      take: LIST_LIMIT,
-    });
-    return rows.map(toSummary);
+    const where = { siteId: site.siteId, hotelId: hotel.id };
+    const [rows, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where,
+        include: summaryInclude,
+        orderBy: { serial: 'desc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.order.count({ where }),
+    ]);
+    return { items: rows.map(toSummary), page: query.page, pageSize: query.pageSize, total };
   }
 
   async detail(site: SiteContext, code: string): Promise<OrderDetail> {
@@ -117,6 +172,7 @@ export class OrdersService {
           include: {
             product: { select: { code: true, name: true } },
             crateType: { select: { code: true, name: true } },
+            recipeVersion: { select: { version: true } },
           },
           orderBy: { lineNo: 'asc' },
         },
@@ -127,6 +183,7 @@ export class OrdersService {
             cycle: {
               select: {
                 capacity: true,
+                labelTemplateVersionId: true,
                 product: { select: { code: true, name: true } },
                 recipeVersion: { select: { version: true } },
               },
@@ -144,6 +201,11 @@ export class OrdersService {
         canceller: { select: { displayName: true } },
       },
     });
+    const designs = await this.labels.getVersionRefs([
+      ...row.lines.flatMap((l) => l.labelTemplateVersionId ?? []),
+      ...row.allocations.map((a) => a.cycle.labelTemplateVersionId),
+    ]);
+    const design = (id: string | null) => (id ? (designs.get(id)?.label ?? null) : null);
     return {
       ...toSummary(row),
       delivery: {
@@ -160,6 +222,8 @@ export class OrdersService {
         product: l.product,
         crateType: l.crateType,
         capacity: l.capacity,
+        recipeVersion: l.recipeVersion?.version ?? null,
+        design: design(l.labelTemplateVersionId),
         requiredCrates: l.crates,
         loadedCrates: l.allocatedCrates,
         requiredBottles: l.bottles,
@@ -169,6 +233,7 @@ export class OrdersService {
         crate: a.crate.code,
         product: a.cycle.product,
         recipeVersion: a.cycle.recipeVersion.version,
+        design: design(a.cycle.labelTemplateVersionId) ?? '',
         bottles: a.cycle.capacity,
         loadedAt: a.allocatedAt.toISOString(),
         loadedBy: a.allocator.displayName,
@@ -224,6 +289,14 @@ export class OrdersService {
       input.requestId,
       { actorId, siteId: site.siteId, ...input, requestId: undefined },
       async (tx) => {
+        // Serialised with a deactivation of the site (its lock); the site must have its warehouse.
+        await lockSiteShared(tx, site.siteId);
+        const served = await tx.site.count({
+          where: { id: site.siteId, active: true, locations: { some: {} } },
+        });
+        if (served === 0) {
+          throw domainError(409, 'SITE_WITHOUT_WAREHOUSE', 'The active site has no warehouse');
+        }
         const hotel = await this.hotels.byCode(input.hotelCode, tx);
         if (!hotel) throw domainError(422, 'UNKNOWN_HOTEL', 'Unknown hotel');
         // The order belongs to the hotel's fulfilment site — never to another site.
@@ -391,8 +464,48 @@ export class OrdersService {
             { product: product.code, crates: line.crates },
           );
         }
+        // One line never mixes recipe versions or label designs (owner 2026-10-17): the first
+        // crate pins them; the database checks the allocation against the pins again.
+        if (
+          line.allocatedCrates > 0 &&
+          (line.recipeVersionId !== cycle.recipeVersionId ||
+            line.labelTemplateVersionId !== cycle.labelTemplateVersionId)
+        ) {
+          const refs = await this.labels.getVersionRefs(
+            [line.labelTemplateVersionId!, cycle.labelTemplateVersionId],
+            tx,
+          );
+          const pinned = await tx.recipeVersion.findUniqueOrThrow({
+            where: { id: line.recipeVersionId! },
+            select: { version: true },
+          });
+          throw domainErrorWithDetails(
+            409,
+            'LINE_VERSION_MISMATCH',
+            'This product line already holds crates of another recipe version or label design',
+            {
+              crate: crate.code,
+              line: {
+                recipeVersion: pinned.version,
+                design: refs.get(line.labelTemplateVersionId!)?.label ?? null,
+              },
+              scanned: {
+                recipeVersion: cycle.recipeVersion.version,
+                design: refs.get(cycle.labelTemplateVersionId)?.label ?? null,
+              },
+            },
+          );
+        }
         const members = await this.cycles.activeMembers(tx, cycle.id);
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
+        await tx.orderLine.update({
+          where: { id: line.id },
+          data: {
+            allocatedCrates: { increment: 1 },
+            recipeVersionId: cycle.recipeVersionId,
+            labelTemplateVersionId: cycle.labelTemplateVersionId,
+          },
+        });
         await this.cycles.allocate(tx, cycle, { ...step, order: order.code });
         const allocation = await tx.orderCrateAllocation.create({
           data: {
@@ -411,10 +524,6 @@ export class OrdersService {
             assignmentId: m.id,
             bottleId: m.bottle.id,
           })),
-        });
-        await tx.orderLine.update({
-          where: { id: line.id },
-          data: { allocatedCrates: { increment: 1 } },
         });
         await this.event(tx, order.id, 'CRATE_ADDED', step, { crate: crate.code });
         return { outcome: 'ADDED' as const, crate: crate.code, product };
@@ -570,9 +679,18 @@ export class OrdersService {
       select: { lineId: true },
     });
     await this.cycles.releaseAllocation(tx, cycle!, { ...step, order: order.code, reason });
+    // The last crate out releases the line's pinned versions (the order lock serialises this).
+    const line = await tx.orderLine.findUniqueOrThrow({
+      where: { id: row.lineId },
+      select: { allocatedCrates: true },
+    });
+    const left = line.allocatedCrates - 1;
     await tx.orderLine.update({
       where: { id: row.lineId },
-      data: { allocatedCrates: { decrement: 1 } },
+      data: {
+        allocatedCrates: left,
+        ...(left === 0 ? { recipeVersionId: null, labelTemplateVersionId: null } : {}),
+      },
     });
   }
 

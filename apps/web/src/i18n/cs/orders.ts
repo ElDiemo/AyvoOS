@@ -16,6 +16,9 @@ export const ordersCs = {
     overdue: 'Žádná objednávka po termínu.',
     closed: 'Zatím žádná dokončená ani stornovaná objednávka.',
   } as Record<string, string>,
+  page: (page: number, pages: number) => `Strana ${page} z ${pages}`,
+  previous: 'Předchozí',
+  next: 'Další',
   columns: {
     code: 'Číslo',
     hotel: 'Hotel',
@@ -23,6 +26,8 @@ export const ordersCs = {
     status: 'Stav',
     crates: 'Bedny',
     bottles: 'Lahve',
+    cratesOf: 'Bedny načtené / požadované',
+    bottlesOf: 'Lahve načtené / požadované',
   },
   status: {
     OPEN: 'Otevřená',
@@ -47,6 +52,8 @@ export const ordersCs = {
     crates: 'Načtené bedny',
     noCrates: 'Zatím není načtená žádná bedna.',
     recipe: (v: number) => `receptura V${v}`,
+    pinned: (v: number, design: string) => `receptura V${v} · design ${design}`,
+    pinnedHelp: 'Položka nemíchá verze: první bedna určila recepturu a design etikety.',
     loadedBy: (by: string) => `načetl(a) ${by}`,
     history: 'Historie',
     events: {
@@ -76,6 +83,8 @@ export const ordersCs = {
     hotelHelp: 'Jen hotely, které obsluhuje aktivní provozovna.',
     noHotels: 'Tato provozovna zatím neobsluhuje žádný hotel.',
     shipDate: 'Požadovaný den odeslání',
+    shipDateHelp: (today: string, site: string) =>
+      `Nejdříve dnes – ${today} podle provozovny ${site}.`,
     products: 'Produkty (celé bedny)',
     noProducts: 'Žádný aktivní produkt s aktivní recepturou.',
     crates: 'Beden',
@@ -92,7 +101,21 @@ export const ordersCs = {
     scanLabel: 'Naskenujte QR bedny',
     scanHelp: 'Jen plná hotová bedna (Hotovo) správného produktu této provozovny.',
     scanPlaceholder: 'QR bedny',
-    busy: 'Ukládám…',
+    busy: 'Ověřuji… další QR můžete hned načíst.',
+    log: 'Poslední skeny',
+    logAdded: 'načtena',
+    logAlready: 'už v objednávce',
+    logRefused: 'odmítnuta',
+    blockedTitle: 'Výsledek skenu bedny není jistý.',
+    blockedText:
+      'Spojení se serverem selhalo. Bednu nechte u objednávky a klepněte na „Zkusit znovu“ – stejný pokus se nikdy nenačte dvakrát. Do vyřešení nelze bedny odebírat, kompletaci dokončit ani odejít.',
+    waiting: (n: number) => (n === 0 ? 'Žádné další skeny nečekají.' : `Čeká na odeslání: ${n}`),
+    leaveGuard: {
+      title: 'Skeny beden nejsou vyřešené',
+      text: 'Některý sken čeká na odeslání nebo jeho výsledek není jistý. Stránku ani provozovnu nyní nelze opustit – vraťte se a sken dokončete („Zkusit znovu“).',
+      stay: 'Zpět k vyřešení skenu',
+    },
+    waitForScans: 'Nejdřív se musí vyřešit všechny skeny.',
     added: (crate: string, product: string) => `Bedna ${crate} načtena – ${product}`,
     already: (crate: string) => `Bedna ${crate} už v této objednávce je – nic se nezměnilo.`,
     uncertain:
@@ -121,6 +144,9 @@ export const ordersCs = {
     PRODUCT_NOT_IN_ORDER: 'Produkt této bedny objednávka neobsahuje.',
     WRONG_CRATE_TYPE: 'Bedna je jiného typu, než objednávka požaduje.',
     LINE_COMPLETE: 'Tento produkt má už všechny objednané bedny.',
+    LINE_VERSION_MISMATCH:
+      'Bedna má jinou verzi receptury nebo design etikety než bedny, které už v této položce jsou – položka je nemíchá.',
+    SITE_WITHOUT_WAREHOUSE: 'Provozovna nemá založený sklad.',
     ORDER_NOT_OPEN: 'Objednávka není otevřená.',
     ORDER_INCOMPLETE: 'Objednávka ještě není přesně splněná.',
     CRATE_NOT_IN_ORDER: 'Bedna v objednávce není.',

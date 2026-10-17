@@ -4,7 +4,7 @@ import type {
   HotelDetail,
   HotelSummary,
 } from '@ayvo/types';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
 import { domainError } from '../common/domain-error.js';
@@ -12,6 +12,7 @@ import { allocateSerials } from '../database/code-counters.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
+import { lockSiteShared, SiteDependencyRegistry } from '../sites/site-dependencies.js';
 
 const hotelInclude = {
   fulfillmentSite: { select: { code: true, name: true } },
@@ -19,8 +20,15 @@ const hotelInclude = {
 } satisfies Prisma.HotelInclude;
 type HotelRecord = Prisma.HotelGetPayload<{ include: typeof hotelInclude }>;
 
-/** Hotels whose fulfilment site may serve them: active, with a warehouse (doc 028 §2). */
-const servingSite = { active: true, capabilities: { has: 'WAREHOUSE' } } as const;
+/**
+ * Sites that may serve a hotel: active, with the WAREHOUSE capability AND a really created
+ * warehouse (owner 2026-10-17 — the capability alone is not enough).
+ */
+const servingSite = {
+  active: true,
+  capabilities: { has: 'WAREHOUSE' },
+  locations: { some: {} },
+} satisfies Prisma.SiteWhereInput;
 
 /**
  * customers module (doc 007, doc 028): hotels with one delivery address and contact and their
@@ -28,12 +36,23 @@ const servingSite = { active: true, capabilities: { has: 'WAREHOUSE' } } as cons
  * company-wide master data; their orders belong to the orders module.
  */
 @Injectable()
-export class HotelsService {
+export class HotelsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly operations: OperationRequestsService,
     private readonly audit: AuditService,
+    private readonly siteDependencies: SiteDependencyRegistry,
   ) {}
+
+  /** A site serving hotels stays active (doc 022 §7; no hotel reassignment exists yet). */
+  onModuleInit(): void {
+    this.siteDependencies.register(async (siteId, db) => {
+      const n = await db.hotel.count({ where: { fulfillmentSiteId: siteId } });
+      return n > 0
+        ? [{ code: 'HOTELS_SERVED', detail: `${n} hotel(s) are served by this site` }]
+        : [];
+    });
+  }
 
   /** All hotels, or those served by one site (ordering at the active site). */
   async list(fulfillmentSiteId?: string): Promise<HotelSummary[]> {
@@ -76,6 +95,9 @@ export class HotelsService {
       input.requestId,
       { actorId, ...input, requestId: undefined },
       async (tx) => {
+        // Serialised with a deactivation of that site (its lock): never served by a site that
+        // is being deactivated on a stale check.
+        await lockSiteShared(tx, input.fulfillmentSiteId);
         const site = await tx.site.findFirst({
           where: { id: input.fulfillmentSiteId, ...servingSite },
           select: { id: true },
@@ -84,7 +106,7 @@ export class HotelsService {
           throw domainError(
             422,
             'FULFILLMENT_SITE_INVALID',
-            'The fulfilment site must be an active site with a warehouse',
+            'The fulfilment site must be an active site with a created warehouse',
           );
         }
         const { first: serial } = await allocateSerials(tx, 'hotel', 1);

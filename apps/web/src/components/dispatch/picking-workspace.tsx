@@ -4,9 +4,14 @@ import { orderDetailSchema, orderScanResultSchema, type OrderDetail } from '@ayv
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ConfirmDialog, uncertain, useAttempt } from '@/components/catalog/form-kit';
 import { buttonClass, inputClass } from '@/components/ui';
+import {
+  ScanQueueStatus,
+  useScanQueue,
+  type QueueItem,
+} from '@/components/workstations/use-scan-queue';
 import { formatDateCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
 import { apiSend } from '@/lib/client-api';
@@ -16,11 +21,20 @@ import { OrderLines } from './order-lines';
 
 const t = ordersCs.pick;
 type Message = { tone: 'ok' | 'info' | 'error'; text: string } | null;
+type LogEntry = {
+  id: string;
+  scanned: string;
+  result: 'added' | 'already' | 'refused';
+  text: string;
+};
 
 /**
- * Kompletace on a mobile terminal (doc 028): the hotel and order stay on top, large counters per
- * product, a focused scan field. One scan = one request id; after an uncertain answer the same
- * scan is retried with the same id (nothing is doubled). Any authorized worker may continue.
+ * Kompletace on a mobile terminal (doc 028): the hotel, order and site stay on top, large
+ * counters per product, a scan field that never blocks. Every scan is queued with its own stable
+ * request id and sent in order (the shared station queue): a scanner may send the next QR while
+ * the previous one is still being saved. An uncertain answer stops the queue until "Zkusit znovu"
+ * sends the SAME attempt; unresolved scans survive a reload of this tab, block leaving and the
+ * site switch (before anything is sent) and block removing crates or completing.
  */
 export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
   const router = useRouter();
@@ -29,58 +43,70 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
   const [order, setOrder] = useState(initial);
   const [value, setValue] = useState('');
   const [message, setMessage] = useState<Message>(null);
-  const [retry, setRetry] = useState<string | null>(null);
+  const [log, setLog] = useState<LogEntry[]>([]);
   const [removing, setRemoving] = useState<string | null>(null);
   const [reason, setReason] = useState('');
-  const scan = useAttempt();
   const action = useAttempt();
   useScanFocusReturn(input);
+  const focusScan = useCallback(() => input.current?.focus(), []);
   const open = order.status === 'OPEN';
+  // After the removal dialog closes (the browser gives the focus back to its opener first), the
+  // scan field takes it again: this effect runs after the dialog's own close effect.
+  useEffect(() => {
+    if (removing === null && open) input.current?.focus();
+  }, [removing, open]);
   const complete = order.lines.every((l) => l.loadedCrates === l.requiredCrates);
 
-  // The field is disabled while a scan is saved: focus returns once it is enabled again, after
-  // every answer (accepted or refused), so the next scan never types into nowhere.
-  useEffect(() => {
-    if (open && !removing && !scan.busy && retry === null) input.current?.focus();
-  }, [open, removing, scan.busy, retry, order, message]);
+  const record = (item: QueueItem, result: LogEntry['result'], text: string) =>
+    setLog((l) => [{ id: item.requestId, scanned: item.raw, result, text }, ...l].slice(0, 8));
 
-  async function send(scanned: string) {
-    const result = await scan.run(scanned, (requestId) =>
-      apiSend('POST', `admin/orders/${order.code}/crates`, orderScanResultSchema, {
-        requestId,
-        scannedValue: scanned,
-      }),
-    );
-    if (result.ok) {
-      setOrder(result.value.order);
-      setRetry(null);
-      setValue('');
-      setMessage(
-        result.value.outcome === 'ADDED'
-          ? { tone: 'ok', text: t.added(result.value.crate, result.value.product.name) }
-          : { tone: 'info', text: t.already(result.value.crate) },
+  async function process(item: QueueItem): Promise<boolean> {
+    try {
+      const res = await apiSend(
+        'POST',
+        `admin/orders/${order.code}/crates`,
+        orderScanResultSchema,
+        {
+          requestId: item.requestId,
+          scannedValue: item.raw,
+        },
       );
-    } else if (result.error) {
-      if (uncertain(result.error)) {
-        setRetry(scanned);
+      setOrder(res.order);
+      const text =
+        res.outcome === 'ADDED' ? t.added(res.crate, res.product.name) : t.already(res.crate);
+      setMessage({ tone: res.outcome === 'ADDED' ? 'ok' : 'info', text });
+      record(item, res.outcome === 'ADDED' ? 'added' : 'already', res.crate);
+      return true;
+    } catch (error) {
+      if (uncertain(error)) {
         setMessage({ tone: 'error', text: t.uncertain });
-      } else {
-        setRetry(null);
-        setValue('');
-        setMessage({ tone: 'error', text: orderErrorText(result.error) });
+        return false; // stays at the head of the queue with its request id
       }
+      const text = orderErrorText(error);
+      setMessage({ tone: 'error', text });
+      record(item, 'refused', text);
+      return true;
     }
   }
+  const queue = useScanQueue(process, undefined, `ayvo:picking:${order.code}`);
+  const settled = !queue.unresolved && !queue.busy;
+  // Once the queue is resolved ("Zkusit znovu" disappears with its button), the scanner types
+  // into the scan field again.
+  const unresolved = queue.unresolved;
+  useEffect(() => {
+    if (!unresolved && open) input.current?.focus();
+  }, [unresolved, open]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const scanned = value.trim();
-    if (!scanned || scan.busy) return;
-    void send(scanned);
+    setValue('');
+    if (scanned) queue.enqueue({ kind: 'crate', raw: scanned, revision: 0 });
+    input.current?.focus();
   }
 
   async function remove() {
-    if (!removing) return;
+    if (!removing || !settled) return;
     const body = { reason: reason.trim() || null };
     const result = await action.run(`${removing}:${JSON.stringify(body)}`, (requestId) =>
       apiSend('POST', `admin/orders/${order.code}/crates/${removing}/remove`, orderDetailSchema, {
@@ -95,11 +121,12 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
       setReason('');
     } else if (result.error) {
       setMessage({ tone: 'error', text: orderErrorText(result.error) });
-      setRemoving(null);
+      if (!uncertain(result.error)) setRemoving(null);
     }
   }
 
   async function finish() {
+    if (!settled) return;
     const result = await action.run(`complete:${order.code}`, (requestId) =>
       apiSend('POST', `admin/orders/${order.code}/complete`, orderDetailSchema, { requestId }),
     );
@@ -116,7 +143,9 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
         className="sticky top-0 z-10 -mx-4 border-b border-stone-200 bg-white/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-lg sm:border"
         data-testid="picking-context"
       >
-        <p className="text-xs uppercase tracking-wide text-stone-500">{t.title}</p>
+        <p className="text-xs uppercase tracking-wide text-stone-500">
+          {t.title} · {order.site.name} ({order.site.code})
+        </p>
         <p className="text-lg font-semibold wrap-anywhere">{order.hotel.name}</p>
         <p className="text-sm text-stone-600">
           <span className="font-mono">{order.code}</span> · {formatDateCs(order.requestedShipDate)}{' '}
@@ -149,28 +178,40 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
           <label htmlFor={`${id}-scan`} className="text-sm font-medium">
             {t.scanLabel}
           </label>
-          <div className="flex gap-2">
-            <input
-              ref={input}
-              id={`${id}-scan`}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder={t.scanPlaceholder}
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              enterKeyHint="go"
-              disabled={scan.busy || retry !== null}
-              aria-describedby={`${id}-scan-help`}
-              className={cn(inputClass, 'py-3 text-lg')}
-              data-testid="scan-input"
-            />
-          </div>
+          {/* Never disabled: a scanner may send the next code while one is being saved. */}
+          <input
+            ref={input}
+            id={`${id}-scan`}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={t.scanPlaceholder}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            enterKeyHint="go"
+            autoFocus
+            aria-describedby={`${id}-scan-help`}
+            className={cn(inputClass, 'py-3 text-lg')}
+            data-testid="scan-input"
+          />
           <p id={`${id}-scan-help`} className="text-xs text-stone-500">
-            {scan.busy ? t.busy : t.scanHelp}
+            {queue.busy ? t.busy : t.scanHelp}
           </p>
         </form>
       )}
+
+      <ScanQueueStatus
+        queue={queue}
+        testIdPrefix="picking"
+        focusScan={focusScan}
+        texts={{
+          leaveGuard: t.leaveGuard,
+          blockedTitle: t.blockedTitle,
+          blockedText: t.blockedText,
+          waiting: t.waiting,
+          retry: t.retry,
+        }}
+      />
 
       {message && (
         <div
@@ -185,18 +226,6 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
           )}
         >
           {message.text}
-          {retry && (
-            <div className="mt-2">
-              <button
-                type="button"
-                className={buttonClass.primary}
-                onClick={() => void send(retry)}
-                disabled={scan.busy}
-              >
-                {t.retry}
-              </button>
-            </div>
-          )}
         </div>
       )}
 
@@ -207,14 +236,44 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
           <button
             type="button"
             className={cn(buttonClass.primary, 'py-3 text-base')}
-            disabled={!complete || action.busy}
+            disabled={!complete || !settled || action.busy}
             onClick={() => void finish()}
             data-testid="complete-picking"
           >
             {t.complete}
           </button>
           {!complete && <p className="text-xs text-stone-500">{t.completeHelp}</p>}
+          {complete && !settled && <p className="text-xs text-stone-500">{t.waitForScans}</p>}
         </div>
+      )}
+
+      {log.length > 0 && (
+        <section aria-labelledby={`${id}-log`}>
+          <h2 id={`${id}-log`} className="mb-2 text-sm font-semibold">
+            {t.log}
+          </h2>
+          <ol className="flex flex-col gap-1 text-sm" data-testid="scan-log">
+            {log.map((e) => (
+              <li
+                key={e.id}
+                data-result={e.result}
+                className={cn(
+                  'rounded border px-2 py-1 wrap-anywhere',
+                  e.result === 'refused' ? 'border-red-200 bg-red-50' : 'border-stone-200 bg-white',
+                )}
+              >
+                <span className="font-medium">
+                  {e.result === 'added'
+                    ? t.logAdded
+                    : e.result === 'already'
+                      ? t.logAlready
+                      : t.logRefused}
+                </span>{' '}
+                · {e.text}
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
 
       {order.crates.length > 0 && (
@@ -237,6 +296,7 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
                   <button
                     type="button"
                     className={buttonClass.secondary}
+                    disabled={!settled}
                     onClick={() => setRemoving(c.crate)}
                   >
                     {t.remove}

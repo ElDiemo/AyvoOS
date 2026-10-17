@@ -6,7 +6,8 @@ import {
   hotelCodeSchema,
   orderCodeSchema,
   orderScanRequestSchema,
-  orderViewSchema,
+  orderListQuerySchema,
+  hotelOrdersQuerySchema,
   removeOrderCrateRequestSchema,
   type CancelOrderRequest,
   type CompleteOrderRequest,
@@ -17,12 +18,13 @@ import {
   type OrderList,
   type OrderScanRequest,
   type OrderScanResult,
-  type OrderSummary,
-  type OrderView,
+  type HotelOrders,
+  type HotelOrdersQuery,
+  type OrderCalendar,
+  type OrderListQuery,
   type RemoveOrderCrateRequest,
 } from '@ayvo/types';
 import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
-import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
@@ -32,7 +34,6 @@ import type { SiteContext } from '../inventory/warehouse-context.js';
 import { OrdersService } from './orders.service.js';
 
 const CODE = new ZodValidationPipe(orderCodeSchema);
-const listQuerySchema = z.object({ view: orderViewSchema.default('today') });
 
 /**
  * Objednávky a expedice (doc 028): orders of the active site and their picking. An order of
@@ -45,10 +46,16 @@ export class OrdersController {
   @RequirePermission('orders:read')
   @Get()
   list(
-    @Query(new ZodValidationPipe(listQuerySchema)) query: { view: OrderView },
+    @Query(new ZodValidationPipe(orderListQuerySchema)) query: OrderListQuery,
     @OperationalSite() site: SiteContext,
   ): Promise<OrderList> {
-    return this.orders.list(site, query.view);
+    return this.orders.list(site, query);
+  }
+
+  @RequirePermission('orders:read')
+  @Get('calendar')
+  calendar(@OperationalSite() site: SiteContext): Promise<OrderCalendar> {
+    return this.orders.calendar(site);
   }
 
   @RequirePermission('orders:manage')
@@ -67,9 +74,10 @@ export class OrdersController {
   @Get('hotel/:hotel')
   ofHotel(
     @Param('hotel', new ZodValidationPipe(hotelCodeSchema)) hotel: string,
+    @Query(new ZodValidationPipe(hotelOrdersQuerySchema)) query: HotelOrdersQuery,
     @OperationalSite() site: SiteContext,
-  ): Promise<OrderSummary[]> {
-    return this.orders.ofHotel(site, hotel);
+  ): Promise<HotelOrders> {
+    return this.orders.ofHotel(site, hotel, query);
   }
 
   @RequirePermission('orders:read')

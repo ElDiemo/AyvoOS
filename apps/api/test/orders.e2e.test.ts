@@ -51,6 +51,20 @@ describe.skipIf(!hasDatabase)('hotels, orders and picking (doc 028)', () => {
     t.prisma.crateCycle.findFirstOrThrow({
       where: { crate: { code: crateCode }, status: { not: 'ABORTED' } },
     });
+  /** Every order of a tab, page by page (the first page's today and counts). */
+  const allOf = async (view: string) => {
+    let first: OrderList | null = null;
+    const items: OrderList['items'] = [];
+    for (let page = 1; ; page++) {
+      const res = (
+        await http().get('/api/admin/orders').query({ view, page, pageSize: 100 }).expect(200)
+      ).body as OrderList;
+      first ??= res;
+      items.push(...res.items);
+      if (page * res.pageSize >= res.total) break;
+    }
+    return { ...first!, items };
+  };
   const detail = async (code: string) =>
     (await http().get(`/api/admin/orders/${code}`).expect(200)).body as OrderDetail;
 
@@ -118,7 +132,7 @@ describe.skipIf(!hasDatabase)('hotels, orders and picking (doc 028)', () => {
       ],
       history: [{ type: 'CREATED' }],
     });
-    expect(order.code).toMatch(/^OR-\d{6}$/);
+    expect(order.code).toMatch(/^ORD-\d{6}$/);
     const past = await http()
       .post('/api/admin/orders')
       .send({
@@ -194,8 +208,7 @@ describe.skipIf(!hasDatabase)('hotels, orders and picking (doc 028)', () => {
         },
       });
     });
-    const tab = async (view: string) =>
-      (await http().get('/api/admin/orders').query({ view }).expect(200)).body as OrderList;
+    const tab = (view: string) => allOf(view);
     const today = await tab('today');
     expect(today.today).toBe(pragueToday());
     expect(today.items.map((o) => o.code)).toContain(order.code);
@@ -203,9 +216,10 @@ describe.skipIf(!hasDatabase)('hotels, orders and picking (doc 028)', () => {
     expect((await tab('future')).items.map((o) => o.code)).toContain(future.code);
     expect((await tab('overdue')).items.map((o) => o.code)).toContain(overdue.code);
     expect(today.counts.future).toBeGreaterThanOrEqual(1);
-    const ofHotel = (await http().get(`/api/admin/orders/hotel/${hotel.code}`).expect(200))
-      .body as { code: string }[];
-    expect(ofHotel.map((o) => o.code)).toEqual(
+    const ofHotel = (
+      await http().get(`/api/admin/orders/hotel/${hotel.code}?pageSize=100`).expect(200)
+    ).body as { items: { code: string }[] };
+    expect(ofHotel.items.map((o) => o.code)).toEqual(
       expect.arrayContaining([order.code, future.code, overdue.code]),
     );
     // The snapshot is immutable: an order never moves to another site or address.
@@ -509,5 +523,126 @@ describe.skipIf(!hasDatabase)('hotels, orders and picking (doc 028)', () => {
     ).rejects.toThrow();
     await cancelOrder(t, order.code).expect(200);
     await cancelOrder(t, empty.code).expect(200);
+  });
+
+  it('a site with only the WAREHOUSE capability but no warehouse cannot serve a hotel', async () => {
+    const site = (
+      await http()
+        .post('/api/admin/sites')
+        .send({
+          code: `NW-${randomUUID().slice(0, 4).toUpperCase()}`,
+          name: 'Bez skladu',
+          countryCode: 'AT',
+          addressLine1: 'Gasse 1',
+          addressLine2: null,
+          postalCode: '1010',
+          city: 'Wien',
+          timeZone: 'Europe/Vienna',
+          defaultLocale: 'de-AT',
+          defaultCurrency: 'EUR',
+          capabilities: ['WAREHOUSE'],
+          reason: 'site without its warehouse yet',
+        })
+        .expect(201)
+    ).body as { id: string };
+    const refused = await http()
+      .post('/api/admin/hotels')
+      .send(hotelBody({ fulfillmentSiteId: site.id }));
+    expect([refused.status, refused.body.code]).toEqual([422, 'FULFILLMENT_SITE_INVALID']);
+    const sites = (await http().get('/api/admin/hotels/fulfillment-sites').expect(200)).body;
+    expect(sites.map((s: { id: string }) => s.id)).not.toContain(site.id);
+  });
+
+  it('one order line never mixes recipe versions or label designs; the pin is recorded', async () => {
+    // Same product: two crates of one design (different liquid lots), one of another design.
+    const first = await soap.make();
+    const otherLot = await soap.make('FILLED', await soap.receiveLiquid());
+    await soap.refill(); // next crates carry another approved design
+    const otherDesign = await soap.make();
+    const sameAsFirst = await t.prisma.crateCycle.findFirstOrThrow({
+      where: { crate: { code: first.crateCode }, status: { not: 'ABORTED' } },
+    });
+    const order = await createOrder(t, hotel.code, [
+      { productCode: soap.kit.productCode, crates: 2 },
+    ]);
+    await scanCrate(t, order.code, first.crateUrl).expect(200);
+    let d = await detail(order.code);
+    expect(d.lines[0]).toMatchObject({ recipeVersion: 1, loadedCrates: 1 });
+    expect(d.lines[0]!.design).toBeTruthy();
+    expect(d.crates[0]!.design).toBe(d.lines[0]!.design);
+    const mixed = await scanCrate(t, order.code, otherDesign.crateUrl);
+    expect([mixed.status, mixed.body.code]).toEqual([409, 'LINE_VERSION_MISMATCH']);
+    expect(mixed.body.details.line.design).toBe(d.lines[0]!.design);
+    expect(mixed.body.details.scanned.design).not.toBe(d.lines[0]!.design);
+    // Different liquid lots are not a version: the first design with another lot fits.
+    await scanCrate(t, order.code, otherLot.crateUrl).expect(200);
+    const line = await t.prisma.orderLine.findFirstOrThrow({
+      where: { order: { code: order.code } },
+    });
+    expect(line).toMatchObject({
+      recipeVersionId: sameAsFirst.recipeVersionId,
+      labelTemplateVersionId: sameAsFirst.labelTemplateVersionId,
+    });
+    // The database refuses a pin change while the line holds a crate.
+    await expect(
+      t.prisma.orderLine.update({
+        where: { id: line.id },
+        data: {
+          labelTemplateVersionId: (
+            await t.prisma.crateCycle.findFirstOrThrow({
+              where: { crate: { code: otherDesign.crateCode }, status: { not: 'ABORTED' } },
+            })
+          ).labelTemplateVersionId,
+        },
+      }),
+    ).rejects.toThrow(/never mixes/);
+    // Empty again: the pin is released and the other design may start the line.
+    await removeCrate(t, order.code, first.crateCode).expect(200);
+    await removeCrate(t, order.code, otherLot.crateCode).expect(200);
+    d = await detail(order.code);
+    expect(d.lines[0]).toMatchObject({ recipeVersion: null, design: null, loadedCrates: 0 });
+    await scanCrate(t, order.code, otherDesign.crateUrl).expect(200);
+    const removedEvent = d.history.find((e) => e.type === 'CRATE_REMOVED')!;
+    expect(removedEvent).toMatchObject({ crate: first.crateCode, reason: null });
+    expect(removedEvent.actor).toBeTruthy(); // author and time kept without a reason
+    await cancelOrder(t, order.code).expect(200);
+    const noReason = await http()
+      .post(`/api/admin/orders/${order.code}/cancel`)
+      .send({ requestId: randomUUID(), reason: '' });
+    expect(noReason.status).toBe(400); // cancelling always needs a reason
+  });
+
+  it('pages: every order of a tab and of a hotel is reachable beyond 200, in a stable order', async () => {
+    const many = await createHotel(t, { name: 'Hotel Mnoho objednávek' });
+    const day = pragueToday(40);
+    const codes: string[] = [];
+    for (let i = 0; i < 205; i++) {
+      codes.push(
+        (await createOrder(t, many.code, [{ productCode: soap.kit.productCode, crates: 1 }], day))
+          .code,
+      );
+    }
+    const seen: string[] = [];
+    let total = 0;
+    for (let page = 1; ; page++) {
+      const res = (
+        await http()
+          .get(`/api/admin/orders/hotel/${many.code}`)
+          .query({ page, pageSize: 100 })
+          .expect(200)
+      ).body as { items: { code: string }[]; total: number; pageSize: number };
+      total = res.total;
+      seen.push(...res.items.map((o) => o.code));
+      if (page * res.pageSize >= res.total) break;
+    }
+    expect(total).toBe(205);
+    expect(seen).toEqual([...codes].reverse()); // newest first, each exactly once, incl. the last
+    const future = await allOf('future');
+    const mine = future.items.map((o) => o.code).filter((c) => codes.includes(c));
+    expect(mine).toEqual(codes); // ship day, then number — stable across pages
+    expect(future.counts.future).toBe(future.items.length);
+    const over = await http().get('/api/admin/orders').query({ pageSize: 101 });
+    expect(over.status).toBe(400); // pages are bounded, never "everything"
+    for (const code of codes) await cancelOrder(t, code).expect(200);
   });
 });

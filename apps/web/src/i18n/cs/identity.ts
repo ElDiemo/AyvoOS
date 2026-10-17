@@ -393,6 +393,9 @@ export const identityCs = {
     blockers: 'Deaktivaci teď brání:',
     blocker: {
       STOCK_ON_HAND: 'Ve skladech provozovny jsou zásoby.',
+      HOTELS_SERVED:
+        'Provozovna obsluhuje hotely. Přeřazení hotelů zatím neexistuje, proto ji nelze deaktivovat.',
+      ORDERS_NOT_CLOSED: 'Provozovna má otevřené nebo k expedici připravené objednávky.',
       WAREHOUSES: 'Provozovna má sklady.',
       LAST_ACTIVE_SITE: 'Je to poslední aktivní provozovna.',
     } as Record<string, string>,

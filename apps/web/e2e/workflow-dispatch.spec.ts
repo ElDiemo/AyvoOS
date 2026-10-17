@@ -113,7 +113,7 @@ const scan = async (page: Page, value: string) => {
 test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
   const request = context.request;
-  const printed = await printedBottles(request, `expedice-${Date.now()}`, 8);
+  const printed = await printedBottles(request, `expedice-${Date.now()}`, 10);
   kit = await labelingSetup(request, {
     versionId: printed.versionId,
     capacity: 2,
@@ -126,7 +126,7 @@ test.beforeAll(async ({ browser }) => {
     (await receiveStock(request, kit.liquidCode, '5000'))!,
   );
   await receiveStock(request, kit.pumpCode, '50');
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const urls = printed.urls.slice(i * 2, i * 2 + 2);
     const crate = await labelledCrate(request, kit, {
       versionId: printed.versionId,
@@ -140,7 +140,7 @@ test.beforeAll(async ({ browser }) => {
   unfinished = await labelledCrate(request, kit, {
     versionId: printed.versionId,
     bottleLotCode: bottleLot,
-    urls: printed.urls.slice(6, 8),
+    urls: printed.urls.slice(8, 10),
   });
   await context.close();
 });
@@ -189,9 +189,10 @@ test('Objednávky: a manual order in whole crates; bottles from the crate capaci
   await expect(line).toContainText('= 4 lahví');
   await shot(page, 'dispatch-03-order-new');
   await form.getByRole('button', { name: 'Založit objednávku' }).click();
-  await expect(page).toHaveURL(/\/dispatch\/orders\/OR-\d{6}$/);
+  await expect(page).toHaveURL(/\/dispatch\/orders\/ORD-\d{6}$/);
   orderCode = page.url().split('/').pop()!;
   await expect(page.getByTestId('order-status')).toHaveText('Otevřená');
+  expect(orderCode).toMatch(/^ORD-\d{6}$/);
   await expect(page.getByTestId(`line-crates-${kit.productCode}`)).toHaveText('0 / 2');
   await expect(page.getByTestId(`line-bottles-${kit.productCode}`)).toHaveText('0 / 4');
   await expect(page.getByTestId('order-delivery')).toContainText('Hotel Bečva (E2E)');
@@ -291,3 +292,166 @@ test('the ready order keeps its history; its crates are held by it', async ({ pa
   await page.goto('/dispatch?view=closed');
   await expect(page.getByTestId(`order-${orderCode}`)).toContainText('Stornovaná');
 });
+
+/** A new order of n crates of the kit's product for the hotel, through the API. */
+async function apiOrder(page: Page, crates: number): Promise<string> {
+  const calendar = await json<{ today: string }>(
+    await page.request.get('/api/admin/orders/calendar'),
+  );
+  const order = await json<{ code: string }>(
+    await page.request.post('/api/admin/orders', {
+      data: {
+        requestId: crypto.randomUUID(),
+        hotelCode,
+        requestedShipDate: calendar.today,
+        lines: [{ productCode: kit.productCode, crates }],
+      },
+    }),
+  );
+  return order.code;
+}
+
+test('rapid scans are never lost: the next QR is taken while the previous one is saved', async ({
+  page,
+}) => {
+  const code = await apiOrder(page, 2);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/dispatch/orders/${code}/pick`);
+  const sent: string[] = [];
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  let first = true;
+  await page.route(`**/api/admin/orders/${code}/crates`, async (route) => {
+    sent.push((route.request().postDataJSON() as { requestId: string }).requestId);
+    if (first) {
+      first = false;
+      await held; // the first answer is slow
+    }
+    await route.continue();
+  });
+  const field = page.getByTestId('scan-input');
+  await expect(field).toBeFocused();
+  // Two QR codes typed back to back, without waiting for focus or any answer in between.
+  await page.keyboard.type(crates[0]!.url);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type(crates[1]!.url);
+  await page.keyboard.press('Enter');
+  await expect(field).toBeEnabled();
+  await expect(page.getByTestId('picking-unresolved')).toBeVisible();
+  await expect(page.getByTestId('complete-picking')).toBeDisabled();
+  release();
+  await expect(page.getByTestId(`line-crates-${kit.productCode}`)).toHaveText('2 / 2');
+  await expect(page.getByTestId('scan-log').locator('[data-result="added"]')).toHaveCount(2);
+  expect(new Set(sent).size).toBe(2); // two attempts, each with its own id
+  await expect(page.getByTestId('picking-unresolved')).toHaveCount(0);
+  await page.unroute(`**/api/admin/orders/${code}/crates`);
+  await page.getByTestId('complete-picking').click();
+  await expect(page.getByTestId('picking-ready')).toBeVisible();
+});
+
+test('a lost answer stops picking: no leaving or site switch; reload and retry send the same attempt', async ({
+  page,
+}) => {
+  const code = await apiOrder(page, 2);
+  await page.goto(`/dispatch/orders/${code}/pick`);
+  const ids: string[] = [];
+  let mode: 'lose-before' | 'lose-after' | 'pass' = 'lose-before';
+  await page.route(`**/api/admin/orders/${code}/crates`, async (route) => {
+    ids.push((route.request().postDataJSON() as { requestId: string }).requestId);
+    if (mode === 'lose-before') return route.abort('failed'); // never reached the server
+    if (mode === 'lose-after') {
+      await route.fetch(); // committed on the server, the answer is lost
+      return route.abort('failed');
+    }
+    return route.continue();
+  });
+  const siteCalls: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/auth/active-site')) siteCalls.push(r.method());
+  });
+
+  await scan(page, crates[2]!.url);
+  const unresolved = page.getByTestId('picking-unresolved');
+  await expect(unresolved).toContainText('Výsledek skenu bedny není jistý');
+  await expect(page.getByTestId('complete-picking')).toBeDisabled();
+  await shot(page, 'dispatch-11-picking-uncertain');
+
+  // Leaving inside the app is held back.
+  await page.getByRole('link', { name: 'Zpět na objednávku' }).click();
+  await expect(page.getByRole('dialog')).toContainText('Skeny beden nejsou vyřešené');
+  await page.getByRole('button', { name: 'Zpět k vyřešení skenu' }).click();
+  await expect(page).toHaveURL(new RegExp(`/dispatch/orders/${code}/pick$`));
+  // Switching the site asks first — nothing is sent to the server.
+  const switcher = page.getByTestId('site-switcher');
+  const other = (await switcher.locator('option', { hasText: 'E2E-DE' }).textContent())!;
+  await switcher.selectOption({ label: other });
+  await expect(page.getByRole('dialog')).toContainText('Skeny beden nejsou vyřešené');
+  await page.getByRole('button', { name: 'Zpět k vyřešení skenu' }).click();
+  expect(siteCalls).toEqual([]);
+
+  // A reload keeps the unresolved attempt (this tab), still stopped.
+  page.on('dialog', (d) => void d.accept());
+  await page.reload();
+  await expect(page.getByTestId('picking-unresolved')).toContainText(
+    'Výsledek skenu bedny není jistý',
+  );
+  mode = 'pass';
+  await page.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(page.getByTestId(`line-crates-${kit.productCode}`)).toHaveText('1 / 2');
+  expect(ids.at(-1)).toBe(ids[0]); // the SAME attempt after the reload
+
+  // Lost after the commit: the retry replays it, nothing is loaded twice.
+  mode = 'lose-after';
+  const before = ids.length;
+  await scan(page, crates[3]!.url);
+  await expect(page.getByTestId('picking-unresolved')).toBeVisible();
+  mode = 'pass';
+  await page.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(page.getByTestId(`line-crates-${kit.productCode}`)).toHaveText('2 / 2');
+  expect(ids.slice(before)).toHaveLength(2);
+  expect(ids[before + 1]).toBe(ids[before]);
+  const detail = await json<{ crates: { crate: string }[] }>(
+    await page.request.get(`/api/admin/orders/${code}`),
+  );
+  expect(detail.crates.map((c) => c.crate).sort()).toEqual(
+    [crates[2]!.code, crates[3]!.code].sort(),
+  );
+  await page.unroute(`**/api/admin/orders/${code}/crates`);
+  await page.getByTestId('complete-picking').click();
+  await expect(page.getByTestId('picking-ready')).toBeVisible();
+});
+
+for (const timezoneId of ['Pacific/Kiritimati', 'Pacific/Pago_Pago']) {
+  test(`the ship day follows the site's time zone, not the device's (${timezoneId})`, async ({
+    browser,
+  }) => {
+    // UTC+14 and UTC−11: at any moment at least one of them is on another calendar day than
+    // Přerov, so a form using the device's day would fail here.
+    const context = await browser.newContext({
+      storageState: 'e2e/.auth/admin.json',
+      timezoneId,
+    });
+    const page = await context.newPage();
+    const calendar = await json<{ today: string; timeZone: string }>(
+      await page.request.get('/api/admin/orders/calendar'),
+    );
+    expect(calendar.timeZone).toBe('Europe/Prague');
+    await page.goto(`/dispatch/orders/new?hotel=${hotelCode}`);
+    const date = page.getByTestId('order-form').getByLabel('Požadovaný den odeslání');
+    await expect(date).toHaveValue(calendar.today);
+    await expect(date).toHaveAttribute('min', calendar.today);
+    await page.getByTestId(`order-line-${kit.productCode}`).getByRole('textbox').fill('1');
+    await page
+      .getByTestId('order-form')
+      .getByRole('button', { name: 'Založit objednávku' })
+      .click();
+    await expect(page).toHaveURL(/\/dispatch\/orders\/ORD-\d{6}$/); // accepted by the server
+    const code = page.url().split('/').pop()!;
+    await json(
+      await page.request.post(`/api/admin/orders/${code}/cancel`, {
+        data: { requestId: crypto.randomUUID(), reason: 'konec testu' },
+      }),
+    );
+    await context.close();
+  });
+}

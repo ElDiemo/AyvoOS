@@ -10,7 +10,8 @@ import { deliveryAddressSchema, hotelCodeSchema, hotelContactSchema } from './ho
  * dispatch or delivery is recorded.
  */
 
-export const orderCodeSchema = z.string().regex(/^OR-\d{6,}$/, 'e.g. OR-000001');
+/** Language-neutral (only the word "Objednávka / Order" is translated); never encodes a country. */
+export const orderCodeSchema = z.string().regex(/^ORD-\d{6,}$/, 'e.g. ORD-000001');
 export const orderStatusSchema = z.enum(['OPEN', 'READY_TO_DISPATCH', 'CANCELLED']);
 export type OrderStatus = z.infer<typeof orderStatusSchema>;
 
@@ -81,21 +82,58 @@ export const orderSummarySchema = z.object({
 });
 export type OrderSummary = z.infer<typeof orderSummarySchema>;
 
+export const ORDER_PAGE_SIZE_MAX = 100;
+const pageQuery = {
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(ORDER_PAGE_SIZE_MAX).default(50),
+};
+export const orderListQuerySchema = z.object({
+  view: orderViewSchema.default('today'),
+  ...pageQuery,
+});
+export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
+export const hotelOrdersQuerySchema = z.object(pageQuery);
+export type HotelOrdersQuery = z.infer<typeof hotelOrdersQuerySchema>;
+
+const pageFields = {
+  items: z.array(orderSummarySchema),
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  total: z.number().int(),
+};
+
 export const orderListSchema = z.object({
   view: orderViewSchema,
   /** "Today" in the site's time zone (YYYY-MM-DD). */
   today: isoDateSchema,
-  items: z.array(orderSummarySchema),
+  ...pageFields,
   counts: z.record(orderViewSchema, z.number().int()),
 });
 export type OrderList = z.infer<typeof orderListSchema>;
 
+/** The orders of one hotel at the active site, newest first, paged. */
+export const hotelOrdersSchema = z.object(pageFields);
+export type HotelOrders = z.infer<typeof hotelOrdersSchema>;
+
+/** The active site's calendar day — the only "today" the order form uses (doc 028 §2). */
+export const orderCalendarSchema = z.object({
+  today: isoDateSchema,
+  timeZone: z.string(),
+  site: z.object({ code: z.string(), name: z.string() }),
+});
+export type OrderCalendar = z.infer<typeof orderCalendarSchema>;
 export const orderLineSchema = z
   .object({
     lineNo: z.number().int(),
     product: ref,
     crateType: ref,
     capacity: z.number().int(),
+    /**
+     * Pinned by the first loaded crate: every crate of the line has this recipe version and label
+     * design (no mixing); null while the line is empty.
+     */
+    recipeVersion: z.number().int().nullable(),
+    design: z.string().nullable(),
   })
   .extend(quantitiesSchema.shape);
 export type OrderLine = z.infer<typeof orderLineSchema>;
@@ -104,6 +142,7 @@ export const orderCrateSchema = z.object({
   crate: z.string(),
   product: ref,
   recipeVersion: z.number().int(),
+  design: z.string(),
   bottles: z.number().int(),
   loadedAt: z.iso.datetime(),
   loadedBy: z.string(),

@@ -2,6 +2,7 @@ import { orderListSchema, orderViewSchema, type OrderView } from '@ayvo/types';
 import Link from 'next/link';
 import { DispatchHeader } from '@/components/dispatch/dispatch-header';
 import { OrderRows } from '@/components/dispatch/order-rows';
+import { Pager } from '@/components/dispatch/pager';
 import { buttonClass, Card, EmptyState } from '@/components/ui';
 import { formatDateCs } from '@/i18n/cs/format';
 import { ordersCs as t } from '@/i18n/cs/orders';
@@ -9,6 +10,7 @@ import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
+const PAGE_SIZE = 50;
 
 /**
  * Expedice → Objednávky (doc 028): the active site's orders by the requested ship day in the
@@ -17,13 +19,16 @@ export const dynamic = 'force-dynamic';
 export default async function OrdersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<{ view?: string; page?: string }>;
 }) {
-  const raw = (await searchParams).view;
-  const view: OrderView = orderViewSchema.safeParse(raw).success ? (raw as OrderView) : 'today';
+  const params = await searchParams;
+  const view: OrderView = orderViewSchema.safeParse(params.view).success
+    ? (params.view as OrderView)
+    : 'today';
+  const page = Math.max(1, Number(params.page) || 1);
   const [me, list] = await Promise.all([
     currentUser(),
-    apiGet('admin/orders', orderListSchema, { view }),
+    apiGet('admin/orders', orderListSchema, { view, page, pageSize: PAGE_SIZE }),
   ]);
   return (
     <>
@@ -68,6 +73,12 @@ export default async function OrdersPage({
           <OrderRows orders={list.items} />
         )}
       </Card>
+      <Pager
+        page={list.page}
+        pageSize={list.pageSize}
+        total={list.total}
+        href={(p) => `/dispatch?view=${view}&page=${p}`}
+      />
     </>
   );
 }

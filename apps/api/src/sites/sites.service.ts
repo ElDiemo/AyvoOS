@@ -13,6 +13,7 @@ import { domainError, idempotencyConflict } from '../common/domain-error.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, type Site as SiteRecord } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
+import { SiteDependencyRegistry } from './site-dependencies.js';
 
 const notFound = () => domainError(404, 'SITE_NOT_FOUND', 'No such site');
 const warehouseCodeTaken = () =>
@@ -40,6 +41,7 @@ export class SitesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly inventory: InventoryService,
+    private readonly dependencies: SiteDependencyRegistry,
   ) {}
 
   /** Every site with its warehouses (access evaluation, administration). */
@@ -266,9 +268,9 @@ export class SitesService {
   }
 
   /**
-   * What prevents deactivation now. v0.1: stock still held at the site's warehouses, and the
-   * last active site. Future modules add theirs here (active hotels served by the site, open
-   * production orders, crates in circulation, carrier accounts — doc 022 §6).
+   * What prevents deactivation now: stock still held at the site's warehouses, the last active
+   * site, and what other modules register (hotels served by the site, its orders not yet closed —
+   * doc 028; later production orders, crates in circulation, carrier accounts — doc 022 §6).
    */
   private async deactivationBlockers(
     site: SiteRecord,
@@ -285,6 +287,7 @@ export class SitesService {
     if (otherActive === 0) {
       blockers.push({ code: 'LAST_ACTIVE_SITE', detail: 'At least one site must stay active' });
     }
+    blockers.push(...(await this.dependencies.run(site.id, db)));
     return blockers;
   }
 

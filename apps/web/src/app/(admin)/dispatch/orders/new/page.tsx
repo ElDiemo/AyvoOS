@@ -1,4 +1,4 @@
-import { hotelSummarySchema, orderableProductSchema } from '@ayvo/types';
+import { hotelSummarySchema, orderableProductSchema, orderCalendarSchema } from '@ayvo/types';
 import { z } from 'zod';
 import { DispatchHeader } from '@/components/dispatch/dispatch-header';
 import { OrderForm } from '@/components/dispatch/order-form';
@@ -17,9 +17,10 @@ export default async function NewOrderPage({
 }) {
   await requirePermission('orders:manage');
   const { hotel } = await searchParams;
-  const [hotels, products] = await Promise.all([
+  const [hotels, products, calendar] = await Promise.all([
     apiGet('admin/orders/hotels', z.array(hotelSummarySchema)),
     apiGet('admin/orders/products', z.array(orderableProductSchema)),
+    apiGet('admin/orders/calendar', orderCalendarSchema),
   ]);
   return (
     <>
@@ -35,6 +36,7 @@ export default async function NewOrderPage({
         hotels={hotels}
         products={products}
         initialHotel={hotels.some((h) => h.code === hotel) ? hotel! : ''}
+        calendar={calendar}
       />
     </>
   );

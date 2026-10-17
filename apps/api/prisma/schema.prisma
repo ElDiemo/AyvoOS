@@ -89,6 +89,7 @@ model LabelTemplate {
 /// DB: immutable (UPDATE/DELETE rejected by trigger); UNIQUE (template_id, version_number);
 /// CHECK physical size 10–500 mm.
 model LabelTemplateVersion {
+  orderLines       OrderLine[]
   productApprovals ProductLabelApproval[]
   cycles           CrateCycle[]
   bindings         BottleProductBinding[]
@@ -1475,6 +1476,7 @@ enum RecipeStatus {
 /// status DRAFT → ACTIVE → ARCHIVED (or DRAFT → ARCHIVED); activation only when complete;
 /// identity columns immutable; DELETE rejected. Only a DRAFT gains revisions.
 model RecipeVersion {
+  orderLines         OrderLine[]
   cycles             CrateCycle[]
   sessions           WorkstationSession[]
   id                 String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -2135,20 +2137,25 @@ model Order {
 /// product's active recipe at order time; bottles = crates × capacity. DB: immutable except
 /// allocated_crates (0…crates, equal to the active allocations at commit).
 model OrderLine {
-  id              String @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  orderId         String @map("order_id") @db.Uuid
-  lineNo          Int    @map("line_no")
-  productId       String @map("product_id") @db.Uuid
-  crateTypeId     String @map("crate_type_id") @db.Uuid
-  capacity        Int
-  crates          Int
-  bottles         Int
-  allocatedCrates Int    @default(0) @map("allocated_crates")
+  id                     String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  orderId                String  @map("order_id") @db.Uuid
+  lineNo                 Int     @map("line_no")
+  productId              String  @map("product_id") @db.Uuid
+  crateTypeId            String  @map("crate_type_id") @db.Uuid
+  capacity               Int
+  crates                 Int
+  bottles                Int
+  allocatedCrates        Int     @default(0) @map("allocated_crates")
+  /// Pinned by the first loaded crate, cleared when the line is empty again (no mixing).
+  recipeVersionId        String? @map("recipe_version_id") @db.Uuid
+  labelTemplateVersionId String? @map("label_template_version_id") @db.Uuid
 
-  order       Order                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  product     Product                @relation(fields: [productId], references: [id], onDelete: Restrict)
-  crateType   CrateType              @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
-  allocations OrderCrateAllocation[]
+  order                Order                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  recipeVersion        RecipeVersion?         @relation(fields: [recipeVersionId], references: [id], onDelete: Restrict)
+  labelTemplateVersion LabelTemplateVersion?  @relation(fields: [labelTemplateVersionId], references: [id], onDelete: Restrict)
+  product              Product                @relation(fields: [productId], references: [id], onDelete: Restrict)
+  crateType            CrateType              @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  allocations          OrderCrateAllocation[]
 
   @@unique([orderId, lineNo])
   @@unique([orderId, productId])

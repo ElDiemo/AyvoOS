@@ -70,6 +70,8 @@ CREATE TABLE "order_lines" (
     "crates" INTEGER NOT NULL,
     "bottles" INTEGER NOT NULL,
     "allocated_crates" INTEGER NOT NULL DEFAULT 0,
+    "recipe_version_id" UUID,
+    "label_template_version_id" UUID,
 
     CONSTRAINT "order_lines_pkey" PRIMARY KEY ("id")
 );
@@ -199,6 +201,12 @@ ALTER TABLE "order_lines" ADD CONSTRAINT "order_lines_product_id_fkey" FOREIGN K
 ALTER TABLE "order_lines" ADD CONSTRAINT "order_lines_crate_type_id_fkey" FOREIGN KEY ("crate_type_id") REFERENCES "crate_types"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "order_lines" ADD CONSTRAINT "order_lines_recipe_version_id_fkey" FOREIGN KEY ("recipe_version_id") REFERENCES "recipe_versions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "order_lines" ADD CONSTRAINT "order_lines_label_template_version_id_fkey" FOREIGN KEY ("label_template_version_id") REFERENCES "label_template_versions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "order_crate_allocations" ADD CONSTRAINT "order_crate_allocations_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -242,13 +250,15 @@ ALTER TABLE "order_events" ADD CONSTRAINT "order_events_operation_request_id_fke
 
 
 -- =============================================================================================
--- Codes (global, gapless like GR-/CR-) — the format is provisional (doc 028 §6)
+-- Codes (global, gapless like GR-/CR-): HT-000001, ORD-000001 — language-neutral (owner
+-- 2026-10-17); country, hotel and site are separate columns, never read from the code
 -- =============================================================================================
 
 INSERT INTO "code_counters" ("name", "last_value") VALUES ('hotel', 0), ('order', 0);
 
 -- =============================================================================================
--- Hotels: explicit, active fulfilment site with a warehouse; code and site immutable
+-- Hotels: explicit, active fulfilment site with a really created warehouse (owner 2026-10-17:
+-- the WAREHOUSE capability alone is not enough); code and site immutable
 -- =============================================================================================
 
 ALTER TABLE "hotels"
@@ -265,7 +275,8 @@ CREATE FUNCTION hotels_insert_check() RETURNS trigger
   AS $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM "sites" s WHERE s."id" = NEW."fulfillment_site_id" AND s."active"
-                    AND 'WAREHOUSE' = ANY (s."capabilities")) THEN
+                    AND 'WAREHOUSE' = ANY (s."capabilities")
+                    AND EXISTS (SELECT 1 FROM "inventory_locations" l WHERE l."site_id" = s."id")) THEN
     RAISE EXCEPTION 'AYVO: a hotel is served by an active site with a warehouse' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -296,13 +307,34 @@ CREATE TRIGGER "hotels_guard" BEFORE UPDATE OR DELETE ON "hotels"
 CREATE TRIGGER "hotels_no_truncate" BEFORE TRUNCATE ON "hotels"
   FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
 
+-- A site serving hotels, or with orders not yet closed, is never deactivated (doc 022 §7; no
+-- hotel reassignment exists yet). The application refuses it first under the site lock (hotel and
+-- order creation take a share lock on the site row); this is the database's own last line.
+CREATE FUNCTION sites_deactivation_dependencies() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF OLD."active" AND NOT NEW."active" AND (
+       EXISTS (SELECT 1 FROM "hotels" h WHERE h."fulfillment_site_id" = NEW."id")
+    OR EXISTS (SELECT 1 FROM "orders" o WHERE o."site_id" = NEW."id"
+                                           AND o."status" IN ('OPEN', 'READY_TO_DISPATCH'))) THEN
+    RAISE EXCEPTION 'AYVO: a site serving hotels or holding unclosed orders stays active'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER "sites_deactivation_dependencies" BEFORE UPDATE OF "active" ON "sites"
+  FOR EACH ROW EXECUTE FUNCTION sites_deactivation_dependencies();
+
 -- =============================================================================================
 -- Orders: the hotel's fulfilment site as an immutable snapshot; status transitions
 -- =============================================================================================
 
 ALTER TABLE "orders"
   ADD CONSTRAINT "orders_serial_check" CHECK ("serial" >= 1),
-  ADD CONSTRAINT "orders_code_check" CHECK ("code" = ayvo_format_code('OR-', "serial")),
+  ADD CONSTRAINT "orders_code_check" CHECK ("code" = ayvo_format_code('ORD-', "serial")),
   ADD CONSTRAINT "orders_country_code_check" CHECK ("country_code" ~ '^[A-Z]{2}$'),
   ADD CONSTRAINT "orders_completed_check" CHECK (("completed_at" IS NULL) = ("completed_by" IS NULL)),
   ADD CONSTRAINT "orders_cancelled_check" CHECK (
@@ -323,7 +355,8 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM "hotels" h JOIN "sites" s ON s."id" = h."fulfillment_site_id"
                   WHERE h."id" = NEW."hotel_id" AND h."fulfillment_site_id" = NEW."site_id"
-                    AND s."active" AND 'WAREHOUSE' = ANY (s."capabilities")) THEN
+                    AND s."active" AND 'WAREHOUSE' = ANY (s."capabilities")
+                    AND EXISTS (SELECT 1 FROM "inventory_locations" l WHERE l."site_id" = s."id")) THEN
     RAISE EXCEPTION 'AYVO: an order belongs to the hotel''s active fulfilment site' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -400,14 +433,20 @@ CREATE CONSTRAINT TRIGGER "orders_consistent" AFTER INSERT OR UPDATE ON "orders"
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION orders_consistent();
 
 -- =============================================================================================
--- Order lines: whole crates; capacity = the crate type's; bottles derived; only the counter moves
+-- Order lines: whole crates; capacity = the crate type's; bottles derived; only the counter and
+-- the pinned recipe version + label design move. One line never mixes recipe versions or label
+-- designs (owner 2026-10-17): the first loaded crate pins them, they are released only when the
+-- line is empty again; liquid lots may differ between bottles (that is not a version).
 -- =============================================================================================
 
 ALTER TABLE "order_lines"
   ADD CONSTRAINT "order_lines_line_no_check" CHECK ("line_no" >= 1),
   ADD CONSTRAINT "order_lines_crates_check" CHECK ("crates" >= 1 AND "capacity" >= 1),
   ADD CONSTRAINT "order_lines_bottles_check" CHECK ("bottles" = "crates" * "capacity"),
-  ADD CONSTRAINT "order_lines_allocated_check" CHECK ("allocated_crates" BETWEEN 0 AND "crates");
+  ADD CONSTRAINT "order_lines_allocated_check" CHECK ("allocated_crates" BETWEEN 0 AND "crates"),
+  ADD CONSTRAINT "order_lines_pinned_check" CHECK (
+    ("allocated_crates" = 0) = ("recipe_version_id" IS NULL)
+    AND ("allocated_crates" = 0) = ("label_template_version_id" IS NULL));
 
 CREATE FUNCTION order_lines_insert_check() RETURNS trigger
   LANGUAGE plpgsql
@@ -434,8 +473,15 @@ BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'AYVO: order lines are never deleted' USING ERRCODE = 'restrict_violation';
   END IF;
-  IF (to_jsonb(NEW) - 'allocated_crates') IS DISTINCT FROM (to_jsonb(OLD) - 'allocated_crates') THEN
+  IF (to_jsonb(NEW) - ARRAY['allocated_crates','recipe_version_id','label_template_version_id'])
+     IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['allocated_crates','recipe_version_id','label_template_version_id']) THEN
     RAISE EXCEPTION 'AYVO: an order line changes only by its picked crates' USING ERRCODE = 'restrict_violation';
+  END IF;
+  -- The pinned versions never change while the line holds a crate.
+  IF OLD."allocated_crates" > 0 AND NEW."allocated_crates" > 0
+     AND (NEW."recipe_version_id" IS DISTINCT FROM OLD."recipe_version_id"
+          OR NEW."label_template_version_id" IS DISTINCT FROM OLD."label_template_version_id") THEN
+    RAISE EXCEPTION 'AYVO: an order line never mixes recipe versions or label designs' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
 END
@@ -499,8 +545,10 @@ BEGIN
                   WHERE o."id" = NEW."order_id" AND l."id" = NEW."line_id" AND o."status" = 'OPEN'
                     AND c."crate_id" = NEW."crate_id" AND c."status" = 'ALLOCATED'
                     AND c."site_id" = o."site_id" AND c."product_id" = l."product_id"
-                    AND c."crate_type_id" = l."crate_type_id" AND c."capacity" = l."capacity") THEN
-    RAISE EXCEPTION 'AYVO: only a finished crate of the line''s product, crate type and site joins an open order'
+                    AND c."crate_type_id" = l."crate_type_id" AND c."capacity" = l."capacity"
+                    AND c."recipe_version_id" = l."recipe_version_id"
+                    AND c."label_template_version_id" = l."label_template_version_id") THEN
+    RAISE EXCEPTION 'AYVO: only a finished crate of the line''s product, crate type, versions and site joins an open order'
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;

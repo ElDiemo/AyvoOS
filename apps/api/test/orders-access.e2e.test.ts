@@ -75,7 +75,7 @@ describe.skipIf(!hasDatabase)('orders access and site isolation (real sign-in)',
     await activeSite(admin, INITIAL_SITE_ID);
     other = (
       await as(admin).post('/api/admin/sites', {
-        code: `OR-${randomUUID().slice(0, 4).toUpperCase()}`,
+        code: `SK-${randomUUID().slice(0, 4).toUpperCase()}`,
         name: 'Druhý sklad',
         countryCode: 'SK',
         addressLine1: 'Testovacia 1',
@@ -166,13 +166,19 @@ describe.skipIf(!hasDatabase)('orders access and site isolation (real sign-in)',
       .expect(201);
     const picker = await createUser([role]);
     expect((await as(picker).get(`/api/admin/orders/${remote.code}`)).status).toBe(404);
-    const list = (await as(picker).get('/api/admin/orders?view=future').expect(200))
-      .body as OrderList;
-    expect(list.items.map((o) => o.code)).toContain(local.code);
-    expect(list.items.map((o) => o.code)).not.toContain(remote.code);
+    const codes: string[] = [];
+    for (let page = 1; ; page++) {
+      const list = (
+        await as(picker).get(`/api/admin/orders?view=future&pageSize=100&page=${page}`).expect(200)
+      ).body as OrderList;
+      codes.push(...list.items.map((o) => o.code));
+      if (page * list.pageSize >= list.total) break;
+    }
+    expect(codes).toContain(local.code);
+    expect(codes).not.toContain(remote.code);
     expect(
       (await as(picker).get(`/api/admin/orders/hotel/${there.code}`).expect(200)).body,
-    ).toEqual([]);
+    ).toMatchObject({ items: [], total: 0 });
     // Picking another site's order: not found, whatever is scanned.
     const ownCrate = await soap.make();
     const scanRemote = await as(picker).post(`/api/admin/orders/${remote.code}/crates`, {
@@ -258,5 +264,86 @@ describe.skipIf(!hasDatabase)('orders access and site isolation (real sign-in)',
         reason: 'konec testu',
       })
       .expect(200);
+  });
+
+  async function siteWithWarehouse(prefix: string) {
+    const site = (
+      await as(admin)
+        .post('/api/admin/sites', {
+          code: `${prefix}-${randomUUID().slice(0, 4).toUpperCase()}`,
+          name: 'Provozovna k uzavření',
+          countryCode: 'SK',
+          addressLine1: 'Testovacia 2',
+          addressLine2: null,
+          postalCode: '811 02',
+          city: 'Bratislava',
+          timeZone: 'Europe/Bratislava',
+          defaultLocale: 'sk-SK',
+          defaultCurrency: 'EUR',
+          capabilities: ['WAREHOUSE'],
+          reason: 'deactivation test',
+        })
+        .expect(201)
+    ).body as SiteDetail;
+    await as(admin)
+      .post(`/api/admin/sites/${site.id}/warehouses`, {
+        requestId: randomUUID(),
+        code: `${site.code}-W`,
+        name: 'Sklad',
+        reason: 'first warehouse',
+      })
+      .expect(201);
+    return site;
+  }
+  const blockers = async (siteId: string) =>
+    (
+      (await as(admin).get(`/api/admin/sites/${siteId}`).expect(200)).body as SiteDetail
+    ).deactivationBlockers.map((b) => b.code);
+
+  it('a site serving hotels or holding unclosed orders cannot be deactivated (no stock needed)', async () => {
+    const site = await siteWithWarehouse('DH');
+    expect(await blockers(site.id)).toEqual([]); // zero stock, another site active
+    const h = await hotel(admin, site.id);
+    expect(await blockers(site.id)).toEqual(['HOTELS_SERVED']);
+    const refused = await as(admin).post(`/api/admin/sites/${site.id}/deactivate`, {
+      reason: 'closing',
+    });
+    expect([refused.status, refused.body.code]).toEqual([409, 'SITE_DEPENDENCIES']);
+    await activeSite(admin, site.id);
+    const o = await order(admin, h.code);
+    expect(await blockers(site.id)).toEqual(['HOTELS_SERVED', 'ORDERS_NOT_CLOSED']);
+    await as(admin)
+      .post(`/api/admin/orders/${o.code}/cancel`, { requestId: randomUUID(), reason: 'konec' })
+      .expect(200);
+    await activeSite(admin, INITIAL_SITE_ID);
+    expect(await blockers(site.id)).toEqual(['HOTELS_SERVED']); // the cancelled order is closed
+    const site2 = (await ra.prisma.site.findUniqueOrThrow({ where: { id: site.id } })).active;
+    expect(site2).toBe(true); // nothing changed by the refusals
+    // The database refuses it on its own as well.
+    await expect(
+      ra.prisma.site.update({ where: { id: site.id }, data: { active: false } }),
+    ).rejects.toThrow(/stays active/);
+    expect(await ra.prisma.order.count({ where: { code: o.code } })).toBe(1); // history kept
+  });
+
+  it('a hotel created while its site is being deactivated never ends up on an inactive site', async () => {
+    for (let i = 0; i < 4; i++) {
+      const site = await siteWithWarehouse('RC');
+      const [deactivated, created] = await Promise.all([
+        as(admin).post(`/api/admin/sites/${site.id}/deactivate`, { reason: 'souběh' }),
+        as(admin).post('/api/admin/hotels', hotelBody({ fulfillmentSiteId: site.id })),
+      ]);
+      const active = (await ra.prisma.site.findUniqueOrThrow({ where: { id: site.id } })).active;
+      const hotels = await ra.prisma.hotel.count({ where: { fulfillmentSiteId: site.id } });
+      // Exactly one side wins: deactivated without a hotel, or the hotel and an active site.
+      if (deactivated.status === 200) {
+        expect([created.status, created.body.code]).toEqual([422, 'FULFILLMENT_SITE_INVALID']);
+        expect([active, hotels]).toEqual([false, 0]);
+      } else {
+        expect([deactivated.status, deactivated.body.code]).toEqual([409, 'SITE_DEPENDENCIES']);
+        expect(created.status).toBe(201);
+        expect([active, hotels]).toEqual([true, 1]);
+      }
+    }
   });
 });

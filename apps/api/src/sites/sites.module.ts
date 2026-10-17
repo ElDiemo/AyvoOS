@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { InventoryModule } from '../inventory/inventory.module.js';
 import { SitesController } from './sites.controller.js';
+import { SiteDependencyRegistry } from './site-dependencies.js';
 import { SitesService } from './sites.service.js';
 
 /**
@@ -11,7 +12,7 @@ import { SitesService } from './sites.service.js';
 @Module({
   imports: [InventoryModule],
   controllers: [SitesController],
-  providers: [SitesService],
-  exports: [SitesService],
+  providers: [SitesService, SiteDependencyRegistry],
+  exports: [SitesService, SiteDependencyRegistry],
 })
 export class SitesModule {}

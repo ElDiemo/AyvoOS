@@ -11,7 +11,7 @@ export const CODE_PREFIX = {
   crate: 'AYV-C-',
   crateRegistration: 'CR-',
   hotel: 'HT-',
-  order: 'OR-',
+  order: 'ORD-',
 } as const;
 
 export function formatCode(prefix: string, serial: bigint): string {

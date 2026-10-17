@@ -22,6 +22,11 @@ export type QueueItem = { kind: string; raw: string; revision: number; requestId
 export function useScanQueue(
   process: (item: QueueItem) => Promise<boolean>,
   onUnresolvedChange?: (unresolved: boolean) => void,
+  /**
+   * Keeps unresolved items (with their request ids) in this tab's sessionStorage, so a reload
+   * restores them — stopped, as uncertain, until "Zkusit znovu" sends the SAME attempts.
+   */
+  storageKey?: string,
 ) {
   const queue = useRef<QueueItem[]>([]);
   const draining = useRef(false);
@@ -34,6 +39,45 @@ export function useScanQueue(
     processRef.current = process;
   });
   const unresolved = waiting > 0 || blocked !== null;
+  const save = () => {
+    if (!storageKey) return;
+    try {
+      if (queue.current.length > 0) {
+        sessionStorage.setItem(storageKey, JSON.stringify(queue.current));
+      } else sessionStorage.removeItem(storageKey);
+    } catch {
+      // storage unavailable: the in-page queue and the leave guard still hold
+    }
+  };
+  useEffect(() => {
+    if (!storageKey) return;
+    let stored: unknown = null;
+    try {
+      stored = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null');
+    } catch {
+      stored = null;
+    }
+    const items = Array.isArray(stored)
+      ? stored.filter(
+          (x): x is QueueItem =>
+            typeof x === 'object' &&
+            x !== null &&
+            typeof x.kind === 'string' &&
+            typeof x.raw === 'string' &&
+            typeof x.revision === 'number' &&
+            typeof x.requestId === 'string',
+        )
+      : [];
+    if (items.length === 0) return;
+    // Restored after a reload: the result of the first is unknown — stop until "Zkusit znovu".
+    queue.current = items;
+    blockedRef.current = true;
+    // After hydration (the server rendered no queue): shown in the next microtask.
+    void Promise.resolve().then(() => {
+      setBlocked(items[0]!);
+      setWaiting(items.length);
+    });
+  }, [storageKey]);
   useEffect(() => {
     onUnresolvedChange?.(unresolved);
   }, [unresolved, onUnresolvedChange]);
@@ -51,6 +95,7 @@ export function useScanQueue(
           break;
         }
         queue.current.shift();
+        save();
         setWaiting(queue.current.length);
       }
     } finally {
@@ -63,6 +108,7 @@ export function useScanQueue(
   function enqueue(item: Omit<QueueItem, 'requestId'>) {
     if (item.raw.trim() === '' && item.kind !== 'finish') return;
     queue.current.push({ ...item, requestId: crypto.randomUUID() });
+    save();
     setWaiting(queue.current.length);
     if (!draining.current && !blockedRef.current) void drain();
   }
@@ -85,15 +131,18 @@ export function ScanQueueStatus({
   queue,
   testIdPrefix,
   focusScan,
+  texts = t,
 }: {
   queue: ReturnType<typeof useScanQueue>;
   testIdPrefix: string;
   focusScan: () => void;
+  /** The station's texts by default; other scan screens (picking) pass their own. */
+  texts?: Pick<typeof t, 'leaveGuard' | 'blockedTitle' | 'blockedText' | 'waiting' | 'retry'>;
 }) {
   const { unresolved, blocked, waiting, retryBlocked } = queue;
   return (
     <>
-      <UnsavedChangesGuard dirty={unresolved} texts={t.leaveGuard} onStay={focusScan} />
+      <UnsavedChangesGuard dirty={unresolved} texts={texts.leaveGuard} onStay={focusScan} />
       {unresolved && (
         <div
           role="alert"
@@ -102,12 +151,12 @@ export function ScanQueueStatus({
         >
           {blocked && (
             <>
-              <p className="font-semibold">{t.blockedTitle}</p>
-              <p>{t.blockedText}</p>
+              <p className="font-semibold">{texts.blockedTitle}</p>
+              <p>{texts.blockedText}</p>
             </>
           )}
           <p data-testid={`${testIdPrefix}-waiting`}>
-            {t.waiting(Math.max(0, waiting - (blocked ? 1 : 0)))}
+            {texts.waiting(Math.max(0, waiting - (blocked ? 1 : 0)))}
           </p>
           {blocked && (
             <button
@@ -115,7 +164,7 @@ export function ScanQueueStatus({
               className={`${buttonClass.primary} self-start`}
               onClick={retryBlocked}
             >
-              {t.retry}
+              {texts.retry}
             </button>
           )}
         </div>

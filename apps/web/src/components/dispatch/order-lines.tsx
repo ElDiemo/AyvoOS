@@ -24,6 +24,15 @@ export function OrderLines({ order, large = false }: { order: OrderDetail; large
             <p className="text-xs text-stone-500">
               {l.crateType.name} · {t.perCrate(l.capacity)}
             </p>
+            {l.recipeVersion !== null && l.design && (
+              <p
+                className="text-xs text-stone-500"
+                title={t.pinnedHelp}
+                data-testid={`line-pinned-${l.product.code}`}
+              >
+                {t.pinned(l.recipeVersion, l.design)}
+              </p>
+            )}
             <dl className="mt-2 grid grid-cols-2 gap-2">
               <div>
                 <dt className="text-xs text-stone-500">{t.loadedCrates}</dt>
