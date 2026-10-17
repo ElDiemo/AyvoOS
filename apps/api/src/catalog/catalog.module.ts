@@ -6,6 +6,8 @@ import { CatalogController } from './catalog.controller.js';
 import { CatalogService } from './catalog.service.js';
 import { ProductLabelApprovalsService } from './product-label-approvals.service.js';
 import { RecipesService } from './recipes.service.js';
+import { WeightsController } from './weights.controller.js';
+import { WeightsService } from './weights.service.js';
 
 /**
  * catalog module (doc 023, doc 020 §2): company-wide components, product categories, products and
@@ -15,8 +17,8 @@ import { RecipesService } from './recipes.service.js';
  */
 @Module({
   imports: [InventoryModule, CratesModule, LabelsModule],
-  controllers: [CatalogController],
-  providers: [CatalogService, RecipesService, ProductLabelApprovalsService],
-  exports: [RecipesService, ProductLabelApprovalsService],
+  controllers: [CatalogController, WeightsController],
+  providers: [CatalogService, RecipesService, ProductLabelApprovalsService, WeightsService],
+  exports: [RecipesService, ProductLabelApprovalsService, WeightsService],
 })
 export class CatalogModule {}

@@ -449,15 +449,16 @@ enum LotTracking {
 /// DELETE rejected. (id, base_unit_id) unique: target of composite FKs that force every
 /// quantity of the item into its base unit.
 model InventoryItem {
-  id          String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  referenceWeights ItemReferenceWeight[]
+  id               String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
   /// Language-neutral SKU, e.g. "NEW_BOTTLE".
-  code        String            @unique
-  name        String
-  kind        InventoryItemKind
-  baseUnitId  String            @map("base_unit_id") @db.Uuid
-  lotTracking LotTracking       @map("lot_tracking")
-  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  archivedAt  DateTime?         @map("archived_at") @db.Timestamptz(3)
+  code             String                @unique
+  name             String
+  kind             InventoryItemKind
+  baseUnitId       String                @map("base_unit_id") @db.Uuid
+  lotTracking      LotTracking           @map("lot_tracking")
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  archivedAt       DateTime?             @map("archived_at") @db.Timestamptz(3)
 
   baseUnit     InventoryUnit          @relation(fields: [baseUnitId], references: [id], onDelete: Restrict)
   settings     InventoryItemSetting[]
@@ -896,28 +897,33 @@ enum OperationKind {
   ORDER_CRATE_REMOVE
   ORDER_COMPLETE
   ORDER_CANCEL
+  MEASUREMENT_RECORD
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
 /// different payload → conflict. DB: insert-only except setting `result` once (NULL → value).
 model OperationRequest {
+  itemWeights        ItemReferenceWeight[]
+  productWeights     ProductReferenceWeight[]
+  tareWeights        CrateTypeTareWeight[]
+  crateDimensions    CrateTypeDimension[]
   hotels             Hotel[]
   orders             Order[]
-  allocations        OrderCrateAllocation[] @relation("AllocateOperation")
-  allocationReleases OrderCrateAllocation[] @relation("AllocationReleaseOperation")
+  allocations        OrderCrateAllocation[]   @relation("AllocateOperation")
+  allocationReleases OrderCrateAllocation[]   @relation("AllocationReleaseOperation")
   orderEvents        OrderEvent[]
-  bottleEvents       BottleEvent[]          @relation("BottleEventOperation")
-  labelApprovals     ProductLabelApproval[] @relation("ApproveOperation")
-  labelRevocations   ProductLabelApproval[] @relation("RevokeOperation")
-  cyclesOpened       CrateCycle[]           @relation("CycleOpenOperation")
-  assignments        CrateAssignment[]      @relation("AssignOperation")
-  releases           CrateAssignment[]      @relation("ReleaseOperation")
+  bottleEvents       BottleEvent[]            @relation("BottleEventOperation")
+  labelApprovals     ProductLabelApproval[]   @relation("ApproveOperation")
+  labelRevocations   ProductLabelApproval[]   @relation("RevokeOperation")
+  cyclesOpened       CrateCycle[]             @relation("CycleOpenOperation")
+  assignments        CrateAssignment[]        @relation("AssignOperation")
+  releases           CrateAssignment[]        @relation("ReleaseOperation")
   bindings           BottleProductBinding[]
-  requestId          String                 @id @map("request_id") @db.Uuid
+  requestId          String                   @id @map("request_id") @db.Uuid
   kind               OperationKind
-  payloadSha256      String                 @map("payload_sha256") @db.Char(64)
+  payloadSha256      String                   @map("payload_sha256") @db.Char(64)
   result             Json?
-  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
 
   catalogComponents        CatalogComponent[]
   crateTypes               CrateType[]
@@ -948,30 +954,34 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
-  hotelsCreated       Hotel[]                @relation("HotelCreatedBy")
-  ordersCreated       Order[]                @relation("OrderCreatedBy")
-  ordersCompleted     Order[]                @relation("OrderCompletedBy")
-  ordersCancelled     Order[]                @relation("OrderCancelledBy")
-  allocationsMade     OrderCrateAllocation[] @relation("AllocatedBy")
-  allocationsRelease  OrderCrateAllocation[] @relation("AllocationReleasedBy")
+  itemWeights         ItemReferenceWeight[]
+  productWeights      ProductReferenceWeight[]
+  tareWeights         CrateTypeTareWeight[]
+  crateDimensions     CrateTypeDimension[]
+  hotelsCreated       Hotel[]                  @relation("HotelCreatedBy")
+  ordersCreated       Order[]                  @relation("OrderCreatedBy")
+  ordersCompleted     Order[]                  @relation("OrderCompletedBy")
+  ordersCancelled     Order[]                  @relation("OrderCancelledBy")
+  allocationsMade     OrderCrateAllocation[]   @relation("AllocatedBy")
+  allocationsRelease  OrderCrateAllocation[]   @relation("AllocationReleasedBy")
   orderEvents         OrderEvent[]
-  labelApprovals      ProductLabelApproval[] @relation("ApprovalBy")
-  labelRevocations    ProductLabelApproval[] @relation("ApprovalRevokedBy")
-  cyclesOpened        CrateCycle[]           @relation("CycleOpenedBy")
-  cyclesAborted       CrateCycle[]           @relation("CycleAbortedBy")
-  assignmentsMade     CrateAssignment[]      @relation("AssignedBy")
-  assignmentsReleased CrateAssignment[]      @relation("ReleasedBy")
-  id                  String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  email               String                 @unique
-  displayName         String                 @map("display_name")
-  status              UserStatus             @default(ACTIVE)
-  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  labelApprovals      ProductLabelApproval[]   @relation("ApprovalBy")
+  labelRevocations    ProductLabelApproval[]   @relation("ApprovalRevokedBy")
+  cyclesOpened        CrateCycle[]             @relation("CycleOpenedBy")
+  cyclesAborted       CrateCycle[]             @relation("CycleAbortedBy")
+  assignmentsMade     CrateAssignment[]        @relation("AssignedBy")
+  assignmentsReleased CrateAssignment[]        @relation("ReleasedBy")
+  id                  String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email               String                   @unique
+  displayName         String                   @map("display_name")
+  status              UserStatus               @default(ACTIVE)
+  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   /// NULL only for the bootstrap administrator.
-  createdBy           String?                @map("created_by") @db.Uuid
-  deactivatedAt       DateTime?              @map("deactivated_at") @db.Timestamptz(3)
-  deactivatedBy       String?                @map("deactivated_by") @db.Uuid
-  deactivationReason  String?                @map("deactivation_reason")
-  lastLoginAt         DateTime?              @map("last_login_at") @db.Timestamptz(3)
+  createdBy           String?                  @map("created_by") @db.Uuid
+  deactivatedAt       DateTime?                @map("deactivated_at") @db.Timestamptz(3)
+  deactivatedBy       String?                  @map("deactivated_by") @db.Uuid
+  deactivationReason  String?                  @map("deactivation_reason")
+  lastLoginAt         DateTime?                @map("last_login_at") @db.Timestamptz(3)
 
   createdByUser             User?                     @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   createdUsers              User[]                    @relation("UserCreatedBy")
@@ -1393,15 +1403,17 @@ model CatalogComponent {
 /// A returnable production crate type (ADR 0021): capacity is data, never a constant.
 /// DB: code pattern; capacity 1–1000; immutable; DELETE rejected.
 model CrateType {
+  tareWeights        CrateTypeTareWeight[]
+  dimensions         CrateTypeDimension[]
   orderLines         OrderLine[]
   cycles             CrateCycle[]
-  id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code               String       @unique
+  id                 String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String                @unique
   name               String
   capacity           Int
-  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String       @map("created_by") @db.Uuid
-  operationRequestId String       @map("operation_request_id") @db.Uuid
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String                @map("created_by") @db.Uuid
+  operationRequestId String                @map("operation_request_id") @db.Uuid
 
   categories    CrateTypeCategory[]
   registrations CrateRegistration[]
@@ -1435,24 +1447,25 @@ enum ProductStatus {
 /// and creation immutable; the name may be corrected while ACTIVE (audited); status forward-only;
 /// DELETE rejected.
 model Product {
+  referenceWeights   ProductReferenceWeight[]
   orderLines         OrderLine[]
   labelApprovals     ProductLabelApproval[]
   cycles             CrateCycle[]
   bindings           BottleProductBinding[]
   sessions           WorkstationSession[]
-  id                 String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code               String                 @unique
+  id                 String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code               String                   @unique
   name               String
-  categoryCode       String                 @map("category_code")
-  nominalQuantity    Decimal                @map("nominal_quantity") @db.Decimal(19, 3)
-  nominalUnitId      String                 @map("nominal_unit_id") @db.Uuid
-  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String                 @map("created_by") @db.Uuid
-  operationRequestId String                 @map("operation_request_id") @db.Uuid
+  categoryCode       String                   @map("category_code")
+  nominalQuantity    Decimal                  @map("nominal_quantity") @db.Decimal(19, 3)
+  nominalUnitId      String                   @map("nominal_unit_id") @db.Uuid
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String                   @map("created_by") @db.Uuid
+  operationRequestId String                   @map("operation_request_id") @db.Uuid
   /// ACTIVE → ARCHIVED (forward only). An archived product gets no new recipe work.
-  status             ProductStatus          @default(ACTIVE)
-  archivedAt         DateTime?              @map("archived_at") @db.Timestamptz(3)
-  archivedBy         String?                @map("archived_by") @db.Uuid
+  status             ProductStatus            @default(ACTIVE)
+  archivedAt         DateTime?                @map("archived_at") @db.Timestamptz(3)
+  archivedBy         String?                  @map("archived_by") @db.Uuid
 
   category    ProductCategory  @relation(fields: [categoryCode], references: [code], onDelete: Restrict)
   nominalUnit InventoryUnit    @relation(fields: [nominalUnitId], references: [id], onDelete: Restrict)
@@ -1715,20 +1728,21 @@ enum CrateEventType {
 /// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
 /// the operation does not record one (registration records only the site). DB: immutable.
 model CrateEvent {
-  cycleId            String?        @map("cycle_id") @db.Uuid
-  cycle              CrateCycle?    @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  crateId            String         @map("crate_id") @db.Uuid
+  weightSnapshot     CrateCycleWeightSnapshot?
+  cycleId            String?                   @map("cycle_id") @db.Uuid
+  cycle              CrateCycle?               @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  id                 String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  crateId            String                    @map("crate_id") @db.Uuid
   type               CrateEventType
-  occurredAt         DateTime       @map("occurred_at") @db.Timestamptz(3)
-  recordedAt         DateTime       @default(now()) @map("recorded_at") @db.Timestamptz(3)
-  actorId            String         @map("actor_id") @db.Uuid
-  siteId             String         @map("site_id") @db.Uuid
-  locationId         String?        @map("location_id") @db.Uuid
-  operationRequestId String         @map("operation_request_id") @db.Uuid
-  registrationId     String?        @map("registration_id") @db.Uuid
-  printJobId         String?        @map("print_job_id") @db.Uuid
-  payload            Json           @default("{}")
+  occurredAt         DateTime                  @map("occurred_at") @db.Timestamptz(3)
+  recordedAt         DateTime                  @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  actorId            String                    @map("actor_id") @db.Uuid
+  siteId             String                    @map("site_id") @db.Uuid
+  locationId         String?                   @map("location_id") @db.Uuid
+  operationRequestId String                    @map("operation_request_id") @db.Uuid
+  registrationId     String?                   @map("registration_id") @db.Uuid
+  printJobId         String?                   @map("print_job_id") @db.Uuid
+  payload            Json                      @default("{}")
 
   crate        Crate               @relation(fields: [crateId], references: [id], onDelete: Restrict)
   actor        User                @relation(fields: [actorId], references: [id], onDelete: Restrict)
@@ -1941,29 +1955,30 @@ enum CrateCycleStatus {
 /// (A3 uses OPEN_ASSEMBLY → READY_TO_FILL); member_count = active assignments; OPEN_ASSEMBLY ⇒
 /// fewer than capacity, READY_TO_FILL ⇒ exactly capacity (commit-time).
 model CrateCycle {
+  weightSnapshots        CrateCycleWeightSnapshot[]
   orderAllocations       OrderCrateAllocation[]
-  id                     String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  crateId                String                 @map("crate_id") @db.Uuid
-  siteId                 String                 @map("site_id") @db.Uuid
-  status                 CrateCycleStatus       @default(OPEN_ASSEMBLY)
-  crateTypeId            String                 @map("crate_type_id") @db.Uuid
+  id                     String                     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  crateId                String                     @map("crate_id") @db.Uuid
+  siteId                 String                     @map("site_id") @db.Uuid
+  status                 CrateCycleStatus           @default(OPEN_ASSEMBLY)
+  crateTypeId            String                     @map("crate_type_id") @db.Uuid
   capacity               Int
-  productId              String                 @map("product_id") @db.Uuid
-  categoryCode           String                 @map("category_code")
-  recipeVersionId        String                 @map("recipe_version_id") @db.Uuid
-  labelTemplateVersionId String                 @map("label_template_version_id") @db.Uuid
-  memberCount            Int                    @default(0) @map("member_count")
+  productId              String                     @map("product_id") @db.Uuid
+  categoryCode           String                     @map("category_code")
+  recipeVersionId        String                     @map("recipe_version_id") @db.Uuid
+  labelTemplateVersionId String                     @map("label_template_version_id") @db.Uuid
+  memberCount            Int                        @default(0) @map("member_count")
   /// Active members that are FILLED (doc 025 §3.2 "Naplněno"); changed only with their events.
-  filledCount            Int                    @default(0) @map("filled_count")
+  filledCount            Int                        @default(0) @map("filled_count")
   /// Set by Hotovo (FILLED); cleared again by "Vrátit do rozpracování".
-  filledAt               DateTime?              @map("filled_at") @db.Timestamptz(3)
-  openedAt               DateTime               @default(now()) @map("opened_at") @db.Timestamptz(3)
-  openedBy               String                 @map("opened_by") @db.Uuid
-  openOperationId        String                 @map("open_operation_id") @db.Uuid
-  readyToFillAt          DateTime?              @map("ready_to_fill_at") @db.Timestamptz(3)
-  abortedAt              DateTime?              @map("aborted_at") @db.Timestamptz(3)
-  abortedBy              String?                @map("aborted_by") @db.Uuid
-  abortReason            String?                @map("abort_reason")
+  filledAt               DateTime?                  @map("filled_at") @db.Timestamptz(3)
+  openedAt               DateTime                   @default(now()) @map("opened_at") @db.Timestamptz(3)
+  openedBy               String                     @map("opened_by") @db.Uuid
+  openOperationId        String                     @map("open_operation_id") @db.Uuid
+  readyToFillAt          DateTime?                  @map("ready_to_fill_at") @db.Timestamptz(3)
+  abortedAt              DateTime?                  @map("aborted_at") @db.Timestamptz(3)
+  abortedBy              String?                    @map("aborted_by") @db.Uuid
+  abortReason            String?                    @map("abort_reason")
 
   crate                Crate                  @relation(fields: [crateId], references: [id], onDelete: Restrict)
   site                 Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
@@ -2235,4 +2250,161 @@ model OrderEvent {
 
   @@index([orderId, occurredAt])
   @@map("order_events")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Weights and dimensions (doc 025 §10, PR W1, owner 2026-10-17): measured reference values for
+// future dispatch. Append-only; a correction is a new row pointing to the corrected one. Unknown
+// = no row, never 0. Recording never touches stock, units, consumption or production states.
+// ---------------------------------------------------------------------------------------------
+
+/// A measured reference weight of a component (inventory item): grams per one base unit (a
+/// counted item: bottle body, pump, label), or for a volume item (a liquid) the weighed mass of
+/// a stated sample volume in the item's base unit — never a density guess. DB: immutable.
+model ItemReferenceWeight {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId             String   @map("item_id") @db.Uuid
+  massG              Decimal  @map("mass_g") @db.Decimal(12, 3)
+  /// Volume items only: the sample volume in the item's base unit (e.g. ml).
+  sampleVolume       Decimal? @map("sample_volume") @db.Decimal(12, 3)
+  measuredOn         DateTime @map("measured_on") @db.Date
+  method             String
+  correctionOfId     String?  @map("correction_of_id") @db.Uuid
+  correctionReason   String?  @map("correction_reason")
+  recordedAt         DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String   @map("recorded_by") @db.Uuid
+  operationRequestId String   @unique @map("operation_request_id") @db.Uuid
+
+  item         InventoryItem         @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  correctionOf ItemReferenceWeight?  @relation("ItemWeightCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections  ItemReferenceWeight[] @relation("ItemWeightCorrection")
+  recorder     User                  @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation    OperationRequest      @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@index([itemId, recordedAt])
+  @@map("item_reference_weights")
+}
+
+/// The weighed mass of ONE complete finished bottle (body + content + pump + label) of a product,
+/// based on `bottles_weighed` bottles. DB: immutable.
+model ProductReferenceWeight {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  productId          String   @map("product_id") @db.Uuid
+  massG              Decimal  @map("mass_g") @db.Decimal(12, 3)
+  bottlesWeighed     Int      @map("bottles_weighed")
+  measuredOn         DateTime @map("measured_on") @db.Date
+  method             String
+  correctionOfId     String?  @map("correction_of_id") @db.Uuid
+  correctionReason   String?  @map("correction_reason")
+  recordedAt         DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String   @map("recorded_by") @db.Uuid
+  operationRequestId String   @unique @map("operation_request_id") @db.Uuid
+
+  product      Product                    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  correctionOf ProductReferenceWeight?    @relation("ProductWeightCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections  ProductReferenceWeight[]   @relation("ProductWeightCorrection")
+  recorder     User                       @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation    OperationRequest           @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  snapshots    CrateCycleWeightSnapshot[]
+
+  @@index([productId, recordedAt])
+  @@map("product_reference_weights")
+}
+
+/// The tare of an empty crate of a type, including its dividers as described. DB: immutable.
+model CrateTypeTareWeight {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  crateTypeId        String   @map("crate_type_id") @db.Uuid
+  massG              Decimal  @map("mass_g") @db.Decimal(12, 3)
+  /// What the weighed crate consisted of (dividers, inserts …).
+  configuration      String
+  measuredOn         DateTime @map("measured_on") @db.Date
+  method             String
+  correctionOfId     String?  @map("correction_of_id") @db.Uuid
+  correctionReason   String?  @map("correction_reason")
+  recordedAt         DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String   @map("recorded_by") @db.Uuid
+  operationRequestId String   @unique @map("operation_request_id") @db.Uuid
+
+  crateType    CrateType                  @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  correctionOf CrateTypeTareWeight?       @relation("TareCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections  CrateTypeTareWeight[]      @relation("TareCorrection")
+  recorder     User                       @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation    OperationRequest           @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  snapshots    CrateCycleWeightSnapshot[]
+
+  @@index([crateTypeId, recordedAt])
+  @@map("crate_type_tare_weights")
+}
+
+enum DimensionSubject {
+  /// The crate itself (outer size).
+  CRATE
+  /// The final shipping package of one crate (one crate = one parcel = one label).
+  SHIPPING_PACKAGE
+}
+
+enum ExtraPackaging {
+  /// The crate ships as it is.
+  NONE
+  CARTON
+  PROTECTIVE_COVER
+  OTHER
+}
+
+/// Measured outer dimensions (mm) of a crate type or of its final shipping package; for the
+/// package also any extra packaging, its mass (unknown allowed) and whether the tare includes it.
+/// DB: immutable.
+model CrateTypeDimension {
+  id                 String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  crateTypeId        String           @map("crate_type_id") @db.Uuid
+  subject            DimensionSubject
+  lengthMm           Int              @map("length_mm")
+  widthMm            Int              @map("width_mm")
+  heightMm           Int              @map("height_mm")
+  extraPackaging     ExtraPackaging?  @map("extra_packaging")
+  extraDescription   String?          @map("extra_description")
+  extraMassG         Decimal?         @map("extra_mass_g") @db.Decimal(12, 3)
+  extraInTare        Boolean?         @map("extra_in_tare")
+  measuredOn         DateTime         @map("measured_on") @db.Date
+  method             String
+  correctionOfId     String?          @map("correction_of_id") @db.Uuid
+  correctionReason   String?          @map("correction_reason")
+  recordedAt         DateTime         @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String           @map("recorded_by") @db.Uuid
+  operationRequestId String           @unique @map("operation_request_id") @db.Uuid
+
+  crateType        CrateType                  @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  correctionOf     CrateTypeDimension?        @relation("DimensionCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections      CrateTypeDimension[]       @relation("DimensionCorrection")
+  recorder         User                       @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation        OperationRequest           @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  packageSnapshots CrateCycleWeightSnapshot[] @relation("SnapshotPackage")
+
+  @@index([crateTypeId, subject, recordedAt])
+  @@map("crate_type_dimensions")
+}
+
+/// The references available at a Hotovo (its CRATE_FILLED event) and the expected weights derived
+/// from them; null = unknown then. Later measurements never rewrite it. DB: immutable.
+model CrateCycleWeightSnapshot {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  cycleId          String   @map("cycle_id") @db.Uuid
+  crateEventId     String   @unique @map("crate_event_id") @db.Uuid
+  bottles          Int
+  productWeightId  String?  @map("product_weight_id") @db.Uuid
+  tareWeightId     String?  @map("tare_weight_id") @db.Uuid
+  packageId        String?  @map("package_id") @db.Uuid
+  expectedCrateG   Decimal? @map("expected_crate_g") @db.Decimal(12, 3)
+  expectedPackageG Decimal? @map("expected_package_g") @db.Decimal(12, 3)
+  takenAt          DateTime @map("taken_at") @db.Timestamptz(3)
+
+  cycle         CrateCycle              @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  crateEvent    CrateEvent              @relation(fields: [crateEventId], references: [id], onDelete: Restrict)
+  productWeight ProductReferenceWeight? @relation(fields: [productWeightId], references: [id], onDelete: Restrict)
+  tareWeight    CrateTypeTareWeight?    @relation(fields: [tareWeightId], references: [id], onDelete: Restrict)
+  package       CrateTypeDimension?     @relation("SnapshotPackage", fields: [packageId], references: [id], onDelete: Restrict)
+
+  @@index([cycleId])
+  @@map("crate_cycle_weight_snapshots")
 }

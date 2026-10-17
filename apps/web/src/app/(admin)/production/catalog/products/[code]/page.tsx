@@ -3,6 +3,7 @@ import {
   productCodeSchema,
   productLabelApprovalSchema,
   productSchema,
+  productWeightsSchema,
 } from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -14,6 +15,7 @@ import {
   RenameProduct,
 } from '@/components/catalog/product-actions';
 import { ProductLabelApprovals } from '@/components/catalog/product-label-approvals';
+import { ProductWeightsCard } from '@/components/weights/product-weights';
 import { RecipeStatusBadge } from '@/components/catalog/recipe-status';
 import { Card, EmptyState, Field, FieldList, Notice } from '@/components/ui';
 import { catalogCs } from '@/i18n/cs/catalog';
@@ -42,7 +44,7 @@ export default async function ProductPage({
     siteTimeZone(),
   ]);
   const canManage = hasPermission(me, 'catalog:product_manage');
-  const [approvals, templates] = await Promise.all([
+  const [approvals, templates, weights] = await Promise.all([
     apiGet(
       `admin/catalog/products/${encodeURIComponent(code)}/label-approvals`,
       z.array(productLabelApprovalSchema),
@@ -51,6 +53,7 @@ export default async function ProductPage({
     canManage && hasPermission(me, 'production:read')
       ? apiGet('admin/label-templates', z.array(labelTemplateSummarySchema))
       : Promise.resolve([]),
+    apiGet(`admin/catalog/products/${encodeURIComponent(code)}/weights`, productWeightsSchema),
   ]);
   const candidates = templates
     .filter((tpl) => !tpl.archivedAt)
@@ -152,6 +155,11 @@ export default async function ProductPage({
                 <p className="text-xs text-stone-500">{t.authorNote}</p>
               </div>
             </Card>
+            <ProductWeightsCard
+              w={weights}
+              canRecord={hasPermission(me, 'catalog:weights_record')}
+              timeZone={tz}
+            />
             <ProductLabelApprovals
               productCode={product.code}
               approvals={approvals}

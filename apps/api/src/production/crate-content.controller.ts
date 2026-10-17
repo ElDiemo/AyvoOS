@@ -2,6 +2,7 @@ import {
   crateCodeSchema,
   outsideBottlesQuerySchema,
   type CrateContent,
+  type CrateWeightSnapshot,
   type OutsideBottlesPage,
   type OutsideBottlesQuery,
 } from '@ayvo/types';
@@ -27,6 +28,16 @@ export class CrateContentController {
     @OperationalSite() site: SiteContext,
   ): Promise<CrateContent> {
     return this.content.content(code, site.siteId);
+  }
+
+  /** The weight references kept at each Hotovo of the crate (doc 025 §10): expectations only. */
+  @RequirePermission('crates:read')
+  @Get('crates/:code/weights')
+  crateWeights(
+    @Param('code', CRATE_CODE) code: string,
+    @OperationalSite() site: SiteContext,
+  ): Promise<CrateWeightSnapshot[]> {
+    return this.content.weights(code, site.siteId);
   }
 
   @RequirePermission('crates:read')

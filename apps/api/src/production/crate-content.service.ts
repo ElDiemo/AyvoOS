@@ -1,4 +1,5 @@
 import type {
+  CrateWeightSnapshot,
   CrateContent,
   OutsideBottle,
   OutsideBottleGroup,
@@ -14,6 +15,7 @@ import { CratesService } from '../crates/crates.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
+import { WeightsService } from '../catalog/weights.service.js';
 
 /**
  * Read models of the crate overview (doc 025 A5), for the active site only: the content of a
@@ -28,8 +30,15 @@ export class CrateContentService {
     private readonly crates: CratesService,
     private readonly cycles: CrateCyclesService,
     private readonly labels: LabelTemplatesService,
+    private readonly weightsService: WeightsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
+
+  /** The weight references kept at each Hotovo of a crate of the site (doc 025 §10). */
+  async weights(code: string, siteId: string): Promise<CrateWeightSnapshot[]> {
+    const crate = await this.crates.findOfSite(code, siteId);
+    return this.weightsService.snapshotsOfCrate(crate.id);
+  }
 
   async content(code: string, siteId: string): Promise<CrateContent> {
     const crate = await this.crates.findOfSite(code, siteId);
