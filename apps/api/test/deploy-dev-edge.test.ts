@@ -339,7 +339,10 @@ case "$1" in
 esac
 exit 0`,
     );
-    stub('tailscale', 'echo 100.100.100.1');
+    stub(
+      'tailscale',
+      '[[ $1 == debug ]] && { echo \'{"NoSNAT":true}\'; exit 0; }; echo 100.100.100.1',
+    );
     stub('ip', 'echo "5: tailscale0    inet 100.100.100.1/32 scope global tailscale0"');
     stub('systemctl', 'exit 0');
     stub('sysctl', 'echo 1');

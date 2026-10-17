@@ -46,6 +46,19 @@ WorkOS sign-in, Basic Auth and `noindex`. Constraints:
    `net.ipv4.ip_nonlocal_bind=1` lets Docker bind the tailnet address at boot before tailscaled has
    assigned it (so the stack starts after a reboot; it is reachable once the tailnet is up). The
    deploy script refuses to run without both.
+   4a. **The tailnet peer address must survive the forward** (found on DEV 2026-10-17, after the
+   switch). With Tailscale's default `--snat-subnet-routes=true`, tailscaled marks every packet
+   forwarded from `tailscale0` and masquerades it in POSTROUTING — including the Docker DNAT to
+   Caddy — so Caddy saw the bridge gateway (`172.20.0.1`) instead of the device and aborted every
+   tailnet request (browser: `ERR_HTTP2_PROTOCOL_ERROR`). `install.sh` therefore sets
+   `tailscale set --snat-subnet-routes=false` (it refuses if the node advertises routes; this
+   server advertises none, so nothing else changes) and the deploy script fails closed while
+   `NoSNAT` is not `true`. Not chosen: allowing the gateway or the Docker range in Caddy (that
+   would admit any forwarded source without identifying the device) or trusting
+   `X-Forwarded-For`. Public access is unaffected: public 443 is still bound to no public address
+   and dropped by the guard, public :80 traffic is not marked by Tailscale (it does not enter
+   through `tailscale0`), and Caddy's check is unchanged. Checks run on the server cannot see this
+   path (local packets never pass Tailscale's forward rules); it is verified from a tailnet device.
 5. **Private DNS via Tailscale split DNS.** A CoreDNS container (`dns`), published on the Tailscale
    IPv4 address :53 only, is authoritative for `DEV_DOMAIN` alone: `A` = the Tailscale address,
    other types NOERROR/empty, names below it NXDOMAIN, **every other name REFUSED** (no recursion,

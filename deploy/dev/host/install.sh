@@ -4,8 +4,12 @@
 #   sudo bash deploy/dev/host/install.sh /opt/ayvo/backups/dev-preview/edge-before-<time>-<id>
 # Backs up the current firewall state and sysctl first (to /var/backups/ayvo-dev-tailnet/<time>),
 # then installs: the sysctl (ip_nonlocal_bind), /usr/local/sbin/ayvo-dev-docker-guard and its
-# systemd unit (enabled, applied now and on every Docker start). It does not touch UFW, SSH,
-# Tailscale or any container. Undo: sudo bash deploy/dev/host/uninstall.sh
+# systemd unit (enabled, applied now and on every Docker start), and turns off Tailscale's SNAT of
+# forwarded traffic (`tailscale set --snat-subnet-routes=false`): with it on, tailscaled masquerades
+# every packet forwarded from tailscale0 — also the DNAT to Caddy — to the Docker bridge gateway,
+# so Caddy cannot see the tailnet peer and refuses it. No subnet routes are advertised, so nothing
+# else changes. It does not touch UFW, SSH, other Tailscale settings or any container.
+# Idempotent: re-run it (with a current edge backup) to apply a newer version. Undo: sudo bash deploy/dev/host/uninstall.sh
 set -Eeuo pipefail
 umask 022
 [[ $(id -u) == 0 ]] || { echo "run as root (sudo)" >&2; exit 1; }
@@ -24,6 +28,7 @@ chmod 700 "$BACKUP"
 iptables-save >"$BACKUP/iptables.rules"
 ip6tables-save >"$BACKUP/ip6tables.rules"
 sysctl net.ipv4.ip_nonlocal_bind >"$BACKUP/sysctl.txt"
+tailscale debug prefs >"$BACKUP/tailscale-prefs.json"
 for f in /etc/sysctl.d/60-ayvo-dev-tailnet.conf /usr/local/sbin/ayvo-dev-docker-guard \
   /etc/systemd/system/ayvo-dev-docker-guard.service; do
   [[ ! -e $f ]] || cp -a "$f" "$BACKUP/"
@@ -37,8 +42,14 @@ install -m 644 "$HERE/ayvo-dev-docker-guard.service" /etc/systemd/system/ayvo-de
 systemctl daemon-reload
 systemctl enable ayvo-dev-docker-guard.service
 systemctl restart ayvo-dev-docker-guard.service
+# Keep the tailnet peer address on forwarded connections (ADR 0026). Refuses if routes are
+# advertised: SNAT would then matter for them, and this server must not route for the tailnet.
+[[ "$(tailscale debug prefs | jq -c '.AdvertiseRoutes // []')" == '[]' ]] ||
+  { echo "this node advertises subnet routes: refusing to change SNAT" >&2; exit 1; }
+tailscale set --snat-subnet-routes=false
 
 echo
 sysctl net.ipv4.ip_nonlocal_bind
 systemctl is-active ayvo-dev-docker-guard.service
 /usr/local/sbin/ayvo-dev-docker-guard status
+echo "tailscale NoSNAT: $(tailscale debug prefs | jq -r .NoSNAT)"
