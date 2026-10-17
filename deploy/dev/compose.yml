@@ -1,14 +1,20 @@
-# AYVO OS — DEV preview deployment (https://dev.ayvo.co). ADR 0013.
+# AYVO OS — DEV preview deployment (https://dev.ayvo.co). ADR 0013, ADR 0026 (tailnet only).
 #
 # DEV ONLY: never production data or production secrets (ADR 0008).
 # Deploy with scripts/deploy-dev.sh, which reads the server-only env file (never committed).
 # Validate without secrets: pnpm deploy:config
 #
-# Topology:
-#   internet ──80/443──▶ caddy ──/api/*──▶ api ──▶ postgres, redis
+# Topology (ADR 0026 — the preview is reachable only through our Tailscale tailnet):
+#   tailnet ──443/80──▶ caddy ──/api/*──▶ api ──▶ postgres, redis
 #                              └──other───▶ web ──(server-side)──▶ api
+#   tailnet ──53─────▶ dns (CoreDNS: answers only DEV_DOMAIN, refuses everything else)
+#   internet ─80/IPv4─▶ caddy: ACME HTTP-01 challenges only; every other request is aborted
 #
-# Only Caddy publishes host ports. web, api, postgres and redis are reachable only on the
+# Ports are published ONLY on the server's Tailscale IPv4 address (DEV_TAILNET_IPV4, derived from
+# `tailscale ip -4` by scripts/deploy-dev.sh) — never on 0.0.0.0 or any IPv6 address — except
+# IPv4 :80 for certificate renewal. Caddy also refuses every client outside the tailnet, and the
+# host guard (deploy/dev/host) admits forwarded container traffic only from tailscale0 (plus
+# IPv4 :80). web, api, postgres and redis are reachable only on the
 # internal Docker networks. postgres and redis sit on an internal network with no egress.
 #
 # This project ("ayvo-dev-preview") is separate from the local development infrastructure in
@@ -38,11 +44,16 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - '80:80'
-      - '443:443'
-      - '443:443/udp' # HTTP/3
+      # HTTPS + HTTP/3 on the Tailscale IPv4 address only (ADR 0026). No IPv6 publishing: Docker
+      # would proxy it in userland and Caddy would no longer see the real client address.
+      - '${DEV_TAILNET_IPV4:?set by scripts/deploy-dev.sh from tailscale ip -4}:443:443'
+      - '${DEV_TAILNET_IPV4}:443:443/udp'
+      # IPv4 :80 on every address: the narrow public ACME HTTP-01 exception (Caddy answers only
+      # /.well-known/acme-challenge/ and aborts everything else) and the redirect for the tailnet.
+      - '0.0.0.0:80:80'
     environment:
       DEV_DOMAIN: ${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
+      DEV_TAILNET_IPV4: ${DEV_TAILNET_IPV4}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the server env file}
       DEV_BASIC_AUTH_USER: ${DEV_BASIC_AUTH_USER:?set DEV_BASIC_AUTH_USER in the server env file}
       DEV_BASIC_AUTH_HASH: ${DEV_BASIC_AUTH_HASH:?set DEV_BASIC_AUTH_HASH in the server env file}
@@ -51,6 +62,8 @@ services:
       # TLS certificates and ACME account; kept across rebuilds to avoid re-issuance rate limits.
       - caddy-data:/data
       - caddy-config:/config
+      # Empty except while scripts/verify-dev-acme.sh proves the public HTTP-01 path (staging CA).
+      - acme-webroot:/srv/acme:ro
     networks:
       - edge
     depends_on:
@@ -64,6 +77,32 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Private DNS for the tailnet (Tailscale split DNS for DEV_DOMAIN only, ADR 0026). Answers
+  # DEV_DOMAIN with the Tailscale IPv4 address and refuses every other name: never a resolver.
+  dns:
+    image: coredns/coredns:1.11.3
+    restart: unless-stopped
+    logging: *logging
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # The image's binary carries this file capability; without it in the bounding set exec fails.
+    cap_add:
+      - NET_BIND_SERVICE
+    command: ['-conf', '/etc/coredns/Corefile']
+    environment:
+      DEV_DOMAIN: ${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
+    volumes:
+      - ./Corefile:/etc/coredns/Corefile:ro
+    # Unprivileged port inside the container; :53 only on the Tailscale IPv4 address.
+    ports:
+      - '${DEV_TAILNET_IPV4}:53:1053/udp'
+      - '${DEV_TAILNET_IPV4}:53:1053/tcp'
+    networks:
+      - dns
 
   web:
     <<: *app
@@ -191,6 +230,8 @@ networks:
   # api/migrate ↔ postgres/redis. No route to the outside world.
   backend:
     internal: true
+  # The private DNS server alone (no other service, no upstream resolver).
+  dns:
 
 # Explicit names keep the data independent of the Compose project name. Nothing in this repo
 # removes these volumes; scripts/deploy-dev.sh never runs `down -v` or `volume rm`.
@@ -203,5 +244,7 @@ volumes:
     name: ayvo-dev-preview-caddy-data
   caddy-config:
     name: ayvo-dev-preview-caddy-config
+  acme-webroot:
+    name: ayvo-dev-preview-acme-webroot
   files-data:
     name: ayvo-dev-preview-files-data

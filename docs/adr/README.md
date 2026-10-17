@@ -34,7 +34,7 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0010](0010-redis-non-authoritative.md)                    | Redis is never authoritative                                             | Accepted — confirmed by owner 2026-10-10                                                  |
 | [0011](0011-bottle-terminal-states-and-reuse-cycles.md)    | Bottle terminal states and reuse cycles                                  | Accepted — confirmed by owner 2026-10-10                                                  |
 | [0012](0012-turborepo-agent-guidance-disabled.md)          | Turborepo agent guidance disabled; CLAUDE.md canonical                   | Accepted — confirmed by owner 2026-10-10                                                  |
-| [0013](0013-dev-preview-deployment.md)                     | DEV preview deployment: Caddy, same-origin API, Basic Auth               | Accepted — confirmed by owner 2026-10-10                                                  |
+| [0013](0013-dev-preview-deployment.md)                     | DEV preview deployment: Caddy, same-origin API, Basic Auth               | Accepted 2026-10-10; public reachability superseded by 0026                               |
 | [0014](0014-public-qr-identity-and-url.md)                 | Public QR identity, URL format, DEV/production separation                | Accepted — QR size/EC still provisional                                                   |
 | [0015](0015-immutable-label-template-versions.md)          | Immutable label template versions, reproducible print jobs               | Accepted — confirmed by owner 2026-10-10                                                  |
 | [0016](0016-file-storage-abstraction.md)                   | File storage abstraction                                                 | Accepted for DEV; production blocker                                                      |
@@ -47,6 +47,7 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0023](0023-sites-as-operational-boundary.md)              | Sites as the top-level operational boundary                              | Accepted — directed by owner 2026-10-12; foundation implemented (doc 022)                 |
 | [0024](0024-custom-roles-and-permission-catalogue.md)      | Custom roles over a migration-governed permission catalogue              | Accepted — directed by owner 2026-10-12; implemented (doc 021 §7a)                        |
 | [0025](0025-same-crate-two-scans-explicit-hotovo.md)       | Same crate from labelling to dispatch, two bottle scans, explicit Hotovo | Proposed — process confirmed by owner 2026-10-14; model in doc 025 awaits approval        |
+| [0026](0026-dev-preview-tailnet-only.md)                   | DEV preview reachable only through our Tailscale tailnet                 | Accepted — directed by owner 2026-10-17 (DEV only)                                        |
 
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,

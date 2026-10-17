@@ -14,7 +14,7 @@ Status: Draft — foundation complete; DEV preview deployed (2026-10-10)
 - Production will later run on a **separate VPS** _(confirmed by owner 2026-10-10)_.
 - **No staging environment** for now _(confirmed by owner 2026-10-10)_.
 - Domain database models are still not implemented _(confirmed by owner 2026-10-10)_.
-- Caddy is the reverse proxy; the whole preview is behind HTTP Basic Auth, reachable from anywhere with credentials (no IP allowlist), and sends `X-Robots-Tag: noindex, nofollow` _(confirmed by owner 2026-10-10)_.
+- Caddy is the reverse proxy; the whole preview is behind HTTP Basic Auth and sends `X-Robots-Tag: noindex, nofollow` _(confirmed by owner 2026-10-10)_. Since 2026-10-17 it is reachable **only through our Tailscale tailnet** ([ADR 0026](adr/0026-dev-preview-tailnet-only.md)); the earlier "reachable from anywhere, no IP allowlist" is superseded.
 - No separate public API subdomain: the browser-facing API is same-origin at `https://dev.ayvo.co/api/*`, so no CORS _(confirmed by owner 2026-10-10)_.
 - The `ayvo` user may use Docker on this DEV server _(confirmed by owner 2026-10-10)_.
 - No CI/CD yet: deployment is manual until the first domain is stable _(confirmed by owner 2026-10-10)_.
@@ -45,11 +45,15 @@ Status: Draft — foundation complete; DEV preview deployed (2026-10-10)
 > script backs up. Losing it loses uploaded artwork. Local file storage is DEV-only; production
 > needs object storage, off-site backups and a tested restore ([ADR 0016](adr/0016-file-storage-abstraction.md)).
 
-Decision record: [ADR 0013](adr/0013-dev-preview-deployment.md). Files: `deploy/dev/compose.yml`,
-`deploy/dev/Caddyfile`, `apps/api/Dockerfile`, `apps/web/Dockerfile`, `scripts/deploy-dev.sh`.
+Decision records: [ADR 0013](adr/0013-dev-preview-deployment.md),
+[ADR 0026](adr/0026-dev-preview-tailnet-only.md) (tailnet only). Files: `deploy/dev/compose.yml`,
+`deploy/dev/Caddyfile`, `deploy/dev/Corefile`, `deploy/dev/host/` (root-installed guard),
+`apps/api/Dockerfile`, `apps/web/Dockerfile`, `scripts/deploy-dev.sh`, `scripts/verify-dev-acme.sh`.
 
 ```
-internet ──80/443──▶ caddy (TLS, Basic Auth, X-Robots-Tag)
+tailnet ──443 (Tailscale IPv4 only)──▶ caddy (TLS, tailnet peer check, Basic Auth, X-Robots-Tag)
+tailnet ──53 (Tailscale IPv4 only)───▶ dns (CoreDNS: dev.ayvo.co only, everything else REFUSED)
+internet ──80 (IPv4)──▶ caddy: ACME HTTP-01 only; everything else aborted
                        ├─ /api, /api/* ──▶ api:4000  (path unchanged) ──▶ postgres:5432, redis:6379
                        └─ everything else ─▶ web:3000 ──(server-side, http://api:4000)──▶ api
 networks: edge = caddy, web, api        backend (internal, no egress) = api, migrate, postgres, redis
@@ -57,7 +61,8 @@ networks: edge = caddy, web, api        backend (internal, no egress) = api, mig
 
 | Service    | Image                          | Host ports         | Health check                                 |
 | ---------- | ------------------------------ | ------------------ | -------------------------------------------- |
-| `caddy`    | `caddy:2-alpine`               | 80, 443, 443/udp   | admin API on container localhost             |
+| `caddy`    | `caddy:2-alpine`               | ts:443 tcp/udp, 80 | admin API on container localhost             |
+| `dns`      | `coredns/coredns:1.11.3`       | ts:53 tcp/udp      | — (checked by the deploy script)             |
 | `web`      | `ayvo-dev-preview/web:<tag>`   | none               | `GET /` (Dockerfile `HEALTHCHECK`)           |
 | `api`      | `ayvo-dev-preview/api:<tag>`   | none               | `GET /api/health` (Dockerfile `HEALTHCHECK`) |
 | `postgres` | `postgres:18-alpine`           | none               | `pg_isready`                                 |
@@ -65,7 +70,23 @@ networks: edge = caddy, web, api        backend (internal, no egress) = api, mig
 | `migrate`  | `ayvo-dev-preview/api-migrate` | none (one-off run) | —                                            |
 
 Data volumes are explicitly named (`ayvo-dev-preview-postgres-data`, `…-redis-data`,
-`…-caddy-data`, `…-caddy-config`) and survive rebuilds; nothing in the repo removes them.
+`…-caddy-data`, `…-caddy-config`, `…-acme-webroot`) and survive rebuilds; nothing in the repo
+removes them. `ts:` = the server's Tailscale IPv4 address, read by the deploy script from
+`tailscale ip -4` on every run.
+
+### Tailnet only (ADR 0026)
+
+- **Owner, once (sudo):** `sudo bash deploy/dev/host/install.sh` — backs up the firewall state to
+  `/var/backups/ayvo-dev-tailnet/<time>/`, installs the `DOCKER-USER` guard unit and the sysctl
+  `net.ipv4.ip_nonlocal_bind=1`. The deploy script refuses to run without them.
+- **Owner, Tailscale admin console:** DNS → add nameserver `<server Tailscale IPv4>`, _Restrict to
+  domain_ `dev.ayvo.co` (split DNS); access policy: members → server tcp/udp 443, tcp 80,
+  tcp/udp 53; admins → tcp 22. Save the previous policy first.
+- `scripts/deploy-dev.sh --edge` recreates only Caddy and DNS with the running image tag.
+- `scripts/verify-dev-acme.sh` proves certificate renewal (Let's Encrypt staging, HTTP-01 over the
+  public IPv4 :80 exception; the test certificate is discarded).
+- Still public: SSH 22 (until the owner closes it), Tailscale UDP 41641, IPv4 TCP 80 (ACME only).
+- Rollback: [ADR 0026 § Rollback](adr/0026-dev-preview-tailnet-only.md#rollback-exact).
 
 ### Server-only configuration
 
@@ -132,9 +153,9 @@ It never runs `docker compose down`, `down -v`, `volume rm` or prune commands.
 ### First deployment
 
 One-time prerequisites (owner, with sudo): Docker access for `ayvo`
-(`sudo usermod -aG docker ayvo`, then log in again); DNS `dev.ayvo.co` → this server; inbound
-TCP 80/443 (and UDP 443 for HTTP/3) reachable. Docker-published ports bypass `ufw`, so only
-Caddy's ports are exposed — no other service publishes one.
+(`sudo usermod -aG docker ayvo`, then log in again); DNS `dev.ayvo.co` → this server (public, for
+ACME HTTP-01); inbound IPv4 TCP 80 reachable; Tailscale logged in; the host guard installed
+(above). Docker-published ports bypass `ufw`: the guard and the tailnet binding handle them.
 
 ```bash
 # 1. Server-only env file (outside the repo)

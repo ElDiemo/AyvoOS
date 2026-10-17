@@ -1,13 +1,21 @@
-# AYVO OS — Caddy reverse proxy for the DEV preview (ADR 0013).
+# AYVO OS — Caddy reverse proxy for the DEV preview (ADR 0013, ADR 0026).
 # Values come from the server-only env file via deploy/dev/compose.yml; none are committed.
+#
+# Tailnet only (ADR 0026): HTTPS is published only on the server's Tailscale IPv4 address, and
+# every request is additionally checked here against the real TCP peer address (remote_ip — never
+# a forwarded header). The only public exception is IPv4 :80 for ACME HTTP-01 challenges.
 {
 	# ACME account contact for automatic TLS certificates.
 	email {$ACME_EMAIL}
 }
 
-{$DEV_DOMAIN} {
-	encode zstd gzip
+(tailnet) {
+	# Tailscale's IPv4 range (and the server's own tailnet address for local deploy checks).
+	# Reaching this check at all needs the tailnet: ports are bound to the tailnet address.
+	@outside not remote_ip 100.64.0.0/10
+}
 
+(robots) {
 	# Set immediately (not deferred), so they are on every response, including basic_auth's 401
 	# challenge. Keep deletions out of this block: Caddy defers a block that deletes a field, and
 	# deferred operations are not applied to error responses such as that 401.
@@ -17,26 +25,69 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 	header -Server
+}
 
-	# The whole preview, including /api, sits behind HTTP Basic Auth. The hash is bcrypt
-	# (`caddy hash-password`); the plaintext password is never stored on the server.
-	basic_auth {
-		{$DEV_BASIC_AUTH_USER} {$DEV_BASIC_AUTH_HASH}
-	}
-
-	# Same-origin API: /api and /api/* go to NestJS with the path forwarded UNCHANGED (no
-	# handle_path, no rewrite). NestJS serves all routes under the /api global prefix.
-	@api path /api /api/*
-	handle @api {
-		reverse_proxy api:4000 {
-			header_down -X-Powered-By
+{$DEV_DOMAIN} {
+	# Certificates only via HTTP-01 on public IPv4 :80 (port 443 is not public any more).
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
 		}
 	}
+	encode zstd gzip
+	import robots
+	import tailnet
 
-	# Everything else is the Next.js app.
+	# Outside the tailnet: close the connection, before Basic Auth or anything else answers.
+	handle @outside {
+		abort
+	}
+
 	handle {
-		reverse_proxy web:3000 {
-			header_down -X-Powered-By
+		# The whole preview, including /api, sits behind HTTP Basic Auth. The hash is bcrypt
+		# (`caddy hash-password`); the plaintext password is never stored on the server.
+		basic_auth {
+			{$DEV_BASIC_AUTH_USER} {$DEV_BASIC_AUTH_HASH}
+		}
+
+		# Same-origin API: /api and /api/* go to NestJS with the path forwarded UNCHANGED (no
+		# handle_path, no rewrite). NestJS serves all routes under the /api global prefix.
+		@api path /api /api/*
+		handle @api {
+			reverse_proxy api:4000 {
+				header_down -X-Powered-By
+			}
+		}
+
+		# Everything else is the Next.js app.
+		handle {
+			reverse_proxy web:3000 {
+				header_down -X-Powered-By
+			}
 		}
 	}
+}
+
+# Plain HTTP (public IPv4 :80, tailnet :80). Caddy answers its own ACME HTTP-01 challenges before
+# these routes. Besides that, the public sees only the (normally empty) challenge directory used by
+# scripts/verify-dev-acme.sh; the tailnet is redirected to HTTPS; everything else is aborted.
+http://{$DEV_DOMAIN} {
+	import robots
+	import tailnet
+
+	handle /.well-known/acme-challenge/* {
+		root * /srv/acme
+		file_server
+	}
+	handle @outside {
+		abort
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
+}
+
+# Any other host name or a bare IP address: nothing.
+http:// {
+	abort
 }
