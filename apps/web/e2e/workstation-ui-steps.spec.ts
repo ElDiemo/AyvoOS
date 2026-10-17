@@ -200,6 +200,11 @@ test('a filling station for the gel opens with its mode and category', async ({ 
     (await station.count()) === 0,
     'a SHOWER_GEL filling station already exists in this database',
   );
+  // A missing station is not a recipe problem (live review of PR #30).
+  await expect(station).not.toContainText('receptura tuto položku neobsahuje');
+  await expect(page.getByTestId('readiness-filling')).not.toContainText(
+    'receptura tuto položku neobsahuje',
+  );
   await station.getByRole('link').click();
   await expect(page).toHaveURL(/\/production\/workstations\?/);
   const form = page.getByTestId('workstation-form');
