@@ -503,7 +503,7 @@ while (($#)); do
 done
 
 STEP="validate prerequisites"
-for cmd in docker git curl jq awk flock realpath stat tailscale ip dig systemctl sysctl; do
+for cmd in docker git curl jq awk flock realpath stat tailscale ip systemctl sysctl; do
   command -v "$cmd" >/dev/null || die "required command not found: $cmd"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 plugin is required"
@@ -547,6 +547,8 @@ docker info >/dev/null 2>&1 ||
 mkdir -p "$STATE_DIR" "$BACKUP_DIR"
 exec 9>"$STATE_DIR/.deploy-dev-preview.lock"
 flock -n 9 || die "another deployment is running (lock: $STATE_DIR/.deploy-dev-preview.lock)"
+
+command -v dig >/dev/null || die "required command not found: dig (verification of the private DNS)"
 
 if [[ $MODE == edge ]]; then
   STEP="edge: running image tag"
