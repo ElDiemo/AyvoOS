@@ -186,6 +186,18 @@ Orientation only — no production rule, permission or role assignment changed.
   never turned into new gates. The design step opens the product's design section (`#designs`).
   "Pracovat na pracovišti" tells a station manager when the site has no active station yet, with
   the way to create one; others are told to ask the supervisor.
+- **Context and permissions of the steps (PR #30 review UI30-R1/R2).** A step keeps what the
+  overview knows: "Připravit QR etikety" is offered once per approved design of THIS product that
+  can be used for new identities (latest version of an active template) and opens the form with
+  only that design — never the first template; without one, the dependency is explained instead.
+  A stock step preselects the item of the judged recipe line (for a waiting crate: its pinned,
+  possibly older recipe — not the active one); a station step carries mode and category. Quantity,
+  supplier and lot are never filled in and nothing is saved by following a step; the target pages
+  validate the parameters again and lead back to the same product ("Zpět na přípravu výroby").
+  A step is offered only with EVERY permission its target page needs (e.g. approving a design also
+  needs `production:read` to list the templates; finishing and activating a recipe needs both
+  `catalog:product_manage` and `catalog:recipe_approve`); otherwise "Požádejte vedoucího", with a
+  read-only look at the product where the user may read it.
 - **UI-22 — identity ≠ bottle.** "Vytvořit lahve" is now "Připravit QR etikety lahví": it creates
   permanent identities and their label PDF, consumes nothing and makes no physical bottle; the
   page lists the three steps (identity + PDF → labelled at the labelling station → filled at the

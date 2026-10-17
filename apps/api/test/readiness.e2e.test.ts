@@ -126,6 +126,28 @@ describe.skipIf(!hasDatabase)('production readiness (doc 027)', () => {
     r = await get();
     expect(of(r, 'setup.design')).toMatchObject({ state: 'OK', count: 1 });
     expect(of(r, 'labeling.labels')).toMatchObject({ state: 'OK', count: 3 });
+    // The next step keeps the context (issue #11 UI-21): this product's usable approved design,
+    // the stock items of its recipe, the station mode and category.
+    const design = await su.prisma.labelTemplateVersion.findUniqueOrThrow({
+      where: { id: versionId },
+      include: { template: true },
+    });
+    expect(of(r, 'labeling.labels').target?.designs).toEqual([
+      { versionId, label: `${design.template.name} v${design.versionNumber}` },
+    ]);
+    const code = async (id: string) =>
+      (await su.prisma.inventoryItem.findUniqueOrThrow({ where: { id } })).code;
+    expect(of(r, 'labeling.labelStock').target?.item?.code).toBe(await code(kit.labelItemId));
+    expect(of(r, 'labeling.bottles').target?.item?.code).toBe('NEW_BOTTLE');
+    expect(of(r, 'filling.liquid').target?.item?.code).toBe(await code(kit.liquidItemId));
+    expect(of(r, 'filling.station').target?.station).toEqual({
+      mode: 'FILLING',
+      categoryCode: 'HAND_SOAP',
+    });
+    expect(of(r, 'labeling.station').target?.station).toEqual({
+      mode: 'LABELING',
+      categoryCode: null,
+    });
     expect(of(r, 'labeling.crate')).toMatchObject({ state: 'OK', count: 1 });
     expect(of(r, 'labeling.labelStock')).toMatchObject({ state: 'OK', count: 10 });
     // Labelling never waits for filling: no liquid and no pumps yet.
@@ -190,6 +212,9 @@ describe.skipIf(!hasDatabase)('production readiness (doc 027)', () => {
     expect(of(r, 'setup.warehouse')).toMatchObject({ state: 'OK' });
     expect(r.crates).toBeNull();
     expect(of(r, 'labeling.station').state).not.toBe('UNAVAILABLE');
+    for (const key of ['labeling.labels', 'filling.liquid', 'labeling.labelStock']) {
+      expect(of(r, key).target, key).toBeNull(); // no context without the permission
+    }
     expect(JSON.stringify(r)).not.toMatch(/GR-\d|price|unitPrice/);
   });
 
@@ -300,6 +325,10 @@ describe.skipIf(!hasDatabase)('production readiness (doc 027)', () => {
         recipe: { version: 1, waitingCrates: 1 },
       }),
     ]);
+    // The next step receives liquid A of the pinned V1, never B of the active V2.
+    expect(liquid[0]!.target?.item?.code).toBe(
+      (await su.prisma.inventoryItem.findUniqueOrThrow({ where: { id: k.liquidItemId } })).code,
+    );
     // …and pump B missing (V2) is not reported against the crate whose pump A is in stock.
     expect(pumps).toEqual([
       expect.objectContaining({ state: 'OK', count: 3, recipe: { version: 1, waitingCrates: 1 } }),

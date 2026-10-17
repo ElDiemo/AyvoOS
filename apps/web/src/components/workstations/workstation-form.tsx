@@ -20,15 +20,24 @@ import { workstationErrorText } from './workstation-errors';
 const t = workstationsCs.manage;
 
 /** Nové pracoviště (production:workstations_manage), at the active site. */
-export function WorkstationForm({ categories }: { categories: ProductCategory[] }) {
+export function WorkstationForm({
+  categories,
+  initialMode = '',
+  initialCategory = '',
+}: {
+  categories: ProductCategory[];
+  /** Known from "Připravit výrobu" (issue #11 UI-21); code, name and reason stay the user's. */
+  initialMode?: 'LABELING' | 'FILLING' | '';
+  initialCategory?: string;
+}) {
   const router = useRouter();
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
   const focusError = useFocusFirstError(form);
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
-  const [mode, setMode] = useState<'LABELING' | 'FILLING' | ''>('');
-  const [category, setCategory] = useState('');
+  const [mode, setMode] = useState<'LABELING' | 'FILLING' | ''>(initialMode);
+  const [category, setCategory] = useState(initialCategory);
   const [reason, setReason] = useState('');
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [formError, setFormError] = useState<string | null>(null);

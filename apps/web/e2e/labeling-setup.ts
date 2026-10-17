@@ -21,13 +21,22 @@ export interface LabelingSetup {
   stationCode: string;
   liquidCode: string;
   pumpCode: string;
+  labelCode: string;
 }
 
 export async function labelingSetup(
   request: APIRequestContext,
-  opts: { versionId: string; capacity?: number; approve?: boolean; productName?: string },
+  opts: {
+    versionId: string;
+    capacity?: number;
+    approve?: boolean;
+    productName?: string;
+    /** Product category (HAND_SOAP by default). */
+    category?: string;
+  },
 ): Promise<LabelingSetup> {
   const api = '/api/admin/catalog';
+  const category = opts.category ?? 'HAND_SOAP';
   const label = await json<{ code: string }>(
     await request.post(`${api}/components`, {
       data: {
@@ -39,7 +48,7 @@ export async function labelingSetup(
         name: 'Etiketa (E2E)',
         unitCode: 'pcs',
         lotTracked: false,
-        categoryCode: 'HAND_SOAP',
+        categoryCode: category,
       },
     }),
   );
@@ -54,7 +63,7 @@ export async function labelingSetup(
         name: 'Kapalina (E2E)',
         unitCode: 'ml',
         lotTracked: true,
-        categoryCode: 'HAND_SOAP',
+        categoryCode: category,
       },
     }),
   );
@@ -80,7 +89,7 @@ export async function labelingSetup(
         code: `E2E-CRT-${sfx()}`,
         name: 'Vratná bedna (E2E)',
         capacity: opts.capacity ?? 40,
-        categoryCodes: ['HAND_SOAP'],
+        categoryCodes: [category],
         reason: 'E2E typ bedny',
       },
     }),
@@ -92,7 +101,7 @@ export async function labelingSetup(
         requestId: crypto.randomUUID(),
         code: `E2E-P-${sfx()}`,
         name: productName,
-        categoryCode: 'HAND_SOAP',
+        categoryCode: category,
         nominalQuantity: '330',
         nominalUnitCode: 'ml',
         reason: 'E2E produkt',
@@ -157,6 +166,7 @@ export async function labelingSetup(
     stationCode,
     liquidCode: liquid.code,
     pumpCode: pump.code,
+    labelCode: label.code,
   };
 }
 

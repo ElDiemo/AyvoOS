@@ -33,25 +33,30 @@ export default async function ProductionSetupPage({
   const r = await apiGet('admin/production/readiness', productionReadinessSchema, {
     product: typeof product === 'string' && product ? product : undefined,
   });
-  const productHref = r.product
-    ? `/production/catalog/products/${r.product.code}`
-    : '/production/catalog';
   /** The concrete next step of a missing item, or who to ask (issue #11 UI-21). */
   const Step = ({ item }: { item: ReadinessItem }) => {
     const dependency = readinessDependency(item, r);
-    const step = item.state === 'MISSING' ? readinessStep(item, me.permissions, productHref) : null;
-    if (!dependency && item.state !== 'MISSING') return null;
+    const step = readinessStep(item, me.permissions, r.product?.code ?? null);
+    if (!dependency && step.kind === 'none') return null;
     return (
       <span className="flex w-full flex-col gap-1 text-xs" data-testid={`step-${item.key}`}>
         {dependency && <span>{dependency}</span>}
-        {item.state === 'MISSING' &&
-          (step ? (
-            <Link href={step.href} className="self-start font-medium underline">
-              {t.actions.next}: {step.label} →
+        {step.kind === 'links' &&
+          step.links.map((l) => (
+            <Link key={l.href} href={l.href} className="self-start font-medium underline">
+              {t.actions.next}: {l.label} →
             </Link>
-          ) : (
-            <span>{t.askSupervisor}</span>
           ))}
+        {step.kind === 'ask' && (
+          <>
+            <span data-testid="ask-supervisor">{t.askSupervisor}</span>
+            {step.read && (
+              <Link href={step.read.href} className="self-start underline">
+                {step.read.label}
+              </Link>
+            )}
+          </>
+        )}
       </span>
     );
   };

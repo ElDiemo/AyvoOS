@@ -141,7 +141,8 @@ for (const w of WIDTHS) {
     // Labels wait for the design: explained, with the step to prepare them.
     const labels = page.getByTestId('step-labeling.labels');
     await expect(labels).toContainText('nejdřív schvalte design etikety');
-    await expect(labels.getByRole('link')).toHaveAttribute('href', '/bottles/new');
+    // No QR preparation with an unrelated template while the design is missing (PR #30 review).
+    await expect(labels.getByRole('link')).toHaveCount(0);
     await expect(page.getByTestId('step-filling.crates')).toContainText('vznikají lepením');
     await noOverflow(page);
     await shot(page, `ui11-03-setup-${w.name}`);
@@ -180,8 +181,13 @@ for (const w of WIDTHS) {
     await expect(page.getByTestId('crates').locator('li').first()).toBeInViewport();
     await expect(page.getByTestId('crate-more-filters')).not.toHaveAttribute('open', '');
     await noOverflow(page);
+    await expect(page.locator('.animate-pulse')).toHaveCount(0);
     await shot(page, `ui11-05-crates-${w.name}`);
     await page.goto(`/production/crates/${crateCode}`);
+    // The concrete crate is rendered (not a loading skeleton) before anything is checked or shot.
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(crateCode);
+    await expect(page.getByTestId('crate-history')).toBeVisible();
+    await expect(page.locator('.animate-pulse')).toHaveCount(0);
     const section = page.getByTestId('crate-corrections-section');
     await expect(section).toContainText('Opravy vedoucího');
     await expect(page.getByTestId('crate-corrections')).toBeHidden();
@@ -193,6 +199,8 @@ for (const w of WIDTHS) {
     );
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     await noOverflow(page);
+    await expect(page.getByTestId('crate-qr-url')).toBeVisible();
+    await expect(page.locator('.animate-pulse')).toHaveCount(0);
     await shot(page, `ui11-06-crate-detail-${w.name}`);
   });
 }

@@ -178,6 +178,12 @@ export const productionCs = {
       filled: '3. Naplnění – sken na plnicím pracovišti (odepíše kapalinu a pumpičku)',
     },
     stepsTitle: 'Co se kdy děje',
+    backToSetup: 'Zpět na přípravu výroby',
+    forProduct: (product: string) =>
+      `Pro produkt ${product}: nabízí se jen jeho schválený design (aktuální verze aktivní šablony).`,
+    noApprovedDesign: (product: string) =>
+      `Produkt ${product} nemá schválený design, se kterým lze teď připravit QR etikety (aktuální verze aktivní šablony). Nejdřív ho schvalte u produktu.`,
+    openDesigns: 'Otevřít designy produktu',
     back: 'Lahve',
     quantity: '1 · Počet lahví',
     quantityInvalid: (min: number, max: number) => `Zadejte celé číslo od ${min} do ${max}.`,

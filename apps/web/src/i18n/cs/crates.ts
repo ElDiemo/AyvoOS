@@ -144,6 +144,7 @@ export const cratesCs = {
     ACTIVE: 'V provozu',
     RETIRED: 'Vyřazená',
   } as Record<string, string>,
+  backToSetup: 'Zpět na přípravu výroby',
   backToList: 'Zpět na bedny',
   new: {
     title: 'Evidovat nové bedny',
