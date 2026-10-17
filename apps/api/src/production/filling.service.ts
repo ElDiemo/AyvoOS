@@ -23,6 +23,7 @@ import type { Principal } from '../identity/principal.js';
 import { InventoryService, byLockOrder } from '../inventory/inventory.service.js';
 import { StationSessionsService } from '../workstations/station-sessions.service.js';
 import type { WorkstationRecord } from '../workstations/workstations.service.js';
+import { crateAllocated } from './cycle-corrections.service.js';
 
 const notFilling = () => domainError(409, 'WRONG_STATION_MODE', 'This is not a filling station');
 const contextChanged = () =>
@@ -405,6 +406,7 @@ export class FillingService {
         { memberCount: cycle.memberCount, capacity: cycle.capacity },
       );
     }
+    if (cycle.status === 'ALLOCATED') throw crateAllocated();
     if (cycle.status === 'FILLED') {
       throw domainError(409, 'CRATE_ALREADY_FILLED', 'This crate is already finished (Hotovo)');
     }

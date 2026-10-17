@@ -55,6 +55,16 @@ export const shellCs = {
       groups: { records: 'Evidence', setup: 'Nastavení výroby' },
       readOnly: 'jen pro čtení',
     },
+    hotels: {
+      label: 'Hotely',
+      description: 'Hotely, jejich doručovací adresa, kontakt a obsluhující provozovna.',
+      pages: { list: 'Hotely', new: 'Nový hotel' },
+    },
+    dispatch: {
+      label: 'Expedice',
+      description: 'Ruční objednávky hotelů a kompletace hotových beden k expedici.',
+      pages: { orders: 'Objednávky', new: 'Nová objednávka' },
+    },
   },
   home: {
     title: 'Přehled',

@@ -62,6 +62,11 @@ export const identityCs = {
     'production:session_takeover': 'Vynuceně převzít obsazené pracoviště (s důvodem)',
     'production:cycle_correct':
       'Opravovat oběhy beden – vyjmout, doplnit a přeložit lahve, vrátit do rozpracování, zrušit oběh (s důvodem)',
+    'hotels:read': 'Zobrazit hotely, jejich doručovací adresu, kontakt a obsluhující provozovnu',
+    'hotels:manage': 'Zakládat hotely',
+    'orders:read': 'Zobrazit objednávky provozovny a jejich načtené bedny',
+    'orders:manage': 'Zakládat a stornovat objednávky provozovny',
+    'orders:pick': 'Kompletovat objednávky – načítat a odebírat hotové bedny, dokončit kompletaci',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
@@ -69,6 +74,8 @@ export const identityCs = {
     production: 'Výroba',
     catalog: 'Produktový katalog',
     crates: 'Bedny',
+    hotels: 'Hotely',
+    orders: 'Objednávky a expedice',
     identity: 'Uživatelé a role',
     sites: 'Provozovny',
   } as Record<string, string>,

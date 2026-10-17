@@ -252,6 +252,9 @@ const ICONS = {
   overview: 'M4 5h7v6H4zM13 5h7v3h-7zM13 10h7v9h-7zM4 13h7v6H4z',
   warehouse: 'M3 10l9-6 9 6v10H3zM7 20v-6h10v6M7 17h10',
   production: 'M4 20V9l5 3V9l5 3V5h6v15zM8 16h2M14 16h2',
+  // A building with floors (hotels) and a crate on a truck bed (dispatch), same stroke style.
+  hotels: 'M5 21V4h10v17M15 9h4v12M3 21h18M8 8h4M8 12h4M8 16h4',
+  dispatch: 'M3 6h11v9H3zM14 9h4l3 3v3h-7M7 18a2 2 0 1 0 0-.01M17 18a2 2 0 1 0 0-.01',
   admin: 'M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6zM9 12l2 2 4-4',
 } as const;
 

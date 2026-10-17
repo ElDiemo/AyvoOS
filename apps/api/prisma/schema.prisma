@@ -203,19 +203,20 @@ model BottleCreationBatch {
 /// created_at) immutable (trigger); code derived from serial (CHECK); public_token unique and
 /// 22 URL-safe characters (CHECK).
 model Bottle {
-  assignments     CrateAssignment[]
-  binding         BottleProductBinding?
-  id              String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial          BigInt                @unique
+  orderAllocations OrderAllocationBottle[]
+  assignments      CrateAssignment[]
+  binding          BottleProductBinding?
+  id               String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial           BigInt                  @unique
   /// Human-readable, sequential: "AYV-B-000001". Not a security token.
-  code            String                @unique
+  code             String                  @unique
   /// Opaque public QR identity (128 random bits, base64url). Never derived from id or code.
-  publicToken     String                @unique @map("public_token")
-  status          BottleStatus
-  creationBatchId String                @map("creation_batch_id") @db.Uuid
-  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  publicToken      String                  @unique @map("public_token")
+  status           BottleStatus
+  creationBatchId  String                  @map("creation_batch_id") @db.Uuid
+  createdAt        DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   /// The site the bottle belongs to — its series' site (composite FK). No transfer in v0.1.
-  siteId          String                @map("site_id") @db.Uuid
+  siteId           String                  @map("site_id") @db.Uuid
 
   creationBatch BottleCreationBatch         @relation(fields: [creationBatchId, siteId], references: [id, siteId], onDelete: Restrict)
   site          Site                        @relation(fields: [siteId], references: [id], onDelete: Restrict)
@@ -888,23 +889,34 @@ enum OperationKind {
   CYCLE_MEMBER_ADD
   CYCLE_REOPEN
   CYCLE_ABORT
+  HOTEL_CREATE
+  ORDER_CREATE
+  ORDER_CRATE_ADD
+  ORDER_CRATE_REMOVE
+  ORDER_COMPLETE
+  ORDER_CANCEL
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
 /// different payload → conflict. DB: insert-only except setting `result` once (NULL → value).
 model OperationRequest {
-  bottleEvents     BottleEvent[]          @relation("BottleEventOperation")
-  labelApprovals   ProductLabelApproval[] @relation("ApproveOperation")
-  labelRevocations ProductLabelApproval[] @relation("RevokeOperation")
-  cyclesOpened     CrateCycle[]           @relation("CycleOpenOperation")
-  assignments      CrateAssignment[]      @relation("AssignOperation")
-  releases         CrateAssignment[]      @relation("ReleaseOperation")
-  bindings         BottleProductBinding[]
-  requestId        String                 @id @map("request_id") @db.Uuid
-  kind             OperationKind
-  payloadSha256    String                 @map("payload_sha256") @db.Char(64)
-  result           Json?
-  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  hotels             Hotel[]
+  orders             Order[]
+  allocations        OrderCrateAllocation[] @relation("AllocateOperation")
+  allocationReleases OrderCrateAllocation[] @relation("AllocationReleaseOperation")
+  orderEvents        OrderEvent[]
+  bottleEvents       BottleEvent[]          @relation("BottleEventOperation")
+  labelApprovals     ProductLabelApproval[] @relation("ApproveOperation")
+  labelRevocations   ProductLabelApproval[] @relation("RevokeOperation")
+  cyclesOpened       CrateCycle[]           @relation("CycleOpenOperation")
+  assignments        CrateAssignment[]      @relation("AssignOperation")
+  releases           CrateAssignment[]      @relation("ReleaseOperation")
+  bindings           BottleProductBinding[]
+  requestId          String                 @id @map("request_id") @db.Uuid
+  kind               OperationKind
+  payloadSha256      String                 @map("payload_sha256") @db.Char(64)
+  result             Json?
+  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
 
   catalogComponents        CatalogComponent[]
   crateTypes               CrateType[]
@@ -935,6 +947,13 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
+  hotelsCreated       Hotel[]                @relation("HotelCreatedBy")
+  ordersCreated       Order[]                @relation("OrderCreatedBy")
+  ordersCompleted     Order[]                @relation("OrderCompletedBy")
+  ordersCancelled     Order[]                @relation("OrderCancelledBy")
+  allocationsMade     OrderCrateAllocation[] @relation("AllocatedBy")
+  allocationsRelease  OrderCrateAllocation[] @relation("AllocationReleasedBy")
+  orderEvents         OrderEvent[]
   labelApprovals      ProductLabelApproval[] @relation("ApprovalBy")
   labelRevocations    ProductLabelApproval[] @relation("ApprovalRevokedBy")
   cyclesOpened        CrateCycle[]           @relation("CycleOpenedBy")
@@ -1213,6 +1232,8 @@ enum SiteCapability {
 /// country and not a legal entity. DB: code unique and immutable; never deleted; a valid IANA
 /// time zone; deactivation keeps history and blocks new operational changes.
 model Site {
+  hotels          Hotel[]
+  orders          Order[]
   crateCycles     CrateCycle[]
   id              String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
   code            String           @unique
@@ -1371,6 +1392,7 @@ model CatalogComponent {
 /// A returnable production crate type (ADR 0021): capacity is data, never a constant.
 /// DB: code pattern; capacity 1–1000; immutable; DELETE rejected.
 model CrateType {
+  orderLines         OrderLine[]
   cycles             CrateCycle[]
   id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   code               String       @unique
@@ -1412,6 +1434,7 @@ enum ProductStatus {
 /// and creation immutable; the name may be corrected while ACTIVE (audited); status forward-only;
 /// DELETE rejected.
 model Product {
+  orderLines         OrderLine[]
   labelApprovals     ProductLabelApproval[]
   cycles             CrateCycle[]
   bindings           BottleProductBinding[]
@@ -1589,19 +1612,20 @@ model CrateRegistration {
 /// circulations are crate cycles (later PR). site_id = the site it belongs to (doc 022).
 /// DB: identity columns immutable; DELETE rejected; token registered as kind CRATE.
 model Crate {
-  cycles         CrateCycle[]
-  sessions       WorkstationSession[]
-  id             String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial         BigInt               @unique
-  code           String               @unique
-  qrToken        String               @unique @map("qr_token")
+  orderAllocations OrderCrateAllocation[]
+  cycles           CrateCycle[]
+  sessions         WorkstationSession[]
+  id               String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial           BigInt                 @unique
+  code             String                 @unique
+  qrToken          String                 @unique @map("qr_token")
   /// Always CRATE: composite FK to the registry row of this token.
-  qrKind         QrIdentityKind       @default(CRATE) @map("qr_kind")
-  crateTypeId    String               @map("crate_type_id") @db.Uuid
-  registrationId String               @map("registration_id") @db.Uuid
-  siteId         String               @map("site_id") @db.Uuid
-  status         CrateStatus          @default(ACTIVE)
-  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  qrKind           QrIdentityKind         @default(CRATE) @map("qr_kind")
+  crateTypeId      String                 @map("crate_type_id") @db.Uuid
+  registrationId   String                 @map("registration_id") @db.Uuid
+  siteId           String                 @map("site_id") @db.Uuid
+  status           CrateStatus            @default(ACTIVE)
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
 
   qrIdentity    QrIdentity               @relation(fields: [qrToken, qrKind], references: [token, kind], onDelete: Restrict)
   crateType     CrateType                @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
@@ -1682,6 +1706,8 @@ enum CrateEventType {
   CYCLE_ABORTED
   MEMBER_REMOVED
   MEMBER_ADDED
+  ALLOCATED_TO_ORDER
+  RELEASED_FROM_ORDER
 }
 
 /// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
@@ -1903,6 +1929,8 @@ enum CrateCycleStatus {
   FILLING
   FILLED
   ABORTED
+  /// Scanned into an order (doc 028); back to FILLED when removed or the order is cancelled.
+  ALLOCATED
 }
 
 /// One circulation of one crate (ADR 0021, ADR 0025): an immutable snapshot (crate type,
@@ -1911,28 +1939,29 @@ enum CrateCycleStatus {
 /// (A3 uses OPEN_ASSEMBLY → READY_TO_FILL); member_count = active assignments; OPEN_ASSEMBLY ⇒
 /// fewer than capacity, READY_TO_FILL ⇒ exactly capacity (commit-time).
 model CrateCycle {
-  id                     String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  crateId                String           @map("crate_id") @db.Uuid
-  siteId                 String           @map("site_id") @db.Uuid
-  status                 CrateCycleStatus @default(OPEN_ASSEMBLY)
-  crateTypeId            String           @map("crate_type_id") @db.Uuid
+  orderAllocations       OrderCrateAllocation[]
+  id                     String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  crateId                String                 @map("crate_id") @db.Uuid
+  siteId                 String                 @map("site_id") @db.Uuid
+  status                 CrateCycleStatus       @default(OPEN_ASSEMBLY)
+  crateTypeId            String                 @map("crate_type_id") @db.Uuid
   capacity               Int
-  productId              String           @map("product_id") @db.Uuid
-  categoryCode           String           @map("category_code")
-  recipeVersionId        String           @map("recipe_version_id") @db.Uuid
-  labelTemplateVersionId String           @map("label_template_version_id") @db.Uuid
-  memberCount            Int              @default(0) @map("member_count")
+  productId              String                 @map("product_id") @db.Uuid
+  categoryCode           String                 @map("category_code")
+  recipeVersionId        String                 @map("recipe_version_id") @db.Uuid
+  labelTemplateVersionId String                 @map("label_template_version_id") @db.Uuid
+  memberCount            Int                    @default(0) @map("member_count")
   /// Active members that are FILLED (doc 025 §3.2 "Naplněno"); changed only with their events.
-  filledCount            Int              @default(0) @map("filled_count")
+  filledCount            Int                    @default(0) @map("filled_count")
   /// Set by Hotovo (FILLED); cleared again by "Vrátit do rozpracování".
-  filledAt               DateTime?        @map("filled_at") @db.Timestamptz(3)
-  openedAt               DateTime         @default(now()) @map("opened_at") @db.Timestamptz(3)
-  openedBy               String           @map("opened_by") @db.Uuid
-  openOperationId        String           @map("open_operation_id") @db.Uuid
-  readyToFillAt          DateTime?        @map("ready_to_fill_at") @db.Timestamptz(3)
-  abortedAt              DateTime?        @map("aborted_at") @db.Timestamptz(3)
-  abortedBy              String?          @map("aborted_by") @db.Uuid
-  abortReason            String?          @map("abort_reason")
+  filledAt               DateTime?              @map("filled_at") @db.Timestamptz(3)
+  openedAt               DateTime               @default(now()) @map("opened_at") @db.Timestamptz(3)
+  openedBy               String                 @map("opened_by") @db.Uuid
+  openOperationId        String                 @map("open_operation_id") @db.Uuid
+  readyToFillAt          DateTime?              @map("ready_to_fill_at") @db.Timestamptz(3)
+  abortedAt              DateTime?              @map("aborted_at") @db.Timestamptz(3)
+  abortedBy              String?                @map("aborted_by") @db.Uuid
+  abortReason            String?                @map("abort_reason")
 
   crate                Crate                  @relation(fields: [crateId], references: [id], onDelete: Restrict)
   site                 Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
@@ -1964,20 +1993,21 @@ enum CrateAssignmentSource {
 /// ordinal ≤ the cycle's capacity (composite FK); inserted only into OPEN_ASSEMBLY; the bottle's
 /// product binding matches the cycle snapshot; release fields set once.
 model CrateAssignment {
-  id                 String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  cycleId            String                @map("cycle_id") @db.Uuid
-  cycleCapacity      Int                   @map("cycle_capacity")
-  bottleId           String                @map("bottle_id") @db.Uuid
+  orderBottles       OrderAllocationBottle[]
+  id                 String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  cycleId            String                  @map("cycle_id") @db.Uuid
+  cycleCapacity      Int                     @map("cycle_capacity")
+  bottleId           String                  @map("bottle_id") @db.Uuid
   ordinal            Int
   source             CrateAssignmentSource
-  assignedAt         DateTime              @default(now()) @map("assigned_at") @db.Timestamptz(3)
-  assignedBy         String                @map("assigned_by") @db.Uuid
-  operationRequestId String                @map("operation_request_id") @db.Uuid
-  assignedEventId    String                @unique @map("assigned_event_id") @db.Uuid
-  releasedAt         DateTime?             @map("released_at") @db.Timestamptz(3)
-  releasedBy         String?               @map("released_by") @db.Uuid
-  releaseReason      String?               @map("release_reason")
-  releaseOperationId String?               @map("release_operation_id") @db.Uuid
+  assignedAt         DateTime                @default(now()) @map("assigned_at") @db.Timestamptz(3)
+  assignedBy         String                  @map("assigned_by") @db.Uuid
+  operationRequestId String                  @map("operation_request_id") @db.Uuid
+  assignedEventId    String                  @unique @map("assigned_event_id") @db.Uuid
+  releasedAt         DateTime?               @map("released_at") @db.Timestamptz(3)
+  releasedBy         String?                 @map("released_by") @db.Uuid
+  releaseReason      String?                 @map("release_reason")
+  releaseOperationId String?                 @map("release_operation_id") @db.Uuid
 
   cycle            CrateCycle        @relation(fields: [cycleId, cycleCapacity], references: [id, capacity], onDelete: Restrict)
   bottle           Bottle            @relation(fields: [bottleId], references: [id], onDelete: Restrict)
@@ -2013,4 +2043,189 @@ model BottleProductBinding {
   operation            OperationRequest     @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
 
   @@map("bottle_product_bindings")
+}
+
+// ---------------------------------------------------------------------------------------------
+// customers + orders modules — hotels, manual orders and picking of finished crates (doc 028).
+// No contracts, billing, carriers or deliveries yet.
+// ---------------------------------------------------------------------------------------------
+
+/// A hotel with one delivery address and contact (doc 028 §1). The fulfilment site is chosen
+/// explicitly, never derived from the country (doc 022 §7). DB: code and site immutable; never
+/// deleted.
+model Hotel {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt   @unique
+  code               String   @unique
+  name               String
+  addressLine1       String   @map("address_line1")
+  addressLine2       String?  @map("address_line2")
+  postalCode         String   @map("postal_code")
+  city               String
+  countryCode        String   @map("country_code") @db.Char(2)
+  contactName        String   @map("contact_name")
+  contactPhone       String   @map("contact_phone")
+  contactEmail       String   @map("contact_email")
+  fulfillmentSiteId  String   @map("fulfillment_site_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String   @map("created_by") @db.Uuid
+  operationRequestId String   @unique @map("operation_request_id") @db.Uuid
+
+  fulfillmentSite Site             @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
+  creator         User             @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  operation       OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  orders          Order[]
+
+  @@index([fulfillmentSiteId])
+  @@map("hotels")
+}
+
+enum OrderStatus {
+  OPEN
+  READY_TO_DISPATCH
+  CANCELLED
+}
+
+/// A manual order of one hotel for one delivery address (doc 028). site_id = the hotel's
+/// fulfilment site at creation; hotel name, address and contact are a historical snapshot.
+/// DB: snapshot immutable; status only OPEN → READY_TO_DISPATCH / CANCELLED,
+/// READY_TO_DISPATCH → CANCELLED; READY_TO_DISPATCH only with every line complete.
+model Order {
+  id                 String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt      @unique
+  code               String      @unique
+  hotelId            String      @map("hotel_id") @db.Uuid
+  siteId             String      @map("site_id") @db.Uuid
+  status             OrderStatus @default(OPEN)
+  requestedShipDate  DateTime    @map("requested_ship_date") @db.Date
+  hotelName          String      @map("hotel_name")
+  addressLine1       String      @map("address_line1")
+  addressLine2       String?     @map("address_line2")
+  postalCode         String      @map("postal_code")
+  city               String
+  countryCode        String      @map("country_code") @db.Char(2)
+  contactName        String      @map("contact_name")
+  contactPhone       String      @map("contact_phone")
+  contactEmail       String      @map("contact_email")
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String      @map("created_by") @db.Uuid
+  operationRequestId String      @unique @map("operation_request_id") @db.Uuid
+  completedAt        DateTime?   @map("completed_at") @db.Timestamptz(3)
+  completedBy        String?     @map("completed_by") @db.Uuid
+  cancelledAt        DateTime?   @map("cancelled_at") @db.Timestamptz(3)
+  cancelledBy        String?     @map("cancelled_by") @db.Uuid
+  cancelReason       String?     @map("cancel_reason")
+
+  hotel       Hotel                  @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  site        Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator     User                   @relation("OrderCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  completer   User?                  @relation("OrderCompletedBy", fields: [completedBy], references: [id], onDelete: Restrict)
+  canceller   User?                  @relation("OrderCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
+  operation   OperationRequest       @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  lines       OrderLine[]
+  allocations OrderCrateAllocation[]
+  events      OrderEvent[]
+
+  @@index([siteId, requestedShipDate])
+  @@index([hotelId])
+  @@map("orders")
+}
+
+/// One product of an order in whole crates; crate type and capacity are a snapshot of the
+/// product's active recipe at order time; bottles = crates × capacity. DB: immutable except
+/// allocated_crates (0…crates, equal to the active allocations at commit).
+model OrderLine {
+  id              String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  orderId         String @map("order_id") @db.Uuid
+  lineNo          Int    @map("line_no")
+  productId       String @map("product_id") @db.Uuid
+  crateTypeId     String @map("crate_type_id") @db.Uuid
+  capacity        Int
+  crates          Int
+  bottles         Int
+  allocatedCrates Int    @default(0) @map("allocated_crates")
+
+  order       Order                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  product     Product                @relation(fields: [productId], references: [id], onDelete: Restrict)
+  crateType   CrateType              @relation(fields: [crateTypeId], references: [id], onDelete: Restrict)
+  allocations OrderCrateAllocation[]
+
+  @@unique([orderId, lineNo])
+  @@unique([orderId, productId])
+  @@map("order_lines")
+}
+
+/// A finished crate cycle loaded into an order line (picking). Released, never deleted.
+/// DB: one active allocation per cycle; cycle ALLOCATED ⇔ active allocation; same site, product,
+/// crate type and capacity as the line; release fields set once.
+model OrderCrateAllocation {
+  id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  orderId            String    @map("order_id") @db.Uuid
+  lineId             String    @map("line_id") @db.Uuid
+  cycleId            String    @map("cycle_id") @db.Uuid
+  crateId            String    @map("crate_id") @db.Uuid
+  allocatedAt        DateTime  @map("allocated_at") @db.Timestamptz(3)
+  allocatedBy        String    @map("allocated_by") @db.Uuid
+  operationRequestId String    @map("operation_request_id") @db.Uuid
+  releasedAt         DateTime? @map("released_at") @db.Timestamptz(3)
+  releasedBy         String?   @map("released_by") @db.Uuid
+  releaseReason      String?   @map("release_reason")
+  releaseOperationId String?   @map("release_operation_id") @db.Uuid
+
+  order            Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  line             OrderLine               @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  cycle            CrateCycle              @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  crate            Crate                   @relation(fields: [crateId], references: [id], onDelete: Restrict)
+  allocator        User                    @relation("AllocatedBy", fields: [allocatedBy], references: [id], onDelete: Restrict)
+  releaser         User?                   @relation("AllocationReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  operation        OperationRequest        @relation("AllocateOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  releaseOperation OperationRequest?       @relation("AllocationReleaseOperation", fields: [releaseOperationId], references: [requestId], onDelete: Restrict)
+  bottles          OrderAllocationBottle[]
+
+  @@index([orderId])
+  @@index([cycleId])
+  @@index([crateId])
+  @@map("order_crate_allocations")
+}
+
+/// The crate's bottle memberships at allocation time (the per-bottle trace). DB: insert-only;
+/// the assignment is an active member of the allocation's cycle.
+model OrderAllocationBottle {
+  allocationId String @map("allocation_id") @db.Uuid
+  assignmentId String @map("assignment_id") @db.Uuid
+  bottleId     String @map("bottle_id") @db.Uuid
+
+  allocation OrderCrateAllocation @relation(fields: [allocationId], references: [id], onDelete: Restrict)
+  assignment CrateAssignment      @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  bottle     Bottle               @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+
+  @@id([allocationId, assignmentId])
+  @@index([bottleId])
+  @@map("order_allocation_bottles")
+}
+
+enum OrderEventType {
+  CREATED
+  CRATE_ADDED
+  CRATE_REMOVED
+  COMPLETED
+  CANCELLED
+}
+
+/// Append-only order history (ADR 0006). DB: immutable.
+model OrderEvent {
+  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  orderId            String         @map("order_id") @db.Uuid
+  type               OrderEventType
+  occurredAt         DateTime       @map("occurred_at") @db.Timestamptz(3)
+  actorId            String         @map("actor_id") @db.Uuid
+  operationRequestId String         @map("operation_request_id") @db.Uuid
+  payload            Json           @default("{}")
+
+  order     Order            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  actor     User             @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@index([orderId, occurredAt])
+  @@map("order_events")
 }

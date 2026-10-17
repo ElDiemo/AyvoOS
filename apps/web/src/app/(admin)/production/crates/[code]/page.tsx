@@ -194,6 +194,7 @@ export default async function CrateDetailPage({ params }: { params: Promise<{ co
                 {e.printJobCode && <span className="font-mono"> · {e.printJobCode}</span>}
                 {e.registrationCode && <span className="font-mono"> · {e.registrationCode}</span>}
                 {e.bottle && <span className="font-mono"> · {t.eventBottle(e.bottle)}</span>}
+                {e.order && <span className="font-mono"> · {t.eventOrder(e.order)}</span>}
                 {e.reason && <span> · {t.eventReason(e.reason)}</span>}
                 <span className="block text-xs text-stone-500">
                   {formatDateTimeCs(e.occurredAt, timeZone)} · {t.eventBy(e.actor)}

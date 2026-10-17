@@ -10,6 +10,8 @@ export const CODE_PREFIX = {
   goodsReceipt: 'GR-',
   crate: 'AYV-C-',
   crateRegistration: 'CR-',
+  hotel: 'HT-',
+  order: 'OR-',
 } as const;
 
 export function formatCode(prefix: string, serial: bigint): string {

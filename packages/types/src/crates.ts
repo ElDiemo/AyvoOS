@@ -37,6 +37,8 @@ export const crateEventTypeSchema = z.enum([
   'CYCLE_ABORTED',
   'MEMBER_REMOVED',
   'MEMBER_ADDED',
+  'ALLOCATED_TO_ORDER',
+  'RELEASED_FROM_ORDER',
 ]);
 export type CrateEventType = z.infer<typeof crateEventTypeSchema>;
 
@@ -77,7 +79,14 @@ export const crateSummarySchema = z.object({
   /** The open crate cycle (doc 025 A3), or null: no open circulation. */
   cycle: z
     .object({
-      status: z.enum(['OPEN_ASSEMBLY', 'READY_TO_FILL', 'FILLING', 'FILLED', 'ABORTED']),
+      status: z.enum([
+        'OPEN_ASSEMBLY',
+        'READY_TO_FILL',
+        'FILLING',
+        'FILLED',
+        'ABORTED',
+        'ALLOCATED',
+      ]),
       memberCount: z.number().int(),
       /** "Naplněno" (doc 025 §3.2), shown beside "Obsah" (memberCount). */
       filledCount: z.number().int(),
@@ -99,7 +108,9 @@ export const crateListQuerySchema = z.object({
   search: z.string().trim().max(32).optional(),
   crateType: catalogCodeSchema.optional(),
   /** Derived list state (doc 025 §3.2): EMPTY = no open cycle. */
-  state: z.enum(['EMPTY', 'OPEN_ASSEMBLY', 'READY_TO_FILL', 'FILLING', 'FILLED']).optional(),
+  state: z
+    .enum(['EMPTY', 'OPEN_ASSEMBLY', 'READY_TO_FILL', 'FILLING', 'FILLED', 'ALLOCATED'])
+    .optional(),
 });
 export type CrateListQuery = z.infer<typeof crateListQuerySchema>;
 export const crateListStateSchema = crateListQuerySchema.shape.state.unwrap();
@@ -159,6 +170,8 @@ export const crateEventSchema = z.object({
   /** Corrections and their bottles (doc 025 §4.2): bottle code, reason, assignment source. */
   bottle: z.string().nullable(),
   reason: z.string().nullable(),
+  /** The order of an allocation or its release (doc 028). */
+  order: z.string().nullable(),
 });
 export type CrateEvent = z.infer<typeof crateEventSchema>;
 

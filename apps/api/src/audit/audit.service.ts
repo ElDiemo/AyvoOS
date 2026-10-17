@@ -52,7 +52,8 @@ export type AuditType =
   | 'WORKSTATION_REACTIVATED'
   | 'STATION_SESSION_TAKEN_OVER'
   | 'PRODUCT_LABEL_APPROVED'
-  | 'PRODUCT_LABEL_REVOKED';
+  | 'PRODUCT_LABEL_REVOKED'
+  | 'HOTEL_CREATED';
 
 export interface AuditInput {
   type: AuditType;

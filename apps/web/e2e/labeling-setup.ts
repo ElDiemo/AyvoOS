@@ -347,3 +347,58 @@ export async function lotId(request: APIRequestContext, lotCode: string): Promis
   );
   return lots.find((l) => l.code === lotCode)!.id;
 }
+
+/** The id of a lot of any item by its lot code. */
+export async function lotIdOf(
+  request: APIRequestContext,
+  itemCode: string,
+  lotCode: string,
+): Promise<string> {
+  const lots = await json<{ id: string; code: string }[]>(
+    await request.get(`/api/admin/inventory/lots?item=${itemCode}&available=false`),
+  );
+  return lots.find((l) => l.code === lotCode)!.id;
+}
+
+/**
+ * Fills every bottle of a labelled crate at a new filling station through the API and finishes
+ * it (Hotovo) — the crate is then exactly what an operator makes ready (doc 025 A4).
+ */
+export async function filledCrate(
+  request: APIRequestContext,
+  crate: { url: string },
+  opts: { liquidLotId: string; bottleUrls: string[] },
+): Promise<void> {
+  const station = await fillingStation(request);
+  const session = await openStation(request, station.url);
+  const base = `/api/admin/station-sessions/${session}`;
+  await json(
+    await request.post(`${base}/filling-crate`, {
+      data: { requestId: crypto.randomUUID(), scannedValue: crate.url },
+    }),
+  );
+  await json(
+    await request.post(`${base}/liquid-lot`, {
+      data: { requestId: crypto.randomUUID(), liquidLotId: opts.liquidLotId },
+    }),
+  );
+  const revision = async () =>
+    (await json<{ contextRevision: number }>(await request.get(`${base}/filling`))).contextRevision;
+  for (const bottle of opts.bottleUrls) {
+    await json(
+      await request.post(`${base}/fill-scans`, {
+        data: {
+          requestId: crypto.randomUUID(),
+          scannedValue: bottle,
+          contextRevision: await revision(),
+        },
+      }),
+    );
+  }
+  await json(
+    await request.post(`${base}/finish`, {
+      data: { requestId: crypto.randomUUID(), contextRevision: await revision() },
+    }),
+  );
+  await releaseOwnStation(request);
+}

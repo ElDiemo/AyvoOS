@@ -40,7 +40,7 @@ export interface NavPage {
 }
 
 export interface NavModule {
-  id: 'warehouse' | 'production' | 'admin';
+  id: 'warehouse' | 'production' | 'hotels' | 'dispatch' | 'admin';
   /** Operational modules ("Provoz") or the administration section ("Správa"). */
   section: 'operations' | 'administration';
   label: string;
@@ -53,6 +53,8 @@ export interface NavModule {
 
 const w = shellCs.modules.warehouse;
 const p = shellCs.modules.production;
+const h = shellCs.modules.hotels;
+const d = shellCs.modules.dispatch;
 
 export const MODULES: readonly NavModule[] = [
   {
@@ -184,6 +186,37 @@ export const MODULES: readonly NavModule[] = [
     ],
   },
   {
+    // Hotel master data (doc 028); company-wide.
+    id: 'hotels',
+    section: 'operations',
+    permissions: ['hotels:read'],
+    label: h.label,
+    href: '/hotels',
+    description: h.description,
+    pages: [
+      { id: 'list', href: '/hotels', label: h.pages.list, permission: 'hotels:read' },
+      { id: 'new', href: '/hotels/new', label: h.pages.new, permission: 'hotels:manage' },
+    ],
+  },
+  {
+    // Orders of the active site and their picking (doc 028) — no carrier or delivery yet.
+    id: 'dispatch',
+    section: 'operations',
+    permissions: ['orders:read'],
+    label: d.label,
+    href: '/dispatch',
+    description: d.description,
+    pages: [
+      { id: 'orders', href: '/dispatch', label: d.pages.orders, permission: 'orders:read' },
+      {
+        id: 'new',
+        href: '/dispatch/orders/new',
+        label: d.pages.new,
+        permission: 'orders:manage',
+      },
+    ],
+  },
+  {
     id: 'admin',
     section: 'administration',
     permissions: ['identity:users_read', 'sites:manage'],
@@ -225,6 +258,8 @@ export type ProductionPageId =
   | 'catalog'
   | 'setup';
 export type AdminPageId = 'users' | 'roles' | 'sites';
+export type HotelsPageId = 'list' | 'new';
+export type DispatchPageId = 'orders' | 'new';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports

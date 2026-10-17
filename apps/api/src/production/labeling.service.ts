@@ -25,6 +25,7 @@ import { LabelPrintJobsService } from '../label-production/label-print-jobs.serv
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { StationSessionsService } from '../workstations/station-sessions.service.js';
 import type { WorkstationRecord } from '../workstations/workstations.service.js';
+import { crateAllocated } from './cycle-corrections.service.js';
 
 const notLabeling = () => domainError(409, 'WRONG_STATION_MODE', 'This is not a labelling station');
 const contextIncomplete = () =>
@@ -515,6 +516,7 @@ export class LabelingService {
     session: Pick<WorkstationSession, 'productId' | 'labelTemplateVersionId'>,
   ): void {
     if (!open) return;
+    if (open.status === 'ALLOCATED') throw crateAllocated();
     if (open.status !== 'OPEN_ASSEMBLY') {
       throw domainError(
         409,
