@@ -76,7 +76,7 @@ removes them. `ts:` = the server's Tailscale IPv4 address, read by the deploy sc
 
 ### Tailnet only (ADR 0026)
 
-- **Owner, once (sudo):** `sudo bash deploy/dev/host/install.sh` — backs up the firewall state to
+- **Owner, once (sudo), after an edge backup** (`scripts/dev-edge-backup.sh backup ayvo-dev-preview /opt/ayvo/backups/dev-preview /opt/ayvo/secrets/dev-preview.env`): `sudo bash deploy/dev/host/install.sh <that backup directory>` — verifies it, backs up the firewall state to
   `/var/backups/ayvo-dev-tailnet/<time>/`, installs the `DOCKER-USER` guard unit and the sysctl
   `net.ipv4.ip_nonlocal_bind=1`. The deploy script refuses to run without them.
 - **Owner, Tailscale admin console:** DNS → add nameserver `<server Tailscale IPv4>`, _Restrict to

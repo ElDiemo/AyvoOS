@@ -40,6 +40,10 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    labels:
+      # The last commit that changed deploy/dev (set by scripts/deploy-dev.sh): lets an edge backup
+      # find this exact Compose file in git after the checkout has moved on.
+      com.ayvo.edge-commit: ${AYVO_EDGE_COMMIT:-unknown}
     logging: *logging
     security_opt:
       - no-new-privileges:true

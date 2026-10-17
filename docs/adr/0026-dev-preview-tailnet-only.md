@@ -98,26 +98,35 @@ a generic installer now. Nothing here is production-ready, and production is not
 
 ## Backup and rollback (exact)
 
-**Backup (automatic, before every switch).** `scripts/deploy-dev.sh` (`--edge`, deploy, rollback)
-first runs `scripts/dev-edge-backup.sh backup`, which saves the running Caddy exactly as it runs
-into `/opt/ayvo/backups/dev-preview/edge-before-<time>-<id>/`: the Compose file it was created
-from, every bind-mounted file read from inside the running container, the running image tag, the
-published ports and `docker inspect`. It verifies the copies against the container and that the
-saved Compose file reproduces the running image and exactly its ports, writes checksums and only
-then `COMPLETE`. **If any of this fails, the deployment stops before anything is built or
-switched.** The directory is printed by the deploy and repeated in its failure report.
+**Backup (before the host guard, and automatically before every switch).**
+`scripts/dev-edge-backup.sh backup` saves the running Caddy exactly as it runs into
+`/opt/ayvo/backups/dev-preview/edge-before-<time>-<id>/`: every bind-mounted file read from inside
+the running container, the published ports, `docker inspect`, `runtime.env` (the image tag and,
+after the switch, the tailnet address exactly as the container got them — so a restore needs
+nothing exported by hand), and the Compose file it was created from. That Compose file is the one
+at the container's path or — when the checkout has already moved to a newer `main` — the same path
+in git at the commit recorded on the container (`com.ayvo.edge-commit`) or in the image tag
+(`<sha12>-<time>`); the first that reproduces the running image and **exactly** its ports is
+saved, none ⇒ no backup. Checksums, then `COMPLETE`, are written last. Rendering always uses the
+env file plus `runtime.env` in a clean environment. `deploy/dev/host/install.sh` refuses to run
+without a complete, verified backup named on its command line, and `scripts/deploy-dev.sh`
+(`--edge`, deploy, rollback) takes another one before it builds or switches anything — **if that
+fails, nothing is changed.** The directory is printed and repeated in the failure report.
 
 **Rollback** — also after a partly failed switch (new Caddy missing, unhealthy or half-created,
 DNS failing):
 
-1. Restore the previous Caddy and remove the containers that did not exist before (the `dns`):
+1. Restore the previous Caddy and remove the containers that did not exist before (the `dns`),
+   from any shell (no exported variables needed):
    ```bash
    scripts/dev-edge-backup.sh restore /opt/ayvo/backups/dev-preview/edge-before-<time>-<id> \
      /opt/ayvo/secrets/dev-preview.env
    ```
    It checks the checksums first, recreates only `caddy` from the saved files with the saved tag
    (no build; web, api, database untouched) and fails unless the published ports equal the saved
-   ones. Tested on a throwaway Compose project (`apps/api/test/deploy-dev-edge.test.ts`).
+   ones. Tested on throwaway Compose projects (`apps/api/test/deploy-dev-edge.test.ts`): checkout
+   already on the new Compose while the old Caddy runs, a partly failed switch, a tampered backup,
+   and a tailnet-era backup restored from a clean shell.
 2. `sudo bash deploy/dev/host/uninstall.sh` (removes the guard and resets the sysctl) — only after
    step 1.
 3. Tailscale admin console: remove the split-DNS nameserver; restore the saved access policy.

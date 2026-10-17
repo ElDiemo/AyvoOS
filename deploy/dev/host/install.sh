@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# AYVO OS — install the DEV host guard (ADR 0026). Run as root on the DEV server only:
-#   sudo bash deploy/dev/host/install.sh
+# AYVO OS — install the DEV host guard (ADR 0026). Run as root on the DEV server only, naming a
+# complete edge backup taken BEFORE (scripts/dev-edge-backup.sh backup …; it is checked here):
+#   sudo bash deploy/dev/host/install.sh /opt/ayvo/backups/dev-preview/edge-before-<time>-<id>
 # Backs up the current firewall state and sysctl first (to /var/backups/ayvo-dev-tailnet/<time>),
 # then installs: the sysctl (ip_nonlocal_bind), /usr/local/sbin/ayvo-dev-docker-guard and its
 # systemd unit (enabled, applied now and on every Docker start). It does not touch UFW, SSH,
@@ -9,6 +10,13 @@ set -Eeuo pipefail
 umask 022
 [[ $(id -u) == 0 ]] || { echo "run as root (sudo)" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EDGE_BACKUP=${1:-}
+[[ -n $EDGE_BACKUP && -f $EDGE_BACKUP/COMPLETE && -f $EDGE_BACKUP/runtime.env ]] || {
+  echo "name a complete edge backup first: scripts/dev-edge-backup.sh backup … (ADR 0026)" >&2
+  exit 1
+}
+(cd "$EDGE_BACKUP" && sha256sum --quiet -c SHA256SUMS) || { echo "edge backup checksums do not match" >&2; exit 1; }
+echo "edge backup verified: $EDGE_BACKUP"
 BACKUP="/var/backups/ayvo-dev-tailnet/$(date -u +%Y%m%dT%H%M%SZ)"
 
 mkdir -p "$BACKUP"

@@ -1,13 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -53,6 +45,13 @@ describe('every placeholder of the edge configuration reaches its container (TS3
     expect(serviceEnv(service)).toEqual(expect.arrayContaining(vars));
   });
 });
+
+const get = (port: number) =>
+  run('curl', ['-s', '-m', '3', `http://127.0.0.1:${port}/`]).stdout.trim();
+const until = (port: number, body: string) => {
+  for (let i = 0; i < 30 && get(port) !== body; i++) run('sleep', ['0.5']);
+  return get(port);
+};
 
 let dir: string;
 beforeAll(() => {
@@ -109,12 +108,12 @@ describe.skipIf(!hasDocker || !hasDig)('the real Compose dns service (TS33-R1)',
   });
 });
 
-describe.skipIf(!hasDocker)('edge backup and restore (TS33-R2)', () => {
+describe.skipIf(!hasDocker)('edge backup and restore (TS33-R2, TS33-R3)', () => {
   const project = `ayvo-test-edge-${process.pid}`;
-  const tag = 't1';
   const [oldPort, newPort] = [18000 + (process.pid % 1000), 19000 + (process.pid % 1000)];
   let work: string;
   let backups: string;
+  let tag: string;
 
   const compose = (port: number, extra = '') => `name: ${project}
 services:
@@ -134,22 +133,25 @@ ${extra}`;
         AYVO_IMAGE_TAG: tag,
       },
     );
-  const get = (port: number) =>
-    run('curl', ['-s', '-m', '3', `http://127.0.0.1:${port}/`]).stdout.trim();
-  const until = (port: number, body: string) => {
-    for (let i = 0; i < 30 && get(port) !== body; i++) run('sleep', ['0.5']);
-    return get(port);
+  const git = (...args: string[]) => run('git', ['-C', work, ...args]);
+  const commit = (message: string) => {
+    git('add', '-A');
+    git('-c', 'user.name=t', '-c', 'user.email=t@ayvo.test', 'commit', '-q', '-m', message);
+    return git('rev-parse', 'HEAD').stdout.trim();
   };
 
   beforeAll(() => {
     work = join(dir, 'work');
     backups = join(dir, 'backups');
     run('mkdir', ['-p', work]);
-    run('docker', ['pull', '-q', 'alpine:3.20']);
-    run('docker', ['tag', 'alpine:3.20', `ayvo-edgetest/api:${tag}`]);
+    git('init', '-q');
     writeFileSync(join(work, 'compose.yml'), compose(oldPort));
     writeFileSync(join(work, 'Caddyfile'), ':80 {\n\trespond "old"\n}\n');
     chmodSync(join(work, 'Caddyfile'), 0o644);
+    // Images are tagged <sha12>-<time> by deploy-dev.sh: the commit the old edge was deployed from.
+    tag = `${commit('old edge').slice(0, 12)}-20261017T000000Z`;
+    run('docker', ['pull', '-q', 'alpine:3.20']);
+    run('docker', ['tag', 'alpine:3.20', `ayvo-edgetest/api:${tag}`]);
     const up = dc('up', '--detach', 'caddy', 'api');
     expect(up.status, up.stderr).toBe(0);
     expect(until(oldPort, 'old')).toBe('old');
@@ -173,25 +175,35 @@ ${extra}`;
     expect(r.stderr).toContain('expected exactly one running caddy container');
   });
 
-  it('saves what Caddy really uses and restores it after a partly failed switch', () => {
-    // The file on disk was already replaced (new inode): the backup must hold the RUNNING one.
-    writeFileSync(join(work, 'Caddyfile.next'), ':80 {\n\trespond "disk"\n}\n');
-    renameSync(join(work, 'Caddyfile.next'), join(work, 'Caddyfile'));
-
-    const b = run(helper, ['backup', project, backups, join(dir, 'fixture.env')]);
-    expect(b.status, b.stderr).toBe(0);
-    const saved = b.stdout.trim();
-    expect(existsSync(join(saved, 'COMPLETE'))).toBe(true);
-    expect(readFileSync(join(saved, 'Caddyfile'), 'utf8')).toContain('respond "old"');
-    expect(readFileSync(join(saved, 'tag'), 'utf8').trim()).toBe(tag);
-    expect(readFileSync(join(saved, 'ports'), 'utf8').trim()).toBe(`127.0.0.1:${oldPort}->80/tcp`);
-
-    // The switch: a new caddy on another port plus a dns service that fails to start.
+  it('old caddy running, checkout already on the NEW compose: backup and restore still work (TS33-R3)', () => {
+    // The checkout moves to the new main before the switch: new Compose (other port, a dns that
+    // fails to start) and a new Caddyfile on disk (new inode), while the OLD caddy still runs.
     writeFileSync(
       join(work, 'compose.yml'),
       compose(newPort, "  dns:\n    image: alpine:3.20\n    command: ['false']\n"),
     );
-    writeFileSync(join(work, 'Caddyfile'), ':80 {\n\trespond "new"\n}\n');
+    writeFileSync(join(work, 'Caddyfile.next'), ':80 {\n\trespond "new"\n}\n');
+    renameSync(join(work, 'Caddyfile.next'), join(work, 'Caddyfile'));
+    commit('new edge');
+
+    // The match check stays strict: without the git history no candidate reproduces the old caddy.
+    renameSync(join(work, '.git'), join(work, '.git-away'));
+    const refused = run(helper, ['backup', project, backups, join(dir, 'fixture.env')]);
+    renameSync(join(work, '.git-away'), join(work, '.git'));
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('reproduces the running caddy');
+
+    const b = run(helper, ['backup', project, backups, join(dir, 'fixture.env')]);
+    expect(b.status, b.stderr).toBe(0);
+    const saved = b.stdout.trim();
+    const complete = readFileSync(join(saved, 'COMPLETE'), 'utf8');
+    expect(complete).toContain(`compose=git:${tag.slice(0, 12)}`);
+    expect(readFileSync(join(saved, 'compose.yml'), 'utf8')).toContain(`127.0.0.1:${oldPort}:80`);
+    expect(readFileSync(join(saved, 'Caddyfile'), 'utf8')).toContain('respond "old"');
+    expect(readFileSync(join(saved, 'runtime.env'), 'utf8')).toBe(`AYVO_IMAGE_TAG=${tag}\n`);
+    expect(readFileSync(join(saved, 'ports'), 'utf8').trim()).toBe(`127.0.0.1:${oldPort}->80/tcp`);
+
+    // The switch fails half-way: the new caddy runs on the new port, dns does not start.
     dc('up', '--detach', '--no-deps', 'caddy', 'dns');
     expect(until(newPort, 'new')).toBe('new');
     expect(get(oldPort)).toBe('');
@@ -213,12 +225,95 @@ ${extra}`;
 
   it('refuses to restore a tampered backup', () => {
     const b = run(helper, ['backup', project, backups, join(dir, 'fixture.env')]);
+    expect(b.status, b.stderr).toBe(0);
     const saved = b.stdout.trim();
     writeFileSync(join(saved, 'Caddyfile'), ':80 {\n\trespond "tampered"\n}\n');
     const r = run(helper, ['restore', saved, join(dir, 'fixture.env')]);
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain('checksums');
     expect(until(oldPort, 'old')).toBe('old');
+  });
+});
+
+describe.skipIf(!hasDocker)('restore of a tailnet-era backup from a clean shell (TS33-R4)', () => {
+  const project = `ayvo-test-edge-ts-${process.pid}`;
+  const port = 17000 + (process.pid % 1000);
+  const tag = 't4';
+  let work: string;
+  // Like deploy/dev/compose.yml after ADR 0026: the address is interpolated, required, and passed
+  // to the container; only the deploy process exports it.
+  const compose = `name: ${project}
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports: ['\${DEV_TAILNET_IPV4:?set by deploy}:${port}:80']
+    environment:
+      DEV_TAILNET_IPV4: \${DEV_TAILNET_IPV4}
+    volumes: ['./Caddyfile:/etc/caddy/Caddyfile:ro']
+  api:
+    image: ayvo-edgetest/api:\${AYVO_IMAGE_TAG:-local}
+    command: ['sleep', '3600']
+`;
+  /** A shell without DEV_TAILNET_IPV4 or AYVO_IMAGE_TAG, like a new SSH session. */
+  const clean = (cmd: string, args: string[]) => {
+    const env = { ...process.env };
+    delete env.DEV_TAILNET_IPV4;
+    delete env.AYVO_IMAGE_TAG;
+    return spawnSync(cmd, args, { cwd: root, env, encoding: 'utf8' });
+  };
+
+  beforeAll(() => {
+    work = join(dir, 'work-ts');
+    run('mkdir', ['-p', work]);
+    writeFileSync(join(work, 'compose.yml'), compose);
+    writeFileSync(join(work, 'Caddyfile'), ':80 {\n\trespond "tailnet"\n}\n');
+    chmodSync(join(work, 'Caddyfile'), 0o644);
+    run('docker', ['tag', 'alpine:3.20', `ayvo-edgetest/api:${tag}`]);
+    const up = run(
+      'docker',
+      [
+        'compose',
+        '--project-directory',
+        work,
+        '-f',
+        join(work, 'compose.yml'),
+        'up',
+        '--detach',
+        'caddy',
+        'api',
+      ],
+      {
+        AYVO_IMAGE_TAG: tag,
+        DEV_TAILNET_IPV4: '127.0.0.1',
+      },
+    );
+    expect(up.status, up.stderr).toBe(0);
+    expect(until(port, 'tailnet')).toBe('tailnet');
+  });
+  afterAll(() => {
+    run(
+      'docker',
+      ['compose', '-p', project, '-f', join(work, 'compose.yml'), 'down', '--remove-orphans'],
+      {
+        DEV_TAILNET_IPV4: '127.0.0.1',
+      },
+    );
+    run('docker', ['rmi', `ayvo-edgetest/api:${tag}`]);
+  });
+
+  it('saves the runtime values and restores without any exported address', () => {
+    const b = clean(helper, ['backup', project, join(dir, 'backups-ts'), join(dir, 'fixture.env')]);
+    expect(b.status, b.stderr).toBe(0);
+    const saved = b.stdout.trim();
+    expect(readFileSync(join(saved, 'runtime.env'), 'utf8')).toBe(
+      `AYVO_IMAGE_TAG=${tag}\nDEV_TAILNET_IPV4=127.0.0.1\n`,
+    );
+    // A partly failed switch removed the caddy altogether.
+    run('docker', ['rm', '-f', `${project}-caddy-1`]);
+    expect(get(port)).toBe('');
+    const r = clean(helper, ['restore', saved, join(dir, 'fixture.env')]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(until(port, 'tailnet')).toBe('tailnet');
   });
 });
 

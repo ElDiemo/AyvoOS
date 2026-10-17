@@ -532,6 +532,8 @@ ok "WORKOS_JWT_ISSUER matches the client's WorkOS discovery document"
 STEP="validate tailnet and host guard"
 tailnet_address
 export DEV_TAILNET_IPV4="$TAILNET_IPV4"
+AYVO_EDGE_COMMIT="$(git -C "$REPO_ROOT" log -1 --format=%H -- deploy/dev 2>/dev/null)" || AYVO_EDGE_COMMIT=unknown
+export AYVO_EDGE_COMMIT
 ok "Tailscale IPv4 $TAILNET_IPV4 on tailscale0"
 check_host_guard
 ok "$GUARD_UNIT active and enabled; ip_nonlocal_bind=1"
