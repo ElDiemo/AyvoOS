@@ -11,7 +11,7 @@ const VIEWS = [
 ] as const;
 
 /**
- * Header of Výroba → Lahve: the primary "Vytvořit lahve" action and the two views (individual
+ * Header of Výroba → Lahve: the primary "Připravit QR etikety lahví" action and the two views (individual
  * bottles, history of bottle creations).
  */
 export function BottlesHeader({

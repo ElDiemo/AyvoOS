@@ -77,8 +77,9 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
           </>
         }
       />
+      {/* One row on phones (scrolls sideways), so the crates start within the first screen. */}
       <nav
-        className="mb-4 flex flex-wrap gap-2"
+        className="mb-3 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] sm:flex-wrap sm:overflow-visible [&::-webkit-scrollbar]:hidden"
         aria-label={t.stateFilter}
         data-testid="crate-states"
       >
@@ -90,20 +91,20 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
             aria-current={params.state === state ? 'page' : undefined}
             className={
               params.state === state
-                ? 'rounded-full border border-stone-900 bg-stone-900 px-3 py-1 text-sm text-white'
-                : 'rounded-full border border-stone-300 bg-white px-3 py-1 text-sm text-stone-800 hover:border-stone-500'
+                ? 'shrink-0 rounded-full border border-stone-900 bg-stone-900 px-3 py-1 text-sm whitespace-nowrap text-white'
+                : 'shrink-0 rounded-full border border-stone-300 bg-white px-3 py-1 text-sm whitespace-nowrap text-stone-800 hover:border-stone-500'
             }
           >
             {t.stateCount(t.state[state] ?? state, list.stateCounts[state] ?? 0)}
           </Link>
         ))}
       </nav>
-      <Card className="mb-6">
-        <form
-          className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_12rem_auto]"
-          action="/production/crates"
-          data-testid="crate-filter"
-        >
+      <form
+        className="mb-4 flex flex-col gap-2"
+        action="/production/crates"
+        data-testid="crate-filter"
+      >
+        <div className="flex gap-2">
           <input
             name="search"
             defaultValue={params.search}
@@ -111,46 +112,53 @@ export default async function CratesPage({ searchParams }: { searchParams: Promi
             className={inputClass}
             aria-label={t.search}
           />
-          {types.length > 0 ? (
+          <button type="submit" className={buttonClass.secondary}>
+            {t.filter}
+          </button>
+        </div>
+        <details
+          open={!!(params.crateType || params.state) || undefined}
+          className="text-sm"
+          data-testid="crate-more-filters"
+        >
+          <summary className="cursor-pointer text-stone-600">{t.moreFilters}</summary>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[12rem_12rem_auto]">
+            {types.length > 0 && (
+              <select
+                name="crateType"
+                defaultValue={params.crateType ?? ''}
+                className={inputClass}
+                aria-label={t.typeFilter}
+              >
+                <option value="">{t.allTypes}</option>
+                {types.map((ct) => (
+                  <option key={ct.code} value={ct.code}>
+                    {ct.name} ({ct.code})
+                  </option>
+                ))}
+              </select>
+            )}
             <select
-              name="crateType"
-              defaultValue={params.crateType ?? ''}
+              name="state"
+              defaultValue={params.state ?? ''}
               className={inputClass}
-              aria-label={t.typeFilter}
+              aria-label={t.stateFilter}
             >
-              <option value="">{t.allTypes}</option>
-              {types.map((ct) => (
-                <option key={ct.code} value={ct.code}>
-                  {ct.name} ({ct.code})
+              <option value="">{t.allStates}</option>
+              {crateListStateSchema.options.map((state) => (
+                <option key={state} value={state}>
+                  {t.state[state] ?? state}
                 </option>
               ))}
             </select>
-          ) : (
-            <span className="hidden sm:block" />
-          )}
-          <select
-            name="state"
-            defaultValue={params.state ?? ''}
-            className={inputClass}
-            aria-label={t.stateFilter}
-          >
-            <option value="">{t.allStates}</option>
-            {crateListStateSchema.options.map((state) => (
-              <option key={state} value={state}>
-                {t.state[state] ?? state}
-              </option>
-            ))}
-          </select>
-          <div className="flex gap-2">
-            <button type="submit" className={buttonClass.secondary}>
-              {t.filter}
-            </button>
-            <Link href="/production/crates" className={buttonClass.secondary}>
-              {t.reset}
-            </Link>
           </div>
-        </form>
-      </Card>
+        </details>
+        {filtered && (
+          <Link href="/production/crates" className="self-start text-sm underline">
+            {t.reset}
+          </Link>
+        )}
+      </form>
       <p className="mb-2 text-sm text-stone-600" data-testid="crate-count">
         {t.count(list.total, filtered)}
       </p>

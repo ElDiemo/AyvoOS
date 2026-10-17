@@ -100,7 +100,7 @@ export function ProductLabelApprovals({
   }
 
   return (
-    <Card title={t.title} testId="label-approvals">
+    <Card title={t.title} testId="label-approvals" id="designs" className="scroll-mt-24">
       <div className="flex flex-col gap-4">
         <p className="text-xs text-stone-500">{t.help}</p>
         {approvals.length === 0 ? (

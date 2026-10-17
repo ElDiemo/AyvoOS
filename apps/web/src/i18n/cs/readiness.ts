@@ -56,6 +56,30 @@ export const readinessCs = {
   recipeWaiting: (v: number, n: number) => `receptura V${v} připnutá na ${n} čekajících bednách`,
   recipePlan: (v: number) => `aktivní receptura V${v} – plán pro nové bedny, žádná nečeká`,
   open: 'Otevřít',
+  /** Concrete next steps (issue #11 UI-21); offered only with the permission they need. */
+  actions: {
+    site: 'Nastavit provozovnu',
+    warehouse: 'Založit sklad provozovny',
+    product: 'Založit produkt',
+    recipe: 'Dokončit a aktivovat recepturu',
+    design: 'Schválit design etikety pro tento produkt',
+    labelingStation: 'Založit lepicí pracoviště a vytisknout jeho QR',
+    labels: 'Připravit QR etikety lahví (PDF)',
+    crate: 'Zaevidovat bedny a vytisknout jejich QR',
+    bottles: 'Přijmout nové lahve na sklad',
+    labelStock: 'Přijmout etikety na sklad',
+    fillingStation: 'Založit plnicí pracoviště této kategorie',
+    fillingCrates: 'Pracovat na lepicím pracovišti',
+    liquid: 'Přijmout kapalinu na sklad',
+    pumps: 'Přijmout pumpičky na sklad',
+    needsDesign:
+      'Počítají se jen identity se schváleným designem – nejdřív schvalte design etikety (výše).',
+    needsRecipe: 'Typ bedny určuje aktivní receptura – nejdřív ji aktivujte (výše).',
+    cratesComeFromLabeling:
+      'Bedny k plnění vznikají lepením: plná bedna z lepicího pracoviště čeká na plnění.',
+    needsWarehouse: 'Nejdřív musí mít provozovna založený sklad.',
+    next: 'Další krok',
+  },
   askSupervisor: 'Požádejte vedoucího',
   crateStates: {
     openAssembly: 'Skládají se',

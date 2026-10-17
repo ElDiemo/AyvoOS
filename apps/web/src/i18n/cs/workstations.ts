@@ -51,6 +51,11 @@ export const workstationsCs = {
     subtitle:
       'Naskenujte QR kód pracoviště, u kterého stojíte. Pracoviště zůstane zvolené, dokud ho neopustíte.',
     scanStation: 'Naskenujte QR pracoviště',
+    noStation:
+      'Na této provozovně zatím není žádné aktivní pracoviště. Nejdřív ho založte a vytiskněte jeho QR štítek – ten se tu pak naskenuje.',
+    createStation: 'Založit pracoviště a vytisknout QR',
+    askForStation:
+      'Nemáte QR štítek pracoviště, nebo pracoviště ještě neexistuje? Požádejte vedoucího.',
     scanPlaceholder: 'QR kód pracoviště',
     scanHelp: 'Čtečka odešle kód sama (Enter). Můžete také vložit adresu z QR kódu.',
     checking: 'Ověřuji…',

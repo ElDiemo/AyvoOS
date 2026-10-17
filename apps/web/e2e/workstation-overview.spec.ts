@@ -194,7 +194,7 @@ test('label → fill → Hotovo at two stations; Bedny shows the ready crate wit
   );
 
   // 3. Výroba → Bedny through the navigation: the ready crate, both counts.
-  await page.getByRole('link', { name: 'Bedny', exact: true }).first().click();
+  await page.getByRole('navigation', { name: 'Výroba' }).getByTestId('section-records').click(); // Evidence opens Bedny first
   await expect(page).toHaveURL(/\/production\/crates$/);
   await page.getByTestId('crate-state-FILLED').click();
   await expect(page).toHaveURL(/state=FILLED/);
@@ -216,6 +216,9 @@ test('the supervisor returns the crate to filling, takes a finished bottle out a
   page,
 }) => {
   await page.goto(`/production/crates/${crateCode}`);
+  // Collapsed by default: corrections are not a work step (UI-24).
+  await expect(page.getByTestId('crate-corrections')).toBeHidden();
+  await page.getByTestId('crate-corrections-section').locator('summary').click();
   const corrections = page.getByTestId('crate-corrections');
   await corrections.getByLabel('Důvod (povinný)').fill('kontrola obsahu');
   await corrections.getByRole('button', { name: 'Vrátit do rozpracování' }).click();
@@ -251,6 +254,7 @@ test('the supervisor returns the crate to filling, takes a finished bottle out a
   await expect(page.getByTestId(`outside-${codes[0]}`)).toHaveCount(0);
 
   await page.goto(`/production/crates/${crateCode}`);
+  await page.getByTestId('crate-corrections-section').locator('summary').click();
   await corrections.getByLabel('Lahev (kód nebo naskenovaný QR)').fill(codes[0]!);
   await corrections.getByLabel('Důvod (povinný)').fill('vrácena po kontrole');
   await corrections.getByRole('button', { name: 'Doplnit / přeložit lahev' }).click();

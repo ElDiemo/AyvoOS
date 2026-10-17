@@ -55,27 +55,36 @@ test('Warehouse and Production are separate; label application belongs to Produc
 
   await page.goto('/production');
   const production = page.getByRole('navigation', { name: 'Výroba' });
-  // Práce (a prominent button), then Evidence and Nastavení výroby (doc 027).
-  await expect(production.getByRole('link')).toHaveText([
-    /Pracovat na pracovišti/,
-    'Přehled výroby',
+  // Sections first (issue #11 UI-20): Přehled, Práce, Evidence, Nastavení výroby — the pages of
+  // a section only once it is open, never one long strip.
+  const sections = production.getByTestId('module-sections').getByRole('link');
+  await expect(sections).toHaveText([/^Přehled/, /^Práce/, /^Evidence/, /^Nastavení výroby/]);
+  await expect(production.getByTestId('section-overview')).toHaveAttribute('aria-current', 'true');
+  await expect(production.getByTestId('module-tabs')).toHaveCount(0);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled výroby');
+  await production.getByTestId('section-records').click();
+  await expect(page).toHaveURL(/\/production\/crates$/);
+  await expect(production.getByTestId('module-tabs').getByRole('link')).toHaveText([
     'Bedny',
     'Lahve',
+  ]);
+  await production.getByTestId('section-setup').click();
+  await expect(page).toHaveURL(/\/production\/setup$/);
+  await expect(production.getByTestId('module-tabs').getByRole('link')).toHaveText([
     'Připravit výrobu',
     'Pracoviště a QR',
     'Produkty a receptury',
     'Šablony etiket',
   ]);
-  await expect(production.getByTestId('nav-group-records')).toHaveText('Evidence');
-  await expect(production.getByTestId('nav-group-setup')).toHaveText('Nastavení výroby');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled výroby');
-  // Labelling happens at a station (doc 025 A3): Pracoviště is part of Production.
-  await production.getByRole('link', { name: /Pracovat na pracovišti/ }).click();
+  // Labelling happens at a station (doc 025 A3): Práce is part of Production.
+  await production.getByTestId('section-work').click();
   await expect(page).toHaveURL(/\/production\/station$/);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pracoviště');
   await expect(page.getByRole('navigation', { name: 'Sklad' })).toHaveCount(0);
 
-  // Templates are a Production page too.
+  await expect(production.getByTestId('section-work')).toHaveAttribute('aria-current', 'true');
+  // Templates are a Production page too (Nastavení výroby).
+  await production.getByTestId('section-setup').click();
   await production.getByRole('link', { name: 'Šablony etiket' }).click();
   await expect(page).toHaveURL(/\/label-templates$/);
   await expect(
@@ -148,7 +157,9 @@ test('no sideways scrolling and no production QR URL on the shell pages', async 
       // Wide screens: the module tabs wrap instead of showing a scrollbar.
       if (width === 1280 && path !== '/') {
         const tabs = page.locator('main nav').first().locator('ul');
-        const scrolls = await tabs.evaluate((el) => el.scrollWidth > el.clientWidth);
+        const scrolls = (
+          await tabs.evaluateAll((els) => els.map((el) => el.scrollWidth > el.clientWidth))
+        ).some(Boolean);
         expect(scrolls, `tab scrollbar on ${path}`).toBe(false);
       }
       await expect(page.locator('body')).not.toContainText('qr.ayvo.co');

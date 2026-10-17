@@ -76,6 +76,8 @@ export const fillingCs = {
 /** Supervised corrections of a crate (production:cycle_correct). */
 export const crateCorrectionsCs = {
   title: 'Opravy vedoucího',
+  summary:
+    'Jen pro opravy s důvodem: vyjmout nebo doplnit lahev, vrátit do rozpracování, zrušit oběh. Bednu se tu neplní.',
   help: 'Nejde o běžný pracovní krok: opravy dělá vedoucí s důvodem. Jen přesouvají lahve mezi bednami – nic se znovu neodepíše a hotová lahev nikdy nezmizí ani se nestane prázdnou.',
   bottle: 'Lahev (kód nebo naskenovaný QR)',
   reason: 'Důvod (povinný)',

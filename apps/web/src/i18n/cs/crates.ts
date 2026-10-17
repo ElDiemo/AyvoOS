@@ -58,6 +58,7 @@ export const cratesCs = {
     ALLOCATED: 'V objednávkách',
   } as Record<string, string>,
   stateFilter: 'Stav',
+  moreFilters: 'Další filtry (typ bedny, stav)',
   allStates: 'Všechny stavy',
   stateCount: (label: string, n: number) => `${label}: ${n}`,
   outsideLink: 'Lahve mimo bednu',

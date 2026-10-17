@@ -36,6 +36,16 @@ export default async function CreateBottlesPage({
         subtitle={productionCs.create.subtitle}
         back={{ href: '/bottles', label: productionCs.create.back }}
       />
+      {/* Identity ≠ labelled body ≠ filled bottle (issue #11 UI-22). */}
+      <ol
+        className="mb-6 grid gap-2 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm sm:grid-cols-3"
+        aria-label={productionCs.create.stepsTitle}
+        data-testid="bottle-steps"
+      >
+        <li className="font-medium text-stone-900">{productionCs.create.steps.identity}</li>
+        <li className="text-stone-600">{productionCs.create.steps.labeled}</li>
+        <li className="text-stone-600">{productionCs.create.steps.filled}</li>
+      </ol>
       <CreateBottlesForm
         templates={templates}
         preselectedVersionId={version}

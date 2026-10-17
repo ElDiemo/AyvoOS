@@ -54,9 +54,12 @@ export function Card({
   title,
   action,
   testId,
+  id,
 }: {
   children: React.ReactNode;
   className?: string;
+  /** Anchor for direct links (e.g. #designs from "Připravit výrobu"). */
+  id?: string;
   title?: string;
   /** A link or button on the right of the title (e.g. "Zobrazit vše"). */
   action?: React.ReactNode;
@@ -66,6 +69,7 @@ export function Card({
     <section
       className={cn('rounded-lg border border-stone-200 bg-white p-5 shadow-sm sm:p-6', className)}
       data-testid={testId}
+      id={id}
     >
       {title && (
         <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
