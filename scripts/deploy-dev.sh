@@ -344,6 +344,10 @@ check_host_guard() {
   systemctl is-enabled --quiet "$GUARD_UNIT" || die "$GUARD_UNIT is not enabled (it must survive a reboot)"
   [[ $(sysctl -n net.ipv4.ip_nonlocal_bind 2>/dev/null) == 1 ]] ||
     die "net.ipv4.ip_nonlocal_bind must be 1 (deploy/dev/host/60-ayvo-dev-tailnet.conf)"
+  # With Tailscale's SNAT on, every connection forwarded from tailscale0 reaches Caddy from the
+  # Docker bridge gateway instead of the tailnet peer, and Caddy (rightly) refuses it.
+  [[ "$(tailscale debug prefs 2>/dev/null | jq -r '.NoSNAT')" == true ]] ||
+    die "Tailscale SNAT is on: Caddy would see the Docker gateway, not the tailnet peer. The owner re-runs: sudo bash deploy/dev/host/install.sh <edge backup> (tailscale set --snat-subnet-routes=false)"
 }
 
 # The tag of the running api image; web must run the same tag (--edge keeps both untouched).
@@ -536,7 +540,7 @@ AYVO_EDGE_COMMIT="$(git -C "$REPO_ROOT" log -1 --format=%H -- deploy/dev 2>/dev/
 export AYVO_EDGE_COMMIT
 ok "Tailscale IPv4 $TAILNET_IPV4 on tailscale0"
 check_host_guard
-ok "$GUARD_UNIT active and enabled; ip_nonlocal_bind=1"
+ok "$GUARD_UNIT active and enabled; ip_nonlocal_bind=1; Tailscale SNAT off"
 
 STEP="validate compose config"
 export AYVO_IMAGE_TAG="${TAG:-validate}"

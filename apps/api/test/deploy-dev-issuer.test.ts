@@ -47,8 +47,14 @@ esac
   );
   write(join(bin, 'docker'), '#!/usr/bin/env bash\nexit 0\n');
   // Tailnet and host guard stubs: TS_IP (the Tailscale IPv4, empty = not logged in),
-  // GUARD (active | inactive), NONLOCAL (the sysctl value).
-  write(join(bin, 'tailscale'), '#!/usr/bin/env bash\n[[ -n $TS_IP ]] && echo "$TS_IP"\n');
+  // NOSNAT (Tailscale's NoSNAT pref), GUARD (active | inactive), NONLOCAL (the sysctl value).
+  write(
+    join(bin, 'tailscale'),
+    `#!/usr/bin/env bash
+if [[ $1 == debug && $2 == prefs ]]; then printf '{"NoSNAT":%s,"AdvertiseRoutes":null}\\n' "$NOSNAT"; exit 0; fi
+[[ -n $TS_IP ]] && echo "$TS_IP"
+`,
+  );
   write(
     join(bin, 'ip'),
     '#!/usr/bin/env bash\n[[ -n $TS_IP ]] && echo "5: tailscale0    inet $TS_IP/32 scope global tailscale0"\n',
@@ -62,7 +68,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 function check(
   fixture: string,
   issuer = ISSUER,
-  host: { TS_IP?: string; GUARD?: string; NONLOCAL?: string; extra?: string } = {},
+  host: { TS_IP?: string; NOSNAT?: string; GUARD?: string; NONLOCAL?: string; extra?: string } = {},
 ) {
   const env = join(dir, `dev-preview-${fixture}.env`);
   write(
@@ -91,6 +97,7 @@ function check(
       AYVO_DEV_ENV_FILE: env,
       FIXTURE: fixture,
       TS_IP: host.TS_IP ?? '100.100.100.1',
+      NOSNAT: host.NOSNAT ?? 'true',
       GUARD: host.GUARD ?? 'active',
       NONLOCAL: host.NONLOCAL ?? '1',
     },
@@ -139,6 +146,7 @@ describe('deploy-dev.sh --check: WorkOS issuer against the discovery document', 
     const { status, output } = check('ok');
     expect(output).toContain('Tailscale IPv4 100.100.100.1 on tailscale0');
     expect(output).toContain('ayvo-dev-docker-guard.service active and enabled');
+    expect(output).toContain('Tailscale SNAT off');
     expect(status).toBe(0);
   });
 
@@ -152,6 +160,9 @@ describe('deploy-dev.sh --check: WorkOS issuer against the discovery document', 
       'ayvo-dev-docker-guard.service is not active',
     ],
     ['without ip_nonlocal_bind', { NONLOCAL: '0' }, 'net.ipv4.ip_nonlocal_bind must be 1'],
+    // PR #33 on DEV: Tailscale masqueraded forwarded tailnet traffic to the Docker gateway
+    // (172.20.0.1), so Caddy saw no tailnet peer and aborted every request.
+    ['with Tailscale SNAT on', { NOSNAT: 'false' }, 'Tailscale SNAT is on'],
     [
       'with DEV_TAILNET_IPV4 in the env file',
       { extra: 'DEV_TAILNET_IPV4=100.100.100.1' },
