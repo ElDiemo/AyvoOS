@@ -147,6 +147,14 @@ export function readinessStep(
   };
 }
 
+/** Readiness items that are recipe materials (stock of one recipe line). */
+const MATERIAL_KEYS = new Set([
+  'labeling.bottles',
+  'labeling.labelStock',
+  'filling.liquid',
+  'filling.pumps',
+]);
+
 /** A missing item that waits for another one first (explained, never an extra gate). */
 export function readinessDependency(item: ReadinessItem, r: ProductionReadiness): string | null {
   const missing = (key: string) =>
@@ -158,7 +166,14 @@ export function readinessDependency(item: ReadinessItem, r: ProductionReadiness)
   }
   if (item.key === 'labeling.crate' && missing('setup.recipe')) return t.needsRecipe;
   if (item.key === 'filling.crates') return t.cratesComeFromLabeling;
-  if (item.key.startsWith('filling.') && item.target?.item === null && item.state === 'MISSING') {
+  // Only a material can be missing from the recipe — never a station or a crate (live review of
+  // PR #30: a missing filling station showed this hint although its recipe was complete).
+  if (
+    MATERIAL_KEYS.has(item.key) &&
+    item.state === 'MISSING' &&
+    item.target !== null &&
+    item.target.item === null
+  ) {
     return t.recipeLacksItem;
   }
   return null;
