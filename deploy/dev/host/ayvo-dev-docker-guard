@@ -1,0 +1,78 @@
+#!/bin/sh
+# AYVO OS — DEV host guard for published Docker ports (ADR 0026). Installed by install.sh as
+# /usr/local/sbin/ayvo-dev-docker-guard and run by ayvo-dev-docker-guard.service.
+#
+# Docker publishes ports with its own iptables rules, bypassing UFW. This guard sits in Docker's
+# DOCKER-USER chain (IPv4 and IPv6) and, for traffic ENTERING through the public interface,
+# drops every new connection to a container — except IPv4 TCP port 80 (the public ACME HTTP-01
+# exception; Caddy serves nothing else there). Replies to the containers' own outbound
+# connections (ACME, WorkOS) pass. Traffic from tailscale0 is not touched here; who may use the
+# tailnet is decided by the Tailscale access policy.
+#
+#   ayvo-dev-docker-guard apply    (idempotent)
+#   ayvo-dev-docker-guard remove
+#   ayvo-dev-docker-guard status
+set -eu
+
+CHAIN=AYVO-DEV-GUARD
+ext_if() {
+  ip -4 route show default | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
+remove_family() {
+  ipt=$1
+  # Remove every jump to the chain from DOCKER-USER, then the chain itself.
+  while $ipt -S DOCKER-USER 2>/dev/null | grep -q -- "-j $CHAIN"; do
+    rule=$($ipt -S DOCKER-USER | grep -m1 -- "-j $CHAIN" | sed 's/^-A /-D /')
+    # shellcheck disable=SC2086 # the rule is re-split into its arguments on purpose
+    $ipt $rule
+  done
+  $ipt -F "$CHAIN" 2>/dev/null || true
+  $ipt -X "$CHAIN" 2>/dev/null || true
+}
+
+apply_family() {
+  ipt=$1 family=$2 ext=$3
+  $ipt -N DOCKER-USER 2>/dev/null || true
+  remove_family "$ipt"
+  $ipt -N "$CHAIN"
+  $ipt -A "$CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  if [ "$family" = 4 ]; then
+    $ipt -A "$CHAIN" -p tcp -m conntrack --ctstate DNAT --ctorigdstport 80 -j RETURN
+  fi
+  $ipt -A "$CHAIN" -j DROP
+  $ipt -I DOCKER-USER 1 -i "$ext" -j "$CHAIN"
+}
+
+case ${1:-} in
+  apply)
+    ext=$(ext_if)
+    [ -n "$ext" ] || {
+      echo "ayvo-dev-docker-guard: no IPv4 default route, cannot find the public interface" >&2
+      exit 1
+    }
+    [ "$ext" != tailscale0 ] || {
+      echo "ayvo-dev-docker-guard: the default route uses tailscale0 (exit node?) — refusing" >&2
+      exit 1
+    }
+    apply_family iptables 4 "$ext"
+    apply_family ip6tables 6 "$ext"
+    echo "ayvo-dev-docker-guard: applied on $ext (IPv4 + IPv6)"
+    ;;
+  remove)
+    remove_family iptables
+    remove_family ip6tables
+    echo "ayvo-dev-docker-guard: removed"
+    ;;
+  status)
+    for ipt in iptables ip6tables; do
+      echo "== $ipt"
+      $ipt -S DOCKER-USER 2>/dev/null | grep -- "-j $CHAIN" || echo "(no jump)"
+      $ipt -S "$CHAIN" 2>/dev/null || echo "(no chain)"
+    done
+    ;;
+  *)
+    echo "usage: $0 apply|remove|status" >&2
+    exit 2
+    ;;
+esac

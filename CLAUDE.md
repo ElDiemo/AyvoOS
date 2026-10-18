@@ -160,10 +160,14 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   **separate VPS**. No staging environment yet — `APP_ENV` is `development | test | production`
   (ADR 0008).
 - `docker/compose.yml` runs dev PostgreSQL 18 + Redis 8 on 127.0.0.1.
-- DEV preview (ADR 0013): Caddy is the only public entry (80/443), HTTP Basic Auth on everything,
+- DEV preview (ADR 0013, **tailnet only — ADR 0026**): Caddy publishes 443 only on the server's
+  Tailscale IPv4 address (from `tailscale ip -4`, never `0.0.0.0`/IPv6) and aborts every peer
+  outside the tailnet; the only public port is IPv4 :80 for ACME HTTP-01 (everything else
+  aborted); private DNS (`dns`, CoreDNS) answers only `dev.ayvo.co` via Tailscale split DNS; the
+  root-installed host guard (`deploy/dev/host/`) is required. HTTP Basic Auth on everything,
   `X-Robots-Tag: noindex, nofollow`. The API is **same-origin** at `/api/*` — NestJS owns the
   `/api` prefix (`API_BASE_PATH` in `@ayvo/types`); Caddy forwards the path unchanged. No API
-  subdomain, no CORS, no IP allowlist, no CI/CD. Deploy only with `scripts/deploy-dev.sh`, and only
+  subdomain, no CORS, no CI/CD. `--edge` recreates only Caddy + DNS. Deploy only with `scripts/deploy-dev.sh`, and only
   when the owner asks; it must never remove volumes. Secrets live in
   `/opt/ayvo/secrets/dev-preview.env`, never in the repo.
 

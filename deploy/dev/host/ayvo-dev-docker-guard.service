@@ -1,0 +1,16 @@
+# AYVO OS — DEV host guard for published Docker ports (ADR 0026). See ayvo-dev-docker-guard.
+[Unit]
+Description=AYVO DEV: drop public traffic to Docker containers (except IPv4 :80 for ACME)
+After=docker.service network-online.target
+Wants=network-online.target
+# Re-applied whenever Docker (re)starts.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ayvo-dev-docker-guard apply
+ExecStop=/usr/local/sbin/ayvo-dev-docker-guard remove
+
+[Install]
+WantedBy=docker.service multi-user.target
