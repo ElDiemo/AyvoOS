@@ -50,7 +50,12 @@ export default async function CrateTypesPage({
             {crateTypes.map((c) => (
               <CatalogRow key={c.code} testId={`crate-${c.code}`}>
                 <div className="min-w-0 wrap-anywhere">
-                  <span className="font-medium">{c.name}</span>{' '}
+                  <Link
+                    href={`/production/catalog/crate-types/${encodeURIComponent(c.code)}`}
+                    className="font-medium underline-offset-2 hover:underline"
+                  >
+                    {c.name}
+                  </Link>{' '}
                   <span className="font-mono text-xs text-stone-500">{c.code}</span>
                 </div>
                 <RowValue label={t.capacity}>{c.capacity}</RowValue>

@@ -24,6 +24,7 @@ import { InventoryService, byLockOrder } from '../inventory/inventory.service.js
 import { StationSessionsService } from '../workstations/station-sessions.service.js';
 import type { WorkstationRecord } from '../workstations/workstations.service.js';
 import { crateAllocated } from './cycle-corrections.service.js';
+import { WeightsService } from '../catalog/weights.service.js';
 
 const notFilling = () => domainError(409, 'WRONG_STATION_MODE', 'This is not a filling station');
 const contextChanged = () =>
@@ -58,6 +59,7 @@ export class FillingService {
     private readonly recipes: RecipesService,
     private readonly inventory: InventoryService,
     private readonly registry: QrRegistryService,
+    private readonly weights: WeightsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -354,11 +356,14 @@ export class FillingService {
             },
           );
         }
+        const occurredAt = new Date();
         const finished = await this.cycles.finish(tx, cycle!, {
           actorId: principal.userId,
           operationId: input.requestId,
-          occurredAt: new Date(),
+          occurredAt,
         });
+        // The weight references available now (doc 025 §10); unknown stays unknown, never blocks.
+        await this.weights.snapshotHotovo(tx, finished, input.requestId, occurredAt);
         await this.sessions.unloadCrate(tx, sessionId);
         return { crate: { code: crate.code }, cycle: await this.cycles.toState(finished, tx) };
       },

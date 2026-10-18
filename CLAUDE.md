@@ -51,6 +51,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   crates (capacity from the crate type), order crate allocations (+ their bottles), order events;
   crate cycle `ALLOCATED`; permissions `hotels:*` / `orders:*` for ADMIN only. Ends at
   "Připraveno k expedici" — no carrier, dispatch, delivery, contracts or hotel users.
+  Weights and dimensions (doc 025 §10, W1, owner 2026-10-17): append-only measured references of
+  components and packaging (per unit; a liquid as a weighed sample), the finished bottle per
+  recipe version, crate tare and crate /
+  shipping-package dimensions (g / mm), Hotovo weight snapshots; `catalog:weights_record`.
+  Unknown is never 0; one shipped crate = one parcel = one label; no carrier limit hard-coded.
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

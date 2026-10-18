@@ -66,6 +66,7 @@ export const PERMISSION_CODES = [
   'catalog:read',
   'catalog:product_manage',
   'catalog:recipe_approve',
+  'catalog:weights_record',
   'crates:read',
   'crates:register',
   'production:workstations_manage',
