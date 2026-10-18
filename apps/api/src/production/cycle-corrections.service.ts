@@ -10,7 +10,7 @@ import { RecipesService } from '../catalog/recipes.service.js';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { classifyScannedQr } from '../common/qr-policy.js';
 import { ENV, type Env } from '../config/env.js';
-import { CrateCyclesService, type CycleRecord } from '../crates/crate-cycles.service.js';
+import { CrateCyclesService, type CycleRecord, isHeldByOrder } from '../crates/crate-cycles.service.js';
 import { CratesService } from '../crates/crates.service.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -65,7 +65,7 @@ export class CycleCorrectionsService {
       async (tx) => {
         const { crate, cycle } = await this.lockedCycle(tx, crateCode, siteId);
         if (!cycle) throw this.noCycle();
-        if (cycle.status === 'ALLOCATED') throw crateAllocated();
+        if (isHeldByOrder(cycle.status)) throw crateAllocated();
         if (cycle.status === 'FILLED') throw crateReady();
         const bottle = await this.bottleOf(tx, input.bottle, siteId);
         const status = await this.bottles.lockForLabelApplication(tx, bottle.id);
@@ -151,7 +151,7 @@ export class CycleCorrectionsService {
         let cycle: CycleRecord;
         let source: 'REPACKED' | 'REPLACEMENT';
         if (open) {
-          if (open.status === 'ALLOCATED') throw crateAllocated();
+          if (isHeldByOrder(open.status)) throw crateAllocated();
           if (open.status === 'FILLED') throw crateReady();
           if (open.status === 'READY_TO_FILL' || open.memberCount >= open.capacity) {
             throw domainError(409, 'CRATE_FULL', 'This crate has no free place');
@@ -242,7 +242,7 @@ export class CycleCorrectionsService {
       { actorId, siteId, crateCode, reason: input.reason },
       async (tx) => {
         const { crate, cycle } = await this.lockedCycle(tx, crateCode, siteId);
-        if (cycle?.status === 'ALLOCATED') throw crateAllocated();
+        if (cycle && isHeldByOrder(cycle.status)) throw crateAllocated();
         if (!cycle || cycle.status !== 'FILLED') {
           throw domainError(409, 'CRATE_NOT_READY', 'Only a ready crate (Hotovo) is returned');
         }
@@ -275,7 +275,7 @@ export class CycleCorrectionsService {
       async (tx) => {
         const { crate, cycle: open } = await this.lockedCycle(tx, crateCode, siteId);
         if (!open) throw this.noCycle();
-        if (open.status === 'ALLOCATED') throw crateAllocated();
+        if (isHeldByOrder(open.status)) throw crateAllocated();
         if (open.status === 'FILLED') throw crateReady();
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         let cycle = open;

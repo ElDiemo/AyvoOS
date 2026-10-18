@@ -39,6 +39,8 @@ export const crateEventTypeSchema = z.enum([
   'MEMBER_ADDED',
   'ALLOCATED_TO_ORDER',
   'RELEASED_FROM_ORDER',
+  /** Handed to the carrier with its order (doc 029) — not delivered. */
+  'DISPATCHED',
 ]);
 export type CrateEventType = z.infer<typeof crateEventTypeSchema>;
 
@@ -86,6 +88,7 @@ export const crateSummarySchema = z.object({
         'FILLED',
         'ABORTED',
         'ALLOCATED',
+        'DISPATCHED',
       ]),
       memberCount: z.number().int(),
       /** "Naplněno" (doc 025 §3.2), shown beside "Obsah" (memberCount). */
@@ -109,7 +112,15 @@ export const crateListQuerySchema = z.object({
   crateType: catalogCodeSchema.optional(),
   /** Derived list state (doc 025 §3.2): EMPTY = no open cycle. */
   state: z
-    .enum(['EMPTY', 'OPEN_ASSEMBLY', 'READY_TO_FILL', 'FILLING', 'FILLED', 'ALLOCATED'])
+    .enum([
+      'EMPTY',
+      'OPEN_ASSEMBLY',
+      'READY_TO_FILL',
+      'FILLING',
+      'FILLED',
+      'ALLOCATED',
+      'DISPATCHED',
+    ])
     .optional(),
 });
 export type CrateListQuery = z.infer<typeof crateListQuerySchema>;

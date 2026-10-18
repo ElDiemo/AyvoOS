@@ -2,19 +2,19 @@
 export const ordersCs = {
   title: 'Objednávky',
   subtitle:
-    'Ruční objednávky hotelů této provozovny v celých bednách. Kompletace končí stavem „Připraveno k expedici“ – předání dopravci ani doručení se zatím neevidují.',
+    'Ruční objednávky hotelů této provozovny v celých bednách: kompletace, přepravní štítky, připraveno k vyzvednutí a předání dopravci. Doručení hotelu se zatím neeviduje.',
   newOrder: 'Nová objednávka',
   views: {
     today: 'Dnes',
     future: 'Budoucí',
     overdue: 'Po termínu',
-    closed: 'Dokončené a stornované',
+    closed: 'Předané a stornované',
   } as Record<string, string>,
   empty: {
     today: 'Na dnešek nečeká žádná objednávka.',
     future: 'Žádné budoucí objednávky.',
     overdue: 'Žádná objednávka po termínu.',
-    closed: 'Zatím žádná dokončená ani stornovaná objednávka.',
+    closed: 'Zatím žádná předaná ani stornovaná objednávka.',
   } as Record<string, string>,
   page: (page: number, pages: number) => `Strana ${page} z ${pages}`,
   previous: 'Předchozí',
@@ -32,7 +32,9 @@ export const ordersCs = {
   status: {
     OPEN: 'Otevřená',
     PICKING: 'Rozpracovaná',
-    READY_TO_DISPATCH: 'Připraveno k expedici',
+    READY_TO_DISPATCH: 'Kompletace dokončena',
+    READY_FOR_PICKUP: 'Připraveno k vyzvednutí',
+    HANDED_TO_CARRIER: 'Předáno dopravci',
     CANCELLED: 'Stornovaná',
   } as Record<string, string>,
   of: (loaded: number, required: number) => `${loaded} / ${required}`,
@@ -60,8 +62,18 @@ export const ordersCs = {
       CREATED: 'Objednávka založena',
       CRATE_ADDED: 'Bedna načtena',
       CRATE_REMOVED: 'Bedna odebrána',
-      COMPLETED: 'Kompletace dokončena – připraveno k expedici',
+      COMPLETED: 'Kompletace dokončena',
       CANCELLED: 'Objednávka stornována',
+      SHIPMENT_CREATED: 'Přeprava připravena z kompletace',
+      LABELS_REQUESTED: 'Požadavek na štítky odeslán dopravci',
+      LABELS_CREATED: 'Dopravce vytvořil štítky',
+      LABELS_REJECTED: 'Dopravce požadavek odmítl',
+      LABELS_UNCERTAIN: 'Odpověď dopravce nedorazila – nic se znovu neodeslalo',
+      LABELS_NOT_CREATED: 'Dopravce potvrdil, že nic nevytvořil',
+      PARCEL_WEIGHED: 'Balík skutečně zvážen',
+      READY_FOR_PICKUP: 'Potvrzeno: připraveno k vyzvednutí',
+      HANDED_TO_CARRIER: 'Potvrzeno: předáno dopravci',
+      SHIPMENT_CANCELLED: 'Příprava přepravy zrušena',
     } as Record<string, string>,
     pick: 'Kompletovat',
     resume: 'Pokračovat v kompletaci',
@@ -72,8 +84,7 @@ export const ordersCs = {
     cancelConfirm: 'Stornovat',
     cancelled: (by: string, reason: string) => `Stornoval(a) ${by}: ${reason}`,
     completed: (by: string) => `Kompletaci dokončil(a) ${by}`,
-    notDispatched:
-      'Připraveno k expedici neznamená předání dopravci ani doručení hotelu – ty se zatím neevidují.',
+    parcels: (n: number) => `${n} ${n === 1 ? 'balík' : n < 5 ? 'balíky' : 'balíků'}`,
   },
   form: {
     title: 'Nová objednávka',
@@ -127,8 +138,9 @@ export const ordersCs = {
     removeReason: 'Důvod (nepovinné)',
     complete: 'Dokončit kompletaci',
     completeHelp: 'Dokončit lze jen při přesném splnění všech produktů.',
-    ready: 'Připraveno k expedici',
-    readyText: 'Kompletace je dokončená. Předání dopravci ani doručení se zatím neevidují.',
+    ready: 'Kompletace dokončena',
+    readyText:
+      'Kompletace je dokončená a z beden vznikly balíky. Pokračujte na objednávce: přepravní štítky, nalepení a předání dopravci.',
     notOpen: 'Objednávka není otevřená – kompletaci nelze měnit.',
     back: 'Zpět na objednávku',
     complete_line: 'Hotovo',
@@ -155,6 +167,11 @@ export const ordersCs = {
     UNKNOWN_HOTEL: 'Neznámý hotel.',
     UNKNOWN_PRODUCT: 'Neznámý nebo archivovaný produkt.',
     PRODUCT_WITHOUT_RECIPE: 'Produkt nemá aktivní recepturu s typem bedny.',
+    CRATE_DISPATCHED: 'Bedna už byla předána dopravci s jinou objednávkou.',
+    ORDER_NOT_CANCELLABLE:
+      'Objednávku teď nelze stornovat: připravenou k vyzvednutí nejdřív vraťte zrušením přípravy přepravy, předanou dopravci už ne.',
+    SHIPMENT_AT_CARRIER:
+      'Přeprava je už u dopravce. Nejdřív zrušte její přípravu (přes dopravce) – objednávka se tiše neuvolní.',
     IDEMPOTENCY_CONFLICT: 'Požadavek se už použil jinak – zkuste akci znovu.',
   } as Record<string, string>,
   crateStatus: {
@@ -163,5 +180,6 @@ export const ordersCs = {
     FILLING: 'plní se',
     FILLED: 'hotová',
     ALLOCATED: 'v objednávce',
+    DISPATCHED: 'předaná dopravci',
   } as Record<string, string>,
 };

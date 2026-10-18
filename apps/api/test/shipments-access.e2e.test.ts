@@ -1,0 +1,213 @@
+import { randomUUID } from 'node:crypto';
+import type { AdminUserDetail, SiteDetail } from '@ayvo/types';
+import request from 'supertest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { testCarrierControl } from '../src/orders/carriers/test-carrier.js';
+import {
+  completeOrder,
+  crateFactory,
+  createHotel,
+  createOrder,
+  scanCrate,
+} from './support/order-fixtures.js';
+import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
+import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+
+/**
+ * Dispatch permissions through REAL sign-in (doc 029 §6): shipments:read / prepare / handover
+ * exist only for ADMIN; each step needs its own permission, checked again on every request —
+ * also on the repetition of the same request id after the permission was removed; another site's
+ * shipment is not found. The superuser app makes the synthetic completed orders.
+ */
+describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)', () => {
+  let su: TestApp;
+  let ra: TestApp;
+  let admin: string;
+  let adminId: string;
+  let other: SiteDetail;
+  let factory: Awaited<ReturnType<typeof crateFactory>>;
+  let hotel: string;
+  const http = () => request(ra.app.getHttpServer());
+  const as = (cookie: string) => ({
+    get: (path: string) => http().get(path).set('Cookie', cookie),
+    post: (path: string, body: object = {}) => http().post(path).set('Cookie', cookie).send(body),
+  });
+  const activeSite = (cookie: string, siteId: string) =>
+    as(cookie).post('/api/auth/active-site', { siteId }).expect(200);
+
+  async function createUser(roles: string[]) {
+    const res = await as(admin).post('/api/admin/identity/users', {
+      email: `ship-${randomUUID().slice(0, 8)}@ayvo.test`,
+      displayName: `Expedient ${randomUUID().slice(0, 4)}`,
+      roles,
+      siteIds: [INITIAL_SITE_ID],
+      warehouseCodes: [],
+      reason: 'dispatch access test',
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const user = res.body as AdminUserDetail;
+    const cookie = await sessionCookie(ra, user.email);
+    await activeSite(cookie, INITIAL_SITE_ID);
+    return { cookie, id: user.id };
+  }
+  async function role(permissions: string[]) {
+    const code = `SHIP_${randomUUID().slice(0, 6).toUpperCase()}`;
+    await as(admin)
+      .post('/api/admin/identity/roles', {
+        code,
+        name: `Expedice ${code}`,
+        description: 'Příprava přepravy',
+        permissions,
+        reason: 'dispatch test role',
+      })
+      .expect(201);
+    return code;
+  }
+  /** A completed order of the initial site with one weighed parcel (the test carrier needs it). */
+  async function completed() {
+    const c = await factory.make();
+    const order = await createOrder(su, hotel, [
+      { productCode: factory.kit.productCode, crates: 1 },
+    ]);
+    expect((await scanCrate(su, order.code, c.crateUrl)).status).toBe(200);
+    expect((await completeOrder(su, order.code)).status).toBe(200);
+    await request(su.app.getHttpServer())
+      .post(`/api/admin/orders/${order.code}/shipment/parcels/1/weighings`)
+      .send({ requestId: randomUUID(), massG: '2500', correctionOf: null, correctionReason: null })
+      .expect(200);
+    return order.code;
+  }
+
+  beforeAll(async () => {
+    su = await createTestApp({ CARRIER_PROVIDER: 'test' });
+    ra = await createTestApp({ CARRIER_PROVIDER: 'test' }, {}, { auth: 'real' });
+    factory = await crateFactory(su);
+    hotel = (await createHotel(su)).code;
+    const user = await prepareInvitedUser(ra, {
+      email: `ship-admin-${randomUUID().slice(0, 8)}@ayvo.test`,
+      displayName: 'Ship Admin',
+    });
+    adminId = user.id;
+    await ra.prisma.userRole.create({
+      data: { userId: user.id, roleCode: 'ADMIN', grantReason: 'test administrator' },
+    });
+    admin = await sessionCookie(ra, user.email);
+    await activeSite(admin, INITIAL_SITE_ID);
+    other = (
+      await as(admin).post('/api/admin/sites', {
+        code: `SH-${randomUUID().slice(0, 4).toUpperCase()}`,
+        name: 'Jiný sklad',
+        countryCode: 'SK',
+        addressLine1: 'Testovacia 2',
+        addressLine2: null,
+        postalCode: '811 02',
+        city: 'Bratislava',
+        timeZone: 'Europe/Bratislava',
+        defaultLocale: 'sk-SK',
+        defaultCurrency: 'EUR',
+        capabilities: ['WAREHOUSE'],
+        reason: 'second site',
+      })
+    ).body as SiteDetail;
+    await as(admin)
+      .post(`/api/admin/sites/${other.id}/warehouses`, {
+        requestId: randomUUID(),
+        code: `${other.code}-W`,
+        name: 'Sklad',
+        reason: 'first warehouse',
+      })
+      .expect(201);
+  });
+  beforeEach(() => testCarrierControl.reset());
+  afterAll(async () => {
+    await ra?.prisma.userRole.updateMany({
+      where: { userId: adminId, roleCode: 'ADMIN', revokedAt: null },
+      data: { revokedAt: new Date(), revokeReason: 'end of test' },
+    });
+    testCarrierControl.reset();
+    await ra?.close();
+    await su?.close();
+  });
+
+  it('only ADMIN holds the dispatch permissions; existing roles gain nothing', async () => {
+    const holders = await ra.prisma.rolePermission.findMany({
+      where: {
+        permissionCode: { in: ['shipments:read', 'shipments:prepare', 'shipments:handover'] },
+      },
+      select: { roleCode: true },
+    });
+    expect([...new Set(holders.map((h) => h.roleCode))]).toEqual(['ADMIN']);
+    const order = await completed();
+    for (const r of ['WAREHOUSE_SUPERVISOR', 'PRODUCTION_SUPERVISOR', 'WAREHOUSE_OPERATOR']) {
+      const { cookie } = await createUser([r]);
+      expect((await as(cookie).get(`/api/admin/orders/${order}/shipment`)).status, r).toBe(403);
+    }
+  });
+
+  it('each step needs its own permission, checked again on every request and repetition', async () => {
+    const order = await completed();
+    const reader = await createUser([await role(['orders:read', 'shipments:read'])]);
+    const preparer = await createUser([
+      await role(['orders:read', 'shipments:read', 'shipments:prepare']),
+    ]);
+    const onlyOrders = await createUser([await role(['orders:read'])]);
+    expect((await as(onlyOrders.cookie).get(`/api/admin/orders/${order}/shipment`)).status).toBe(
+      403,
+    );
+    expect((await as(reader.cookie).get(`/api/admin/orders/${order}/shipment`)).status).toBe(200);
+    const labels = (cookie: string, requestId = randomUUID()) =>
+      as(cookie).post(`/api/admin/orders/${order}/shipment/labels`, { requestId });
+    expect((await labels(reader.cookie)).status).toBe(403);
+    expect(testCarrierControl.calls).toHaveLength(0);
+    const id = randomUUID();
+    expect((await labels(preparer.cookie, id)).status).toBe(200);
+    expect(
+      (
+        await as(preparer.cookie).post(`/api/admin/orders/${order}/shipment/ready`, {
+          requestId: randomUUID(),
+          labelsApplied: true,
+        })
+      ).status,
+    ).toBe(200);
+    // Preparing is not handing over.
+    const handOver = (cookie: string) =>
+      as(cookie).post(`/api/admin/orders/${order}/shipment/hand-over`, {
+        requestId: randomUUID(),
+        handedOver: true,
+      });
+    expect((await handOver(preparer.cookie)).status).toBe(403);
+    // The permission removed: the very same request id is refused too (no replay around it).
+    await ra.prisma.userRole.updateMany({
+      where: { userId: preparer.id, revokedAt: null },
+      data: { revokedAt: new Date(), revokeReason: 'test: role removed' },
+    });
+    expect((await labels(preparer.cookie, id)).status).toBe(403);
+    expect((await as(preparer.cookie).get(`/api/admin/orders/${order}/shipment`)).status).toBe(403);
+    expect(testCarrierControl.calls).toHaveLength(1);
+    const handler = await createUser([await role(['orders:read', 'shipments:handover'])]);
+    expect((await handOver(handler.cookie)).status).toBe(200);
+  });
+
+  it('another site’s shipment is not found, whatever is asked', async () => {
+    const order = await completed();
+    await activeSite(admin, other.id);
+    for (const path of ['', '/labels.pdf']) {
+      expect((await as(admin).get(`/api/admin/orders/${order}/shipment${path}`)).status).toBe(404);
+    }
+    for (const [path, body] of [
+      ['/labels', {}],
+      ['/resolve', {}],
+      ['/ready', { labelsApplied: true }],
+      ['/hand-over', { handedOver: true }],
+      ['/parcels/1/weighings', { massG: '1', correctionOf: null, correctionReason: null }],
+    ] as const) {
+      const res = await as(admin).post(`/api/admin/orders/${order}/shipment${path}`, {
+        requestId: randomUUID(),
+        ...body,
+      });
+      expect(res.status, path).toBe(404);
+    }
+    expect(testCarrierControl.calls).toHaveLength(0);
+    await activeSite(admin, INITIAL_SITE_ID);
+  });
+});

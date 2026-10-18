@@ -117,6 +117,10 @@ export const envSchema = z
       .max(7 * 24)
       .default(12),
 
+    // Carrier for shipping labels (doc 029). `none` until a real carrier adapter is configured
+    // (PPL needs owner-provided test access); `test` — a fake carrier — only with APP_ENV=test.
+    CARRIER_PROVIDER: z.enum(['none', 'test']).default('none'),
+
     // Upper limit for an uploaded supplier document (PDF, JPEG or PNG), in bytes.
     SUPPLIER_DOCUMENT_MAX_BYTES: z.coerce
       .number()
@@ -146,6 +150,10 @@ export const envSchema = z
         'AUTH_PROVIDER',
         'WORKOS_API_KEY, WORKOS_CLIENT_ID and WORKOS_JWT_ISSUER are required for AUTH_PROVIDER=workos',
       );
+    }
+    if (env.CARRIER_PROVIDER === 'test' && env.APP_ENV !== 'test') {
+      // Never a pretended carrier on DEV or production: no fake labels, numbers or answers.
+      return fail('CARRIER_PROVIDER', 'CARRIER_PROVIDER=test is allowed only with APP_ENV=test');
     }
     if (production && !env.APP_PUBLIC_ORIGIN) {
       return fail('APP_PUBLIC_ORIGIN', 'APP_PUBLIC_ORIGIN is required in production');

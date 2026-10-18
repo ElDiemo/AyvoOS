@@ -45,6 +45,7 @@ export const cratesCs = {
     FILLED: 'Připravená',
     ABORTED: 'Zrušený oběh',
     ALLOCATED: 'V objednávce (připravená)',
+    DISPATCHED: 'Předaná dopravci (na cestě, ne u hotelu)',
   } as Record<string, string>,
   cycleLine: (status: string, members: number, filled: number, capacity: number, product: string) =>
     `${status} · obsah ${members}/${capacity} · naplněno ${filled}/${capacity} · ${product}`,
@@ -56,6 +57,7 @@ export const cratesCs = {
     FILLING: 'Plní se',
     FILLED: 'Připravené',
     ALLOCATED: 'V objednávkách',
+    DISPATCHED: 'Předané dopravci',
   } as Record<string, string>,
   stateFilter: 'Stav',
   moreFilters: 'Další filtry (typ bedny, stav)',
@@ -134,6 +136,7 @@ export const cratesCs = {
     MEMBER_ADDED: 'Lahev přidána do bedny',
     ALLOCATED_TO_ORDER: 'Načtena do objednávky',
     RELEASED_FROM_ORDER: 'Uvolněna z objednávky',
+    DISPATCHED: 'Předána dopravci (neznamená doručení)',
   } as Record<string, string>,
   eventOrder: (code: string) => `objednávka ${code}`,
   eventBy: (actor: string) => `Provedl(a): ${actor}`,

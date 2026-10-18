@@ -1,6 +1,9 @@
 # 028 — Hotels, manual orders and picking (first slice)
 
-Status: **implemented (DEV), first slice** — scope approved by the owner on 2026-10-17
+Status: **implemented (DEV), first slice** — scope approved by the owner on 2026-10-17.
+**Continued by [doc 029](029-dispatch-to-carrier.md)** (shipment, labels, ready for pickup, handed
+to the carrier): `READY_TO_DISPATCH` is now shown as "Kompletace dokončena" and is no longer the
+end of the flow
 ("Hotely → Objednávky → Kompletace expedice"). Builds on doc 007 (hotels), doc 008 (service
 deliveries), doc 022 §7 (fulfilment site) and the crate circulation of ADR 0021 / doc 025.
 

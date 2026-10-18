@@ -86,6 +86,16 @@ describe('loadEnv', () => {
       ).toMatchObject({ AUTH_PROVIDER: 'test' });
     });
 
+    it('never allows the fake carrier on DEV or production (doc 029: nothing pretended)', () => {
+      expect(loadEnv(valid).CARRIER_PROVIDER).toBe('none');
+      expect(() => loadEnv({ ...valid, CARRIER_PROVIDER: 'test' })).toThrow(
+        /CARRIER_PROVIDER=test/,
+      );
+      expect(() => loadEnv({ ...production, CARRIER_PROVIDER: 'test' })).toThrow(
+        /CARRIER_PROVIDER=test/,
+      );
+    });
+
     it('never allows the fake provider on DEV or production (no authentication bypass)', () => {
       expect(() => loadEnv({ ...valid, AUTH_PROVIDER: 'test' })).toThrow(/AUTH_PROVIDER=test/);
       expect(() => loadEnv({ ...production, AUTH_PROVIDER: 'test' })).toThrow(/AUTH_PROVIDER=test/);

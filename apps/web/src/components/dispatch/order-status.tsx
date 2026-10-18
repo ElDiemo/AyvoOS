@@ -10,7 +10,9 @@ export function orderState(o: Pick<OrderSummary, 'status' | 'totals'>): string {
 const tone: Record<string, string> = {
   OPEN: 'border-stone-300 bg-white text-stone-800',
   PICKING: 'border-amber-300 bg-amber-50 text-amber-950',
-  READY_TO_DISPATCH: 'border-emerald-300 bg-emerald-50 text-emerald-900',
+  READY_TO_DISPATCH: 'border-sky-300 bg-sky-50 text-sky-950',
+  READY_FOR_PICKUP: 'border-emerald-300 bg-emerald-50 text-emerald-900',
+  HANDED_TO_CARRIER: 'border-stone-300 bg-stone-100 text-stone-800',
   CANCELLED: 'border-stone-200 bg-stone-100 text-stone-500',
 };
 

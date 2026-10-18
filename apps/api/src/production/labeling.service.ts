@@ -14,7 +14,7 @@ import { domainError } from '../common/domain-error.js';
 import { formatQuantity, quantity } from '../common/quantity.js';
 import { classifyScannedQr } from '../common/qr-policy.js';
 import { ENV, type Env } from '../config/env.js';
-import { CrateCyclesService, type CycleRecord } from '../crates/crate-cycles.service.js';
+import { CrateCyclesService, type CycleRecord, isHeldByOrder } from '../crates/crate-cycles.service.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { QrRegistryService } from '../database/qr-registry.service.js';
@@ -516,7 +516,7 @@ export class LabelingService {
     session: Pick<WorkstationSession, 'productId' | 'labelTemplateVersionId'>,
   ): void {
     if (!open) return;
-    if (open.status === 'ALLOCATED') throw crateAllocated();
+    if (isHeldByOrder(open.status)) throw crateAllocated();
     if (open.status !== 'OPEN_ASSEMBLY') {
       throw domainError(
         409,

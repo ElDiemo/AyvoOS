@@ -899,6 +899,12 @@ enum OperationKind {
   ORDER_COMPLETE
   ORDER_CANCEL
   MEASUREMENT_RECORD
+  SHIPMENT_LABELS_REQUEST
+  SHIPMENT_LABELS_RESOLVE
+  SHIPMENT_PARCEL_WEIGH
+  SHIPMENT_CANCEL
+  ORDER_READY_FOR_PICKUP
+  ORDER_HAND_OVER
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -937,6 +943,10 @@ model OperationRequest {
   workstations             Workstation[]
   workstationEvents        WorkstationEvent[]
   workstationSessionEvents WorkstationSessionEvent[]
+
+  shipments       Shipment[]               @relation("ShipmentOperation")
+  parcelWeighings ShipmentParcelWeighing[] @relation("ParcelWeighOperation")
+  carrierRequests ShipmentCarrierRequest[] @relation("CarrierRequestOperation")
 
   @@map("operation_requests")
 }
@@ -1020,6 +1030,11 @@ model User {
   workstationSessions       WorkstationSession[]      @relation("SessionUser")
   workstationSessionsClosed WorkstationSession[]      @relation("SessionClosedBy")
   workstationSessionEvents  WorkstationSessionEvent[]
+
+  shipmentsCreated   Shipment[]               @relation("ShipmentCreatedBy")
+  shipmentsCancelled Shipment[]               @relation("ShipmentCancelledBy")
+  parcelWeighings    ShipmentParcelWeighing[] @relation("ParcelWeighedBy")
+  carrierRequests    ShipmentCarrierRequest[] @relation("CarrierRequestBy")
 
   @@map("users")
 }
@@ -1287,6 +1302,8 @@ model Site {
   workstationSessions WorkstationSession[]
   createdByUser       User?                  @relation("SiteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   updatedByUser       User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  shipments Shipment[]
 
   @@map("sites")
 }
@@ -1651,6 +1668,8 @@ model Crate {
   printJobItems CrateLabelPrintJobItem[]
   events        CrateEvent[]
 
+  shipmentParcels ShipmentParcel[]
+
   @@index([siteId, serial])
   @@index([crateTypeId])
   @@map("crates")
@@ -1725,6 +1744,8 @@ enum CrateEventType {
   MEMBER_ADDED
   ALLOCATED_TO_ORDER
   RELEASED_FROM_ORDER
+  /// Handed to the carrier with its order (doc 029) — not delivered, not at the hotel.
+  DISPATCHED
 }
 
 /// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
@@ -1949,6 +1970,9 @@ enum CrateCycleStatus {
   ABORTED
   /// Scanned into an order (doc 028); back to FILLED when removed or the order is cancelled.
   ALLOCATED
+  /// Handed to the carrier with its order (doc 029, ADR 0021). Not at the hotel; terminal until
+  /// delivery and returns exist.
+  DISPATCHED
 }
 
 /// One circulation of one crate (ADR 0021, ADR 0025): an immutable snapshot (crate type,
@@ -1995,6 +2019,8 @@ model CrateCycle {
   events               CrateEvent[]
   bottleEvents         BottleEvent[]
   bindings             BottleProductBinding[]
+
+  shipmentParcels ShipmentParcel[]
 
   @@unique([id, capacity])
   @@index([crateId, openedAt])
@@ -2101,14 +2127,20 @@ model Hotel {
 
 enum OrderStatus {
   OPEN
+  /// Kompletace dokončena (doc 028); the shipment and its parcels exist (doc 029).
   READY_TO_DISPATCH
   CANCELLED
+  /// "Připraveno k vyzvednutí": labels created by the carrier and confirmed as applied (doc 029).
+  READY_FOR_PICKUP
+  /// "Předáno dopravci": confirmed physical hand-over. Never "delivered" (doc 029).
+  HANDED_TO_CARRIER
 }
 
 /// A manual order of one hotel for one delivery address (doc 028). site_id = the hotel's
 /// fulfilment site at creation; hotel name, address and contact are a historical snapshot.
-/// DB: snapshot immutable; status only OPEN → READY_TO_DISPATCH / CANCELLED,
-/// READY_TO_DISPATCH → CANCELLED; READY_TO_DISPATCH only with every line complete.
+/// DB: snapshot immutable; status OPEN → READY_TO_DISPATCH / CANCELLED, READY_TO_DISPATCH →
+/// CANCELLED / READY_FOR_PICKUP, READY_FOR_PICKUP → READY_TO_DISPATCH / HANDED_TO_CARRIER
+/// (doc 029); from READY_TO_DISPATCH on every line complete and exactly one shipment.
 model Order {
   id                 String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
   serial             BigInt      @unique
@@ -2144,6 +2176,7 @@ model Order {
   lines       OrderLine[]
   allocations OrderCrateAllocation[]
   events      OrderEvent[]
+  shipments   Shipment[]
 
   @@index([siteId, requestedShipDate])
   @@index([hotelId])
@@ -2205,6 +2238,7 @@ model OrderCrateAllocation {
   operation        OperationRequest        @relation("AllocateOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   releaseOperation OperationRequest?       @relation("AllocationReleaseOperation", fields: [releaseOperationId], references: [requestId], onDelete: Restrict)
   bottles          OrderAllocationBottle[]
+  parcels          ShipmentParcel[]
 
   @@index([orderId])
   @@index([cycleId])
@@ -2234,6 +2268,19 @@ enum OrderEventType {
   CRATE_REMOVED
   COMPLETED
   CANCELLED
+  /// doc 029: the shipment and its parcels derived from the completed picking.
+  SHIPMENT_CREATED
+  LABELS_REQUESTED
+  LABELS_CREATED
+  LABELS_REJECTED
+  /// The carrier's answer is unknown (timeout, lost response): never re-sent blindly.
+  LABELS_UNCERTAIN
+  /// The carrier confirmed that nothing was created for an uncertain request.
+  LABELS_NOT_CREATED
+  PARCEL_WEIGHED
+  READY_FOR_PICKUP
+  HANDED_TO_CARRIER
+  SHIPMENT_CANCELLED
 }
 
 /// Append-only order history (ADR 0006). DB: immutable.
@@ -2391,6 +2438,8 @@ model CrateTypeDimension {
   operation        OperationRequest           @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   packageSnapshots CrateCycleWeightSnapshot[] @relation("SnapshotPackage")
 
+  shipmentParcels ShipmentParcel[] @relation("ParcelPackage")
+
   @@index([crateTypeId, subject, recordedAt])
   @@map("crate_type_dimensions")
 }
@@ -2419,6 +2468,187 @@ model CrateCycleWeightSnapshot {
   package           CrateTypeDimension?     @relation("SnapshotPackage", fields: [packageId], references: [id], onDelete: Restrict)
   packageItemWeight ItemReferenceWeight?    @relation("SnapshotPackageItem", fields: [packageItemWeightId], references: [id], onDelete: Restrict)
 
+  shipmentParcels ShipmentParcel[]
+
   @@index([cycleId])
   @@map("crate_cycle_weight_snapshots")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dispatch to a carrier (doc 029, owner 2026-10-18): one shipment per completed order (the whole
+// order together), one parcel per physical crate (= one label), derived automatically from the
+// completed picking. The carrier is behind an interface; nothing is pretended without one.
+// ---------------------------------------------------------------------------------------------
+
+enum ShipmentStatus {
+  /// Parcels derived; no carrier request yet (actual weighings may be added).
+  DRAFT
+  /// A carrier request is unresolved (sent, unknown, or labels not yet stored). Blocks everything.
+  REQUESTING
+  /// The carrier created the shipment and its labels are stored.
+  LABELED
+  CANCELLED
+}
+
+/// One shipment of one order. DB: one non-cancelled shipment per order; transitions DRAFT →
+/// REQUESTING → DRAFT / LABELED, DRAFT → CANCELLED, LABELED → CANCELLED only with a confirmed
+/// carrier cancellation; REQUESTING ⇔ one unresolved carrier request; LABELED ⇔ labels stored and
+/// every parcel numbered. The delivery data are the order's immutable snapshot.
+model Shipment {
+  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt         @unique
+  code               String         @unique
+  orderId            String         @map("order_id") @db.Uuid
+  siteId             String         @map("site_id") @db.Uuid
+  status             ShipmentStatus @default(DRAFT)
+  /// The carrier of the first request (snapshot); null until then.
+  carrierCode        String?        @map("carrier_code")
+  carrierShipmentRef String?        @map("carrier_shipment_ref")
+  createdAt          DateTime       @map("created_at") @db.Timestamptz(3)
+  createdBy          String         @map("created_by") @db.Uuid
+  operationRequestId String         @map("operation_request_id") @db.Uuid
+  labeledAt          DateTime?      @map("labeled_at") @db.Timestamptz(3)
+  cancelledAt        DateTime?      @map("cancelled_at") @db.Timestamptz(3)
+  cancelledBy        String?        @map("cancelled_by") @db.Uuid
+  cancelReason       String?        @map("cancel_reason")
+  /// Set only when the carrier confirmed the cancellation of a created shipment.
+  carrierCancelledAt DateTime?      @map("carrier_cancelled_at") @db.Timestamptz(3)
+
+  order     Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  site      Site                     @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator   User                     @relation("ShipmentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  canceller User?                    @relation("ShipmentCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
+  operation OperationRequest         @relation("ShipmentOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  parcels   ShipmentParcel[]
+  requests  ShipmentCarrierRequest[]
+  labels    ShipmentLabel[]
+
+  @@index([orderId])
+  @@map("shipments")
+}
+
+enum ParcelReferenceSource {
+  /// The crate's Hotovo weight snapshot (W1), never rewritten.
+  HOTOVO_SNAPSHOT
+  /// No Hotovo value: the references in force when the shipment was derived.
+  REFERENCE_AT_SHIPMENT
+}
+
+/// One physical crate = one parcel = one label. DB: insert only while the shipment is DRAFT, for
+/// an active allocation of the shipment's order; immutable except the carrier parcel number (set
+/// once). The bottles are the allocation's (never scanned again).
+model ShipmentParcel {
+  id                  String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId          String                 @map("shipment_id") @db.Uuid
+  parcelNo            Int                    @map("parcel_no")
+  allocationId        String                 @map("allocation_id") @db.Uuid
+  crateId             String                 @map("crate_id") @db.Uuid
+  cycleId             String                 @map("cycle_id") @db.Uuid
+  /// Calculated reference of the finished package — never an actual weighing.
+  referenceWeightG    Decimal?               @map("reference_weight_g") @db.Decimal(20, 3)
+  referenceSource     ParcelReferenceSource? @map("reference_source")
+  weightSnapshotId    String?                @map("weight_snapshot_id") @db.Uuid
+  packageDimensionId  String?                @map("package_dimension_id") @db.Uuid
+  carrierParcelNumber String?                @map("carrier_parcel_number")
+
+  shipment         Shipment                  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  allocation       OrderCrateAllocation      @relation(fields: [allocationId], references: [id], onDelete: Restrict)
+  crate            Crate                     @relation(fields: [crateId], references: [id], onDelete: Restrict)
+  cycle            CrateCycle                @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  weightSnapshot   CrateCycleWeightSnapshot? @relation(fields: [weightSnapshotId], references: [id], onDelete: Restrict)
+  packageDimension CrateTypeDimension?       @relation("ParcelPackage", fields: [packageDimensionId], references: [id], onDelete: Restrict)
+  weighings        ShipmentParcelWeighing[]
+
+  @@unique([shipmentId, parcelNo])
+  @@unique([shipmentId, allocationId])
+  @@index([crateId])
+  @@map("shipment_parcels")
+}
+
+/// An actual weighing of one parcel (optional, append-only; a correction is a new row). Allowed
+/// only while the shipment is DRAFT — the carrier receives what was known when labels were made.
+model ShipmentParcelWeighing {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  parcelId           String   @map("parcel_id") @db.Uuid
+  massG              Decimal  @map("mass_g") @db.Decimal(12, 3)
+  recordedAt         DateTime @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String   @map("recorded_by") @db.Uuid
+  operationRequestId String   @unique @map("operation_request_id") @db.Uuid
+  correctionOfId     String?  @unique @map("correction_of_id") @db.Uuid
+  correctionReason   String?  @map("correction_reason")
+
+  parcel       ShipmentParcel          @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  recorder     User                    @relation("ParcelWeighedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation    OperationRequest        @relation("ParcelWeighOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  correctionOf ShipmentParcelWeighing? @relation("ParcelWeighingCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  correctedBy  ShipmentParcelWeighing? @relation("ParcelWeighingCorrection")
+
+  @@index([parcelId, recordedAt])
+  @@map("shipment_parcel_weighings")
+}
+
+enum CarrierRequestStatus {
+  /// Written; not yet handed to the carrier (safe to send).
+  PREPARED
+  /// Claimed for sending: the carrier may or may not have it — only a lookup resolves it.
+  SENT
+  /// The carrier acknowledged it (e.g. PPL batch id) and is still processing: poll, never re-send.
+  ACCEPTED
+  /// The carrier created the shipment; labels not stored yet.
+  CREATED
+  /// Labels stored.
+  SUCCEEDED
+  /// The carrier refused it (nothing created).
+  REJECTED
+  /// A lookup confirmed that the carrier created nothing for it.
+  NOT_CREATED
+}
+
+/// One attempt to create the shipment at the carrier, identified by a unique client reference.
+/// DB: at most one unresolved (PREPARED / SENT / ACCEPTED / CREATED) per shipment; transitions only forward;
+/// the payload sent is kept (no secrets).
+model ShipmentCarrierRequest {
+  id                 String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId         String               @map("shipment_id") @db.Uuid
+  attemptNo          Int                  @map("attempt_no")
+  carrierCode        String               @map("carrier_code")
+  clientReference    String               @unique @map("client_reference")
+  status             CarrierRequestStatus @default(PREPARED)
+  payload            Json
+  carrierRef         String?              @map("carrier_ref")
+  result             Json?
+  errorCode          String?              @map("error_code")
+  errorMessage       String?              @map("error_message")
+  createdAt          DateTime             @map("created_at") @db.Timestamptz(3)
+  createdBy          String               @map("created_by") @db.Uuid
+  operationRequestId String               @unique @map("operation_request_id") @db.Uuid
+  sentAt             DateTime?            @map("sent_at") @db.Timestamptz(3)
+  resolvedAt         DateTime?            @map("resolved_at") @db.Timestamptz(3)
+
+  shipment  Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  creator   User             @relation("CarrierRequestBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation("CarrierRequestOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  labels    ShipmentLabel[]
+
+  @@unique([shipmentId, attemptNo])
+  @@map("shipment_carrier_requests")
+}
+
+/// The label document returned by the carrier, stored once and re-printed as is (re-printing never
+/// contacts the carrier). Generating or downloading it is not evidence of printing.
+model ShipmentLabel {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId String   @map("shipment_id") @db.Uuid
+  requestId  String   @map("request_id") @db.Uuid
+  format     String
+  fileKey    String   @unique @map("file_key")
+  sha256     String
+  sizeBytes  Int      @map("size_bytes")
+  createdAt  DateTime @map("created_at") @db.Timestamptz(3)
+
+  shipment Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  request  ShipmentCarrierRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+
+  @@unique([shipmentId])
+  @@map("shipment_labels")
 }

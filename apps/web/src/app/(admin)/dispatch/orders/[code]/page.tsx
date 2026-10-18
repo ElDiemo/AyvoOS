@@ -1,10 +1,11 @@
-import { orderCodeSchema, orderDetailSchema } from '@ayvo/types';
+import { orderCodeSchema, orderDetailSchema, orderShipmentSchema } from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CancelOrder } from '@/components/dispatch/cancel-order';
 import { DispatchHeader } from '@/components/dispatch/dispatch-header';
 import { OrderLines } from '@/components/dispatch/order-lines';
 import { OrderStatusBadge } from '@/components/dispatch/order-status';
+import { ShipmentPanel } from '@/components/dispatch/shipment-panel';
 import { buttonClass, Card, EmptyState, Field, FieldList, Notice } from '@/components/ui';
 import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
@@ -14,7 +15,10 @@ import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 export const dynamic = 'force-dynamic';
 const t = ordersCs.detail;
 
-/** Order detail (doc 028): snapshot, requested vs. loaded per product, crates and history. */
+/**
+ * Order detail (doc 028, doc 029): snapshot, requested vs. loaded per product, crates, the one
+ * next step of the dispatch with its parcels and labels, and the history.
+ */
 export default async function OrderPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
   if (!orderCodeSchema.safeParse(code).success) notFound();
@@ -23,6 +27,14 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
     apiGet(`admin/orders/${code}`, orderDetailSchema),
     siteTimeZone(),
   ]);
+  const shipment =
+    order.status !== 'OPEN' && order.status !== 'CANCELLED' && hasPermission(me, 'shipments:read')
+      ? await apiGet(`admin/orders/${code}/shipment`, orderShipmentSchema)
+      : null;
+  // A shipment at the carrier (requested or labelled) is cancelled first, never silently.
+  const atCarrier = ['REQUESTING', 'LABELED'].includes(shipment?.shipment?.status ?? '');
+  const cancellable =
+    order.status === 'OPEN' || (order.status === 'READY_TO_DISPATCH' && !atCarrier);
   const d = order.delivery;
   return (
     <>
@@ -46,19 +58,24 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
                 {order.totals.loadedCrates > 0 ? t.resume : t.pick}
               </Link>
             )}
-            {order.status !== 'CANCELLED' && hasPermission(me, 'orders:manage') && (
-              <CancelOrder code={order.code} />
-            )}
+            {cancellable && hasPermission(me, 'orders:manage') && <CancelOrder code={order.code} />}
           </>
         }
       />
-      {order.status === 'READY_TO_DISPATCH' && (
-        <div className="mb-6">
-          <Notice tone="info">
-            {order.completedBy && t.completed(order.completedBy)} ·{' '}
-            {formatDateTimeCs(order.completedAt, timeZone)}. {t.notDispatched}
-          </Notice>
-        </div>
+      {order.completedBy && order.status !== 'CANCELLED' && (
+        <p className="mb-4 text-sm text-stone-600" data-testid="order-completed">
+          {t.completed(order.completedBy)} · {formatDateTimeCs(order.completedAt, timeZone)}
+        </p>
+      )}
+      {shipment && (
+        <ShipmentPanel
+          code={order.code}
+          status={order.status}
+          data={shipment}
+          canPrepare={hasPermission(me, 'shipments:prepare')}
+          canHandOver={hasPermission(me, 'shipments:handover')}
+          timeZone={timeZone}
+        />
       )}
       {order.status === 'CANCELLED' && order.cancelledBy && order.cancelReason && (
         <div className="mb-6">
@@ -132,6 +149,8 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
             {order.history.map((e, i) => (
               <li key={i}>
                 <span className="font-medium">{t.events[e.type] ?? e.type}</span>
+                {e.shipment && <span className="font-mono"> · {e.shipment}</span>}
+                {e.parcels !== null && <span> · {t.parcels(e.parcels)}</span>}
                 {e.crate && <span className="font-mono"> · {e.crate}</span>}
                 {e.reason && <span> · {e.reason}</span>}
                 <span className="block text-xs text-stone-500">
