@@ -3,7 +3,8 @@
 - **Status:** Accepted — confirmed by owner 2026-10-10
 - **Date:** 2026-10-10
 - **Deciders:** AYVO owner; AYVO OS lead architect
-- **Supersedes / Superseded by:** — (fills the "hosting setup for `dev.ayvo.co`" open question of
+- **Supersedes / Superseded by:** public reachability superseded by
+  [ADR 0026](0026-dev-preview-tailnet-only.md) (tailnet only, 2026-10-17) — (fills the "hosting setup for `dev.ayvo.co`" open question of
   [ADR 0008](0008-dev-prod-separation.md))
 
 ## Context
