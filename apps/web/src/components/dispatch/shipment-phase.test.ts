@@ -1,16 +1,20 @@
-import type { OrderShipment, Shipment } from '@ayvo/types';
+import type { CarrierInfo, OrderShipment, Shipment } from '@ayvo/types';
 import { describe, expect, it } from 'vitest';
 import { shipmentPhase } from './shipment-phase';
 
-const carrier = {
+const carrier: CarrierInfo = {
   configured: true,
+  unavailable: null,
   code: 'TEST',
   name: 'Test',
-  parcelWeight: 'REQUIRED' as const,
-  parcelDimensions: 'OPTIONAL' as const,
+  environment: 'TEST',
+  parcelWeight: 'REQUIRED',
+  parcelDimensions: 'OPTIONAL',
   canCancel: true,
 };
-const shipment = (over: Partial<Shipment> = {}): OrderShipment => ({
+const none: CarrierInfo = { ...carrier, configured: false, unavailable: 'NOT_CONFIGURED' };
+const shipment = (over: Partial<Shipment> = {}, site: CarrierInfo = carrier): OrderShipment => ({
+  carrier: site,
   shipment: {
     code: 'SHP-000001',
     status: 'DRAFT',
@@ -20,7 +24,9 @@ const shipment = (over: Partial<Shipment> = {}): OrderShipment => ({
     parcels: [],
     missing: [],
     request: null,
+    cancelRequest: null,
     label: null,
+    pollingStopped: false,
     createdAt: '2026-10-18T10:00:00.000Z',
     ...over,
   },
@@ -34,6 +40,7 @@ const request = (status: string, errorCode: string | null = null) =>
     sentAt: null,
     errorCode,
     errorMessage: null,
+    resolvableAt: null,
   }) as Shipment['request'];
 
 describe('shipmentPhase (doc 029): one next step from the order status and its shipment', () => {
@@ -47,12 +54,16 @@ describe('shipmentPhase (doc 029): one next step from the order status and its s
   });
 
   it('never offers labels without a carrier or with missing required data', () => {
-    expect(shipmentPhase('READY_TO_DISPATCH', { shipment: null, cancelled: [] })).toBe(
+    expect(shipmentPhase('READY_TO_DISPATCH', { carrier, shipment: null, cancelled: [] })).toBe(
       'NO_SHIPMENT',
     );
+    // An order completed before doc 029 at a site without a carrier: no button to be refused.
     expect(
-      shipmentPhase('READY_TO_DISPATCH', shipment({ carrier: { ...carrier, configured: false } })),
+      shipmentPhase('READY_TO_DISPATCH', { carrier: none, shipment: null, cancelled: [] }),
     ).toBe('NO_CARRIER');
+    expect(shipmentPhase('READY_TO_DISPATCH', shipment({ carrier: none }, none))).toBe(
+      'NO_CARRIER',
+    );
     expect(
       shipmentPhase(
         'READY_TO_DISPATCH',
@@ -62,7 +73,7 @@ describe('shipmentPhase (doc 029): one next step from the order status and its s
     expect(shipmentPhase('READY_TO_DISPATCH', shipment())).toBe('CREATE');
   });
 
-  it('an unresolved carrier request is resolved, never created again', () => {
+  it('an unresolved request is resolved, never created again; a cancellation is followed', () => {
     const at = (r: Shipment['request']) =>
       shipmentPhase('READY_TO_DISPATCH', shipment({ status: 'REQUESTING', request: r }));
     expect(at(request('SENT', 'NO_ANSWER'))).toBe('UNCERTAIN');
@@ -71,5 +82,8 @@ describe('shipmentPhase (doc 029): one next step from the order status and its s
     expect(at(request('ACCEPTED'))).toBe('ACCEPTED');
     expect(at(request('CREATED'))).toBe('CREATED');
     expect(shipmentPhase('READY_TO_DISPATCH', shipment({ status: 'LABELED' }))).toBe('LABELED');
+    expect(shipmentPhase('READY_TO_DISPATCH', shipment({ status: 'CANCELLING' }))).toBe(
+      'CANCELLING',
+    );
   });
 });

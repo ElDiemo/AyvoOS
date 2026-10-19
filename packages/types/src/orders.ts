@@ -172,6 +172,8 @@ export const orderEventSchema = z.object({
     'READY_FOR_PICKUP',
     'HANDED_TO_CARRIER',
     'SHIPMENT_CANCELLED',
+    'SHIPMENT_CANCEL_REQUESTED',
+    'SHIPMENT_CANCEL_REFUSED',
   ]),
   occurredAt: z.iso.datetime(),
   actor: z.string(),
@@ -197,6 +199,13 @@ export const orderDetailSchema = orderSummarySchema.extend({
   cancelledAt: z.iso.datetime().nullable(),
   cancelledBy: z.string().nullable(),
   cancelReason: z.string().nullable(),
+  /** The order's live shipment (doc 029), readable with orders:read: code and status only. */
+  shipment: z
+    .object({
+      code: z.string(),
+      status: z.enum(['DRAFT', 'REQUESTING', 'LABELED', 'CANCELLING', 'CANCELLED']),
+    })
+    .nullable(),
 });
 export type OrderDetail = z.infer<typeof orderDetailSchema>;
 

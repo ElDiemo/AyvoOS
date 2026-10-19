@@ -120,6 +120,13 @@ export const envSchema = z
     // Carrier for shipping labels (doc 029). `none` until a real carrier adapter is configured
     // (PPL needs owner-provided test access); `test` — a fake carrier — only with APP_ENV=test.
     CARRIER_PROVIDER: z.enum(['none', 'test']).default('none'),
+    // Every carrier call is abandoned (outcome unknown, never re-sent) after this time.
+    CARRIER_CALL_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(120).default(30),
+    // A request claimed for sending is treated as possibly in flight for this long: no lookup and
+    // no manual resolution before (doc 029 §3). Outside tests at least 3 × the call timeout.
+    CARRIER_SETTLE_SECONDS: z.coerce.number().int().min(0).max(3600).default(120),
+    // Background polling of accepted carrier requests (seconds between rounds; 0 = off).
+    CARRIER_POLL_SECONDS: z.coerce.number().int().min(0).max(3600).default(10),
 
     // Upper limit for an uploaded supplier document (PDF, JPEG or PNG), in bytes.
     SUPPLIER_DOCUMENT_MAX_BYTES: z.coerce
@@ -154,6 +161,15 @@ export const envSchema = z
     if (env.CARRIER_PROVIDER === 'test' && env.APP_ENV !== 'test') {
       // Never a pretended carrier on DEV or production: no fake labels, numbers or answers.
       return fail('CARRIER_PROVIDER', 'CARRIER_PROVIDER=test is allowed only with APP_ENV=test');
+    }
+    if (
+      env.APP_ENV !== 'test' &&
+      env.CARRIER_SETTLE_SECONDS < 3 * env.CARRIER_CALL_TIMEOUT_SECONDS
+    ) {
+      return fail(
+        'CARRIER_SETTLE_SECONDS',
+        'CARRIER_SETTLE_SECONDS must be at least 3 × CARRIER_CALL_TIMEOUT_SECONDS',
+      );
     }
     if (production && !env.APP_PUBLIC_ORIGIN) {
       return fail('APP_PUBLIC_ORIGIN', 'APP_PUBLIC_ORIGIN is required in production');

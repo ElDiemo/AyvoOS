@@ -206,6 +206,10 @@ export class OrdersService implements OnModuleInit {
         creator: { select: { displayName: true } },
         completer: { select: { displayName: true } },
         canceller: { select: { displayName: true } },
+        shipments: {
+          where: { status: { not: 'CANCELLED' } },
+          select: { code: true, status: true },
+        },
       },
     });
     const designs = await this.labels.getVersionRefs([
@@ -268,6 +272,7 @@ export class OrdersService implements OnModuleInit {
       cancelledAt: row.cancelledAt?.toISOString() ?? null,
       cancelledBy: row.canceller?.displayName ?? null,
       cancelReason: row.cancelReason,
+      shipment: row.shipments[0] ?? null,
     };
   }
 

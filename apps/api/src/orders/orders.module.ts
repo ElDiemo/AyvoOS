@@ -5,11 +5,14 @@ import { CustomersModule } from '../customers/customers.module.js';
 import { LabelsModule } from '../labels/labels.module.js';
 import { ENV, type Env } from '../config/env.js';
 import { SitesModule } from '../sites/sites.module.js';
-import { CARRIERS, type CarrierRegistry } from './carriers/carrier.js';
-import { TestCarrier } from './carriers/test-carrier.js';
+import { CARRIERS } from './carriers/carrier.js';
+import { carrierRegistry } from './carriers/carrier-registry.js';
 import { OrdersController } from './orders.controller.js';
 import { OrdersService } from './orders.service.js';
 import { ShipmentsController } from './shipments.controller.js';
+import { ShipmentCarrierFlow } from './shipment-carrier-flow.service.js';
+import { ShipmentDeriver } from './shipment-deriver.service.js';
+import { ShipmentPoller } from './shipment-poller.service.js';
 import { ShipmentsService } from './shipments.service.js';
 
 /**
@@ -24,16 +27,10 @@ import { ShipmentsService } from './shipments.service.js';
   providers: [
     OrdersService,
     ShipmentsService,
-    {
-      // The carrier per site (doc 022 §8). None until a real adapter is configured; the fake
-      // TestCarrier exists only with APP_ENV=test (enforced by the environment schema).
-      provide: CARRIERS,
-      inject: [ENV],
-      useFactory: (env: Env): CarrierRegistry => {
-        const carrier = env.CARRIER_PROVIDER === 'test' ? new TestCarrier() : null;
-        return { forSite: () => carrier };
-      },
-    },
+    ShipmentDeriver,
+    ShipmentCarrierFlow,
+    ShipmentPoller,
+    { provide: CARRIERS, inject: [ENV], useFactory: (env: Env) => carrierRegistry(env) },
   ],
 })
 export class OrdersModule {}

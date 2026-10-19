@@ -81,6 +81,7 @@ export const PERMISSION_CODES = [
   'shipments:read',
   'shipments:prepare',
   'shipments:handover',
+  'shipments:resolve_uncertain',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -136,6 +137,7 @@ export const SITE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'shipments:read',
   'shipments:prepare',
   'shipments:handover',
+  'shipments:resolve_uncertain',
 ];
 
 /** Permissions that also need the active site and access to its warehouse (doc 022). */

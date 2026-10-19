@@ -300,6 +300,15 @@ test('one click creates three labels; re-opening the PDF creates nothing new', a
   await expect(page.getByTestId('carrier-ref')).toBeVisible();
   // Labels exist ≠ printed ≠ ready: the order is still "Kompletace dokončena".
   await expect(page.getByTestId('order-status')).toHaveText('Kompletace dokončena');
+  // Each parcel has its own label (1 crate = 1 parcel = 1 label) and there is a complete one.
+  for (const n of [1, 2, 3]) {
+    const own = await page.getByTestId(`parcel-${n}-label`).getAttribute('href');
+    const res = await page.request.get(own!);
+    expect(res.headers()['content-type']).toContain('application/pdf');
+  }
+  await expect(page.getByTestId('carrier-test-environment')).toHaveText(
+    'Testovací prostředí dopravce',
+  );
   const href = await page.getByTestId('open-labels').getAttribute('href');
   for (let i = 0; i < 2; i++) {
     const pdf = await page.request.get(href!);

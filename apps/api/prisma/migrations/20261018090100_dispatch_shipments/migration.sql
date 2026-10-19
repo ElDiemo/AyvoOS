@@ -4,13 +4,13 @@
 -- new tables and triggers; existing functions are replaced with stricter versions only.
 
 -- CreateEnum
-CREATE TYPE "ShipmentStatus" AS ENUM ('DRAFT', 'REQUESTING', 'LABELED', 'CANCELLED');
+CREATE TYPE "ShipmentStatus" AS ENUM ('DRAFT', 'REQUESTING', 'LABELED', 'CANCELLING', 'CANCELLED');
 
 -- CreateEnum
 CREATE TYPE "ParcelReferenceSource" AS ENUM ('HOTOVO_SNAPSHOT', 'REFERENCE_AT_SHIPMENT');
 
 -- CreateEnum
-CREATE TYPE "CarrierRequestStatus" AS ENUM ('PREPARED', 'SENT', 'ACCEPTED', 'CREATED', 'SUCCEEDED', 'REJECTED', 'NOT_CREATED');
+CREATE TYPE "CarrierRequestStatus" AS ENUM ('PREPARED', 'SENT', 'ACCEPTED', 'CREATED', 'SUCCEEDED', 'REJECTED', 'NOT_CREATED', 'VOIDED');
 
 -- CreateTable
 CREATE TABLE "shipments" (
@@ -21,6 +21,8 @@ CREATE TABLE "shipments" (
     "site_id" UUID NOT NULL,
     "status" "ShipmentStatus" NOT NULL DEFAULT 'DRAFT',
     "carrier_code" TEXT,
+    "carrier_connection" TEXT,
+    "carrier_environment" TEXT,
     "carrier_shipment_ref" TEXT,
     "created_at" TIMESTAMPTZ(3) NOT NULL,
     "created_by" UUID NOT NULL,
@@ -30,6 +32,9 @@ CREATE TABLE "shipments" (
     "cancelled_by" UUID,
     "cancel_reason" TEXT,
     "carrier_cancelled_at" TIMESTAMPTZ(3),
+    "cancel_requested_at" TIMESTAMPTZ(3),
+    "cancel_requested_by" UUID,
+    "carrier_cancel_sent_at" TIMESTAMPTZ(3),
 
     CONSTRAINT "shipments_pkey" PRIMARY KEY ("id")
 );
@@ -71,6 +76,8 @@ CREATE TABLE "shipment_carrier_requests" (
     "shipment_id" UUID NOT NULL,
     "attempt_no" INTEGER NOT NULL,
     "carrier_code" TEXT NOT NULL,
+    "carrier_connection" TEXT NOT NULL,
+    "carrier_environment" TEXT NOT NULL,
     "client_reference" TEXT NOT NULL,
     "status" "CarrierRequestStatus" NOT NULL DEFAULT 'PREPARED',
     "payload" JSONB NOT NULL,
@@ -83,6 +90,8 @@ CREATE TABLE "shipment_carrier_requests" (
     "operation_request_id" UUID NOT NULL,
     "sent_at" TIMESTAMPTZ(3),
     "resolved_at" TIMESTAMPTZ(3),
+    "next_poll_at" TIMESTAMPTZ(3),
+    "poll_count" INTEGER NOT NULL DEFAULT 0,
 
     CONSTRAINT "shipment_carrier_requests_pkey" PRIMARY KEY ("id")
 );
@@ -91,8 +100,10 @@ CREATE TABLE "shipment_carrier_requests" (
 CREATE TABLE "shipment_labels" (
     "id" UUID NOT NULL DEFAULT uuidv7(),
     "shipment_id" UUID NOT NULL,
+    "parcel_id" UUID,
     "request_id" UUID NOT NULL,
     "format" TEXT NOT NULL,
+    "dpi" INTEGER,
     "file_key" TEXT NOT NULL,
     "sha256" TEXT NOT NULL,
     "size_bytes" INTEGER NOT NULL,
@@ -141,7 +152,7 @@ CREATE UNIQUE INDEX "shipment_carrier_requests_shipment_id_attempt_no_key" ON "s
 CREATE UNIQUE INDEX "shipment_labels_file_key_key" ON "shipment_labels"("file_key");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "shipment_labels_shipment_id_key" ON "shipment_labels"("shipment_id");
+CREATE UNIQUE INDEX "shipment_labels_shipment_id_parcel_id_key" ON "shipment_labels"("shipment_id", "parcel_id");
 
 -- AddForeignKey
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -154,6 +165,9 @@ ALTER TABLE "shipments" ADD CONSTRAINT "shipments_created_by_fkey" FOREIGN KEY (
 
 -- AddForeignKey
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_cancelled_by_fkey" FOREIGN KEY ("cancelled_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "shipments" ADD CONSTRAINT "shipments_cancel_requested_by_fkey" FOREIGN KEY ("cancel_requested_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_operation_request_id_fkey" FOREIGN KEY ("operation_request_id") REFERENCES "operation_requests"("request_id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -201,6 +215,9 @@ ALTER TABLE "shipment_carrier_requests" ADD CONSTRAINT "shipment_carrier_request
 ALTER TABLE "shipment_labels" ADD CONSTRAINT "shipment_labels_shipment_id_fkey" FOREIGN KEY ("shipment_id") REFERENCES "shipments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "shipment_labels" ADD CONSTRAINT "shipment_labels_parcel_id_fkey" FOREIGN KEY ("parcel_id") REFERENCES "shipment_parcels"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "shipment_labels" ADD CONSTRAINT "shipment_labels_request_id_fkey" FOREIGN KEY ("request_id") REFERENCES "shipment_carrier_requests"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 
@@ -244,6 +261,11 @@ BEGIN
   IF OLD."completed_at" IS NOT NULL AND (NEW."completed_at" IS DISTINCT FROM OLD."completed_at"
                                          OR NEW."completed_by" IS DISTINCT FROM OLD."completed_by") THEN
     RAISE EXCEPTION 'AYVO: an order''s completion is recorded once' USING ERRCODE = 'restrict_violation';
+  END IF;
+  -- "Ready for pickup" is withdrawn only by starting the cancellation of its labels.
+  IF OLD."status" = 'READY_FOR_PICKUP' AND NEW."status" = 'READY_TO_DISPATCH' AND NOT EXISTS (
+       SELECT 1 FROM "shipments" s WHERE s."order_id" = NEW."id" AND s."status" = 'CANCELLING') THEN
+    RAISE EXCEPTION 'AYVO: ready for pickup is withdrawn only by cancelling the labels' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
 END
@@ -455,11 +477,20 @@ ALTER TABLE "shipments"
     AND ("status" = 'CANCELLED') = ("cancelled_at" IS NOT NULL)
     AND ("cancel_reason" IS NULL OR btrim("cancel_reason") <> '')
     AND ("carrier_cancelled_at" IS NULL OR "cancelled_at" IS NOT NULL)),
+  ADD CONSTRAINT "shipments_cancel_requested_check" CHECK (
+    ("cancel_requested_at" IS NULL) = ("cancel_requested_by" IS NULL)
+    AND ("status" <> 'CANCELLING' OR "cancel_requested_at" IS NOT NULL)
+    AND ("carrier_cancelled_at" IS NULL OR "cancel_requested_at" IS NOT NULL)),
   ADD CONSTRAINT "shipments_labeled_check" CHECK (
     ("status" <> 'LABELED' OR ("labeled_at" IS NOT NULL AND "carrier_code" IS NOT NULL))
-    AND ("status" <> 'REQUESTING' OR "carrier_code" IS NOT NULL)
+    AND ("status" NOT IN ('REQUESTING', 'CANCELLING') OR "carrier_code" IS NOT NULL)
     AND ("status" <> 'DRAFT' OR "labeled_at" IS NULL)),
-  ADD CONSTRAINT "shipments_carrier_code_check" CHECK ("carrier_code" IS NULL OR "carrier_code" ~ '^[A-Z][A-Z0-9_]{1,19}$');
+  ADD CONSTRAINT "shipments_carrier_code_check" CHECK ("carrier_code" IS NULL OR "carrier_code" ~ '^[A-Z][A-Z0-9_]{1,19}$'),
+  ADD CONSTRAINT "shipments_carrier_snapshot_check" CHECK (
+    ("carrier_code" IS NULL) = ("carrier_connection" IS NULL)
+    AND ("carrier_code" IS NULL) = ("carrier_environment" IS NULL)
+    AND ("carrier_environment" IS NULL OR "carrier_environment" IN ('TEST', 'PRODUCTION'))
+    AND ("carrier_cancel_sent_at" IS NULL OR "cancel_requested_at" IS NOT NULL));
 
 -- The whole order travels together: one live shipment per order.
 CREATE UNIQUE INDEX "shipments_one_live_per_order" ON "shipments" ("order_id") WHERE "status" <> 'CANCELLED';
@@ -483,8 +514,10 @@ CREATE FUNCTION shipments_guard() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 DECLARE
-  mutable text[] := ARRAY['status','carrier_code','carrier_shipment_ref','labeled_at','cancelled_at',
-                          'cancelled_by','cancel_reason','carrier_cancelled_at'];
+  mutable text[] := ARRAY['status','carrier_code','carrier_connection','carrier_environment',
+                          'carrier_shipment_ref','labeled_at','cancelled_at','cancelled_by',
+                          'cancel_reason','carrier_cancelled_at','cancel_requested_at',
+                          'cancel_requested_by','carrier_cancel_sent_at'];
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'AYVO: shipments are never deleted' USING ERRCODE = 'restrict_violation';
@@ -495,19 +528,25 @@ BEGIN
   IF OLD."status" = 'CANCELLED' THEN
     RAISE EXCEPTION 'AYVO: a cancelled shipment never changes' USING ERRCODE = 'restrict_violation';
   END IF;
-  IF (OLD."carrier_code" IS NOT NULL AND NEW."carrier_code" IS DISTINCT FROM OLD."carrier_code")
+  -- The carrier may change only while nothing is at a carrier (a draft after a refusal).
+  IF (OLD."carrier_code" IS NOT NULL AND OLD."status" <> 'DRAFT'
+      AND (NEW."carrier_code", NEW."carrier_connection", NEW."carrier_environment")
+          IS DISTINCT FROM (OLD."carrier_code", OLD."carrier_connection", OLD."carrier_environment"))
+     OR (OLD."cancel_requested_at" IS NOT NULL AND NEW."cancel_requested_at" IS DISTINCT FROM OLD."cancel_requested_at"
+         AND NEW."status" <> 'CANCELLING')
      OR (OLD."carrier_shipment_ref" IS NOT NULL AND NEW."carrier_shipment_ref" IS DISTINCT FROM OLD."carrier_shipment_ref")
      OR (OLD."labeled_at" IS NOT NULL AND NEW."labeled_at" IS DISTINCT FROM OLD."labeled_at") THEN
     RAISE EXCEPTION 'AYVO: carrier data are recorded once' USING ERRCODE = 'restrict_violation';
   END IF;
   IF NEW."status" <> OLD."status" AND NOT (
        (OLD."status" = 'DRAFT' AND NEW."status" IN ('REQUESTING', 'CANCELLED'))
-    OR (OLD."status" = 'REQUESTING' AND NEW."status" IN ('DRAFT', 'LABELED'))
-    OR (OLD."status" = 'LABELED' AND NEW."status" = 'CANCELLED')) THEN
+    OR (OLD."status" = 'REQUESTING' AND NEW."status" IN ('DRAFT', 'LABELED', 'CANCELLING'))
+    OR (OLD."status" = 'LABELED' AND NEW."status" = 'CANCELLING')
+    OR (OLD."status" = 'CANCELLING' AND NEW."status" IN ('LABELED', 'REQUESTING', 'CANCELLED'))) THEN
     RAISE EXCEPTION 'AYVO: shipment % → % is not allowed', OLD."status", NEW."status" USING ERRCODE = 'check_violation';
   END IF;
   -- A shipment created at the carrier is cancelled only when the carrier confirmed it.
-  IF OLD."status" = 'LABELED' AND NEW."status" = 'CANCELLED' AND NEW."carrier_cancelled_at" IS NULL THEN
+  IF OLD."status" = 'CANCELLING' AND NEW."status" = 'CANCELLED' AND NEW."carrier_cancelled_at" IS NULL THEN
     RAISE EXCEPTION 'AYVO: a labelled shipment is cancelled only through the carrier' USING ERRCODE = 'check_violation';
   END IF;
   IF OLD."status" = 'DRAFT' AND NEW."status" = 'CANCELLED' AND NEW."carrier_cancelled_at" IS NOT NULL THEN
@@ -526,6 +565,7 @@ CREATE FUNCTION ayvo_assert_shipment(p_shipment_id uuid) RETURNS void
 DECLARE
   s record;
   unresolved int;
+  labeled boolean;
 BEGIN
   SELECT * INTO s FROM "shipments" WHERE "id" = p_shipment_id;
   IF s."status" <> 'CANCELLED' THEN
@@ -538,14 +578,26 @@ BEGIN
   END IF;
   SELECT count(*) INTO unresolved FROM "shipment_carrier_requests" r
    WHERE r."shipment_id" = p_shipment_id AND r."status" IN ('PREPARED', 'SENT', 'ACCEPTED', 'CREATED');
-  IF (s."status" = 'REQUESTING') <> (unresolved = 1) OR unresolved > 1 THEN
+  -- Labelled: every parcel has its number and its own label file.
+  labeled := NOT EXISTS (SELECT 1 FROM "shipment_parcels" p WHERE p."shipment_id" = p_shipment_id
+                           AND NOT EXISTS (SELECT 1 FROM "shipment_labels" l WHERE l."parcel_id" = p."id"))
+    AND EXISTS (SELECT 1 FROM "shipment_carrier_requests" r WHERE r."shipment_id" = p_shipment_id AND r."status" = 'SUCCEEDED')
+    AND NOT EXISTS (SELECT 1 FROM "shipment_parcels" p WHERE p."shipment_id" = p_shipment_id AND p."carrier_parcel_number" IS NULL);
+  IF unresolved > 1
+     OR (s."status" = 'REQUESTING' AND unresolved <> 1)
+     OR (s."status" IN ('DRAFT', 'LABELED', 'CANCELLED') AND unresolved <> 0) THEN
     RAISE EXCEPTION 'AYVO: a shipment is REQUESTING exactly while one carrier request is unresolved' USING ERRCODE = 'check_violation';
   END IF;
-  IF s."status" = 'LABELED' AND (
-       NOT EXISTS (SELECT 1 FROM "shipment_labels" l WHERE l."shipment_id" = p_shipment_id)
-    OR NOT EXISTS (SELECT 1 FROM "shipment_carrier_requests" r WHERE r."shipment_id" = p_shipment_id AND r."status" = 'SUCCEEDED')
-    OR EXISTS (SELECT 1 FROM "shipment_parcels" p WHERE p."shipment_id" = p_shipment_id AND p."carrier_parcel_number" IS NULL)) THEN
+  IF s."status" = 'LABELED' AND NOT labeled THEN
     RAISE EXCEPTION 'AYVO: a LABELED shipment has its labels and every parcel number' USING ERRCODE = 'check_violation';
+  END IF;
+  -- Cancelling at the carrier: a labelled shipment, or one the carrier created (its request
+  -- CREATED) whose labels never became usable.
+  IF s."status" = 'CANCELLING' AND NOT (
+       (unresolved = 0 AND labeled)
+    OR (unresolved = 1 AND EXISTS (SELECT 1 FROM "shipment_carrier_requests" r
+                                    WHERE r."shipment_id" = p_shipment_id AND r."status" = 'CREATED'))) THEN
+    RAISE EXCEPTION 'AYVO: only a shipment the carrier created is cancelled at the carrier' USING ERRCODE = 'check_violation';
   END IF;
   PERFORM ayvo_assert_order(s."order_id");
 END
@@ -682,10 +734,12 @@ CREATE TRIGGER "shipment_parcel_weighings_no_truncate" BEFORE TRUNCATE ON "shipm
 ALTER TABLE "shipment_carrier_requests"
   ADD CONSTRAINT "shipment_carrier_requests_attempt_check" CHECK ("attempt_no" >= 1),
   ADD CONSTRAINT "shipment_carrier_requests_reference_check" CHECK (btrim("client_reference") <> '' AND length("client_reference") <= 128),
-  ADD CONSTRAINT "shipment_carrier_requests_carrier_check" CHECK ("carrier_code" ~ '^[A-Z][A-Z0-9_]{1,19}$'),
+  ADD CONSTRAINT "shipment_carrier_requests_carrier_check" CHECK ("carrier_code" ~ '^[A-Z][A-Z0-9_]{1,19}$'
+    AND "carrier_environment" IN ('TEST', 'PRODUCTION') AND btrim("carrier_connection") <> ''),
+  ADD CONSTRAINT "shipment_carrier_requests_polls_check" CHECK ("poll_count" >= 0),
   ADD CONSTRAINT "shipment_carrier_requests_times_check" CHECK (
     ("status" = 'PREPARED') = ("sent_at" IS NULL)
-    AND ("status" IN ('SUCCEEDED', 'REJECTED', 'NOT_CREATED')) = ("resolved_at" IS NOT NULL));
+    AND ("status" IN ('SUCCEEDED', 'REJECTED', 'NOT_CREATED', 'VOIDED')) = ("resolved_at" IS NOT NULL));
 
 CREATE UNIQUE INDEX "shipment_carrier_requests_one_unresolved" ON "shipment_carrier_requests" ("shipment_id")
   WHERE "status" IN ('PREPARED', 'SENT', 'ACCEPTED', 'CREATED');
@@ -698,7 +752,9 @@ BEGIN
     RAISE EXCEPTION 'AYVO: a carrier request starts PREPARED' USING ERRCODE = 'check_violation';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM "shipments" s WHERE s."id" = NEW."shipment_id" AND s."status" = 'REQUESTING'
-                                               AND s."carrier_code" = NEW."carrier_code") THEN
+                                               AND s."carrier_code" = NEW."carrier_code"
+                                               AND s."carrier_connection" = NEW."carrier_connection"
+                                               AND s."carrier_environment" = NEW."carrier_environment") THEN
     RAISE EXCEPTION 'AYVO: a carrier request belongs to a requesting shipment of the same carrier' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -709,7 +765,8 @@ CREATE FUNCTION shipment_carrier_requests_guard() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 DECLARE
-  mutable text[] := ARRAY['status','carrier_ref','result','error_code','error_message','sent_at','resolved_at'];
+  mutable text[] := ARRAY['status','carrier_ref','result','error_code','error_message','sent_at','resolved_at',
+                          'next_poll_at','poll_count'];
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'AYVO: carrier requests are never deleted' USING ERRCODE = 'restrict_violation';
@@ -717,7 +774,7 @@ BEGIN
   IF (to_jsonb(NEW) - mutable) IS DISTINCT FROM (to_jsonb(OLD) - mutable) THEN
     RAISE EXCEPTION 'AYVO: what was sent to the carrier is immutable' USING ERRCODE = 'restrict_violation';
   END IF;
-  IF OLD."status" IN ('SUCCEEDED', 'REJECTED', 'NOT_CREATED') THEN
+  IF OLD."status" IN ('SUCCEEDED', 'REJECTED', 'NOT_CREATED', 'VOIDED') THEN
     RAISE EXCEPTION 'AYVO: a resolved carrier request never changes' USING ERRCODE = 'restrict_violation';
   END IF;
   IF (OLD."carrier_ref" IS NOT NULL AND NEW."carrier_ref" IS DISTINCT FROM OLD."carrier_ref")
@@ -727,8 +784,8 @@ BEGIN
   IF NEW."status" <> OLD."status" AND NOT (
        (OLD."status" = 'PREPARED' AND NEW."status" = 'SENT')
     OR (OLD."status" = 'SENT' AND NEW."status" IN ('ACCEPTED', 'CREATED', 'SUCCEEDED', 'REJECTED', 'NOT_CREATED'))
-    OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('CREATED', 'SUCCEEDED', 'REJECTED'))
-    OR (OLD."status" = 'CREATED' AND NEW."status" = 'SUCCEEDED')) THEN
+    OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('CREATED', 'SUCCEEDED', 'REJECTED', 'NOT_CREATED'))
+    OR (OLD."status" = 'CREATED' AND NEW."status" IN ('SUCCEEDED', 'VOIDED'))) THEN
     RAISE EXCEPTION 'AYVO: carrier request % → % is not allowed', OLD."status", NEW."status" USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -749,14 +806,22 @@ CREATE CONSTRAINT TRIGGER "shipment_carrier_requests_consistent" AFTER INSERT OR
 -- ---------------------------------------------------------------------------------------------
 
 ALTER TABLE "shipment_labels"
-  ADD CONSTRAINT "shipment_labels_format_check" CHECK ("format" IN ('PDF')),
+  ADD CONSTRAINT "shipment_labels_format_check" CHECK ("format" IN ('PDF', 'ZPL')),
+  ADD CONSTRAINT "shipment_labels_dpi_check" CHECK ("dpi" IS NULL OR "dpi" BETWEEN 100 AND 1200),
   ADD CONSTRAINT "shipment_labels_sha_check" CHECK ("sha256" ~ '^[0-9a-f]{64}$'),
   ADD CONSTRAINT "shipment_labels_size_check" CHECK ("size_bytes" > 0);
+
+-- One complete document per shipment (parcel null); one label per parcel (unique index).
+CREATE UNIQUE INDEX "shipment_labels_one_complete" ON "shipment_labels" ("shipment_id") WHERE "parcel_id" IS NULL;
 
 CREATE FUNCTION shipment_labels_insert_check() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 BEGIN
+  IF NEW."parcel_id" IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM "shipment_parcels" p WHERE p."id" = NEW."parcel_id" AND p."shipment_id" = NEW."shipment_id") THEN
+    RAISE EXCEPTION 'AYVO: a parcel label belongs to a parcel of its shipment' USING ERRCODE = 'check_violation';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM "shipment_carrier_requests" r JOIN "shipments" s ON s."id" = r."shipment_id"
                   WHERE r."id" = NEW."request_id" AND r."shipment_id" = NEW."shipment_id"
                     AND r."status" IN ('SENT', 'ACCEPTED', 'CREATED') AND s."status" = 'REQUESTING') THEN
@@ -782,11 +847,13 @@ SELECT set_config('ayvo.catalogue_migration', 'on', false);
 INSERT INTO "permissions" ("code", "description", "warehouse_scoped", "security_admin", "site_scoped", "site_capability") VALUES
   ('shipments:read', 'View the shipment of an order of the active site: parcels, weights, labels and carrier numbers', false, false, true, 'WAREHOUSE'),
   ('shipments:prepare', 'Prepare the shipment of an order: actual weighings, carrier labels, ready for pickup, cancel the preparation', false, false, true, 'WAREHOUSE'),
-  ('shipments:handover', 'Confirm the physical hand-over of an order to the carrier', false, false, true, 'WAREHOUSE');
+  ('shipments:handover', 'Confirm the physical hand-over of an order to the carrier', false, false, true, 'WAREHOUSE'),
+  ('shipments:resolve_uncertain', 'Exceptionally confirm, after checking with the carrier, that an uncertain carrier request created nothing (risk of a duplicate shipment; audited with a reason)', false, false, true, 'WAREHOUSE');
 
 INSERT INTO "role_permissions" ("role_code", "permission_code") VALUES
   ('ADMIN', 'shipments:read'),
   ('ADMIN', 'shipments:prepare'),
-  ('ADMIN', 'shipments:handover');
+  ('ADMIN', 'shipments:handover'),
+  ('ADMIN', 'shipments:resolve_uncertain');
 
 SELECT set_config('ayvo.catalogue_migration', 'off', false);

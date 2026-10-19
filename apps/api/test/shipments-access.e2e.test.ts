@@ -79,8 +79,12 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
   }
 
   beforeAll(async () => {
-    su = await createTestApp({ CARRIER_PROVIDER: 'test' });
-    ra = await createTestApp({ CARRIER_PROVIDER: 'test' }, {}, { auth: 'real' });
+    su = await createTestApp({ CARRIER_PROVIDER: 'test', CARRIER_POLL_SECONDS: '0' });
+    ra = await createTestApp(
+      { CARRIER_PROVIDER: 'test', CARRIER_POLL_SECONDS: '0' },
+      {},
+      { auth: 'real' },
+    );
     factory = await crateFactory(su);
     hotel = (await createHotel(su)).code;
     const user = await prepareInvitedUser(ra, {
@@ -132,7 +136,14 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
   it('only ADMIN holds the dispatch permissions; existing roles gain nothing', async () => {
     const holders = await ra.prisma.rolePermission.findMany({
       where: {
-        permissionCode: { in: ['shipments:read', 'shipments:prepare', 'shipments:handover'] },
+        permissionCode: {
+          in: [
+            'shipments:read',
+            'shipments:prepare',
+            'shipments:handover',
+            'shipments:resolve_uncertain',
+          ],
+        },
       },
       select: { roleCode: true },
     });
@@ -176,6 +187,15 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
         handedOver: true,
       });
     expect((await handOver(preparer.cookie)).status).toBe(403);
+    // Closing an uncertain request by hand is a separate, exceptional permission.
+    expect(
+      (
+        await as(preparer.cookie).post(`/api/admin/orders/${order}/shipment/abandon`, {
+          requestId: randomUUID(),
+          reason: 'nic nevzniklo',
+        })
+      ).status,
+    ).toBe(403);
     // The permission removed: the very same request id is refused too (no replay around it).
     await ra.prisma.userRole.updateMany({
       where: { userId: preparer.id, revokedAt: null },
@@ -191,7 +211,7 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
   it('another site’s shipment is not found, whatever is asked', async () => {
     const order = await completed();
     await activeSite(admin, other.id);
-    for (const path of ['', '/labels.pdf']) {
+    for (const path of ['', '/labels', '/parcels/1/label']) {
       expect((await as(admin).get(`/api/admin/orders/${order}/shipment${path}`)).status).toBe(404);
     }
     for (const [path, body] of [

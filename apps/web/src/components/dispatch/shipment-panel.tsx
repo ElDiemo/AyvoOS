@@ -8,7 +8,7 @@ import {
 } from '@ayvo/types';
 import { cn } from '@ayvo/ui';
 import { useRouter } from 'next/navigation';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import {
   ConfirmDialog,
   FormField,
@@ -37,21 +37,40 @@ type Props = {
   data: OrderShipment;
   canPrepare: boolean;
   canHandOver: boolean;
+  /** `shipments:resolve_uncertain`: the exceptional manual closing of an uncertain request. */
+  canResolveUncertain: boolean;
   timeZone: string;
 };
+
+/** Phases in which the carrier may still answer by itself: the page refreshes on its own. */
+const WAITING: ShipmentPhase[] = ['ACCEPTED', 'CREATED', 'CANCELLING', 'IN_FLIGHT', 'PREPARED'];
 
 /**
  * Přeprava on the order detail: one main next step, the parcels (one per crate) with the
  * calculated reference, an optional actual weighing and the carrier number, the stored labels.
  */
-export function ShipmentPanel({ code, status, data, canPrepare, canHandOver, timeZone }: Props) {
+export function ShipmentPanel({
+  code,
+  status,
+  data,
+  canPrepare,
+  canHandOver,
+  canResolveUncertain,
+  timeZone,
+}: Props) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const phase = shipmentPhase(status, data);
   const s = data.shipment;
   const parcels = s?.parcels.length ?? 0;
   const parcelWord = ordersCs.detail.parcels(parcels);
-  const labelsHref = `/api/admin/orders/${code}/shipment/labels.pdf`;
+  const labelsHref = `/api/admin/orders/${code}/shipment/labels`;
+  const waiting = !!phase && WAITING.includes(phase) && !s?.pollingStopped;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => router.refresh(), 5000);
+    return () => clearInterval(timer);
+  }, [waiting, router]);
 
   const send = (path: string, body: object) =>
     apiSend('POST', `admin/orders/${code}/shipment/${path}`, orderShipmentSchema, body);
@@ -76,6 +95,7 @@ export function ShipmentPanel({ code, status, data, canPrepare, canHandOver, tim
               onDone={done}
               onError={failed}
               labelsHref={labelsHref}
+              timeZone={timeZone}
             />
             {error && (
               <p
@@ -94,9 +114,17 @@ export function ShipmentPanel({ code, status, data, canPrepare, canHandOver, tim
           title={t.parcels}
           testId="shipment-parcels"
           action={
-            <span className="text-xs text-stone-500">
+            <span className="flex flex-wrap items-center gap-2 text-xs text-stone-500">
               {t.shipment(s.code)}
               {s.carrier.name && ` · ${t.carrier(s.carrier.name)}`}
+              {s.carrier.environment === 'TEST' && (
+                <span
+                  className="rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-900"
+                  data-testid="carrier-test-environment"
+                >
+                  {t.testEnvironment}
+                </span>
+              )}
             </span>
           }
         >
@@ -120,6 +148,7 @@ export function ShipmentPanel({ code, status, data, canPrepare, canHandOver, tim
                 parcel={parcel}
                 editable={s.status === 'DRAFT' && canPrepare}
                 code={code}
+                labelHref={`/api/admin/orders/${code}/shipment/parcels/${parcel.parcelNo}/label`}
                 timeZone={timeZone}
                 onDone={done}
               />
@@ -139,8 +168,18 @@ export function ShipmentPanel({ code, status, data, canPrepare, canHandOver, tim
               <span className="text-xs text-stone-500">{t.labelsNote}</span>
             </div>
           )}
+          {canResolveUncertain &&
+            (phase === 'UNCERTAIN' || phase === 'ACCEPTED' || phase === 'IN_FLIGHT') && (
+              <details className="mt-4 text-sm" data-testid="shipment-exceptional">
+                <summary className="cursor-pointer text-stone-600">{t.more}</summary>
+                <div className="mt-3">
+                  <AbandonUncertain send={send} onDone={done} />
+                </div>
+              </details>
+            )}
           {canPrepare &&
-            (s.status === 'LABELED' || status === 'READY_FOR_PICKUP') &&
+            (s.status === 'LABELED' ||
+              (s.status === 'REQUESTING' && s.request?.status === 'CREATED')) &&
             status !== 'HANDED_TO_CARRIER' && (
               <details className="mt-4 text-sm" data-testid="shipment-more">
                 <summary className="cursor-pointer text-stone-600">{t.more}</summary>
@@ -183,6 +222,7 @@ function NextStep({
   onDone,
   onError,
   labelsHref,
+  timeZone,
 }: {
   phase: ShipmentPhase;
   parcelWord: string;
@@ -193,9 +233,21 @@ function NextStep({
   onDone: () => void;
   onError: (e: unknown) => void;
   labelsHref: string;
+  timeZone: string;
 }) {
   const { busy, run } = useAttempt();
   const [dialog, setDialog] = useState<'ready' | 'handover' | null>(null);
+  // The clock is read after mount and every 5 s (never during render).
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 5000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, []);
   const [checked, setChecked] = useState(false);
   const parcels = data.shipment?.parcels.length ?? 0;
 
@@ -235,12 +287,15 @@ function NextStep({
           {canPrepare && primary(p.createLabels, () => action('labels', 'labels'), 'create-labels')}
         </>
       );
-    case 'NO_CARRIER':
+    case 'NO_CARRIER': {
+      const reason = data.shipment?.carrier.unavailable ?? data.carrier.unavailable;
       return (
         <Notice tone="warning">
-          <span className="font-semibold">{p.noCarrier}.</span> {p.noCarrierText}
+          <span className="font-semibold">{p.noCarrier}.</span> {p.noCarrierText}{' '}
+          <span data-testid="carrier-unavailable">{reason ? p.noCarrierReason[reason] : ''}</span>
         </Notice>
       );
+    }
     case 'MISSING':
       return (
         <>
@@ -271,15 +326,41 @@ function NextStep({
         ACCEPTED: [p.accepted, p.acceptedText],
         CREATED: [p.created, p.createdText],
       }[phase];
+      const request = data.shipment?.request;
+      const notYet =
+        phase === 'IN_FLIGHT' &&
+        !!request?.resolvableAt &&
+        (now === null || new Date(request.resolvableAt).getTime() > now);
       return (
         <>
           <Notice tone="warning">
             <span className="font-semibold">{texts[0]}.</span> {texts[1]}
           </Notice>
-          {canPrepare && primary(p.resolve, () => action('resolve', 'resolve'), 'resolve-labels')}
+          {data.shipment?.pollingStopped && <p className="text-sm">{p.pollingStopped}</p>}
+          {notYet ? (
+            <p className="text-sm text-stone-600" data-testid="resolvable-at">
+              {p.resolvableAt(formatDateTimeCs(request!.resolvableAt, timeZone))}
+            </p>
+          ) : (
+            canPrepare && primary(p.resolve, () => action('resolve', 'resolve'), 'resolve-labels')
+          )}
         </>
       );
     }
+    case 'CANCELLING':
+      return (
+        <>
+          <Notice tone="warning">
+            <span className="font-semibold">{p.cancelling}.</span> {p.cancellingText}
+          </Notice>
+          {canPrepare &&
+            primary(
+              p.resolveCancel,
+              () => action('cancel-resolve', 'cancel/resolve'),
+              'resolve-cancel',
+            )}
+        </>
+      );
     case 'LABELED':
       return (
         <>
@@ -382,12 +463,14 @@ function ParcelRow({
   parcel,
   editable,
   code,
+  labelHref,
   timeZone,
   onDone,
 }: {
   parcel: ShipmentParcel;
   editable: boolean;
   code: string;
+  labelHref: string;
   timeZone: string;
   onDone: () => void;
 }) {
@@ -447,6 +530,17 @@ function ParcelRow({
           </div>
         )}
       </dl>
+      {parcel.label && (
+        <a
+          href={labelHref}
+          target="_blank"
+          rel="noopener"
+          className="mt-2 inline-block text-sm underline underline-offset-2"
+          data-testid={`parcel-${parcel.parcelNo}-label`}
+        >
+          {t.parcelLabel(parcel.label.format)}
+        </a>
+      )}
       {editable && !open && (
         <button
           type="button"
@@ -605,6 +699,62 @@ function CancelPreparation({ send, onDone }: { send: Send; onDone: () => void })
       >
         <p>{t.cancelText}</p>
         <ReasonField id={`${id}-reason`} value={reason} onChange={setReason} error={error} />
+      </ConfirmDialog>
+    </>
+  );
+}
+
+/**
+ * The exceptional manual closing of an uncertain request (`shipments:resolve_uncertain`): a
+ * reason and an explicit check of the duplicate risk; audited with the user's name.
+ */
+function AbandonUncertain({ send, onDone }: { send: Send; onDone: () => void }) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [checked, setChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { busy, run } = useAttempt();
+
+  async function confirm() {
+    const invalid = reasonError(reason);
+    setError(invalid);
+    if (invalid || !checked) return;
+    const body = { reason: reason.trim() };
+    const result = await run(JSON.stringify(body), (requestId) =>
+      send('abandon', { requestId, ...body }),
+    );
+    if (result.ok) {
+      setOpen(false);
+      onDone();
+    } else if (result.error)
+      setError(uncertain(result.error) ? t.uncertain : orderErrorText(result.error));
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className={buttonClass.secondary}
+        onClick={() => setOpen(true)}
+        data-testid="abandon-request"
+      >
+        {t.abandon}
+      </button>
+      <ConfirmDialog
+        open={open}
+        title={t.abandonTitle}
+        confirmLabel={t.abandonConfirm}
+        danger
+        busy={busy}
+        confirmDisabled={!checked}
+        onConfirm={confirm}
+        onCancel={() => setOpen(false)}
+        testId="abandon-dialog"
+      >
+        <p>{t.abandonText}</p>
+        <ReasonField id={`${id}-reason`} value={reason} onChange={setReason} error={error} />
+        <Check checked={checked} onChange={setChecked} label={t.abandonCheck} />
       </ConfirmDialog>
     </>
   );

@@ -10,6 +10,7 @@ export type ShipmentPhase =
   | 'UNCERTAIN'
   | 'ACCEPTED'
   | 'CREATED'
+  | 'CANCELLING'
   | 'LABELED'
   | 'READY_FOR_PICKUP'
   | 'HANDED_OVER';
@@ -23,7 +24,8 @@ export function shipmentPhase(status: OrderStatus, data: OrderShipment): Shipmen
   if (status === 'READY_FOR_PICKUP') return 'READY_FOR_PICKUP';
   if (status !== 'READY_TO_DISPATCH') return null;
   const s = data.shipment;
-  if (!s) return 'NO_SHIPMENT';
+  if (!s) return data.carrier.configured ? 'NO_SHIPMENT' : 'NO_CARRIER';
+  if (s.status === 'CANCELLING') return 'CANCELLING';
   if (s.status === 'LABELED') return 'LABELED';
   if (s.status === 'REQUESTING') {
     const r = s.request;

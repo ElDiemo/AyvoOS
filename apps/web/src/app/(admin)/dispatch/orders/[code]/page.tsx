@@ -31,8 +31,8 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
     order.status !== 'OPEN' && order.status !== 'CANCELLED' && hasPermission(me, 'shipments:read')
       ? await apiGet(`admin/orders/${code}/shipment`, orderShipmentSchema)
       : null;
-  // A shipment at the carrier (requested or labelled) is cancelled first, never silently.
-  const atCarrier = ['REQUESTING', 'LABELED'].includes(shipment?.shipment?.status ?? '');
+  // A shipment at the carrier is cancelled first, never silently (known from orders:read too).
+  const atCarrier = ['REQUESTING', 'LABELED', 'CANCELLING'].includes(order.shipment?.status ?? '');
   const cancellable =
     order.status === 'OPEN' || (order.status === 'READY_TO_DISPATCH' && !atCarrier);
   const d = order.delivery;
@@ -74,6 +74,7 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
           data={shipment}
           canPrepare={hasPermission(me, 'shipments:prepare')}
           canHandOver={hasPermission(me, 'shipments:handover')}
+          canResolveUncertain={hasPermission(me, 'shipments:resolve_uncertain')}
           timeZone={timeZone}
         />
       )}

@@ -10,18 +10,25 @@ import { RecipesService } from '../catalog/recipes.service.js';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { classifyScannedQr } from '../common/qr-policy.js';
 import { ENV, type Env } from '../config/env.js';
-import { CrateCyclesService, type CycleRecord, isHeldByOrder } from '../crates/crate-cycles.service.js';
+import {
+  CrateCyclesService,
+  type CycleRecord,
+  isHeldByOrder,
+} from '../crates/crate-cycles.service.js';
 import { CratesService } from '../crates/crates.service.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 
 /** A crate held by an order (doc 028) keeps its bottles: remove it from the order first. */
-export const crateAllocated = () =>
-  domainError(
-    409,
-    'CRATE_ALLOCATED',
-    'This crate is loaded into an order: remove it from the order first',
-  );
+/** A crate held by an order: loaded (removable from the order) or handed to the carrier. */
+export const crateAllocated = (status?: string) =>
+  status === 'DISPATCHED'
+    ? domainError(409, 'CRATE_DISPATCHED', 'This crate was handed to the carrier with its order')
+    : domainError(
+        409,
+        'CRATE_ALLOCATED',
+        'This crate is loaded into an order: remove it from the order first',
+      );
 
 const crateReady = () =>
   domainError(
@@ -65,7 +72,7 @@ export class CycleCorrectionsService {
       async (tx) => {
         const { crate, cycle } = await this.lockedCycle(tx, crateCode, siteId);
         if (!cycle) throw this.noCycle();
-        if (isHeldByOrder(cycle.status)) throw crateAllocated();
+        if (isHeldByOrder(cycle.status)) throw crateAllocated(cycle.status);
         if (cycle.status === 'FILLED') throw crateReady();
         const bottle = await this.bottleOf(tx, input.bottle, siteId);
         const status = await this.bottles.lockForLabelApplication(tx, bottle.id);
@@ -151,7 +158,7 @@ export class CycleCorrectionsService {
         let cycle: CycleRecord;
         let source: 'REPACKED' | 'REPLACEMENT';
         if (open) {
-          if (isHeldByOrder(open.status)) throw crateAllocated();
+          if (isHeldByOrder(open.status)) throw crateAllocated(open.status);
           if (open.status === 'FILLED') throw crateReady();
           if (open.status === 'READY_TO_FILL' || open.memberCount >= open.capacity) {
             throw domainError(409, 'CRATE_FULL', 'This crate has no free place');
@@ -242,7 +249,7 @@ export class CycleCorrectionsService {
       { actorId, siteId, crateCode, reason: input.reason },
       async (tx) => {
         const { crate, cycle } = await this.lockedCycle(tx, crateCode, siteId);
-        if (cycle && isHeldByOrder(cycle.status)) throw crateAllocated();
+        if (cycle && isHeldByOrder(cycle.status)) throw crateAllocated(cycle.status);
         if (!cycle || cycle.status !== 'FILLED') {
           throw domainError(409, 'CRATE_NOT_READY', 'Only a ready crate (Hotovo) is returned');
         }
@@ -275,7 +282,7 @@ export class CycleCorrectionsService {
       async (tx) => {
         const { crate, cycle: open } = await this.lockedCycle(tx, crateCode, siteId);
         if (!open) throw this.noCycle();
-        if (isHeldByOrder(open.status)) throw crateAllocated();
+        if (isHeldByOrder(open.status)) throw crateAllocated(open.status);
         if (open.status === 'FILLED') throw crateReady();
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         let cycle = open;

@@ -905,6 +905,7 @@ enum OperationKind {
   SHIPMENT_CANCEL
   ORDER_READY_FOR_PICKUP
   ORDER_HAND_OVER
+  SHIPMENT_LABELS_ABANDON
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1031,10 +1032,11 @@ model User {
   workstationSessionsClosed WorkstationSession[]      @relation("SessionClosedBy")
   workstationSessionEvents  WorkstationSessionEvent[]
 
-  shipmentsCreated   Shipment[]               @relation("ShipmentCreatedBy")
-  shipmentsCancelled Shipment[]               @relation("ShipmentCancelledBy")
-  parcelWeighings    ShipmentParcelWeighing[] @relation("ParcelWeighedBy")
-  carrierRequests    ShipmentCarrierRequest[] @relation("CarrierRequestBy")
+  shipmentsCreated     Shipment[]               @relation("ShipmentCreatedBy")
+  shipmentsCancelled   Shipment[]               @relation("ShipmentCancelledBy")
+  shipmentsCancelAsked Shipment[]               @relation("ShipmentCancelRequestedBy")
+  parcelWeighings      ShipmentParcelWeighing[] @relation("ParcelWeighedBy")
+  carrierRequests      ShipmentCarrierRequest[] @relation("CarrierRequestBy")
 
   @@map("users")
 }
@@ -2281,6 +2283,8 @@ enum OrderEventType {
   READY_FOR_PICKUP
   HANDED_TO_CARRIER
   SHIPMENT_CANCELLED
+  SHIPMENT_CANCEL_REQUESTED
+  SHIPMENT_CANCEL_REFUSED
 }
 
 /// Append-only order history (ADR 0006). DB: immutable.
@@ -2487,41 +2491,54 @@ enum ShipmentStatus {
   REQUESTING
   /// The carrier created the shipment and its labels are stored.
   LABELED
+  /// Cancellation at the carrier started (recorded before the carrier is called): blocks ready
+  /// for pickup and hand-over until the carrier confirms (CANCELLED) or refuses (back).
+  CANCELLING
   CANCELLED
 }
 
 /// One shipment of one order. DB: one non-cancelled shipment per order; transitions DRAFT →
-/// REQUESTING → DRAFT / LABELED, DRAFT → CANCELLED, LABELED → CANCELLED only with a confirmed
-/// carrier cancellation; REQUESTING ⇔ one unresolved carrier request; LABELED ⇔ labels stored and
-/// every parcel numbered. The delivery data are the order's immutable snapshot.
+/// REQUESTING → DRAFT / LABELED, DRAFT → CANCELLED (never at a carrier), LABELED or REQUESTING
+/// (shipment created at the carrier) → CANCELLING → back / CANCELLED only with the carrier's
+/// confirmation; REQUESTING ⇔ one unresolved carrier request; LABELED ⇔ labels stored and every
+/// parcel numbered. The delivery data are the order's immutable snapshot.
 model Shipment {
-  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial             BigInt         @unique
-  code               String         @unique
-  orderId            String         @map("order_id") @db.Uuid
-  siteId             String         @map("site_id") @db.Uuid
-  status             ShipmentStatus @default(DRAFT)
-  /// The carrier of the first request (snapshot); null until then.
-  carrierCode        String?        @map("carrier_code")
-  carrierShipmentRef String?        @map("carrier_shipment_ref")
-  createdAt          DateTime       @map("created_at") @db.Timestamptz(3)
-  createdBy          String         @map("created_by") @db.Uuid
-  operationRequestId String         @map("operation_request_id") @db.Uuid
-  labeledAt          DateTime?      @map("labeled_at") @db.Timestamptz(3)
-  cancelledAt        DateTime?      @map("cancelled_at") @db.Timestamptz(3)
-  cancelledBy        String?        @map("cancelled_by") @db.Uuid
-  cancelReason       String?        @map("cancel_reason")
+  id                  String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial              BigInt         @unique
+  code                String         @unique
+  orderId             String         @map("order_id") @db.Uuid
+  siteId              String         @map("site_id") @db.Uuid
+  status              ShipmentStatus @default(DRAFT)
+  /// The carrier, its server-side connection and environment of the requests (snapshot); null
+  /// until the first request. Lookups and cancellation always use these, never the current setting.
+  carrierCode         String?        @map("carrier_code")
+  carrierConnection   String?        @map("carrier_connection")
+  carrierEnvironment  String?        @map("carrier_environment")
+  carrierShipmentRef  String?        @map("carrier_shipment_ref")
+  createdAt           DateTime       @map("created_at") @db.Timestamptz(3)
+  createdBy           String         @map("created_by") @db.Uuid
+  operationRequestId  String         @map("operation_request_id") @db.Uuid
+  labeledAt           DateTime?      @map("labeled_at") @db.Timestamptz(3)
+  cancelledAt         DateTime?      @map("cancelled_at") @db.Timestamptz(3)
+  cancelledBy         String?        @map("cancelled_by") @db.Uuid
+  cancelReason        String?        @map("cancel_reason")
   /// Set only when the carrier confirmed the cancellation of a created shipment.
-  carrierCancelledAt DateTime?      @map("carrier_cancelled_at") @db.Timestamptz(3)
+  carrierCancelledAt  DateTime?      @map("carrier_cancelled_at") @db.Timestamptz(3)
+  /// The cancellation at the carrier was started (CANCELLING) — by whom, when; kept afterwards.
+  cancelRequestedAt   DateTime?      @map("cancel_requested_at") @db.Timestamptz(3)
+  cancelRequestedBy   String?        @map("cancel_requested_by") @db.Uuid
+  /// The carrier accepted the cancellation request (asynchronous carriers confirm it later).
+  carrierCancelSentAt DateTime?      @map("carrier_cancel_sent_at") @db.Timestamptz(3)
 
-  order     Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  site      Site                     @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  creator   User                     @relation("ShipmentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  canceller User?                    @relation("ShipmentCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
-  operation OperationRequest         @relation("ShipmentOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
-  parcels   ShipmentParcel[]
-  requests  ShipmentCarrierRequest[]
-  labels    ShipmentLabel[]
+  order           Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  site            Site                     @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator         User                     @relation("ShipmentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  canceller       User?                    @relation("ShipmentCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
+  cancelRequester User?                    @relation("ShipmentCancelRequestedBy", fields: [cancelRequestedBy], references: [id], onDelete: Restrict)
+  operation       OperationRequest         @relation("ShipmentOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  parcels         ShipmentParcel[]
+  requests        ShipmentCarrierRequest[]
+  labels          ShipmentLabel[]
 
   @@index([orderId])
   @@map("shipments")
@@ -2558,6 +2575,7 @@ model ShipmentParcel {
   weightSnapshot   CrateCycleWeightSnapshot? @relation(fields: [weightSnapshotId], references: [id], onDelete: Restrict)
   packageDimension CrateTypeDimension?       @relation("ParcelPackage", fields: [packageDimensionId], references: [id], onDelete: Restrict)
   weighings        ShipmentParcelWeighing[]
+  labels           ShipmentLabel[]
 
   @@unique([shipmentId, parcelNo])
   @@unique([shipmentId, allocationId])
@@ -2600,8 +2618,12 @@ enum CarrierRequestStatus {
   SUCCEEDED
   /// The carrier refused it (nothing created).
   REJECTED
-  /// A lookup confirmed that the carrier created nothing for it.
+  /// A lookup confirmed that the carrier created nothing for it — or a person did, with a reason,
+  /// after checking with the carrier (an audited, supervised resolution).
   NOT_CREATED
+  /// The carrier created it, its labels never became usable, and the carrier confirmed its
+  /// cancellation.
+  VOIDED
 }
 
 /// One attempt to create the shipment at the carrier, identified by a unique client reference.
@@ -2612,6 +2634,8 @@ model ShipmentCarrierRequest {
   shipmentId         String               @map("shipment_id") @db.Uuid
   attemptNo          Int                  @map("attempt_no")
   carrierCode        String               @map("carrier_code")
+  carrierConnection  String               @map("carrier_connection")
+  carrierEnvironment String               @map("carrier_environment")
   clientReference    String               @unique @map("client_reference")
   status             CarrierRequestStatus @default(PREPARED)
   payload            Json
@@ -2624,6 +2648,9 @@ model ShipmentCarrierRequest {
   operationRequestId String               @unique @map("operation_request_id") @db.Uuid
   sentAt             DateTime?            @map("sent_at") @db.Timestamptz(3)
   resolvedAt         DateTime?            @map("resolved_at") @db.Timestamptz(3)
+  /// Bounded background polling of an accepted request: when to look next, how often so far.
+  nextPollAt         DateTime?            @map("next_poll_at") @db.Timestamptz(3)
+  pollCount          Int                  @default(0) @map("poll_count")
 
   shipment  Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
   creator   User             @relation("CarrierRequestBy", fields: [createdBy], references: [id], onDelete: Restrict)
@@ -2634,21 +2661,25 @@ model ShipmentCarrierRequest {
   @@map("shipment_carrier_requests")
 }
 
-/// The label document returned by the carrier, stored once and re-printed as is (re-printing never
-/// contacts the carrier). Generating or downloading it is not evidence of printing.
+/// A label file returned by the carrier: one per parcel (its own label) and optionally the
+/// complete document of the shipment (parcel null). Stored once; re-printing never contacts the
+/// carrier. Generating or downloading it is not evidence of printing.
 model ShipmentLabel {
   id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   shipmentId String   @map("shipment_id") @db.Uuid
+  parcelId   String?  @map("parcel_id") @db.Uuid
   requestId  String   @map("request_id") @db.Uuid
   format     String
+  dpi        Int?
   fileKey    String   @unique @map("file_key")
   sha256     String
   sizeBytes  Int      @map("size_bytes")
   createdAt  DateTime @map("created_at") @db.Timestamptz(3)
 
   shipment Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  parcel   ShipmentParcel?        @relation(fields: [parcelId], references: [id], onDelete: Restrict)
   request  ShipmentCarrierRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
 
-  @@unique([shipmentId])
+  @@unique([shipmentId, parcelId])
   @@map("shipment_labels")
 }

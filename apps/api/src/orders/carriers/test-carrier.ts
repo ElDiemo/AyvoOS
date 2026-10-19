@@ -1,10 +1,13 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import {
   CarrierRejectedError,
+  type CarrierCancelStatus,
   type CarrierCreateOutcome,
   type CarrierGateway,
+  type CarrierParcelNumber,
   type CarrierPollOutcome,
   type CarrierRules,
+  type CarrierSettingsSnapshot,
   type CarrierShipmentRequest,
 } from './carrier.js';
 
@@ -14,144 +17,216 @@ import {
  * steer it through {@link testCarrierControl}; by default every request succeeds.
  */
 type Behaviour =
-  /** Creates and answers. */
   | 'SUCCEED'
   /** Refuses (nothing created). */
   | 'REJECT'
-  /** Accepts for asynchronous processing; created on the next poll. */
+  /** Accepts for asynchronous processing; created on a later poll. */
   | 'ACCEPT'
+  /** Accepts; the carrier's processing then fails (nothing created). */
+  | 'ACCEPT_THEN_FAIL'
   /** Fails before anything is created (the answer is lost on the way there). */
   | 'LOSE_BEFORE'
   /** Creates, then the answer is lost. */
   | 'LOSE_AFTER'
+  /** Never answers (until the caller's time limit aborts it). */
+  | 'HANG'
   /** Creates, but the label download fails once. */
   | 'LABELS_FAIL_ONCE';
 
 interface Created {
   shipmentRef: string;
-  parcels: { parcelNo: number; number: string }[];
+  parcels: CarrierParcelNumber[];
   request: CarrierShipmentRequest;
   cancelled: boolean;
 }
 
+const defaultRules = (): CarrierRules => ({
+  parcelWeight: 'REQUIRED',
+  parcelDimensions: 'OPTIONAL',
+  senderAddress: 'OPTIONAL',
+  canCancel: true,
+});
+
 export const testCarrierControl = {
   next: [] as Behaviour[],
-  rules: {
-    parcelWeight: 'REQUIRED',
-    parcelDimensions: 'OPTIONAL',
-    senderAddress: 'OPTIONAL',
-    canCancel: true,
-  } as CarrierRules,
+  rules: defaultRules(),
+  /** How the next cancellations answer. */
+  cancel: [] as ('CONFIRM' | 'PENDING' | 'REFUSE' | 'LOSE')[],
+  /** What the next cancellation status checks answer (else from the fake state). */
+  cancelStatus: [] as CarrierCancelStatus[],
+  /** Polls still answering "pending" before an accepted request is processed. */
+  pendingPolls: 0,
   /** Every create() call, in order — tests assert that nothing is sent twice. */
   calls: [] as CarrierShipmentRequest[],
+  polls: 0,
+  cancelCalls: 0,
   created: new Map<string, Created>(),
-  accepted: new Map<string, CarrierShipmentRequest>(),
+  accepted: new Map<string, { request: CarrierShipmentRequest; fail: boolean }>(),
   labelsFail: new Set<string>(),
   reset(): void {
     this.next = [];
+    this.cancel = [];
+    this.cancelStatus = [];
+    this.pendingPolls = 0;
     this.calls = [];
+    this.polls = 0;
+    this.cancelCalls = 0;
     this.created.clear();
     this.accepted.clear();
     this.labelsFail.clear();
-    this.rules = {
-      parcelWeight: 'REQUIRED',
-      parcelDimensions: 'OPTIONAL',
-      senderAddress: 'OPTIONAL',
-      canCancel: true,
-    };
+    this.rules = defaultRules();
   },
+};
+
+/** The settings every site uses with the test carrier (it has no site configuration). */
+export const TEST_CARRIER_SETTINGS: CarrierSettingsSnapshot = {
+  service: 'TEST',
+  label: { format: 'PDF', dpi: 203, complete: true },
+  sender: null,
 };
 
 let serial = 0;
 function create(request: CarrierShipmentRequest): Created {
   serial += 1;
   const base = `TEST${String(Date.now()).slice(-6)}${String(serial).padStart(4, '0')}`;
-  const created: Created = {
-    shipmentRef: base,
-    parcels: request.parcels.map((p) => ({
-      parcelNo: p.parcelNo,
-      number: `${base}-${p.parcelNo}`,
-    })),
-    request,
-    cancelled: false,
-  };
+  // Answered in REVERSE parcel order on purpose: callers must map by the parcel's own reference.
+  const parcels = request.parcels
+    .map((p) => ({ parcelNo: p.parcelNo, number: `${base}${String(p.parcelNo).padStart(2, '0')}` }))
+    .reverse();
+  const created: Created = { shipmentRef: base, parcels, request, cancelled: false };
   testCarrierControl.created.set(request.clientReference, created);
   return created;
 }
 
+const abortable = <T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('aborted'));
+    signal.addEventListener('abort', () => reject(new Error('test carrier: timed out')), {
+      once: true,
+    });
+    work().then(resolve, reject);
+  });
+
+async function labelPdf(created: Created, only: number | null): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const all = [...created.parcels].sort((a, b) => a.parcelNo - b.parcelNo);
+  for (const p of all.filter((x) => only === null || x.parcelNo === only)) {
+    const page = pdf.addPage([283, 425]); // 100 × 150 mm
+    const line = (text: string, y: number, size = 12) =>
+      page.drawText(text, { x: 14, y, size, font, color: rgb(0, 0, 0) });
+    const sent = created.request.parcels.find((x) => x.parcelNo === p.parcelNo)!;
+    line('TEST CARRIER - NOT A REAL LABEL', 395, 13);
+    line(`Parcel ${p.parcelNo}/${all.length}`, 360);
+    line(p.number, 335);
+    line(`Crate: ${sent.crate}`, 310);
+    line(created.request.orderCode, 285);
+  }
+  return pdf.save();
+}
+
+const byRef = (shipmentRef: string) =>
+  [...testCarrierControl.created.values()].find((c) => c.shipmentRef === shipmentRef);
+
 export class TestCarrier implements CarrierGateway {
   readonly code = 'TEST';
   readonly name = 'Testovací dopravce (jen automatické testy)';
+  readonly connection = 'TEST';
+  readonly environment = 'TEST' as const;
   get rules(): CarrierRules {
     return testCarrierControl.rules;
   }
 
-  async create(request: CarrierShipmentRequest): Promise<CarrierCreateOutcome> {
+  create(request: CarrierShipmentRequest, signal: AbortSignal): Promise<CarrierCreateOutcome> {
     testCarrierControl.calls.push(request);
     const behaviour = testCarrierControl.next.shift() ?? 'SUCCEED';
-    if (behaviour === 'REJECT')
-      throw new CarrierRejectedError('TEST_REJECTED', 'Refused by the test carrier');
-    if (behaviour === 'LOSE_BEFORE')
-      throw new Error('test carrier: connection lost before the request arrived');
-    if (behaviour === 'ACCEPT') {
-      const ref = `BATCH-${request.clientReference}`;
-      testCarrierControl.accepted.set(ref, request);
-      return { kind: 'ACCEPTED', carrierRef: ref };
-    }
-    const created = create(request);
-    if (behaviour === 'LOSE_AFTER') throw new Error('test carrier: the answer was lost');
-    if (behaviour === 'LABELS_FAIL_ONCE') testCarrierControl.labelsFail.add(created.shipmentRef);
-    return { kind: 'CREATED', shipmentRef: created.shipmentRef, parcels: created.parcels };
-  }
-
-  async poll(query: {
-    clientReference: string;
-    carrierRef: string | null;
-  }): Promise<CarrierPollOutcome> {
-    const found = testCarrierControl.created.get(query.clientReference);
-    if (found) return { kind: 'CREATED', shipmentRef: found.shipmentRef, parcels: found.parcels };
-    const accepted = query.carrierRef
-      ? testCarrierControl.accepted.get(query.carrierRef)
-      : undefined;
-    if (accepted) {
-      testCarrierControl.accepted.delete(query.carrierRef!);
-      const created = create(accepted);
+    if (behaviour === 'HANG') return abortable(signal, () => new Promise<never>(() => undefined));
+    return abortable(signal, async () => {
+      if (behaviour === 'REJECT') {
+        throw new CarrierRejectedError('TEST_REJECTED', 'Refused by the test carrier');
+      }
+      if (behaviour === 'LOSE_BEFORE') throw new Error('test carrier: connection lost');
+      if (behaviour === 'ACCEPT' || behaviour === 'ACCEPT_THEN_FAIL') {
+        const ref = `BATCH-${request.clientReference}`;
+        testCarrierControl.accepted.set(ref, { request, fail: behaviour === 'ACCEPT_THEN_FAIL' });
+        return { kind: 'ACCEPTED', carrierRef: ref };
+      }
+      const created = create(request);
+      if (behaviour === 'LOSE_AFTER') throw new Error('test carrier: the answer was lost');
+      if (behaviour === 'LABELS_FAIL_ONCE') testCarrierControl.labelsFail.add(created.shipmentRef);
       return { kind: 'CREATED', shipmentRef: created.shipmentRef, parcels: created.parcels };
-    }
-    return { kind: 'NOT_CREATED' };
+    });
   }
 
-  async labels(query: { shipmentRef: string }): Promise<Uint8Array> {
-    if (testCarrierControl.labelsFail.delete(query.shipmentRef)) {
-      throw new Error('test carrier: label download failed');
-    }
-    const found = [...testCarrierControl.created.values()].find(
-      (c) => c.shipmentRef === query.shipmentRef,
-    );
-    if (!found) throw new Error('test carrier: unknown shipment');
-    const pdf = await PDFDocument.create();
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    for (const p of found.parcels) {
-      const page = pdf.addPage([283, 425]); // 100 × 150 mm
-      const line = (text: string, y: number, size = 12) =>
-        page.drawText(text, { x: 14, y, size, font, color: rgb(0, 0, 0) });
-      line('TEST CARRIER - NOT A REAL LABEL', 395, 13);
-      line(`Parcel ${p.parcelNo}/${found.parcels.length}`, 360);
-      line(p.number, 335);
-      line(
-        `Ref: ${found.request.parcels.find((x) => x.parcelNo === p.parcelNo)?.reference ?? ''}`,
-        310,
-      );
-      line(found.request.orderCode, 285);
-    }
-    return pdf.save();
+  poll(
+    query: { clientReference: string; carrierRef: string | null },
+    signal: AbortSignal,
+  ): Promise<CarrierPollOutcome> {
+    return abortable(signal, async () => {
+      testCarrierControl.polls += 1;
+      const found = testCarrierControl.created.get(query.clientReference);
+      if (found) return { kind: 'CREATED', shipmentRef: found.shipmentRef, parcels: found.parcels };
+      const accepted = query.carrierRef
+        ? testCarrierControl.accepted.get(query.carrierRef)
+        : undefined;
+      if (accepted) {
+        if (testCarrierControl.pendingPolls > 0) {
+          testCarrierControl.pendingPolls -= 1;
+          return { kind: 'PENDING' };
+        }
+        testCarrierControl.accepted.delete(query.carrierRef!);
+        if (accepted.fail) {
+          return { kind: 'REJECTED', code: 'TEST_BATCH_ERROR', message: 'Batch failed' };
+        }
+        const created = create(accepted.request);
+        return { kind: 'CREATED', shipmentRef: created.shipmentRef, parcels: created.parcels };
+      }
+      return { kind: 'NOT_CREATED' };
+    });
   }
 
-  async cancel(query: { shipmentRef: string }): Promise<void> {
-    const found = [...testCarrierControl.created.values()].find(
-      (c) => c.shipmentRef === query.shipmentRef,
-    );
-    if (!found) throw new CarrierRejectedError('TEST_UNKNOWN', 'Unknown shipment');
-    found.cancelled = true;
+  labels(query: { shipmentRef: string; parcels: CarrierParcelNumber[] }, signal: AbortSignal) {
+    return abortable(signal, async () => {
+      if (testCarrierControl.labelsFail.delete(query.shipmentRef)) {
+        throw new Error('test carrier: label download failed');
+      }
+      const found = byRef(query.shipmentRef);
+      if (!found) throw new Error('test carrier: unknown shipment');
+      return {
+        parcels: await Promise.all(
+          query.parcels.map(async (p) => ({
+            parcelNo: p.parcelNo,
+            format: 'PDF' as const,
+            dpi: 203,
+            bytes: await labelPdf(found, p.parcelNo),
+          })),
+        ),
+        complete: { format: 'PDF' as const, dpi: 203, bytes: await labelPdf(found, null) },
+      };
+    });
+  }
+
+  cancel(query: { shipmentRef: string }, signal: AbortSignal): Promise<'CANCELLED' | 'PENDING'> {
+    return abortable(signal, async () => {
+      testCarrierControl.cancelCalls += 1;
+      const found = byRef(query.shipmentRef);
+      if (!found) throw new CarrierRejectedError('TEST_UNKNOWN', 'Unknown shipment');
+      const mode = testCarrierControl.cancel.shift() ?? 'CONFIRM';
+      if (mode === 'REFUSE') throw new CarrierRejectedError('TEST_TOO_LATE', 'Already picked up');
+      if (mode === 'LOSE') {
+        found.cancelled = true;
+        throw new Error('test carrier: cancellation answer lost');
+      }
+      found.cancelled = true;
+      return mode === 'PENDING' ? 'PENDING' : 'CANCELLED';
+    });
+  }
+
+  cancelStatus(query: { shipmentRef: string }, signal: AbortSignal): Promise<CarrierCancelStatus> {
+    return abortable(signal, async () => {
+      const set = testCarrierControl.cancelStatus.shift();
+      if (set) return set;
+      return byRef(query.shipmentRef)?.cancelled ? 'CANCELLED' : 'NOT_CANCELLED';
+    });
   }
 }

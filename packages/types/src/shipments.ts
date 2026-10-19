@@ -10,7 +10,13 @@ import { gramsSchema } from './weights.js';
  */
 
 export const shipmentCodeSchema = z.string().regex(/^SHP-\d{6,}$/, 'e.g. SHP-000001');
-export const shipmentStatusSchema = z.enum(['DRAFT', 'REQUESTING', 'LABELED', 'CANCELLED']);
+export const shipmentStatusSchema = z.enum([
+  'DRAFT',
+  'REQUESTING',
+  'LABELED',
+  'CANCELLING',
+  'CANCELLED',
+]);
 export type ShipmentStatus = z.infer<typeof shipmentStatusSchema>;
 export const carrierRequestStatusSchema = z.enum([
   'PREPARED',
@@ -20,16 +26,29 @@ export const carrierRequestStatusSchema = z.enum([
   'SUCCEEDED',
   'REJECTED',
   'NOT_CREATED',
+  'VOIDED',
 ]);
 export type CarrierRequestStatus = z.infer<typeof carrierRequestStatusSchema>;
 
 /** What the configured carrier needs per parcel (from its documentation, never assumed). */
 export const carrierFieldRuleSchema = z.enum(['REQUIRED', 'OPTIONAL', 'NOT_USED']);
+export const carrierUnavailableSchema = z.enum([
+  'NOT_CONFIGURED',
+  'DISABLED',
+  'INCOMPLETE',
+  'CREDENTIALS_MISSING',
+  /** The connection an existing request used is no longer available on this server. */
+  'CONNECTION_UNAVAILABLE',
+]);
 export const carrierInfoSchema = z.object({
-  /** False: no carrier is configured for this site — no label can be created. */
+  /** False: no carrier can take a new request at this site — no label can be created. */
   configured: z.boolean(),
+  /** Why not (shown truthfully; never a secret). */
+  unavailable: carrierUnavailableSchema.nullable(),
   code: z.string().nullable(),
   name: z.string().nullable(),
+  /** TEST = the carrier's test environment (no real shipment). */
+  environment: z.enum(['TEST', 'PRODUCTION']).nullable(),
   parcelWeight: carrierFieldRuleSchema.nullable(),
   parcelDimensions: carrierFieldRuleSchema.nullable(),
   /** Whether the carrier can cancel a created shipment through its interface. */
@@ -65,6 +84,8 @@ export const shipmentParcelSchema = z.object({
   /** The outer dimensions of the final shipping package (W1), if measured. */
   dimensions: dimensionsSchema.nullable(),
   carrierParcelNumber: z.string().nullable(),
+  /** This parcel's own stored label (one crate = one parcel = one label). */
+  label: z.object({ format: z.enum(['PDF', 'ZPL']), dpi: z.number().int().nullable() }).nullable(),
 });
 export type ShipmentParcel = z.infer<typeof shipmentParcelSchema>;
 
@@ -92,15 +113,33 @@ export const shipmentSchema = z.object({
       sentAt: z.iso.datetime().nullable(),
       errorCode: z.string().nullable(),
       errorMessage: z.string().nullable(),
+      /**
+       * A request claimed for sending may still be in flight until then: no lookup and no
+       * manual resolution before it (a lookup could miss a shipment being created right now).
+       */
+      resolvableAt: z.iso.datetime().nullable(),
     })
     .nullable(),
-  label: z.object({ format: z.literal('PDF'), createdAt: z.iso.datetime() }).nullable(),
+  /** The cancellation at the carrier was started (CANCELLING), by whom and why. */
+  cancelRequest: z.object({ at: z.iso.datetime(), by: z.string(), reason: z.string() }).nullable(),
+  /** The complete label document of the shipment, if the carrier provides one. */
+  label: z
+    .object({
+      format: z.enum(['PDF', 'ZPL']),
+      dpi: z.number().int().nullable(),
+      createdAt: z.iso.datetime(),
+    })
+    .nullable(),
+  /** Automatic checks of an accepted request ended: a person checks again ("Ověřit"). */
+  pollingStopped: z.boolean(),
   createdAt: z.iso.datetime(),
 });
 export type Shipment = z.infer<typeof shipmentSchema>;
 
 /** The order's dispatch: its live shipment (null before its first derivation), cancelled ones. */
 export const orderShipmentSchema = z.object({
+  /** The carrier configured for the active site (also before any shipment exists). */
+  carrier: carrierInfoSchema,
   shipment: shipmentSchema.nullable(),
   cancelled: z.array(
     z.object({
@@ -147,3 +186,13 @@ export type HandOverRequest = z.infer<typeof handOverRequestSchema>;
 /** Cancels the preparation (never the order, never its crates). */
 export const cancelShipmentRequestSchema = z.strictObject({ ...op, reason: reasonSchema });
 export type CancelShipmentRequest = z.infer<typeof cancelShipmentRequestSchema>;
+/** Asks the carrier again about a started cancellation (its answer was not received). */
+export const resolveCancelRequestSchema = z.strictObject(op);
+export type ResolveCancelRequest = z.infer<typeof resolveCancelRequestSchema>;
+
+/**
+ * Supervised resolution of an uncertain request the carrier cannot answer: a person confirms —
+ * after checking with the carrier — that nothing was created. Audited with the reason.
+ */
+export const abandonLabelsRequestSchema = z.strictObject({ ...op, reason: reasonSchema });
+export type AbandonLabelsRequest = z.infer<typeof abandonLabelsRequestSchema>;

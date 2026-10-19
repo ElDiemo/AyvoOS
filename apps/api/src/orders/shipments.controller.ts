@@ -1,5 +1,9 @@
 import {
+  abandonLabelsRequestSchema,
   cancelShipmentRequestSchema,
+  resolveCancelRequestSchema,
+  type AbandonLabelsRequest,
+  type ResolveCancelRequest,
   handOverRequestSchema,
   orderCodeSchema,
   readyForPickupRequestSchema,
@@ -52,18 +56,25 @@ export class ShipmentsController {
     return this.shipments.view(site, code);
   }
 
-  /** The stored carrier labels (opening or downloading them is not evidence of printing). */
+  /** The complete label document (opening or downloading it is not evidence of printing). */
   @RequirePermission('shipments:read')
-  @Get('labels.pdf')
+  @Get('labels')
   async labels(
     @Param('code', CODE) code: string,
     @OperationalSite() site: SiteContext,
   ): Promise<StreamableFile> {
-    const file = await this.shipments.labelFile(site, code);
-    return new StreamableFile(file.bytes, {
-      type: 'application/pdf',
-      disposition: `inline; filename="${file.filename}"`,
-    });
+    return labelResponse(await this.shipments.labelFile(site, code, null));
+  }
+
+  /** One parcel's own label — the label of exactly that crate. */
+  @RequirePermission('shipments:read')
+  @Get('parcels/:parcelNo/label')
+  async parcelLabel(
+    @Param('code', CODE) code: string,
+    @Param('parcelNo', ParseIntPipe) parcelNo: number,
+    @OperationalSite() site: SiteContext,
+  ): Promise<StreamableFile> {
+    return labelResponse(await this.shipments.labelFile(site, code, parcelNo));
   }
 
   @RequirePermission('shipments:prepare')
@@ -88,6 +99,31 @@ export class ShipmentsController {
     @OperationalSite() site: SiteContext,
   ): Promise<OrderShipment> {
     return this.shipments.resolve(principal.userId, site, code, body);
+  }
+
+  /** Exceptional manual resolution of an uncertain request (separate permission, reason). */
+  @RequirePermission('shipments:resolve_uncertain')
+  @Post('abandon')
+  @HttpCode(200)
+  abandon(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(abandonLabelsRequestSchema)) body: AbandonLabelsRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.shipments.abandon(principal.userId, site, code, body);
+  }
+
+  @RequirePermission('shipments:prepare')
+  @Post('cancel/resolve')
+  @HttpCode(200)
+  resolveCancel(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(resolveCancelRequestSchema)) body: ResolveCancelRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.shipments.resolveCancel(principal.userId, site, code, body);
   }
 
   @RequirePermission('shipments:prepare')
@@ -138,4 +174,11 @@ export class ShipmentsController {
   ): Promise<OrderShipment> {
     return this.shipments.cancel(principal.userId, site, code, body);
   }
+}
+
+function labelResponse(file: { bytes: Buffer; filename: string; format: string }): StreamableFile {
+  return new StreamableFile(file.bytes, {
+    type: file.format === 'ZPL' ? 'application/zpl' : 'application/pdf',
+    disposition: `${file.format === 'ZPL' ? 'attachment' : 'inline'}; filename="${file.filename}"`,
+  });
 }

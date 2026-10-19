@@ -297,10 +297,19 @@ export class CrateCyclesService {
   async dispatch(
     tx: Prisma.TransactionClient,
     cycle: CycleRecord,
-    input: { actorId: string; operationId: string; occurredAt: Date; order: string; shipment: string },
+    input: {
+      actorId: string;
+      operationId: string;
+      occurredAt: Date;
+      order: string;
+      shipment: string;
+    },
   ): Promise<void> {
     await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'DISPATCHED' } });
-    await this.event(tx, cycle, 'DISPATCHED', input, { order: input.order, shipment: input.shipment });
+    await this.event(tx, cycle, 'DISPATCHED', input, {
+      order: input.order,
+      shipment: input.shipment,
+    });
   }
 
   /** The cycle's active assignments, in ordinal order, with their bottles. */

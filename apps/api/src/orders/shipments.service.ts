@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import type {
+  AbandonLabelsRequest,
   CancelShipmentRequest,
   CarrierInfo,
   HandOverRequest,
@@ -7,134 +7,71 @@ import type {
   OrderShipment,
   ReadyForPickupRequest,
   RequestLabelsRequest,
+  ResolveCancelRequest,
   ResolveLabelsRequest,
   WeighParcelRequest,
 } from '@ayvo/types';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { WeightsService, grams } from '../catalog/weights.service.js';
-import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { grams } from '../catalog/weights.service.js';
+import { CODE_PREFIX, parseCodeSerial } from '../common/codes.js';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
+import { ENV, type Env } from '../config/env.js';
 import { CrateCyclesService } from '../crates/crate-cycles.service.js';
-import { allocateSerials } from '../database/code-counters.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type { SiteContext } from '../inventory/warehouse-context.js';
-import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
+import { FILE_STORAGE, type FileStorage } from '../storage/file-storage.js';
 import {
   CARRIERS,
-  CarrierRejectedError,
-  type CarrierCreateOutcome,
+  type CarrierChoice,
   type CarrierGateway,
-  type CarrierPollOutcome,
   type CarrierRegistry,
+  type CarrierSettingsSnapshot,
   type CarrierShipmentRequest,
 } from './carriers/carrier.js';
+import { MAX_POLLS, ShipmentCarrierFlow, UNRESOLVED } from './shipment-carrier-flow.service.js';
+import { ShipmentDeriver } from './shipment-deriver.service.js';
+import { shipmentEvent, type Step } from './shipment-events.js';
 
-type Step = { actorId: string; operationId: string; occurredAt: Date };
 type Tx = Prisma.TransactionClient;
-
-/**
- * A request whose sending may still be in flight (claimed, no answer recorded) is not looked up
- * before this has passed: a lookup during the call could report "nothing created" for a shipment
- * the carrier is creating right now. Carrier adapters must time out well before it.
- */
-const IN_FLIGHT_MS = 120_000;
-/** The error code that marks a finished call whose answer is unknown. */
-const NO_ANSWER = 'NO_ANSWER';
-const UNRESOLVED = ['PREPARED', 'SENT', 'ACCEPTED', 'CREATED'] as const;
 
 const notFound = () => new NotFoundException('Order not found');
 
+/** Strips diacritics for carriers that accept only Latin ASCII (PPL CPL, doc 029 §5). */
+export const latin = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
 /**
- * Dispatch of a completed order to a carrier (doc 029). One shipment per order (the whole order
- * together), one parcel per allocated crate (= one label), derived automatically when picking is
- * completed. The carrier is reached only through {@link CarrierGateway}, outside transactions;
- * each attempt is written before it is sent, claimed once, and never re-sent blindly — an unknown
- * answer is looked up by its client reference. Nothing here moves stock or means "delivered".
+ * Dispatch of a completed order to a carrier (doc 029) — the operations on the order. One
+ * shipment per order (the whole order together), one parcel per allocated crate (= one label),
+ * derived when picking is completed. The carrier is reached only through
+ * {@link ShipmentCarrierFlow} (written request, claimed once, time-limited calls, never re-sent
+ * blindly). Nothing here moves stock or means "delivered".
  */
 @Injectable()
 export class ShipmentsService {
-  private readonly log = new Logger(ShipmentsService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly operations: OperationRequestsService,
-    private readonly weights: WeightsService,
     private readonly cycles: CrateCyclesService,
+    private readonly deriver: ShipmentDeriver,
+    private readonly flow: ShipmentCarrierFlow,
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
     @Inject(CARRIERS) private readonly carriers: CarrierRegistry,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
-  // --- derivation (in the caller's transaction) ----------------------------------------------
-
-  /**
-   * The shipment of a just completed order: one parcel per active allocation, in loading order,
-   * with its calculated reference (Hotovo snapshot, else the references in force now) and the
-   * shipping package's dimensions. No carrier is contacted.
-   */
-  async derive(tx: Tx, order: { id: string; siteId: string }, step: Step): Promise<string> {
-    const allocations = await tx.orderCrateAllocation.findMany({
-      where: { orderId: order.id, releasedAt: null },
-      include: {
-        cycle: {
-          select: {
-            id: true,
-            productId: true,
-            recipeVersionId: true,
-            crateTypeId: true,
-            capacity: true,
-          },
-        },
-      },
-      orderBy: [{ allocatedAt: 'asc' }, { id: 'asc' }],
-    });
-    const { first: serial } = await allocateSerials(tx, 'shipment', 1);
-    const shipment = await tx.shipment.create({
-      data: {
-        serial,
-        code: formatCode(CODE_PREFIX.shipment, serial),
-        orderId: order.id,
-        siteId: order.siteId,
-        createdAt: step.occurredAt,
-        createdBy: step.actorId,
-        operationRequestId: step.operationId,
-      },
-    });
-    let parcelNo = 0;
-    for (const a of allocations) {
-      const ref = await this.weights.parcelReference(tx, a.cycle, step.occurredAt);
-      parcelNo += 1;
-      await tx.shipmentParcel.create({
-        data: {
-          shipmentId: shipment.id,
-          parcelNo,
-          allocationId: a.id,
-          crateId: a.crateId,
-          cycleId: a.cycleId,
-          referenceWeightG: ref.massG,
-          referenceSource: ref.source,
-          weightSnapshotId: ref.snapshotId,
-          packageDimensionId: ref.packageDimensionId,
-        },
-      });
-    }
-    await this.event(tx, order.id, 'SHIPMENT_CREATED', step, {
-      shipment: shipment.code,
-      parcels: allocations.length,
-    });
-    return shipment.code;
+  /** The shipment of a just completed order (in the completion transaction). */
+  derive(tx: Tx, order: { id: string; siteId: string }, step: Step): Promise<string> {
+    return this.deriver.derive(tx, order, step);
   }
 
   /**
    * Cancelling the order (doc 028) cancels only a shipment that never reached a carrier. One at
-   * the carrier (requested or labelled) must be cancelled first — never silently released.
+   * the carrier (requested, labelled or being cancelled) blocks it — never silently released.
    */
   async releaseForOrderCancel(tx: Tx, orderId: string, step: Step, reason: string): Promise<void> {
-    const live = await tx.shipment.findFirst({
-      where: { orderId, status: { not: 'CANCELLED' } },
-      select: { id: true, code: true, status: true },
-    });
+    const live = await this.liveShipment(tx, orderId);
     if (!live) return;
     if (live.status !== 'DRAFT') {
       throw domainErrorWithDetails(
@@ -153,7 +90,7 @@ export class ShipmentsService {
         cancelReason: reason,
       },
     });
-    await this.event(tx, orderId, 'SHIPMENT_CANCELLED', step, { shipment: live.code, reason });
+    await shipmentEvent(tx, orderId, 'SHIPMENT_CANCELLED', step, { shipment: live.code, reason });
   }
 
   // --- reading -------------------------------------------------------------------------------
@@ -165,7 +102,8 @@ export class ShipmentsService {
       where: { orderId: order.id },
       include: {
         canceller: { select: { displayName: true } },
-        labels: { select: { format: true, createdAt: true } },
+        cancelRequester: { select: { displayName: true } },
+        labels: { where: { parcelId: null }, select: { format: true, dpi: true, createdAt: true } },
         requests: { orderBy: { attemptNo: 'desc' }, take: 1 },
         parcels: {
           orderBy: { parcelNo: 'asc' },
@@ -175,6 +113,7 @@ export class ShipmentsService {
               select: { capacity: true, product: { select: { code: true, name: true } } },
             },
             packageDimension: { select: { lengthMm: true, widthMm: true, heightMm: true } },
+            labels: { select: { format: true, dpi: true } },
             weighings: {
               orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
               take: 1,
@@ -185,8 +124,8 @@ export class ShipmentsService {
       },
       orderBy: { serial: 'desc' },
     });
-    const live = rows.find((r) => r.status !== 'CANCELLED') ?? null;
-    const carrier = this.carriers.forSite(site.siteId);
+    const choice = await this.carriers.forSite(site.siteId);
+    const current = carrierInfo(choice);
     const cancelled = rows
       .filter((r) => r.status === 'CANCELLED')
       .map((r) => ({
@@ -195,10 +134,25 @@ export class ShipmentsService {
         cancelledBy: r.canceller!.displayName,
         reason: r.cancelReason!,
       }));
-    if (!live) return { shipment: null, cancelled };
+    const live = rows.find((r) => r.status !== 'CANCELLED') ?? null;
+    if (!live) return { carrier: current, shipment: null, cancelled };
+    // A shipment already at a carrier is shown with ITS carrier and environment (snapshot).
+    const own = this.flow.gatewayOf(live);
+    const carrier: CarrierInfo = live.carrierCode
+      ? own
+        ? gatewayInfo(own)
+        : {
+            ...current,
+            configured: false,
+            unavailable: 'CONNECTION_UNAVAILABLE',
+            code: live.carrierCode,
+            environment: live.carrierEnvironment as 'TEST' | 'PRODUCTION',
+          }
+      : current;
     const parcels = live.parcels.map((p) => {
       const w = p.weighings[0];
       const d = p.packageDimension;
+      const label = p.labels[0];
       return {
         parcelNo: p.parcelNo,
         crate: p.crate.code,
@@ -221,18 +175,31 @@ export class ShipmentsService {
             ? { lengthMm: d.lengthMm, widthMm: d.widthMm, heightMm: d.heightMm }
             : null,
         carrierParcelNumber: p.carrierParcelNumber,
+        label: label ? { format: label.format as 'PDF' | 'ZPL', dpi: label.dpi } : null,
       };
     });
     const request = live.requests[0] ?? null;
+    const asked =
+      live.status === 'CANCELLING'
+        ? await this.prisma.orderEvent.findFirst({
+            where: { orderId: order.id, type: 'SHIPMENT_CANCEL_REQUESTED' },
+            orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+            select: { payload: true },
+          })
+        : null;
+    const gatewayForMissing = live.status === 'DRAFT' && choice.gateway ? choice : null;
     return {
+      carrier: current,
       shipment: {
         code: live.code,
         status: live.status,
-        carrier: carrierInfo(carrier),
+        carrier,
         carrierShipmentRef: live.carrierShipmentRef,
         labeledAt: live.labeledAt?.toISOString() ?? null,
         parcels,
-        missing: carrier ? await this.missing(this.prisma, carrier, site.siteId, parcels) : [],
+        missing: gatewayForMissing
+          ? await this.missing(gatewayForMissing.gateway, gatewayForMissing.settings, parcels)
+          : [],
         request: request
           ? {
               attemptNo: request.attemptNo,
@@ -241,28 +208,72 @@ export class ShipmentsService {
               sentAt: request.sentAt?.toISOString() ?? null,
               errorCode: request.errorCode,
               errorMessage: request.errorMessage,
+              resolvableAt:
+                request.status === 'SENT' && request.sentAt
+                  ? new Date(
+                      request.sentAt.getTime() + this.env.CARRIER_SETTLE_SECONDS * 1000,
+                    ).toISOString()
+                  : null,
             }
           : null,
+        cancelRequest:
+          live.status === 'CANCELLING' && live.cancelRequestedAt
+            ? {
+                at: live.cancelRequestedAt.toISOString(),
+                by: live.cancelRequester?.displayName ?? '',
+                reason: ((asked?.payload ?? {}) as { reason?: string }).reason ?? '',
+              }
+            : null,
         label: live.labels[0]
-          ? { format: 'PDF' as const, createdAt: live.labels[0].createdAt.toISOString() }
+          ? {
+              format: live.labels[0].format as 'PDF' | 'ZPL',
+              dpi: live.labels[0].dpi,
+              createdAt: live.labels[0].createdAt.toISOString(),
+            }
           : null,
+        pollingStopped:
+          !!request &&
+          (request.status === 'ACCEPTED' || request.status === 'CREATED') &&
+          request.nextPollAt === null &&
+          request.pollCount >= MAX_POLLS,
         createdAt: live.createdAt.toISOString(),
       },
       cancelled,
     };
   }
 
-  /** The stored label document (re-printing never contacts the carrier). */
-  async labelFile(site: SiteContext, code: string): Promise<{ bytes: Buffer; filename: string }> {
+  /**
+   * A stored label file (re-printing never contacts the carrier): one parcel's own label, or the
+   * complete document. Opening or downloading it is not evidence of printing.
+   */
+  async labelFile(
+    site: SiteContext,
+    code: string,
+    parcelNo: number | null,
+  ): Promise<{ bytes: Buffer; filename: string; format: string }> {
     const order = await this.findOrder(this.prisma, code, site.siteId);
     if (!order) throw notFound();
     const live = await this.prisma.shipment.findFirst({
       where: { orderId: order.id, status: { not: 'CANCELLED' } },
-      select: { code: true, labels: { select: { fileKey: true } } },
+      select: { id: true, code: true },
     });
-    const key = live?.labels[0]?.fileKey;
-    if (!key) throw domainError(404, 'NO_LABELS', 'This shipment has no labels yet');
-    return { bytes: await this.storage.get(key), filename: `${live.code}-stitky.pdf` };
+    const label = live
+      ? await this.prisma.shipmentLabel.findFirst({
+          where:
+            parcelNo === null
+              ? { shipmentId: live.id, parcelId: null }
+              : { shipmentId: live.id, parcel: { parcelNo } },
+          select: { fileKey: true, format: true },
+        })
+      : null;
+    if (!live || !label) throw domainError(404, 'NO_LABELS', 'This label does not exist');
+    const ext = label.format === 'ZPL' ? 'zpl' : 'pdf';
+    const name = parcelNo === null ? `${live.code}-stitky` : `${live.code}-balik-${parcelNo}`;
+    return {
+      bytes: await this.storage.get(label.fileKey),
+      filename: `${name}.${ext}`,
+      format: label.format,
+    };
   }
 
   // --- actual weighing -----------------------------------------------------------------------
@@ -302,7 +313,7 @@ export class ShipmentsService {
         if (latest && input.correctionOf !== latest.id) {
           throw domainError(
             409,
-            latest && input.correctionOf === null ? 'WEIGHING_EXISTS' : 'WEIGHING_STALE',
+            input.correctionOf === null ? 'WEIGHING_EXISTS' : 'WEIGHING_STALE',
             'This parcel was weighed already: correct its latest weighing',
           );
         }
@@ -321,7 +332,7 @@ export class ShipmentsService {
             correctionReason: input.correctionReason,
           },
         });
-        await this.event(tx, order.id, 'PARCEL_WEIGHED', step, {
+        await shipmentEvent(tx, order.id, 'PARCEL_WEIGHED', step, {
           shipment: shipment.code,
           crate: parcel.crate.code,
           reason: input.correctionReason ?? undefined,
@@ -335,9 +346,9 @@ export class ShipmentsService {
   // --- carrier labels ------------------------------------------------------------------------
 
   /**
-   * "Vytvořit přepravní štítky": writes one carrier request (PREPARED) and then sends it once.
-   * A repeated click or a concurrent request finds the unresolved one and creates nothing new;
-   * a replay of the same request id never sends again.
+   * "Vytvořit přepravní štítky": writes one carrier request (PREPARED, with the site's current
+   * carrier settings as a snapshot) and then sends it once. A repeated click or a concurrent
+   * request finds the unresolved one and creates nothing new; a replay never sends again.
    */
   async requestLabels(
     actorId: string,
@@ -345,14 +356,7 @@ export class ShipmentsService {
     code: string,
     input: RequestLabelsRequest,
   ): Promise<OrderShipment> {
-    const carrier = this.carriers.forSite(site.siteId);
-    if (!carrier) {
-      throw domainError(
-        409,
-        'CARRIER_NOT_CONFIGURED',
-        'No carrier is configured for this site: labels cannot be created',
-      );
-    }
+    const choice = await this.carriers.forSite(site.siteId);
     const { result } = await this.operations.run(
       'SHIPMENT_LABELS_REQUEST',
       input.requestId,
@@ -369,23 +373,42 @@ export class ShipmentsService {
         }
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         let shipment = await this.liveShipment(tx, order.id);
-        // Orders completed before doc 029 get their shipment now (the same derivation).
-        if (!shipment) {
-          await this.derive(tx, order, step);
-          shipment = (await this.liveShipment(tx, order.id))!;
-        }
-        if (shipment.status === 'REQUESTING') {
+        if (shipment?.status === 'REQUESTING') {
           const open = await tx.shipmentCarrierRequest.findFirstOrThrow({
             where: { shipmentId: shipment.id, status: { in: [...UNRESOLVED] } },
             select: { id: true },
           });
           return { attemptId: open.id };
         }
-        if (shipment.status === 'LABELED') {
+        if (shipment?.status === 'LABELED' || shipment?.status === 'CANCELLING') {
           throw domainError(409, 'LABELS_EXIST', 'The labels of this shipment exist already');
         }
-        const payload = await this.payload(tx, carrier, order, shipment);
-        const missing = await this.missing(tx, carrier, site.siteId, payload.view);
+        if (!choice.gateway) {
+          throw domainErrorWithDetails(
+            409,
+            'CARRIER_NOT_CONFIGURED',
+            'No carrier can take a request at this site',
+            { reason: choice.reason },
+          );
+        }
+        const carrier = choice.gateway;
+        // Orders completed before doc 029 get their shipment now (the same derivation).
+        if (!shipment) {
+          await this.deriver.derive(tx, order, step);
+          shipment = (await this.liveShipment(tx, order.id))!;
+        }
+        const attemptNo =
+          (await tx.shipmentCarrierRequest.count({ where: { shipmentId: shipment.id } })) + 1;
+        const clientReference = `${shipment.code}-${attemptNo}`;
+        const payload = await this.payload(
+          tx,
+          carrier,
+          choice.settings,
+          order,
+          shipment.id,
+          clientReference,
+        );
+        const missing = await this.missing(carrier, choice.settings, payload.view);
         if (missing.length > 0) {
           throw domainErrorWithDetails(
             422,
@@ -394,43 +417,42 @@ export class ShipmentsService {
             { missing },
           );
         }
-        const attempts = await tx.shipmentCarrierRequest.count({
-          where: { shipmentId: shipment.id },
-        });
-        const attemptNo = attempts + 1;
-        const clientReference = `${shipment.code}-${attemptNo}`;
+        const snapshot = {
+          carrierCode: carrier.code,
+          carrierConnection: carrier.connection,
+          carrierEnvironment: carrier.environment,
+        };
         await tx.shipment.update({
           where: { id: shipment.id },
-          data: { status: 'REQUESTING', carrierCode: carrier.code },
+          data: { status: 'REQUESTING', ...snapshot },
         });
-        const request = { ...payload.request, clientReference };
         const row = await tx.shipmentCarrierRequest.create({
           data: {
             shipmentId: shipment.id,
             attemptNo,
-            carrierCode: carrier.code,
+            ...snapshot,
             clientReference,
-            payload: JSON.parse(JSON.stringify(request)),
+            payload: JSON.parse(JSON.stringify(payload.request)),
             createdAt: step.occurredAt,
             createdBy: actorId,
             operationRequestId: input.requestId,
           },
         });
-        await this.event(tx, order.id, 'LABELS_REQUESTED', step, {
+        await shipmentEvent(tx, order.id, 'LABELS_REQUESTED', step, {
           shipment: shipment.code,
           parcels: payload.request.parcels.length,
         });
         return { attemptId: row.id };
       },
     );
-    await this.drive(result.attemptId, { actorId, operationId: input.requestId });
+    await this.flow.drive(result.attemptId, { actorId, operationId: input.requestId });
     return this.view(site, code);
   }
 
   /**
-   * "Ověřit u dopravce": settles an unresolved request — sends a never-sent one, looks up an
-   * uncertain or accepted one by its references, or fetches the labels of a created one. Never
-   * re-sends a request that may have reached the carrier.
+   * "Ověřit u dopravce": sends a never-sent request, polls an accepted one, fetches the labels
+   * of a created one, or looks up an uncertain one by its references — only after the in-flight
+   * window (database time), never re-sending it.
    */
   async resolve(
     actorId: string,
@@ -438,295 +460,77 @@ export class ShipmentsService {
     code: string,
     input: ResolveLabelsRequest,
   ): Promise<OrderShipment> {
-    if (!this.carriers.forSite(site.siteId)) {
-      throw domainError(409, 'CARRIER_NOT_CONFIGURED', 'No carrier is configured for this site');
-    }
     const { result } = await this.operations.run(
       'SHIPMENT_LABELS_RESOLVE',
       input.requestId,
       { actorId, siteId: site.siteId, code },
       async (tx) => {
         const order = await this.lockOrder(tx, code, site.siteId);
-        const shipment = await this.liveShipment(tx, order.id);
-        const open = shipment
-          ? await tx.shipmentCarrierRequest.findFirst({
-              where: { shipmentId: shipment.id, status: { in: [...UNRESOLVED] } },
-              select: { id: true, status: true, sentAt: true, errorCode: true },
-            })
-          : null;
-        if (!open) throw domainError(409, 'NOTHING_TO_RESOLVE', 'No carrier request is open');
-        if (
-          open.status === 'SENT' &&
-          open.errorCode !== NO_ANSWER &&
-          Date.now() - open.sentAt!.getTime() < IN_FLIGHT_MS
-        ) {
+        const open = await this.openRequest(tx, order.id);
+        if (!this.flow.gatewayOf(open)) {
           throw domainError(
             409,
-            'REQUEST_IN_FLIGHT',
-            'The request is still being sent: check again in a moment',
+            'CARRIER_CONNECTION_UNAVAILABLE',
+            'The carrier connection of this request is not available on this server',
           );
         }
+        if (open.status === 'SENT') await this.assertSettled(tx, open.id);
         return { attemptId: open.id };
       },
     );
-    await this.drive(result.attemptId, { actorId, operationId: input.requestId }, true);
+    await this.flow.drive(result.attemptId, { actorId, operationId: input.requestId }, true);
     return this.view(site, code);
   }
 
   /**
-   * Moves one request forward. PREPARED is claimed (status SENT) by exactly one caller before
-   * the carrier is called; everything after the call is recorded in its own transaction.
+   * Exceptional, supervised resolution (`shipments:resolve_uncertain`, reason, audited): a person
+   * who checked with the carrier confirms that an uncertain request created nothing. Only after
+   * the in-flight window and never for a request the carrier reported as created — a mistake here
+   * can lead to a duplicate shipment at the carrier, which the UI states.
    */
-  private async drive(
-    attemptId: string,
-    by: { actorId: string; operationId: string },
-    lookup = false,
-  ): Promise<void> {
-    const attempt = await this.prisma.shipmentCarrierRequest.findUniqueOrThrow({
-      where: { id: attemptId },
-      include: { shipment: { select: { siteId: true } } },
-    });
-    const carrier = this.carriers.forSite(attempt.shipment.siteId);
-    if (!carrier || carrier.code !== attempt.carrierCode) return;
-    if (attempt.status === 'PREPARED') {
-      const claimed = await this.prisma.$executeRaw`
-        UPDATE "shipment_carrier_requests" SET "status" = 'SENT', "sent_at" = now()
-         WHERE "id" = ${attemptId}::uuid AND "status" = 'PREPARED'`;
-      if (claimed !== 1) return; // someone else is sending it
-      let outcome: CarrierCreateOutcome;
-      try {
-        outcome = await carrier.create(attempt.payload as unknown as CarrierShipmentRequest);
-      } catch (error) {
-        if (error instanceof CarrierRejectedError) {
-          await this.reject(attemptId, by, error.code, error.message);
-        } else {
-          this.log.warn(`Carrier request ${attempt.clientReference}: no answer (${String(error)})`);
-          await this.uncertain(attemptId, by);
+  async abandon(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    input: AbandonLabelsRequest,
+  ): Promise<OrderShipment> {
+    await this.operations.run(
+      'SHIPMENT_LABELS_ABANDON',
+      input.requestId,
+      { actorId, siteId: site.siteId, code, reason: input.reason },
+      async (tx) => {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        const open = await this.openRequest(tx, order.id);
+        if (open.status !== 'SENT' && open.status !== 'ACCEPTED') {
+          throw domainErrorWithDetails(
+            409,
+            'REQUEST_NOT_ABANDONABLE',
+            'Only an uncertain or unanswered request can be closed this way',
+            { status: open.status },
+          );
         }
-        return;
-      }
-      await this.settle(carrier, attemptId, by, outcome);
-      return;
-    }
-    if (attempt.status === 'CREATED') {
-      await this.fetchLabels(carrier, attemptId, by);
-      return;
-    }
-    if (attempt.status === 'ACCEPTED' || (attempt.status === 'SENT' && lookup)) {
-      let outcome: CarrierPollOutcome;
-      try {
-        outcome = await carrier.poll({
-          clientReference: attempt.clientReference,
-          carrierRef: attempt.carrierRef,
-        });
-      } catch (error) {
-        this.log.warn(`Carrier lookup ${attempt.clientReference} failed (${String(error)})`);
-        return;
-      }
-      await this.settle(carrier, attemptId, by, outcome);
-    }
-  }
-
-  private async settle(
-    carrier: CarrierGateway,
-    attemptId: string,
-    by: { actorId: string; operationId: string },
-    outcome: CarrierPollOutcome,
-  ): Promise<void> {
-    switch (outcome.kind) {
-      case 'PENDING':
-      case 'UNKNOWN':
-        return;
-      case 'REJECTED':
-        await this.reject(attemptId, by, outcome.code, outcome.message);
-        return;
-      case 'NOT_CREATED':
-        await this.inAttempt(attemptId, async (tx, a, order) => {
-          // Only an uncertain request can be confirmed "never created".
-          if (a.status !== 'SENT') return;
-          await tx.shipmentCarrierRequest.update({
-            where: { id: a.id },
-            data: { status: 'NOT_CREATED', resolvedAt: new Date() },
-          });
-          await tx.shipment.update({ where: { id: a.shipmentId }, data: { status: 'DRAFT' } });
-          await this.event(tx, order.id, 'LABELS_NOT_CREATED', this.step(by), {
-            shipment: a.shipment.code,
-          });
-        });
-        return;
-      case 'ACCEPTED':
-        await this.inAttempt(attemptId, async (tx, a) => {
-          if (a.status !== 'SENT') return;
-          await tx.shipmentCarrierRequest.update({
-            where: { id: a.id },
-            data: { status: 'ACCEPTED', carrierRef: outcome.carrierRef, errorCode: null },
-          });
-        });
-        // One immediate look; later ones through "Ověřit u dopravce".
-        await this.drive(attemptId, by);
-        return;
-      case 'CREATED': {
-        const recorded = await this.inAttempt(attemptId, async (tx, a) => {
-          if (a.status !== 'SENT' && a.status !== 'ACCEPTED') return a.status === 'CREATED';
-          await tx.shipmentCarrierRequest.update({
-            where: { id: a.id },
-            data: {
-              status: 'CREATED',
-              errorCode: null,
-              result: { shipmentRef: outcome.shipmentRef, parcels: outcome.parcels },
-            },
-          });
-          return true;
-        });
-        if (recorded) await this.fetchLabels(carrier, attemptId, by);
-      }
-    }
-  }
-
-  /** Downloads and stores the labels of a created shipment, then marks it LABELED. */
-  private async fetchLabels(
-    carrier: CarrierGateway,
-    attemptId: string,
-    by: { actorId: string; operationId: string },
-  ): Promise<void> {
-    const attempt = await this.prisma.shipmentCarrierRequest.findUniqueOrThrow({
-      where: { id: attemptId },
-    });
-    const result = attempt.result as {
-      shipmentRef: string;
-      parcels: { parcelNo: number; number: string }[];
-    } | null;
-    if (attempt.status !== 'CREATED' || !result) return;
-    let bytes: Uint8Array;
-    try {
-      bytes = await carrier.labels({
-        shipmentRef: result.shipmentRef,
-        carrierRef: attempt.carrierRef,
-      });
-    } catch (error) {
-      this.log.warn(`Labels of ${attempt.clientReference} not downloaded (${String(error)})`);
-      return;
-    }
-    const key = newStorageKey('shipment-labels', 'pdf');
-    await this.storage.put(key, bytes);
-    await this.inAttempt(attemptId, async (tx, a, order) => {
-      if (a.status !== 'CREATED') return;
-      const parcels = await tx.shipmentParcel.findMany({
-        where: { shipmentId: a.shipmentId },
-        select: { id: true, parcelNo: true },
-      });
-      const numbers = new Map(result.parcels.map((p) => [p.parcelNo, p.number]));
-      if (parcels.length !== numbers.size || parcels.some((p) => !numbers.get(p.parcelNo))) {
-        // The carrier's answer does not match the parcels: a person has to look at it.
+        await this.assertSettled(tx, open.id);
+        const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         await tx.shipmentCarrierRequest.update({
-          where: { id: a.id },
+          where: { id: open.id },
           data: {
-            errorCode: 'CARRIER_PARCEL_MISMATCH',
-            errorMessage: 'The carrier returned other parcels than were sent',
+            status: 'NOT_CREATED',
+            resolvedAt: step.occurredAt,
+            nextPollAt: null,
+            errorCode: 'CLOSED_BY_PERSON',
+            errorMessage: input.reason,
           },
         });
-        return;
-      }
-      await tx.shipmentLabel.create({
-        data: {
-          shipmentId: a.shipmentId,
-          requestId: a.id,
-          format: 'PDF',
-          fileKey: key,
-          sha256: createHash('sha256').update(bytes).digest('hex'),
-          sizeBytes: bytes.byteLength,
-          createdAt: new Date(),
-        },
-      });
-      for (const p of parcels) {
-        await tx.shipmentParcel.update({
-          where: { id: p.id },
-          data: { carrierParcelNumber: numbers.get(p.parcelNo)! },
+        await tx.shipment.update({ where: { id: open.shipmentId }, data: { status: 'DRAFT' } });
+        await shipmentEvent(tx, order.id, 'LABELS_NOT_CREATED', step, {
+          shipment: open.shipment.code,
+          reason: input.reason,
+          manual: true,
         });
-      }
-      const now = new Date();
-      await tx.shipment.update({
-        where: { id: a.shipmentId },
-        data: { status: 'LABELED', carrierShipmentRef: result.shipmentRef, labeledAt: now },
-      });
-      await tx.shipmentCarrierRequest.update({
-        where: { id: a.id },
-        data: { status: 'SUCCEEDED', resolvedAt: now, errorCode: null, errorMessage: null },
-      });
-      await this.event(tx, order.id, 'LABELS_CREATED', this.step(by), {
-        shipment: a.shipment.code,
-        parcels: parcels.length,
-      });
-    });
-  }
-
-  private async reject(
-    attemptId: string,
-    by: { actorId: string; operationId: string },
-    code: string,
-    message: string,
-  ): Promise<void> {
-    await this.inAttempt(attemptId, async (tx, a, order) => {
-      if (a.status !== 'SENT' && a.status !== 'ACCEPTED') return;
-      await tx.shipmentCarrierRequest.update({
-        where: { id: a.id },
-        data: {
-          status: 'REJECTED',
-          resolvedAt: new Date(),
-          errorCode: code.slice(0, 100),
-          errorMessage: message.slice(0, 1000),
-        },
-      });
-      await tx.shipment.update({ where: { id: a.shipmentId }, data: { status: 'DRAFT' } });
-      await this.event(tx, order.id, 'LABELS_REJECTED', this.step(by), {
-        shipment: a.shipment.code,
-        reason: message.slice(0, 500),
-      });
-    });
-  }
-
-  /** The call ended without a usable answer: recorded, never re-sent. */
-  private async uncertain(
-    attemptId: string,
-    by: { actorId: string; operationId: string },
-  ): Promise<void> {
-    await this.inAttempt(attemptId, async (tx, a, order) => {
-      if (a.status !== 'SENT') return;
-      await tx.shipmentCarrierRequest.update({
-        where: { id: a.id },
-        data: { errorCode: NO_ANSWER, errorMessage: 'No answer from the carrier' },
-      });
-      await this.event(tx, order.id, 'LABELS_UNCERTAIN', this.step(by), {
-        shipment: a.shipment.code,
-      });
-    });
-  }
-
-  /** Runs `work` with the order and the attempt locked (order → shipment → request). */
-  private async inAttempt<R>(
-    attemptId: string,
-    work: (
-      tx: Tx,
-      attempt: Prisma.ShipmentCarrierRequestGetPayload<{
-        include: { shipment: { select: { code: true; orderId: true } } };
-      }>,
-      order: { id: string },
-    ) => Promise<R>,
-  ): Promise<R> {
-    return this.prisma.$transaction(async (tx) => {
-      const head = await tx.shipmentCarrierRequest.findUniqueOrThrow({
-        where: { id: attemptId },
-        select: { shipment: { select: { orderId: true } } },
-      });
-      const orderId = head.shipment.orderId;
-      await tx.$executeRaw`SELECT 1 FROM "orders" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
-      await tx.$executeRaw`SELECT 1 FROM "shipment_carrier_requests" WHERE "id" = ${attemptId}::uuid FOR UPDATE`;
-      const attempt = await tx.shipmentCarrierRequest.findUniqueOrThrow({
-        where: { id: attemptId },
-        include: { shipment: { select: { code: true, orderId: true } } },
-      });
-      return work(tx, attempt, { id: orderId });
-    });
+        return { code: order.code };
+      },
+    );
+    return this.view(site, code);
   }
 
   // --- physical milestones -------------------------------------------------------------------
@@ -755,7 +559,7 @@ export class ShipmentsService {
         }
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         await tx.order.update({ where: { id: order.id }, data: { status: 'READY_FOR_PICKUP' } });
-        await this.event(tx, order.id, 'READY_FOR_PICKUP', step, { shipment: shipment.code });
+        await shipmentEvent(tx, order.id, 'READY_FOR_PICKUP', step, { shipment: shipment.code });
         return { code: order.code };
       },
     );
@@ -764,7 +568,8 @@ export class ShipmentsService {
 
   /**
    * "Předáno dopravci": after the real hand-over. The crates' cycles become DISPATCHED (ADR
-   * 0021) — not delivered and not at the hotel.
+   * 0021) — not delivered and not at the hotel. A started cancellation has already taken the
+   * order back to READY_TO_DISPATCH, so the two can never both happen.
    */
   async handOver(
     actorId: string,
@@ -791,19 +596,20 @@ export class ShipmentsService {
         await tx.order.update({ where: { id: order.id }, data: { status: 'HANDED_TO_CARRIER' } });
         const held = await tx.orderCrateAllocation.findMany({
           where: { orderId: order.id, releasedAt: null },
-          select: { crateId: true },
+          select: { crateId: true, cycleId: true },
           orderBy: { crateId: 'asc' },
         });
         for (const a of held) {
           await this.cycles.lockCrate(tx, a.crateId);
           const cycle = await this.cycles.openCycle(tx, a.crateId, true);
-          await this.cycles.dispatch(tx, cycle!, {
+          if (cycle?.id !== a.cycleId) throw new Error('The allocated cycle is not the open one');
+          await this.cycles.dispatch(tx, cycle, {
             ...step,
             order: order.code,
             shipment: shipment.code,
           });
         }
-        await this.event(tx, order.id, 'HANDED_TO_CARRIER', step, {
+        await shipmentEvent(tx, order.id, 'HANDED_TO_CARRIER', step, {
           shipment: shipment.code,
           parcels: held.length,
         });
@@ -814,8 +620,9 @@ export class ShipmentsService {
   }
 
   /**
-   * "Zrušit přípravu přepravy": a labelled shipment is cancelled only when the carrier confirms
-   * it; then a fresh draft is derived (same crates) and the order is ready to dispatch again. The
+   * "Zrušit přípravu přepravy": first recorded (CANCELLING, under the order lock; a ready order
+   * goes back to READY_TO_DISPATCH so it cannot be handed over meanwhile), then the carrier is
+   * asked. Only its confirmation cancels; then a fresh draft is derived from the same crates. The
    * order, its crates and the stock stay as they are.
    */
   async cancel(
@@ -824,109 +631,141 @@ export class ShipmentsService {
     code: string,
     input: CancelShipmentRequest,
   ): Promise<OrderShipment> {
-    const order = await this.findOrder(this.prisma, code, site.siteId);
-    if (!order) throw notFound();
-    const replay = await this.prisma.operationRequest.findUnique({
-      where: { requestId: input.requestId },
-      select: { result: true },
-    });
-    let carrierCancelled = false;
-    const live = await this.prisma.shipment.findFirst({
-      where: { orderId: order.id, status: { not: 'CANCELLED' } },
-      select: { status: true, carrierCode: true, carrierShipmentRef: true },
-    });
-    if (!replay?.result && live?.status === 'LABELED') {
-      const carrier = this.carriers.forSite(site.siteId);
-      if (!carrier || carrier.code !== live.carrierCode || !carrier.rules.canCancel) {
-        throw domainError(
-          409,
-          'CARRIER_CANCEL_UNSUPPORTED',
-          'The carrier cannot cancel this shipment through its interface',
-        );
-      }
-      try {
-        await carrier.cancel({ shipmentRef: live.carrierShipmentRef! });
-      } catch (error) {
-        if (error instanceof CarrierRejectedError) {
-          throw domainErrorWithDetails(409, 'CARRIER_CANCEL_REFUSED', 'The carrier refused', {
-            message: error.message,
-          });
-        }
-        throw domainError(
-          502,
-          'CARRIER_UNAVAILABLE',
-          'The carrier did not confirm the cancellation: nothing was changed here',
-        );
-      }
-      carrierCancelled = true;
-    }
-    await this.operations.run(
+    const { result } = await this.operations.run(
       'SHIPMENT_CANCEL',
       input.requestId,
       { actorId, siteId: site.siteId, code, reason: input.reason },
       async (tx) => {
-        const locked = await this.lockOrder(tx, code, site.siteId);
-        const shipment = await this.liveShipment(tx, locked.id);
-        if (!shipment || shipment.status === 'DRAFT') {
-          throw domainError(409, 'SHIPMENT_NOT_AT_CARRIER', 'Nothing was sent to the carrier');
-        }
-        if (shipment.status === 'REQUESTING') {
-          throw domainError(
-            409,
-            'SHIPMENT_REQUEST_UNRESOLVED',
-            'A carrier request is unresolved: check it with the carrier first',
-          );
-        }
-        if (
-          !carrierCancelled ||
-          !['READY_TO_DISPATCH', 'READY_FOR_PICKUP'].includes(locked.status)
-        ) {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        const shipment = await this.liveShipment(tx, order.id);
+        if (!shipment) throw domainError(409, 'SHIPMENT_NOT_AT_CARRIER', 'Nothing to cancel');
+        if (shipment.status === 'CANCELLING') return { shipmentId: shipment.id };
+        if (order.status !== 'READY_TO_DISPATCH' && order.status !== 'READY_FOR_PICKUP') {
           throw domainErrorWithDetails(
             409,
             'SHIPMENT_NOT_CANCELLABLE',
             'The shipment cannot be cancelled now',
-            { status: locked.status },
+            { status: order.status },
+          );
+        }
+        if (shipment.status === 'DRAFT') {
+          throw domainError(409, 'SHIPMENT_NOT_AT_CARRIER', 'Nothing was sent to the carrier');
+        }
+        if (shipment.status === 'REQUESTING') {
+          // A shipment the carrier created (labels not usable) can be cancelled; anything else
+          // is first resolved with the carrier.
+          const open = await tx.shipmentCarrierRequest.findFirst({
+            where: { shipmentId: shipment.id, status: 'CREATED' },
+            select: { id: true },
+          });
+          if (!open) {
+            throw domainError(
+              409,
+              'SHIPMENT_REQUEST_UNRESOLVED',
+              'A carrier request is unresolved: check it with the carrier first',
+            );
+          }
+        }
+        const carrier = this.flow.gatewayOf(shipment);
+        if (!carrier || !carrier.rules.canCancel) {
+          throw domainError(
+            409,
+            'CARRIER_CANCEL_UNSUPPORTED',
+            'The carrier cannot cancel this shipment through its interface',
           );
         }
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         await tx.shipment.update({
           where: { id: shipment.id },
           data: {
-            status: 'CANCELLED',
-            cancelledAt: step.occurredAt,
-            cancelledBy: actorId,
-            cancelReason: input.reason,
-            carrierCancelledAt: step.occurredAt,
+            status: 'CANCELLING',
+            cancelRequestedAt: step.occurredAt,
+            cancelRequestedBy: actorId,
+            carrierCancelSentAt: null,
           },
         });
-        if (locked.status === 'READY_FOR_PICKUP') {
-          await tx.order.update({
-            where: { id: locked.id },
-            data: { status: 'READY_TO_DISPATCH' },
-          });
+        if (order.status === 'READY_FOR_PICKUP') {
+          await tx.order.update({ where: { id: order.id }, data: { status: 'READY_TO_DISPATCH' } });
         }
-        await this.event(tx, locked.id, 'SHIPMENT_CANCELLED', step, {
+        await shipmentEvent(tx, order.id, 'SHIPMENT_CANCEL_REQUESTED', step, {
           shipment: shipment.code,
           reason: input.reason,
         });
-        await this.derive(tx, locked, step);
-        return { code: locked.code };
+        return { shipmentId: shipment.id };
       },
     );
+    await this.flow.driveCancel(result.shipmentId, { actorId, operationId: input.requestId });
+    return this.view(site, code);
+  }
+
+  /** "Ověřit zrušení u dopravce": asks the carrier again about a started cancellation. */
+  async resolveCancel(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    input: ResolveCancelRequest,
+  ): Promise<OrderShipment> {
+    const { result } = await this.operations.run(
+      'SHIPMENT_CANCEL',
+      input.requestId,
+      { actorId, siteId: site.siteId, code, resolve: true },
+      async (tx) => {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        const shipment = await this.liveShipment(tx, order.id);
+        if (shipment?.status !== 'CANCELLING') {
+          throw domainError(409, 'NOTHING_TO_RESOLVE', 'No cancellation is in progress');
+        }
+        return { shipmentId: shipment.id };
+      },
+    );
+    await this.flow.driveCancel(result.shipmentId, { actorId, operationId: input.requestId }, true);
     return this.view(site, code);
   }
 
   // --- helpers -------------------------------------------------------------------------------
 
-  /** What is sent: the order's address snapshot, the site as sender, one entry per parcel. */
+  /** Refuses while a claimed request may still be in flight (database time, not this host's). */
+  private async assertSettled(tx: Tx, requestId: string): Promise<void> {
+    const [row] = await tx.$queryRaw<{ settled: boolean; at: Date | null }[]>`
+      SELECT ("sent_at" + make_interval(secs => ${this.env.CARRIER_SETTLE_SECONDS})) <= now() AS settled,
+             "sent_at" + make_interval(secs => ${this.env.CARRIER_SETTLE_SECONDS}) AS at
+        FROM "shipment_carrier_requests" WHERE "id" = ${requestId}::uuid`;
+    if (row && !row.settled) {
+      throw domainErrorWithDetails(
+        409,
+        'REQUEST_IN_FLIGHT',
+        'The request may still be in flight: check again later',
+        { resolvableAt: row.at?.toISOString() ?? null },
+      );
+    }
+  }
+
+  private async openRequest(tx: Tx, orderId: string) {
+    const shipment = await this.liveShipment(tx, orderId);
+    const open = shipment
+      ? await tx.shipmentCarrierRequest.findFirst({
+          where: { shipmentId: shipment.id, status: { in: [...UNRESOLVED] } },
+          include: { shipment: { select: { code: true } } },
+        })
+      : null;
+    if (!open) throw domainError(409, 'NOTHING_TO_RESOLVE', 'No carrier request is open');
+    return open;
+  }
+
+  /**
+   * What is sent: the order's address snapshot (Latin-only where the carrier needs it), the
+   * sender from the site's carrier settings, and one entry per parcel with its own reference.
+   */
   private async payload(
     tx: Tx,
     carrier: CarrierGateway,
+    settings: CarrierSettingsSnapshot,
     order: Prisma.OrderGetPayload<object>,
-    shipment: { id: string },
+    shipmentId: string,
+    clientReference: string,
   ) {
     const parcels = await tx.shipmentParcel.findMany({
-      where: { shipmentId: shipment.id },
+      where: { shipmentId },
       orderBy: { parcelNo: 'asc' },
       include: {
         crate: { select: { code: true } },
@@ -934,7 +773,6 @@ export class ShipmentsService {
         weighings: { orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }], take: 1 },
       },
     });
-    const site = await tx.site.findUniqueOrThrow({ where: { id: order.siteId } });
     const view = parcels.map((p) => {
       const d = p.packageDimension;
       return {
@@ -950,20 +788,10 @@ export class ShipmentsService {
             : null,
       };
     });
-    const sender =
-      site.addressLine1 && site.postalCode && site.city
-        ? {
-            name: site.name,
-            addressLine1: site.addressLine1,
-            addressLine2: site.addressLine2,
-            postalCode: site.postalCode,
-            city: site.city,
-            countryCode: site.countryCode,
-          }
-        : null;
-    const request: Omit<CarrierShipmentRequest, 'clientReference'> = {
+    const request: CarrierShipmentRequest = {
+      clientReference,
       orderCode: order.code,
-      sender: carrier.rules.senderAddress === 'NOT_USED' ? null : sender,
+      settings,
       recipient: {
         name: order.hotelName,
         addressLine1: order.addressLine1,
@@ -977,7 +805,8 @@ export class ShipmentsService {
       },
       parcels: parcels.map((p, i) => ({
         parcelNo: p.parcelNo,
-        reference: p.crate.code,
+        reference: `${clientReference}-${p.parcelNo}`,
+        crate: p.crate.code,
         weightG: carrier.rules.parcelWeight === 'NOT_USED' ? null : view[i]!.weightG,
         dimensionsMm:
           carrier.rules.parcelDimensions === 'NOT_USED' || !view[i]!.dimensions
@@ -994,9 +823,8 @@ export class ShipmentsService {
 
   /** Data the carrier requires and that are unknown — shown, never replaced by 0 or a guess. */
   private async missing(
-    db: Tx,
     carrier: CarrierGateway,
-    siteId: string,
+    settings: CarrierSettingsSnapshot,
     parcels: {
       parcelNo: number;
       weightG?: string | null;
@@ -1006,11 +834,8 @@ export class ShipmentsService {
     }[],
   ): Promise<MissingData[]> {
     const missing: MissingData[] = [];
-    if (carrier.rules.senderAddress === 'REQUIRED') {
-      const site = await db.site.findUniqueOrThrow({ where: { id: siteId } });
-      if (!site.addressLine1 || !site.postalCode || !site.city) {
-        missing.push({ field: 'SENDER_ADDRESS', parcelNo: null });
-      }
+    if (carrier.rules.senderAddress === 'REQUIRED' && !settings.sender) {
+      missing.push({ field: 'SENDER_ADDRESS', parcelNo: null });
     }
     for (const p of parcels) {
       const weight = p.weightG ?? p.actual?.massG ?? p.reference?.massG ?? null;
@@ -1027,7 +852,14 @@ export class ShipmentsService {
   private liveShipment(tx: Tx, orderId: string) {
     return tx.shipment.findFirst({
       where: { orderId, status: { not: 'CANCELLED' } },
-      select: { id: true, code: true, status: true },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        carrierCode: true,
+        carrierConnection: true,
+        carrierEnvironment: true,
+      },
     });
   }
 
@@ -1043,58 +875,31 @@ export class ShipmentsService {
     if (serial === null) return Promise.resolve(null);
     return db.order.findFirst({ where: { serial, siteId }, select: { id: true } });
   }
-
-  private step(by: { actorId: string; operationId: string }): Step {
-    return { ...by, occurredAt: new Date() };
-  }
-
-  private async event(
-    tx: Tx,
-    orderId: string,
-    type:
-      | 'SHIPMENT_CREATED'
-      | 'LABELS_REQUESTED'
-      | 'LABELS_CREATED'
-      | 'LABELS_REJECTED'
-      | 'LABELS_UNCERTAIN'
-      | 'LABELS_NOT_CREATED'
-      | 'PARCEL_WEIGHED'
-      | 'READY_FOR_PICKUP'
-      | 'HANDED_TO_CARRIER'
-      | 'SHIPMENT_CANCELLED',
-    step: Step,
-    payload: { shipment: string; parcels?: number; crate?: string; reason?: string },
-  ): Promise<void> {
-    await tx.orderEvent.create({
-      data: {
-        orderId,
-        type,
-        occurredAt: step.occurredAt,
-        actorId: step.actorId,
-        operationRequestId: step.operationId,
-        payload: JSON.parse(JSON.stringify(payload)),
-      },
-    });
-  }
 }
 
-function carrierInfo(carrier: CarrierGateway | null): CarrierInfo {
-  if (!carrier) {
-    return {
-      configured: false,
-      code: null,
-      name: null,
-      parcelWeight: null,
-      parcelDimensions: null,
-      canCancel: false,
-    };
-  }
+function gatewayInfo(g: CarrierGateway): CarrierInfo {
   return {
     configured: true,
-    code: carrier.code,
-    name: carrier.name,
-    parcelWeight: carrier.rules.parcelWeight,
-    parcelDimensions: carrier.rules.parcelDimensions,
-    canCancel: carrier.rules.canCancel,
+    unavailable: null,
+    code: g.code,
+    name: g.name,
+    environment: g.environment,
+    parcelWeight: g.rules.parcelWeight,
+    parcelDimensions: g.rules.parcelDimensions,
+    canCancel: g.rules.canCancel,
+  };
+}
+
+function carrierInfo(choice: CarrierChoice): CarrierInfo {
+  if (choice.gateway) return gatewayInfo(choice.gateway);
+  return {
+    configured: false,
+    unavailable: choice.reason,
+    code: null,
+    name: null,
+    environment: null,
+    parcelWeight: null,
+    parcelDimensions: null,
+    canCancel: false,
   };
 }

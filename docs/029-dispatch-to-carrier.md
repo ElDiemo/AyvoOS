@@ -1,171 +1,186 @@
 # 029 — Completing the order and preparing it for carrier pickup
 
-Status: **implemented (DEV, PR pending review)** — scope approved by the owner on 2026-10-18
-("Dokončení objednávky a příprava k vyzvednutí dopravcem"). Continues doc 028 (orders, picking)
-on the same order; uses W1 (doc 025 §10) for weights and dimensions; implements the carrier
-boundary planned in doc 008 ("CarrierAdapter … carrier calls outside DB transactions, results
-persisted with idempotency keys") and the per-site carrier rule of doc 022 §8.
+Status (2026-10-19):
+
+| Part                                                     | Implemented | Tested                                       | Deployed |
+| -------------------------------------------------------- | ----------- | -------------------------------------------- | -------- |
+| Order flow, shipment, parcels, labels, ready, hand-over  | yes (PR A)  | automated (API, DB rules, Playwright)        | no       |
+| Carrier boundary, test-only carrier, polling, cancelling | yes (PR A)  | automated, with the test-only carrier        | no       |
+| Site carrier settings (PPL), PPL CPL adapter             | PR B        | automated against a simulated PPL server     | no       |
+| Real PPL test environment                                | —           | **not yet** (needs the test credentials, §5) | no       |
+| Physical printing on the Zebra ZD220                     | —           | **open** (physical acceptance, §5)           | no       |
+
+Scope approved by the owner on 2026-10-18 and 2026-10-19. Continues doc 028 (orders, picking) on
+the same order; uses W1 (doc 025 §10) for weights and dimensions; implements the carrier boundary
+planned in doc 008 and the per-site carrier rule of doc 022 §8.
 
 Out of scope (not implemented, not pretended): delivery, returns, billing, the hotel portal, partial
-or split shipments, ordering a pickup ("svoz"), automatic printing (Raspberry Pi), the public QR
-passport and ESG. **No real carrier is connected yet**: PPL needs owner-provided access (§5).
+or split shipments, ordering a pickup ("svoz" — a PPL pickup order is not our hotel order),
+automatic printing (Raspberry Pi), the public QR passport, ESG, a production PPL connection.
 
 ## 1. One flow, on the order
 
 Everything is on the order detail in **Expedice** — no separate shipment list, no second worklist,
-no "create shipment" button:
+no "create shipment" button: open the order → scan the finished crates → complete picking →
+create the carrier labels → print and apply them → confirm **Připraveno k vyzvednutí** → after the
+real hand-over confirm **Předáno dopravci**.
 
-1. open the order → 2. scan the finished crates (picking, doc 028) → 3. complete picking →
-2. create the carrier labels → 5. print and apply them → 6. confirm **Připraveno k vyzvednutí** →
-3. after the real hand-over confirm **Předáno dopravci**.
+The order status is the **one** process status; the shipment records where the carrier request
+stands. The database couples them, so they cannot contradict each other:
 
-The order status is the **one** process status; the shipment records only where the carrier
-request stands. The database couples them, so they cannot contradict each other:
-
-| Order status (UI)                            | Meaning                                                                                    | Shipment                                                |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| `OPEN` (Otevřená / Rozpracovaná)             | picking                                                                                    | none                                                    |
-| `READY_TO_DISPATCH` (Kompletace dokončena)   | picking complete; shipment and parcels derived automatically                               | `DRAFT` → `REQUESTING` → `LABELED` (or back to `DRAFT`) |
-| `READY_FOR_PICKUP` (Připraveno k vyzvednutí) | the operator confirmed the labels are printed and applied                                  | `LABELED`                                               |
-| `HANDED_TO_CARRIER` (Předáno dopravci)       | the operator confirmed the real hand-over; the crate cycles become `DISPATCHED` (ADR 0021) | `LABELED`                                               |
-| `CANCELLED`                                  | cancelled (only before anything reached a carrier)                                         | cancelled                                               |
+| Order status (UI)                            | Meaning                                                              | Shipment                                                          |
+| -------------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `OPEN` (Otevřená / Rozpracovaná)             | picking                                                              | none                                                              |
+| `READY_TO_DISPATCH` (Kompletace dokončena)   | picking complete; shipment and parcels derived automatically         | `DRAFT` → `REQUESTING` → `LABELED`; `CANCELLING` while cancelling |
+| `READY_FOR_PICKUP` (Připraveno k vyzvednutí) | the operator confirmed the labels are printed and applied            | `LABELED`                                                         |
+| `HANDED_TO_CARRIER` (Předáno dopravci)       | the operator confirmed the real hand-over; crate cycles `DISPATCHED` | `LABELED`                                                         |
+| `CANCELLED`                                  | cancelled (only before anything reached a carrier)                   | cancelled                                                         |
 
 None of these means "delivered", "the bottle is at the hotel" or "a completed reuse cycle"
-(ADR 0011). A created or downloaded PDF is not evidence of printing; only the explicit
+(ADR 0011). A created or downloaded file is not evidence of printing; only the explicit
 confirmation is. The bottles keep their status (`FILLED`); nothing moves stock.
 
-## 2. Model (owner-approved 2026-10-18: internal shipment, parcels and their audited history)
+## 2. Model (owner-approved: internal shipment, parcels and their audited history)
 
-| Table                       | Purpose                                                                                                                                                   |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `shipments`                 | `SHP-000001`; one live (non-cancelled) per order — the whole order travels together; carrier code and its shipment reference recorded once                |
-| `shipment_parcels`          | one per allocated crate (= one physical crate = one parcel = one label); links the allocation (and so its bottles), crate and cycle; calculated reference |
-| `shipment_parcel_weighings` | optional actual weighings, append-only, corrections keep the previous one; only before the labels are requested                                           |
-| `shipment_carrier_requests` | each attempt at the carrier: unique client reference, the payload sent (no secrets), status, answer                                                       |
-| `shipment_labels`           | the carrier's label document, stored once (re-printing never contacts the carrier)                                                                        |
+| Table                       | Purpose                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `shipments`                 | `SHP-000001`; one live per order (the whole order together); carrier, **connection and environment recorded at the first request** (snapshot)    |
+| `shipment_parcels`          | one per allocated crate (= one physical crate = one parcel = one label); allocation (so its bottles), crate, cycle, calculated reference, number |
+| `shipment_parcel_weighings` | optional actual weighings, append-only, corrections keep the previous one; only before the labels are requested                                  |
+| `shipment_carrier_requests` | each attempt: unique client reference, the payload sent **including the site's carrier settings used** (snapshot, no secrets), status, polling   |
+| `shipment_labels`           | **one label file per parcel** and optionally the complete document; stored once, never replaced; PDF or ZPL with its DPI                         |
 
-Shipment history is part of the order history (`order_events`): shipment created, labels
-requested / created / refused / answer unknown / not created, parcel weighed, ready for pickup,
-handed over, preparation cancelled.
-
-Delivery data are the **order's snapshot** (doc 028), not the hotel as it is now. The sender is
-the site's address.
+The shipment history is part of the order history (`order_events`). Delivery data are the
+**order's snapshot** (doc 028); the sender comes from the site's carrier settings.
 
 ## 3. Rules
 
 - **Derived, not entered:** completing the picking creates the shipment and one parcel per crate in
-  loading order (same transaction). Orders completed before this change get it when labels are
-  first requested (the same derivation).
+  loading order (same transaction).
 - **Frozen content:** a completed order's crates cannot be removed (doc 028); while a carrier
-  request is unresolved or a shipment is labelled, the order cannot be cancelled
-  (`SHIPMENT_AT_CARRIER`) and no second shipment exists (one live per order, unique index). A draft
-  that never reached a carrier is cancelled together with the order.
-- **Cancelling the preparation** ("Zrušit přípravu přepravy", reason): only for a labelled shipment
-  and only when the carrier confirms the cancellation through its interface
-  (`carrier_cancelled_at`; the database refuses a local-only cancellation). Then a fresh draft is
-  derived from the same crates and the order is `READY_TO_DISPATCH` again. It never cancels the
-  order, never releases its crates and never returns material to stock. A carrier without
-  cancellation in its interface: `CARRIER_CANCEL_UNSUPPORTED`.
-- **Carrier requests — at most one send per attempt:** the request is written first (`PREPARED`),
-  then claimed by one conditional update (`SENT`) — only the claimer calls the carrier. A double
-  click, a concurrent click or a replay of the same request id finds the unresolved request and
-  sends nothing. A definitive refusal → `REJECTED`, back to draft. **No usable answer** (timeout,
-  lost response) → stays `SENT` with `NO_ANSWER`, recorded, **never re-sent**; "Ověřit u dopravce"
-  looks it up by its client reference: created → labels are fetched; the carrier confirms nothing
-  was created → `NOT_CREATED`, a new attempt (new client reference) may follow; unknown → stays for
-  a person. A request still possibly in flight (claimed, no outcome recorded, < 2 min) is not looked
-  up. Asynchronous acceptance (e.g. a PPL batch) → `ACCEPTED`, polled, never re-sent. Created but
-  labels not downloaded → `CREATED`, labels fetched again without a new shipment.
-- **Weights:** each parcel carries the **calculated reference** of the finished package: the crate's
-  Hotovo snapshot (W1, never rewritten) or — when it has none — the references in force when the
-  shipment was derived, labelled as such; unknown stays unknown. The **actual weighing** is
-  optional and kept apart; the carrier receives the actual weight if there is one, else the
-  reference. No weighing is required unless the configured carrier requires a weight that is not
-  known; then the missing data are shown and the request is refused (`SHIPMENT_DATA_MISSING`) —
-  never 0 or an invented value. No carrier limit (e.g. 30 kg) is hard-coded.
-- **Dimensions:** the outer dimensions of the final shipping package (W1) are shown per parcel and
-  sent when the carrier uses them.
+  request is unresolved, labels exist or a cancellation runs, the order cannot be cancelled
+  (`SHIPMENT_AT_CARRIER`) and no second shipment exists (one live per order). A draft that never
+  reached a carrier is cancelled with the order.
+- **At most one send per attempt:** the request is written first (`PREPARED`), then claimed by one
+  conditional update (`SENT`) — only the claimer calls the carrier. A double click, a concurrent
+  click or a replay finds the unresolved request and sends nothing.
+- **Time limit:** every carrier call aborts after `CARRIER_CALL_TIMEOUT_SECONDS` (default 30 s);
+  an aborted or answerless call is **unknown** (`NO_ANSWER`), never "failed", never re-sent.
+- **In-flight window:** a claimed request may still be in flight for `CARRIER_SETTLE_SECONDS`
+  (default 120 s, at least 3 × the time limit outside tests), measured **from `sent_at` in database
+  time** regardless of any error code. Before it ends: no lookup and no manual closing; the UI
+  shows from when "Ověřit" is possible.
+- **Only the carrier settles an uncertain request:** "Ověřit u dopravce" looks it up by its
+  references. Created → labels are fetched; the carrier itself confirms nothing was created →
+  `NOT_CREATED`; the carrier cannot tell (e.g. PPL without a batch id, §5) → it **stays uncertain**.
+  The passing of time never marks anything `NOT_CREATED` and nothing is re-created blindly.
+- **Exceptional manual closing** (`shipments:resolve_uncertain`, ADMIN only; a reason and an
+  explicit check box): a person who verified with the carrier that nothing was created closes an
+  uncertain or unanswered request (`NOT_CREATED`, `CLOSED_BY_PERSON`, audited). Only after the
+  in-flight window, never for a request the carrier reported as created. The dialog states the
+  risk: if a shipment does exist, the next request creates a **second** one at the carrier.
+- **Asynchronous carriers:** an accepted request (`ACCEPTED`, e.g. a PPL batch id stored at once)
+  is polled by a background worker: back-off 10 s, 20 s, 40 s … up to 5 min, at most 30 times; the
+  state is in the database, so a restart continues; several API processes share the work
+  (`SKIP LOCKED`). After the limit, a person checks with "Ověřit". The same applies to labels that
+  could not be downloaded yet (`CREATED`).
+- **Labels:** stored only after checking: each parcel's number is proven per parcel (never by
+  position), each file really is PDF/ZPL (magic bytes), ≤ 5 MB. A mismatch keeps the request open
+  (`CARRIER_PARCEL_MISMATCH`, `LABELS_INVALID`) for a person.
+- **Cancelling the preparation:** first **recorded** (`CANCELLING`, reason, under the order lock);
+  a ready-for-pickup order goes back to `READY_TO_DISPATCH`, so it cannot be handed over meanwhile;
+  the database ties that step to the cancellation. Then the carrier is asked (with the request's own
+  connection): its confirmation cancels (`carrier_cancelled_at`, a fresh draft of the same crates);
+  its refusal returns the shipment (`LABELED`, or `REQUESTING` for a created shipment whose labels
+  never became usable); an asynchronous or lost answer stays `CANCELLING` for "Ověřit zrušení".
+  Never cancels the order, releases crates or returns stock. Actual weighings are entered again on
+  the new draft.
+- **Weights:** calculated reference per parcel (Hotovo snapshot or, without one, the references at
+  derivation — labelled); optional actual weighing kept apart; the carrier gets the actual weight,
+  else the reference, only where it uses weights and its unit is confirmed. Missing required data are
+  shown and refused (`SHIPMENT_DATA_MISSING`), never 0 or invented; no carrier limit hard-coded.
+- **Snapshots:** each request keeps the settings it used; later changes of the site's settings never
+  change it; lookups, labels and cancellation use the request's connection and environment.
 
 ## 4. Carrier boundary
 
-`apps/api/src/orders/carriers/carrier.ts`: `create` (sends once; refusal vs. unknown), `poll` (by
-client reference / carrier reference), `labels`, `cancel`, and the carrier's rules (weight,
-dimensions, sender address: required / optional / not used; cancellation supported). The registry
-returns the carrier configured for a site, or none.
+`apps/api/src/orders/carriers/carrier.ts`: `create` (once; refusal vs. unknown), `poll`, `labels`
+(per parcel + complete), `cancel` (idempotent; may be asynchronous) and `cancelStatus`, plus the
+carrier's rules. The registry gives the carrier for a **new** request at a site (from its settings)
+and the carrier of an **existing** request (its connection and environment only).
 
-- **DEV and production today: no carrier** (`CARRIER_PROVIDER=none`, the default). The order shows
-  "Dopravce není pro tuto provozovnu nastavený"; no label, number or success is ever pretended.
-- `CARRIER_PROVIDER=test` — a fake carrier for automated tests (labels marked "TEST CARRIER - NOT A
-  REAL LABEL") — is refused by the environment schema unless `APP_ENV=test`, like
-  `AUTH_PROVIDER=test`.
+- No site carrier, or the site's settings incomplete/disabled, or the server lacks the credentials:
+  the order shows why ("Dopravce není pro tuto provozovnu připravený" + the reason); nothing is
+  pretended.
+- `CARRIER_PROVIDER=test` — a fake carrier for automated tests (labels "TEST CARRIER - NOT A REAL
+  LABEL") — is refused unless `APP_ENV=test`.
 
-## 5. PPL (CPL API) — what the official documentation says, and what is missing
+## 5. PPL (CPL API) — facts from the authoritative documentation (ppl-cpl-api.apidog.io, 2026-10-19)
 
-Sources (2026-10-18): developer.ppl.cz, the PPL CPL API documentation (ppl-cpl-api-en.apidog.io /
-ppl-cpl-api.apidog.io).
+- OAuth2 client credentials (`scope=myapi2`), token 30 min, at most 12 tokens/min — reused until
+  expiry. Test `https://api-dev.dhl.com/ecs/ppl/myapi2`; production URL exists but is **not used**.
+- `POST /shipment/batch` → `201`, batch id only in the `Location` header (stored at once) →
+  `GET /shipment/batch/{id}`: `importState` `Accepted | InProcess | Complete | Error`, each item with
+  `shipmentNumber`, `labelUrl`, and set parcels as `relatedItems` (`relationType: ShipmentSet`).
+- **Mapping parcels to crates:** batch status has no per-parcel index. Each set item therefore
+  carries its own `externalNumbers` (`CUST` = our parcel reference); `GET /shipment` returns
+  `externalNumbers` per shipment number → each number is mapped by that proof. If the proof is
+  missing, the labels are not accepted (open for a person) — never mapped by position.
+- **No idempotency key, duplicate `referenceId` behaviour and `CustomerReferences` matching are not
+  documented**; a lost `Location` header has no documented lookup → such a request stays uncertain.
+- Labels: `labelSettings.format` (`Pdf`/`Zpl`/…), `dpi` 203–1200 (ZPL); per-parcel `labelUrl`
+  (`/data/{guid}`) on the same API host, Bearer token; batch valid ≤ 30 days (AYVO keeps a copy).
+  Downloads go only to the configured API origin, without redirects, size-limited, content-checked.
+- Weight per set item optional; **unit not documented** → not sent until PPL confirms it
+  (mandatory towards Germany — DE is therefore not supported yet). No dimension fields.
+- Latin characters only (examples contradict it) → diacritics are stripped in what is sent.
+- Cancel `POST /shipment/{number}/cancel` → `202` (asynchronous) → confirmed only when `GET /shipment`
+  shows `Canceled`.
+- Pickup ordering is a separate endpoint (`/order/batch`) and is **not used**.
 
-- REST "CPL API", OAuth2 client credentials (`scope=myapi2`); test `https://api-dev.dhl.com/ecs/ppl/myapi2`
-  (separate database), production `https://api.dhl.com/ecs/ppl/myapi2`.
-- **Asynchronous:** `POST /shipment/batch` → batch id in the `Location` header → poll
-  `GET /shipment/batch/{id}` → shipment numbers and label URLs. Maps to `ACCEPTED` + `poll`.
-- Multi-parcel **shipment set** (one master number, one number and label per parcel) — matches one
-  shipment per order with one parcel per crate. The documented maximum parcels per set is
-  inconsistent (20 / 50 / 100) — to be confirmed with PPL; not hard-coded.
-- Per-parcel weight optional (mandatory towards Germany); **no dimension fields**; sender optional
-  (registered address otherwise); only Latin characters (no diacritics).
-- Labels PDF/ZPL/…, A4 (4 per page) or ≥ 127 × 110 mm thermal; re-downloadable while the batch is
-  valid (≤ 30 days) — AYVO stores its copy.
-- **No idempotency key documented.** `referenceId` is "unique", but the behaviour of a duplicate is
-  not documented; lookup `GET /shipment?CustomerReferences=…` exists, but whether it matches
-  `referenceId` is not documented; a lost batch id has no documented lookup. Until PPL answers, an
-  unknown PPL outcome stays unresolved for a person (`poll` → `UNKNOWN`) — never re-sent.
-- Cancellation `POST /shipment/{number}/cancel` → 202 (asynchronous; condition "before physical
-  dispatch", cut-off undocumented). Pickup ordering exists (`POST /order/batch`) — not used.
-
-**Needed from the owner** (credentials only into the server configuration, never into chat or git):
-PPL contract and CPL API access for the **test** environment (client id / secret), the customer
-number if PPL requires it, the sender/pickup address registered with PPL (and return address),
-the product (e.g. `BUSS`) and services, the label format (A4 vs. thermal, printer DPI), and PPL's
-written answers on: duplicate `referenceId`, lookup by `CustomerReferences`, maximum parcels per
-set, cancellation cut-off, weight unit. External tests only in PPL's test environment with
-synthetic data; no pickup orders, no live hotel data.
+**Open questions for PPL** (also in the PR): duplicate `referenceId`; does `CustomerReferences`
+match `referenceId` or `externalNumbers`; lookup of a batch after a lost `Location`; is each set
+item's `externalNumbers` returned per parcel by `GET /shipment`; weight unit and precision; maximum
+parcels per set (20 / 50 / 100 in different places); cancellation cut-off and behaviour for set
+parcels; label size — e-mail 127 × 101 mm (CZ) / 150 × 101 mm (EU) vs. documentation 127 × 110 mm /
+150 × 100 mm; which product codes our contract allows (`BUSS`?), and whether diacritics are accepted.
 
 ## 6. Permissions (catalogue migration; ADMIN only)
 
-| Permission           | Scope                    | Use                                                                          |
-| -------------------- | ------------------------ | ---------------------------------------------------------------------------- |
-| `shipments:read`     | active site, `WAREHOUSE` | the order's shipment, parcels, weights, labels (PDF), carrier numbers        |
-| `shipments:prepare`  | active site, `WAREHOUSE` | actual weighing, create/resolve labels, ready for pickup, cancel preparation |
-| `shipments:handover` | active site, `WAREHOUSE` | confirm the hand-over to the carrier                                         |
+| Permission                    | Scope                    | Use                                                                          |
+| ----------------------------- | ------------------------ | ---------------------------------------------------------------------------- |
+| `shipments:read`              | active site, `WAREHOUSE` | the order's shipment, parcels, weights, labels, carrier numbers              |
+| `shipments:prepare`           | active site, `WAREHOUSE` | actual weighing, create/resolve labels, ready for pickup, cancel preparation |
+| `shipments:handover`          | active site, `WAREHOUSE` | confirm the hand-over to the carrier                                         |
+| `shipments:resolve_uncertain` | active site, `WAREHOUSE` | the exceptional manual closing of an uncertain request (§3)                  |
 
-Checked by the global guard on every request, also on the repetition of the same request id; an
-order of another site is not found (404). Like orders (doc 028), not warehouse-scoped. No other
-role gains them; `HOTEL_USER` stays a planned, unassignable role.
+Checked on every request, also on the repetition of the same request id; another site's order is
+not found (404). Not warehouse-scoped (like orders, doc 028). `HOTEL_USER` stays unassignable.
 
 ## 7. UI
 
-Order detail: hotel, number, site and delivery snapshot as before; **Další krok** with exactly one
-main action for the current state (or a truthful notice: no carrier, missing data, unresolved
-request); **Balíky** — crate code, product, bottles, calculated reference (and its source), actual
-weighing (separately), package dimensions, carrier parcel number, the stored labels ("Otevřít
-štítky (PDF)") and, collapsed, "Zrušit přípravu přepravy"; confirmations in dialogs with an
-explicit check box; history with the shipment events. The order overview keeps open, completed
-and ready-for-pickup orders in the day tabs; "Předané a stornované" holds the closed ones. The
-hotel detail lists its orders with these statuses. The crate shows "Předaná dopravci (na cestě, ne
-u hotelu)".
+Order detail: hotel, number, site and delivery snapshot; **Další krok** with exactly one main action
+for the current state or a truthful notice (no carrier and why, missing data, uncertain request
+with the time from which it can be checked, carrier processing, cancellation running); the page
+refreshes itself while the carrier may answer. **Balíky**: crate code, product, bottles, calculated
+reference and its source, actual weighing (separately), package dimensions, carrier parcel number,
+**each parcel's own label**, the complete document, the carrier's test-environment badge; collapsed
+"Další možnosti" (cancel the preparation; the exceptional manual closing). Confirmations in dialogs
+with an explicit check box. The hotel detail lists its orders with these statuses.
 
-## 8. Implementation (PR, 2026-10-18)
+## 8. Implementation and tests
 
-- Migrations `20261018090000_dispatch_enum_values`, `20261018090100_dispatch_shipments` (additive:
-  new tables, triggers, stricter replacements of the order/cycle rule functions, permissions).
-- API: `orders` module — `ShipmentsService`, `ShipmentsController`
-  (`/api/admin/orders/:code/shipment…`), carrier boundary and the test-only carrier.
-- Tests: `shipments.e2e.test.ts` (three crates → three parcels and labels, missing weight,
-  double click, concurrency, answers lost before/after the carrier, in-flight request, refusal,
-  asynchronous acceptance, label download retry, frozen content, ready for pickup, hand-over and
-  `DISPATCHED`, cancellation through the carrier, no carrier configured, database rules, W1
-  snapshots untouched, no stock movement), `shipments-access.e2e.test.ts` (real sign-in: ADMIN
-  only, per-step permissions, permission removed before a replay, other site 404), Playwright
-  `workflow-shipment.spec.ts` (the whole flow on a 390 px terminal; screenshots desktop / 390 /
-  320 in `docs/screenshots/shipment/`).
-- Waiting for: PPL access (adapter), a label printer (automatic printing).
+- Migrations `20261018090000_dispatch_enum_values`, `20261018090100_dispatch_shipments` (additive).
+- API (`orders` module): `ShipmentsService`, `ShipmentCarrierFlow`, `ShipmentDeriver`,
+  `ShipmentPoller`, `ShipmentsController`, carrier boundary and registry, the test-only carrier.
+- `shipments.e2e.test.ts`: one and three crates, per-parcel labels mapped by the carrier's answer
+  (answered in reverse order), missing weight, double click and concurrency, answers lost before and
+  after the carrier, a hanging carrier cut off, asynchronous acceptance with polling continued by a
+  second app instance ("restart"), a failed batch, the polling limit, labels downloaded later and
+  checked before storing, the in-flight window in database time, the exceptional manual closing,
+  cancellation recorded first / refused / lost / unsupported, concurrent cancel and hand-over, frozen
+  content, `DISPATCHED`, no stock movement, database rules, W1 snapshots untouched, no carrier
+  configured. `shipments-access.e2e.test.ts`: real sign-in, ADMIN only, per-step permissions incl.
+  the exceptional one, permission removed before a replay, other site 404. Playwright
+  `workflow-shipment.spec.ts`: the whole flow on a 390 px terminal incl. per-parcel labels;
+  `workflow-dispatch.spec.ts`: mobile picking with the scanner focus.

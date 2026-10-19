@@ -3,9 +3,17 @@ export const shipmentsCs = {
   title: 'Přeprava',
   nextStep: 'Další krok',
   phase: {
-    noCarrier: 'Dopravce není pro tuto provozovnu nastavený',
+    noCarrier: 'Dopravce není pro tuto provozovnu připravený',
     noCarrierText:
-      'Přepravní štítky teď nelze vytvořit. Aplikace žádné štítky ani přepravní čísla nepředstírá – po nastavení dopravce (např. PPL) bude tento krok dostupný.',
+      'Přepravní štítky teď nelze vytvořit. Aplikace žádné štítky ani přepravní čísla nepředstírá.',
+    noCarrierReason: {
+      NOT_CONFIGURED: 'Dopravce není u provozovny nastavený (Správa systému → Provozovny).',
+      DISABLED: 'Použití dopravce je u provozovny vypnuté.',
+      INCOMPLETE: 'Nastavení dopravce u provozovny není kompletní.',
+      CREDENTIALS_MISSING: 'Přístupové údaje k dopravci nejsou na serveru nastavené.',
+      CONNECTION_UNAVAILABLE:
+        'Připojení k dopravci, přes které přeprava vznikla, není na serveru dostupné.',
+    } as Record<string, string>,
     missing: 'Chybí údaje, které dopravce vyžaduje',
     missingText: 'Doplňte je u balíků níže. Neznámá hodnota se nikdy neposílá jako 0.',
     createLabels: 'Vytvořit přepravní štítky',
@@ -16,6 +24,13 @@ export const shipmentsCs = {
       'Odpověď dopravce nedorazila. Požadavek se nikdy neodešle naslepo znovu – nejdřív se ověří u dopravce podle jeho reference.',
     inFlight: 'Požadavek se právě odesílá',
     inFlightText: 'Počkejte na odpověď dopravce a pak stav ověřte.',
+    resolvableAt: (at: string) => `Ověřit lze od ${at} – do té doby může požadavek ještě běžet.`,
+    pollingStopped:
+      'Automatické ověřování skončilo bez výsledku. Ověřte stav ručně; nic se znovu neodešle.',
+    cancelling: 'Zrušení u dopravce probíhá',
+    cancellingText:
+      'Zrušení je zaznamenané a objednávku teď nelze připravit k vyzvednutí ani předat. Přeprava se zruší, až to dopravce potvrdí.',
+    resolveCancel: 'Ověřit zrušení u dopravce',
     accepted: 'Dopravce požadavek zpracovává',
     acceptedText: 'Dopravce požadavek přijal; čísla a štítky zatím nevrátil.',
     created: 'Dopravce zásilku vytvořil, štítky se nestáhly',
@@ -46,7 +61,9 @@ export const shipmentsCs = {
     check: 'Dopravce bedny skutečně převzal.',
     confirm: 'Potvrdit předání',
   },
-  openLabels: 'Otevřít štítky (PDF)',
+  openLabels: 'Otevřít všechny štítky',
+  parcelLabel: (format: string) => `Štítek balíku (${format})`,
+  testEnvironment: 'Testovací prostředí dopravce',
   labelsNote: 'Opakovaný tisk používá uložené štítky – u dopravce nic nového nevzniká.',
   carrier: (name: string) => `Dopravce: ${name}`,
   shipment: (code: string) => `Přeprava ${code}`,
@@ -88,7 +105,13 @@ export const shipmentsCs = {
   cancel: 'Zrušit přípravu přepravy',
   cancelTitle: 'Zrušit přípravu přepravy?',
   cancelText:
-    'Zásilka se zruší u dopravce (jen pokud to potvrdí). Objednávka, její bedny ani sklad se nemění; připraví se nová přeprava ze stejných beden.',
+    'Zásilka se zruší u dopravce (jen pokud to potvrdí). Objednávka, její bedny ani sklad se nemění; připraví se nová přeprava ze stejných beden. Skutečná vážení balíků bude potřeba zadat znovu.',
+  abandon: 'Uzavřít nejistý požadavek ručně',
+  abandonTitle: 'Uzavřít nejistý požadavek ručně?',
+  abandonText:
+    'Výjimečný krok. Použijte ho jen tehdy, když jste u dopravce (např. v jeho portálu nebo podpoře) ověřili, že žádná zásilka nevznikla. Pokud zásilka přece jen existuje, nový požadavek vytvoří u dopravce DRUHOU zásilku. Krok se zaznamená s vaším jménem a důvodem.',
+  abandonCheck: 'Ověřil(a) jsem u dopravce, že zásilka nevznikla.',
+  abandonConfirm: 'Uzavřít požadavek',
   cancelConfirm: 'Zrušit přípravu',
   cancelUnsupported: 'Tento dopravce rušení přes rozhraní nepodporuje.',
   cancelled: 'Zrušené přípravy',
@@ -113,5 +136,9 @@ export const shipmentsCs = {
     CARRIER_CANCEL_REFUSED: 'Dopravce zrušení odmítl.',
     CARRIER_UNAVAILABLE: 'Dopravce zrušení nepotvrdil – nic se nezměnilo.',
     NO_LABELS: 'Štítky zatím neexistují.',
+    CARRIER_CONNECTION_UNAVAILABLE:
+      'Připojení k dopravci, přes které požadavek vznikl, není na serveru dostupné.',
+    REQUEST_NOT_ABANDONABLE:
+      'Tento požadavek nelze uzavřít ručně – dopravce zásilku vytvořil; zrušte ji přes dopravce.',
   } as Record<string, string>,
 };
