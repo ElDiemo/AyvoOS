@@ -42,7 +42,13 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
         <div className="flex min-w-0 flex-col gap-6">
           {!site.addressComplete && <Notice tone="warning">{t.addressMissing}</Notice>}
           <SiteForm site={site} />
-          {carriers && <CarrierSettings initial={carriers} site={site} />}
+          {carriers && (
+            <CarrierSettings
+              initial={carriers}
+              site={site}
+              canManageConnections={hasPermission(me, 'carriers:connections_manage')}
+            />
+          )}
           <Card title={t.audit} className="relative overflow-x-auto">
             <AuditList events={site.audit} testId="site-audit" />
           </Card>

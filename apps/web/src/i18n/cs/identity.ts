@@ -73,6 +73,8 @@ export const identityCs = {
     'shipments:prepare':
       'Připravit přepravu – skutečné vážení, přepravní štítky u dopravce, připraveno k vyzvednutí, zrušení přípravy',
     'shipments:handover': 'Potvrdit předání objednávky dopravci',
+    'carriers:connections_manage':
+      'Zadávat a nahrazovat přístupové údaje k dopravcům (uložené šifrovaně, nikdy se nezobrazí)',
     'sites:carrier_manage':
       'Spravovat dopravce provozovny – připojení, odesílatel, služba, štítky, ověření připojení',
     'shipments:resolve_uncertain':
@@ -89,6 +91,7 @@ export const identityCs = {
     shipments: 'Přeprava (dopravce)',
     identity: 'Uživatelé a role',
     sites: 'Provozovny',
+    carriers: 'Připojení dopravců',
   } as Record<string, string>,
   login: {
     title: 'Přihlášení do AYVO OS',
@@ -326,6 +329,7 @@ export const identityCs = {
       CARRIER_SETTINGS_UPDATED: 'Změna nastavení dopravce',
       CARRIER_CONNECTION_VERIFIED: 'Ověření připojení k dopravci',
       CARRIER_CONNECTION_VERIFY_FAILED: 'Neúspěšné ověření připojení k dopravci',
+      CARRIER_CREDENTIALS_REPLACED: 'Změna přístupových údajů k dopravci',
     } as Record<string, string>,
   },
   roles_admin: {

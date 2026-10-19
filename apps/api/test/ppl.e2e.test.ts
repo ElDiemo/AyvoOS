@@ -1,5 +1,10 @@
-import { randomUUID } from 'node:crypto';
-import type { OrderShipment, PplSettings, VerifyCarrierResult } from '@ayvo/types';
+import { randomBytes, randomUUID } from 'node:crypto';
+import type {
+  CarrierConnectionAdmin,
+  OrderShipment,
+  PplSettings,
+  VerifyCarrierResult,
+} from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
@@ -25,6 +30,8 @@ import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js'
  * 203 dpi, settings changed during a shipment (snapshot), token reuse, no secret in any answer or
  * audit, and sites kept apart. Synthetic data only.
  */
+const KEY = randomBytes(32).toString('base64');
+
 describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', () => {
   const ppl = new FakePpl('ayvo-test-client', 'ayvo-test-secret-value');
   let t: TestApp;
@@ -97,6 +104,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
       CARRIER_POLL_SECONDS: '0',
       CARRIER_SETTLE_SECONDS: '0',
       CARRIER_CALL_TIMEOUT_SECONDS: '5',
+      CARRIER_CREDENTIALS_KEY: KEY,
     });
     factory = await crateFactory(t, { capacity: 2 });
     hotel = (await createHotel(t, { name: 'Hotel Bečva', city: 'Přerov' })).code;
@@ -110,7 +118,9 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
   it('settings: saved incomplete and explained; verified (nothing created); then complete', async () => {
     let v = (await http().get(settingsUrl).expect(200)).body as PplSettings;
     expect(v).toMatchObject({ saved: false, enabled: false, label: { format: 'PDF', dpi: 203 } });
-    expect(v.connections).toEqual([{ code: 'PPL_TEST', environment: 'TEST', credentials: 'SET' }]);
+    expect(v.connections).toEqual([
+      { code: 'PPL_TEST', environment: 'TEST', credentials: 'SET', source: 'SERVER' },
+    ]);
     // A product is chosen only from the verified list; an unknown connection is refused.
     expect((await save()).body.code).toBe('PRODUCT_NOT_VERIFIED');
     expect((await save({ connection: 'PPL_PRODUCTION', productCode: null })).body.code).toBe(
@@ -450,14 +460,13 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     });
     if (other)
       expect(await registry.forSite(other.id)).toEqual({ gateway: null, reason: 'NOT_CONFIGURED' });
-    // An existing request keeps its own connection and environment; another environment: none.
-    expect(
-      registry.forConnection({
-        carrierCode: 'PPL',
-        connection: 'PPL_TEST',
-        environment: 'PRODUCTION',
-      }),
-    ).toBeNull();
+    // An existing request keeps its own connection, environment and account; anything else: none.
+    const account = (await registry.ppl('PPL_TEST'))!.account;
+    const ref = { carrierCode: 'PPL', connection: 'PPL_TEST', environment: 'TEST', account };
+    expect(await registry.forConnection(ref)).not.toBeNull();
+    expect(await registry.forConnection({ ...ref, environment: 'PRODUCTION' })).toBeNull();
+    expect(await registry.forConnection({ ...ref, account: 'someotheraccount' })).toBeNull();
+    expect(await registry.forConnection({ ...ref, account: null })).toBeNull();
   });
 
   it('the token is reused until it expires (not one per request)', async () => {
@@ -467,5 +476,130 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     const res = await post(order, 'labels');
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(ppl.tokens - before).toBeLessThanOrEqual(1);
+  });
+
+  // --- Credentials managed in the administration (ADR 0027). Last: they replace the server's
+  // credentials of PPL_TEST in this test database.
+
+  const connectionsUrl = '/api/admin/carrier-connections';
+  const replace = (clientId: string, clientSecret: string, requestId = randomUUID()) =>
+    http()
+      .post(`${connectionsUrl}/PPL_TEST/credentials`)
+      .send({ requestId, clientId, clientSecret, reason: 'Synthetic test credentials' });
+  const pplTest = async () =>
+    ((await http().get(connectionsUrl).expect(200)).body as CarrierConnectionAdmin[]).find(
+      (c) => c.code === 'PPL_TEST',
+    )!;
+
+  it('credentials entered in the administration: encrypted, write-only, audited without values', async () => {
+    await ready();
+    expect(await pplTest()).toMatchObject({
+      credentials: 'SET',
+      source: 'SERVER',
+      environment: 'TEST',
+      keyAvailable: true,
+    });
+    // The same account entered in the administration; a repeat of the request is the same request.
+    const id = randomUUID();
+    const res = await replace(ppl.clientId, ppl.clientSecret, id).expect(200);
+    await replace(ppl.clientId, ppl.clientSecret, id).expect(200);
+    expect(await pplTest()).toMatchObject({ credentials: 'SET', source: 'ADMIN' });
+    // Same account: the earlier verification stays valid.
+    expect(((await http().get(settingsUrl).expect(200)).body as PplSettings).problems).toEqual([]);
+    const row = await t.prisma.carrierConnection.findUniqueOrThrow({ where: { code: 'PPL_TEST' } });
+    const stored = JSON.stringify(
+      [
+        res.body,
+        await pplTest(),
+        Buffer.from(row.secretCiphertext).toString('latin1'),
+        await t.prisma.operationRequest.findMany({ where: { requestId: id } }),
+        await t.prisma.auditEvent.findMany({ where: { type: 'CARRIER_CREDENTIALS_REPLACED' } }),
+      ],
+      (_, v: unknown) => (typeof v === 'bigint' ? v.toString() : v),
+    );
+    expect(stored).not.toContain(ppl.clientSecret);
+    expect(stored).not.toContain(KEY);
+    expect(stored).not.toContain('clientSecret":"');
+    // Incomplete or foreign input is refused; nothing echoes the value.
+    const bad = await http()
+      .post(`${connectionsUrl}/PPL_TEST/credentials`)
+      .send({ requestId: randomUUID(), clientId: 'x', clientSecret: '', reason: 'short secret' });
+    expect(bad.status).toBe(400);
+    expect((await replace('a', 'b').expect(200)) && true).toBe(true);
+    await replace(ppl.clientId, ppl.clientSecret).expect(200);
+    expect(
+      (
+        await http().post(`${connectionsUrl}/PPL_PROD/credentials`).send({
+          requestId: randomUUID(),
+          clientId: 'a',
+          clientSecret: 'b',
+          reason: 'no such connection',
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it('another account never takes over existing shipments; switching back restores them', async () => {
+    await ready();
+    const { order } = await completed(1);
+    await post(order, 'labels').expect(200);
+    const number = lastBatch().numbers[0]!.number;
+    // Credentials of ANOTHER (synthetic) account.
+    ppl.clients.set('ayvo-other-account', 'synthetic-other-secret');
+    await replace('ayvo-other-account', 'synthetic-other-secret').expect(200);
+    const v = await view(order);
+    expect(v.shipment!.status, JSON.stringify(v)).toBe('LABELED');
+    // The shipment's own carrier (its account) is not available; nothing switches to the new one.
+    expect(v.shipment!.carrier.unavailable).toBe('CONNECTION_UNAVAILABLE');
+    const cancels = ppl.seen.filter((x) => x.path.endsWith('/cancel')).length;
+    expect((await post(order, 'cancel', { reason: 'Omyl' })).body.code).toBe(
+      'CARRIER_CANCEL_UNSUPPORTED',
+    );
+    expect(ppl.seen.filter((x) => x.path.endsWith('/cancel')).length).toBe(cancels);
+    // The site's verification was made with the previous account: new shipments wait for a new one.
+    expect(((await http().get(settingsUrl).expect(200)).body as PplSettings).problems).toContain(
+      'VERIFIED_WITH_ANOTHER_CONNECTION',
+    );
+    // Back to the original account: the shipment is cancelled with ITS account only.
+    await replace(ppl.clientId, ppl.clientSecret).expect(200);
+    const c = ((await post(order, 'cancel', { reason: 'Omyl' }).expect(200)).body as OrderShipment)
+      .shipment!;
+    expect(c.status).toBe('CANCELLING');
+    const asked = ppl.seen.filter((x) => x.path === `/shipment/${number}/cancel`);
+    expect(asked.map((x) => x.client)).toEqual([ppl.clientId]);
+  });
+
+  it('stored credentials unreadable with another key: never replaced by the server file', async () => {
+    const other = await createTestApp({
+      PPL_TEST_CLIENT_ID: ppl.clientId,
+      PPL_TEST_CLIENT_SECRET: ppl.clientSecret,
+      PPL_TEST_API_BASE_URL_FOR_TESTS: ppl.base,
+      CARRIER_POLL_SECONDS: '0',
+      CARRIER_CREDENTIALS_KEY: randomBytes(32).toString('base64'),
+    });
+    const noKey = await createTestApp({
+      PPL_TEST_CLIENT_ID: ppl.clientId,
+      PPL_TEST_CLIENT_SECRET: ppl.clientSecret,
+      PPL_TEST_API_BASE_URL_FOR_TESTS: ppl.base,
+      CARRIER_POLL_SECONDS: '0',
+    });
+    try {
+      for (const app of [other, noKey]) {
+        const list = (await request(app.app.getHttpServer()).get(connectionsUrl).expect(200))
+          .body as CarrierConnectionAdmin[];
+        expect(list.find((c) => c.code === 'PPL_TEST')).toMatchObject({
+          credentials: 'UNREADABLE',
+          source: 'ADMIN',
+        });
+        expect(await app.app.get(CarrierRegistryService).ppl('PPL_TEST')).toBeNull();
+      }
+      const refused = await request(noKey.app.getHttpServer())
+        .post(`${connectionsUrl}/PPL_TEST/credentials`)
+        .send({ requestId: randomUUID(), clientId: 'a', clientSecret: 'b', reason: 'no key' });
+      expect([refused.status, refused.body.code]).toEqual([409, 'CREDENTIALS_KEY_MISSING']);
+    } finally {
+      await other.close();
+      await noKey.close();
+    }
   });
 });

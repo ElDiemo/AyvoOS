@@ -909,6 +909,7 @@ enum OperationKind {
   SHIPMENT_CANCEL_RESOLVE
   CARRIER_SETTINGS_UPDATE
   CARRIER_CONNECTION_VERIFY
+  CARRIER_CREDENTIALS_REPLACE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1041,8 +1042,9 @@ model User {
   parcelWeighings      ShipmentParcelWeighing[] @relation("ParcelWeighedBy")
   carrierRequests      ShipmentCarrierRequest[] @relation("CarrierRequestBy")
 
-  carrierSettingsVerified SiteCarrierSetting[] @relation("CarrierSettingVerifiedBy")
-  carrierSettingsUpdated  SiteCarrierSetting[] @relation("CarrierSettingUpdatedBy")
+  carrierSettingsVerified   SiteCarrierSetting[] @relation("CarrierSettingVerifiedBy")
+  carrierSettingsUpdated    SiteCarrierSetting[] @relation("CarrierSettingUpdatedBy")
+  carrierConnectionsUpdated CarrierConnection[]  @relation("CarrierConnectionUpdatedBy")
 
   @@map("users")
 }
@@ -2523,6 +2525,8 @@ model Shipment {
   carrierCode         String?        @map("carrier_code")
   carrierConnection   String?        @map("carrier_connection")
   carrierEnvironment  String?        @map("carrier_environment")
+  /// Fingerprint of the carrier account (ADR 0027): later calls only with this same account.
+  carrierAccount      String?        @map("carrier_account")
   carrierShipmentRef  String?        @map("carrier_shipment_ref")
   createdAt           DateTime       @map("created_at") @db.Timestamptz(3)
   createdBy           String         @map("created_by") @db.Uuid
@@ -2645,6 +2649,7 @@ model ShipmentCarrierRequest {
   carrierCode        String               @map("carrier_code")
   carrierConnection  String               @map("carrier_connection")
   carrierEnvironment String               @map("carrier_environment")
+  carrierAccount     String?              @map("carrier_account")
   clientReference    String               @unique @map("client_reference")
   status             CarrierRequestStatus @default(PREPARED)
   payload            Json
@@ -2727,6 +2732,8 @@ model SiteCarrierSetting {
   verifiedConnection String?   @map("verified_connection")
   /// The carrier's product list as read during the verification (code + name).
   verifiedProducts   Json?     @map("verified_products")
+  /// The carrier account fingerprint the verification was made with (ADR 0027).
+  verifiedAccount    String?   @map("verified_account")
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
   updatedBy          String    @map("updated_by") @db.Uuid
@@ -2736,4 +2743,26 @@ model SiteCarrierSetting {
   updater  User  @relation("CarrierSettingUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@map("site_carrier_settings")
+}
+
+/// Credentials of a server-side carrier connection entered in the administration (ADR 0027): the
+/// secret only encrypted (AES-256-GCM, key in the server environment). Replaced, never deleted,
+/// never returned by the API. Only the TEST environment exists in this stage.
+model CarrierConnection {
+  code             String   @id
+  carrier          String
+  environment      String
+  clientId         String   @map("client_id")
+  account          String
+  secretCiphertext Bytes    @map("secret_ciphertext")
+  secretIv         Bytes    @map("secret_iv")
+  secretTag        Bytes    @map("secret_tag")
+  keyId            String   @map("key_id")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy        String   @map("updated_by") @db.Uuid
+
+  updater User @relation("CarrierConnectionUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  @@map("carrier_connections")
 }

@@ -137,7 +137,7 @@ export class ShipmentsService {
     const live = rows.find((r) => r.status !== 'CANCELLED') ?? null;
     if (!live) return { carrier: current, shipment: null, cancelled };
     // A shipment already at a carrier is shown with ITS carrier and environment (snapshot).
-    const own = this.flow.gatewayOf(live);
+    const own = await this.flow.gatewayOf(live);
     // A draft is shown with the site's current carrier (the next request uses it).
     const carrier: CarrierInfo =
       live.carrierCode && live.status !== 'DRAFT'
@@ -423,6 +423,7 @@ export class ShipmentsService {
           carrierCode: carrier.code,
           carrierConnection: carrier.connection,
           carrierEnvironment: carrier.environment,
+          carrierAccount: carrier.account,
         };
         await tx.shipment.update({
           where: { id: shipment.id },
@@ -469,7 +470,7 @@ export class ShipmentsService {
       async (tx) => {
         const order = await this.lockOrder(tx, code, site.siteId);
         const open = await this.openRequest(tx, order.id);
-        if (!this.flow.gatewayOf(open)) {
+        if (!(await this.flow.gatewayOf(open))) {
           throw domainError(
             409,
             'CARRIER_CONNECTION_UNAVAILABLE',
@@ -671,7 +672,7 @@ export class ShipmentsService {
             );
           }
         }
-        const carrier = this.flow.gatewayOf(shipment);
+        const carrier = await this.flow.gatewayOf(shipment);
         if (!carrier || !carrier.rules.canCancel) {
           throw domainError(
             409,
@@ -869,6 +870,7 @@ export class ShipmentsService {
         carrierCode: true,
         carrierConnection: true,
         carrierEnvironment: true,
+        carrierAccount: true,
       },
     });
   }

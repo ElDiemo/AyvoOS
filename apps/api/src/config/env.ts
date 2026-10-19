@@ -136,6 +136,17 @@ export const envSchema = z
       (v) => (v === '' ? undefined : v),
       z.string().min(1).max(500).optional(),
     ),
+    // AES-256-GCM key (base64, 32 bytes) for carrier credentials entered in the administration
+    // (ADR 0027). Without it, credentials cannot be entered or read there.
+    CARRIER_CREDENTIALS_KEY: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .refine((v) => /^[A-Za-z0-9+/]{43}=$/.test(v) && Buffer.from(v, 'base64').length === 32, {
+          message: 'must be 32 random bytes in base64',
+        })
+        .optional(),
+    ),
     // Only for automated tests (a simulated PPL server); refused unless APP_ENV=test.
     PPL_TEST_API_BASE_URL_FOR_TESTS: z.url({ protocol: /^https?$/ }).optional(),
 

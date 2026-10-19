@@ -114,6 +114,35 @@ test('ADMIN sets up PPL for a site: incomplete → verified → complete; nothin
   await shot(page, 'carrier-03-complete-phone');
 });
 
+test('ADMIN enters connection credentials: write-only, never shown back', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/admin/carriers');
+  const card = page.getByTestId('connection-PPL_TEST');
+  await expect(card).toContainText('Testovací prostředí');
+  await expect(page.getByTestId('connection-PPL_TEST-state')).toHaveText(
+    'nastaveno · ze serverového souboru',
+  );
+  // The simulated server's own (fake) account, now entered in the administration.
+  await page.getByTestId('connection-PPL_TEST-client-id').fill('e2e-fake-ppl-client');
+  const secret = page.getByTestId('connection-PPL_TEST-secret');
+  await expect(secret).toHaveAttribute('type', 'password');
+  await secret.fill(FAKE_SECRET);
+  await page.getByTestId('connection-PPL_TEST-reason').fill('Synthetic browser test');
+  await page.getByTestId('connection-PPL_TEST-save').click();
+  await expect(card).toContainText('Přístupové údaje uloženy.');
+  await expect(page.getByTestId('connection-PPL_TEST-state')).toHaveText(
+    'nastaveno · zadáno v administraci',
+  );
+  await expect(secret).toHaveValue('');
+  await page.reload();
+  expect(await page.content()).not.toContain(FAKE_SECRET);
+  await shot(page, 'carrier-04-connections');
+  // The site still uses it — same account, so the verification stays valid.
+  const site = await openMainSite(page);
+  await expect(site.getByTestId('carrier-credentials')).toContainText('zadáno v administraci');
+  await expect(site.getByTestId('carrier-problems')).toContainText('Nastavení je úplné');
+});
+
 test('the operator never sees the carrier settings', async ({ browser }) => {
   const ctx = await browser.newContext({ storageState: 'e2e/.auth/operator.json' });
   const page = await ctx.newPage();
@@ -121,6 +150,9 @@ test('the operator never sees the carrier settings', async ({ browser }) => {
   expect(res.status()).toBe(403);
   await page.goto('/admin/sites');
   await expect(page.getByTestId('carrier-settings')).toHaveCount(0);
+  expect((await page.request.get('/api/admin/carrier-connections')).status()).toBe(403);
+  await page.goto('/admin/carriers');
+  await expect(page.getByTestId('connection-PPL_TEST')).toHaveCount(0);
   expect(await page.content()).not.toContain(FAKE_SECRET);
   await ctx.close();
 });

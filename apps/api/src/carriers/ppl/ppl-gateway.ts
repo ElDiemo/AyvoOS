@@ -139,7 +139,10 @@ export class PplGateway implements CarrierGateway {
     canCancel: true,
   };
 
-  constructor(private readonly client: PplClient) {
+  constructor(
+    private readonly client: PplClient,
+    readonly account: string,
+  ) {
     this.connection = client.connection.code;
     this.environment = client.connection.environment;
     this.name = this.environment === 'TEST' ? 'PPL (testovací prostředí)' : 'PPL';

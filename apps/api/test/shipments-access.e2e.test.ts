@@ -181,6 +181,24 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
         ).status,
       ).toBe(403);
     }
+    // Carrier connections (credentials): ADMIN only as well; a custom role can never hold it.
+    for (const u of [supervisor, dispatcher]) {
+      expect((await as(u.cookie).get('/api/admin/carrier-connections')).status).toBe(403);
+      expect(
+        (
+          await http()
+            .post('/api/admin/carrier-connections/PPL_TEST/credentials')
+            .set('Cookie', u.cookie)
+            .send({ requestId: randomUUID(), clientId: 'a', clientSecret: 'b', reason: 'not mine' })
+        ).status,
+      ).toBe(403);
+    }
+    const conn = await ra.prisma.rolePermission.findMany({
+      where: { permissionCode: 'carriers:connections_manage' },
+      select: { roleCode: true },
+    });
+    expect(conn.map((h) => h.roleCode)).toEqual(['ADMIN']);
+    await as(admin).get('/api/admin/carrier-connections').expect(200);
     const own = await as(admin).get(url).expect(200);
     const theirs = await as(admin).get(`/api/admin/sites/${other.id}/carriers/ppl`).expect(200);
     expect([own.body.site.id, theirs.body.site.id]).toEqual([INITIAL_SITE_ID, other.id]);

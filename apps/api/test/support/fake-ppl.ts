@@ -62,11 +62,22 @@ export class FakePpl {
   readonly batches = new Map<string, Batch>();
   readonly cancelled = new Set<string>();
   /** Every request seen: method + path (+ whether a Bearer token was present). */
-  readonly seen: { method: string; path: string; bearer: boolean; host: string }[] = [];
+  readonly seen: {
+    method: string;
+    path: string;
+    bearer: boolean;
+    /** The account (client id) whose token was used, if any. */
+    client: string | null;
+    host: string;
+  }[] = [];
   private serial = 4_000_000_000;
 
   readonly clientId: string;
   readonly clientSecret: string;
+  /** Further accounts PPL knows (client id → secret), e.g. after credentials were replaced. */
+  readonly clients = new Map<string, string>();
+  /** The client id each issued token belongs to. */
+  readonly tokenClient = new Map<string, string>();
 
   // No parameter properties: the Playwright API server loads this file with Node's type stripping.
   constructor(clientId = 'fake-client-id', clientSecret = 'fake-client-secret') {
@@ -128,16 +139,26 @@ export class FakePpl {
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://x');
     const path = url.pathname.slice(BASE_PATH.length);
-    const bearer = req.headers.authorization === `Bearer ${this.validToken}` && !!this.validToken;
-    this.seen.push({ method: req.method ?? '', path, bearer, host: req.headers.host ?? '' });
+    const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
+    const client = this.tokenClient.get(token) ?? null;
+    const bearer = client !== null;
+    this.seen.push({
+      method: req.method ?? '',
+      path,
+      bearer,
+      client,
+      host: req.headers.host ?? '',
+    });
     if (this.mode.down) return this.json(res, 503, { title: 'Service unavailable' });
 
     if (req.method === 'POST' && path === '/login/getAccessToken') {
       if (this.mode.tokenDown) return this.json(res, 503, { title: 'Service unavailable' });
       const form = new URLSearchParams(await this.body(req));
+      const id = form.get('client_id') ?? '';
+      const known = id === this.clientId ? this.clientSecret : this.clients.get(id);
       if (
-        form.get('client_id') !== this.clientId ||
-        form.get('client_secret') !== this.clientSecret ||
+        known === undefined ||
+        form.get('client_secret') !== known ||
         form.get('grant_type') !== 'client_credentials' ||
         form.get('scope') !== 'myapi2'
       ) {
@@ -145,6 +166,7 @@ export class FakePpl {
       }
       this.tokens += 1;
       this.validToken = `tok-${randomUUID()}`;
+      this.tokenClient.set(this.validToken, id);
       return this.json(res, 200, {
         access_token: this.validToken,
         expires_in: 1800,

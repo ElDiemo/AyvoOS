@@ -158,6 +158,7 @@ export class TestCarrier implements CarrierGateway {
   readonly name = 'Testovací dopravce (jen automatické testy)';
   readonly connection = 'TEST';
   readonly environment = 'TEST' as const;
+  readonly account = 'test-carrier';
   get rules(): CarrierRules {
     return testCarrierControl.rules;
   }

@@ -15,7 +15,8 @@ import { PrismaService } from '../database/prisma.service.js';
 import { CarrierRegistryService } from './carrier-registry.service.js';
 import { carrierProblems, isVerifiedProduct } from './carrier-settings.rules.js';
 import { PplAuthError } from './ppl/ppl-client.js';
-import { isPplConnection, pplConnectionList } from './ppl/ppl-connections.js';
+import { CarrierCredentialsService } from './carrier-credentials.service.js';
+import { isPplConnection } from './ppl/ppl-connections.js';
 
 const DEFAULT_INPUT: PplSettingsInput = {
   enabled: false,
@@ -61,6 +62,7 @@ export class CarrierSettingsService {
     private readonly operations: OperationRequestsService,
     private readonly audit: AuditService,
     private readonly registry: CarrierRegistryService,
+    private readonly credentials: CarrierCredentialsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -104,7 +106,7 @@ export class CarrierSettingsService {
       site,
       carrier: 'PPL',
       saved: !!row,
-      connections: pplConnectionList(this.env),
+      connections: await this.credentials.connections(),
       verified:
         row?.verifiedAt && row.verifiedConnection
           ? {
@@ -116,7 +118,10 @@ export class CarrierSettingsService {
                 : [],
             }
           : null,
-      problems: carrierProblems(this.env, row),
+      problems: carrierProblems(
+        row,
+        row?.connection ? await this.credentials.state(row.connection) : null,
+      ),
       updatedAt: row?.updatedAt.toISOString() ?? null,
       updatedBy: row?.updater.displayName ?? null,
     };
@@ -183,6 +188,7 @@ export class CarrierSettingsService {
                 verifiedAt: null,
                 verifiedBy: null,
                 verifiedConnection: null,
+                verifiedAccount: null,
                 verifiedProducts: Prisma.DbNull,
               }
             : {};
@@ -219,7 +225,7 @@ export class CarrierSettingsService {
     if (!row?.connection) {
       throw domainError(409, 'NO_CONNECTION', 'Choose and save a connection first');
     }
-    const gateway = this.registry.ppl(row.connection);
+    const gateway = await this.registry.ppl(row.connection);
     if (!gateway) {
       throw domainError(
         409,
@@ -261,6 +267,8 @@ export class CarrierSettingsService {
               verifiedAt: new Date(),
               verifiedBy: actorId,
               verifiedConnection: row.connection,
+              // Valid only for this account: replaced credentials of another account need a new check.
+              verifiedAccount: gateway.account,
               verifiedProducts: products,
             },
           });

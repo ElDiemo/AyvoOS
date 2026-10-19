@@ -7,6 +7,7 @@ import {
   type PplSettingsInput,
   type Site,
 } from '@ayvo/types';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useAttempt } from '@/components/catalog/form-kit';
@@ -39,7 +40,16 @@ const inputOf = (s: PplSettings): PplSettingsInput => ({
  * URL: a connection is chosen by its server-side code, with "nastaveno / nenastaveno" for its
  * credentials. "Ověřit připojení" reads PPL's service list and creates nothing.
  */
-export function CarrierSettings({ initial, site }: { initial: PplSettings; site: Site }) {
+export function CarrierSettings({
+  initial,
+  site,
+  canManageConnections,
+}: {
+  initial: PplSettings;
+  site: Site;
+  /** Whether the viewer may enter connection credentials (Správa systému → Dopravci). */
+  canManageConnections: boolean;
+}) {
   const router = useRouter();
   const [settings, setSettings] = useState(initial);
   const [form, setForm] = useState<PplSettingsInput>(() => inputOf(initial));
@@ -166,6 +176,21 @@ export function CarrierSettings({ initial, site }: { initial: PplSettings; site:
               <strong className={connection.credentials === 'SET' ? '' : 'text-red-700'}>
                 {connection.credentials === 'SET' ? t.credentialsSet : t.credentialsMissing}
               </strong>
+              {connection.source && (
+                <span className="text-stone-500"> ({t.connections.source[connection.source]})</span>
+              )}
+              {canManageConnections && (
+                <>
+                  {' · '}
+                  <Link
+                    href="/admin/carriers"
+                    className="underline"
+                    data-testid="carrier-manage-connections"
+                  >
+                    {t.manageConnections}
+                  </Link>
+                </>
+              )}
             </p>
           )}
           {connection?.environment === 'TEST' && (

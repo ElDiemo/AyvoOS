@@ -2,13 +2,14 @@
 
 Status (2026-10-19):
 
-| Part                                                     | Implemented | Tested                                       | Deployed |
-| -------------------------------------------------------- | ----------- | -------------------------------------------- | -------- |
-| Order flow, shipment, parcels, labels, ready, hand-over  | yes (PR A)  | automated (API, DB rules, Playwright)        | no       |
-| Carrier boundary, test-only carrier, polling, cancelling | yes (PR A)  | automated, with the test-only carrier        | no       |
-| Site carrier settings (PPL), PPL CPL adapter             | yes (PR B)  | automated against a simulated PPL server     | no       |
-| Real PPL test environment                                | —           | **not yet** (needs the test credentials, §5) | no       |
-| Physical printing on the Zebra ZD220                     | —           | **open** (physical acceptance, §5)           | no       |
+| Part                                                     | Implemented | Tested                                   | Deployed |
+| -------------------------------------------------------- | ----------- | ---------------------------------------- | -------- |
+| Order flow, shipment, parcels, labels, ready, hand-over  | yes (PR A)  | automated (API, DB rules, Playwright)    | no       |
+| Carrier boundary, test-only carrier, polling, cancelling | yes (PR A)  | automated, with the test-only carrier    | no       |
+| Site carrier settings (PPL), PPL CPL adapter             | yes (PR B)  | automated against a simulated PPL server | no       |
+| Carrier connections in the administration (ADR 0027)     | yes (PR B)  | automated (API, Playwright)              | no       |
+| Real PPL test environment                                | —           | one authorized run, §10                  | no       |
+| Physical printing on the Zebra ZD220                     | —           | **open** (physical acceptance, §5)       | no       |
 
 Scope approved by the owner on 2026-10-18 and 2026-10-19. Continues doc 028 (orders, picking) on
 the same order; uses W1 (doc 025 §10) for weights and dimensions; implements the carrier boundary
@@ -253,31 +254,18 @@ is no production connection, so DEV can neither switch nor fall back to producti
 refuses the PPL TEST credentials with `APP_ENV=production`; a different base URL is accepted only by
 automated tests (`APP_ENV=test`).
 
-**Credentials** live only in the server env file (`/opt/ayvo/secrets/dev-preview.env`, outside git)
-as `PPL_TEST_CLIENT_ID` and `PPL_TEST_CLIENT_SECRET` (both or neither), passed to the API container by
-`deploy/dev/compose.yml`. They and the token never reach the browser, logs, audit, screenshots or
-the repository; the token is cached in memory until shortly before it expires.
+**Credentials** (ADR 0027): entered in **Správa systému → Dopravci** (ADMIN,
+`carriers:connections_manage`) — stored only AES-256-GCM-encrypted in `carrier_connections`, the
+key (`CARRIER_CREDENTIALS_KEY`) only in the server env file; the secret is write-only (never
+returned, logged, audited or kept in an idempotency record). Otherwise the server env file
+(`PPL_TEST_CLIENT_ID` / `PPL_TEST_CLIENT_SECRET`, passed by `deploy/dev/compose.yml`) applies. The
+UI shows only "nastaveno / nenastaveno" and the source. Every shipment and request records the
+carrier **account** (a fingerprint of the client id): existing shipments are verified, polled and
+cancelled only with that same account — credentials of another account never take them over.
 
-Inserting them on the DEV server (owner; values never typed into a chat or a command line):
-
-```bash
-# 1. Back up the env file (permissions kept).
-sudo cp -p /opt/ayvo/secrets/dev-preview.env /opt/ayvo/secrets/dev-preview.env.bak-$(date +%Y%m%d%H%M)
-# 2. Check that the keys are not there yet (prints only key names).
-sudo grep -o '^PPL_TEST_[A-Z_]*' /opt/ayvo/secrets/dev-preview.env
-# 3. Read the values without echo and append them (no shell history, not shown).
-read -rs -p 'PPL client_id: ' PPL_ID; echo
-read -rs -p 'PPL client_secret: ' PPL_SECRET; echo
-printf 'PPL_TEST_CLIENT_ID=%s\nPPL_TEST_CLIENT_SECRET=%s\n' "$PPL_ID" "$PPL_SECRET" \
-  | sudo tee -a /opt/ayvo/secrets/dev-preview.env >/dev/null
-unset PPL_ID PPL_SECRET
-# 4. Verify presence only (key names, never values) and the file mode.
-sudo grep -o '^PPL_TEST_[A-Z_]*' /opt/ayvo/secrets/dev-preview.env
-sudo stat -c '%a %U:%G' /opt/ayvo/secrets/dev-preview.env
-```
-
-They take effect with the next approved deploy (`scripts/deploy-dev.sh`); afterwards the site
-settings show "nastaveno" and "Ověřit připojení" can be used. Until then nothing can be sent to PPL.
+On the DEV server, the owner authorized (2026-10-19) storing the PPL TEST credentials in
+`/opt/ayvo/secrets/dev-preview.env` together with a generated `CARRIER_CREDENTIALS_KEY` (backup
+kept, mode 600, no duplicate keys). They take effect only with an approved deploy.
 
 **Tests:** `ppl.e2e.test.ts` runs the real adapter against a simulated PPL API
 (`test/support/fake-ppl.ts`): settings saved incomplete and explained, verification (nothing

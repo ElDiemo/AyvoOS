@@ -11,6 +11,7 @@
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -57,6 +58,8 @@ const testEnv = {
   PPL_TEST_CLIENT_ID: fakePpl.clientId,
   PPL_TEST_CLIENT_SECRET: fakePpl.clientSecret,
   PPL_TEST_API_BASE_URL_FOR_TESTS: fakePpl.base,
+  // A fresh random key per run: credentials entered in the browser tests are encrypted with it.
+  CARRIER_CREDENTIALS_KEY: randomBytes(32).toString('base64'),
   DATABASE_URL: e2eUrl,
   APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
   // The browser tests sign in many times from one address.

@@ -59,8 +59,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   `CARRIER_PROVIDER=test` only with `APP_ENV=test`. No delivery, returns or pickup ordering.
   Site carrier settings (doc 029 §9, owner 2026-10-19): `site_carrier_settings` (PPL only,
   `sites:carrier_manage`, ADMIN), a server-side connection by code (only `PPL_TEST`, URL fixed in
-  code, no production connection), credentials only in the server env file — never in the DB,
-  browser, logs, audit or git; each request snapshots settings + connection + environment.
+  code, no production connection), credentials only on the server — never in plaintext in the DB,
+  never in the browser, logs, audit or git; each request snapshots settings + connection + environment +
+  account. Credentials may also be entered in Správa systému → Dopravci (ADR 0027,
+  `carriers:connections_manage`): AES-256-GCM in `carrier_connections`, key `CARRIER_CREDENTIALS_KEY`
+  only in the server env, secret write-only; another account never takes over existing shipments.
   Weights and dimensions (doc 025 §10, W1, owner 2026-10-17): append-only measured references of
   components and packaging (per unit; a liquid as a weighed sample), the finished bottle per
   recipe version, crate tare and crate /

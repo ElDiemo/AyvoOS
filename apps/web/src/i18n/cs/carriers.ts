@@ -2,6 +2,40 @@ import type { CarrierSettingsProblem } from '@ayvo/types';
 
 /** Správa systému → Provozovny → Dopravci a expedice (doc 029 §9). */
 export const carriersCs = {
+  connections: {
+    nav: 'Dopravci',
+    title: 'Připojení dopravců',
+    subtitle:
+      'Přístupové údaje k rozhraním dopravců. Ukládají se šifrovaně na serveru; tajný klíč se po uložení už nikdy nezobrazí – lze ho jen nahradit.',
+    environment: { TEST: 'Testovací prostředí', PRODUCTION: 'Produkce' },
+    credentials: {
+      SET: 'nastaveno',
+      MISSING: 'nenastaveno',
+      UNREADABLE: 'uložené údaje nelze přečíst (jiný klíč serveru) – zadejte je znovu',
+    },
+    source: {
+      ADMIN: 'zadáno v administraci',
+      SERVER: 'ze serverového souboru',
+    },
+    keyMissing:
+      'Server nemá šifrovací klíč pro přístupové údaje – zadávat je zde nelze. Klíč doplní správce serveru.',
+    clientId: 'Client ID',
+    clientSecret: 'Client secret',
+    secretHint: 'Zadaná hodnota se nikde nezobrazí a po uložení se pole vyprázdní.',
+    reason: 'Důvod změny',
+    replace: 'Uložit přístupové údaje',
+    replacing: 'Ukládám…',
+    saved: 'Přístupové údaje uloženy.',
+    accountWarning:
+      'Pokud zadáte údaje jiného účtu, přepravy vytvořené dosavadním účtem se přes toto připojení už neověří ani nezruší (zobrazí se jako nedostupné) a provozovny musí připojení ověřit znovu.',
+    lastChange: (at: string, by: string) => `Naposledy změněno ${at} (${by}).`,
+    productionAbsent:
+      'Produkční připojení v této verzi neexistuje – DEV používá výhradně testovací prostředí PPL.',
+    errors: {
+      CREDENTIALS_KEY_MISSING: 'Server nemá šifrovací klíč – přístupové údaje nelze uložit.',
+    } as Record<string, string>,
+  },
+  manageConnections: 'Spravovat přístupové údaje',
   title: 'Dopravci a expedice',
   ppl: 'PPL',
   intro:
@@ -68,9 +102,12 @@ export const carriersCs = {
     NO_CONNECTION: 'Není vybrané připojení.',
     UNKNOWN_CONNECTION: 'Vybrané připojení na serveru neexistuje.',
     CREDENTIALS_MISSING: 'Server nemá přístupové údaje k vybranému připojení.',
+    CREDENTIALS_UNREADABLE:
+      'Uložené přístupové údaje nelze přečíst (jiný klíč serveru) – zadejte je znovu.',
     SENDER_INCOMPLETE: 'Odesílatel není úplný (název, ulice, město, PSČ a země).',
     NOT_VERIFIED: 'Připojení nebylo ověřeno.',
-    VERIFIED_WITH_ANOTHER_CONNECTION: 'Ověření proběhlo s jiným připojením – ověřte znovu.',
+    VERIFIED_WITH_ANOTHER_CONNECTION:
+      'Ověření proběhlo s jiným připojením nebo účtem – ověřte připojení znovu.',
     NO_PRODUCT: 'Není vybraná služba PPL.',
     PRODUCT_NOT_VERIFIED: 'Vybraná služba není v seznamu služeb z posledního ověření.',
   } satisfies Record<CarrierSettingsProblem, string>,

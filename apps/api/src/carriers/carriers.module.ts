@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CARRIERS } from './carrier.js';
+import { CarrierConnectionsController } from './carrier-connections.controller.js';
+import { CarrierCredentialsService } from './carrier-credentials.service.js';
 import { CarrierRegistryService } from './carrier-registry.service.js';
 import { CarrierSettingsController } from './carrier-settings.controller.js';
 import { CarrierSettingsService } from './carrier-settings.service.js';
@@ -10,11 +12,12 @@ import { CarrierSettingsService } from './carrier-settings.service.js';
  * orders module; credentials never leave the server process.
  */
 @Module({
-  controllers: [CarrierSettingsController],
+  controllers: [CarrierSettingsController, CarrierConnectionsController],
   providers: [
     CarrierRegistryService,
     { provide: CARRIERS, useExisting: CarrierRegistryService },
     CarrierSettingsService,
+    CarrierCredentialsService,
   ],
   exports: [CARRIERS],
 })

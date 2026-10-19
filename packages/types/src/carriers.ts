@@ -11,8 +11,13 @@ export const carrierConnectionSchema = z.object({
   code: z.string(),
   /** TEST = the carrier's test environment: no real shipment. */
   environment: z.enum(['TEST', 'PRODUCTION']),
-  /** Whether the server has the credentials (never their value). */
-  credentials: z.enum(['SET', 'MISSING']),
+  /**
+   * Whether usable credentials exist (never their value). UNREADABLE = stored in the
+   * administration but not readable with the server's key.
+   */
+  credentials: z.enum(['SET', 'MISSING', 'UNREADABLE']),
+  /** ADMIN = entered in the administration (encrypted); SERVER = the server environment file. */
+  source: z.enum(['ADMIN', 'SERVER']).nullable(),
 });
 export type CarrierConnection = z.infer<typeof carrierConnectionSchema>;
 
@@ -21,6 +26,7 @@ export const carrierSettingsProblemSchema = z.enum([
   'NO_CONNECTION',
   'UNKNOWN_CONNECTION',
   'CREDENTIALS_MISSING',
+  'CREDENTIALS_UNREADABLE',
   'SENDER_INCOMPLETE',
   'NOT_VERIFIED',
   'VERIFIED_WITH_ANOTHER_CONNECTION',
@@ -111,3 +117,24 @@ export const verifyCarrierResultSchema = z.object({
   settings: pplSettingsSchema,
 });
 export type VerifyCarrierResult = z.infer<typeof verifyCarrierResultSchema>;
+
+/** Správa systému → Dopravci (ADR 0027): a connection without any credential value. */
+export const carrierConnectionAdminSchema = carrierConnectionSchema.extend({
+  carrier: z.literal('PPL'),
+  /** Whether the server can store credentials (has its encryption key). */
+  keyAvailable: z.boolean(),
+  updatedAt: z.iso.datetime().nullable(),
+  updatedBy: z.string().nullable(),
+});
+export type CarrierConnectionAdmin = z.infer<typeof carrierConnectionAdminSchema>;
+
+/** Enters or replaces credentials; the secret is write-only (never returned). */
+export const replaceCarrierCredentialsRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  clientId: z.string().trim().min(1).max(200),
+  clientSecret: z.string().min(1).max(500),
+  reason: z.string().trim().min(3).max(500),
+});
+export type ReplaceCarrierCredentialsRequest = z.infer<
+  typeof replaceCarrierCredentialsRequestSchema
+>;

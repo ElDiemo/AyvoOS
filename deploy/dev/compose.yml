@@ -159,6 +159,8 @@ services:
       # "nenastaveno" (no shipment can be created). The API URL is fixed in code, never here.
       PPL_TEST_CLIENT_ID: ${PPL_TEST_CLIENT_ID:-}
       PPL_TEST_CLIENT_SECRET: ${PPL_TEST_CLIENT_SECRET:-}
+      # Key for carrier credentials entered in the administration (ADR 0027; encrypted at rest).
+      CARRIER_CREDENTIALS_KEY: ${CARRIER_CREDENTIALS_KEY:-}
     volumes:
       # Label artwork and generated print PDFs (doc 016). The root filesystem stays read-only.
       - files-data:/var/lib/ayvo/files

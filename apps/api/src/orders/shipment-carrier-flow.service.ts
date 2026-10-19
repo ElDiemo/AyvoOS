@@ -79,16 +79,19 @@ export class ShipmentCarrierFlow {
     }
   }
 
-  gatewayOf(ref: {
+  /** The carrier of a shipment or request: its own connection, environment and account only. */
+  async gatewayOf(ref: {
     carrierCode: string | null;
     carrierConnection: string | null;
     carrierEnvironment: string | null;
-  }): CarrierGateway | null {
+    carrierAccount: string | null;
+  }): Promise<CarrierGateway | null> {
     if (!ref.carrierCode || !ref.carrierConnection || !ref.carrierEnvironment) return null;
     return this.carriers.forConnection({
       carrierCode: ref.carrierCode,
       connection: ref.carrierConnection,
       environment: ref.carrierEnvironment,
+      account: ref.carrierAccount,
     });
   }
 
@@ -105,7 +108,7 @@ export class ShipmentCarrierFlow {
       where: { id: attemptId },
       include: { shipment: { select: { status: true } } },
     });
-    const carrier = this.gatewayOf(attempt);
+    const carrier = await this.gatewayOf(attempt);
     if (!carrier) return;
     const request = attempt.payload as unknown as CarrierShipmentRequest;
     if (attempt.status === 'PREPARED') {
@@ -526,7 +529,7 @@ export class ShipmentCarrierFlow {
       include: { requests: { where: { status: { in: ['CREATED', 'SUCCEEDED'] } } } },
     });
     if (s.status !== 'CANCELLING') return;
-    const carrier = this.gatewayOf(s);
+    const carrier = await this.gatewayOf(s);
     if (!carrier) return;
     const created = s.requests[0]?.result as Created | null;
     const shipmentRef = s.carrierShipmentRef ?? created?.shipmentRef;
