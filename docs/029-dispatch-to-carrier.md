@@ -76,14 +76,27 @@ The shipment history is part of the order history (`order_events`). Delivery dat
   The passing of time never marks anything `NOT_CREATED` and nothing is re-created blindly.
 - **Exceptional manual closing** (`shipments:resolve_uncertain`, ADMIN only; a reason and an
   explicit check box): a person who verified with the carrier that nothing was created closes an
-  uncertain or unanswered request (`NOT_CREATED`, `CLOSED_BY_PERSON`, audited). Only after the
-  in-flight window, never for a request the carrier reported as created. The dialog states the
+  uncertain request (`NOT_CREATED`, `CLOSED_BY_PERSON`, audited) — a claimed one only after the
+  in-flight window, an accepted one only after its automatic checks ended; never one the carrier
+  reported as created. The UI offers it only when the server would allow it. The dialog states the
   risk: if a shipment does exist, the next request creates a **second** one at the carrier.
 - **Asynchronous carriers:** an accepted request (`ACCEPTED`, e.g. a PPL batch id stored at once)
   is polled by a background worker: back-off 10 s, 20 s, 40 s … up to 5 min, at most 30 times; the
   state is in the database, so a restart continues; several API processes share the work
   (`SKIP LOCKED`). After the limit, a person checks with "Ověřit". The same applies to labels that
   could not be downloaded yet (`CREATED`).
+- **Bounded, always:** every automatic round ends scheduled (counted) or stopped; problems that
+  need a person (`CARRIER_PARCEL_MISMATCH`, `LABELS_INVALID`, `CARRIER_PARTIAL`) stop the polling;
+  "Ověřit" looks a mismatch up again. Nothing is downloaded or stored unless the shipment is still
+  `REQUESTING` (never during a cancellation); a user's inline processing holds a lease so the poller
+  does not work on the same request at the same time.
+- **Partly created set:** if the carrier creates only some parcels, the request stays `CREATED`
+  (`CARRIER_PARTIAL`, no labels) and is cancelled at the carrier — every created number.
+- **Late answers are never silent:** a carrier creation or cancellation confirmation arriving after
+  the request or cancellation was closed locally is written to the history (`CARRIER_LATE_ANSWER`)
+  and logged as an error, for a person to check with the carrier.
+- **Carriers without cancellation** through their interface are not used for new shipments
+  (`CANCELLATION_UNSUPPORTED`): otherwise a created-but-unusable shipment would have no way out.
 - **Labels:** stored only after checking: each parcel's number is proven per parcel (never by
   position), each file really is PDF/ZPL (magic bytes), ≤ 5 MB. A mismatch keeps the request open
   (`CARRIER_PARCEL_MISMATCH`, `LABELS_INVALID`) for a person.
@@ -91,8 +104,10 @@ The shipment history is part of the order history (`order_events`). Delivery dat
   a ready-for-pickup order goes back to `READY_TO_DISPATCH`, so it cannot be handed over meanwhile;
   the database ties that step to the cancellation. Then the carrier is asked (with the request's own
   connection): its confirmation cancels (`carrier_cancelled_at`, a fresh draft of the same crates);
-  its refusal returns the shipment (`LABELED`, or `REQUESTING` for a created shipment whose labels
-  never became usable); an asynchronous or lost answer stays `CANCELLING` for "Ověřit zrušení".
+  only its **definitive** refusal (rejected request, or "not cancelled" after it accepted the
+  request — e.g. already picked up) returns the shipment (`LABELED`, or `REQUESTING` for a created
+  shipment whose labels never became usable, which then resumes its label download); "still
+  processing" or a lost answer stays `CANCELLING` for "Ověřit zrušení".
   Never cancels the order, releases crates or returns stock. Actual weighings are entered again on
   the new draft.
 - **Weights:** calculated reference per parcel (Hotovo snapshot or, without one, the references at

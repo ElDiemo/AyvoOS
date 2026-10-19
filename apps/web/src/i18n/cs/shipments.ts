@@ -13,6 +13,8 @@ export const shipmentsCs = {
       CREDENTIALS_MISSING: 'Přístupové údaje k dopravci nejsou na serveru nastavené.',
       CONNECTION_UNAVAILABLE:
         'Připojení k dopravci, přes které přeprava vznikla, není na serveru dostupné.',
+      CANCELLATION_UNSUPPORTED:
+        'Dopravce neumí zásilku zrušit přes rozhraní – pro nové přepravy se nepoužije.',
     } as Record<string, string>,
     missing: 'Chybí údaje, které dopravce vyžaduje',
     missingText: 'Doplňte je u balíků níže. Neznámá hodnota se nikdy neposílá jako 0.',

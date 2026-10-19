@@ -174,6 +174,7 @@ export const orderEventSchema = z.object({
     'SHIPMENT_CANCELLED',
     'SHIPMENT_CANCEL_REQUESTED',
     'SHIPMENT_CANCEL_REFUSED',
+    'CARRIER_LATE_ANSWER',
   ]),
   occurredAt: z.iso.datetime(),
   actor: z.string(),

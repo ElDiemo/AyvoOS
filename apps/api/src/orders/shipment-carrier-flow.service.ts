@@ -19,17 +19,22 @@ import { shipmentEvent, type Step } from './shipment-events.js';
 
 type Tx = Prisma.TransactionClient;
 type By = { actorId: string; operationId: string };
+type Created = { shipmentRef: string; numbers?: string[]; parcels: CarrierParcelNumber[] };
 
-/** The error code of a finished call whose outcome is unknown (never re-sent). */
+/** The error code of a finished call (or lookup) whose outcome is unknown (never re-sent). */
 export const NO_ANSWER = 'NO_ANSWER';
 export const UNRESOLVED = ['PREPARED', 'SENT', 'ACCEPTED', 'CREATED'] as const;
-/** Bounded automatic polling of an accepted request: attempts and back-off (seconds). */
+/** Bounded automatic polling of an accepted/created request (back-off 10 s … 5 min, in SQL). */
 export const MAX_POLLS = 30;
-const backoff = (n: number) => Math.min(5 * 2 ** n, 300);
+/** While one caller works on a request inline, the poller leaves it alone this long. */
+const LEASE_SECONDS = 60;
 /** Upper bound of one stored label file. */
 const MAX_LABEL_BYTES = 5 * 1024 * 1024;
+/** Problems that need a person (or "Ověřit"): automatic polling stops for them. */
+const NEEDS_PERSON = new Set(['CARRIER_PARCEL_MISMATCH', 'LABELS_INVALID', 'CARRIER_PARTIAL']);
 
 const step = (by: By): Step => ({ ...by, occurredAt: new Date() });
+const lease = () => new Date(Date.now() + LEASE_SECONDS * 1000);
 
 /** Whether bytes really are the claimed label format (never trust a content type alone). */
 export function isLabelFile(file: CarrierLabelFile): boolean {
@@ -42,9 +47,10 @@ export function isLabelFile(file: CarrierLabelFile): boolean {
 /**
  * Everything that talks to the carrier for a shipment (doc 029 §3): sending a written request
  * exactly once (claim), recording each answer in its own transaction, bounded polling of accepted
- * requests (also after a restart — the state is in the database), downloading and checking labels
- * before storing them, and the asynchronous cancellation. Calls are always made with the
- * connection recorded on the request and abort after CARRIER_CALL_TIMEOUT_SECONDS.
+ * or created requests (state in the database — a restart continues; every claimed round ends
+ * scheduled or stopped), downloading and checking labels before storing them (only while the
+ * shipment is REQUESTING), and the asynchronous cancellation. Calls always use the connection
+ * recorded on the request and abort after CARRIER_CALL_TIMEOUT_SECONDS.
  */
 @Injectable()
 export class ShipmentCarrierFlow {
@@ -90,11 +96,13 @@ export class ShipmentCarrierFlow {
   /**
    * Moves one request forward. PREPARED is claimed (SENT) by exactly one caller before the carrier
    * is called. SENT is looked up only when `lookup` (an explicit, permitted "Ověřit" after the
-   * in-flight window); ACCEPTED is polled; CREATED gets its labels.
+   * in-flight window); ACCEPTED is polled; CREATED gets its labels — or, on an explicit lookup of a
+   * created request whose parcels did not match, is looked up again.
    */
   async drive(attemptId: string, by: By, lookup = false): Promise<void> {
     const attempt = await this.prisma.shipmentCarrierRequest.findUniqueOrThrow({
       where: { id: attemptId },
+      include: { shipment: { select: { status: true } } },
     });
     const carrier = this.gatewayOf(attempt);
     if (!carrier) return;
@@ -119,11 +127,15 @@ export class ShipmentCarrierFlow {
       await this.settle(carrier, attemptId, by, outcome);
       return;
     }
-    if (attempt.status === 'CREATED') {
+    // Labels and lookups belong to a shipment still being resolved — never to one being cancelled.
+    if (attempt.shipment.status !== 'REQUESTING') return;
+    const relook =
+      attempt.status === 'CREATED' && lookup && attempt.errorCode === 'CARRIER_PARCEL_MISMATCH';
+    if (attempt.status === 'CREATED' && !relook) {
       await this.fetchLabels(carrier, attemptId, by);
       return;
     }
-    if (attempt.status === 'ACCEPTED' || (attempt.status === 'SENT' && lookup)) {
+    if (relook || attempt.status === 'ACCEPTED' || (attempt.status === 'SENT' && lookup)) {
       let outcome: CarrierPollOutcome;
       try {
         outcome = await this.call((signal) =>
@@ -151,16 +163,22 @@ export class ShipmentCarrierFlow {
       case 'PENDING':
         await this.schedule(attemptId);
         return;
-      case 'UNKNOWN':
-        await this.inAttempt(attemptId, async (tx, a) => {
-          if (a.status === 'SENT') {
-            await tx.shipmentCarrierRequest.update({
-              where: { id: a.id },
-              data: { errorMessage: outcome.detail.slice(0, 1000) },
-            });
-          }
+      case 'UNKNOWN': {
+        const accepted = await this.inAttempt(attemptId, async (tx, a) => {
+          if (a.status !== 'SENT' && a.status !== 'ACCEPTED') return false;
+          await tx.shipmentCarrierRequest.update({
+            where: { id: a.id },
+            data: {
+              // A lookup the carrier cannot answer leaves the request uncertain, never closed.
+              errorCode: a.status === 'SENT' ? NO_ANSWER : a.errorCode,
+              errorMessage: outcome.detail.slice(0, 1000),
+            },
+          });
+          return a.status === 'ACCEPTED';
         });
+        if (accepted) await this.schedule(attemptId);
         return;
+      }
       case 'REJECTED':
         await this.reject(attemptId, by, outcome.code, outcome.message);
         return;
@@ -188,66 +206,77 @@ export class ShipmentCarrierFlow {
               carrierRef: outcome.carrierRef,
               errorCode: null,
               errorMessage: null,
-              nextPollAt: new Date(),
+              nextPollAt: lease(),
               pollCount: 0,
             },
           });
           return true;
         });
-        // One immediate look after the transition; further ones by the background poller.
+        // One immediate look after the transition; still accepted later = still processing.
         if (moved) await this.drive(attemptId, by);
+        else await this.schedule(attemptId);
         return;
       }
       case 'CREATED': {
-        const recorded = await this.inAttempt(attemptId, async (tx, a) => {
-          if (a.status === 'CREATED') return true;
-          if (a.status !== 'SENT' && a.status !== 'ACCEPTED') return false;
+        const recorded = await this.inAttempt(attemptId, async (tx, a, orderId) => {
+          const replace = a.status === 'CREATED' && a.errorCode === 'CARRIER_PARCEL_MISMATCH';
+          if (a.status === 'CREATED' && !replace) return true;
+          if (a.status !== 'SENT' && a.status !== 'ACCEPTED' && !replace) {
+            // The carrier created it although the request was closed meanwhile: never silent.
+            if (a.status === 'NOT_CREATED' || a.status === 'REJECTED') {
+              this.log.error(
+                `Carrier created ${outcome.shipmentRef} for closed ${a.clientReference}`,
+              );
+              await shipmentEvent(tx, orderId, 'CARRIER_LATE_ANSWER', step(by), {
+                shipment: a.shipment.code,
+                reason: `Dopravce zásilku ${outcome.shipmentRef} vytvořil až po uzavření požadavku ${a.clientReference} – zkontrolujte ji u dopravce.`,
+              });
+            }
+            return false;
+          }
           await tx.shipmentCarrierRequest.update({
             where: { id: a.id },
             data: {
               status: 'CREATED',
-              errorCode: null,
-              errorMessage: null,
-              nextPollAt: new Date(),
+              errorCode: outcome.problem?.code.slice(0, 100) ?? null,
+              errorMessage: outcome.problem?.message.slice(0, 1000) ?? null,
+              nextPollAt: outcome.problem ? null : lease(),
               pollCount: 0,
               result: JSON.parse(
-                JSON.stringify({ shipmentRef: outcome.shipmentRef, parcels: outcome.parcels }),
+                JSON.stringify({
+                  shipmentRef: outcome.shipmentRef,
+                  numbers: outcome.numbers,
+                  parcels: outcome.parcels,
+                }),
               ),
             },
           });
           return true;
         });
-        if (recorded) await this.fetchLabels(carrier, attemptId, by);
+        // A partly created shipment never gets labels: it is cancelled at the carrier instead.
+        if (recorded && !outcome.problem) await this.fetchLabels(carrier, attemptId, by);
       }
     }
   }
 
-  /** The next automatic look at an accepted/created request (bounded, with back-off). */
+  /** The next automatic look (bounded, back-off, database time); stops after MAX_POLLS. */
   private async schedule(attemptId: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      const a = await tx.shipmentCarrierRequest.findUniqueOrThrow({ where: { id: attemptId } });
-      if (a.status !== 'ACCEPTED' && a.status !== 'CREATED') return;
-      const count = a.pollCount + 1;
-      await tx.shipmentCarrierRequest.update({
-        where: { id: a.id },
-        data: {
-          pollCount: count,
-          nextPollAt: count >= MAX_POLLS ? null : new Date(Date.now() + backoff(count) * 1000),
-        },
-      });
-    });
+    await this.prisma.$executeRaw`
+      UPDATE "shipment_carrier_requests"
+         SET "poll_count" = "poll_count" + 1,
+             "next_poll_at" = CASE WHEN "poll_count" + 1 >= ${MAX_POLLS} THEN NULL
+                                   ELSE now() + make_interval(secs => LEAST(5 * power(2, "poll_count" + 1), 300)) END
+       WHERE "id" = ${attemptId}::uuid AND "status" IN ('ACCEPTED', 'CREATED')`;
   }
 
   /** Downloads, checks and stores the labels of a created shipment, then marks it LABELED. */
   private async fetchLabels(carrier: CarrierGateway, attemptId: string, by: By): Promise<void> {
     const attempt = await this.prisma.shipmentCarrierRequest.findUniqueOrThrow({
       where: { id: attemptId },
+      include: { shipment: { select: { status: true } } },
     });
-    const result = attempt.result as {
-      shipmentRef: string;
-      parcels: CarrierParcelNumber[];
-    } | null;
-    if (attempt.status !== 'CREATED' || !result) return;
+    const result = attempt.result as Created | null;
+    if (attempt.status !== 'CREATED' || !result || attempt.shipment.status !== 'REQUESTING') return;
     const request = attempt.payload as unknown as CarrierShipmentRequest;
     const parcels = await this.prisma.shipmentParcel.findMany({
       where: { shipmentId: attempt.shipmentId },
@@ -263,7 +292,11 @@ export class ShipmentCarrierFlow {
       distinct.size !== parcels.length ||
       parcels.some((p) => !numbers.get(p.parcelNo))
     ) {
-      await this.mark(attemptId, 'CARRIER_PARCEL_MISMATCH', 'The carrier returned other parcels');
+      await this.mark(
+        attemptId,
+        'CARRIER_PARCEL_MISMATCH',
+        'The carrier numbers are not proven per parcel',
+      );
       return;
     }
     let files: Awaited<ReturnType<CarrierGateway['labels']>>;
@@ -293,6 +326,12 @@ export class ShipmentCarrierFlow {
       await this.mark(attemptId, 'LABELS_INVALID', 'The carrier returned no valid label file');
       return;
     }
+    // The shipment may have changed meanwhile (e.g. a cancellation started): store nothing then.
+    const still = await this.prisma.shipmentCarrierRequest.findUnique({
+      where: { id: attemptId },
+      select: { status: true, shipment: { select: { status: true } } },
+    });
+    if (still?.status !== 'CREATED' || still.shipment.status !== 'REQUESTING') return;
     // Stored only after every check passed; files are never replaced or deleted.
     const stored: { parcelId: string | null; file: CarrierLabelFile; key: string }[] = [];
     for (const p of parcels) {
@@ -303,19 +342,23 @@ export class ShipmentCarrierFlow {
       stored.push({ parcelId: null, file: files.complete, key: await this.put(files.complete) });
     }
     await this.inAttempt(attemptId, async (tx, a, orderId) => {
-      if (a.status !== 'CREATED') return;
+      const s = await tx.shipment.findUniqueOrThrow({
+        where: { id: a.shipmentId },
+        select: { status: true },
+      });
+      if (a.status !== 'CREATED' || s.status !== 'REQUESTING') return;
       const now = new Date();
-      for (const s of stored) {
+      for (const x of stored) {
         await tx.shipmentLabel.create({
           data: {
             shipmentId: a.shipmentId,
-            parcelId: s.parcelId,
+            parcelId: x.parcelId,
             requestId: a.id,
-            format: s.file.format,
-            dpi: s.file.dpi,
-            fileKey: s.key,
-            sha256: createHash('sha256').update(s.file.bytes).digest('hex'),
-            sizeBytes: s.file.bytes.byteLength,
+            format: x.file.format,
+            dpi: x.file.dpi,
+            fileKey: x.key,
+            sha256: createHash('sha256').update(x.file.bytes).digest('hex'),
+            sizeBytes: x.file.bytes.byteLength,
             createdAt: now,
           },
         });
@@ -353,12 +396,17 @@ export class ShipmentCarrierFlow {
     return key;
   }
 
+  /** Records a problem of a created request; those that need a person stop the polling. */
   private async mark(attemptId: string, code: string, message: string): Promise<void> {
     await this.inAttempt(attemptId, async (tx, a) => {
       if (a.status !== 'CREATED') return;
       await tx.shipmentCarrierRequest.update({
         where: { id: a.id },
-        data: { errorCode: code, errorMessage: message },
+        data: {
+          errorCode: code,
+          errorMessage: message,
+          ...(NEEDS_PERSON.has(code) ? { nextPollAt: null } : {}),
+        },
       });
     });
   }
@@ -424,24 +472,32 @@ export class ShipmentCarrierFlow {
   }
 
   /**
-   * Background step: claims due accepted/created requests (SKIP LOCKED, a lease) and moves them
-   * forward. Safe with several API processes and after a restart.
+   * Background step: claims due accepted/created requests of shipments still being resolved
+   * (SKIP LOCKED, a lease) and moves them forward. Every claimed round ends scheduled (counted)
+   * or stopped — a round that changed nothing is counted like any other look.
    */
   async pollDue(limit = 5): Promise<number> {
     const due = await this.prisma.$queryRaw<
-      { id: string; created_by: string; operation_request_id: string }[]
+      { id: string; created_by: string; operation_request_id: string; lease: Date }[]
     >`
-      UPDATE "shipment_carrier_requests" r SET "next_poll_at" = now() + interval '60 seconds'
+      UPDATE "shipment_carrier_requests" r
+         SET "next_poll_at" = now() + make_interval(secs => ${LEASE_SECONDS})
        WHERE r."id" IN (SELECT q."id" FROM "shipment_carrier_requests" q
+                          JOIN "shipments" s ON s."id" = q."shipment_id" AND s."status" = 'REQUESTING'
                          WHERE q."status" IN ('ACCEPTED', 'CREATED') AND q."next_poll_at" <= now()
-                         ORDER BY q."next_poll_at" LIMIT ${limit} FOR UPDATE SKIP LOCKED)
-      RETURNING r."id", r."created_by", r."operation_request_id"`;
+                         ORDER BY q."next_poll_at" LIMIT ${limit} FOR UPDATE OF q SKIP LOCKED)
+      RETURNING r."id", r."created_by", r."operation_request_id", r."next_poll_at" AS "lease"`;
     for (const r of due) {
       try {
         await this.drive(r.id, { actorId: r.created_by, operationId: r.operation_request_id });
       } catch (error) {
         this.log.warn(`Polling ${r.id} failed: ${String(error)}`);
       }
+      // Untouched by the round (no answer, an exception, …): counted, so polling stays bounded.
+      const untouched = await this.prisma.shipmentCarrierRequest.count({
+        where: { id: r.id, nextPollAt: r.lease, status: { in: ['ACCEPTED', 'CREATED'] } },
+      });
+      if (untouched) await this.schedule(r.id);
     }
     return due.length;
   }
@@ -451,7 +507,8 @@ export class ShipmentCarrierFlow {
   /**
    * Moves a started cancellation (shipment CANCELLING) forward: asks the carrier (idempotent) or,
    * when it already accepted the request, checks the outcome. Only the carrier's confirmation
-   * cancels; its refusal returns the shipment; an unknown answer leaves it for "Ověřit zrušení".
+   * cancels; only its definitive refusal returns the shipment; anything else stays CANCELLING for
+   * "Ověřit zrušení".
    */
   async driveCancel(shipmentId: string, by: By, check = false): Promise<void> {
     const s = await this.prisma.shipment.findUniqueOrThrow({
@@ -461,20 +518,26 @@ export class ShipmentCarrierFlow {
     if (s.status !== 'CANCELLING') return;
     const carrier = this.gatewayOf(s);
     if (!carrier) return;
-    const created = s.requests[0]?.result as {
-      shipmentRef: string;
-      parcels: CarrierParcelNumber[];
-    } | null;
+    const created = s.requests[0]?.result as Created | null;
     const shipmentRef = s.carrierShipmentRef ?? created?.shipmentRef;
     if (!shipmentRef) return;
-    const query = { shipmentRef, parcels: (created?.parcels ?? []).map((p) => p.number) };
+    // Every number the carrier created — also those of a partly created set.
+    const query = {
+      shipmentRef,
+      parcels: created?.numbers ?? (created?.parcels ?? []).map((p) => p.number),
+    };
     try {
       if (check || s.carrierCancelSentAt) {
         const status = await this.call((signal) => carrier.cancelStatus(query, signal));
-        if (status === 'CANCELLED') return this.finalizeCancel(shipmentId, by);
+        if (status === 'CANCELLED') return await this.finalizeCancel(shipmentId, by);
         if (status === 'NOT_CANCELLED') {
+          // Definitive (e.g. already picked up) once the carrier had the request.
           if (s.carrierCancelSentAt) {
-            return this.refuseCancel(shipmentId, by, 'The carrier did not cancel the shipment');
+            return await this.refuseCancel(
+              shipmentId,
+              by,
+              'The carrier did not cancel the shipment',
+            );
           }
           // The earlier request's answer was lost: asking again is safe (cancelling is idempotent).
         } else {
@@ -482,7 +545,7 @@ export class ShipmentCarrierFlow {
         }
       }
       const answer = await this.call((signal) => carrier.cancel(query, signal));
-      if (answer === 'CANCELLED') return this.finalizeCancel(shipmentId, by);
+      if (answer === 'CANCELLED') return await this.finalizeCancel(shipmentId, by);
       await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT 1 FROM "orders" WHERE "id" = ${s.orderId}::uuid FOR UPDATE`;
         await tx.shipment.updateMany({
@@ -492,7 +555,7 @@ export class ShipmentCarrierFlow {
       });
     } catch (error) {
       if (error instanceof CarrierRejectedError) {
-        return this.refuseCancel(shipmentId, by, error.message);
+        return await this.refuseCancel(shipmentId, by, error.message);
       }
       this.log.warn(`Cancellation of ${s.code}: no usable answer`);
     }
@@ -503,13 +566,21 @@ export class ShipmentCarrierFlow {
       const head = await tx.shipment.findUniqueOrThrow({ where: { id: shipmentId } });
       await tx.$executeRaw`SELECT 1 FROM "orders" WHERE "id" = ${head.orderId}::uuid FOR UPDATE`;
       const s = await tx.shipment.findUniqueOrThrow({ where: { id: shipmentId } });
-      if (s.status !== 'CANCELLING') return;
+      const at = { ...by, occurredAt: new Date() };
+      if (s.status !== 'CANCELLING') {
+        // A confirmation after the shipment was returned (a concurrent, older refusal): recorded.
+        this.log.error(`Carrier confirmed the cancellation of ${s.code} after it was returned`);
+        await shipmentEvent(tx, s.orderId, 'CARRIER_LATE_ANSWER', at, {
+          shipment: s.code,
+          reason: `Dopravce potvrdil zrušení přepravy ${s.code} až po jejím vrácení – zkontrolujte ji u dopravce.`,
+        });
+        return;
+      }
       const order = await tx.order.findUniqueOrThrow({ where: { id: s.orderId } });
-      const now = new Date();
       // A shipment created but never labelled: its open request is voided with it.
       await tx.shipmentCarrierRequest.updateMany({
         where: { shipmentId, status: 'CREATED' },
-        data: { status: 'VOIDED', resolvedAt: now, nextPollAt: null },
+        data: { status: 'VOIDED', resolvedAt: at.occurredAt, nextPollAt: null },
       });
       const asked = await tx.orderEvent.findFirst({
         where: { orderId: s.orderId, type: 'SHIPMENT_CANCEL_REQUESTED' },
@@ -521,13 +592,12 @@ export class ShipmentCarrierFlow {
         where: { id: shipmentId },
         data: {
           status: 'CANCELLED',
-          cancelledAt: now,
+          cancelledAt: at.occurredAt,
           cancelledBy: by.actorId,
           cancelReason: reason,
-          carrierCancelledAt: now,
+          carrierCancelledAt: at.occurredAt,
         },
       });
-      const at = { ...by, occurredAt: now };
       await shipmentEvent(tx, s.orderId, 'SHIPMENT_CANCELLED', at, { shipment: s.code, reason });
       // The same crates, a fresh draft: the order is ready to be labelled again.
       await this.deriver.derive(tx, order, at);
@@ -550,6 +620,11 @@ export class ShipmentCarrierFlow {
           status: s.requests.length > 0 ? 'REQUESTING' : 'LABELED',
           carrierCancelSentAt: null,
         },
+      });
+      // A created request resumes its (bounded) label download.
+      await tx.shipmentCarrierRequest.updateMany({
+        where: { shipmentId, status: 'CREATED' },
+        data: { nextPollAt: new Date(), pollCount: 0 },
       });
       await shipmentEvent(tx, s.orderId, 'SHIPMENT_CANCEL_REFUSED', step(by), {
         shipment: s.code,

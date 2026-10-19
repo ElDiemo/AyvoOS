@@ -39,6 +39,8 @@ export const carrierUnavailableSchema = z.enum([
   'CREDENTIALS_MISSING',
   /** The connection an existing request used is no longer available on this server. */
   'CONNECTION_UNAVAILABLE',
+  /** The carrier cannot cancel through its interface: not used for new shipments (doc 029 §4). */
+  'CANCELLATION_UNSUPPORTED',
 ]);
 export const carrierInfoSchema = z.object({
   /** False: no carrier can take a new request at this site — no label can be created. */

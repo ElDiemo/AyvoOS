@@ -10,10 +10,14 @@ import { TEST_CARRIER_SETTINGS, TestCarrier } from './test-carrier.js';
 export function carrierRegistry(env: Env): CarrierRegistry {
   const test = env.CARRIER_PROVIDER === 'test' ? new TestCarrier() : null;
   return {
+    // A carrier that cannot cancel through its interface is never used for a new shipment: a
+    // created-but-unusable shipment would otherwise have no way out (doc 029 §4).
     forSite: async () =>
-      test
-        ? { gateway: test, settings: TEST_CARRIER_SETTINGS }
-        : { gateway: null, reason: 'NOT_CONFIGURED' },
+      !test
+        ? { gateway: null, reason: 'NOT_CONFIGURED' }
+        : test.rules.canCancel
+          ? { gateway: test, settings: TEST_CARRIER_SETTINGS }
+          : { gateway: null, reason: 'CANCELLATION_UNSUPPORTED' },
     forConnection: (ref) =>
       test &&
       ref.carrierCode === test.code &&

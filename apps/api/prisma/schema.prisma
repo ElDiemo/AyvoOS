@@ -906,6 +906,7 @@ enum OperationKind {
   ORDER_READY_FOR_PICKUP
   ORDER_HAND_OVER
   SHIPMENT_LABELS_ABANDON
+  SHIPMENT_CANCEL_RESOLVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -2285,6 +2286,7 @@ enum OrderEventType {
   SHIPMENT_CANCELLED
   SHIPMENT_CANCEL_REQUESTED
   SHIPMENT_CANCEL_REFUSED
+  CARRIER_LATE_ANSWER
 }
 
 /// Append-only order history (ADR 0006). DB: immutable.

@@ -14,7 +14,9 @@ export type ShipmentEventType =
   | 'HANDED_TO_CARRIER'
   | 'SHIPMENT_CANCEL_REQUESTED'
   | 'SHIPMENT_CANCEL_REFUSED'
-  | 'SHIPMENT_CANCELLED';
+  | 'SHIPMENT_CANCELLED'
+  /** The carrier answered after the request/cancellation was closed locally — never silent. */
+  | 'CARRIER_LATE_ANSWER';
 
 /** One entry of the order's append-only history (doc 029): the shipment's audited trail. */
 export async function shipmentEvent(

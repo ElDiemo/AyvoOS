@@ -42,6 +42,25 @@ type Props = {
   timeZone: string;
 };
 
+/** The clock, read after mount and every 5 s (never during render); null before. */
+function useNow(): number | null {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 5000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, []);
+  return now;
+}
+
+/** Whether the server allows looking up / closing a claimed request yet (in-flight window). */
+const settled = (resolvableAt: string | null | undefined, now: number | null) =>
+  !resolvableAt || (now !== null && new Date(resolvableAt).getTime() <= now);
+
 /** Phases in which the carrier may still answer by itself: the page refreshes on its own. */
 const WAITING: ShipmentPhase[] = ['ACCEPTED', 'CREATED', 'CANCELLING', 'IN_FLIGHT', 'PREPARED'];
 
@@ -66,6 +85,7 @@ export function ShipmentPanel({
   const parcelWord = ordersCs.detail.parcels(parcels);
   const labelsHref = `/api/admin/orders/${code}/shipment/labels`;
   const waiting = !!phase && WAITING.includes(phase) && !s?.pollingStopped;
+  const now = useNow();
   useEffect(() => {
     if (!waiting) return;
     const timer = setInterval(() => router.refresh(), 5000);
@@ -169,7 +189,11 @@ export function ShipmentPanel({
             </div>
           )}
           {canResolveUncertain &&
-            (phase === 'UNCERTAIN' || phase === 'ACCEPTED' || phase === 'IN_FLIGHT') && (
+            // As the server: a claimed request after its window; an accepted one only after its
+            // automatic checks ended.
+            (((phase === 'UNCERTAIN' || phase === 'IN_FLIGHT') &&
+              settled(s.request?.resolvableAt, now)) ||
+              (phase === 'ACCEPTED' && s.pollingStopped)) && (
               <details className="mt-4 text-sm" data-testid="shipment-exceptional">
                 <summary className="cursor-pointer text-stone-600">{t.more}</summary>
                 <div className="mt-3">
@@ -237,17 +261,7 @@ function NextStep({
 }) {
   const { busy, run } = useAttempt();
   const [dialog, setDialog] = useState<'ready' | 'handover' | null>(null);
-  // The clock is read after mount and every 5 s (never during render).
-  const [now, setNow] = useState<number | null>(null);
-  useEffect(() => {
-    const tick = () => setNow(Date.now());
-    const first = setTimeout(tick, 0);
-    const timer = setInterval(tick, 5000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(timer);
-    };
-  }, []);
+  const now = useNow();
   const [checked, setChecked] = useState(false);
   const parcels = data.shipment?.parcels.length ?? 0;
 
@@ -327,10 +341,9 @@ function NextStep({
         CREATED: [p.created, p.createdText],
       }[phase];
       const request = data.shipment?.request;
+      // A claimed (SENT) request is looked up only after its in-flight window — as the server.
       const notYet =
-        phase === 'IN_FLIGHT' &&
-        !!request?.resolvableAt &&
-        (now === null || new Date(request.resolvableAt).getTime() > now);
+        (phase === 'IN_FLIGHT' || phase === 'UNCERTAIN') && !settled(request?.resolvableAt, now);
       return (
         <>
           <Notice tone="warning">

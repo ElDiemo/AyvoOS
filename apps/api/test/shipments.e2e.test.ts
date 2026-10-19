@@ -476,8 +476,9 @@ describe.skipIf(!hasDatabase)('dispatch: shipment, parcels, carrier labels (doc 
       'DRAFT',
     );
 
-    testCarrierControl.rules = { ...testCarrierControl.rules, canCancel: false };
+    // A carrier that lost its cancellation after the labels were made: refused, nothing changed.
     const c = await labelled({ soapOnly: true });
+    testCarrierControl.rules = { ...testCarrierControl.rules, canCancel: false };
     expect((await post(c.order, 'cancel', { reason: 'Omyl' })).body.code).toBe(
       'CARRIER_CANCEL_UNSUPPORTED',
     );
@@ -548,6 +549,137 @@ describe.skipIf(!hasDatabase)('dispatch: shipment, parcels, carrier labels (doc 
     const c = await completedOrder({ soapOnly: true });
     expect((await cancelOrder(t, c.order)).status).toBe(200);
     expect((await view(c.order)).shipment).toBeNull();
+  });
+
+  /** Label files actually in storage (orphans included) — not only the rows. */
+  async function storedLabelFiles(): Promise<number> {
+    const { readdir } = await import('node:fs/promises');
+    const root = `${t.env.FILE_STORAGE_DIR}/shipment-labels`;
+    const all = await readdir(root, { recursive: true }).catch(() => [] as string[]);
+    return all.filter((f) => /\.(pdf|zpl)$/.test(String(f))).length;
+  }
+
+  it('a created shipment whose labels are not stored can be cancelled; the poller stays away', async () => {
+    const { order } = await completedOrder({ soapOnly: true });
+    testCarrierControl.next = ['LABELS_FAIL_ONCE'];
+    expect(((await labels(order)).body as OrderShipment).shipment!.request).toMatchObject({
+      status: 'CREATED',
+      errorCode: 'LABELS_NOT_DOWNLOADED',
+    });
+    const files = await storedLabelFiles();
+    testCarrierControl.cancel = ['PENDING'];
+    testCarrierControl.cancelStatus = ['PENDING'];
+    const s = (
+      (await post(order, 'cancel', { reason: 'Zásilka nepoužitelná' })).body as OrderShipment
+    ).shipment!;
+    expect(s.status).toBe('CANCELLING');
+    // While cancelling, polling downloads nothing (no rows, no files).
+    await pollNow();
+    await pollNow();
+    expect(await storedLabelFiles()).toBe(files);
+    expect((await view(order)).shipment!.status).toBe('CANCELLING');
+    // First check: still processing → stays CANCELLING; then confirmed: cancelled, the created
+    // request voided, a fresh draft.
+    expect(((await post(order, 'cancel/resolve')).body as OrderShipment).shipment!.status).toBe(
+      'CANCELLING',
+    );
+    const done = ((await post(order, 'cancel/resolve')).body as OrderShipment).shipment!;
+    expect(done.status).toBe('DRAFT');
+    const req = await t.prisma.shipmentCarrierRequest.findFirstOrThrow({
+      where: { shipment: { order: { code: order }, status: 'CANCELLED' } },
+    });
+    expect(req.status).toBe('VOIDED');
+  });
+
+  it('a refused cancellation of a created shipment resumes its label download', async () => {
+    const { order } = await completedOrder({ soapOnly: true });
+    testCarrierControl.next = ['LABELS_FAIL_ONCE'];
+    await labels(order);
+    testCarrierControl.cancel = ['REFUSE'];
+    const s = ((await post(order, 'cancel', { reason: 'Omyl' })).body as OrderShipment).shipment!;
+    expect(s).toMatchObject({ status: 'REQUESTING', request: { status: 'CREATED' } });
+    await pollNow();
+    expect((await view(order)).shipment!.status).toBe('LABELED');
+  });
+
+  it('an accepted cancellation the carrier then definitively refuses returns the labels', async () => {
+    const { order } = await labelled({ soapOnly: true });
+    testCarrierControl.cancel = ['PENDING'];
+    testCarrierControl.cancelStatus = ['NOT_CANCELLED'];
+    expect(
+      ((await post(order, 'cancel', { reason: 'Omyl' })).body as OrderShipment).shipment!.status,
+    ).toBe('CANCELLING');
+    expect(((await post(order, 'cancel/resolve')).body as OrderShipment).shipment!.status).toBe(
+      'LABELED',
+    );
+  });
+
+  it('numbers not proven per parcel are never accepted; polling stops; a lookup proves them', async () => {
+    const { order } = await completedOrder();
+    await weighUnknown(order);
+    testCarrierControl.next = ['MISMATCH_ONCE'];
+    const files = await storedLabelFiles();
+    const s = ((await labels(order)).body as OrderShipment).shipment!;
+    expect(s).toMatchObject({
+      status: 'REQUESTING',
+      request: { status: 'CREATED', errorCode: 'CARRIER_PARCEL_MISMATCH' },
+    });
+    expect(await storedLabelFiles()).toBe(files);
+    const req = await t.prisma.shipmentCarrierRequest.findFirstOrThrow({
+      where: { shipment: { order: { code: order } } },
+    });
+    expect(req.nextPollAt).toBeNull();
+    const polls = testCarrierControl.polls;
+    await pollNow();
+    expect(testCarrierControl.polls).toBe(polls);
+    expect((await view(order)).shipment!.request!.errorCode).toBe('CARRIER_PARCEL_MISMATCH');
+    // "Ověřit u dopravce" looks it up again — now every parcel is proven.
+    expect(((await resolve(order)).body as OrderShipment).shipment!.status).toBe('LABELED');
+    expect(testCarrierControl.calls).toHaveLength(1);
+  });
+
+  it('a partly created set stays open and is cancelled at the carrier — every created number', async () => {
+    const { order } = await completedOrder();
+    await weighUnknown(order);
+    testCarrierControl.next = ['PARTIAL'];
+    const s = ((await labels(order)).body as OrderShipment).shipment!;
+    expect(s).toMatchObject({
+      status: 'REQUESTING',
+      request: { status: 'CREATED', errorCode: 'CARRIER_PARTIAL' },
+    });
+    expect((await post(order, 'abandon', { reason: 'pokus o uzavření' })).body.code).toBe(
+      'REQUEST_NOT_ABANDONABLE',
+    );
+    expect((await cancelOrder(t, order)).body.code).toBe('SHIPMENT_AT_CARRIER');
+    const done = ((await post(order, 'cancel', { reason: 'Neúplná sada' })).body as OrderShipment)
+      .shipment!;
+    expect(done.status).toBe('DRAFT');
+    expect(testCarrierControl.cancelCalls).toBe(1);
+  });
+
+  it('a carrier without cancellation is not used for new shipments', async () => {
+    const { order } = await completedOrder({ soapOnly: true });
+    testCarrierControl.rules = { ...testCarrierControl.rules, canCancel: false };
+    const res = await labels(order);
+    expect([res.body.code, res.body.details]).toEqual([
+      'CARRIER_NOT_CONFIGURED',
+      { reason: 'CANCELLATION_UNSUPPORTED' },
+    ]);
+    expect((await view(order)).carrier.unavailable).toBe('CANCELLATION_UNSUPPORTED');
+  });
+
+  it('an accepted request: checkable at any time, closable by hand only after its checks ended', async () => {
+    const { order } = await completedOrder({ soapOnly: true });
+    testCarrierControl.next = ['ACCEPT'];
+    testCarrierControl.pendingPolls = 1000;
+    const s = ((await labels(order)).body as OrderShipment).shipment!;
+    expect(s.request).toMatchObject({ status: 'ACCEPTED', resolvableAt: expect.any(String) });
+    expect((await post(order, 'abandon', { reason: 'Ověřeno u dopravce' })).body.code).toBe(
+      'REQUEST_NOT_ABANDONABLE',
+    );
+    for (let i = 0; i < 31; i++) await pollNow();
+    expect((await view(order)).shipment!.pollingStopped).toBe(true);
+    expect((await post(order, 'abandon', { reason: 'Ověřeno u dopravce' })).status).toBe(200);
   });
 
   it('the database keeps the rules even without the API', async () => {

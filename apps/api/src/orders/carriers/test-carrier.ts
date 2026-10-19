@@ -31,7 +31,11 @@ type Behaviour =
   /** Never answers (until the caller's time limit aborts it). */
   | 'HANG'
   /** Creates, but the label download fails once. */
-  | 'LABELS_FAIL_ONCE';
+  | 'LABELS_FAIL_ONCE'
+  /** Creates, but proves the number of only some parcels (once; a lookup proves all). */
+  | 'MISMATCH_ONCE'
+  /** Creates only some parcels of a set (the others fail). */
+  | 'PARTIAL';
 
 interface Created {
   shipmentRef: string;
@@ -61,6 +65,8 @@ export const testCarrierControl = {
   polls: 0,
   cancelCalls: 0,
   created: new Map<string, Created>(),
+  mismatch: new Set<string>(),
+  partial: new Set<string>(),
   accepted: new Map<string, { request: CarrierShipmentRequest; fail: boolean }>(),
   labelsFail: new Set<string>(),
   reset(): void {
@@ -74,6 +80,8 @@ export const testCarrierControl = {
     this.created.clear();
     this.accepted.clear();
     this.labelsFail.clear();
+    this.mismatch.clear();
+    this.partial.clear();
     this.rules = defaultRules();
   },
 };
@@ -125,6 +133,23 @@ async function labelPdf(created: Created, only: number | null): Promise<Uint8Arr
   return pdf.save();
 }
 
+function createdOutcome(c: Created): CarrierCreateOutcome {
+  const numbers = c.parcels.map((p) => p.number);
+  if (testCarrierControl.partial.has(c.shipmentRef)) {
+    return {
+      kind: 'CREATED',
+      shipmentRef: c.shipmentRef,
+      numbers: numbers.slice(0, 1),
+      parcels: [],
+      problem: { code: 'CARRIER_PARTIAL', message: 'Only some parcels were created' },
+    };
+  }
+  if (testCarrierControl.mismatch.delete(c.shipmentRef)) {
+    return { kind: 'CREATED', shipmentRef: c.shipmentRef, numbers, parcels: c.parcels.slice(1) };
+  }
+  return { kind: 'CREATED', shipmentRef: c.shipmentRef, numbers, parcels: c.parcels };
+}
+
 const byRef = (shipmentRef: string) =>
   [...testCarrierControl.created.values()].find((c) => c.shipmentRef === shipmentRef);
 
@@ -154,7 +179,9 @@ export class TestCarrier implements CarrierGateway {
       const created = create(request);
       if (behaviour === 'LOSE_AFTER') throw new Error('test carrier: the answer was lost');
       if (behaviour === 'LABELS_FAIL_ONCE') testCarrierControl.labelsFail.add(created.shipmentRef);
-      return { kind: 'CREATED', shipmentRef: created.shipmentRef, parcels: created.parcels };
+      if (behaviour === 'MISMATCH_ONCE') testCarrierControl.mismatch.add(created.shipmentRef);
+      if (behaviour === 'PARTIAL') testCarrierControl.partial.add(created.shipmentRef);
+      return createdOutcome(created);
     });
   }
 
@@ -165,7 +192,7 @@ export class TestCarrier implements CarrierGateway {
     return abortable(signal, async () => {
       testCarrierControl.polls += 1;
       const found = testCarrierControl.created.get(query.clientReference);
-      if (found) return { kind: 'CREATED', shipmentRef: found.shipmentRef, parcels: found.parcels };
+      if (found) return createdOutcome(found);
       const accepted = query.carrierRef
         ? testCarrierControl.accepted.get(query.carrierRef)
         : undefined;
@@ -178,8 +205,7 @@ export class TestCarrier implements CarrierGateway {
         if (accepted.fail) {
           return { kind: 'REJECTED', code: 'TEST_BATCH_ERROR', message: 'Batch failed' };
         }
-        const created = create(accepted.request);
-        return { kind: 'CREATED', shipmentRef: created.shipmentRef, parcels: created.parcels };
+        return createdOutcome(create(accepted.request));
       }
       return { kind: 'NOT_CREATED' };
     });

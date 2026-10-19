@@ -138,17 +138,19 @@ export class ShipmentsService {
     if (!live) return { carrier: current, shipment: null, cancelled };
     // A shipment already at a carrier is shown with ITS carrier and environment (snapshot).
     const own = this.flow.gatewayOf(live);
-    const carrier: CarrierInfo = live.carrierCode
-      ? own
-        ? gatewayInfo(own)
-        : {
-            ...current,
-            configured: false,
-            unavailable: 'CONNECTION_UNAVAILABLE',
-            code: live.carrierCode,
-            environment: live.carrierEnvironment as 'TEST' | 'PRODUCTION',
-          }
-      : current;
+    // A draft is shown with the site's current carrier (the next request uses it).
+    const carrier: CarrierInfo =
+      live.carrierCode && live.status !== 'DRAFT'
+        ? own
+          ? gatewayInfo(own)
+          : {
+              ...current,
+              configured: false,
+              unavailable: 'CONNECTION_UNAVAILABLE',
+              code: live.carrierCode,
+              environment: live.carrierEnvironment as 'TEST' | 'PRODUCTION',
+            }
+        : current;
     const parcels = live.parcels.map((p) => {
       const w = p.weighings[0];
       const d = p.packageDimension;
@@ -209,7 +211,7 @@ export class ShipmentsService {
               errorCode: request.errorCode,
               errorMessage: request.errorMessage,
               resolvableAt:
-                request.status === 'SENT' && request.sentAt
+                (request.status === 'SENT' || request.status === 'ACCEPTED') && request.sentAt
                   ? new Date(
                       request.sentAt.getTime() + this.env.CARRIER_SETTLE_SECONDS * 1000,
                     ).toISOString()
@@ -501,7 +503,10 @@ export class ShipmentsService {
       async (tx) => {
         const order = await this.lockOrder(tx, code, site.siteId);
         const open = await this.openRequest(tx, order.id);
-        if (open.status !== 'SENT' && open.status !== 'ACCEPTED') {
+        // An accepted request only once its automatic checks ended without an answer.
+        const pollingOver =
+          open.status === 'ACCEPTED' && open.nextPollAt === null && open.pollCount >= MAX_POLLS;
+        if (open.status !== 'SENT' && !pollingOver) {
           throw domainErrorWithDetails(
             409,
             'REQUEST_NOT_ABANDONABLE',
@@ -684,6 +689,11 @@ export class ShipmentsService {
             carrierCancelSentAt: null,
           },
         });
+        // A created request stops its label download while the cancellation runs.
+        await tx.shipmentCarrierRequest.updateMany({
+          where: { shipmentId: shipment.id, status: 'CREATED' },
+          data: { nextPollAt: null },
+        });
         if (order.status === 'READY_FOR_PICKUP') {
           await tx.order.update({ where: { id: order.id }, data: { status: 'READY_TO_DISPATCH' } });
         }
@@ -706,9 +716,9 @@ export class ShipmentsService {
     input: ResolveCancelRequest,
   ): Promise<OrderShipment> {
     const { result } = await this.operations.run(
-      'SHIPMENT_CANCEL',
+      'SHIPMENT_CANCEL_RESOLVE',
       input.requestId,
-      { actorId, siteId: site.siteId, code, resolve: true },
+      { actorId, siteId: site.siteId, code },
       async (tx) => {
         const order = await this.lockOrder(tx, code, site.siteId);
         const shipment = await this.liveShipment(tx, order.id);

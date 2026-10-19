@@ -65,8 +65,19 @@ export interface CarrierParcelNumber {
 }
 
 export type CarrierCreateOutcome =
-  /** Created: the carrier's shipment reference and one number per parcel, proven per parcel. */
-  | { kind: 'CREATED'; shipmentRef: string; parcels: CarrierParcelNumber[] }
+  /**
+   * Created at the carrier: its shipment reference, EVERY carrier number it created (for a
+   * cancellation) and the parcels whose number is proven per parcel. Fewer proven parcels than
+   * sent, or a `problem` (e.g. some parcels of a set failed), keep the request open for a person —
+   * the shipment exists at the carrier and can be cancelled there.
+   */
+  | {
+      kind: 'CREATED';
+      shipmentRef: string;
+      numbers: string[];
+      parcels: CarrierParcelNumber[];
+      problem?: { code: string; message: string };
+    }
   /** Accepted for asynchronous processing (e.g. a PPL batch): poll it, never re-send. */
   | { kind: 'ACCEPTED'; carrierRef: string };
 
@@ -86,6 +97,10 @@ export interface CarrierLabelFile {
   bytes: Uint8Array;
 }
 
+/**
+ * CANCELLED = confirmed; NOT_CANCELLED = definitively not (e.g. already picked up) — never "not
+ * yet"; PENDING = still processing; UNKNOWN = the carrier cannot tell.
+ */
 export type CarrierCancelStatus = 'CANCELLED' | 'PENDING' | 'NOT_CANCELLED' | 'UNKNOWN';
 
 /** The carrier refused the request: nothing was created / nothing changed (definitive). */
@@ -150,7 +165,12 @@ export type CarrierChoice =
   | {
       gateway: null;
       /** Why no new request can be made at this site (shown to the operator, no secrets). */
-      reason: 'NOT_CONFIGURED' | 'DISABLED' | 'INCOMPLETE' | 'CREDENTIALS_MISSING';
+      reason:
+        | 'NOT_CONFIGURED'
+        | 'DISABLED'
+        | 'INCOMPLETE'
+        | 'CREDENTIALS_MISSING'
+        | 'CANCELLATION_UNSUPPORTED';
     };
 
 export interface CarrierRegistry {
