@@ -13,7 +13,7 @@ import {
   type CarrierPollOutcome,
   type CarrierRegistry,
   type CarrierShipmentRequest,
-} from './carriers/carrier.js';
+} from '../carriers/carrier.js';
 import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { shipmentEvent, type Step } from './shipment-events.js';
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { OrderDetail, OrderShipment } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { testCarrierControl } from '../src/orders/carriers/test-carrier.js';
+import { testCarrierControl } from '../src/carriers/test-carrier.js';
 import { ShipmentCarrierFlow } from '../src/orders/shipment-carrier-flow.service.js';
 import {
   cancelOrder,

@@ -1,8 +1,9 @@
-import { siteDetailSchema } from '@ayvo/types';
+import { pplSettingsSchema, siteDetailSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
 import { AdminHeader } from '@/components/admin/admin-header';
 import { AuditList } from '@/components/admin/audit-list';
+import { CarrierSettings } from '@/components/admin/carrier-settings';
 import { SiteForm, SiteStatus } from '@/components/admin/site-form';
 import { SiteWarehouseForm } from '@/components/admin/site-warehouse-form';
 import { Card, Notice } from '@/components/ui';
@@ -21,6 +22,10 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
     currentUser(),
   ]);
   const canManage = hasPermission(me, 'sites:manage');
+  // Dopravci a expedice: ADMIN only (sites:carrier_manage); never fetched for anyone else.
+  const carriers = hasPermission(me, 'sites:carrier_manage')
+    ? await apiGet(`admin/sites/${id}/carriers/ppl`, pplSettingsSchema)
+    : null;
   return (
     <>
       <AdminHeader
@@ -37,6 +42,7 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
         <div className="flex min-w-0 flex-col gap-6">
           {!site.addressComplete && <Notice tone="warning">{t.addressMissing}</Notice>}
           <SiteForm site={site} />
+          {carriers && <CarrierSettings initial={carriers} site={site} />}
           <Card title={t.audit} className="relative overflow-x-auto">
             <AuditList events={site.audit} testId="site-audit" />
           </Card>

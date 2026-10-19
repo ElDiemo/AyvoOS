@@ -96,6 +96,21 @@ describe('loadEnv', () => {
       );
     });
 
+    it('PPL TEST credentials: both or neither, fixed URL outside tests, never in production', () => {
+      const creds = { PPL_TEST_CLIENT_ID: 'fake-id', PPL_TEST_CLIENT_SECRET: 'fake-secret' };
+      expect(loadEnv({ ...valid, ...creds }).PPL_TEST_CLIENT_ID).toBe('fake-id');
+      // Empty values from Compose mean "not set".
+      expect(
+        loadEnv({ ...valid, PPL_TEST_CLIENT_ID: '', PPL_TEST_CLIENT_SECRET: '' })
+          .PPL_TEST_CLIENT_ID,
+      ).toBeUndefined();
+      expect(() => loadEnv({ ...valid, PPL_TEST_CLIENT_ID: 'fake-id' })).toThrow(/go together/);
+      expect(() =>
+        loadEnv({ ...valid, ...creds, PPL_TEST_API_BASE_URL_FOR_TESTS: 'http://127.0.0.1:1/x' }),
+      ).toThrow(/APP_ENV=test/);
+      expect(() => loadEnv({ ...production, ...creds })).toThrow(/not used in production/);
+    });
+
     it('never allows the fake provider on DEV or production (no authentication bypass)', () => {
       expect(() => loadEnv({ ...valid, AUTH_PROVIDER: 'test' })).toThrow(/AUTH_PROVIDER=test/);
       expect(() => loadEnv({ ...production, AUTH_PROVIDER: 'test' })).toThrow(/AUTH_PROVIDER=test/);

@@ -155,6 +155,10 @@ services:
       # bottles; the production QR host is refused here, ADR 0014).
       PUBLIC_QR_BASE_URL: https://${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}/q
       FILE_STORAGE_DIR: /var/lib/ayvo/files
+      # PPL CPL TEST environment (doc 029 §9): credentials only in the server env file; empty =
+      # "nenastaveno" (no shipment can be created). The API URL is fixed in code, never here.
+      PPL_TEST_CLIENT_ID: ${PPL_TEST_CLIENT_ID:-}
+      PPL_TEST_CLIENT_SECRET: ${PPL_TEST_CLIENT_SECRET:-}
     volumes:
       # Label artwork and generated print PDFs (doc 016). The root filesystem stays read-only.
       - files-data:/var/lib/ayvo/files

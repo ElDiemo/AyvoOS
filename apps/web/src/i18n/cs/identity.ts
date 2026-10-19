@@ -73,6 +73,8 @@ export const identityCs = {
     'shipments:prepare':
       'Připravit přepravu – skutečné vážení, přepravní štítky u dopravce, připraveno k vyzvednutí, zrušení přípravy',
     'shipments:handover': 'Potvrdit předání objednávky dopravci',
+    'sites:carrier_manage':
+      'Spravovat dopravce provozovny – připojení, odesílatel, služba, štítky, ověření připojení',
     'shipments:resolve_uncertain':
       'Výjimečně ručně uzavřít nejistý požadavek u dopravce (po ověření u dopravce; riziko duplicitní zásilky)',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
@@ -321,6 +323,9 @@ export const identityCs = {
       INVITATION_REVOKED: 'Zrušení pozvánky',
       INVITATION_FAILED: 'Neúspěšné odeslání pozvánky',
       INVITATION_ACCEPTED: 'Přijetí pozvánky',
+      CARRIER_SETTINGS_UPDATED: 'Změna nastavení dopravce',
+      CARRIER_CONNECTION_VERIFIED: 'Ověření připojení k dopravci',
+      CARRIER_CONNECTION_VERIFY_FAILED: 'Neúspěšné ověření připojení k dopravci',
     } as Record<string, string>,
   },
   roles_admin: {

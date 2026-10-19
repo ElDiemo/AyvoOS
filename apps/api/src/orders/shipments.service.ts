@@ -29,7 +29,7 @@ import {
   type CarrierRegistry,
   type CarrierSettingsSnapshot,
   type CarrierShipmentRequest,
-} from './carriers/carrier.js';
+} from '../carriers/carrier.js';
 import { MAX_POLLS, ShipmentCarrierFlow, UNRESOLVED } from './shipment-carrier-flow.service.js';
 import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { shipmentEvent, type Step } from './shipment-events.js';

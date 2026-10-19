@@ -82,6 +82,7 @@ export const PERMISSION_CODES = [
   'shipments:prepare',
   'shipments:handover',
   'shipments:resolve_uncertain',
+  'sites:carrier_manage',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;

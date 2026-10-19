@@ -6,7 +6,7 @@ Status (2026-10-19):
 | -------------------------------------------------------- | ----------- | -------------------------------------------- | -------- |
 | Order flow, shipment, parcels, labels, ready, hand-over  | yes (PR A)  | automated (API, DB rules, Playwright)        | no       |
 | Carrier boundary, test-only carrier, polling, cancelling | yes (PR A)  | automated, with the test-only carrier        | no       |
-| Site carrier settings (PPL), PPL CPL adapter             | PR B        | automated against a simulated PPL server     | no       |
+| Site carrier settings (PPL), PPL CPL adapter             | yes (PR B)  | automated against a simulated PPL server     | no       |
 | Real PPL test environment                                | —           | **not yet** (needs the test credentials, §5) | no       |
 | Physical printing on the Zebra ZD220                     | —           | **open** (physical acceptance, §5)           | no       |
 
@@ -119,7 +119,7 @@ The shipment history is part of the order history (`order_events`). Delivery dat
 
 ## 4. Carrier boundary
 
-`apps/api/src/orders/carriers/carrier.ts`: `create` (once; refusal vs. unknown), `poll`, `labels`
+`apps/api/src/carriers/carrier.ts`: `create` (once; refusal vs. unknown), `poll`, `labels`
 (per parcel + complete), `cancel` (idempotent; may be asynchronous) and `cancelStatus`, plus the
 carrier's rules. The registry gives the carrier for a **new** request at a site (from its settings)
 and the carrier of an **existing** request (its connection and environment only).
@@ -199,3 +199,68 @@ with an explicit check box. The hotel detail lists its orders with these statuse
   the exceptional one, permission removed before a replay, other site 404. Playwright
   `workflow-shipment.spec.ts`: the whole flow on a 390 px terminal incl. per-parcel labels;
   `workflow-dispatch.spec.ts`: mobile picking with the scanner focus.
+
+## 9. Site carrier settings (PPL) and the server connection
+
+**Správa systému → Provozovny → detail → Dopravci a expedice** (ADMIN only,
+`sites:carrier_manage`; table `site_carrier_settings`, one row per site, never deleted, every change
+audited without any secret):
+
+- PPL only; "Používat PPL" switch; the **connection** is chosen by its server-side code (`PPL_TEST`,
+  badge "Testovací prostředí"); its credentials are shown only as **nastaveno / nenastaveno**.
+- Sender (name, street, city, postal code, country, contact, phone, e-mail) — may be prefilled from
+  the site's address and must be checked by the user; PPL receives Latin characters only.
+- Default service: only from the list read by **"Ověřit připojení"** with that connection (token +
+  `GET /codelist/product`; creates no shipment and orders no pickup). No product, depot or other value
+  is copied from examples.
+- Labels: PDF or ZPL, printer resolution (default 203 dpi — Zebra ZD220), one label per parcel or
+  additionally the complete A4 document. Labels are never cropped or scaled.
+- Incomplete settings can be saved; what blocks new shipments is listed (and returned by the API).
+  A changed connection needs a new verification.
+- A new shipment request copies the settings and the connection (code + environment) into itself;
+  later changes never affect it, and its polling, label download and cancellation use only its own
+  connection — never another environment, never a fallback.
+
+**Connections** are defined in code (`apps/api/src/carriers/ppl/ppl-connections.ts`): only
+`PPL_TEST` → `https://api-dev.dhl.com/ecs/ppl/myapi2` exists. The URL is not editable by anyone; there
+is no production connection, so DEV can neither switch nor fall back to production PPL. The API
+refuses the PPL TEST credentials with `APP_ENV=production`; a different base URL is accepted only by
+automated tests (`APP_ENV=test`).
+
+**Credentials** live only in the server env file (`/opt/ayvo/secrets/dev-preview.env`, outside git)
+as `PPL_TEST_CLIENT_ID` and `PPL_TEST_CLIENT_SECRET` (both or neither), passed to the API container by
+`deploy/dev/compose.yml`. They and the token never reach the browser, logs, audit, screenshots or
+the repository; the token is cached in memory until shortly before it expires.
+
+Inserting them on the DEV server (owner; values never typed into a chat or a command line):
+
+```bash
+# 1. Back up the env file (permissions kept).
+sudo cp -p /opt/ayvo/secrets/dev-preview.env /opt/ayvo/secrets/dev-preview.env.bak-$(date +%Y%m%d%H%M)
+# 2. Check that the keys are not there yet (prints only key names).
+sudo grep -o '^PPL_TEST_[A-Z_]*' /opt/ayvo/secrets/dev-preview.env
+# 3. Read the values without echo and append them (no shell history, not shown).
+read -rs -p 'PPL client_id: ' PPL_ID; echo
+read -rs -p 'PPL client_secret: ' PPL_SECRET; echo
+printf 'PPL_TEST_CLIENT_ID=%s\nPPL_TEST_CLIENT_SECRET=%s\n' "$PPL_ID" "$PPL_SECRET" \
+  | sudo tee -a /opt/ayvo/secrets/dev-preview.env >/dev/null
+unset PPL_ID PPL_SECRET
+# 4. Verify presence only (key names, never values) and the file mode.
+sudo grep -o '^PPL_TEST_[A-Z_]*' /opt/ayvo/secrets/dev-preview.env
+sudo stat -c '%a %U:%G' /opt/ayvo/secrets/dev-preview.env
+```
+
+They take effect with the next approved deploy (`scripts/deploy-dev.sh`); afterwards the site
+settings show "nastaveno" and "Ověřit připojení" can be used. Until then nothing can be sent to PPL.
+
+**Tests:** `ppl.e2e.test.ts` runs the real adapter against a simulated PPL API
+(`test/support/fake-ppl.ts`): settings saved incomplete and explained, verification (nothing
+created), one and three crates (each number mapped by its own `CUST` reference, never by position),
+unproven mapping, partly created set cancelled, lost `Location` and PPL unavailable (uncertain, never
+re-sent), validation refusal, asynchronous processing with the poller, settings changed meanwhile
+(snapshot kept), ZPL 203 dpi, labels only from the API origin (foreign host, redirect, oversized file
+refused), disabled settings, other sites and environments, token reuse, no secret in any answer or
+audit. `shipments-access.e2e.test.ts`: ADMIN only, other site separate. Playwright
+`carrier-settings.spec.ts`: the page against the simulated PPL, no secret in the page, phone widths.
+A run against the real PPL test environment (synthetic data, no pickup, no records in the live DEV
+database) waits for the credentials.
