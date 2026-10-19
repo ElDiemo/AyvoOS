@@ -44,6 +44,11 @@ type Mode = {
   cancelRefuse: string[];
   /** Numbers already picked up from the sender. */
   pickedUp: string[];
+  /**
+   * As observed in the real TEST environment (2026-10-19): GET /shipment returns the SHIPMENT's
+   * CUST reference for every parcel of a set (not each item's own), plus shipmentSet positions.
+   */
+  setCustFromShipment: boolean;
 };
 
 interface Batch {
@@ -103,6 +108,7 @@ export class FakePpl {
       cancelFailures: 0,
       cancelRefuse: [],
       pickedUp: [],
+      setCustFromShipment: false,
     };
   }
 
@@ -263,7 +269,23 @@ export class FakePpl {
     }
     if (req.method === 'GET' && path === '/shipment') {
       const wanted = url.searchParams.getAll('ShipmentNumbers');
-      const all = [...this.batches.values()].flatMap((b) => b.numbers);
+      const all = [...this.batches.values()].flatMap((b) =>
+        b.numbers.map((n, i) => ({
+          ...n,
+          ref:
+            this.mode.setCustFromShipment && b.numbers.length > 1
+              ? String(b.body.shipments[0]!.referenceId)
+              : n.ref,
+          set:
+            b.numbers.length > 1
+              ? {
+                  masterShipmentNumber: b.numbers[0]!.number,
+                  shipmentsInSet: b.numbers.length,
+                  shipmentInSetNumber: i + 1,
+                }
+              : { shipmentsInSet: 0, shipmentInSetNumber: 0 },
+        })),
+      );
       return this.json(
         res,
         200,
@@ -271,14 +293,16 @@ export class FakePpl {
           .filter((x) => wanted.includes(x.number))
           .map((x) => ({
             shipmentNumber: x.number,
+            // Flags, comma-separated — as the real TEST environment answers.
             shipmentState: this.cancelled.has(x.number)
-              ? 'Canceled'
+              ? 'Undelivered, DataShipment, Canceled'
               : this.mode.pickedUp.includes(x.number)
-                ? 'PickedUpFromSender'
-                : 'DataShipment',
+                ? 'PickedUpFromSender, Active'
+                : 'Undelivered, DataShipment, Active',
             externalNumbers: this.mode.hideExternals
               ? []
               : [{ code: 'CUST', externalNumber: x.ref }],
+            shipmentSet: x.set,
           })),
       );
     }

@@ -90,15 +90,32 @@ function address(
   return out;
 }
 
-const PICKED_UP = new Set([
+/**
+ * `shipmentState` is a set of flags (documented enum ShipmentStates), sent comma-separated — e.g.
+ * a new shipment of the TEST environment reads "Undelivered, DataShipment, Active" (live run
+ * 2026-10-19). "Undelivered" means "not delivered yet", not "with the carrier".
+ */
+const flags = (state: string | null | undefined) =>
+  new Set(
+    (state ?? '')
+      .split(',')
+      .map((f) => f.trim())
+      .filter(Boolean),
+  );
+/** Flags meaning the carrier already has the parcel physically. */
+const PICKED_UP = [
   'PickedUpFromSender',
   'OutForDelivery',
   'Delivered',
   'DeliveredToPickupPoint',
   'NotDelivered',
-  'Undelivered',
   'BackToSender',
-]);
+];
+const isCancelled = (state: string | undefined) => flags(state).has('Canceled');
+const isPickedUp = (state: string | undefined) => {
+  const f = flags(state);
+  return PICKED_UP.some((x) => f.has(x));
+};
 
 interface BatchItem {
   referenceId?: string | null;
@@ -411,7 +428,7 @@ export class PplGateway implements CarrierGateway {
   ): Promise<'CANCELLED' | 'PENDING'> {
     const states = await this.states(query.parcels, signal);
     if (!states) throw new Error('PPL shipment states unavailable');
-    const open = query.parcels.filter((n) => states.get(n) !== 'Canceled');
+    const open = query.parcels.filter((n) => !isCancelled(states.get(n)));
     if (open.length === 0) return 'CANCELLED';
     const refused: string[] = [];
     let accepted = query.parcels.length - open.length;
@@ -440,9 +457,9 @@ export class PplGateway implements CarrierGateway {
     const states = await this.states(query.parcels, signal);
     if (!states) return 'UNKNOWN';
     const all = query.parcels.map((n) => states.get(n)!);
-    if (all.every((s) => s === 'Canceled')) return 'CANCELLED';
-    const some = all.some((s) => s === 'Canceled');
-    if (all.some((s) => PICKED_UP.has(s))) return some ? 'UNKNOWN' : 'NOT_CANCELLED';
+    if (all.every(isCancelled)) return 'CANCELLED';
+    const some = all.some(isCancelled);
+    if (all.some(isPickedUp)) return some ? 'UNKNOWN' : 'NOT_CANCELLED';
     return 'PENDING';
   }
 

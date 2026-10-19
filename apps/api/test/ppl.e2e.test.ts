@@ -348,6 +348,29 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     expect(ppl.batches.size).toBe(batches);
   });
 
+  it('as in the real TEST environment: set parcels carry only the shipment CUST — nothing mapped', async () => {
+    await ready();
+    const { order } = await completed(3);
+    ppl.mode.setCustFromShipment = true;
+    const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
+    // Positions in the set exist, but their relation to our crates is not documented: unproven.
+    expect(s).toMatchObject({
+      status: 'REQUESTING',
+      request: { status: 'CREATED', errorCode: 'CARRIER_PARCEL_MISMATCH' },
+    });
+    expect(s.parcels.every((p) => p.label === null && p.carrierParcelNumber === null)).toBe(true);
+    // It can still be cancelled at PPL — every created number.
+    const c = (
+      (await post(order, 'cancel', { reason: 'Neprokázané přiřazení' }).expect(200))
+        .body as OrderShipment
+    ).shipment!;
+    expect(c.status).toBe('CANCELLING');
+    for (const n of lastBatch().numbers) expect(ppl.cancelled.has(n.number)).toBe(true);
+    const done = ((await post(order, 'cancel/resolve').expect(200)).body as OrderShipment)
+      .shipment!;
+    expect(done.status).toBe('DRAFT');
+  });
+
   it('a number left over or claiming an already claimed parcel: never accepted', async () => {
     await ready();
     const { order } = await completed(3);

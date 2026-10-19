@@ -278,3 +278,35 @@ audit. `shipments-access.e2e.test.ts`: ADMIN only, other site separate. Playwrig
 `carrier-settings.spec.ts`: the page against the simulated PPL, no secret in the page, phone widths.
 A run against the real PPL test environment (synthetic data, no pickup, no records in the live DEV
 database) waits for the credentials.
+
+## 10. Live run against the PPL TEST environment (2026-10-19, owner-authorized, once)
+
+`apps/api/test/ppl-live.e2e.test.ts` — skipped unless `AYVO_PPL_LIVE=1` with the TEST credentials;
+per-run test database (never the live DEV database), temporary file store, synthetic sender and
+recipient, no pickup ordered (the adapter has no such call), nothing re-sent. Real API
+`https://api-dev.dhl.com/ecs/ppl/myapi2`. Calls made: 1 token, 1 product list, 2 × `POST
+shipment/batch` (201), 5 × batch status, 1 label download, 4 × cancel (202), `GET /shipment` for the
+checks below. Results:
+
+| Step                         | Result                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ověřit připojení             | OK — token, 16 products (incl. `BUSS` "PPL Parcel CZ Business", used for the test)                                                                                                                                                                                                                                                          |
+| 1 crate                      | `201` + batch id → `ACCEPTED` → `Complete`: one number; label PDF **127 × 101 mm**, mapped (single parcel, its own `CUST`); re-download returned the same file, **no new batch**                                                                                                                                                            |
+| 3 crates (set) + complete A4 | PPL created a set of 3 numbers (`shipmentSet`: master, `shipmentsInSet` 3, `shipmentInSetNumber` 1–3), but `GET /shipment` returns the **shipment's** `CUST` for all three, not each item's own → mapping **not proven** → `CARRIER_PARCEL_MISMATCH`, no label assigned (by design: never by position). Complete PDF therefore not reached. |
+| Cancel (1 + 3 numbers)       | All 4 cancels answered `202`; within ~4 min per shipment (and ~8 min later) PPL still showed `Undelivered, DataShipment, Active` — **no `Canceled` seen**; both shipments stayed `CANCELLING` (correctly not assumed).                                                                                                                      |
+
+Fixes from the run (simulator updated to the observed behaviour, regression tests): `shipmentState`
+is a comma-separated set of flags — parsed as such; `Undelivered` (= not delivered yet) is not
+"with the carrier". The synthetic TEST shipments 80256049251–80256049254 remain at PPL TEST with a
+cancellation requested.
+
+**Not verified:** labels of a multi-crate set and the complete A4 document against the real API
+(blocked by the mapping question), a confirmed cancellation, physical printing (no printer).
+
+**Questions for PPL from the run:** (1) set items' own `externalNumbers` are documented ("pro každý
+balík zvlášť") but `GET /shipment` returns the shipment's `CUST` for every set parcel — how is each
+created number tied to the item sent (is `shipmentInSetNumber` = the item's position in
+`shipmentSetItems`)? Does a shipment-level `CUST` override the items' own? (2) When does a cancelled
+shipment show `Canceled` in the TEST environment, and are cancellations processed there at all?
+(3) Label size: the TEST label is 127 × 101 mm (CZ) — matches the e-mail, not the documentation's
+127 × 110 mm.
