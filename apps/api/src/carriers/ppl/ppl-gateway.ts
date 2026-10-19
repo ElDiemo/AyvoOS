@@ -368,7 +368,14 @@ export class PplGateway implements CarrierGateway {
       parcels,
       complete:
         completeUrls?.length === 1
-          ? { format, dpi, bytes: await this.client.download(completeUrls[0]!, signal) }
+          ? {
+              format,
+              dpi,
+              bytes: await this.client.download(completeUrls[0]!, signal, {
+                kind: 'complete',
+                batchId: query.carrierRef,
+              }),
+            }
           : null,
     };
   }

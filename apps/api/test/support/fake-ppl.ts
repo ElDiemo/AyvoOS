@@ -229,7 +229,14 @@ export class FakePpl {
             relatedItems: processing ? [] : related,
           },
         ],
-        completeLabel: { labelUrls: [label(`complete-${b.id}`)] },
+        // As documented: the complete document comes from GET shipment/batch/{batchId}/label.
+        completeLabel: {
+          labelUrls: [
+            this.mode.labelForeignHost
+              ? `http://evil.example/shipment/batch/${b.id}/label?pageSize=A4`
+              : `${this.base}/shipment/batch/${b.id}/label?pageSize=A4&position=1&limit=200&offset=0`,
+          ],
+        },
       });
     }
     if (req.method === 'GET' && path === '/shipment') {
@@ -262,9 +269,7 @@ export class FakePpl {
       }
       // The format of the batch this label belongs to.
       const id = dataMatch[1]!;
-      const batch = [...this.batches.values()].find(
-        (b) => id === `complete-${b.id}` || b.numbers.some((n) => n.number === id),
-      );
+      const batch = [...this.batches.values()].find((b) => b.numbers.some((n) => n.number === id));
       const zpl = batch?.body.labelSettings?.format === 'Zpl';
       if (this.mode.labelHuge) {
         res.writeHead(200, { 'content-type': 'application/pdf' });
@@ -277,6 +282,17 @@ export class FakePpl {
           ? `^XA^FO50,50^FD${dataMatch[1]}^FS^XZ`
           : `%PDF-1.4\n% fake PPL label ${dataMatch[1]}\n%%EOF\n`,
       );
+      return;
+    }
+    const completeMatch = /^\/shipment\/batch\/([0-9a-f-]{36})\/label$/.exec(path);
+    if (req.method === 'GET' && completeMatch) {
+      const b = this.batches.get(completeMatch[1]!);
+      if (!b) return this.json(res, 404, { title: 'Not found' });
+      if (!url.searchParams.has('limit') || !url.searchParams.has('offset')) {
+        return this.json(res, 400, { title: 'limit and offset are required' });
+      }
+      res.writeHead(200, { 'content-type': 'application/pdf' });
+      res.end(`%PDF-1.4\n% fake PPL complete A4 document of batch ${b.id}\n%%EOF\n`);
       return;
     }
     const cancelMatch = /^\/shipment\/([^/]+)\/cancel$/.exec(path);

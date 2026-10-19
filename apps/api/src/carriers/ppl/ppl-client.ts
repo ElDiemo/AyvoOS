@@ -26,6 +26,8 @@ export interface PplResponse {
 
 const MIN_SPACING_MS = 40;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+/** Documented query parameters of GET shipment/batch/{batchId}/label (case-insensitive). */
+const COMPLETE_LABEL_QUERY = new Set(['pagesize', 'position', 'limit', 'offset', 'orderby']);
 /** The shared token request has its own time limit — one caller's abort never fails the others. */
 const TOKEN_TIMEOUT_MS = 30_000;
 
@@ -170,11 +172,17 @@ export class PplClient {
 
   /**
    * Downloads a label file from a URL PPL returned (absolute, or relative to the API host). Only the
-   * connection's own origin and its `/data/` path are accepted; redirects are refused; the size is
-   * limited. Only then is the token sent. A violation is a {@link CarrierProtocolError} (a person
-   * checks it — it is not retried).
+   * connection's own origin is accepted, and only the documented path of what is expected: a
+   * parcel's label under `/data/`, or the complete document of exactly this batch at
+   * `/shipment/batch/{batchId}/label` with its documented query parameters. Redirects are refused;
+   * the size is limited. Only then is the token sent. A violation is a {@link CarrierProtocolError}
+   * (a person checks it — it is not retried).
    */
-  async download(rawUrl: string, signal: AbortSignal): Promise<Uint8Array> {
+  async download(
+    rawUrl: string,
+    signal: AbortSignal,
+    expected: { kind: 'parcel' } | { kind: 'complete'; batchId: string } = { kind: 'parcel' },
+  ): Promise<Uint8Array> {
     const base = new URL(this.connection.baseUrl);
     let url: URL;
     try {
@@ -182,13 +190,14 @@ export class PplClient {
     } catch {
       throw new CarrierProtocolError('PPL returned an unusable label URL');
     }
-    if (
-      url.origin !== base.origin ||
-      !url.pathname.startsWith(`${base.pathname}/data/`) ||
-      url.username ||
-      url.password
-    ) {
-      throw new CarrierProtocolError('PPL label URL outside the PPL API: refused');
+    const allowed =
+      expected.kind === 'parcel'
+        ? url.pathname.startsWith(`${base.pathname}/data/`) && !url.pathname.includes('..')
+        : url.pathname ===
+            `${base.pathname}/shipment/batch/${encodeURIComponent(expected.batchId)}/label` &&
+          [...url.searchParams.keys()].every((k) => COMPLETE_LABEL_QUERY.has(k.toLowerCase()));
+    if (url.origin !== base.origin || !allowed || url.username || url.password || url.hash) {
+      throw new CarrierProtocolError('PPL label URL outside the expected PPL endpoint: refused');
     }
     const token = await this.accessToken(signal);
     await this.spaced();

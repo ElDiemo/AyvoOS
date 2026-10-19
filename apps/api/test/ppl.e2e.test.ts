@@ -411,6 +411,19 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     expect(stored).not.toContain(ppl.clientId);
   });
 
+  it('the complete A4 document comes from shipment/batch/{batchId}/label (as documented)', async () => {
+    await ready({ label: { format: 'PDF', dpi: 203, layout: 'A4' } });
+    const { order } = await completed(3);
+    const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
+    expect(s.status).toBe('LABELED');
+    expect(s.parcels.every((p) => p.label?.format === 'PDF')).toBe(true);
+    const id = lastBatch().id;
+    expect(ppl.seen.some((x) => x.path === `/shipment/batch/${id}/label` && x.bearer)).toBe(true);
+    const complete = await http().get(`/api/admin/orders/${order}/shipment/labels`).expect(200);
+    expect(complete.headers['content-type']).toContain('application/pdf');
+    expect(complete.body.toString()).toContain(`complete A4 document of batch ${id}`);
+  });
+
   it('A4 complete document only as PDF', async () => {
     await ready();
     const r = await save({ label: { format: 'ZPL', dpi: 203, layout: 'A4' } });
