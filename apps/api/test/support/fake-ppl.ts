@@ -32,6 +32,18 @@ type Mode = {
   labelHuge: boolean;
   /** Everything answers 503 (PPL unavailable). */
   down: boolean;
+  /** Only the token endpoint answers 503. */
+  tokenDown: boolean;
+  /** One more created number than parcels, claiming parcel 1's CUST reference. */
+  extraNumber: boolean;
+  /** Label URLs relative to the API host. */
+  labelRelative: boolean;
+  /** The next cancel requests answer 500 (lost / unusable answer), then normally. */
+  cancelFailures: number;
+  /** Cancel answers 400 for these numbers (e.g. already picked up). */
+  cancelRefuse: string[];
+  /** Numbers already picked up from the sender. */
+  pickedUp: string[];
 };
 
 interface Batch {
@@ -74,6 +86,12 @@ export class FakePpl {
       labelRedirect: false,
       labelHuge: false,
       down: false,
+      tokenDown: false,
+      extraNumber: false,
+      labelRelative: false,
+      cancelFailures: 0,
+      cancelRefuse: [],
+      pickedUp: [],
     };
   }
 
@@ -115,6 +133,7 @@ export class FakePpl {
     if (this.mode.down) return this.json(res, 503, { title: 'Service unavailable' });
 
     if (req.method === 'POST' && path === '/login/getAccessToken') {
+      if (this.mode.tokenDown) return this.json(res, 503, { title: 'Service unavailable' });
       const form = new URLSearchParams(await this.body(req));
       if (
         form.get('client_id') !== this.clientId ||
@@ -136,9 +155,10 @@ export class FakePpl {
     if (!bearer) return this.json(res, 401, { title: 'Unauthorized' });
 
     if (req.method === 'GET' && path === '/codelist/product') {
+      // Obviously simulated codes: real PPL products are read from PPL, never copied from examples.
       return this.json(res, 200, [
-        { code: 'BUSS', name: 'PPL Parcel CZ Business' },
-        { code: 'PRIV', name: 'PPL Parcel CZ Private' },
+        { code: 'SIM-A', name: 'Simulovaná služba A (není služba PPL)' },
+        { code: 'SIM-B', name: 'Simulovaná služba B (není služba PPL)' },
       ]);
     }
     if (req.method === 'POST' && path === '/shipment/batch') {
@@ -163,6 +183,8 @@ export class FakePpl {
         ref,
         master: i === 0,
       }));
+      if (this.mode.extraNumber)
+        numbers.push({ number: String(this.serial++), ref: refs[0]!, master: false });
       this.batches.set(id, { id, body, polls: 0, numbers });
       return this.json(
         res,
@@ -180,7 +202,11 @@ export class FakePpl {
       const state = (last: boolean) =>
         processing ? 'InProcess' : this.mode.partial && last ? 'Error' : 'Complete';
       const label = (n: string) =>
-        this.mode.labelForeignHost ? `http://evil.example/data/${n}` : `${this.base}/data/${n}`;
+        this.mode.labelForeignHost
+          ? `http://evil.example/data/${n}`
+          : this.mode.labelRelative
+            ? `${BASE_PATH}/data/${n}`
+            : `${this.base}/data/${n}`;
       const [master, ...rest] = b.numbers;
       const related = rest
         .map((x, i) => ({
@@ -216,7 +242,11 @@ export class FakePpl {
           .filter((x) => wanted.includes(x.number))
           .map((x) => ({
             shipmentNumber: x.number,
-            shipmentState: this.cancelled.has(x.number) ? 'Canceled' : 'DataShipment',
+            shipmentState: this.cancelled.has(x.number)
+              ? 'Canceled'
+              : this.mode.pickedUp.includes(x.number)
+                ? 'PickedUpFromSender'
+                : 'DataShipment',
             externalNumbers: this.mode.hideExternals
               ? []
               : [{ code: 'CUST', externalNumber: x.ref }],
@@ -230,7 +260,12 @@ export class FakePpl {
         res.end();
         return;
       }
-      const zpl = [...this.batches.values()].some((b) => b.body.labelSettings?.format === 'Zpl');
+      // The format of the batch this label belongs to.
+      const id = dataMatch[1]!;
+      const batch = [...this.batches.values()].find(
+        (b) => id === `complete-${b.id}` || b.numbers.some((n) => n.number === id),
+      );
+      const zpl = batch?.body.labelSettings?.format === 'Zpl';
       if (this.mode.labelHuge) {
         res.writeHead(200, { 'content-type': 'application/pdf' });
         res.end(Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(6 * 1024 * 1024, 32)]));
@@ -246,7 +281,15 @@ export class FakePpl {
     }
     const cancelMatch = /^\/shipment\/([^/]+)\/cancel$/.exec(path);
     if (req.method === 'POST' && cancelMatch) {
-      this.cancelled.add(decodeURIComponent(cancelMatch[1]!));
+      const n = decodeURIComponent(cancelMatch[1]!);
+      if (this.mode.cancelFailures > 0) {
+        this.mode.cancelFailures -= 1;
+        return this.json(res, 500, { title: 'Internal error' });
+      }
+      if (this.mode.cancelRefuse.includes(n) || this.mode.pickedUp.includes(n)) {
+        return this.json(res, 400, { title: 'Shipment cannot be cancelled', status: 400 });
+      }
+      this.cancelled.add(n);
       return this.json(res, 202, {});
     }
     return this.json(res, 404, { title: 'Not found' });

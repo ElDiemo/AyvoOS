@@ -96,6 +96,7 @@ export const SECURITY_ADMIN_PERMISSIONS: readonly PermissionCode[] = [
   'identity:users_manage',
   'identity:roles_manage',
   'sites:manage',
+  'sites:carrier_manage',
   'sites:all_access',
 ];
 

@@ -65,11 +65,12 @@ CREATE TRIGGER "site_carrier_settings_no_delete" BEFORE DELETE ON "site_carrier_
 CREATE TRIGGER "site_carrier_settings_no_truncate" BEFORE TRUNCATE ON "site_carrier_settings"
   FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
 
--- Permission: site administration of carriers (and the connection check). ADMIN only.
+-- Permission: site administration of carriers (and the connection check). ADMIN only: marked as
+-- security administration, so a custom role can never hold it.
 SELECT set_config('ayvo.catalogue_migration', 'on', false);
 
 INSERT INTO "permissions" ("code", "description", "warehouse_scoped", "security_admin", "site_scoped", "site_capability") VALUES
-  ('sites:carrier_manage', 'View and change the carrier settings of sites (PPL) and verify the carrier connection; never shows credentials', false, false, false, NULL);
+  ('sites:carrier_manage', 'View and change the carrier settings of sites (PPL) and verify the carrier connection; never shows credentials', false, true, false, NULL);
 
 INSERT INTO "role_permissions" ("role_code", "permission_code") VALUES
   ('ADMIN', 'sites:carrier_manage');

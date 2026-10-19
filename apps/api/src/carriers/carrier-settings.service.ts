@@ -5,7 +5,8 @@ import type {
   VerifyCarrierRequest,
   VerifyCarrierResult,
 } from '@ayvo/types';
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '../generated/prisma/client.js';
 import { AuditService } from '../audit/audit.service.js';
 import { domainError } from '../common/domain-error.js';
 import { ENV, type Env } from '../config/env.js';
@@ -53,6 +54,8 @@ function changes(before: Record<string, unknown> | null, after: Record<string, u
  */
 @Injectable()
 export class CarrierSettingsService {
+  private readonly log = new Logger(CarrierSettingsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly operations: OperationRequestsService,
@@ -140,7 +143,11 @@ export class CarrierSettingsService {
             'This connection does not exist on the server',
           );
         }
-        await tx.$executeRaw`SELECT 1 FROM "site_carrier_settings" WHERE "site_id" = ${siteId}::uuid FOR UPDATE`;
+        if (settings.label.layout === 'A4' && settings.label.format !== 'PDF') {
+          throw domainError(422, 'A4_NEEDS_PDF', 'The complete A4 document exists only as PDF');
+        }
+        // The site row serializes saves (also the very first one, before a settings row exists).
+        await tx.$executeRaw`SELECT 1 FROM "sites" WHERE "id" = ${siteId}::uuid FOR UPDATE`;
         const before = await tx.siteCarrierSetting.findUnique({ where: { siteId } });
         const sameConnection = before?.verifiedConnection === settings.connection;
         if (
@@ -176,7 +183,7 @@ export class CarrierSettingsService {
                 verifiedAt: null,
                 verifiedBy: null,
                 verifiedConnection: null,
-                verifiedProducts: undefined,
+                verifiedProducts: Prisma.DbNull,
               }
             : {};
         await tx.siteCarrierSetting.upsert({
@@ -230,17 +237,22 @@ export class CarrierSettingsService {
     try {
       products = await gateway.verify(controller.signal);
     } catch (e) {
+      // Secret-free: PPL client errors carry only HTTP status codes.
+      this.log.warn(
+        `PPL verification of site ${siteId} (${row.connection}) failed: ${(e as Error).message}`,
+      );
       error =
         e instanceof PplAuthError
           ? 'PPL odmítlo přihlášení (zkontrolujte přístupové údaje na serveru).'
-          : 'PPL neodpovědělo nebo odpověď nebyla použitelná.';
+          : 'PPL není dostupné nebo odpověď nebyla použitelná. Zkuste to později.';
     } finally {
       clearTimeout(timer);
     }
     await this.operations.run(
       'CARRIER_CONNECTION_VERIFY',
       input.requestId,
-      { actorId, siteId, connection: row.connection, ok: !!products },
+      // The outcome is not part of the request: a repeated click with the same id is the same request.
+      { actorId, siteId, connection: row.connection },
       async (tx) => {
         if (products) {
           await tx.siteCarrierSetting.update({

@@ -50,7 +50,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
         enabled: true,
         connection: 'PPL_TEST',
         sender,
-        productCode: 'BUSS',
+        productCode: 'SIM-A',
         label: { format: 'PDF', dpi: 203, layout: 'SINGLE' },
         ...over,
       });
@@ -121,7 +121,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     const tokens = ppl.tokens;
     const r = (await verify().expect(200)).body as VerifyCarrierResult;
     expect(r.ok).toBe(true);
-    expect(r.settings.verified!.products.map((p) => p.code)).toEqual(['BUSS', 'PRIV']);
+    expect(r.settings.verified!.products.map((p) => p.code)).toEqual(['SIM-A', 'SIM-B']);
     // Verification reads only: no batch, no pickup order.
     expect(
       ppl.seen.filter((s) => s.method === 'POST' && s.path !== '/login/getAccessToken'),
@@ -154,7 +154,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     const sent = lastBatch().body.shipments[0]!;
     expect(sent).toMatchObject({
       referenceId: s.request!.clientReference,
-      productType: 'BUSS',
+      productType: 'SIM-A',
       sender: {
         name: 'AYVO Prerov (test)',
         street: 'Prumyslova 1',
@@ -165,7 +165,8 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
       externalNumbers: [{ code: 'CUST', externalNumber: s.request!.clientReference }],
     });
     expect(sent.shipmentSet).toBeUndefined();
-    expect(lastBatch().body.labelSettings).toEqual({ format: 'Pdf', dpi: 203 });
+    // The printer resolution is sent only for ZPL.
+    expect(lastBatch().body.labelSettings).toEqual({ format: 'Pdf' });
     // No weight is sent while PPL does not document its unit; no depot, no pickup order.
     expect(JSON.stringify(lastBatch().body)).not.toMatch(/weight|depot|order\/batch/i);
     expect(s.parcels[0]!.carrierParcelNumber).toBe(lastBatch().numbers[0]!.number);
@@ -297,12 +298,123 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
       ppl.mode[fault] = true;
       const { order } = await completed(1);
       const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
+      // A broken contract goes to a person: not retried automatically.
       expect(s, fault).toMatchObject({
         status: 'REQUESTING',
-        request: { status: 'CREATED', errorCode: 'LABELS_NOT_DOWNLOADED' },
+        request: { status: 'CREATED', errorCode: 'LABELS_INVALID' },
       });
       expect(s.parcels[0]!.label).toBeNull();
+      const req = await t.prisma.shipmentCarrierRequest.findFirstOrThrow({
+        where: { shipment: { order: { code: order } } },
+      });
+      expect(req.nextPollAt, fault).toBeNull();
     }
+    // Never a token to another host.
+    expect(ppl.seen.some((x) => x.host.includes('evil'))).toBe(false);
+  });
+
+  it('a label URL relative to the API host is accepted (same origin, /data/ only)', async () => {
+    await ready();
+    ppl.mode.labelRelative = true;
+    const { order } = await completed(1);
+    const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
+    expect(s.status).toBe('LABELED');
+  });
+
+  it('the token cannot be had: nothing was sent — refused, back to the draft, not uncertain', async () => {
+    await ready();
+    const { order } = await completed(1);
+    const batches = ppl.batches.size;
+    ppl.mode.tokenDown = true;
+    // A fresh client (no cached token), as after a restart.
+    (
+      t.app.get(CarrierRegistryService) as unknown as { gateways: Map<string, unknown> }
+    ).gateways.clear();
+    const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
+    expect(s).toMatchObject({
+      status: 'DRAFT',
+      request: { status: 'REJECTED', errorCode: 'PPL_UNAVAILABLE' },
+    });
+    expect(ppl.batches.size).toBe(batches);
+  });
+
+  it('a number left over or claiming an already claimed parcel: never accepted', async () => {
+    await ready();
+    const { order } = await completed(3);
+    ppl.mode.extraNumber = true;
+    const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
+    expect(s).toMatchObject({
+      status: 'REQUESTING',
+      request: { status: 'CREATED', errorCode: 'CARRIER_PARCEL_MISMATCH' },
+    });
+    expect(s.parcels.every((p) => p.label === null)).toBe(true);
+  });
+
+  it('a lost cancel answer: asked again on "Ověřit zrušení" — never stuck, never doubled', async () => {
+    await ready();
+    const { order } = await completed(3);
+    await post(order, 'labels').expect(200);
+    const numbers = lastBatch().numbers.map((n) => n.number);
+    ppl.mode.cancelFailures = 1;
+    let c = ((await post(order, 'cancel', { reason: 'Omyl' }).expect(200)).body as OrderShipment)
+      .shipment!;
+    expect(c.status).toBe('CANCELLING');
+    expect(numbers.some((n) => ppl.cancelled.has(n))).toBe(false);
+    c = ((await post(order, 'cancel/resolve').expect(200)).body as OrderShipment).shipment!;
+    expect(c.status).toBe('CANCELLING');
+    expect(numbers.every((n) => ppl.cancelled.has(n))).toBe(true);
+    const asked = ppl.seen.filter((x) => x.path.endsWith('/cancel')).length;
+    c = ((await post(order, 'cancel/resolve').expect(200)).body as OrderShipment).shipment!;
+    expect(c.status).toBe('DRAFT');
+    expect(ppl.seen.filter((x) => x.path.endsWith('/cancel')).length).toBe(asked);
+  });
+
+  it('a set PPL cancels only partly is never returned as if nothing was cancelled', async () => {
+    await ready();
+    const { order } = await completed(3);
+    await post(order, 'labels').expect(200);
+    const numbers = lastBatch().numbers.map((n) => n.number);
+    ppl.mode.cancelRefuse = [numbers[1]!];
+    let c = ((await post(order, 'cancel', { reason: 'Omyl' }).expect(200)).body as OrderShipment)
+      .shipment!;
+    expect(c.status).toBe('CANCELLING');
+    c = ((await post(order, 'cancel/resolve').expect(200)).body as OrderShipment).shipment!;
+    expect(c.status).toBe('CANCELLING');
+  });
+
+  it('a shipment already picked up: PPL refuses every number — the labels stay', async () => {
+    await ready();
+    const { order } = await completed(1);
+    await post(order, 'labels').expect(200);
+    ppl.mode.pickedUp = lastBatch().numbers.map((n) => n.number);
+    const c = ((await post(order, 'cancel', { reason: 'Omyl' }).expect(200)).body as OrderShipment)
+      .shipment!;
+    expect(c.status).toBe('LABELED');
+  });
+
+  it('no secret or token in anything stored for a shipment', async () => {
+    await ready();
+    const { order } = await completed(3);
+    await post(order, 'labels').expect(200);
+    const stored = JSON.stringify(
+      [
+        await t.prisma.shipmentCarrierRequest.findMany({
+          where: { shipment: { order: { code: order } } },
+        }),
+        await t.prisma.orderEvent.findMany({ where: { order: { code: order } } }),
+        await t.prisma.shipment.findMany({ where: { order: { code: order } } }),
+      ],
+      (_, v: unknown) => (typeof v === 'bigint' ? v.toString() : v),
+    );
+    expect(stored).not.toContain(ppl.clientSecret);
+    expect(stored).not.toContain(ppl.validToken);
+    expect(stored).not.toContain(ppl.clientId);
+  });
+
+  it('A4 complete document only as PDF', async () => {
+    await ready();
+    const r = await save({ label: { format: 'ZPL', dpi: 203, layout: 'A4' } });
+    expect([r.status, r.body.code]).toEqual([422, 'A4_NEEDS_PDF']);
   });
 
   it('disabled or incomplete settings and other sites: no new PPL shipment', async () => {

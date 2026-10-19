@@ -76,7 +76,7 @@ test('ADMIN sets up PPL for a site: incomplete → verified → complete; nothin
   await card.getByTestId('carrier-verify').click();
   await expect(card.getByTestId('carrier-message')).toContainText('Připojení funguje');
   await expect(card.getByTestId('carrier-verified')).toContainText('Ověřeno');
-  await card.getByTestId('carrier-product').selectOption('BUSS');
+  await card.getByTestId('carrier-product').selectOption('SIM-A');
   await card.getByTestId('carrier-label-format').selectOption('ZPL');
   await expect(card.getByTestId('carrier-label-dpi')).toHaveValue('203');
   await card.getByTestId('carrier-save').click();
@@ -95,7 +95,7 @@ test('ADMIN sets up PPL for a site: incomplete → verified → complete; nothin
 
   // A changed connection invalidates the verification (only after saving it again).
   await page.reload();
-  await expect(card.getByTestId('carrier-product')).toHaveValue('BUSS');
+  await expect(card.getByTestId('carrier-product')).toHaveValue('SIM-A');
   await expect(card.getByTestId('carrier-label-format')).toHaveValue('ZPL');
 
   for (const width of [320, 390]) {

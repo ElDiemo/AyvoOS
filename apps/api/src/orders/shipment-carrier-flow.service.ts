@@ -6,6 +6,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 import {
   CARRIERS,
+  CarrierProtocolError,
   CarrierRejectedError,
   type CarrierGateway,
   type CarrierLabelFile,
@@ -286,7 +287,11 @@ export class ShipmentCarrierFlow {
     // Each parcel number must be proven for exactly one of our parcels — never by position.
     const numbers = new Map(result.parcels.map((p) => [p.parcelNo, p.number]));
     const distinct = new Set(result.parcels.map((p) => p.number));
+    // …and every number the carrier created belongs to exactly one parcel (none left over).
+    const created = result.numbers ?? result.parcels.map((p) => p.number);
     if (
+      created.length !== parcels.length ||
+      created.some((n) => !distinct.has(n)) ||
       result.parcels.length !== parcels.length ||
       numbers.size !== parcels.length ||
       distinct.size !== parcels.length ||
@@ -312,7 +317,12 @@ export class ShipmentCarrierFlow {
           signal,
         ),
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof CarrierProtocolError) {
+        this.log.error(`Labels of ${attempt.clientReference} refused: ${error.message}`);
+        await this.mark(attemptId, 'LABELS_INVALID', error.message);
+        return;
+      }
       this.log.warn(`Labels of ${attempt.clientReference} not downloaded`);
       await this.mark(attemptId, 'LABELS_NOT_DOWNLOADED', 'The labels could not be downloaded');
       await this.schedule(attemptId);
@@ -540,9 +550,11 @@ export class ShipmentCarrierFlow {
             );
           }
           // The earlier request's answer was lost: asking again is safe (cancelling is idempotent).
-        } else {
-          return; // PENDING / UNKNOWN: stays CANCELLING
+        } else if (status === 'UNKNOWN' || s.carrierCancelSentAt) {
+          return; // the carrier cannot tell, or is processing our request: stays CANCELLING
         }
+        // PENDING (nothing cancelled yet) and our request's answer was lost: asking again is
+        // safe — the gateway skips numbers already cancelled.
       }
       const answer = await this.call((signal) => carrier.cancel(query, signal));
       if (answer === 'CANCELLED') return await this.finalizeCancel(shipmentId, by);

@@ -40,6 +40,8 @@ export const carriersCs = {
   formatPdf: 'PDF',
   formatZpl: 'ZPL (přímo pro tiskárnu Zebra)',
   dpi: 'Rozlišení tiskárny',
+  dpiHint: 'Rozlišení se posílá jen pro ZPL; PDF se tiskne ve skutečné velikosti.',
+  a4NeedsPdf: 'Souhrnný dokument A4 je jen ve formátu PDF.',
   dpiValue: (dpi: number) => (dpi === 203 ? '203 dpi (Zebra ZD220)' : `${dpi} dpi`),
   layout: 'Rozvržení',
   layoutSingle: 'Jeden štítek na balík',
@@ -56,7 +58,8 @@ export const carriersCs = {
   verifySaveFirst: 'Před ověřením nastavení uložte.',
   verifiedAt: (at: string, by: string, connection: string) =>
     `Ověřeno ${at} (${by}), připojení ${connection}.`,
-  verifyOk: (n: number) => `Připojení funguje. PPL nabízí ${n} služeb.`,
+  verifyOk: (n: number) =>
+    `Připojení funguje. PPL nabízí ${n} ${n === 1 ? 'službu' : n >= 2 && n <= 4 ? 'služby' : 'služeb'}.`,
   notVerified: 'Připojení zatím nebylo ověřeno.',
   ready: 'Nastavení je úplné – nové přepravy této provozovny mohou použít PPL.',
   problemsTitle: 'Nové přepravy PPL zatím nelze vytvořit:',
@@ -76,6 +79,7 @@ export const carriersCs = {
     PRODUCT_NOT_VERIFIED: 'Službu lze vybrat jen ze seznamu načteného ověřením s tímto připojením.',
     NO_CONNECTION: 'Nejdřív vyberte a uložte připojení.',
     CREDENTIALS_MISSING: 'Server nemá přístupové údaje k tomuto připojení.',
+    A4_NEEDS_PDF: 'Souhrnný dokument A4 je jen ve formátu PDF.',
   } as Record<string, string>,
   lastChange: (at: string, by: string) => `Naposledy změněno ${at} (${by}).`,
 };

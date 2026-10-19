@@ -1,3 +1,5 @@
+import { CarrierProtocolError } from '../carrier.js';
+
 /**
  * HTTP client of the PPL CPL API (ppl-cpl-api.apidog.io, read 2026-10-19). One instance per
  * server-side connection. The OAuth2 token (client credentials, scope myapi2, valid 30 min, at most
@@ -24,6 +26,8 @@ export interface PplResponse {
 
 const MIN_SPACING_MS = 40;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+/** The shared token request has its own time limit — one caller's abort never fails the others. */
+const TOKEN_TIMEOUT_MS = 30_000;
 
 /** A short, secret-free description of a PPL error body (problem+json). */
 export function pplProblem(body: unknown): string {
@@ -63,7 +67,12 @@ export class PplClient {
     return next;
   }
 
-  private async accessToken(signal: AbortSignal): Promise<string> {
+  /**
+   * A valid token (cached or new). Throws {@link PplAuthError} when PPL refuses the credentials and
+   * {@link PplUnavailableError} otherwise — in both cases nothing else was sent to PPL.
+   */
+  async accessToken(signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
     if (this.token && Date.now() < this.token.expiresAt) return this.token.value;
     this.pending ??= (async () => {
       await this.spaced();
@@ -80,25 +89,45 @@ export class PplClient {
           scope: 'myapi2',
         }),
         redirect: 'manual',
-        signal,
+        signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+      }).catch(() => {
+        throw new PplUnavailableError('PPL token endpoint unreachable');
       });
-      if (!res.ok) throw new PplAuthError(res.status);
-      const body = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
-      if (typeof body.access_token !== 'string' || !body.access_token) throw new PplAuthError(0);
-      const seconds = typeof body.expires_in === 'number' ? body.expires_in : 1800;
-      // Renewed a minute early, never later than PPL says.
+      if ([400, 401, 403].includes(res.status)) throw new PplAuthError(res.status);
+      if (!res.ok) throw new PplUnavailableError(`PPL token endpoint: HTTP ${res.status}`);
+      const body = (await res.json().catch(() => ({}))) as {
+        access_token?: unknown;
+        expires_in?: unknown;
+      };
+      if (typeof body.access_token !== 'string' || !body.access_token) {
+        throw new PplUnavailableError('PPL token endpoint: no token in the answer');
+      }
+      const seconds =
+        typeof body.expires_in === 'number' && body.expires_in > 0 ? body.expires_in : 1800;
+      // Renewed a minute early (half-way for short tokens) — never later than PPL says.
       this.token = {
         value: body.access_token,
-        expiresAt: Date.now() + Math.max(seconds - 60, 30) * 1000,
+        expiresAt: Date.now() + (seconds > 120 ? seconds - 60 : seconds / 2) * 1000,
       };
       return body.access_token;
     })().finally(() => {
       this.pending = null;
     });
-    return this.pending;
+    const shared = this.pending;
+    shared.catch(() => undefined); // a caller that gave up never leaves a rejection unhandled
+    // Each caller still honours its own signal while waiting for the shared request.
+    return await Promise.race([
+      shared,
+      new Promise<never>((_, reject) =>
+        signal.addEventListener('abort', () => reject(signal.reason as Error), { once: true }),
+      ),
+    ]);
   }
 
-  /** One API request; a 401 drops the token and is retried once (the request was not processed). */
+  /**
+   * One API request. A 401 on a read drops the token and is retried once. A creating request
+   * (`once: true`) is never repeated: its 401 is returned to the caller (PPL did not process it).
+   */
   async request(
     method: 'GET' | 'POST',
     path: string,
@@ -106,6 +135,7 @@ export class PplClient {
       query?: Record<string, string | number | (string | number)[]>;
       json?: unknown;
       signal: AbortSignal;
+      once?: boolean;
     },
   ): Promise<PplResponse> {
     const url = new URL(`${this.connection.baseUrl}${path}`);
@@ -126,10 +156,11 @@ export class PplClient {
         redirect: 'manual',
         signal: opts.signal,
       });
-      if (res.status === 401 && attempt === 0) {
+      if (res.status === 401 && attempt === 0 && !opts.once) {
         this.token = null;
         continue;
       }
+      if (res.status === 401) this.token = null;
       const type = res.headers.get('content-type') ?? '';
       const body = type.includes('json') ? await res.json().catch(() => null) : await res.text();
       return { status: res.status, headers: res.headers, body };
@@ -138,14 +169,26 @@ export class PplClient {
   }
 
   /**
-   * Downloads a label file from a URL PPL returned. Only the connection's own API origin and base
-   * path are accepted; redirects are refused; the size is limited. Only then is the token sent.
+   * Downloads a label file from a URL PPL returned (absolute, or relative to the API host). Only the
+   * connection's own origin and its `/data/` path are accepted; redirects are refused; the size is
+   * limited. Only then is the token sent. A violation is a {@link CarrierProtocolError} (a person
+   * checks it — it is not retried).
    */
   async download(rawUrl: string, signal: AbortSignal): Promise<Uint8Array> {
-    const url = new URL(rawUrl);
     const base = new URL(this.connection.baseUrl);
-    if (url.origin !== base.origin || !url.pathname.startsWith(`${base.pathname}/`)) {
-      throw new Error('PPL label URL outside the PPL API: refused');
+    let url: URL;
+    try {
+      url = new URL(rawUrl, base.origin);
+    } catch {
+      throw new CarrierProtocolError('PPL returned an unusable label URL');
+    }
+    if (
+      url.origin !== base.origin ||
+      !url.pathname.startsWith(`${base.pathname}/data/`) ||
+      url.username ||
+      url.password
+    ) {
+      throw new CarrierProtocolError('PPL label URL outside the PPL API: refused');
     }
     const token = await this.accessToken(signal);
     await this.spaced();
@@ -154,10 +197,12 @@ export class PplClient {
       redirect: 'manual',
       signal,
     });
-    if (res.status >= 300 && res.status < 400) throw new Error('PPL label redirect: refused');
+    if (res.status >= 300 && res.status < 400) {
+      throw new CarrierProtocolError('PPL label redirect: refused');
+    }
     if (!res.ok || !res.body) throw new Error(`PPL label download: ${res.status}`);
     const declared = Number(res.headers.get('content-length') ?? '0');
-    if (declared > MAX_FILE_BYTES) throw new Error('PPL label too large');
+    if (declared > MAX_FILE_BYTES) throw new CarrierProtocolError('PPL label too large');
     const reader = res.body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -167,7 +212,7 @@ export class PplClient {
       size += value.byteLength;
       if (size > MAX_FILE_BYTES) {
         await reader.cancel();
-        throw new Error('PPL label too large');
+        throw new CarrierProtocolError('PPL label too large');
       }
       chunks.push(value);
     }
@@ -175,7 +220,10 @@ export class PplClient {
   }
 }
 
-/** Authentication failed (wrong or revoked credentials) — the message never contains them. */
+/** PPL (or its token endpoint) could not be reached or answered unusably; nothing was sent. */
+export class PplUnavailableError extends Error {}
+
+/** Authentication refused (wrong or revoked credentials) — the message never contains them. */
 export class PplAuthError extends Error {
   constructor(readonly status: number) {
     super(`PPL authentication failed${status ? ` (HTTP ${status})` : ''}`);

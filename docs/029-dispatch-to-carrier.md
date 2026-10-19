@@ -153,6 +153,31 @@ and the carrier of an **existing** request (its connection and environment only)
   shows `Canceled`.
 - Pickup ordering is a separate endpoint (`/order/batch`) and is **not used**.
 
+**How the adapter handles what the documentation leaves open** (to be confirmed in the PPL test
+environment before any use):
+
+- The token is obtained **before** the batch is sent: if PPL refuses the credentials or cannot be
+  reached, the batch was certainly not sent → refused (`PPL_AUTH` / `PPL_UNAVAILABLE`), never
+  uncertain. A creating request is sent once and never repeated by the client (not even after a
+  401, which PPL documents as "not processed"); reads are retried once after a 401.
+- Batch id: the path segment after `/shipment/batch/` of the `Location` header (absolute or
+  relative); its format is not documented, only a conservative character set is required.
+- Parcel mapping: every created number must belong to exactly one parcel by its own `CUST`; a parcel
+  claimed by two numbers, or a number left over, is not proven (`CARRIER_PARCEL_MISMATCH`).
+- Labels: absolute or host-relative `labelUrl`, only under the API's `/data/`; a foreign host, a
+  redirect or an oversized file is a contract violation for a person (`LABELS_INVALID`, not
+  retried). The complete A4 document only as PDF and only when PPL returns it as one file. `dpi` is
+  sent only for ZPL.
+- Cancelling: numbers already `Canceled` are skipped (asking again after a lost answer is safe);
+  a definite refusal only when PPL refused every number and none is cancelled; a partly cancelled
+  set stays `CANCELLING` for a person (no automatic return). States treated as "with the carrier":
+  `PickedUpFromSender`, `OutForDelivery`, `Delivered`, `DeliveredToPickupPoint`, `NotDelivered`,
+  `Undelivered`, `BackToSender` (names from the code list, unverified).
+- Query parameters `ShipmentNumbers`, `Limit` (50), `Offset` — at most 50 numbers per order.
+- Text: diacritics removed and Ł/ß/Đ/typographic marks transliterated; a value longer than PPL's
+  limit or with other characters refuses the request before sending (nothing is cut). Deliveries to
+  Germany are refused until the weight unit is confirmed.
+
 **Open questions for PPL** (also in the PR): duplicate `referenceId`; does `CustomerReferences`
 match `referenceId` or `externalNumbers`; lookup of a batch after a lost `Location`; is each set
 item's `externalNumbers` returned per parcel by `GET /shipment`; weight unit and precision; maximum
@@ -162,12 +187,13 @@ parcels; label size — e-mail 127 × 101 mm (CZ) / 150 × 101 mm (EU) vs. docum
 
 ## 6. Permissions (catalogue migration; ADMIN only)
 
-| Permission                    | Scope                    | Use                                                                          |
-| ----------------------------- | ------------------------ | ---------------------------------------------------------------------------- |
-| `shipments:read`              | active site, `WAREHOUSE` | the order's shipment, parcels, weights, labels, carrier numbers              |
-| `shipments:prepare`           | active site, `WAREHOUSE` | actual weighing, create/resolve labels, ready for pickup, cancel preparation |
-| `shipments:handover`          | active site, `WAREHOUSE` | confirm the hand-over to the carrier                                         |
-| `shipments:resolve_uncertain` | active site, `WAREHOUSE` | the exceptional manual closing of an uncertain request (§3)                  |
+| Permission                    | Scope                    | Use                                                                                                       |
+| ----------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `shipments:read`              | active site, `WAREHOUSE` | the order's shipment, parcels, weights, labels, carrier numbers                                           |
+| `shipments:prepare`           | active site, `WAREHOUSE` | actual weighing, create/resolve labels, ready for pickup, cancel preparation                              |
+| `shipments:handover`          | active site, `WAREHOUSE` | confirm the hand-over to the carrier                                                                      |
+| `shipments:resolve_uncertain` | active site, `WAREHOUSE` | the exceptional manual closing of an uncertain request (§3)                                               |
+| `sites:carrier_manage`        | global (site detail)     | the site's carrier settings and "Ověřit připojení" (§9); security administration — never in a custom role |
 
 Checked on every request, also on the repetition of the same request id; another site's order is
 not found (404). Not warehouse-scoped (like orders, doc 028). `HOTEL_USER` stays unassignable.

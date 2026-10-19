@@ -150,6 +150,7 @@ export function CarrierSettings({ initial, site }: { initial: PplSettings; site:
             value={form.connection ?? ''}
             onChange={(e) => setForm((f) => ({ ...f, connection: e.target.value || null }))}
             className={inputClass}
+            aria-label={t.connection}
             data-testid="carrier-connection"
           >
             <option value="">{t.connectionNone}</option>
@@ -220,6 +221,7 @@ export function CarrierSettings({ initial, site }: { initial: PplSettings; site:
             onChange={(e) => setForm((f) => ({ ...f, productCode: e.target.value || null }))}
             className={inputClass}
             disabled={products.length === 0}
+            aria-label={t.service}
             data-testid="carrier-product"
           >
             <option value="">{t.serviceNone}</option>
@@ -244,7 +246,12 @@ export function CarrierSettings({ initial, site }: { initial: PplSettings; site:
                 onChange={(e) =>
                   setForm((f) => ({
                     ...f,
-                    label: { ...f.label, format: e.target.value as 'PDF' | 'ZPL' },
+                    label: {
+                      ...f.label,
+                      format: e.target.value as 'PDF' | 'ZPL',
+                      // The complete A4 document exists only as PDF.
+                      layout: e.target.value === 'ZPL' ? 'SINGLE' : f.label.layout,
+                    },
                   }))
                 }
                 className={inputClass}
@@ -285,10 +292,15 @@ export function CarrierSettings({ initial, site }: { initial: PplSettings; site:
                 data-testid="carrier-label-layout"
               >
                 <option value="SINGLE">{t.layoutSingle}</option>
-                <option value="A4">{t.layoutA4}</option>
+                <option value="A4" disabled={form.label.format !== 'PDF'}>
+                  {t.layoutA4}
+                </option>
               </select>
             </label>
           </div>
+          <p className="text-xs text-stone-500">
+            {form.label.format === 'ZPL' ? t.a4NeedsPdf : t.dpiHint}
+          </p>
           <p className="text-xs text-stone-500">{t.labelSizeHint}</p>
         </fieldset>
 

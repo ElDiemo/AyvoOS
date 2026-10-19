@@ -10,7 +10,7 @@ import {
   type CarrierSettingsSnapshot,
   type CarrierShipmentRequest,
 } from '../carrier.js';
-import { pplProblem, type PplClient } from './ppl-client.js';
+import { pplProblem, PplAuthError, type PplClient } from './ppl-client.js';
 
 /**
  * PPL CPL API adapter (doc 029 §5; ppl-cpl-api.apidog.io, read 2026-10-19). Asynchronous: a batch
@@ -21,24 +21,73 @@ import { pplProblem, type PplClient } from './ppl-client.js';
  * Weights are not sent while their unit is undocumented; no dimensions exist in the API.
  */
 
-const lat = (s: string | null | undefined) =>
-  s ? s.normalize('NFD').replace(/[̀-ͯ]/g, '') : undefined;
-/** Field lengths documented for the PPL address model. */
-const cut = (s: string | null | undefined, max: number) => lat(s)?.slice(0, max);
+/** Letters a Unicode decomposition does not reduce to Latin, and typographic punctuation. */
+const LATIN: Record<string, string> = {
+  Ł: 'L',
+  ł: 'l',
+  Đ: 'D',
+  đ: 'd',
+  Ø: 'O',
+  ø: 'o',
+  ß: 'ss',
+  Æ: 'AE',
+  æ: 'ae',
+  Œ: 'OE',
+  œ: 'oe',
+  '„': '"',
+  '“': '"',
+  '”': '"',
+  '‚': "'",
+  '‘': "'",
+  '’': "'",
+  '–': '-',
+  '—': '-',
+  ' ': ' ',
+};
+/** PPL accepts Latin characters only (doc 029 §5): diacritics removed, the rest transliterated. */
+export const latin = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\u0020-\u007e]/g, (c) => LATIN[c] ?? c);
 
+/** Address field lengths documented for the PPL address model. */
+const LIMITS = { name: 50, street: 60, city: 50, zipCode: 10, contact: 50, phone: 30, email: 50 };
+
+/**
+ * The PPL address. Nothing is cut: a value PPL could not take (too long, non-Latin) refuses the
+ * request before anything is sent — what is printed on the label is never silently changed.
+ */
 function address(
+  role: 'sender' | 'recipient',
   a: CarrierAddress & { contactName?: string | null; phone?: string | null; email?: string | null },
 ) {
-  return {
-    name: cut(a.name, 50),
-    street: cut([a.addressLine1, a.addressLine2].filter(Boolean).join(', '), 60),
-    city: cut(a.city, 50),
-    zipCode: cut(a.postalCode.replace(/\s+/g, ''), 10),
+  const out = {
+    name: latin(a.name),
+    street: latin([a.addressLine1, a.addressLine2].filter(Boolean).join(', ')),
+    city: latin(a.city),
+    zipCode: a.postalCode.replace(/\s+/g, ''),
     country: a.countryCode,
-    contact: cut(a.contactName ?? null, 50),
-    phone: cut(a.phone ?? null, 30),
-    email: a.email ? a.email.slice(0, 50) : undefined,
+    contact: a.contactName ? latin(a.contactName) : undefined,
+    phone: a.phone ? a.phone.trim() : undefined,
+    email: a.email ? a.email.trim() : undefined,
   };
+  for (const [field, max] of Object.entries(LIMITS)) {
+    const v = out[field as keyof typeof out];
+    if (v && v.length > max) {
+      throw new CarrierRejectedError(
+        'PPL_FIELD_TOO_LONG',
+        `${role}.${field}: longer than the ${max} characters PPL accepts`,
+      );
+    }
+    if (v && /[^ -~]/.test(v)) {
+      throw new CarrierRejectedError(
+        'PPL_NOT_LATIN',
+        `${role}.${field}: characters PPL cannot take`,
+      );
+    }
+  }
+  return out;
 }
 
 const PICKED_UP = new Set([
@@ -96,14 +145,26 @@ export class PplGateway implements CarrierGateway {
     this.name = this.environment === 'TEST' ? 'PPL (testovací prostředí)' : 'PPL';
   }
 
-  /** The batch request (exactly what PPL receives; stored with the attempt as its payload). */
+  /**
+   * The batch request — exactly what PPL receives, built from the attempt's stored request (its
+   * settings snapshot), so it is the same for every look at the attempt. Refuses (nothing sent)
+   * what PPL could not take.
+   */
   static batch(request: CarrierShipmentRequest) {
     const s = request.settings;
     const set = request.parcels.length > 1;
+    // Germany needs the parcel weight, whose unit PPL does not document (doc 029 §5).
+    if (request.recipient.countryCode === 'DE') {
+      throw new CarrierRejectedError(
+        'PPL_COUNTRY_UNSUPPORTED',
+        'Germany needs parcel weights; their unit is not confirmed by PPL yet',
+      );
+    }
     return {
       labelSettings: {
         format: s.label.format === 'ZPL' ? 'Zpl' : 'Pdf',
-        dpi: s.label.dpi,
+        // The printer resolution applies to ZPL (documented 203–1200 dpi).
+        ...(s.label.format === 'ZPL' ? { dpi: s.label.dpi } : {}),
         ...(s.label.complete
           ? {
               completeLabelSettings: {
@@ -118,9 +179,9 @@ export class PplGateway implements CarrierGateway {
         {
           referenceId: request.clientReference,
           productType: s.service,
-          note: lat(request.orderCode),
-          sender: s.sender ? address(s.sender) : undefined,
-          recipient: address(request.recipient),
+          note: latin(request.orderCode),
+          sender: s.sender ? address('sender', s.sender) : undefined,
+          recipient: address('recipient', request.recipient),
           externalNumbers: [{ code: 'CUST', externalNumber: request.clientReference }],
           ...(set
             ? {
@@ -143,20 +204,36 @@ export class PplGateway implements CarrierGateway {
   ): Promise<CarrierCreateOutcome> {
     if (!request.settings.service)
       throw new CarrierRejectedError('PPL_NO_PRODUCT', 'No PPL product');
+    const body = PplGateway.batch(request);
+    // The token first: if it cannot be had, the batch was certainly not sent (a definite "no").
+    try {
+      await this.client.accessToken(signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new CarrierRejectedError(
+        error instanceof PplAuthError ? 'PPL_AUTH' : 'PPL_UNAVAILABLE',
+        error instanceof PplAuthError
+          ? 'PPL refused the server credentials; nothing was sent'
+          : 'PPL could not be reached; nothing was sent',
+      );
+    }
+    // Sent once; never repeated by the client (also not after a 401).
     const res = await this.client.request('POST', '/shipment/batch', {
-      json: PplGateway.batch(request),
+      json: body,
       signal,
+      once: true,
     });
     if (res.status === 201) {
-      const id = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i.exec(
-        res.headers.get('location') ?? '',
-      )?.[1];
+      const id = batchId(res.headers.get('location'));
       // Accepted but no batch id: the outcome cannot be followed — unknown, never re-sent.
       if (!id) throw new Error('PPL accepted the batch without a usable Location');
       return { kind: 'ACCEPTED', carrierRef: id };
     }
-    // A validation refusal: nothing was created.
+    // A validation refusal, or the token not accepted: nothing was created.
     if (res.status === 400) throw new CarrierRejectedError('PPL_400', pplProblem(res.body));
+    if (res.status === 401 || res.status === 403) {
+      throw new CarrierRejectedError(`PPL_${res.status}`, 'PPL did not accept the access token');
+    }
     throw new Error(`PPL answered HTTP ${res.status}`);
   }
 
@@ -231,17 +308,23 @@ export class PplGateway implements CarrierGateway {
     });
     if (res.status !== 200 || !Array.isArray(res.body)) return [];
     const byRef = new Map(request.parcels.map((p) => [p.reference, p.parcelNo]));
-    const mapped = new Map<number, string>();
+    // parcel → every number claiming it; a parcel claimed by two numbers is ambiguous (unproven).
+    const claims = new Map<number, Set<string>>();
     for (const sh of res.body as ShipmentInfo[]) {
       if (!sh.shipmentNumber || !numbers.includes(sh.shipmentNumber)) continue;
-      const refs = (sh.externalNumbers ?? [])
-        .filter((e) => e.code === 'CUST' && e.externalNumber && byRef.has(e.externalNumber))
-        .map((e) => byRef.get(e.externalNumber!)!);
-      // Exactly one of our parcel references per number, used once.
-      if (new Set(refs).size !== 1 || mapped.has(refs[0]!)) continue;
-      mapped.set(refs[0]!, sh.shipmentNumber);
+      const refs = new Set(
+        (sh.externalNumbers ?? [])
+          .filter((e) => e.code === 'CUST' && e.externalNumber && byRef.has(e.externalNumber))
+          .map((e) => byRef.get(e.externalNumber!)!),
+      );
+      // Exactly one of our parcel references per number.
+      if (refs.size !== 1) continue;
+      const parcelNo = [...refs][0]!;
+      claims.set(parcelNo, (claims.get(parcelNo) ?? new Set()).add(sh.shipmentNumber));
     }
-    return [...mapped].map(([parcelNo, number]) => ({ parcelNo, number }));
+    return [...claims]
+      .filter(([, n]) => n.size === 1)
+      .map(([parcelNo, n]) => ({ parcelNo, number: [...n][0]! }));
   }
 
   async labels(
@@ -269,7 +352,7 @@ export class PplGateway implements CarrierGateway {
     const parcels = [];
     for (const p of query.parcels) {
       const url = urls.get(p.number);
-      if (!url) throw new Error(`PPL returned no label for ${p.number}`);
+      if (!url) throw new Error(`PPL returned no label for ${p.number} (yet)`);
       parcels.push({
         parcelNo: p.parcelNo,
         format,
@@ -277,51 +360,79 @@ export class PplGateway implements CarrierGateway {
         bytes: await this.client.download(url, signal),
       });
     }
-    const completeUrl = query.settings.label.complete
-      ? status.completeLabel?.labelUrls?.[0]
+    // The complete document (A4, PDF only — enforced by the settings) only as one single file.
+    const completeUrls = query.settings.label.complete
+      ? status.completeLabel?.labelUrls
       : undefined;
     return {
       parcels,
-      complete: completeUrl
-        ? { format, dpi, bytes: await this.client.download(completeUrl, signal) }
-        : null,
+      complete:
+        completeUrls?.length === 1
+          ? { format, dpi, bytes: await this.client.download(completeUrls[0]!, signal) }
+          : null,
     };
   }
 
-  /** Asks PPL to cancel every created number; PPL answers 202 (asynchronous) — confirmed later. */
+  private async states(
+    numbers: string[],
+    signal: AbortSignal,
+  ): Promise<Map<string, string> | null> {
+    const res = await this.client.request('GET', '/shipment', {
+      query: { ShipmentNumbers: numbers, Limit: 50, Offset: 0 },
+      signal,
+    });
+    if (res.status !== 200 || !Array.isArray(res.body)) return null;
+    const states = new Map<string, string>();
+    for (const sh of res.body as ShipmentInfo[]) {
+      if (sh.shipmentNumber) states.set(sh.shipmentNumber, sh.shipmentState ?? '');
+    }
+    return numbers.every((n) => states.has(n)) ? states : null;
+  }
+
+  /**
+   * Asks PPL to cancel every created number not yet `Canceled` (so asking again after a lost
+   * answer is safe). PPL answers 202 (asynchronous) — confirmed later by {@link cancelStatus}. A
+   * definite refusal only when PPL refused every number and none is cancelled; a mixed outcome
+   * stays pending (and is shown as such) — never "returned" while part of it is cancelled.
+   */
   async cancel(
     query: { parcels: string[] },
     signal: AbortSignal,
   ): Promise<'CANCELLED' | 'PENDING'> {
-    for (const n of query.parcels) {
+    const states = await this.states(query.parcels, signal);
+    if (!states) throw new Error('PPL shipment states unavailable');
+    const open = query.parcels.filter((n) => states.get(n) !== 'Canceled');
+    if (open.length === 0) return 'CANCELLED';
+    const refused: string[] = [];
+    let accepted = query.parcels.length - open.length;
+    for (const n of open) {
       const res = await this.client.request('POST', `/shipment/${encodeURIComponent(n)}/cancel`, {
         signal,
       });
-      if (res.status === 400)
-        throw new CarrierRejectedError('PPL_CANCEL_400', pplProblem(res.body));
-      if (res.status !== 202 && res.status !== 200)
-        throw new Error(`PPL cancel: HTTP ${res.status}`);
+      if (res.status === 202 || res.status === 200) accepted += 1;
+      else if (res.status === 400) refused.push(`${n}: ${pplProblem(res.body)}`);
+      else throw new Error(`PPL cancel: HTTP ${res.status}`);
+    }
+    if (refused.length > 0 && accepted === 0) {
+      throw new CarrierRejectedError('PPL_CANCEL_400', refused.join('; ').slice(0, 900));
     }
     return 'PENDING';
   }
 
-  /** CANCELLED only when PPL shows every number `Canceled`. */
+  /**
+   * CANCELLED only when PPL shows every number `Canceled`; NOT_CANCELLED only when none is and one
+   * is already with the carrier; a mixed set is UNKNOWN (a person checks it with PPL).
+   */
   async cancelStatus(
     query: { parcels: string[] },
     signal: AbortSignal,
   ): Promise<CarrierCancelStatus> {
-    const res = await this.client.request('GET', '/shipment', {
-      query: { ShipmentNumbers: query.parcels, Limit: 50, Offset: 0 },
-      signal,
-    });
-    if (res.status !== 200 || !Array.isArray(res.body)) return 'UNKNOWN';
-    const states = new Map(
-      (res.body as ShipmentInfo[]).map((s) => [s.shipmentNumber, s.shipmentState ?? '']),
-    );
-    const all = query.parcels.map((n) => states.get(n));
-    if (all.some((s) => s === undefined)) return 'UNKNOWN';
+    const states = await this.states(query.parcels, signal);
+    if (!states) return 'UNKNOWN';
+    const all = query.parcels.map((n) => states.get(n)!);
     if (all.every((s) => s === 'Canceled')) return 'CANCELLED';
-    if (all.some((s) => PICKED_UP.has(s!))) return 'NOT_CANCELLED';
+    const some = all.some((s) => s === 'Canceled');
+    if (all.some((s) => PICKED_UP.has(s))) return some ? 'UNKNOWN' : 'NOT_CANCELLED';
     return 'PENDING';
   }
 
@@ -341,4 +452,20 @@ export class PplGateway implements CarrierGateway {
         name: typeof p.name === 'string' ? p.name : String(p.code),
       }));
   }
+}
+
+/**
+ * The batch id from the Location header (absolute or relative): the path segment after
+ * `/shipment/batch/`. Its format is not documented — only a conservative character set is required.
+ */
+export function batchId(location: string | null): string | null {
+  if (!location) return null;
+  let path: string;
+  try {
+    path = new URL(location, 'http://relative.invalid').pathname;
+  } catch {
+    return null;
+  }
+  const m = /\/shipment\/batch\/([A-Za-z0-9_-]{1,100})\/?$/.exec(path);
+  return m ? m[1]! : null;
 }

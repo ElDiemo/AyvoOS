@@ -113,6 +113,12 @@ export class CarrierRejectedError extends Error {
   }
 }
 
+/**
+ * The carrier's answer breaks its documented contract (e.g. a label URL on a foreign host, a
+ * redirect): not retried automatically — a person checks it with the carrier.
+ */
+export class CarrierProtocolError extends Error {}
+
 export interface CarrierGateway {
   readonly code: string;
   readonly name: string;
