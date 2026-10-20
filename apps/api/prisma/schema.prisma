@@ -907,6 +907,9 @@ enum OperationKind {
   ORDER_HAND_OVER
   SHIPMENT_LABELS_ABANDON
   SHIPMENT_CANCEL_RESOLVE
+  CARRIER_SETTINGS_UPDATE
+  CARRIER_CONNECTION_VERIFY
+  CARRIER_CREDENTIALS_REPLACE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1038,6 +1041,10 @@ model User {
   shipmentsCancelAsked Shipment[]               @relation("ShipmentCancelRequestedBy")
   parcelWeighings      ShipmentParcelWeighing[] @relation("ParcelWeighedBy")
   carrierRequests      ShipmentCarrierRequest[] @relation("CarrierRequestBy")
+
+  carrierSettingsVerified   SiteCarrierSetting[] @relation("CarrierSettingVerifiedBy")
+  carrierSettingsUpdated    SiteCarrierSetting[] @relation("CarrierSettingUpdatedBy")
+  carrierConnectionsUpdated CarrierConnection[]  @relation("CarrierConnectionUpdatedBy")
 
   @@map("users")
 }
@@ -1307,6 +1314,8 @@ model Site {
   updatedByUser       User?                  @relation("SiteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   shipments Shipment[]
+
+  carrierSetting SiteCarrierSetting?
 
   @@map("sites")
 }
@@ -2516,6 +2525,8 @@ model Shipment {
   carrierCode         String?        @map("carrier_code")
   carrierConnection   String?        @map("carrier_connection")
   carrierEnvironment  String?        @map("carrier_environment")
+  /// Fingerprint of the carrier account (ADR 0027): later calls only with this same account.
+  carrierAccount      String?        @map("carrier_account")
   carrierShipmentRef  String?        @map("carrier_shipment_ref")
   createdAt           DateTime       @map("created_at") @db.Timestamptz(3)
   createdBy           String         @map("created_by") @db.Uuid
@@ -2638,6 +2649,7 @@ model ShipmentCarrierRequest {
   carrierCode        String               @map("carrier_code")
   carrierConnection  String               @map("carrier_connection")
   carrierEnvironment String               @map("carrier_environment")
+  carrierAccount     String?              @map("carrier_account")
   clientReference    String               @unique @map("client_reference")
   status             CarrierRequestStatus @default(PREPARED)
   payload            Json
@@ -2684,4 +2696,73 @@ model ShipmentLabel {
 
   @@unique([shipmentId, parcelId])
   @@map("shipment_labels")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Carrier settings per site (doc 029 §9, doc 022 §8; owner 2026-10-19): PPL only in this stage.
+// Secrets never live here: `connection` names a server-side connection whose credentials are in the
+// server's protected environment. Configuration (current state) — every change is audited.
+// ---------------------------------------------------------------------------------------------
+
+/// The PPL settings of one site. May be saved incomplete; a new shipment needs them complete,
+/// enabled and verified with the same connection.
+model SiteCarrierSetting {
+  id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  siteId             String    @unique @map("site_id") @db.Uuid
+  carrier            String
+  enabled            Boolean   @default(false)
+  /// A server-side connection code (e.g. PPL_TEST); never a URL, never a secret.
+  connection         String?
+  senderName         String?   @map("sender_name")
+  senderStreet       String?   @map("sender_street")
+  senderCity         String?   @map("sender_city")
+  senderPostalCode   String?   @map("sender_postal_code")
+  senderCountry      String?   @map("sender_country") @db.Char(2)
+  senderContact      String?   @map("sender_contact")
+  senderPhone        String?   @map("sender_phone")
+  senderEmail        String?   @map("sender_email")
+  /// The carrier's product code, chosen from the list verified with `verified_connection`.
+  productCode        String?   @map("product_code")
+  labelFormat        String    @default("PDF") @map("label_format")
+  labelDpi           Int       @default(203) @map("label_dpi")
+  /// SINGLE = one label per parcel (thermal printer); A4 = also a complete A4 document.
+  labelLayout        String    @default("SINGLE") @map("label_layout")
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(3)
+  verifiedBy         String?   @map("verified_by") @db.Uuid
+  verifiedConnection String?   @map("verified_connection")
+  /// The carrier's product list as read during the verification (code + name).
+  verifiedProducts   Json?     @map("verified_products")
+  /// The carrier account fingerprint the verification was made with (ADR 0027).
+  verifiedAccount    String?   @map("verified_account")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy          String    @map("updated_by") @db.Uuid
+
+  site     Site  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  verifier User? @relation("CarrierSettingVerifiedBy", fields: [verifiedBy], references: [id], onDelete: Restrict)
+  updater  User  @relation("CarrierSettingUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  @@map("site_carrier_settings")
+}
+
+/// Credentials of a server-side carrier connection entered in the administration (ADR 0027): the
+/// secret only encrypted (AES-256-GCM, key in the server environment). Replaced, never deleted,
+/// never returned by the API. Only the TEST environment exists in this stage.
+model CarrierConnection {
+  code             String   @id
+  carrier          String
+  environment      String
+  clientId         String   @map("client_id")
+  account          String
+  secretCiphertext Bytes    @map("secret_ciphertext")
+  secretIv         Bytes    @map("secret_iv")
+  secretTag        Bytes    @map("secret_tag")
+  keyId            String   @map("key_id")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy        String   @map("updated_by") @db.Uuid
+
+  updater User @relation("CarrierConnectionUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  @@map("carrier_connections")
 }

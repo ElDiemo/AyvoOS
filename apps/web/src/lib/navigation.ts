@@ -1,4 +1,5 @@
 import type { PermissionCode } from '@ayvo/types';
+import { carriersCs } from '../i18n/cs/carriers';
 import { identityCs } from '../i18n/cs/identity';
 import { shellCs } from '../i18n/cs/shell';
 
@@ -219,7 +220,7 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'admin',
     section: 'administration',
-    permissions: ['identity:users_read', 'sites:manage'],
+    permissions: ['identity:users_read', 'sites:manage', 'carriers:connections_manage'],
     label: identityCs.admin.module,
     href: '/admin/users',
     description: identityCs.admin.subtitle,
@@ -242,6 +243,12 @@ export const MODULES: readonly NavModule[] = [
         label: identityCs.sites_admin.nav,
         permission: 'sites:manage',
       },
+      {
+        id: 'carriers',
+        href: '/admin/carriers',
+        label: carriersCs.connections.nav,
+        permission: 'carriers:connections_manage',
+      },
     ],
   },
 ];
@@ -257,7 +264,7 @@ export type ProductionPageId =
   | 'workstations'
   | 'catalog'
   | 'setup';
-export type AdminPageId = 'users' | 'roles' | 'sites';
+export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
 export type HotelsPageId = 'list' | 'new';
 export type DispatchPageId = 'orders' | 'new';
 

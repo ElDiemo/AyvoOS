@@ -6,6 +6,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 import {
   CARRIERS,
+  CarrierProtocolError,
   CarrierRejectedError,
   type CarrierGateway,
   type CarrierLabelFile,
@@ -13,7 +14,7 @@ import {
   type CarrierPollOutcome,
   type CarrierRegistry,
   type CarrierShipmentRequest,
-} from './carriers/carrier.js';
+} from '../carriers/carrier.js';
 import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { shipmentEvent, type Step } from './shipment-events.js';
 
@@ -78,16 +79,19 @@ export class ShipmentCarrierFlow {
     }
   }
 
-  gatewayOf(ref: {
+  /** The carrier of a shipment or request: its own connection, environment and account only. */
+  async gatewayOf(ref: {
     carrierCode: string | null;
     carrierConnection: string | null;
     carrierEnvironment: string | null;
-  }): CarrierGateway | null {
+    carrierAccount: string | null;
+  }): Promise<CarrierGateway | null> {
     if (!ref.carrierCode || !ref.carrierConnection || !ref.carrierEnvironment) return null;
     return this.carriers.forConnection({
       carrierCode: ref.carrierCode,
       connection: ref.carrierConnection,
       environment: ref.carrierEnvironment,
+      account: ref.carrierAccount,
     });
   }
 
@@ -104,7 +108,7 @@ export class ShipmentCarrierFlow {
       where: { id: attemptId },
       include: { shipment: { select: { status: true } } },
     });
-    const carrier = this.gatewayOf(attempt);
+    const carrier = await this.gatewayOf(attempt);
     if (!carrier) return;
     const request = attempt.payload as unknown as CarrierShipmentRequest;
     if (attempt.status === 'PREPARED') {
@@ -286,7 +290,11 @@ export class ShipmentCarrierFlow {
     // Each parcel number must be proven for exactly one of our parcels — never by position.
     const numbers = new Map(result.parcels.map((p) => [p.parcelNo, p.number]));
     const distinct = new Set(result.parcels.map((p) => p.number));
+    // …and every number the carrier created belongs to exactly one parcel (none left over).
+    const created = result.numbers ?? result.parcels.map((p) => p.number);
     if (
+      created.length !== parcels.length ||
+      created.some((n) => !distinct.has(n)) ||
       result.parcels.length !== parcels.length ||
       numbers.size !== parcels.length ||
       distinct.size !== parcels.length ||
@@ -312,7 +320,12 @@ export class ShipmentCarrierFlow {
           signal,
         ),
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof CarrierProtocolError) {
+        this.log.error(`Labels of ${attempt.clientReference} refused: ${error.message}`);
+        await this.mark(attemptId, 'LABELS_INVALID', error.message);
+        return;
+      }
       this.log.warn(`Labels of ${attempt.clientReference} not downloaded`);
       await this.mark(attemptId, 'LABELS_NOT_DOWNLOADED', 'The labels could not be downloaded');
       await this.schedule(attemptId);
@@ -516,7 +529,7 @@ export class ShipmentCarrierFlow {
       include: { requests: { where: { status: { in: ['CREATED', 'SUCCEEDED'] } } } },
     });
     if (s.status !== 'CANCELLING') return;
-    const carrier = this.gatewayOf(s);
+    const carrier = await this.gatewayOf(s);
     if (!carrier) return;
     const created = s.requests[0]?.result as Created | null;
     const shipmentRef = s.carrierShipmentRef ?? created?.shipmentRef;
@@ -540,9 +553,11 @@ export class ShipmentCarrierFlow {
             );
           }
           // The earlier request's answer was lost: asking again is safe (cancelling is idempotent).
-        } else {
-          return; // PENDING / UNKNOWN: stays CANCELLING
+        } else if (status === 'UNKNOWN' || s.carrierCancelSentAt) {
+          return; // the carrier cannot tell, or is processing our request: stays CANCELLING
         }
+        // PENDING (nothing cancelled yet) and our request's answer was lost: asking again is
+        // safe — the gateway skips numbers already cancelled.
       }
       const answer = await this.call((signal) => carrier.cancel(query, signal));
       if (answer === 'CANCELLED') return await this.finalizeCancel(shipmentId, by);

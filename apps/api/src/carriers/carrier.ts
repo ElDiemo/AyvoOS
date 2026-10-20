@@ -113,12 +113,20 @@ export class CarrierRejectedError extends Error {
   }
 }
 
+/**
+ * The carrier's answer breaks its documented contract (e.g. a label URL on a foreign host, a
+ * redirect): not retried automatically — a person checks it with the carrier.
+ */
+export class CarrierProtocolError extends Error {}
+
 export interface CarrierGateway {
   readonly code: string;
   readonly name: string;
   /** The server-side connection (credentials live only on the server) and its environment. */
   readonly connection: string;
   readonly environment: CarrierEnvironment;
+  /** Fingerprint of the carrier account in use (never the client id). */
+  readonly account: string;
   readonly rules: CarrierRules;
   /**
    * Sends the request ONCE. Resolves with what the carrier answered; throws
@@ -177,9 +185,14 @@ export interface CarrierRegistry {
   /** The carrier and settings for a NEW request at a site (doc 022 §8: configured per site). */
   forSite(siteId: string): Promise<CarrierChoice>;
   /** The carrier of an existing request: its own connection and environment, or null. */
-  forConnection(ref: {
-    carrierCode: string;
-    connection: string;
-    environment: string;
-  }): CarrierGateway | null;
+  forConnection(ref: CarrierRef): Promise<CarrierGateway | null>;
+}
+
+/** What a shipment and its requests recorded about their carrier (ADR 0027). */
+export interface CarrierRef {
+  carrierCode: string;
+  connection: string;
+  environment: string;
+  /** Fingerprint of the carrier account; null never matches a configured account. */
+  account: string | null;
 }

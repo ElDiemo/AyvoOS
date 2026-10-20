@@ -125,6 +125,31 @@ export const envSchema = z
     // A request claimed for sending is treated as possibly in flight for this long: no lookup and
     // no manual resolution before (doc 029 §3). Outside tests at least 3 × the call timeout.
     CARRIER_SETTLE_SECONDS: z.coerce.number().int().min(0).max(3600).default(120),
+    // PPL CPL API — TEST environment only (doc 029 §9). Credentials come from the server's protected
+    // env file, never from the repository, the database or the browser. No production connection
+    // exists in this stage; the base URL is fixed in code (not configurable by users).
+    PPL_TEST_CLIENT_ID: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().min(1).max(200).optional(),
+    ),
+    PPL_TEST_CLIENT_SECRET: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().min(1).max(500).optional(),
+    ),
+    // AES-256-GCM key (base64, 32 bytes) for carrier credentials entered in the administration
+    // (ADR 0027). Without it, credentials cannot be entered or read there.
+    CARRIER_CREDENTIALS_KEY: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .refine((v) => /^[A-Za-z0-9+/]{43}=$/.test(v) && Buffer.from(v, 'base64').length === 32, {
+          message: 'must be 32 random bytes in base64',
+        })
+        .optional(),
+    ),
+    // Only for automated tests (a simulated PPL server); refused unless APP_ENV=test.
+    PPL_TEST_API_BASE_URL_FOR_TESTS: z.url({ protocol: /^https?$/ }).optional(),
+
     // Background polling of accepted carrier requests (seconds between rounds; 0 = off).
     CARRIER_POLL_SECONDS: z.coerce.number().int().min(0).max(3600).default(10),
 
@@ -161,6 +186,18 @@ export const envSchema = z
     if (env.CARRIER_PROVIDER === 'test' && env.APP_ENV !== 'test') {
       // Never a pretended carrier on DEV or production: no fake labels, numbers or answers.
       return fail('CARRIER_PROVIDER', 'CARRIER_PROVIDER=test is allowed only with APP_ENV=test');
+    }
+    if (env.PPL_TEST_API_BASE_URL_FOR_TESTS && env.APP_ENV !== 'test') {
+      return fail('PPL_TEST_API_BASE_URL_FOR_TESTS', 'allowed only with APP_ENV=test');
+    }
+    if (env.APP_ENV === 'production' && env.PPL_TEST_CLIENT_ID) {
+      return fail('PPL_TEST_CLIENT_ID', 'the PPL TEST connection is not used in production');
+    }
+    if (!!env.PPL_TEST_CLIENT_ID !== !!env.PPL_TEST_CLIENT_SECRET) {
+      return fail(
+        'PPL_TEST_CLIENT_ID',
+        'PPL_TEST_CLIENT_ID and PPL_TEST_CLIENT_SECRET go together',
+      );
     }
     if (
       env.APP_ENV !== 'test' &&

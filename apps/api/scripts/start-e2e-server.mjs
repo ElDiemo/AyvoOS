@@ -5,11 +5,13 @@
 //   3. bootstraps the first administrator (e2e-admin@ayvo.test) with the one-time command,
 //   4. adds a second, clearly fictional test site with its own warehouse (multi-site browser
 //      tests; warehouses are created by migrations in v0.1, so the test database gets one here),
-//   5. runs dist/main.js with a fresh temporary file store (scripts/e2e-storage.mjs) and the fake
+//   5. starts a simulated PPL API (test/support/fake-ppl.ts) for the PPL settings page,
+//   6. runs dist/main.js with a fresh temporary file store (scripts/e2e-storage.mjs) and the fake
 //      identity provider (APP_ENV=test).
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -40,12 +42,24 @@ execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy']
   stdio: 'inherit',
 });
 
+// A SIMULATED PPL CPL API (test/support/fake-ppl.ts, loaded with Node's type stripping) for the
+// browser tests of the site's PPL settings: "Ověřit připojení" talks to it, never to PPL. Obviously
+// fake credentials; the test-only base URL is refused by the API unless APP_ENV=test.
+const { FakePpl } = await import(resolve(apiRoot, 'test/support/fake-ppl.ts'));
+const fakePpl = new FakePpl('e2e-fake-ppl-client', 'e2e-fake-ppl-secret-never-shown');
+await fakePpl.start();
+
 const testEnv = {
   ...process.env,
   APP_ENV: 'test',
   AUTH_PROVIDER: 'test',
   // The fake carrier (doc 029): allowed only with APP_ENV=test; never on DEV or production.
   CARRIER_PROVIDER: 'test',
+  PPL_TEST_CLIENT_ID: fakePpl.clientId,
+  PPL_TEST_CLIENT_SECRET: fakePpl.clientSecret,
+  PPL_TEST_API_BASE_URL_FOR_TESTS: fakePpl.base,
+  // A fresh random key per run: credentials entered in the browser tests are encrypted with it.
+  CARRIER_CREDENTIALS_KEY: randomBytes(32).toString('base64'),
   DATABASE_URL: e2eUrl,
   APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
   // The browser tests sign in many times from one address.

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AdminUserDetail, SiteDetail } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { testCarrierControl } from '../src/orders/carriers/test-carrier.js';
+import { testCarrierControl } from '../src/carriers/test-carrier.js';
 import {
   completeOrder,
   crateFactory,
@@ -154,6 +154,56 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
       const { cookie } = await createUser([r]);
       expect((await as(cookie).get(`/api/admin/orders/${order}/shipment`)).status, r).toBe(403);
     }
+  });
+
+  it('carrier settings: ADMIN only (sites:carrier_manage); no secret or API URL in the answer', async () => {
+    const holders = await ra.prisma.rolePermission.findMany({
+      where: { permissionCode: 'sites:carrier_manage' },
+      select: { roleCode: true },
+    });
+    expect(holders.map((h) => h.roleCode)).toEqual(['ADMIN']);
+    const url = `/api/admin/sites/${INITIAL_SITE_ID}/carriers/ppl`;
+    const supervisor = await createUser(['WAREHOUSE_SUPERVISOR']);
+    const dispatcher = await createUser([
+      await role(['orders:read', 'shipments:read', 'shipments:prepare', 'shipments:handover']),
+    ]);
+    for (const u of [supervisor, dispatcher]) {
+      expect((await as(u.cookie).get(url)).status).toBe(403);
+      expect((await as(u.cookie).post(`${url}/verify`, { requestId: randomUUID() })).status).toBe(
+        403,
+      );
+      expect(
+        (
+          await http()
+            .put(url)
+            .set('Cookie', u.cookie)
+            .send({ requestId: randomUUID(), enabled: true })
+        ).status,
+      ).toBe(403);
+    }
+    // Carrier connections (credentials): ADMIN only as well; a custom role can never hold it.
+    for (const u of [supervisor, dispatcher]) {
+      expect((await as(u.cookie).get('/api/admin/carrier-connections')).status).toBe(403);
+      expect(
+        (
+          await http()
+            .post('/api/admin/carrier-connections/PPL_TEST/credentials')
+            .set('Cookie', u.cookie)
+            .send({ requestId: randomUUID(), clientId: 'a', clientSecret: 'b', reason: 'not mine' })
+        ).status,
+      ).toBe(403);
+    }
+    const conn = await ra.prisma.rolePermission.findMany({
+      where: { permissionCode: 'carriers:connections_manage' },
+      select: { roleCode: true },
+    });
+    expect(conn.map((h) => h.roleCode)).toEqual(['ADMIN']);
+    await as(admin).get('/api/admin/carrier-connections').expect(200);
+    const own = await as(admin).get(url).expect(200);
+    const theirs = await as(admin).get(`/api/admin/sites/${other.id}/carriers/ppl`).expect(200);
+    expect([own.body.site.id, theirs.body.site.id]).toEqual([INITIAL_SITE_ID, other.id]);
+    expect(theirs.body.saved).toBe(false);
+    expect(JSON.stringify(own.body)).not.toMatch(/secret|token|https?:\/\//i);
   });
 
   it('each step needs its own permission, checked again on every request and repetition', async () => {

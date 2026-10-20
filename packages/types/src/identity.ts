@@ -82,6 +82,8 @@ export const PERMISSION_CODES = [
   'shipments:prepare',
   'shipments:handover',
   'shipments:resolve_uncertain',
+  'sites:carrier_manage',
+  'carriers:connections_manage',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -95,7 +97,9 @@ export const SECURITY_ADMIN_PERMISSIONS: readonly PermissionCode[] = [
   'identity:users_manage',
   'identity:roles_manage',
   'sites:manage',
+  'sites:carrier_manage',
   'sites:all_access',
+  'carriers:connections_manage',
 ];
 
 /** Module of a permission (its code prefix) — the checkbox groups of the role editor. */
@@ -110,6 +114,7 @@ export const PERMISSION_MODULES = [
   'shipments',
   'identity',
   'sites',
+  'carriers',
 ] as const;
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 export const permissionModule = (code: PermissionCode): PermissionModule =>
