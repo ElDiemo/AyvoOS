@@ -77,3 +77,34 @@ delivered. No hotel portal, no `HOTEL_USER` access, no CO2/ESG or consumption.
 - Audited: plan created/saved (with a mandatory reason and the full snapshot), switched on,
   paused, every order created from an occurrence, ship day changes, hotel detail changes.
 - Plans, previews and overviews never change stock or crate cycles and never call a carrier.
+
+## 6. Decisions made while implementing (within the approved scope)
+
+- The creator of an automatic order is the user who switched the plan on (orders need a person;
+  the history says "Z plánu zásobování"). The background round itself has no user.
+- Days are generated for **today and the 13 following local days**; a day that becomes past
+  during a round is skipped.
+- A plan rule may only pick an orderable product (active, with an active recipe and crate type);
+  a rule whose product later stops being orderable stays visible in the editor and its days are
+  blocked with that reason.
+- Any refusal of the order rules blocks the day visibly (`ORDER_REFUSED` with the rule's code
+  when it is not one of the known reasons); database or connection errors only fail the round,
+  which tries again.
+- Delivered bottles in the overview come from the crate content recorded when it was loaded into
+  the order (`order_allocation_bottles`), so later returns never change a past figure.
+- Changing a ship day is allowed in OPEN, READY_TO_DISPATCH and READY_FOR_PICKUP, to any day not
+  in the past (earlier or later); the database allows it only before the hand-over.
+
+## 7. Open questions / not verified
+
+- Not decided by the owner (taken over from doc 031): whether orders "Převzatá dopravcem" keep a
+  site active, and what happens with returning, lost or pick-up-point parcels.
+- The delivered side of the overview chart is verified by API tests (a partly delivered order);
+  the browser test sees only the honest empty chart, because creating delivered parcels in the
+  browser test would need the full picking and carrier flow.
+- Real PPL pickups and deliveries remain unverified (doc 031 §5).
+
+Screenshots (`docs/screenshots/supply-plans/`, from `apps/web/e2e/workflow-supply-plan.spec.ts`):
+hotel without a plan, plan with its 30-day preview, switched on with its orders, Expedice with
+"Odeslat dne", an order from the plan after a ship day change, the manual order overlap, the hotel
+with its plan, orders and deliveries — desktop, 390 and 320 px.
