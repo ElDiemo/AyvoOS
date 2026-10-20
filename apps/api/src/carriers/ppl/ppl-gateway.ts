@@ -51,6 +51,15 @@ export const latin = (s: string) =>
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^\u0020-\u007e]/g, (c) => LATIN[c] ?? c);
 
+/** Documented: `shipmentSet.numberOfShipments` "Počet balíků na adresu - Max 50". */
+export const PPL_SET_MAX = 50;
+/** Documented: GET /shipment `ShipmentNumbers` maxItems 50 per request. */
+const SHIPMENT_NUMBERS_MAX = 50;
+/** Page size of GET /shipment (documented Limit 1–1000). */
+const PAGE_SIZE = 50;
+/** A bound on pages per chunk: never an endless loop on a carrier that keeps answering. */
+const MAX_PAGES = 20;
+
 /** Address field lengths documented for the PPL address model. */
 const LIMITS = { name: 50, street: 60, city: 50, zipCode: 10, contact: 50, phone: 30, email: 50 };
 
@@ -174,6 +183,14 @@ export class PplGateway implements CarrierGateway {
     const s = request.settings;
     const set = request.parcels.length > 1;
     // Germany needs the parcel weight, whose unit PPL does not document (doc 029 §5).
+    // Documented: at most 50 parcels per address in one set (shipmentSet.numberOfShipments) —
+    // refused before anything is sent, never split into several shipments on our own.
+    if (request.parcels.length > PPL_SET_MAX) {
+      throw new CarrierRejectedError(
+        'PPL_SET_TOO_LARGE',
+        `PPL takes at most ${PPL_SET_MAX} parcels in one shipment set (this one has ${request.parcels.length})`,
+      );
+    }
     if (request.recipient.countryCode === 'DE') {
       throw new CarrierRejectedError(
         'PPL_COUNTRY_UNSUPPORTED',
@@ -324,15 +341,12 @@ export class PplGateway implements CarrierGateway {
     if (request.parcels.length === 1 && numbers.length === 1) {
       return [{ parcelNo: request.parcels[0]!.parcelNo, number: numbers[0]! }];
     }
-    const res = await this.client.request('GET', '/shipment', {
-      query: { ShipmentNumbers: numbers, Limit: 50, Offset: 0 },
-      signal,
-    });
-    if (res.status !== 200 || !Array.isArray(res.body)) return [];
+    const found = await this.shipments(numbers, signal);
+    if (!found) return [];
     const byRef = new Map(request.parcels.map((p) => [p.reference, p.parcelNo]));
     // parcel → every number claiming it; a parcel claimed by two numbers is ambiguous (unproven).
     const claims = new Map<number, Set<string>>();
-    for (const sh of res.body as ShipmentInfo[]) {
+    for (const sh of found) {
       if (!sh.shipmentNumber || !numbers.includes(sh.shipmentNumber)) continue;
       const refs = new Set(
         (sh.externalNumbers ?? [])
@@ -402,17 +416,44 @@ export class PplGateway implements CarrierGateway {
     };
   }
 
+  /**
+   * PPL's records of all these numbers (PPL37-R2): GET /shipment takes at most 50 numbers per
+   * request (documented `ShipmentNumbers` maxItems 50) and answers in pages (Limit/Offset,
+   * `X-Paging-Total-Items-Count`). Every chunk is read page by page to its documented total;
+   * null when any page cannot be read — the caller then knows nothing (never a partial truth).
+   */
+  private async shipments(numbers: string[], signal: AbortSignal): Promise<ShipmentInfo[] | null> {
+    const all: ShipmentInfo[] = [];
+    for (let i = 0; i < numbers.length; i += SHIPMENT_NUMBERS_MAX) {
+      const chunk = numbers.slice(i, i + SHIPMENT_NUMBERS_MAX);
+      for (let offset = 0, page = 0; ; page++) {
+        if (page >= MAX_PAGES) return null;
+        const res = await this.client.request('GET', '/shipment', {
+          query: { ShipmentNumbers: chunk, Limit: PAGE_SIZE, Offset: offset },
+          signal,
+        });
+        if (res.status !== 200 || !Array.isArray(res.body)) return null;
+        const items = res.body as ShipmentInfo[];
+        all.push(...items);
+        offset += items.length;
+        const total = Number(res.headers.get('x-paging-total-items-count'));
+        // Without the documented total: one page that is not full is the end.
+        const done =
+          Number.isFinite(total) && total >= 0 ? offset >= total : items.length < PAGE_SIZE;
+        if (done || items.length === 0) break;
+      }
+    }
+    return all;
+  }
+
   private async states(
     numbers: string[],
     signal: AbortSignal,
   ): Promise<Map<string, string> | null> {
-    const res = await this.client.request('GET', '/shipment', {
-      query: { ShipmentNumbers: numbers, Limit: 50, Offset: 0 },
-      signal,
-    });
-    if (res.status !== 200 || !Array.isArray(res.body)) return null;
+    const found = await this.shipments(numbers, signal);
+    if (!found) return null;
     const states = new Map<string, string>();
-    for (const sh of res.body as ShipmentInfo[]) {
+    for (const sh of found) {
       if (sh.shipmentNumber) states.set(sh.shipmentNumber, sh.shipmentState ?? '');
     }
     return numbers.every((n) => states.has(n)) ? states : null;

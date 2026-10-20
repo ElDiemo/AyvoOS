@@ -145,6 +145,13 @@ and the carrier of an **existing** request (its connection and environment only)
   sent **without** a shipment-level `externalNumbers`: PPL applies a shipment-level `CUST` to every
   parcel of the set (live runs 2026-10-19 and -20, PPL support); `referenceId` stays. A single
   parcel keeps its shipment-level `CUST`.
+- **Limits and paging (PPL37-R2):** a set has at most **50** parcels (documented
+  `numberOfShipments` "Max 50"; the general page says 100 per address — the stricter value applies
+  until PPL clarifies). A larger order is **refused before anything is sent** (`PPL_SET_TOO_LARGE`),
+  never split into several shipments on our own. `GET /shipment` takes at most 50
+  `ShipmentNumbers` per request and answers in pages (`Limit`/`Offset`,
+  `X-Paging-Total-Items-Count`): the adapter asks in chunks of 50 and reads every page; a page that
+  cannot be read makes the whole answer unknown (never a partial mapping or state).
 - **No idempotency key, duplicate `referenceId` behaviour and `CustomerReferences` matching are not
   documented**; a lost `Location` header has no documented lookup → such a request stays uncertain.
 - Labels: `labelSettings.format` (`Pdf`/`Zpl`/…), `dpi` 203–1200 (ZPL); per-parcel `labelUrl`

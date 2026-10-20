@@ -49,6 +49,8 @@ type Mode = {
    * in the set without a documented relation to the items sent).
    */
   setCustFromShipment: boolean;
+  /** GET /shipment answers at most this many items per page (null: as many as Limit asks). */
+  pageCap: number | null;
 };
 
 /** The shipment-level CUST of a set, if one was sent (PPL then returns it for every parcel). */
@@ -84,6 +86,8 @@ export class FakePpl {
     /** The account (client id) whose token was used, if any. */
     client: string | null;
     host: string;
+    /** The query string of the request (paging and lookups are asserted on it). */
+    query: URLSearchParams;
   }[] = [];
   private serial = 4_000_000_000;
 
@@ -119,6 +123,7 @@ export class FakePpl {
       cancelRefuse: [],
       pickedUp: [],
       setCustFromShipment: false,
+      pageCap: null,
     };
   }
 
@@ -164,6 +169,7 @@ export class FakePpl {
       bearer,
       client,
       host: req.headers.host ?? '',
+      query: url.searchParams,
     });
     if (this.mode.down) return this.json(res, 503, { title: 'Service unavailable' });
 
@@ -209,6 +215,16 @@ export class FakePpl {
         });
       }
       if (this.mode.batchError) return this.json(res, 500, { title: 'Internal error' });
+      const count = (body.shipments[0]!.shipmentSet as { numberOfShipments?: number } | undefined)
+        ?.numberOfShipments;
+      if (count !== undefined && count > 50) {
+        // Documented: "Počet balíků na adresu - Max 50".
+        return this.json(res, 400, {
+          title: 'One or more validation errors occurred.',
+          status: 400,
+          errors: { 'shipments[0].ShipmentSet.NumberOfShipments': ['Max 50'] },
+        });
+      }
       const id = randomUUID();
       const s = body.shipments[0]!;
       const set = s.shipmentSet as
@@ -279,6 +295,24 @@ export class FakePpl {
     }
     if (req.method === 'GET' && path === '/shipment') {
       const wanted = url.searchParams.getAll('ShipmentNumbers');
+      // As documented: ShipmentNumbers maxItems 50; Limit (1–1000) and Offset (≥ 0) required.
+      const limit = Number(url.searchParams.get('Limit'));
+      const offset = Number(url.searchParams.get('Offset'));
+      if (
+        wanted.length > 50 ||
+        !url.searchParams.has('Limit') ||
+        !url.searchParams.has('Offset') ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 1000 ||
+        !Number.isInteger(offset) ||
+        offset < 0
+      ) {
+        return this.json(res, 400, {
+          title: 'One or more validation errors occurred.',
+          status: 400,
+        });
+      }
       const all = [...this.batches.values()].flatMap((b) =>
         b.numbers.map((n, i) => ({
           ...n,
@@ -298,24 +332,28 @@ export class FakePpl {
               : { shipmentsInSet: 0, shipmentInSetNumber: 0 },
         })),
       );
+      const matching = all.filter((x) => wanted.includes(x.number));
+      // One page: at most Limit items (and at most pageCap, as a server may answer less).
+      const size = Math.min(limit, this.mode.pageCap ?? limit);
       return this.json(
         res,
         200,
-        all
-          .filter((x) => wanted.includes(x.number))
-          .map((x) => ({
-            shipmentNumber: x.number,
-            // Flags, comma-separated — as the real TEST environment answers.
-            shipmentState: this.cancelled.has(x.number)
-              ? 'Undelivered, DataShipment, Canceled'
-              : this.mode.pickedUp.includes(x.number)
-                ? 'PickedUpFromSender, Active'
-                : 'Undelivered, DataShipment, Active',
-            externalNumbers: this.mode.hideExternals
-              ? []
-              : [{ code: 'CUST', externalNumber: x.ref }],
-            shipmentSet: x.set,
-          })),
+        matching.slice(offset, offset + size).map((x) => ({
+          shipmentNumber: x.number,
+          // Flags, comma-separated — as the real TEST environment answers.
+          shipmentState: this.cancelled.has(x.number)
+            ? 'Undelivered, DataShipment, Canceled'
+            : this.mode.pickedUp.includes(x.number)
+              ? 'PickedUpFromSender, Active'
+              : 'Undelivered, DataShipment, Active',
+          externalNumbers: this.mode.hideExternals ? [] : [{ code: 'CUST', externalNumber: x.ref }],
+          shipmentSet: x.set,
+        })),
+        {
+          'X-Paging-Total-Items-Count': String(matching.length),
+          'X-Paging-Offset': String(offset),
+          'X-Paging-Limit': String(size),
+        },
       );
     }
     const dataMatch = /^\/data\/(.+)$/.exec(path);
