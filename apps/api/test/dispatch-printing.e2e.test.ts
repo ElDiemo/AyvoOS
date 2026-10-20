@@ -747,6 +747,59 @@ describe.skipIf(!hasDatabase)('direct printing: labels, print queue, print agent
     expect((await view(order)).shipment!.zpl).toMatchObject({ status: 'DONE' });
   });
 
+  it('PRINT38-R3: another USB device for the printer cancels unsent work (audited); a new print goes to it', async () => {
+    const { order } = await picked(3);
+    await completeAndPrint(order, printerA).expect(200);
+    await printOne(agentA.token); // parcel 1: SENT
+    const claimed = (await claim(agentA.token))!; // parcel 2: CLAIMED (not started)
+    const sending = (await claim(agentA.token))!; // parcel 3: SENDING
+    await agent(agentA.token)
+      .post(`jobs/${sending.id}/start`, { claimToken: sending.claimToken })
+      .expect(200);
+    const p = await t.prisma.printer.findUniqueOrThrow({ where: { id: printerA } });
+    const newSerial = `NEW${rid().slice(0, 6).toUpperCase()}`;
+    await http()
+      .post(admin('/printers'))
+      .send(
+        printerBody(
+          { id: p.id, code: p.code, name: p.name, agentId: p.agentId, usbSerial: newSerial },
+          { dispatchDefault: true },
+        ),
+      )
+      .expect(200);
+    const byId = new Map((await jobsOf(order)).map((j) => [j.id, j.status]));
+    expect(byId.get(claimed.id)).toBe('CANCELLED'); // never sent to the other device
+    expect(byId.get(sending.id)).toBe('SENDING'); // already on its way: not called safe
+    // The claimed job may not start any more.
+    const start = await agent(agentA.token).post(`jobs/${claimed.id}/start`, {
+      claimToken: claimed.claimToken,
+    });
+    expect([start.status, start.body.code]).toEqual([409, 'JOB_NOT_STARTABLE']);
+    const audit = await t.prisma.auditEvent.findFirstOrThrow({
+      where: { type: 'PRINTER_SAVED' },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(audit.payload).toMatchObject({ usbSerialChanged: true, cancelledJobs: 1 });
+    // The cancelled parcel is printed again explicitly — now on the new device.
+    await post(order, 'parcels/2/reprint', {
+      printerId: printerA,
+      reason: 'Tiskárna vyměněna',
+      acknowledgeDuplicate: false,
+    }).expect(200);
+    const job = (await claim(agentA.token))!;
+    expect(job.usbSerial).toBe(newSerial);
+    // Restore the serial for the other tests.
+    await http()
+      .post(admin('/printers'))
+      .send(
+        printerBody(
+          { id: p.id, code: p.code, name: p.name, agentId: p.agentId, usbSerial: p.usbSerial },
+          { dispatchDefault: true },
+        ),
+      )
+      .expect(200);
+  });
+
   it('the database keeps the queue honest even without the API', async () => {
     const { order } = await picked(1);
     await completeAndPrint(order, printerA).expect(200);

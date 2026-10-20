@@ -321,15 +321,21 @@ export class PrintersService {
           updatedAt: now,
           updatedBy: actorId,
         };
-        // Disabled or moved to another agent: its waiting work is cancelled, never redirected.
-        if (before && (!input.enabled || before.agentId !== input.agentId)) {
-          await this.queue.cancelForPrinter(
-            tx,
-            before.id,
-            actorId,
-            now,
-            input.enabled ? 'Tiskárna převedena na jiného agenta' : 'Tiskárna vypnuta',
-          );
+        // Disabled, moved to another agent or another USB device (PRINT38-R3): the physical
+        // target changes, so work not sent yet (QUEUED, CLAIMED) is cancelled — never redirected
+        // to a different device. A job already SENDING ends as its agent reports it.
+        let cancelledJobs = 0;
+        const why = !before
+          ? null
+          : !input.enabled
+            ? 'Tiskárna vypnuta'
+            : before.agentId !== input.agentId
+              ? 'Tiskárna převedena na jiného agenta'
+              : before.usbSerial !== input.usbSerial
+                ? 'Změněno USB zařízení tiskárny – úloha by šla na jiné zařízení'
+                : null;
+        if (before && why) {
+          cancelledJobs = await this.queue.cancelForPrinter(tx, before.id, actorId, now, why);
         }
         const saved = before
           ? await tx.printer.update({ where: { id: before.id }, data })
@@ -348,6 +354,8 @@ export class PrintersService {
               dispatchDefault: input.dispatchDefault,
               autoPrint: input.autoPrint,
               enabled: input.enabled,
+              usbSerialChanged: !!before && before.usbSerial !== input.usbSerial,
+              cancelledJobs,
             },
           },
           tx,
