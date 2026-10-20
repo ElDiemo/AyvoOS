@@ -4,9 +4,22 @@ import { RowValue } from '@/components/catalog/catalog-header';
 import { formatDateCs } from '@/i18n/cs/format';
 import { ordersCs as t } from '@/i18n/cs/orders';
 import { OrderStatusBadge } from './order-status';
+import { OriginBadge } from './order-origin';
 
-/** Orders as rows: number, hotel, ship day, state and loaded / required crates and bottles. */
-export function OrderRows({ orders, hotel = true }: { orders: OrderSummary[]; hotel?: boolean }) {
+/**
+ * Orders as rows: number (and origin: by hand or from a supply plan), hotel, ship day — a future
+ * one marked "Odeslat dne …" — state and loaded / required crates and bottles.
+ */
+export function OrderRows({
+  orders,
+  hotel = true,
+  today,
+}: {
+  orders: OrderSummary[];
+  hotel?: boolean;
+  /** The site's today: later ship days are marked as future. */
+  today?: string;
+}) {
   const grid = 'md:grid-cols-[7rem_minmax(0,1.4fr)_7rem_minmax(0,1fr)_7rem_7rem]';
   return (
     <>
@@ -28,16 +41,30 @@ export function OrderRows({ orders, hotel = true }: { orders: OrderSummary[]; ho
             data-testid={`order-${o.code}`}
             className={`grid grid-cols-1 gap-x-4 gap-y-1 border-t border-stone-100 py-3 text-sm first:border-t-0 md:items-center ${grid}`}
           >
-            <Link
-              href={`/dispatch/orders/${o.code}`}
-              className="font-mono font-medium underline-offset-2 hover:underline"
-            >
-              {o.code}
-            </Link>
+            <span className="flex flex-col items-start gap-0.5">
+              <Link
+                href={`/dispatch/orders/${o.code}`}
+                className="font-mono font-medium underline-offset-2 hover:underline"
+              >
+                {o.code}
+              </Link>
+              <OriginBadge origin={o.origin} />
+            </span>
             <RowValue label={hotel ? t.columns.hotel : t.detail.site}>
               {hotel ? o.hotel.name : o.site.name}
             </RowValue>
-            <RowValue label={t.columns.shipDate}>{formatDateCs(o.requestedShipDate)}</RowValue>
+            <RowValue label={t.columns.shipDate}>
+              {today && o.requestedShipDate > today ? (
+                <span
+                  className="rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-xs font-semibold text-sky-900"
+                  data-testid={`order-${o.code}-send-on`}
+                >
+                  {t.sendOn(formatDateCs(o.requestedShipDate))}
+                </span>
+              ) : (
+                formatDateCs(o.requestedShipDate)
+              )}
+            </RowValue>
             <RowValue label={t.columns.status}>
               <OrderStatusBadge order={o} />
             </RowValue>

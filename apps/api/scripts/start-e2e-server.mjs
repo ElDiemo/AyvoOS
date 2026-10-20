@@ -55,6 +55,8 @@ const testEnv = {
   AUTH_PROVIDER: 'test',
   // The fake carrier (doc 029): allowed only with APP_ENV=test; never on DEV or production.
   CARRIER_PROVIDER: 'test',
+  // Supply plans (doc 032): the real background round, often enough for the browser tests.
+  SUPPLY_PLAN_SECONDS: '2',
   PPL_TEST_CLIENT_ID: fakePpl.clientId,
   PPL_TEST_CLIENT_SECRET: fakePpl.clientSecret,
   PPL_TEST_API_BASE_URL_FOR_TESTS: fakePpl.base,
