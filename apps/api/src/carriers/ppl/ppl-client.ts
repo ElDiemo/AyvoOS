@@ -131,7 +131,7 @@ export class PplClient {
    * (`once: true`) is never repeated: its 401 is returned to the caller (PPL did not process it).
    */
   async request(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     path: string,
     opts: {
       query?: Record<string, string | number | (string | number)[]>;

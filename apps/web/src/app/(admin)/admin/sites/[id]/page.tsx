@@ -1,15 +1,16 @@
-import { pplSettingsSchema, siteDetailSchema } from '@ayvo/types';
+import { pplSettingsSchema, siteDetailSchema, sitePrintingSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
 import { AdminHeader } from '@/components/admin/admin-header';
 import { AuditList } from '@/components/admin/audit-list';
 import { CarrierSettings } from '@/components/admin/carrier-settings';
 import { SiteForm, SiteStatus } from '@/components/admin/site-form';
+import { SitePrinting } from '@/components/admin/site-printing';
 import { SiteWarehouseForm } from '@/components/admin/site-warehouse-form';
 import { Card, Notice } from '@/components/ui';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiGet } from '@/lib/api';
-import { currentUser, hasPermission } from '@/lib/session';
+import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const t = identityCs.sites_admin;
@@ -26,6 +27,11 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
   const carriers = hasPermission(me, 'sites:carrier_manage')
     ? await apiGet(`admin/sites/${id}/carriers/ppl`, pplSettingsSchema)
     : null;
+  // Tiskárny a tiskoví agenti: ADMIN only (printing:manage) — a separate setting from the carrier.
+  const printing = hasPermission(me, 'printing:manage')
+    ? await apiGet(`admin/sites/${id}/printing`, sitePrintingSchema)
+    : null;
+  const timeZone = await siteTimeZone();
   return (
     <>
       <AdminHeader
@@ -49,6 +55,7 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
               canManageConnections={hasPermission(me, 'carriers:connections_manage')}
             />
           )}
+          {printing && <SitePrinting initial={printing} timeZone={timeZone} />}
           <Card title={t.audit} className="relative overflow-x-auto">
             <AuditList events={site.audit} testId="site-audit" />
           </Card>

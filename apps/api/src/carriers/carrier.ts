@@ -95,6 +95,8 @@ export interface CarrierLabelFile {
   format: LabelFormat;
   dpi: number | null;
   bytes: Uint8Array;
+  /** The carrier's id of this file version (e.g. PPL's data GUID), if it has one — no secret. */
+  carrierRef?: string | null;
 }
 
 /**
@@ -152,6 +154,23 @@ export interface CarrierGateway {
     parcels: (CarrierLabelFile & { parcelNo: number })[];
     complete: CarrierLabelFile | null;
   }>;
+  /**
+   * The SAME labels of a labelled shipment in another format (doc 030 §2) — never a new shipment,
+   * never other numbers: one file per parcel, from the carrier itself (no conversion of ours).
+   * Changes only the output format at the carrier; callers run at most one at a time per
+   * shipment. Throws {@link CarrierProtocolError} when the carrier's answer breaks its contract;
+   * any other error means "not now" (retried later).
+   */
+  labelVariant(
+    query: {
+      shipmentRef: string;
+      carrierRef: string | null;
+      parcels: CarrierParcelNumber[];
+      format: 'ZPL';
+      dpi: number;
+    },
+    signal: AbortSignal,
+  ): Promise<{ parcels: (CarrierLabelFile & { parcelNo: number })[] }>;
   /**
    * Asks the carrier to cancel a created shipment. Idempotent: an already cancelled shipment
    * answers CANCELLED. PENDING = accepted, to be confirmed by {@link cancelStatus}.

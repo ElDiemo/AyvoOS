@@ -1,5 +1,6 @@
 import {
   cancelOrderRequestSchema,
+  completeAndLabelRequestSchema,
   completeOrderRequestSchema,
   crateCodeSchema,
   createOrderRequestSchema,
@@ -10,7 +11,9 @@ import {
   hotelOrdersQuerySchema,
   removeOrderCrateRequestSchema,
   type CancelOrderRequest,
+  type CompleteAndLabelRequest,
   type CompleteOrderRequest,
+  type OrderShipment,
   type CreateOrderRequest,
   type HotelSummary,
   type OrderableProduct,
@@ -134,6 +137,22 @@ export class OrdersController {
     @OperationalSite() site: SiteContext,
   ): Promise<OrderDetail> {
     return this.orders.complete(principal.userId, site, code, body);
+  }
+
+  /**
+   * "Dokončit a vytisknout štítky" (doc 030 §1): completing the picking AND preparing the shipment
+   * need both permissions; printing in it additionally printing:print (checked in the service).
+   */
+  @RequirePermission('orders:pick', 'shipments:prepare')
+  @Post(':code/complete-and-label')
+  @HttpCode(200)
+  completeAndLabel(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(completeAndLabelRequestSchema)) body: CompleteAndLabelRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.orders.completeAndLabel(principal, site, code, body);
   }
 
   @RequirePermission('orders:manage')

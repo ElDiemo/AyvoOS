@@ -430,10 +430,14 @@ describe.skipIf(!hasDatabase)('dispatch: shipment, parcels, carrier labels (doc 
     await pollNow();
     expect((await view(c.order)).shipment!.status).toBe('LABELED');
     expect(testCarrierControl.calls).toHaveLength(1);
-    // Files are stored only after the checks: nothing orphaned by the failed download.
-    expect(
-      await t.prisma.shipmentLabel.count({ where: { shipment: { order: { code: c.order } } } }),
-    ).toBe(2);
+    // Files are stored only after the checks: nothing orphaned by the failed download — the
+    // parcel's PDF and the complete document, then the parcel's ZPL for printing (doc 030).
+    const stored = await t.prisma.shipmentLabel.findMany({
+      where: { shipment: { order: { code: c.order } } },
+      select: { format: true, parcelId: true },
+    });
+    expect(stored.filter((l) => l.format === 'PDF')).toHaveLength(2);
+    expect(stored.filter((l) => l.format === 'ZPL' && l.parcelId)).toHaveLength(1);
   });
 
   it('in-flight window in database time: no lookup and no manual closing before it', async () => {

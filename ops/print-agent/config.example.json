@@ -1,0 +1,9 @@
+{
+  "api_base": "https://dev.ayvo.co/api",
+  "token_file": "/etc/ayvo-print-agent/token",
+  "basic_auth_user": "DEV Basic Auth uživatel (jen DEV)",
+  "basic_auth_password_file": "/etc/ayvo-print-agent/basic-auth-password",
+  "journal_dir": "/var/lib/ayvo-print-agent",
+  "poll_seconds": 3,
+  "heartbeat_seconds": 30
+}

@@ -15,8 +15,6 @@ export interface SiteCarrierRow {
   senderPhone: string | null;
   senderEmail: string | null;
   productCode: string | null;
-  labelFormat: string;
-  labelDpi: number;
   labelLayout: string;
   verifiedAt: Date | null;
   verifiedConnection: string | null;
@@ -78,8 +76,10 @@ export function settingsSnapshot(row: SiteCarrierRow): CarrierSettingsSnapshot {
   return {
     service: row.productCode,
     label: {
-      format: row.labelFormat === 'ZPL' ? 'ZPL' : 'PDF',
-      dpi: row.labelDpi,
+      // The carrier request always asks PDF (preview); the ZPL for printing follows at the
+      // printer's resolution (doc 030 §2).
+      format: 'PDF',
+      dpi: 203,
       complete: row.labelLayout === 'A4',
     },
     sender: {

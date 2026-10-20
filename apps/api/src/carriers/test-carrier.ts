@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import {
+  CarrierProtocolError,
   CarrierRejectedError,
   type CarrierCancelStatus,
   type CarrierCreateOutcome,
@@ -71,6 +72,12 @@ export const testCarrierControl = {
   labelsFail: new Set<string>(),
   /** The label settings sites use with the test carrier (default: PDF + complete document). */
   label: null as CarrierSettingsSnapshot['label'] | null,
+  /**
+   * How the next label variant (ZPL) requests answer: FAIL = an outage (retried later), PROTOCOL =
+   * the carrier breaks its contract, WRONG_POSITION = the last set label shows "1/1".
+   */
+  variant: [] as ('FAIL' | 'PROTOCOL' | 'WRONG_POSITION')[],
+  variantCalls: 0,
   reset(): void {
     this.next = [];
     this.cancel = [];
@@ -86,6 +93,8 @@ export const testCarrierControl = {
     this.partial.clear();
     this.rules = defaultRules();
     this.label = null;
+    this.variant = [];
+    this.variantCalls = 0;
   },
 };
 
@@ -102,13 +111,17 @@ export const testCarrierSettings = (): CarrierSettingsSnapshot => ({
   label: testCarrierControl.label ?? TEST_CARRIER_SETTINGS.label,
 });
 
-/** A ZPL label of the test carrier (ASCII, says it is not real). */
-function labelZpl(created: Created, parcelNo: number): Uint8Array {
+/** A ZPL label of the test carrier (ASCII, says it is not real): number, reference, n/N. */
+function labelZpl(created: Created, parcelNo: number, wrongPosition = false): Uint8Array {
   const p = created.parcels.find((x) => x.parcelNo === parcelNo)!;
   const sent = created.request.parcels.find((x) => x.parcelNo === parcelNo)!;
+  const count = created.parcels.length;
+  const position =
+    wrongPosition && count > 1 && parcelNo === count ? '1/1' : `${parcelNo}/${count}`;
   return Buffer.from(
     `^XA^FO20,20^FDTEST CARRIER - NOT A REAL LABEL^FS^FO20,60^FD${p.number}^FS` +
-      `^FO20,100^FDCrate: ${sent.crate}^FS^XZ\n`,
+      `^FO20,100^FDRef.: ${sent.reference}^FS^FO20,140^FD${position}^FS` +
+      `^FO20,180^FDCrate: ${sent.crate}^FS^XZ\n`,
     'ascii',
   );
 }
@@ -262,6 +275,29 @@ export class TestCarrier implements CarrierGateway {
           complete && format === 'PDF'
             ? { format: 'PDF' as const, dpi: null, bytes: await labelPdf(found, null) }
             : null,
+      };
+    });
+  }
+
+  labelVariant(
+    query: { shipmentRef: string; parcels: CarrierParcelNumber[]; format: 'ZPL'; dpi: number },
+    signal: AbortSignal,
+  ) {
+    return abortable(signal, async () => {
+      testCarrierControl.variantCalls += 1;
+      const mode = testCarrierControl.variant.shift();
+      if (mode === 'FAIL') throw new Error('test carrier: label variant unavailable');
+      if (mode === 'PROTOCOL') throw new CarrierProtocolError('test carrier: broken answer');
+      const found = byRef(query.shipmentRef);
+      if (!found) throw new Error('test carrier: unknown shipment');
+      return {
+        parcels: query.parcels.map((p) => ({
+          parcelNo: p.parcelNo,
+          format: 'ZPL' as const,
+          dpi: query.dpi,
+          bytes: labelZpl(found, p.parcelNo, mode === 'WRONG_POSITION'),
+          carrierRef: `TEST-${p.number}-zpl-${query.dpi}`,
+        })),
       };
     });
   }

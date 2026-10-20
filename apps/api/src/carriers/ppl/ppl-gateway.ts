@@ -1,4 +1,5 @@
 import {
+  CarrierProtocolError,
   CarrierRejectedError,
   type CarrierAddress,
   type CarrierCancelStatus,
@@ -50,6 +51,27 @@ export const latin = (s: string) =>
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^\u0020-\u007e]/g, (c) => LATIN[c] ?? c);
+
+/** Batch status reads while waiting for the changed labels after a format change. */
+const VARIANT_READS = 10;
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason as Error);
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason as Error);
+      },
+      { once: true },
+    );
+  });
+/** The data GUID of a label URL (`…/data/{guid}`) — PPL's id of that file version. */
+export const dataGuid = (url: string): string | null => {
+  const m = /\/data\/([^/?#]+)/.exec(url);
+  return m ? decodeURIComponent(m[1]!).slice(0, 200) : null;
+};
 
 /** Documented: `shipmentSet.numberOfShipments` "Počet balíků na adresu - Max 50". */
 export const PPL_SET_MAX = 50;
@@ -168,6 +190,8 @@ export class PplGateway implements CarrierGateway {
   constructor(
     private readonly client: PplClient,
     readonly account: string,
+    /** Pause between batch status reads after a format change (doc 030 §2). */
+    private readonly variantReadMs = 1500,
   ) {
     this.connection = client.connection.code;
     this.environment = client.connection.environment;
@@ -394,6 +418,7 @@ export class PplGateway implements CarrierGateway {
         format,
         dpi,
         bytes: await this.client.download(url, signal),
+        carrierRef: dataGuid(url),
       });
     }
     // The complete document (A4, PDF only — enforced by the settings) only as one single file.
@@ -414,6 +439,78 @@ export class PplGateway implements CarrierGateway {
             }
           : null,
     };
+  }
+
+  /**
+   * The same labels in ZPL (doc 030 §2) by PPL's documented format change of the EXISTING batch:
+   * `PUT shipment/batch/{batchId}` with `labelSettings`, then the batch status until every parcel's
+   * `labelUrl` carries a new data GUID (PPL changes it on every PUT), then `data/{guid}` per parcel.
+   * Nothing is created; the numbers stay. Callers serialize this per shipment (the batch's format
+   * is shared state at PPL).
+   */
+  async labelVariant(
+    query: {
+      shipmentRef: string;
+      carrierRef: string | null;
+      parcels: CarrierParcelNumber[];
+      format: 'ZPL';
+      dpi: number;
+    },
+    signal: AbortSignal,
+  ) {
+    if (!query.carrierRef) throw new Error('PPL labels need the batch id');
+    const before = await this.labelUrls(query.carrierRef, signal);
+    const put = await this.client.request('PUT', `/shipment/batch/${query.carrierRef}`, {
+      json: { labelSettings: { format: 'Zpl', dpi: query.dpi } },
+      signal,
+    });
+    if (put.status === 400 || put.status === 404) {
+      // PPL refused the documented change of this batch: a person checks it with PPL.
+      throw new CarrierProtocolError(`PPL refused the label format change (HTTP ${put.status})`);
+    }
+    if (put.status !== 204 && put.status !== 200) {
+      throw new Error(`PPL label format change: HTTP ${put.status}`);
+    }
+    // New GUIDs appear after the change (≈2 s in the TEST environment, 2026-10-20) — bounded.
+    let urls: Map<string, string> | null = null;
+    for (let i = 0; i < VARIANT_READS; i++) {
+      await sleep(this.variantReadMs, signal);
+      const now = await this.labelUrls(query.carrierRef, signal);
+      if (
+        query.parcels.every((p) => now.get(p.number) && now.get(p.number) !== before.get(p.number))
+      ) {
+        urls = now;
+        break;
+      }
+    }
+    if (!urls) throw new Error('PPL has not provided the changed labels yet');
+    const parcels = [];
+    for (const p of query.parcels) {
+      const url = urls.get(p.number)!;
+      parcels.push({
+        parcelNo: p.parcelNo,
+        format: 'ZPL' as const,
+        dpi: query.dpi,
+        bytes: await this.client.download(url, signal),
+        carrierRef: dataGuid(url),
+      });
+    }
+    return { parcels };
+  }
+
+  /** shipment number → its current labelUrl in the batch status. */
+  private async labelUrls(batchId: string, signal: AbortSignal): Promise<Map<string, string>> {
+    const res = await this.client.request('GET', `/shipment/batch/${batchId}`, { signal });
+    if (res.status !== 200) throw new Error(`PPL batch status: HTTP ${res.status}`);
+    const status = res.body as BatchStatus;
+    const urls = new Map<string, string>();
+    for (const i of status.items ?? []) {
+      if (i.shipmentNumber && i.labelUrl) urls.set(i.shipmentNumber, i.labelUrl);
+      for (const r of i.relatedItems ?? []) {
+        if (r.shipmentNumber && r.labelUrl) urls.set(r.shipmentNumber, r.labelUrl);
+      }
+    }
+    return urls;
   }
 
   /**

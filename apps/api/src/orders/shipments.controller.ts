@@ -1,5 +1,14 @@
 import {
   abandonLabelsRequestSchema,
+  cancelPrintJobRequestSchema,
+  printJobCodeSchema,
+  printShipmentRequestSchema,
+  reprintParcelRequestSchema,
+  retryLabelVariantRequestSchema,
+  type CancelPrintJobRequest,
+  type PrintShipmentRequest,
+  type ReprintParcelRequest,
+  type RetryLabelVariantRequest,
   cancelShipmentRequestSchema,
   resolveCancelRequestSchema,
   type AbandonLabelsRequest,
@@ -75,6 +84,70 @@ export class ShipmentsController {
     @OperationalSite() site: SiteContext,
   ): Promise<StreamableFile> {
     return labelResponse(await this.shipments.labelFile(site, code, parcelNo));
+  }
+
+  /** One parcel's ZPL for the printer — only for those who may print (doc 030 §7). */
+  @RequirePermission('shipments:read', 'printing:print')
+  @Get('parcels/:parcelNo/label/zpl')
+  async parcelZpl(
+    @Param('code', CODE) code: string,
+    @Param('parcelNo', ParseIntPipe) parcelNo: number,
+    @OperationalSite() site: SiteContext,
+  ): Promise<StreamableFile> {
+    return labelResponse(await this.shipments.labelFile(site, code, parcelNo, 'ZPL'));
+  }
+
+  /** "Tisknout štítky": every parcel label on the printer the operator saw (doc 030 §4). */
+  @RequirePermission('printing:print')
+  @Post('print')
+  @HttpCode(200)
+  print(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(printShipmentRequestSchema)) body: PrintShipmentRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.shipments.print(principal.userId, site, code, body);
+  }
+
+  /** "Vytisknout znovu" — one parcel label, explicit and audited. */
+  @RequirePermission('printing:reprint')
+  @Post('parcels/:parcelNo/reprint')
+  @HttpCode(200)
+  reprint(
+    @Param('code', CODE) code: string,
+    @Param('parcelNo', ParseIntPipe) parcelNo: number,
+    @Body(new ZodValidationPipe(reprintParcelRequestSchema)) body: ReprintParcelRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.shipments.reprint(principal.userId, site, code, parcelNo, body);
+  }
+
+  /** "Získat ZPL znovu": the printer's labels fetched again from the carrier (same shipment). */
+  @RequirePermission('shipments:prepare')
+  @Post('zpl/retry')
+  @HttpCode(200)
+  retryLabelVariant(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(retryLabelVariantRequestSchema)) body: RetryLabelVariantRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.shipments.retryLabelVariant(principal.userId, site, code, body);
+  }
+
+  @RequirePermission('printing:print')
+  @Post('print-jobs/:job/cancel')
+  @HttpCode(200)
+  cancelPrintJob(
+    @Param('code', CODE) code: string,
+    @Param('job', new ZodValidationPipe(printJobCodeSchema)) job: string,
+    @Body(new ZodValidationPipe(cancelPrintJobRequestSchema)) body: CancelPrintJobRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.shipments.cancelPrintJob(principal.userId, site, code, job, body);
   }
 
   @RequirePermission('shipments:prepare')

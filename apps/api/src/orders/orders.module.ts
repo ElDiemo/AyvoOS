@@ -5,6 +5,7 @@ import { CustomersModule } from '../customers/customers.module.js';
 import { LabelsModule } from '../labels/labels.module.js';
 import { SitesModule } from '../sites/sites.module.js';
 import { CarriersModule } from '../carriers/carriers.module.js';
+import { PrintingModule } from '../printing/printing.module.js';
 import { OrdersController } from './orders.controller.js';
 import { OrdersService } from './orders.service.js';
 import { ShipmentsController } from './shipments.controller.js';
@@ -27,6 +28,7 @@ import { ShipmentsService } from './shipments.service.js';
     LabelsModule,
     SitesModule,
     CarriersModule,
+    PrintingModule,
   ],
   controllers: [OrdersController, ShipmentsController],
   providers: [

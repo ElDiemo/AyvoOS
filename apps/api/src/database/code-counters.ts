@@ -10,7 +10,8 @@ export type CodeCounterName =
   | 'crate'
   | 'hotel'
   | 'order'
-  | 'shipment';
+  | 'shipment'
+  | 'print_job';
 
 /**
  * Allocates `count` consecutive serials from a gapless counter. Must run inside the business

@@ -16,7 +16,13 @@ export type ShipmentEventType =
   | 'SHIPMENT_CANCEL_REFUSED'
   | 'SHIPMENT_CANCELLED'
   /** The carrier answered after the request/cancellation was closed locally — never silent. */
-  | 'CARRIER_LATE_ANSWER';
+  | 'CARRIER_LATE_ANSWER'
+  /** doc 030: the ZPL of the same labels was stored / could not be obtained (a person decides). */
+  | 'LABEL_VARIANT_STORED'
+  | 'LABEL_VARIANT_FAILED'
+  | 'PRINT_REQUESTED'
+  | 'REPRINT_REQUESTED'
+  | 'PRINT_JOBS_CANCELLED';
 
 /** One entry of the order's append-only history (doc 029): the shipment's audited trail. */
 export async function shipmentEvent(
@@ -30,6 +36,10 @@ export async function shipmentEvent(
     crate?: string;
     reason?: string;
     manual?: boolean;
+    format?: string;
+    dpi?: number;
+    printer?: string;
+    parcelNo?: number;
   },
 ): Promise<void> {
   await tx.orderEvent.create({

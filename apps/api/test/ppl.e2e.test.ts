@@ -58,7 +58,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
         connection: 'PPL_TEST',
         sender,
         productCode: 'SIM-A',
-        label: { format: 'PDF', dpi: 203, layout: 'SINGLE' },
+        label: { layout: 'SINGLE' },
         ...over,
       });
   /** Complete, verified settings (each test stands on its own). */
@@ -117,7 +117,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
 
   it('settings: saved incomplete and explained; verified (nothing created); then complete', async () => {
     let v = (await http().get(settingsUrl).expect(200)).body as PplSettings;
-    expect(v).toMatchObject({ saved: false, enabled: false, label: { format: 'PDF', dpi: 203 } });
+    expect(v).toMatchObject({ saved: false, enabled: false, label: { layout: 'SINGLE' } });
     expect(v.connections).toEqual([
       { code: 'PPL_TEST', environment: 'TEST', credentials: 'SET', source: 'SERVER' },
     ]);
@@ -289,31 +289,71 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     ppl.mode.processingPolls = 2;
     let s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
     expect(s).toMatchObject({ status: 'REQUESTING', request: { status: 'ACCEPTED' } });
-    // The site switches to ZPL meanwhile: this shipment keeps what it was created with.
-    await save({ label: { format: 'ZPL', dpi: 203, layout: 'SINGLE' } }).expect(200);
+    // The site switches to the complete A4 document meanwhile: this shipment keeps its settings.
+    await save({ label: { layout: 'A4' } }).expect(200);
     await pollNow();
     await pollNow();
     s = await view(order).then((v) => v.shipment!);
     expect(s.status).toBe('LABELED');
     expect(s.parcels[0]!.label).toEqual({ format: 'PDF', dpi: null });
+    expect(s.label).toBeNull();
     const req = await t.prisma.shipmentCarrierRequest.findFirstOrThrow({
       where: { shipment: { order: { code: order } } },
     });
-    expect((req.payload as { settings: { label: { format: string } } }).settings.label.format).toBe(
-      'PDF',
-    );
+    expect(
+      (req.payload as { settings: { label: { complete: boolean } } }).settings.label.complete,
+    ).toBe(false);
   });
 
-  it('ZPL at 203 dpi for the Zebra ZD220: requested and stored as ZPL', async () => {
-    await ready({ label: { format: 'ZPL', dpi: 203, layout: 'SINGLE' } });
-    const { order } = await completed(1);
+  it('PDF for preview and ZPL 203 dpi for the Zebra: the same batch, the same numbers (documented PUT)', async () => {
+    await ready();
+    const { order } = await completed(3);
+    const posts = () =>
+      ppl.seen.filter((x) => x.method === 'POST' && x.path === '/shipment/batch').length;
+    const [batchesBefore, postsBefore, putsBefore] = [ppl.batches.size, posts(), ppl.puts];
     const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
-    expect(lastBatch().body.labelSettings).toEqual({ format: 'Zpl', dpi: 203 });
-    expect(s.parcels[0]!.label).toEqual({ format: 'ZPL', dpi: 203 });
-    const file = await http()
-      .get(`/api/admin/orders/${order}/shipment/parcels/1/label`)
-      .expect(200);
-    expect(file.headers['content-type']).toContain('application/zpl');
+    const b = lastBatch();
+    // One shipment at PPL; its PDF first, then the documented format change of the SAME batch.
+    expect(ppl.batches.size - batchesBefore).toBe(1);
+    expect(posts() - postsBefore).toBe(1);
+    expect(ppl.puts - putsBefore).toBe(1);
+    expect(b.body.labelSettings).toEqual({ format: 'Pdf' });
+    expect(b.versions).toEqual([
+      { format: 'Pdf', dpi: null },
+      { format: 'Zpl', dpi: 203 },
+    ]);
+    expect(s.status).toBe('LABELED');
+    expect(s.zpl).toMatchObject({ dpi: 203, status: 'DONE' });
+    for (const p of s.parcels) {
+      expect(p.label).toEqual({ format: 'PDF', dpi: null });
+      expect(p.labels.map((l) => [l.format, l.dpi])).toEqual([
+        ['PDF', null],
+        ['ZPL', 203],
+      ]);
+      // The ZPL names this parcel's number and its own reference — never another parcel's.
+      const zpl = await http()
+        .get(`/api/admin/orders/${order}/shipment/parcels/${p.parcelNo}/label/zpl`)
+        .expect(200);
+      expect(zpl.headers['content-type']).toContain('application/zpl');
+      expect(zpl.headers['content-disposition']).toContain(`balik-${p.parcelNo}-203dpi.zpl`);
+      const text = Buffer.isBuffer(zpl.body) ? zpl.body.toString('latin1') : String(zpl.text);
+      expect(text).toContain(p.carrierParcelNumber!);
+      expect(text).toContain(`Ref.: ${s.request!.clientReference}-${p.parcelNo}`);
+      expect(text).toContain(`^FD${p.parcelNo}/3^FS`);
+      // The plain label link stays the PDF preview.
+      const pdf = await http()
+        .get(`/api/admin/orders/${order}/shipment/parcels/${p.parcelNo}/label`)
+        .expect(200);
+      expect(pdf.headers['content-type']).toContain('application/pdf');
+    }
+    // Opening, downloading or the format change created nothing at PPL.
+    const batches = ppl.batches.size;
+    await http().get(`/api/admin/orders/${order}/shipment/parcels/1/label/zpl`).expect(200);
+    expect(ppl.batches.size).toBe(batches);
+    const history = (await http().get(`/api/admin/orders/${order}`).expect(200)).body as {
+      history: { type: string }[];
+    };
+    expect(history.history.map((h) => h.type)).toContain('LABEL_VARIANT_STORED');
   });
 
   it('labels only from the PPL API origin: a foreign host, a redirect or an oversized file is refused', async () => {
@@ -460,7 +500,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
   });
 
   it('the complete A4 document comes from shipment/batch/{batchId}/label (as documented)', async () => {
-    await ready({ label: { format: 'PDF', dpi: 203, layout: 'A4' } });
+    await ready({ label: { layout: 'A4' } });
     const { order } = await completed(3);
     const s = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
     expect(s.status).toBe('LABELED');
@@ -472,10 +512,10 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     expect(complete.body.toString()).toContain(`complete A4 document of batch ${id}`);
   });
 
-  it('A4 complete document only as PDF', async () => {
+  it('the carrier settings choose no format or resolution (they belong to the printer)', async () => {
     await ready();
     const r = await save({ label: { format: 'ZPL', dpi: 203, layout: 'A4' } });
-    expect([r.status, r.body.code]).toEqual([422, 'A4_NEEDS_PDF']);
+    expect(r.status).toBe(400);
   });
 
   it('disabled or incomplete settings and other sites: no new PPL shipment', async () => {

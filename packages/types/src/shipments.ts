@@ -58,6 +58,60 @@ export const carrierInfoSchema = z.object({
 });
 export type CarrierInfo = z.infer<typeof carrierInfoSchema>;
 
+export const labelVariantSchema = z.object({
+  format: z.enum(['PDF', 'ZPL']),
+  dpi: z.number().int().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type LabelVariant = z.infer<typeof labelVariantSchema>;
+
+/**
+ * A print job (doc 030 §4): QUEUED (waiting) → CLAIMED (taken by the agent) → SENDING → SENT (all
+ * bytes written to the printer — not proof of a printed label) | FAILED (proven not sent) |
+ * UNCERTAIN (possibly sent, unknown); CANCELLED before sending.
+ */
+export const printJobStatusSchema = z.enum([
+  'QUEUED',
+  'CLAIMED',
+  'SENDING',
+  'SENT',
+  'FAILED',
+  'UNCERTAIN',
+  'CANCELLED',
+]);
+export type PrintJobStatus = z.infer<typeof printJobStatusSchema>;
+export const printJobViewSchema = z.object({
+  code: z.string(),
+  status: printJobStatusSchema,
+  kind: z.enum(['SHIPMENT', 'REPRINT']),
+  printer: z.string(),
+  createdAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+  detail: z.string().nullable(),
+  requestedBy: z.string(),
+  reason: z.string().nullable(),
+});
+export type PrintJobView = z.infer<typeof printJobViewSchema>;
+
+/** The site's dispatch printer as the order needs to know it (never the agent's token). */
+export const dispatchPrinterSchema = z.object({
+  id: z.uuid(),
+  code: z.string(),
+  name: z.string(),
+  model: z.string(),
+  dpi: z.number().int(),
+  autoPrint: z.boolean(),
+  /** As the agent last reported it; null = never reported. */
+  reportedState: z.enum(['READY', 'NOT_FOUND', 'ERROR']).nullable(),
+  reportedAt: z.iso.datetime().nullable(),
+  agent: z.object({
+    code: z.string(),
+    lastSeenAt: z.iso.datetime().nullable(),
+    online: z.boolean(),
+  }),
+});
+export type DispatchPrinter = z.infer<typeof dispatchPrinterSchema>;
+
 const dimensionsSchema = z.object({
   lengthMm: z.number().int(),
   widthMm: z.number().int(),
@@ -86,8 +140,12 @@ export const shipmentParcelSchema = z.object({
   /** The outer dimensions of the final shipping package (W1), if measured. */
   dimensions: dimensionsSchema.nullable(),
   carrierParcelNumber: z.string().nullable(),
-  /** This parcel's own stored label (one crate = one parcel = one label). */
+  /** This parcel's own stored label (one crate = one parcel = one label) — its PDF if any. */
   label: z.object({ format: z.enum(['PDF', 'ZPL']), dpi: z.number().int().nullable() }).nullable(),
+  /** Every stored format of this same label (doc 030 §2): PDF for preview, ZPL for printing. */
+  labels: z.array(labelVariantSchema),
+  /** The print jobs of this parcel's label, newest first (doc 030 §4). */
+  printJobs: z.array(printJobViewSchema),
 });
 export type ShipmentParcel = z.infer<typeof shipmentParcelSchema>;
 
@@ -134,6 +192,25 @@ export const shipmentSchema = z.object({
     .nullable(),
   /** Automatic checks of an accepted request ended: a person checks again ("Ověřit"). */
   pollingStopped: z.boolean(),
+  /** The ZPL of the same labels for printing (doc 030 §2); null while not labelled. */
+  zpl: z
+    .object({
+      dpi: z.number().int(),
+      status: z.enum(['PENDING', 'DONE', 'FAILED']),
+      attempts: z.number().int(),
+      errorCode: z.string().nullable(),
+      errorMessage: z.string().nullable(),
+    })
+    .nullable(),
+  /** Print requests still waiting for the ZPL (the target printer fixed when requested). */
+  printWaiting: z.array(
+    z.object({
+      kind: z.enum(['SHIPMENT', 'REPRINT']),
+      printer: z.string(),
+      parcelNo: z.number().int().nullable(),
+      requestedAt: z.iso.datetime(),
+    }),
+  ),
   createdAt: z.iso.datetime(),
 });
 export type Shipment = z.infer<typeof shipmentSchema>;
@@ -143,12 +220,21 @@ export const orderShipmentSchema = z.object({
   /** The carrier configured for the active site (also before any shipment exists). */
   carrier: carrierInfoSchema,
   shipment: shipmentSchema.nullable(),
+  /** The site's default dispatch printer (null: none) — where printing would go now. */
+  printer: dispatchPrinterSchema.nullable(),
   cancelled: z.array(
     z.object({
       code: z.string(),
       cancelledAt: z.iso.datetime(),
       cancelledBy: z.string(),
       reason: z.string(),
+      /**
+       * Labels of this cancelled shipment that may physically exist (a job SENT or UNCERTAIN):
+       * they are invalid and must be removed from the crate or destroyed.
+       */
+      labelsToDestroy: z.array(
+        z.object({ parcelNo: z.number().int(), crate: z.string(), number: z.string().nullable() }),
+      ),
     }),
   ),
 });
@@ -191,6 +277,40 @@ export type CancelShipmentRequest = z.infer<typeof cancelShipmentRequestSchema>;
 /** Asks the carrier again about a started cancellation (its answer was not received). */
 export const resolveCancelRequestSchema = z.strictObject(op);
 export type ResolveCancelRequest = z.infer<typeof resolveCancelRequestSchema>;
+
+/**
+ * "Dokončit a vytisknout štítky": completes the picking, creates the labels and prints them on the
+ * printer the operator saw (`printerId`; null = labels only). A different default printer by now
+ * is refused, never silently used (doc 030 §4).
+ */
+export const completeAndLabelRequestSchema = z.strictObject({
+  ...op,
+  printerId: z.uuid().nullable(),
+});
+export type CompleteAndLabelRequest = z.infer<typeof completeAndLabelRequestSchema>;
+
+/** Prints every parcel label of the shipment on the printer the operator saw (doc 030 §4). */
+export const printShipmentRequestSchema = z.strictObject({ ...op, printerId: z.uuid() });
+export type PrintShipmentRequest = z.infer<typeof printShipmentRequestSchema>;
+
+/** Prints ONE parcel label again: a reason; after a possibly printed job, the duplicate risk. */
+export const reprintParcelRequestSchema = z.strictObject({
+  ...op,
+  printerId: z.uuid(),
+  reason: reasonSchema,
+  acknowledgeDuplicate: z.boolean(),
+});
+export type ReprintParcelRequest = z.infer<typeof reprintParcelRequestSchema>;
+
+/** Fetches the ZPL of the labels again now (after a carrier outage). */
+export const retryLabelVariantRequestSchema = z.strictObject(op);
+export type RetryLabelVariantRequest = z.infer<typeof retryLabelVariantRequestSchema>;
+
+export const printJobCodeSchema = z.string().regex(/^PRJ-\d{6,}$/, 'e.g. PRJ-000001');
+
+/** Cancels a print job that has not started yet. */
+export const cancelPrintJobRequestSchema = z.strictObject({ ...op, reason: reasonSchema });
+export type CancelPrintJobRequest = z.infer<typeof cancelPrintJobRequestSchema>;
 
 /**
  * Supervised resolution of an uncertain request the carrier cannot answer: a person confirms —

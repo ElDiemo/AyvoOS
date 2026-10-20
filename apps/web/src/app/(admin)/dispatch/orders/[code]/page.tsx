@@ -75,6 +75,8 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
           canPrepare={hasPermission(me, 'shipments:prepare')}
           canHandOver={hasPermission(me, 'shipments:handover')}
           canResolveUncertain={hasPermission(me, 'shipments:resolve_uncertain')}
+          canPrint={hasPermission(me, 'printing:print')}
+          canReprint={hasPermission(me, 'printing:reprint')}
           timeZone={timeZone}
         />
       )}

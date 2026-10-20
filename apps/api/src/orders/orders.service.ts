@@ -1,6 +1,7 @@
 import type {
   OrderStatus,
   CancelOrderRequest,
+  CompleteAndLabelRequest,
   CompleteOrderRequest,
   CreateOrderRequest,
   HotelOrders,
@@ -13,6 +14,7 @@ import type {
   OrderList,
   OrderScanRequest,
   OrderScanResult,
+  OrderShipment,
   OrderSummary,
   OrderView,
   RemoveOrderCrateRequest,
@@ -33,6 +35,9 @@ import type { Prisma } from '../generated/prisma/client.js';
 import type { SiteContext } from '../inventory/warehouse-context.js';
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { lockSiteShared, SiteDependencyRegistry } from '../sites/site-dependencies.js';
+import { derivedRequestId } from '../common/derived-request-id.js';
+import type { Principal } from '../identity/principal.js';
+import { PrintersService } from '../printing/printers.service.js';
 import { ShipmentsService } from './shipments.service.js';
 
 const summaryInclude = {
@@ -64,6 +69,7 @@ export class OrdersService implements OnModuleInit {
     private readonly registry: QrRegistryService,
     private readonly siteDependencies: SiteDependencyRegistry,
     private readonly shipments: ShipmentsService,
+    private readonly printers: PrintersService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -597,6 +603,51 @@ export class OrdersService implements OnModuleInit {
       },
     );
     return this.detail(site, code);
+  }
+
+  /**
+   * "Dokončit a vytisknout štítky" (doc 030 §1): completes the picking, creates the carrier labels
+   * (once — doc 029 §3) and, when the operator saw a printer and may print, prints them there as
+   * soon as the printer's ZPL exists. Each step keeps its own permission (the route requires
+   * orders:pick AND shipments:prepare; printing needs printing:print) and its own idempotency
+   * (step ids derived from the client's id): a double click or a lost answer repeats nothing.
+   */
+  async completeAndLabel(
+    principal: Principal,
+    site: SiteContext,
+    code: string,
+    input: CompleteAndLabelRequest,
+  ): Promise<OrderShipment> {
+    if (input.printerId) {
+      if (!principal.permissions.has('printing:print')) {
+        throw domainError(403, 'FORBIDDEN', 'You may not print labels');
+      }
+      const current = await this.printers.dispatchPrinter(site.siteId);
+      if (current?.id !== input.printerId) {
+        throw domainError(
+          409,
+          'PRINTER_CHANGED',
+          'The dispatch printer changed meanwhile: check where the labels will be printed',
+        );
+      }
+    }
+    const found = await this.find(this.prisma, code, site.siteId);
+    if (!found) throw new NotFoundException('Order not found');
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: found.id },
+      select: { status: true },
+    });
+    // A replay (or an order completed by this same action before) does not complete it again.
+    if (order.status === 'OPEN') {
+      await this.complete(principal.userId, site, code, { requestId: input.requestId });
+    }
+    return this.shipments.requestLabels(
+      principal.userId,
+      site,
+      code,
+      { requestId: derivedRequestId(input.requestId, 'labels') },
+      input.printerId ? { printerId: input.printerId } : null,
+    );
   }
 
   async complete(

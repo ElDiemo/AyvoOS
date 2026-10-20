@@ -1,0 +1,24 @@
+[Unit]
+Description=AYVO print agent (doc 030) — USB Zebra ZD220 DT
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ayvo-print
+Group=lp
+WorkingDirectory=/opt/ayvo-print-agent
+ExecStart=/usr/bin/python3 -m ayvo_print_agent --config /etc/ayvo-print-agent/config.json
+Restart=always
+RestartSec=5
+# Least privilege: only the journal directory is writable; the printer through group "lp".
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ayvo-print-agent
+StateDirectory=ayvo-print-agent
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

@@ -265,45 +265,6 @@ export function CarrierSettings({
           <legend className={label}>{t.label}</legend>
           <div className="grid grid-cols-1 gap-4">
             <label className="flex min-w-0 flex-col gap-1">
-              <span className={label}>{t.format}</span>
-              <select
-                value={form.label.format}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    label: {
-                      ...f.label,
-                      format: e.target.value as 'PDF' | 'ZPL',
-                      // The complete A4 document exists only as PDF.
-                      layout: e.target.value === 'ZPL' ? 'SINGLE' : f.label.layout,
-                    },
-                  }))
-                }
-                className={inputClass}
-                data-testid="carrier-label-format"
-              >
-                <option value="PDF">{t.formatPdf}</option>
-                <option value="ZPL">{t.formatZpl}</option>
-              </select>
-            </label>
-            <label className="flex min-w-0 flex-col gap-1">
-              <span className={label}>{t.dpi}</span>
-              <select
-                value={form.label.dpi}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, label: { ...f.label, dpi: Number(e.target.value) } }))
-                }
-                className={inputClass}
-                data-testid="carrier-label-dpi"
-              >
-                {[203, 300, 600].map((d) => (
-                  <option key={d} value={d}>
-                    {t.dpiValue(d)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex min-w-0 flex-col gap-1">
               <span className={label}>{t.layout}</span>
               <select
                 value={form.label.layout}
@@ -317,14 +278,12 @@ export function CarrierSettings({
                 data-testid="carrier-label-layout"
               >
                 <option value="SINGLE">{t.layoutSingle}</option>
-                <option value="A4" disabled={form.label.format !== 'PDF'}>
-                  {t.layoutA4}
-                </option>
+                <option value="A4">{t.layoutA4}</option>
               </select>
             </label>
           </div>
-          <p className="text-xs text-stone-500">
-            {form.label.format === 'ZPL' ? t.a4NeedsPdf : t.dpiHint}
+          <p className="text-xs text-stone-500" data-testid="carrier-label-formats">
+            {t.formatsHint}
           </p>
           <p className="text-xs text-stone-500">{t.labelSizeHint}</p>
         </fieldset>

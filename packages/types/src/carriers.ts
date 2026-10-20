@@ -67,14 +67,12 @@ export const pplSettingsInputSchema = z.strictObject({
       .transform((v) => (v ? v : null)),
   }),
   productCode: z.string().trim().max(20).nullable(),
+  /**
+   * PPL delivers every label as PDF (preview, download) and, for printing, as ZPL at the resolution
+   * of the site's printer (doc 030 §2) — the format belongs to the printer, not to the carrier.
+   */
   label: z.strictObject({
-    format: z.enum(['PDF', 'ZPL']),
-    /** Printer resolution (documented 203–1200 for ZPL). The Zebra ZD220 is 203 dpi. */
-    dpi: z.number().int().min(203).max(1200),
-    /**
-     * SINGLE = one label per parcel; A4 = additionally PPL's complete A4 document (PDF only — the
-     * server refuses A4 with ZPL; the layout on the page is PPL's).
-     */
+    /** SINGLE = one label per parcel; A4 = additionally PPL's complete A4 PDF (PPL's layout). */
     layout: z.enum(['SINGLE', 'A4']),
   }),
 });

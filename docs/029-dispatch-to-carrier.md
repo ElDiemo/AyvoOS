@@ -2,14 +2,14 @@
 
 Status (2026-10-19):
 
-| Part                                                     | Implemented | Tested                                   | Deployed |
-| -------------------------------------------------------- | ----------- | ---------------------------------------- | -------- |
-| Order flow, shipment, parcels, labels, ready, hand-over  | yes (PR A)  | automated (API, DB rules, Playwright)    | no       |
-| Carrier boundary, test-only carrier, polling, cancelling | yes (PR A)  | automated, with the test-only carrier    | no       |
-| Site carrier settings (PPL), PPL CPL adapter             | yes (PR B)  | automated against a simulated PPL server | no       |
-| Carrier connections in the administration (ADR 0027)     | yes (PR B)  | automated (API, Playwright)              | no       |
-| Real PPL test environment                                | —           | one authorized run, §10                  | no       |
-| Physical printing on the Zebra ZD220                     | —           | **open** (physical acceptance, §5)       | no       |
+| Part                                                     | Implemented    | Tested                                             | Deployed |
+| -------------------------------------------------------- | -------------- | -------------------------------------------------- | -------- |
+| Order flow, shipment, parcels, labels, ready, hand-over  | yes (PR A)     | automated (API, DB rules, Playwright)              | no       |
+| Carrier boundary, test-only carrier, polling, cancelling | yes (PR A)     | automated, with the test-only carrier              | no       |
+| Site carrier settings (PPL), PPL CPL adapter             | yes (PR B)     | automated against a simulated PPL server           | no       |
+| Carrier connections in the administration (ADR 0027)     | yes (PR B)     | automated (API, Playwright)                        | no       |
+| Real PPL test environment                                | —              | one authorized run, §10                            | no       |
+| Physical printing on the Zebra ZD220                     | PR C (doc 030) | simulated agent only; **physical acceptance open** | no       |
 
 Scope approved by the owner on 2026-10-18 and 2026-10-19. Continues doc 028 (orders, picking) on
 the same order; uses W1 (doc 025 §10) for weights and dimensions; implements the carrier boundary
@@ -17,7 +17,8 @@ planned in doc 008 and the per-site carrier rule of doc 022 §8.
 
 Out of scope (not implemented, not pretended): delivery, returns, billing, the hotel portal, partial
 or split shipments, ordering a pickup ("svoz" — a PPL pickup order is not our hotel order),
-automatic printing (Raspberry Pi), the public QR passport, ESG, a production PPL connection.
+the public QR passport, ESG, a production PPL connection. Direct printing (Raspberry Pi, Zebra) and
+"Dokončit a vytisknout štítky": doc 030.
 
 ## 1. One flow, on the order
 

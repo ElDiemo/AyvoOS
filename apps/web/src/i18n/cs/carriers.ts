@@ -70,16 +70,11 @@ export const carriersCs = {
   serviceNone: '– vyberte službu –',
   serviceNotVerified: 'Služby se načtou z PPL po ověření připojení.',
   label: 'Štítky',
-  format: 'Formát',
-  formatPdf: 'PDF',
-  formatZpl: 'ZPL (přímo pro tiskárnu Zebra)',
-  dpi: 'Rozlišení tiskárny',
-  dpiHint: 'Rozlišení se posílá jen pro ZPL; PDF se tiskne ve skutečné velikosti.',
-  a4NeedsPdf: 'Souhrnný dokument A4 je jen ve formátu PDF.',
-  dpiValue: (dpi: number) => (dpi === 203 ? '203 dpi (Zebra ZD220)' : `${dpi} dpi`),
   layout: 'Rozvržení',
   layoutSingle: 'Jeden štítek na balík',
   layoutA4: 'Navíc souhrnný dokument A4',
+  formatsHint:
+    'PPL dodá každý štítek jako PDF (náhled a stažení) a pro tisk jako ZPL v rozlišení tiskárny provozovny – tiskárny se nastavují v sekci Tiskárny, ne u dopravce.',
   labelSizeHint:
     'Rozměr štítku PPL zatím není potvrzený (otevřený dotaz na PPL) – štítky se nikdy neořezávají ani nezmenšují.',
   save: 'Uložit nastavení',
@@ -116,7 +111,6 @@ export const carriersCs = {
     PRODUCT_NOT_VERIFIED: 'Službu lze vybrat jen ze seznamu načteného ověřením s tímto připojením.',
     NO_CONNECTION: 'Nejdřív vyberte a uložte připojení.',
     CREDENTIALS_MISSING: 'Server nemá přístupové údaje k tomuto připojení.',
-    A4_NEEDS_PDF: 'Souhrnný dokument A4 je jen ve formátu PDF.',
   } as Record<string, string>,
   lastChange: (at: string, by: string) => `Naposledy změněno ${at} (${by}).`,
 };

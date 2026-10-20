@@ -122,6 +122,11 @@ export const envSchema = z
     CARRIER_PROVIDER: z.enum(['none', 'test']).default('none'),
     // Every carrier call is abandoned (outcome unknown, never re-sent) after this time.
     CARRIER_CALL_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(120).default(30),
+    // Pause between batch status reads while waiting for PPL's changed labels after a format change
+    // (doc 030 §2; new data GUIDs appeared after ≈2 s in the TEST environment).
+    CARRIER_LABEL_VARIANT_WAIT_MS: z.coerce.number().int().min(0).max(10000).default(1500),
+    // Expired print job leases are ended this often (doc 030 §4); 0 = off (tests drive it).
+    PRINT_SWEEP_SECONDS: z.coerce.number().int().min(0).max(3600).default(15),
     // A request claimed for sending is treated as possibly in flight for this long: no lookup and
     // no manual resolution before (doc 029 §3). Outside tests at least 3 × the call timeout.
     CARRIER_SETTLE_SECONDS: z.coerce.number().int().min(0).max(3600).default(120),

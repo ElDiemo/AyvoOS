@@ -1,0 +1,9 @@
+{
+  "name": "@ayvo/print-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AYVO print agent for a Raspberry Pi (doc 030, ADR 0028) — Python standard library only",
+  "scripts": {
+    "test": "cd tests && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=..:. python3 -m unittest discover -s . -t ."
+  }
+}

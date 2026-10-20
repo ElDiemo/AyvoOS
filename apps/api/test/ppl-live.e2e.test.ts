@@ -244,7 +244,7 @@ describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authori
         connection: 'PPL_TEST',
         sender,
         productCode: null,
-        label: { format: 'PDF', dpi: 203, layout: 'SINGLE' },
+        label: { layout: 'SINGLE' },
         ...over,
       });
 
@@ -319,9 +319,7 @@ describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authori
       }
 
       // 3. Three crates, with the complete A4 document: each number mapped to its crate.
-      await save({ productCode: 'BUSS', label: { format: 'PDF', dpi: 203, layout: 'A4' } }).expect(
-        200,
-      );
+      await save({ productCode: 'BUSS', label: { layout: 'A4' } }).expect(200);
       const three = await completed(3);
       const posts1 = batchPosts();
       let s3 = ((await post(three.order, 'labels').expect(200)).body as OrderShipment).shipment!;
@@ -438,9 +436,7 @@ describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authori
       });
       await verifiedProduct();
       // The same settings as the first run's set: the product, PDF, the complete A4 document.
-      await save({ productCode: PRODUCT, label: { format: 'PDF', dpi: 203, layout: 'A4' } }).expect(
-        200,
-      );
+      await save({ productCode: PRODUCT, label: { layout: 'A4' } }).expect(200);
       const three = await completed(3);
       const posts = batchPosts();
       let s = ((await post(three.order, 'labels').expect(200)).body as OrderShipment).shipment!;

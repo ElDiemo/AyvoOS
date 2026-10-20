@@ -206,6 +206,121 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
     expect(JSON.stringify(own.body)).not.toMatch(/secret|token|https?:\/\//i);
   });
 
+  it('printing (doc 030): every action needs its own permission; printers are security administration', async () => {
+    testCarrierControl.rules.parcelWeight = 'NOT_USED';
+    const suffix = randomUUID().slice(0, 4).toUpperCase();
+    const printingUrl = `/api/admin/sites/${INITIAL_SITE_ID}/printing`;
+    const agent = (
+      await as(admin)
+        .post(`${printingUrl}/agents`, {
+          requestId: randomUUID(),
+          code: `RPI-P-${suffix}`,
+          name: 'Pi',
+        })
+        .expect(200)
+    ).body as { agent: { id: string } };
+    const saved = (
+      await as(admin)
+        .post(`${printingUrl}/printers`, {
+          requestId: randomUUID(),
+          id: null,
+          code: `ZD-P-${suffix}`,
+          name: 'Zebra expedice',
+          model: 'ZEBRA_ZD220_DT',
+          agentId: agent.agent.id,
+          usbSerial: `P${suffix}`,
+          dispatchDefault: true,
+          autoPrint: true,
+          enabled: true,
+        })
+        .expect(200)
+    ).body as { printers: { id: string; code: string }[] };
+    const printerId = saved.printers.find((p) => p.code === `ZD-P-${suffix}`)!.id;
+    const c = await factory.make();
+    const order = (
+      await createOrder(su, hotel, [{ productCode: factory.kit.productCode, crates: 1 }])
+    ).code;
+    expect((await scanCrate(su, order, c.crateUrl)).status).toBe(200);
+    const combined = (cookie: string, printer: string | null, requestId = randomUUID()) =>
+      as(cookie).post(`/api/admin/orders/${order}/complete-and-label`, {
+        requestId,
+        printerId: printer,
+      });
+    const status = async () =>
+      (
+        (await request(su.app.getHttpServer()).get(`/api/admin/orders/${order}`)).body as {
+          status: string;
+        }
+      ).status;
+    // Completing without preparing the shipment is not this action.
+    const onlyPick = await createUser([await role(['orders:read', 'orders:pick'])]);
+    expect((await combined(onlyPick.cookie, null)).status).toBe(403);
+    // Completing and labelling, but printing is not allowed: refused BEFORE anything is done.
+    const picker = await createUser([
+      await role(['orders:read', 'orders:pick', 'shipments:read', 'shipments:prepare']),
+    ]);
+    const refused = await combined(picker.cookie, printerId);
+    expect([refused.status, refused.body.code]).toEqual([403, 'FORBIDDEN']);
+    expect(await status()).toBe('OPEN');
+    expect(testCarrierControl.calls).toHaveLength(0);
+    // Without printing: completed and labelled, nothing printed.
+    expect((await combined(picker.cookie, null)).status).toBe(200);
+    expect(await ra.prisma.printJob.count({ where: { order: { code: order } } })).toBe(0);
+    // The ZPL file for the printer only with printing:print; the PDF preview for any reader.
+    expect(
+      (await as(picker.cookie).get(`/api/admin/orders/${order}/shipment/parcels/1/label`)).status,
+    ).toBe(200);
+    expect(
+      (await as(picker.cookie).get(`/api/admin/orders/${order}/shipment/parcels/1/label/zpl`))
+        .status,
+    ).toBe(403);
+    const print = (cookie: string, requestId = randomUUID()) =>
+      as(cookie).post(`/api/admin/orders/${order}/shipment/print`, { requestId, printerId });
+    expect((await print(picker.cookie)).status).toBe(403);
+    const printer = await createUser([
+      await role(['orders:read', 'shipments:read', 'printing:print']),
+    ]);
+    const id = randomUUID();
+    expect((await print(printer.cookie, id)).status).toBe(200);
+    expect(
+      (await as(printer.cookie).get(`/api/admin/orders/${order}/shipment/parcels/1/label/zpl`))
+        .status,
+    ).toBe(200);
+    // Printing again is a separate permission.
+    const reprint = (cookie: string) =>
+      as(cookie).post(`/api/admin/orders/${order}/shipment/parcels/1/reprint`, {
+        requestId: randomUUID(),
+        printerId,
+        reason: 'Štítek poškozen',
+        acknowledgeDuplicate: true,
+      });
+    expect((await reprint(printer.cookie)).status).toBe(403);
+    // Printers and agents: security administration — never a custom role, never anyone but ADMIN.
+    expect((await as(printer.cookie).get(printingUrl)).status).toBe(403);
+    const managerRole = await as(admin).post('/api/admin/identity/roles', {
+      code: `PRN_${suffix}`,
+      name: `Tiskárny ${suffix}`,
+      description: 'Správa tiskáren',
+      permissions: ['printing:manage'],
+      reason: 'must be refused',
+    });
+    expect(managerRole.status).toBeGreaterThanOrEqual(400);
+    const holders = await ra.prisma.rolePermission.findMany({
+      where: {
+        permissionCode: { in: ['printing:print', 'printing:reprint', 'printing:manage'] },
+        role: { isSystem: true },
+      },
+      select: { roleCode: true },
+    });
+    expect([...new Set(holders.map((h) => h.roleCode))]).toEqual(['ADMIN']);
+    // The permission removed: the very same request id is refused too.
+    await ra.prisma.userRole.updateMany({
+      where: { userId: printer.id, revokedAt: null },
+      data: { revokedAt: new Date(), revokeReason: 'test: role removed' },
+    });
+    expect((await print(printer.cookie, id)).status).toBe(403);
+  });
+
   it('each step needs its own permission, checked again on every request and repetition', async () => {
     const order = await completed();
     const reader = await createUser([await role(['orders:read', 'shipments:read'])]);

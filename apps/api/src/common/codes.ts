@@ -13,6 +13,7 @@ export const CODE_PREFIX = {
   hotel: 'HT-',
   order: 'ORD-',
   shipment: 'SHP-',
+  printJob: 'PRJ-',
 } as const;
 
 export function formatCode(prefix: string, serial: bigint): string {

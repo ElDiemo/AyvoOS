@@ -77,6 +77,11 @@ export const ordersCs = {
       SHIPMENT_CANCEL_REQUESTED: 'Zrušení u dopravce zahájeno',
       SHIPMENT_CANCEL_REFUSED: 'Dopravce zrušení odmítl',
       CARRIER_LATE_ANSWER: 'Pozdní odpověď dopravce – zkontrolujte u dopravce',
+      LABEL_VARIANT_STORED: 'Štítky pro tiskárnu (ZPL) uloženy – stejná čísla balíků',
+      LABEL_VARIANT_FAILED: 'ZPL pro tiskárnu se nepodařilo získat',
+      PRINT_REQUESTED: 'Tisk štítků zadán',
+      REPRINT_REQUESTED: 'Opakovaný tisk štítku zadán',
+      PRINT_JOBS_CANCELLED: 'Čekající tiskové úlohy zrušeny',
     } as Record<string, string>,
     pick: 'Kompletovat',
     resume: 'Pokračovat v kompletaci',
@@ -140,6 +145,15 @@ export const ordersCs = {
     removeText: 'Bedna se vrátí mezi hotové bedny. V historii objednávky zůstane záznam.',
     removeReason: 'Důvod (nepovinné)',
     complete: 'Dokončit kompletaci',
+    completeAndPrint: (n: number) =>
+      `Dokončit a vytisknout ${n} ${n === 1 ? 'štítek' : n < 5 ? 'štítky' : 'štítků'}`,
+    completeAndLabel: 'Dokončit a připravit štítky',
+    printTarget: (printer: string) => `Tisk na: ${printer}`,
+    noAutoPrint: 'Štítky se připraví u dopravce; tisk spustíte na detailu objednávky.',
+    labelsQueued: (printer: string) =>
+      `Štítky se připravují u dopravce a půjdou do tiskárny ${printer}. Po nalepení potvrďte na objednávce „Připraveno k vyzvednutí“.`,
+    labelsPrepared: 'Štítky se připravují u dopravce. Tisk a další krok najdete na objednávce.',
+    openOrder: 'Otevřít objednávku – štítky a tisk',
     completeHelp: 'Dokončit lze jen při přesném splnění všech produktů.',
     ready: 'Kompletace dokončena',
     readyText:
