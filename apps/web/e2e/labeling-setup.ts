@@ -377,9 +377,9 @@ export async function lotIdOf(
 export async function filledCrate(
   request: APIRequestContext,
   crate: { url: string },
-  opts: { liquidLotId: string; bottleUrls: string[] },
+  opts: { liquidLotId: string; bottleUrls: string[]; category?: string },
 ): Promise<void> {
-  const station = await fillingStation(request);
+  const station = await fillingStation(request, opts.category);
   const session = await openStation(request, station.url);
   const base = `/api/admin/station-sessions/${session}`;
   await json(

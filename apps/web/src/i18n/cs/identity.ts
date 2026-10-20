@@ -69,6 +69,12 @@ export const identityCs = {
     'orders:read': 'Zobrazit objednávky provozovny a jejich načtené bedny',
     'orders:manage': 'Zakládat a stornovat objednávky provozovny',
     'orders:pick': 'Kompletovat objednávky – načítat a odebírat hotové bedny, dokončit kompletaci',
+    'shipments:read': 'Vidět přepravu objednávky – balíky, hmotnosti, štítky a přepravní čísla',
+    'shipments:prepare':
+      'Připravit přepravu – skutečné vážení, přepravní štítky u dopravce, připraveno k vyzvednutí, zrušení přípravy',
+    'shipments:handover': 'Potvrdit předání objednávky dopravci',
+    'shipments:resolve_uncertain':
+      'Výjimečně ručně uzavřít nejistý požadavek u dopravce (po ověření u dopravce; riziko duplicitní zásilky)',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
@@ -78,6 +84,7 @@ export const identityCs = {
     crates: 'Bedny',
     hotels: 'Hotely',
     orders: 'Objednávky a expedice',
+    shipments: 'Přeprava (dopravce)',
     identity: 'Uživatelé a role',
     sites: 'Provozovny',
   } as Record<string, string>,

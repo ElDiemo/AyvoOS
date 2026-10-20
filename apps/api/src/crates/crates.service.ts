@@ -172,6 +172,7 @@ export class CratesService {
       FILLING: 0,
       FILLED: 0,
       ALLOCATED: 0,
+      DISPATCHED: 0,
     };
     for (const row of open) {
       if (row.status === 'ABORTED') continue;

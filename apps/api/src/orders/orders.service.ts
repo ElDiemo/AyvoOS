@@ -1,4 +1,5 @@
 import type {
+  OrderStatus,
   CancelOrderRequest,
   CompleteOrderRequest,
   CreateOrderRequest,
@@ -32,6 +33,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import type { SiteContext } from '../inventory/warehouse-context.js';
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { lockSiteShared, SiteDependencyRegistry } from '../sites/site-dependencies.js';
+import { ShipmentsService } from './shipments.service.js';
 
 const summaryInclude = {
   hotel: { select: { code: true, name: true } },
@@ -61,20 +63,21 @@ export class OrdersService implements OnModuleInit {
     private readonly labels: LabelTemplatesService,
     private readonly registry: QrRegistryService,
     private readonly siteDependencies: SiteDependencyRegistry,
+    private readonly shipments: ShipmentsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
   /**
-   * A site with orders not yet closed stays active: they could no longer be picked or cancelled
-   * there (doc 022 §7). READY_TO_DISPATCH counts too — nothing is dispatched yet.
+   * A site with orders not yet handed to the carrier stays active: they could no longer be
+   * picked, prepared or cancelled there (doc 022 §7, doc 029).
    */
   onModuleInit(): void {
     this.siteDependencies.register(async (siteId, db) => {
       const n = await db.order.count({
-        where: { siteId, status: { in: ['OPEN', 'READY_TO_DISPATCH'] } },
+        where: { siteId, status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'] } },
       });
       return n > 0
-        ? [{ code: 'ORDERS_NOT_CLOSED', detail: `${n} order(s) are open or ready to dispatch` }]
+        ? [{ code: 'ORDERS_NOT_CLOSED', detail: `${n} order(s) are not yet handed over` }]
         : [];
     });
   }
@@ -101,8 +104,12 @@ export class OrdersService implements OnModuleInit {
     const where = (v: OrderView): Prisma.OrderWhereInput => {
       const date = new Date(`${today}T00:00:00Z`);
       const base = { siteId: site.siteId };
-      if (v === 'closed') return { ...base, status: { in: ['READY_TO_DISPATCH', 'CANCELLED'] } };
-      const open = { ...base, status: 'OPEN' as const };
+      // Closed = handed to the carrier or cancelled; everything else still needs work (doc 029).
+      if (v === 'closed') return { ...base, status: { in: ['HANDED_TO_CARRIER', 'CANCELLED'] } };
+      const open = {
+        ...base,
+        status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'] as OrderStatus[] },
+      };
       if (v === 'today') return { ...open, requestedShipDate: date };
       if (v === 'future') return { ...open, requestedShipDate: { gt: date } };
       return { ...open, requestedShipDate: { lt: date } };
@@ -199,6 +206,10 @@ export class OrdersService implements OnModuleInit {
         creator: { select: { displayName: true } },
         completer: { select: { displayName: true } },
         canceller: { select: { displayName: true } },
+        shipments: {
+          where: { status: { not: 'CANCELLED' } },
+          select: { code: true, status: true },
+        },
       },
     });
     const designs = await this.labels.getVersionRefs([
@@ -239,13 +250,20 @@ export class OrdersService implements OnModuleInit {
         loadedBy: a.allocator.displayName,
       })),
       history: row.events.map((e) => {
-        const payload = (e.payload ?? {}) as { crate?: string; reason?: string };
+        const payload = (e.payload ?? {}) as {
+          crate?: string;
+          reason?: string;
+          shipment?: string;
+          parcels?: number;
+        };
         return {
           type: e.type,
           occurredAt: e.occurredAt.toISOString(),
           actor: e.actor.displayName,
           crate: payload.crate ?? null,
           reason: payload.reason ?? null,
+          shipment: payload.shipment ?? null,
+          parcels: payload.parcels ?? null,
         };
       }),
       createdBy: row.creator.displayName,
@@ -254,6 +272,7 @@ export class OrdersService implements OnModuleInit {
       cancelledAt: row.cancelledAt?.toISOString() ?? null,
       cancelledBy: row.canceller?.displayName ?? null,
       cancelReason: row.cancelReason,
+      shipment: row.shipments[0] ?? null,
     };
   }
 
@@ -423,6 +442,14 @@ export class OrdersService implements OnModuleInit {
             'CRATE_IN_ANOTHER_ORDER',
             'This crate is already loaded into another order',
             { crate: crate.code, order: held.order.code },
+          );
+        }
+        if (cycle.status === 'DISPATCHED') {
+          throw domainErrorWithDetails(
+            409,
+            'CRATE_DISPATCHED',
+            'This crate was handed to the carrier with another order',
+            { crate: crate.code },
           );
         }
         if (cycle.status !== 'FILLED') {
@@ -605,11 +632,10 @@ export class OrdersService implements OnModuleInit {
           where: { id: order.id },
           data: { status: 'READY_TO_DISPATCH', completedAt: occurredAt, completedBy: actorId },
         });
-        await this.event(tx, order.id, 'COMPLETED', {
-          actorId,
-          operationId: input.requestId,
-          occurredAt,
-        });
+        const step = { actorId, operationId: input.requestId, occurredAt };
+        await this.event(tx, order.id, 'COMPLETED', step);
+        // The shipment and one parcel per crate follow from the completed picking (doc 029).
+        await this.shipments.derive(tx, order, step);
         return { code: order.code };
       },
     );
@@ -629,7 +655,20 @@ export class OrdersService implements OnModuleInit {
       async (tx) => {
         const order = await this.lockOrder(tx, code, site.siteId);
         if (order.status === 'CANCELLED') throw orderNotOpen(order.status);
+        if (order.status !== 'OPEN' && order.status !== 'READY_TO_DISPATCH') {
+          // Ready for pickup: cancel the shipment's preparation first; handed over: final here.
+          throw domainErrorWithDetails(
+            409,
+            'ORDER_NOT_CANCELLABLE',
+            'This order cannot be cancelled now',
+            {
+              status: order.status,
+            },
+          );
+        }
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
+        // Only a shipment that never reached a carrier is cancelled with the order.
+        await this.shipments.releaseForOrderCancel(tx, order.id, step, input.reason);
         // Cancelled first: its crates may then be released (the database allows a release only
         // from an open or cancelled order).
         await tx.order.update({

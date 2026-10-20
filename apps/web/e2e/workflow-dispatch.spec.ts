@@ -15,8 +15,8 @@ import {
  * Hotely → Objednávky → Kompletace (doc 028) on the real built app with synthetic data: a hotel
  * with an explicit fulfilment site, a manual order in whole crates (bottles from the crate type's
  * capacity, 2 here), picking on a phone-sized terminal — focused scan field, large counters, a
- * refused unfinished crate, a harmless re-scan, removal — and "Připraveno k expedici" only when
- * exact. Crates are labelled and filled through the API. Screenshots go to AYVO_SCREENSHOT_DIR.
+ * refused unfinished crate, a harmless re-scan, removal — and "Kompletace dokončena" only when
+ * exact (the dispatch that follows is workflow-shipment.spec.ts). Crates are labelled and filled through the API. Screenshots go to AYVO_SCREENSHOT_DIR.
  * (Named to run after warehouse.spec: receiving stock here creates suppliers.)
  */
 test.use({ storageState: 'e2e/.auth/admin.json', timezoneId: 'Europe/Prague' });
@@ -259,14 +259,14 @@ test('Kompletace on a phone: focused scan, refusals, re-scan, removal, exact com
   await noOverflow(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByTestId('complete-picking').click();
-  await expect(page.getByTestId('picking-ready')).toContainText('Připraveno k expedici');
+  await expect(page.getByTestId('picking-ready')).toContainText('Kompletace dokončena');
   await expect(page.getByTestId('scan-input')).toHaveCount(0);
   await shot(page, 'dispatch-08-picking-ready');
 });
 
 test('the ready order keeps its history; its crates are held by it', async ({ page }) => {
   await page.goto(`/dispatch/orders/${orderCode}`);
-  await expect(page.getByTestId('order-status')).toHaveText('Připraveno k expedici');
+  await expect(page.getByTestId('order-status')).toHaveText('Kompletace dokončena');
   await expect(page.getByTestId('start-picking')).toHaveCount(0);
   const history = page.getByTestId('order-history');
   await expect(history).toContainText('Bedna odebrána');

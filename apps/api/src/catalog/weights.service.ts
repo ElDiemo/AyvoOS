@@ -557,6 +557,55 @@ export class WeightsService {
     });
   }
 
+  /**
+   * The calculated reference of one dispatched crate (doc 029): its Hotovo snapshot when that
+   * knows the finished package, otherwise the references in force at `at` (and labelled so).
+   * Never an actual weighing; a historical snapshot is never rewritten.
+   */
+  async parcelReference(
+    tx: Prisma.TransactionClient,
+    cycle: {
+      id: string;
+      productId: string;
+      recipeVersionId: string;
+      crateTypeId: string;
+      capacity: number;
+    },
+    at: Date,
+  ): Promise<{
+    massG: Decimal | null;
+    source: 'HOTOVO_SNAPSHOT' | 'REFERENCE_AT_SHIPMENT' | null;
+    snapshotId: string | null;
+    packageDimensionId: string | null;
+  }> {
+    const snapshot = await tx.crateCycleWeightSnapshot.findFirst({
+      where: { cycleId: cycle.id },
+      orderBy: [{ takenAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, expectedPackageG: true, packageId: true },
+    });
+    if (snapshot?.expectedPackageG) {
+      return {
+        massG: snapshot.expectedPackageG,
+        source: 'HOTOVO_SNAPSHOT',
+        snapshotId: snapshot.id,
+        packageDimensionId: snapshot.packageId,
+      };
+    }
+    const refs = await this.referencesAt(tx, {
+      productId: cycle.productId,
+      recipeVersionId: cycle.recipeVersionId,
+      crateTypeId: cycle.crateTypeId,
+      at,
+    });
+    const expected = expectedWeights(cycle.capacity, refs).expectedPackageG;
+    return {
+      massG: expected ? new Decimal(expected) : null,
+      source: expected ? 'REFERENCE_AT_SHIPMENT' : null,
+      snapshotId: snapshot?.id ?? null,
+      packageDimensionId: snapshot?.packageId ?? refs.pkg?.id ?? null,
+    };
+  }
+
   /** The Hotovo snapshots of a crate of the site, newest first. */
   async snapshotsOfCrate(crateId: string): Promise<CrateWeightSnapshot[]> {
     const rows = await this.prisma.crateCycleWeightSnapshot.findMany({

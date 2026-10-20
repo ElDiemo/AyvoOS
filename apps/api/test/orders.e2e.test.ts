@@ -342,6 +342,8 @@ describe.skipIf(!hasDatabase)('hotels, orders and picking (doc 028)', () => {
       ['CRATE_ADDED', c.crateCode],
       ['CRATE_ADDED', g.crateCode],
       ['COMPLETED', null],
+      // doc 029: the completed picking derives the shipment (one parcel per crate).
+      ['SHIPMENT_CREATED', null],
     ]);
     expect(final.history[3]!.reason).toBe('špatná bedna');
     // The released allocation stays as history.
@@ -401,6 +403,9 @@ describe.skipIf(!hasDatabase)('hotels, orders and picking (doc 028)', () => {
       'CREATED',
       'CRATE_ADDED',
       'COMPLETED',
+      'SHIPMENT_CREATED',
+      // doc 029: a shipment that never reached a carrier is cancelled with the order.
+      'SHIPMENT_CANCELLED',
       'CANCELLED',
     ]);
     expect((await cycleOf(crate.crateCode)).status).toBe('FILLED');

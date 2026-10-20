@@ -183,6 +183,7 @@ export function ConfirmDialog({
   confirmLabel,
   danger = false,
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
   testId,
@@ -193,6 +194,8 @@ export function ConfirmDialog({
   confirmLabel: string;
   danger?: boolean;
   busy?: boolean;
+  /** The confirmation is not possible yet (e.g. a required check box is not ticked). */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   testId?: string;
@@ -227,7 +230,7 @@ export function ConfirmDialog({
           type="button"
           className={danger ? buttonClass.danger : buttonClass.primary}
           onClick={onConfirm}
-          disabled={busy}
+          disabled={busy || confirmDisabled}
         >
           {busy ? t.saving : confirmLabel}
         </button>

@@ -44,6 +44,8 @@ const testEnv = {
   ...process.env,
   APP_ENV: 'test',
   AUTH_PROVIDER: 'test',
+  // The fake carrier (doc 029): allowed only with APP_ENV=test; never on DEV or production.
+  CARRIER_PROVIDER: 'test',
   DATABASE_URL: e2eUrl,
   APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
   // The browser tests sign in many times from one address.

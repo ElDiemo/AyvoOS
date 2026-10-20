@@ -6,13 +6,19 @@ import { deliveryAddressSchema, hotelCodeSchema, hotelContactSchema } from './ho
 /**
  * Manual orders and picking (doc 028): one hotel and delivery address per order, products in
  * whole crates (bottles = crates × the crate type's capacity, never a constant), finished crates
- * scanned into the order. "Připraveno k expedici" is the end of this slice — no carrier,
- * dispatch or delivery is recorded.
+ * scanned into the order. Dispatch to a carrier continues on the same order (doc 029): ready for
+ * pickup, handed to the carrier. Nothing here means delivered.
  */
 
 /** Language-neutral (only the word "Objednávka / Order" is translated); never encodes a country. */
 export const orderCodeSchema = z.string().regex(/^ORD-\d{6,}$/, 'e.g. ORD-000001');
-export const orderStatusSchema = z.enum(['OPEN', 'READY_TO_DISPATCH', 'CANCELLED']);
+export const orderStatusSchema = z.enum([
+  'OPEN',
+  'READY_TO_DISPATCH',
+  'READY_FOR_PICKUP',
+  'HANDED_TO_CARRIER',
+  'CANCELLED',
+]);
 export type OrderStatus = z.infer<typeof orderStatusSchema>;
 
 /** Overview tabs by the requested ship day in the site's time zone. */
@@ -150,11 +156,33 @@ export const orderCrateSchema = z.object({
 export type OrderCrate = z.infer<typeof orderCrateSchema>;
 
 export const orderEventSchema = z.object({
-  type: z.enum(['CREATED', 'CRATE_ADDED', 'CRATE_REMOVED', 'COMPLETED', 'CANCELLED']),
+  type: z.enum([
+    'CREATED',
+    'CRATE_ADDED',
+    'CRATE_REMOVED',
+    'COMPLETED',
+    'CANCELLED',
+    'SHIPMENT_CREATED',
+    'LABELS_REQUESTED',
+    'LABELS_CREATED',
+    'LABELS_REJECTED',
+    'LABELS_UNCERTAIN',
+    'LABELS_NOT_CREATED',
+    'PARCEL_WEIGHED',
+    'READY_FOR_PICKUP',
+    'HANDED_TO_CARRIER',
+    'SHIPMENT_CANCELLED',
+    'SHIPMENT_CANCEL_REQUESTED',
+    'SHIPMENT_CANCEL_REFUSED',
+    'CARRIER_LATE_ANSWER',
+  ]),
   occurredAt: z.iso.datetime(),
   actor: z.string(),
   crate: z.string().nullable(),
   reason: z.string().nullable(),
+  /** Shipment events: the shipment, parcel and carrier numbers concerned (doc 029). */
+  shipment: z.string().nullable(),
+  parcels: z.number().int().nullable(),
 });
 export type OrderEvent = z.infer<typeof orderEventSchema>;
 
@@ -172,6 +200,13 @@ export const orderDetailSchema = orderSummarySchema.extend({
   cancelledAt: z.iso.datetime().nullable(),
   cancelledBy: z.string().nullable(),
   cancelReason: z.string().nullable(),
+  /** The order's live shipment (doc 029), readable with orders:read: code and status only. */
+  shipment: z
+    .object({
+      code: z.string(),
+      status: z.enum(['DRAFT', 'REQUESTING', 'LABELED', 'CANCELLING', 'CANCELLED']),
+    })
+    .nullable(),
 });
 export type OrderDetail = z.infer<typeof orderDetailSchema>;
 

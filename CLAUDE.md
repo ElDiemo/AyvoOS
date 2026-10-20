@@ -51,6 +51,13 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   crates (capacity from the crate type), order crate allocations (+ their bottles), order events;
   crate cycle `ALLOCATED`; permissions `hotels:*` / `orders:*` for ADMIN only. Ends at
   "Připraveno k expedici" — no carrier, dispatch, delivery, contracts or hotel users.
+  Dispatch to a carrier (doc 029, owner 2026-10-18): shipments (one live per order, whole order
+  together), parcels (1 crate = 1 parcel = 1 label, from the allocation), optional actual
+  weighings, carrier requests (written, claimed once, never re-sent blindly), stored labels;
+  order `READY_FOR_PICKUP` / `HANDED_TO_CARRIER`, cycle `DISPATCHED` (not delivered);
+  `shipments:read|prepare|handover` for ADMIN only. Carrier behind `orders/carriers/carrier.ts`;
+  none configured on DEV (PPL awaits owner access); `CARRIER_PROVIDER=test` only with
+  `APP_ENV=test`. No delivery, returns or pickup ordering.
   Weights and dimensions (doc 025 §10, W1, owner 2026-10-17): append-only measured references of
   components and packaging (per unit; a liquid as a weighed sample), the finished bottle per
   recipe version, crate tare and crate /

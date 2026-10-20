@@ -11,6 +11,13 @@ const cycleInclude = {
 export type CycleRecord = Prisma.CrateCycleGetPayload<{ include: typeof cycleInclude }>;
 
 /**
+ * Held by an order — loaded (ALLOCATED, doc 028) or handed to the carrier with it (DISPATCHED,
+ * doc 029): no labelling, filling, correction, refill or repack touches such a crate.
+ */
+export const isHeldByOrder = (status: string): boolean =>
+  status === 'ALLOCATED' || status === 'DISPATCHED';
+
+/**
  * Crate cycles and their members (ADR 0021, ADR 0025 proposed, doc 025 §3.2): one circulation of
  * one crate with an immutable snapshot (crate type, capacity, product, category, recipe version,
  * label design). Labelling (A3) opens a cycle with its first bottle and adds members until the
@@ -283,6 +290,28 @@ export class CrateCyclesService {
     });
   }
 
+  /**
+   * Handed to the carrier with its order (doc 029): ALLOCATED → DISPATCHED with its crate event.
+   * Not delivered and not at the hotel; the members stay exactly as they are.
+   */
+  async dispatch(
+    tx: Prisma.TransactionClient,
+    cycle: CycleRecord,
+    input: {
+      actorId: string;
+      operationId: string;
+      occurredAt: Date;
+      order: string;
+      shipment: string;
+    },
+  ): Promise<void> {
+    await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'DISPATCHED' } });
+    await this.event(tx, cycle, 'DISPATCHED', input, {
+      order: input.order,
+      shipment: input.shipment,
+    });
+  }
+
   /** The cycle's active assignments, in ordinal order, with their bottles. */
   activeMembers(db: Prisma.TransactionClient, cycleId: string) {
     return db.crateAssignment.findMany({
@@ -361,7 +390,8 @@ export class CrateCyclesService {
       | 'MEMBER_REMOVED'
       | 'MEMBER_ADDED'
       | 'ALLOCATED_TO_ORDER'
-      | 'RELEASED_FROM_ORDER',
+      | 'RELEASED_FROM_ORDER'
+      | 'DISPATCHED',
     input: { actorId: string; operationId: string; occurredAt: Date },
     payload: Record<string, string | undefined> = {},
   ): Promise<void> {
