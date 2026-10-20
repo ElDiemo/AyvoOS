@@ -920,6 +920,12 @@ enum OperationKind {
   PRINT_AGENT_ROTATE
   PRINT_AGENT_REVOKE
   SHIPMENT_TRACKING_SYNC
+  SUPPLY_PLAN_SAVE
+  SUPPLY_PLAN_ACTIVATE
+  SUPPLY_PLAN_PAUSE
+  SUPPLY_PLAN_ORDER
+  ORDER_RESCHEDULE
+  HOTEL_UPDATE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -981,34 +987,37 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
-  itemWeights         ItemReferenceWeight[]
-  productWeights      ProductReferenceWeight[]
-  tareWeights         CrateTypeTareWeight[]
-  crateDimensions     CrateTypeDimension[]
-  hotelsCreated       Hotel[]                  @relation("HotelCreatedBy")
-  ordersCreated       Order[]                  @relation("OrderCreatedBy")
-  ordersCompleted     Order[]                  @relation("OrderCompletedBy")
-  ordersCancelled     Order[]                  @relation("OrderCancelledBy")
-  allocationsMade     OrderCrateAllocation[]   @relation("AllocatedBy")
-  allocationsRelease  OrderCrateAllocation[]   @relation("AllocationReleasedBy")
-  orderEvents         OrderEvent[]
-  labelApprovals      ProductLabelApproval[]   @relation("ApprovalBy")
-  labelRevocations    ProductLabelApproval[]   @relation("ApprovalRevokedBy")
-  cyclesOpened        CrateCycle[]             @relation("CycleOpenedBy")
-  cyclesAborted       CrateCycle[]             @relation("CycleAbortedBy")
-  assignmentsMade     CrateAssignment[]        @relation("AssignedBy")
-  assignmentsReleased CrateAssignment[]        @relation("ReleasedBy")
-  id                  String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  email               String                   @unique
-  displayName         String                   @map("display_name")
-  status              UserStatus               @default(ACTIVE)
-  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  itemWeights          ItemReferenceWeight[]
+  productWeights       ProductReferenceWeight[]
+  tareWeights          CrateTypeTareWeight[]
+  crateDimensions      CrateTypeDimension[]
+  hotelsCreated        Hotel[]                  @relation("HotelCreatedBy")
+  ordersCreated        Order[]                  @relation("OrderCreatedBy")
+  supplyPlansCreated   SupplyPlan[]             @relation("SupplyPlanCreatedBy")
+  supplyPlansUpdated   SupplyPlan[]             @relation("SupplyPlanUpdatedBy")
+  supplyPlansActivated SupplyPlan[]             @relation("SupplyPlanActivatedBy")
+  ordersCompleted      Order[]                  @relation("OrderCompletedBy")
+  ordersCancelled      Order[]                  @relation("OrderCancelledBy")
+  allocationsMade      OrderCrateAllocation[]   @relation("AllocatedBy")
+  allocationsRelease   OrderCrateAllocation[]   @relation("AllocationReleasedBy")
+  orderEvents          OrderEvent[]
+  labelApprovals       ProductLabelApproval[]   @relation("ApprovalBy")
+  labelRevocations     ProductLabelApproval[]   @relation("ApprovalRevokedBy")
+  cyclesOpened         CrateCycle[]             @relation("CycleOpenedBy")
+  cyclesAborted        CrateCycle[]             @relation("CycleAbortedBy")
+  assignmentsMade      CrateAssignment[]        @relation("AssignedBy")
+  assignmentsReleased  CrateAssignment[]        @relation("ReleasedBy")
+  id                   String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email                String                   @unique
+  displayName          String                   @map("display_name")
+  status               UserStatus               @default(ACTIVE)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   /// NULL only for the bootstrap administrator.
-  createdBy           String?                  @map("created_by") @db.Uuid
-  deactivatedAt       DateTime?                @map("deactivated_at") @db.Timestamptz(3)
-  deactivatedBy       String?                  @map("deactivated_by") @db.Uuid
-  deactivationReason  String?                  @map("deactivation_reason")
-  lastLoginAt         DateTime?                @map("last_login_at") @db.Timestamptz(3)
+  createdBy            String?                  @map("created_by") @db.Uuid
+  deactivatedAt        DateTime?                @map("deactivated_at") @db.Timestamptz(3)
+  deactivatedBy        String?                  @map("deactivated_by") @db.Uuid
+  deactivationReason   String?                  @map("deactivation_reason")
+  lastLoginAt          DateTime?                @map("last_login_at") @db.Timestamptz(3)
 
   createdByUser             User?                     @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   createdUsers              User[]                    @relation("UserCreatedBy")
@@ -1338,6 +1347,8 @@ model Site {
   printRequests     PrintRequest[]
   dispatchPrintJobs PrintJob[]
 
+  supplyPlans SupplyPlan[]
+
   @@map("sites")
 }
 
@@ -1524,6 +1535,8 @@ model Product {
   archiver    User?            @relation("ProductArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
   operation   OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   recipes     RecipeVersion[]
+
+  supplyPlanRules SupplyPlanRule[]
 
   @@unique([id, categoryCode])
   @@map("products")
@@ -2138,27 +2151,33 @@ model BottleProductBinding {
 /// explicitly, never derived from the country (doc 022 §7). DB: code and site immutable; never
 /// deleted.
 model Hotel {
-  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial             BigInt   @unique
-  code               String   @unique
-  name               String
-  addressLine1       String   @map("address_line1")
-  addressLine2       String?  @map("address_line2")
-  postalCode         String   @map("postal_code")
-  city               String
-  countryCode        String   @map("country_code") @db.Char(2)
-  contactName        String   @map("contact_name")
-  contactPhone       String   @map("contact_phone")
-  contactEmail       String   @map("contact_email")
-  fulfillmentSiteId  String   @map("fulfillment_site_id") @db.Uuid
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy          String   @map("created_by") @db.Uuid
-  operationRequestId String   @unique @map("operation_request_id") @db.Uuid
+  id                    String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial                BigInt   @unique
+  code                  String   @unique
+  name                  String
+  addressLine1          String   @map("address_line1")
+  addressLine2          String?  @map("address_line2")
+  postalCode            String   @map("postal_code")
+  city                  String
+  countryCode           String   @map("country_code") @db.Char(2)
+  contactName           String   @map("contact_name")
+  contactPhone          String   @map("contact_phone")
+  contactEmail          String   @map("contact_email")
+  fulfillmentSiteId     String   @map("fulfillment_site_id") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy             String   @map("created_by") @db.Uuid
+  operationRequestId    String   @unique @map("operation_request_id") @db.Uuid
+  /// Optional practical details (doc 032): goods receipt hours, entrance, …; a receiving contact.
+  deliveryNote          String?  @map("delivery_note")
+  receivingContactName  String?  @map("receiving_contact_name")
+  receivingContactPhone String?  @map("receiving_contact_phone")
+  receivingContactEmail String?  @map("receiving_contact_email")
 
   fulfillmentSite Site             @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
   creator         User             @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   operation       OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   orders          Order[]
+  supplyPlan      SupplyPlan?
 
   @@index([fulfillmentSiteId])
   @@map("hotels")
@@ -2209,19 +2228,24 @@ model Order {
   cancelledAt        DateTime?   @map("cancelled_at") @db.Timestamptz(3)
   cancelledBy        String?     @map("cancelled_by") @db.Uuid
   cancelReason       String?     @map("cancel_reason")
+  /// MANUAL or SUPPLY_PLAN (doc 032); a plan's order points to its occurrence.
+  origin             String      @default("MANUAL")
+  supplyOccurrenceId String?     @unique @map("supply_occurrence_id") @db.Uuid
 
-  hotel         Hotel                  @relation(fields: [hotelId], references: [id], onDelete: Restrict)
-  site          Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  creator       User                   @relation("OrderCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  completer     User?                  @relation("OrderCompletedBy", fields: [completedBy], references: [id], onDelete: Restrict)
-  canceller     User?                  @relation("OrderCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
-  operation     OperationRequest       @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
-  lines         OrderLine[]
-  allocations   OrderCrateAllocation[]
-  events        OrderEvent[]
-  shipments     Shipment[]
-  printRequests PrintRequest[]
-  printJobs     PrintJob[]
+  hotel            Hotel                  @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  supplyOccurrence SupplyPlanOccurrence?  @relation("OrderOfOccurrence", fields: [supplyOccurrenceId], references: [id], onDelete: Restrict)
+  occurrenceOf     SupplyPlanOccurrence?  @relation("OccurrenceOrder")
+  site             Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator          User                   @relation("OrderCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  completer        User?                  @relation("OrderCompletedBy", fields: [completedBy], references: [id], onDelete: Restrict)
+  canceller        User?                  @relation("OrderCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
+  operation        OperationRequest       @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  lines            OrderLine[]
+  allocations      OrderCrateAllocation[]
+  events           OrderEvent[]
+  shipments        Shipment[]
+  printRequests    PrintRequest[]
+  printJobs        PrintJob[]
 
   @@index([siteId, requestedShipDate])
   @@index([hotelId])
@@ -2339,6 +2363,8 @@ enum OrderEventType {
   PARCEL_PICKED_UP
   PARCEL_DELIVERED
   DELIVERED
+  /// doc 032: the planned ship day changed explicitly (reason in the payload).
+  RESCHEDULED
 }
 
 /// Append-only order history (ADR 0006). DB: immutable.
@@ -3100,4 +3126,77 @@ model PrintJobEvent {
 
   @@index([jobId, occurredAt])
   @@map("print_job_events")
+}
+
+/// The supply plan of one hotel (doc 032; current state, every change audited): validity,
+/// INACTIVE → ACTIVE ⇄ PAUSED, its rules. DB: never deleted; hotel and site immutable.
+model SupplyPlan {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  hotelId      String    @unique @map("hotel_id") @db.Uuid
+  siteId       String    @map("site_id") @db.Uuid
+  /// INACTIVE | ACTIVE | PAUSED
+  status       String    @default("INACTIVE")
+  version      Int       @default(1)
+  validFrom    DateTime  @map("valid_from") @db.Date
+  validTo      DateTime? @map("valid_to") @db.Date
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy    String    @map("created_by") @db.Uuid
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy    String    @map("updated_by") @db.Uuid
+  activatedAt  DateTime? @map("activated_at") @db.Timestamptz(3)
+  activatedBy  String?   @map("activated_by") @db.Uuid
+  lastRunAt    DateTime? @map("last_run_at") @db.Timestamptz(3)
+  lastRunOkAt  DateTime? @map("last_run_ok_at") @db.Timestamptz(3)
+  lastRunError String?   @map("last_run_error")
+
+  hotel       Hotel                  @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  site        Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator     User                   @relation("SupplyPlanCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater     User                   @relation("SupplyPlanUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  activator   User?                  @relation("SupplyPlanActivatedBy", fields: [activatedBy], references: [id], onDelete: Restrict)
+  rules       SupplyPlanRule[]
+  occurrences SupplyPlanOccurrence[]
+
+  @@index([siteId, status])
+  @@map("supply_plans")
+}
+
+/// A rule of a plan: product × whole crates × days of the month (1–31).
+model SupplyPlanRule {
+  id        String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  planId    String @map("plan_id") @db.Uuid
+  position  Int
+  productId String @map("product_id") @db.Uuid
+  crates    Int
+  days      Int[]  @db.SmallInt
+
+  plan    SupplyPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  product Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([planId, position])
+  @@map("supply_plan_rules")
+}
+
+/// One occurrence of a plan = one local ship day (doc 032). DB: unique per plan and day (any
+/// version); ORDERED is final; BLOCKED holds the reason.
+model SupplyPlanOccurrence {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  planId        String   @map("plan_id") @db.Uuid
+  shipDate      DateTime @map("ship_date") @db.Date
+  /// ORDERED | BLOCKED
+  status        String
+  orderId       String?  @unique @map("order_id") @db.Uuid
+  planVersion   Int      @map("plan_version")
+  snapshot      Json
+  blockedCode   String?  @map("blocked_code")
+  blockedDetail String?  @map("blocked_detail")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  plan        SupplyPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  order       Order?     @relation("OccurrenceOrder", fields: [orderId], references: [id], onDelete: Restrict)
+  originOrder Order?     @relation("OrderOfOccurrence")
+
+  @@unique([planId, shipDate])
+  @@map("supply_plan_occurrences")
 }

@@ -4,6 +4,7 @@ import type {
   CompleteAndLabelRequest,
   CompleteOrderRequest,
   CreateOrderRequest,
+  HotelDeliveries,
   HotelOrders,
   HotelOrdersQuery,
   HotelSummary,
@@ -18,7 +19,9 @@ import type {
   OrderSummary,
   OrderView,
   RemoveOrderCrateRequest,
+  RescheduleOrderRequest,
 } from '@ayvo/types';
+import { AuditService } from '../audit/audit.service.js';
 import { Inject, Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { RecipesService } from '../catalog/recipes.service.js';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
@@ -44,6 +47,7 @@ const summaryInclude = {
   hotel: { select: { code: true, name: true } },
   site: { select: { code: true, name: true } },
   lines: { select: { crates: true, capacity: true, allocatedCrates: true } },
+  supplyOccurrence: { select: { shipDate: true } },
 } satisfies Prisma.OrderInclude;
 type SummaryRecord = Prisma.OrderGetPayload<{ include: typeof summaryInclude }>;
 
@@ -70,6 +74,7 @@ export class OrdersService implements OnModuleInit {
     private readonly siteDependencies: SiteDependencyRegistry,
     private readonly shipments: ShipmentsService,
     private readonly printers: PrintersService,
+    private readonly audit: AuditService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -264,6 +269,8 @@ export class OrdersService implements OnModuleInit {
           reason?: string;
           shipment?: string;
           parcels?: number;
+          from?: string;
+          to?: string;
         };
         return {
           type: e.type,
@@ -274,6 +281,8 @@ export class OrdersService implements OnModuleInit {
           reason: payload.reason ?? null,
           shipment: payload.shipment ?? null,
           parcels: payload.parcels ?? null,
+          shipDateFrom: e.type === 'RESCHEDULED' ? (payload.from ?? null) : null,
+          shipDateTo: e.type === 'RESCHEDULED' ? (payload.to ?? null) : null,
         };
       }),
       createdBy: row.creator.displayName,
@@ -317,93 +326,315 @@ export class OrdersService implements OnModuleInit {
       'ORDER_CREATE',
       input.requestId,
       { actorId, siteId: site.siteId, ...input, requestId: undefined },
-      async (tx) => {
-        // Serialised with a deactivation of the site (its lock); the site must have its warehouse.
-        await lockSiteShared(tx, site.siteId);
-        const served = await tx.site.count({
-          where: { id: site.siteId, active: true, locations: { some: {} } },
+      async (tx) =>
+        this.insertOrder(tx, {
+          actorId,
+          siteId: site.siteId,
+          hotelCode: input.hotelCode,
+          requestedShipDate: input.requestedShipDate,
+          lines: input.lines,
+          operationRequestId: input.requestId,
+          origin: null,
+        }),
+    );
+    return this.detail(site, result.code);
+  }
+
+  /**
+   * One order with all its lines, in the caller's transaction — the same business rules for a
+   * manual order and one from a supply plan (doc 028, doc 032): the site has its warehouse, the
+   * hotel is served by it, the ship day is not in the past, every product is active and has an
+   * active recipe with a crate type (capacity from it, never a constant). Throws a domain error
+   * otherwise; nothing is written then (the caller's transaction is rolled back).
+   */
+  async insertOrder(
+    tx: Prisma.TransactionClient,
+    input: {
+      actorId: string;
+      siteId: string;
+      hotelCode: string;
+      requestedShipDate: string;
+      lines: { productCode: string; crates: number }[];
+      operationRequestId: string;
+      /** A supply plan's occurrence (its row is written by the caller in this transaction). */
+      origin: { occurrenceId: string; plan: string; plannedShipDate: string } | null;
+    },
+  ): Promise<{ id: string; code: string }> {
+    // Serialised with a deactivation of the site (its lock); the site must have its warehouse.
+    await lockSiteShared(tx, input.siteId);
+    const served = await tx.site.count({
+      where: { id: input.siteId, active: true, locations: { some: {} } },
+    });
+    if (served === 0) {
+      throw domainError(409, 'SITE_WITHOUT_WAREHOUSE', 'The active site has no warehouse');
+    }
+    const hotel = await this.hotels.byCode(input.hotelCode, tx);
+    if (!hotel) throw domainError(422, 'UNKNOWN_HOTEL', 'Unknown hotel');
+    // The order belongs to the hotel's fulfilment site — never to another site.
+    if (hotel.fulfillmentSiteId !== input.siteId) {
+      throw domainErrorWithDetails(
+        409,
+        'HOTEL_OF_ANOTHER_SITE',
+        'This hotel is served by another site',
+        { site: hotel.fulfillmentSite.code },
+      );
+    }
+    if (input.requestedShipDate < (await this.today(input.siteId, tx))) {
+      throw domainError(422, 'SHIP_DATE_IN_PAST', 'The requested ship day is in the past');
+    }
+    const lines = [];
+    for (const line of input.lines) {
+      const product = await tx.product.findUnique({
+        where: { code: line.productCode },
+        select: { id: true, status: true },
+      });
+      if (!product || product.status !== 'ACTIVE') {
+        throw domainErrorWithDetails(422, 'UNKNOWN_PRODUCT', 'Unknown or archived product', {
+          product: line.productCode,
         });
-        if (served === 0) {
-          throw domainError(409, 'SITE_WITHOUT_WAREHOUSE', 'The active site has no warehouse');
-        }
-        const hotel = await this.hotels.byCode(input.hotelCode, tx);
-        if (!hotel) throw domainError(422, 'UNKNOWN_HOTEL', 'Unknown hotel');
-        // The order belongs to the hotel's fulfilment site — never to another site.
-        if (hotel.fulfillmentSiteId !== site.siteId) {
+      }
+      const unit = await this.crateUnit(tx, product.id);
+      if (!unit) {
+        throw domainErrorWithDetails(
+          422,
+          'PRODUCT_WITHOUT_RECIPE',
+          'The product has no active recipe with a crate type',
+          { product: line.productCode },
+        );
+      }
+      lines.push({ productId: product.id, crates: line.crates, ...unit.row });
+    }
+    const { first: serial } = await allocateSerials(tx, 'order', 1);
+    const occurredAt = new Date();
+    const order = await tx.order.create({
+      data: {
+        serial,
+        code: formatCode(CODE_PREFIX.order, serial),
+        hotelId: hotel.id,
+        siteId: input.siteId,
+        requestedShipDate: new Date(`${input.requestedShipDate}T00:00:00Z`),
+        hotelName: hotel.name,
+        addressLine1: hotel.addressLine1,
+        addressLine2: hotel.addressLine2,
+        postalCode: hotel.postalCode,
+        city: hotel.city,
+        countryCode: hotel.countryCode,
+        contactName: hotel.contactName,
+        contactPhone: hotel.contactPhone,
+        contactEmail: hotel.contactEmail,
+        createdAt: occurredAt,
+        createdBy: input.actorId,
+        operationRequestId: input.operationRequestId,
+        origin: input.origin ? 'SUPPLY_PLAN' : 'MANUAL',
+        supplyOccurrenceId: input.origin?.occurrenceId ?? null,
+        lines: {
+          create: lines.map((l, i) => ({
+            lineNo: i + 1,
+            productId: l.productId,
+            crateTypeId: l.crateTypeId,
+            capacity: l.capacity,
+            crates: l.crates,
+            bottles: l.crates * l.capacity,
+          })),
+        },
+      },
+    });
+    await this.event(
+      tx,
+      order.id,
+      'CREATED',
+      { actorId: input.actorId, operationId: input.operationRequestId, occurredAt },
+      input.origin
+        ? {
+            origin: 'SUPPLY_PLAN',
+            plan: input.origin.plan,
+            plannedShipDate: input.origin.plannedShipDate,
+          }
+        : {},
+    );
+    return { id: order.id, code: order.code };
+  }
+
+  /** The crate type and capacity an order line of this product would get now (recipe). */
+  async crateUnitOf(db: Prisma.TransactionClient, productId: string) {
+    return this.crateUnit(db, productId);
+  }
+
+  /**
+   * "Změnit den odeslání" (doc 032 §3): an explicit change of the planned ship day — e.g. a
+   * planned order prepared and sent earlier. Reason, order event and audit; never a past day;
+   * only before the carrier has the order. An order from a plan keeps its occurrence (so the
+   * plan never creates a replacement); the plan and other orders are not changed.
+   */
+  async reschedule(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    input: RescheduleOrderRequest,
+  ): Promise<OrderDetail> {
+    await this.operations.run(
+      'ORDER_RESCHEDULE',
+      input.requestId,
+      { actorId, siteId: site.siteId, code, shipDate: input.shipDate, reason: input.reason },
+      async (tx) => {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        if (!['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'].includes(order.status)) {
           throw domainErrorWithDetails(
             409,
-            'HOTEL_OF_ANOTHER_SITE',
-            'This hotel is served by another site',
-            { site: hotel.fulfillmentSite.code },
+            'ORDER_NOT_RESCHEDULABLE',
+            'The ship day changes only before the hand-over',
+            { status: order.status },
           );
         }
-        if (input.requestedShipDate < (await this.today(site.siteId, tx))) {
+        if (input.shipDate < (await this.today(site.siteId, tx))) {
           throw domainError(422, 'SHIP_DATE_IN_PAST', 'The requested ship day is in the past');
         }
-        const lines = [];
-        for (const line of input.lines) {
-          const product = await tx.product.findUnique({
-            where: { code: line.productCode },
-            select: { id: true, status: true },
-          });
-          if (!product || product.status !== 'ACTIVE') {
-            throw domainErrorWithDetails(422, 'UNKNOWN_PRODUCT', 'Unknown or archived product', {
-              product: line.productCode,
-            });
-          }
-          const unit = await this.crateUnit(tx, product.id);
-          if (!unit) {
-            throw domainErrorWithDetails(
-              422,
-              'PRODUCT_WITHOUT_RECIPE',
-              'The product has no active recipe with a crate type',
-              { product: line.productCode },
-            );
-          }
-          lines.push({ productId: product.id, crates: line.crates, ...unit.row });
+        const from = order.requestedShipDate.toISOString().slice(0, 10);
+        if (from === input.shipDate) {
+          throw domainError(409, 'SAME_SHIP_DATE', 'The order already ships that day');
         }
-        const { first: serial } = await allocateSerials(tx, 'order', 1);
         const occurredAt = new Date();
-        const order = await tx.order.create({
-          data: {
-            serial,
-            code: formatCode(CODE_PREFIX.order, serial),
-            hotelId: hotel.id,
+        await tx.order.update({
+          where: { id: order.id },
+          data: { requestedShipDate: new Date(`${input.shipDate}T00:00:00Z`) },
+        });
+        await this.event(
+          tx,
+          order.id,
+          'RESCHEDULED',
+          { actorId, operationId: input.requestId, occurredAt },
+          { from, to: input.shipDate, reason: input.reason },
+        );
+        await this.audit.record(
+          {
+            type: 'ORDER_RESCHEDULED',
+            actorUserId: actorId,
             siteId: site.siteId,
-            requestedShipDate: new Date(`${input.requestedShipDate}T00:00:00Z`),
-            hotelName: hotel.name,
-            addressLine1: hotel.addressLine1,
-            addressLine2: hotel.addressLine2,
-            postalCode: hotel.postalCode,
-            city: hotel.city,
-            countryCode: hotel.countryCode,
-            contactName: hotel.contactName,
-            contactPhone: hotel.contactPhone,
-            contactEmail: hotel.contactEmail,
-            createdAt: occurredAt,
-            createdBy: actorId,
-            operationRequestId: input.requestId,
-            lines: {
-              create: lines.map((l, i) => ({
-                lineNo: i + 1,
-                productId: l.productId,
-                crateTypeId: l.crateTypeId,
-                capacity: l.capacity,
-                crates: l.crates,
-                bottles: l.crates * l.capacity,
-              })),
+            payload: {
+              order: order.code,
+              from,
+              to: input.shipDate,
+              reason: input.reason,
+              origin: order.origin,
             },
           },
-        });
-        await this.event(tx, order.id, 'CREATED', {
-          actorId,
-          operationId: input.requestId,
-          occurredAt,
-        });
+          tx,
+        );
         return { code: order.code };
       },
     );
-    return this.detail(site, result.code);
+    return this.detail(site, code);
+  }
+
+  /**
+   * The hotel's orders around a ship day (±14 days, not cancelled): shown when an order is made by
+   * hand so a possible overlap is seen — nothing is merged or cancelled (doc 032 §3).
+   */
+  async nearby(site: SiteContext, hotelCode: string, date: string): Promise<OrderSummary[]> {
+    const hotel = await this.hotels.byCode(hotelCode);
+    if (!hotel) throw new NotFoundException('Hotel not found');
+    const at = new Date(`${date}T00:00:00Z`);
+    const day = 86_400_000;
+    const rows = await this.prisma.order.findMany({
+      where: {
+        siteId: site.siteId,
+        hotelId: hotel.id,
+        status: { not: 'CANCELLED' },
+        requestedShipDate: {
+          gte: new Date(at.getTime() - 14 * day),
+          lte: new Date(at.getTime() + 14 * day),
+        },
+      },
+      include: summaryInclude,
+      orderBy: [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
+      take: 20,
+    });
+    return rows.map(toSummary);
+  }
+
+  /**
+   * Deliveries of a hotel per product and month (doc 032 §4), at the active site. Delivered =
+   * parcels the carrier confirmed delivered (doc 031), counted once each with their crate's stored
+   * content, by the month of the delivery in the site's time zone. Open = ordered and not
+   * delivered yet (cancelled orders excluded), by the month of the planned ship day. Reading only.
+   */
+  async deliveries(site: SiteContext, hotelCode: string): Promise<HotelDeliveries> {
+    const hotel = await this.hotels.byCode(hotelCode);
+    if (!hotel) throw new NotFoundException('Hotel not found');
+    const { timeZone } = await this.prisma.site.findUniqueOrThrow({
+      where: { id: site.siteId },
+      select: { timeZone: true },
+    });
+    const delivered = await this.prisma.$queryRaw<
+      { month: string; code: string; name: string; crates: number; bottles: number }[]
+    >`
+      SELECT to_char(pp."delivered_at" AT TIME ZONE ${timeZone}, 'YYYY-MM') AS "month",
+             pr."code", pr."name", count(*)::int AS "crates", sum(c."member_count")::int AS "bottles"
+        FROM "shipment_parcel_progress" pp
+        JOIN "shipment_parcels" p ON p."id" = pp."parcel_id"
+        JOIN "shipments" s ON s."id" = p."shipment_id" AND s."status" <> 'CANCELLED'
+        JOIN "orders" o ON o."id" = s."order_id"
+        JOIN "crate_cycles" c ON c."id" = p."cycle_id"
+        JOIN "products" pr ON pr."id" = c."product_id"
+       WHERE pp."delivered_at" IS NOT NULL AND o."hotel_id" = ${hotel.id}::uuid AND o."site_id" = ${site.siteId}::uuid
+       GROUP BY 1, 2, 3`;
+    const open = await this.prisma.$queryRaw<
+      { month: string; code: string; name: string; crates: number; bottles: number }[]
+    >`
+      SELECT to_char(o."requested_ship_date", 'YYYY-MM') AS "month", pr."code", pr."name",
+             sum(l."crates" - d."n")::int AS "crates", sum((l."crates" - d."n") * l."capacity")::int AS "bottles"
+        FROM "orders" o
+        JOIN "order_lines" l ON l."order_id" = o."id"
+        JOIN "products" pr ON pr."id" = l."product_id"
+        CROSS JOIN LATERAL (
+          SELECT count(*)::int AS "n"
+            FROM "shipments" s
+            JOIN "shipment_parcels" p ON p."shipment_id" = s."id"
+            JOIN "shipment_parcel_progress" pp ON pp."parcel_id" = p."id" AND pp."delivered_at" IS NOT NULL
+            JOIN "crate_cycles" c ON c."id" = p."cycle_id"
+           WHERE s."order_id" = o."id" AND s."status" <> 'CANCELLED' AND c."product_id" = l."product_id") d
+       WHERE o."hotel_id" = ${hotel.id}::uuid AND o."site_id" = ${site.siteId}::uuid
+         AND o."status" <> 'CANCELLED' AND l."crates" > d."n"
+       GROUP BY 1, 2, 3`;
+    const months = new Map<
+      string,
+      Map<string, HotelDeliveries['months'][number]['products'][number]>
+    >();
+    const cell = (month: string, code: string, name: string) => {
+      const m = months.get(month) ?? new Map();
+      months.set(month, m);
+      const c = m.get(code) ?? {
+        productCode: code,
+        productName: name,
+        deliveredCrates: 0,
+        deliveredBottles: 0,
+        openCrates: 0,
+        openBottles: 0,
+      };
+      m.set(code, c);
+      return c;
+    };
+    for (const r of delivered) {
+      const c = cell(r.month, r.code, r.name);
+      c.deliveredCrates += r.crates;
+      c.deliveredBottles += r.bottles;
+    }
+    for (const r of open) {
+      const c = cell(r.month, r.code, r.name);
+      c.openCrates += r.crates;
+      c.openBottles += r.bottles;
+    }
+    return {
+      timeZone,
+      months: [...months.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([month, products]) => ({
+          month,
+          products: [...products.values()].sort((a, b) =>
+            a.productCode.localeCompare(b.productCode),
+          ),
+        })),
+    };
   }
 
   // --- picking ------------------------------------------------------------------------------
@@ -857,7 +1088,7 @@ export class OrdersService implements OnModuleInit {
   private async event(
     tx: Prisma.TransactionClient,
     orderId: string,
-    type: 'CREATED' | 'CRATE_ADDED' | 'CRATE_REMOVED' | 'COMPLETED' | 'CANCELLED',
+    type: 'CREATED' | 'CRATE_ADDED' | 'CRATE_REMOVED' | 'COMPLETED' | 'CANCELLED' | 'RESCHEDULED',
     step: { actorId: string; operationId: string; occurredAt: Date },
     payload: Record<string, string | undefined> = {},
   ): Promise<void> {
@@ -893,6 +1124,8 @@ function toSummary(row: SummaryRecord): OrderSummary {
     site: row.site,
     requestedShipDate: row.requestedShipDate.toISOString().slice(0, 10),
     status: row.status,
+    origin: row.origin === 'SUPPLY_PLAN' ? 'SUPPLY_PLAN' : 'MANUAL',
+    plannedShipDate: row.supplyOccurrence?.shipDate.toISOString().slice(0, 10) ?? null,
     totals: {
       requiredCrates: sum((l) => l.crates),
       loadedCrates: sum((l) => l.allocatedCrates),
