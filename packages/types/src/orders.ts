@@ -17,6 +17,8 @@ export const orderStatusSchema = z.enum([
   'READY_TO_DISPATCH',
   'READY_FOR_PICKUP',
   'HANDED_TO_CARRIER',
+  /** Every parcel delivered, per the carrier (doc 031). */
+  'DELIVERED',
   'CANCELLED',
 ]);
 export type OrderStatus = z.infer<typeof orderStatusSchema>;
@@ -180,9 +182,14 @@ export const orderEventSchema = z.object({
     'PRINT_REQUESTED',
     'REPRINT_REQUESTED',
     'PRINT_JOBS_CANCELLED',
+    'PARCEL_PICKED_UP',
+    'PARCEL_DELIVERED',
+    'DELIVERED',
   ]),
   occurredAt: z.iso.datetime(),
-  actor: z.string(),
+  /** The user; null for an event recorded from the carrier (source CARRIER, doc 031). */
+  actor: z.string().nullable(),
+  source: z.enum(['USER', 'CARRIER']),
   crate: z.string().nullable(),
   reason: z.string().nullable(),
   /** Shipment events: the shipment, parcel and carrier numbers concerned (doc 029). */

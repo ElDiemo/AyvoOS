@@ -157,6 +157,9 @@ export const envSchema = z
 
     // Background polling of accepted carrier requests (seconds between rounds; 0 = off).
     CARRIER_POLL_SECONDS: z.coerce.number().int().min(0).max(3600).default(10),
+    // Automatic tracking (doc 031): seconds between two looks at one shipment (failures back off
+    // from it, up to 6 h). Runs in the same background rounds as the polling above.
+    CARRIER_TRACKING_SECONDS: z.coerce.number().int().min(10).max(86400).default(900),
 
     // Upper limit for an uploaded supplier document (PDF, JPEG or PNG), in bytes.
     SUPPLIER_DOCUMENT_MAX_BYTES: z.coerce

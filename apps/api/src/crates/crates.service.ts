@@ -173,6 +173,7 @@ export class CratesService {
       FILLED: 0,
       ALLOCATED: 0,
       DISPATCHED: 0,
+      DELIVERED: 0,
     };
     for (const row of open) {
       if (row.status === 'ABORTED') continue;
@@ -219,7 +220,8 @@ export class CratesService {
       events: events.map((e) => ({
         type: e.type,
         occurredAt: e.occurredAt.toISOString(),
-        actor: e.actor.displayName,
+        actor: e.actor?.displayName ?? null,
+        source: e.source === 'CARRIER' ? ('CARRIER' as const) : ('USER' as const),
         location: e.location,
         registrationCode: e.registration?.code ?? null,
         printJobCode: e.printJob?.code ?? null,

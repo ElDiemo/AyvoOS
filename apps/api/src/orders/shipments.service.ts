@@ -39,6 +39,7 @@ import { PrintQueueService } from '../printing/print-queue.service.js';
 import { MAX_POLLS, ShipmentCarrierFlow, UNRESOLVED } from './shipment-carrier-flow.service.js';
 import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { shipmentEvent, type Step } from './shipment-events.js';
+import { ShipmentTrackingService } from './shipment-tracking.service.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -67,6 +68,7 @@ export class ShipmentsService {
     @Inject(ENV) private readonly env: Env,
     private readonly printers: PrintersService,
     private readonly printQueue: PrintQueueService,
+    private readonly tracking: ShipmentTrackingService,
   ) {}
 
   /** The shipment of a just completed order (in the completion transaction). */
@@ -175,6 +177,14 @@ export class ShipmentsService {
               environment: live.carrierEnvironment as 'TEST' | 'PRODUCTION',
             }
         : current;
+    // Tracking (doc 031): only a labelled shipment is at the carrier.
+    const tracked =
+      live.status === 'LABELED' || live.status === 'CANCELLING'
+        ? await this.tracking.view(
+            live.id,
+            live.parcels.map((p) => p.id),
+          )
+        : null;
     const parcels = live.parcels.map((p) => {
       const w = p.weighings[0];
       const d = p.packageDimension;
@@ -209,6 +219,7 @@ export class ShipmentsService {
           createdAt: l.createdAt.toISOString(),
         })),
         printJobs: jobs.get(p.id) ?? [],
+        tracking: tracked?.parcels.get(p.id) ?? null,
       };
     });
     const parcelNoOf = new Map(live.parcels.map((p) => [p.id, p.parcelNo]));
@@ -287,11 +298,38 @@ export class ShipmentsService {
           parcelNo: w.parcelId ? (parcelNoOf.get(w.parcelId) ?? null) : null,
           requestedAt: w.requestedAt.toISOString(),
         })),
+        tracking: tracked?.summary ?? null,
         createdAt: live.createdAt.toISOString(),
       },
       printer,
       cancelled,
     };
+  }
+
+  /**
+   * "Obnovit tracking" (doc 031): one look at the carrier now, with the shipment's own connection
+   * and account. Read-only at the carrier; a paused tracking resumes. Returns the order as it is
+   * afterwards — an outage keeps the last known state (and says so).
+   */
+  async refreshTracking(site: SiteContext, code: string): Promise<OrderShipment> {
+    const order = await this.findOrder(this.prisma, code, site.siteId);
+    if (!order) throw notFound();
+    const live = await this.prisma.shipment.findFirst({
+      where: { orderId: order.id, status: 'LABELED' },
+      select: { id: true },
+    });
+    if (!live) {
+      throw domainError(
+        409,
+        'NOT_TRACKED',
+        'Only a shipment with labels at the carrier is tracked',
+      );
+    }
+    const outcome = await this.tracking.sync(live.id, true);
+    if (outcome === 'BUSY') {
+      throw domainError(409, 'TRACKING_BUSY', 'The carrier is being asked right now: try again');
+    }
+    return this.view(site, code);
   }
 
   /**
@@ -635,9 +673,11 @@ export class ShipmentsService {
   }
 
   /**
-   * "Předáno dopravci": after the real hand-over. The crates' cycles become DISPATCHED (ADR
-   * 0021) — not delivered and not at the hotel. A started cancellation has already taken the
-   * order back to READY_TO_DISPATCH, so the two can never both happen.
+   * Manual "Předáno dopravci": after the real hand-over, when the carrier's tracking has not proven
+   * it (doc 029; doc 031 keeps it, recorded as MANUAL — never as the carrier's proof). Every parcel
+   * not yet with the carrier gets a MANUAL pickup and its crate cycle becomes DISPATCHED — not
+   * delivered and not at the hotel. A started cancellation has already taken the order back to
+   * READY_TO_DISPATCH, so the two can never both happen.
    */
   async handOver(
     actorId: string,
@@ -662,15 +702,32 @@ export class ShipmentsService {
         const shipment = (await this.liveShipment(tx, order.id))!;
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         await tx.order.update({ where: { id: order.id }, data: { status: 'HANDED_TO_CARRIER' } });
-        const held = await tx.orderCrateAllocation.findMany({
-          where: { orderId: order.id, releasedAt: null },
-          select: { crateId: true, cycleId: true },
+        const parcels = await tx.shipmentParcel.findMany({
+          where: { shipmentId: shipment.id },
+          select: { id: true, crateId: true, cycleId: true, progress: true },
           orderBy: { crateId: 'asc' },
         });
-        for (const a of held) {
-          await this.cycles.lockCrate(tx, a.crateId);
-          const cycle = await this.cycles.openCycle(tx, a.crateId, true);
-          if (cycle?.id !== a.cycleId) throw new Error('The allocated cycle is not the open one');
+        for (const p of parcels) {
+          // A parcel the carrier already proved picked up keeps that proof.
+          if (p.progress?.pickedUpSource) continue;
+          await this.cycles.lockCrate(tx, p.crateId);
+          const cycle = await this.cycles.openCycle(tx, p.crateId, true);
+          if (cycle?.id !== p.cycleId) throw new Error('The allocated cycle is not the open one');
+          if (p.progress) {
+            await tx.shipmentParcelProgress.update({
+              where: { parcelId: p.id },
+              data: { pickedUpSource: 'MANUAL', pickedUpAt: step.occurredAt },
+            });
+          } else {
+            await tx.shipmentParcelProgress.create({
+              data: {
+                parcelId: p.id,
+                shipmentId: shipment.id,
+                pickedUpSource: 'MANUAL',
+                pickedUpAt: step.occurredAt,
+              },
+            });
+          }
           await this.cycles.dispatch(tx, cycle, {
             ...step,
             order: order.code,
@@ -679,7 +736,8 @@ export class ShipmentsService {
         }
         await shipmentEvent(tx, order.id, 'HANDED_TO_CARRIER', step, {
           shipment: shipment.code,
-          parcels: held.length,
+          parcels: parcels.length,
+          manual: true,
         });
         return { code: order.code };
       },
@@ -714,6 +772,18 @@ export class ShipmentsService {
             'SHIPMENT_NOT_CANCELLABLE',
             'The shipment cannot be cancelled now',
             { status: order.status },
+          );
+        }
+        // Once the carrier has any parcel, a cancellation would release crates it holds (doc 031).
+        const withCarrier = await tx.shipmentParcelProgress.count({
+          where: { shipmentId: shipment.id, pickedUpSource: { not: null } },
+        });
+        if (withCarrier > 0) {
+          throw domainErrorWithDetails(
+            409,
+            'PARCELS_WITH_CARRIER',
+            'The carrier already has parcels of this shipment: it is not cancelled',
+            { parcels: withCarrier },
           );
         }
         if (shipment.status === 'DRAFT') {

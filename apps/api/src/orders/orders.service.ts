@@ -110,8 +110,11 @@ export class OrdersService implements OnModuleInit {
     const where = (v: OrderView): Prisma.OrderWhereInput => {
       const date = new Date(`${today}T00:00:00Z`);
       const base = { siteId: site.siteId };
-      // Closed = handed to the carrier or cancelled; everything else still needs work (doc 029).
-      if (v === 'closed') return { ...base, status: { in: ['HANDED_TO_CARRIER', 'CANCELLED'] } };
+      // Closed = with the carrier, delivered or cancelled; everything else still needs work at the
+      // site (doc 029, doc 031). A partly picked-up order stays open until every parcel is.
+      if (v === 'closed') {
+        return { ...base, status: { in: ['HANDED_TO_CARRIER', 'DELIVERED', 'CANCELLED'] } };
+      }
       const open = {
         ...base,
         status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'] as OrderStatus[] },
@@ -265,7 +268,8 @@ export class OrdersService implements OnModuleInit {
         return {
           type: e.type,
           occurredAt: e.occurredAt.toISOString(),
-          actor: e.actor.displayName,
+          actor: e.actor?.displayName ?? null,
+          source: e.source === 'CARRIER' ? ('CARRIER' as const) : ('USER' as const),
           crate: payload.crate ?? null,
           reason: payload.reason ?? null,
           shipment: payload.shipment ?? null,

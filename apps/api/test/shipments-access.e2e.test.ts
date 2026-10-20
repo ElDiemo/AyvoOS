@@ -370,7 +370,14 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
     expect((await labels(preparer.cookie, id)).status).toBe(403);
     expect((await as(preparer.cookie).get(`/api/admin/orders/${order}/shipment`)).status).toBe(403);
     expect(testCarrierControl.calls).toHaveLength(1);
+    // "Obnovit tracking" (doc 031) belongs to those who confirm the hand-over.
+    const refresh = (cookie: string) =>
+      as(cookie).post(`/api/admin/orders/${order}/shipment/tracking/refresh`, {
+        requestId: randomUUID(),
+      });
+    expect((await refresh(reader.cookie)).status).toBe(403);
     const handler = await createUser([await role(['orders:read', 'shipments:handover'])]);
+    expect((await refresh(handler.cookie)).status).toBe(200);
     expect((await handOver(handler.cookie)).status).toBe(200);
   });
 
@@ -385,6 +392,7 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
       ['/resolve', {}],
       ['/ready', { labelsApplied: true }],
       ['/hand-over', { handedOver: true }],
+      ['/tracking/refresh', {}],
       ['/parcels/1/weighings', { massG: '1', correctionOf: null, correctionReason: null }],
     ] as const) {
       const res = await as(admin).post(`/api/admin/orders/${order}/shipment${path}`, {

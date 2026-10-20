@@ -919,6 +919,7 @@ enum OperationKind {
   PRINT_AGENT_CREATE
   PRINT_AGENT_ROTATE
   PRINT_AGENT_REVOKE
+  SHIPMENT_TRACKING_SYNC
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1776,8 +1777,10 @@ enum CrateEventType {
   MEMBER_ADDED
   ALLOCATED_TO_ORDER
   RELEASED_FROM_ORDER
-  /// Handed to the carrier with its order (doc 029) — not delivered, not at the hotel.
+  /// Its parcel is with the carrier (doc 029, doc 031) — not delivered, not at the hotel.
   DISPATCHED
+  /// Its parcel was delivered, per the carrier (doc 031).
+  DELIVERED
 }
 
 /// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
@@ -1791,7 +1794,9 @@ model CrateEvent {
   type               CrateEventType
   occurredAt         DateTime                  @map("occurred_at") @db.Timestamptz(3)
   recordedAt         DateTime                  @default(now()) @map("recorded_at") @db.Timestamptz(3)
-  actorId            String                    @map("actor_id") @db.Uuid
+  /// NULL exactly for events recorded from the carrier (source CARRIER, ADR 0029).
+  actorId            String?                   @map("actor_id") @db.Uuid
+  source             String                    @default("USER")
   siteId             String                    @map("site_id") @db.Uuid
   locationId         String?                   @map("location_id") @db.Uuid
   operationRequestId String                    @map("operation_request_id") @db.Uuid
@@ -1800,7 +1805,7 @@ model CrateEvent {
   payload            Json                      @default("{}")
 
   crate        Crate               @relation(fields: [crateId], references: [id], onDelete: Restrict)
-  actor        User                @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actor        User?               @relation(fields: [actorId], references: [id], onDelete: Restrict)
   site         Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
   location     InventoryLocation?  @relation(fields: [locationId], references: [id], onDelete: Restrict)
   operation    OperationRequest    @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
@@ -2002,9 +2007,11 @@ enum CrateCycleStatus {
   ABORTED
   /// Scanned into an order (doc 028); back to FILLED when removed or the order is cancelled.
   ALLOCATED
-  /// Handed to the carrier with its order (doc 029, ADR 0021). Not at the hotel; terminal until
-  /// delivery and returns exist.
+  /// Its parcel is with the carrier (doc 029, doc 031). Not at the hotel.
   DISPATCHED
+  /// Its parcel was delivered, per the carrier (doc 031). Terminal until returns exist; the
+  /// bottles' reuse cycle is not completed by it (ADR 0011).
+  DELIVERED
 }
 
 /// One circulation of one crate (ADR 0021, ADR 0025): an immutable snapshot (crate type,
@@ -2164,8 +2171,12 @@ enum OrderStatus {
   CANCELLED
   /// "Připraveno k vyzvednutí": labels created by the carrier and confirmed as applied (doc 029).
   READY_FOR_PICKUP
-  /// "Předáno dopravci": confirmed physical hand-over. Never "delivered" (doc 029).
+  /// "Převzatá dopravcem": every parcel with the carrier — proven by its tracking or an earlier
+  /// manual hand-over (doc 029, doc 031). Never "delivered".
   HANDED_TO_CARRIER
+  /// "Doručená": the carrier confirmed the delivery of every parcel (doc 031). Not a completed
+  /// reuse cycle (ADR 0011).
+  DELIVERED
 }
 
 /// A manual order of one hotel for one delivery address (doc 028). site_id = the hotel's
@@ -2324,6 +2335,10 @@ enum OrderEventType {
   PRINT_REQUESTED
   REPRINT_REQUESTED
   PRINT_JOBS_CANCELLED
+  /// doc 031: the carrier proved a parcel picked up / delivered; the whole order delivered.
+  PARCEL_PICKED_UP
+  PARCEL_DELIVERED
+  DELIVERED
 }
 
 /// Append-only order history (ADR 0006). DB: immutable.
@@ -2332,12 +2347,16 @@ model OrderEvent {
   orderId            String         @map("order_id") @db.Uuid
   type               OrderEventType
   occurredAt         DateTime       @map("occurred_at") @db.Timestamptz(3)
-  actorId            String         @map("actor_id") @db.Uuid
+  /// The user who did it; NULL exactly for events recorded from the carrier (source CARRIER,
+  /// ADR 0029).
+  actorId            String?        @map("actor_id") @db.Uuid
+  /// USER or CARRIER (doc 031): who is the source of this fact.
+  source             String         @default("USER")
   operationRequestId String         @map("operation_request_id") @db.Uuid
   payload            Json           @default("{}")
 
   order     Order            @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  actor     User             @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actor     User?            @relation(fields: [actorId], references: [id], onDelete: Restrict)
   operation OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
 
   @@index([orderId, occurredAt])
@@ -2583,9 +2602,88 @@ model Shipment {
   labelFetches    ShipmentLabelFetch[]
   printRequests   PrintRequest[]
   printJobs       PrintJob[]
+  tracking        ShipmentTracking?
+  trackingEvents  ShipmentTrackingEvent[]
+  parcelProgress  ShipmentParcelProgress[]
 
   @@index([orderId])
   @@map("shipments")
+}
+
+/// Tracking schedule of one labelled shipment (doc 031; current state): the next look, the last
+/// successful one, consecutive failures and a lease. DB: never deleted; stopped ⇔ no next look.
+model ShipmentTracking {
+  shipmentId     String    @id @map("shipment_id") @db.Uuid
+  nextAt         DateTime? @map("next_at") @db.Timestamptz(3)
+  failures       Int       @default(0)
+  lastAttemptAt  DateTime? @map("last_attempt_at") @db.Timestamptz(3)
+  lastSuccessAt  DateTime? @map("last_success_at") @db.Timestamptz(3)
+  /// A short, secret-free reason of the last failure.
+  lastError      String?   @map("last_error")
+  /// Parcel numbers the carrier did not return at the last successful look.
+  missingNumbers String[]  @default([]) @map("missing_numbers")
+  leaseUntil     DateTime? @map("lease_until") @db.Timestamptz(3)
+  stoppedAt      DateTime? @map("stopped_at") @db.Timestamptz(3)
+  /// DELIVERED | CANCELLED | GAVE_UP
+  stopReason     String?   @map("stop_reason")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  @@map("shipment_tracking")
+}
+
+/// One tracking event of one parcel exactly as the carrier reported it (doc 031; append-only):
+/// its numeric status, code, phase, group, wording and time; when AYVO fetched it; our meaning.
+/// DB: immutable; one row per parcel × status × code × time (repeated answers add nothing).
+model ShipmentTrackingEvent {
+  id                  String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId          String   @map("shipment_id") @db.Uuid
+  parcelId            String   @map("parcel_id") @db.Uuid
+  carrierCode         String   @map("carrier_code")
+  carrierEnvironment  String   @map("carrier_environment")
+  carrierParcelNumber String   @map("carrier_parcel_number")
+  statusId            Int?     @map("status_id")
+  code                String?
+  phase               String?
+  group               String?  @map("event_group")
+  name                String?
+  /// DATA | PICKED_UP | IN_TRANSIT | DELIVERED | PICKUP_POINT | NOT_DELIVERED | LOST | RETURNING
+  /// | CANCELLED | UNKNOWN (doc 031 §2)
+  meaning             String
+  occurredAt          DateTime @map("occurred_at") @db.Timestamptz(3)
+  fetchedAt           DateTime @map("fetched_at") @db.Timestamptz(3)
+
+  shipment   Shipment                 @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  parcel     ShipmentParcel           @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  pickupOf   ShipmentParcelProgress[] @relation("ProgressPickupEvent")
+  deliveryOf ShipmentParcelProgress[] @relation("ProgressDeliveryEvent")
+
+  @@index([shipmentId, occurredAt])
+  @@map("shipment_tracking_events")
+}
+
+/// Where each parcel is (doc 031; current state, only forward): picked up — by the carrier's
+/// event, an earlier manual hand-over (MANUAL) or implied by a delivery without a pickup event
+/// (CARRIER_IMPLIED, time unknown) — and delivered (by the carrier's delivery event).
+model ShipmentParcelProgress {
+  parcelId         String    @id @map("parcel_id") @db.Uuid
+  shipmentId       String    @map("shipment_id") @db.Uuid
+  pickedUpAt       DateTime? @map("picked_up_at") @db.Timestamptz(3)
+  /// CARRIER | MANUAL | CARRIER_IMPLIED
+  pickedUpSource   String?   @map("picked_up_source")
+  pickedUpEventId  String?   @map("picked_up_event_id") @db.Uuid
+  deliveredAt      DateTime? @map("delivered_at") @db.Timestamptz(3)
+  deliveredEventId String?   @map("delivered_event_id") @db.Uuid
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  parcel        ShipmentParcel         @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  shipment      Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  pickupEvent   ShipmentTrackingEvent? @relation("ProgressPickupEvent", fields: [pickedUpEventId], references: [id], onDelete: Restrict)
+  deliveryEvent ShipmentTrackingEvent? @relation("ProgressDeliveryEvent", fields: [deliveredEventId], references: [id], onDelete: Restrict)
+
+  @@map("shipment_parcel_progress")
 }
 
 enum ParcelReferenceSource {
@@ -2622,6 +2720,8 @@ model ShipmentParcel {
   labels           ShipmentLabel[]
   printRequests    PrintRequest[]
   printJobs        PrintJob[]
+  trackingEvents   ShipmentTrackingEvent[]
+  progress         ShipmentParcelProgress?
 
   @@unique([shipmentId, parcelNo])
   @@unique([shipmentId, allocationId])

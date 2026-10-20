@@ -13,12 +13,14 @@ import { ShipmentCarrierFlow } from './shipment-carrier-flow.service.js';
 import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { ShipmentPoller } from './shipment-poller.service.js';
 import { ShipmentsService } from './shipments.service.js';
+import { ShipmentTrackingService } from './shipment-tracking.service.js';
 
 /**
  * orders module (doc 028, doc 029): manual orders, the picking of finished crates and their
  * dispatch to a carrier (shipment, parcels, labels, ready for pickup, handed over). Uses customers
  * (hotels), crates (cycles) and catalog (crate unit, weights) only through their exported
- * services. No stock movement and no delivery.
+ * services. No stock movement. Delivery only as the carrier's tracking proves it (doc 031) — no
+ * returns, no hotel portal.
  */
 @Module({
   imports: [
@@ -37,6 +39,7 @@ import { ShipmentsService } from './shipments.service.js';
     ShipmentDeriver,
     ShipmentCarrierFlow,
     ShipmentPoller,
+    ShipmentTrackingService,
   ],
 })
 export class OrdersModule {}

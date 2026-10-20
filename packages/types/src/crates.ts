@@ -39,8 +39,10 @@ export const crateEventTypeSchema = z.enum([
   'MEMBER_ADDED',
   'ALLOCATED_TO_ORDER',
   'RELEASED_FROM_ORDER',
-  /** Handed to the carrier with its order (doc 029) — not delivered. */
+  /** Its parcel is with the carrier (doc 029, doc 031) — not delivered. */
   'DISPATCHED',
+  /** Its parcel was delivered, per the carrier (doc 031). */
+  'DELIVERED',
 ]);
 export type CrateEventType = z.infer<typeof crateEventTypeSchema>;
 
@@ -89,6 +91,7 @@ export const crateSummarySchema = z.object({
         'ABORTED',
         'ALLOCATED',
         'DISPATCHED',
+        'DELIVERED',
       ]),
       memberCount: z.number().int(),
       /** "Naplněno" (doc 025 §3.2), shown beside "Obsah" (memberCount). */
@@ -120,6 +123,7 @@ export const crateListQuerySchema = z.object({
       'FILLED',
       'ALLOCATED',
       'DISPATCHED',
+      'DELIVERED',
     ])
     .optional(),
 });
@@ -174,7 +178,9 @@ export type CrateLabelPrintJob = z.infer<typeof crateLabelPrintJobSchema>;
 export const crateEventSchema = z.object({
   type: crateEventTypeSchema,
   occurredAt: z.iso.datetime(),
-  actor: z.string(),
+  /** The user; null for an event recorded from the carrier (source CARRIER, doc 031). */
+  actor: z.string().nullable(),
+  source: z.enum(['USER', 'CARRIER']),
   location: locationRefSchema.nullable(),
   registrationCode: z.string().nullable(),
   printJobCode: z.string().nullable(),

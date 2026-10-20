@@ -118,6 +118,56 @@ const dimensionsSchema = z.object({
   heightMm: z.number().int(),
 });
 
+/** What a carrier tracking event means for AYVO (doc 031 §2). */
+export const trackingMeaningSchema = z.enum([
+  'DATA',
+  'PICKED_UP',
+  'IN_TRANSIT',
+  'DELIVERED',
+  'PICKUP_POINT',
+  'NOT_DELIVERED',
+  'LOST',
+  'RETURNING',
+  'CANCELLED',
+  'UNKNOWN',
+]);
+export type TrackingMeaning = z.infer<typeof trackingMeaningSchema>;
+
+/** One carrier event of a parcel as stored: the carrier's own code and time, when AYVO fetched it. */
+export const trackingEventSchema = z.object({
+  statusId: z.number().int().nullable(),
+  code: z.string().nullable(),
+  phase: z.string().nullable(),
+  name: z.string().nullable(),
+  meaning: trackingMeaningSchema,
+  occurredAt: z.iso.datetime(),
+  fetchedAt: z.iso.datetime(),
+});
+export type TrackingEvent = z.infer<typeof trackingEventSchema>;
+
+/** Where one parcel is (doc 031). */
+export const parcelTrackingSchema = z.object({
+  /** CARRIER = proven by its pickup event; MANUAL = an earlier manual hand-over; CARRIER_IMPLIED =
+   * delivered without a pickup event (time unknown, never invented). */
+  pickedUp: z
+    .object({
+      source: z.enum(['CARRIER', 'MANUAL', 'CARRIER_IMPLIED']),
+      at: z.iso.datetime().nullable(),
+    })
+    .nullable(),
+  deliveredAt: z.iso.datetime().nullable(),
+  /** The latest carrier event (by its own time). */
+  last: trackingEventSchema.nullable(),
+  /** A problem the carrier reported after the last pickup/delivery step (not delivered, lost,
+   * returning, at a pick-up point) — shown as a warning, never a state. */
+  warning: trackingEventSchema.nullable(),
+  /** The carrier did not return this number at the last successful look. */
+  missing: z.boolean(),
+  /** Every stored event, oldest first. */
+  events: z.array(trackingEventSchema),
+});
+export type ParcelTracking = z.infer<typeof parcelTrackingSchema>;
+
 export const shipmentParcelSchema = z.object({
   parcelNo: z.number().int(),
   crate: z.string(),
@@ -146,6 +196,8 @@ export const shipmentParcelSchema = z.object({
   labels: z.array(labelVariantSchema),
   /** The print jobs of this parcel's label, newest first (doc 030 §4). */
   printJobs: z.array(printJobViewSchema),
+  /** Tracking (doc 031); null before the shipment is labelled. */
+  tracking: parcelTrackingSchema.nullable(),
 });
 export type ShipmentParcel = z.infer<typeof shipmentParcelSchema>;
 
@@ -211,6 +263,23 @@ export const shipmentSchema = z.object({
       requestedAt: z.iso.datetime(),
     }),
   ),
+  /** Automatic tracking at the carrier (doc 031); null when the shipment is not tracked. */
+  tracking: z
+    .object({
+      pickedUp: z.number().int(),
+      delivered: z.number().int(),
+      parcels: z.number().int(),
+      /** The last look at the carrier that succeeded (null: none yet). */
+      lastSuccessAt: z.iso.datetime().nullable(),
+      lastAttemptAt: z.iso.datetime().nullable(),
+      /** The last look failed (outage): the last known state stays — a short reason. */
+      lastError: z.string().nullable(),
+      failures: z.number().int(),
+      nextAt: z.iso.datetime().nullable(),
+      /** DELIVERED (done), GAVE_UP (too many failures — "Obnovit tracking" resumes it). */
+      stopped: z.enum(['DELIVERED', 'CANCELLED', 'GAVE_UP']).nullable(),
+    })
+    .nullable(),
   createdAt: z.iso.datetime(),
 });
 export type Shipment = z.infer<typeof shipmentSchema>;
@@ -267,9 +336,13 @@ export const readyForPickupRequestSchema = z.strictObject({
 });
 export type ReadyForPickupRequest = z.infer<typeof readyForPickupRequestSchema>;
 
-/** "Předáno dopravci": only after the real hand-over. */
+/** Manual "Předáno dopravci" (doc 029): only after the real hand-over; recorded as MANUAL. */
 export const handOverRequestSchema = z.strictObject({ ...op, handedOver: z.literal(true) });
 export type HandOverRequest = z.infer<typeof handOverRequestSchema>;
+
+/** "Obnovit tracking": one look at the carrier now (doc 031). */
+export const refreshTrackingRequestSchema = z.strictObject(op);
+export type RefreshTrackingRequest = z.infer<typeof refreshTrackingRequestSchema>;
 
 /** Cancels the preparation (never the order, never its crates). */
 export const cancelShipmentRequestSchema = z.strictObject({ ...op, reason: reasonSchema });

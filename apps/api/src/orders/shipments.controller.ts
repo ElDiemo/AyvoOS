@@ -14,6 +14,8 @@ import {
   type AbandonLabelsRequest,
   type ResolveCancelRequest,
   handOverRequestSchema,
+  refreshTrackingRequestSchema,
+  type RefreshTrackingRequest,
   orderCodeSchema,
   readyForPickupRequestSchema,
   requestLabelsRequestSchema,
@@ -234,6 +236,18 @@ export class ShipmentsController {
     @OperationalSite() site: SiteContext,
   ): Promise<OrderShipment> {
     return this.shipments.handOver(principal.userId, site, code, body);
+  }
+
+  /** "Obnovit tracking" (doc 031): those who confirm the hand-over may ask the carrier now. */
+  @RequirePermission('shipments:handover')
+  @Post('tracking/refresh')
+  @HttpCode(200)
+  refreshTracking(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(refreshTrackingRequestSchema)) _body: RefreshTrackingRequest,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderShipment> {
+    return this.shipments.refreshTracking(site, code);
   }
 
   @RequirePermission('shipments:prepare')
