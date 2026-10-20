@@ -50,8 +50,7 @@ Pokračujte, až skončí `PREFLIGHT OK`. Sériové číslo si poznamenejte.
 
 1. **Přidat agenta** (např. kód `RPI-EXPEDICE`). Token se zobrazí **jen jednou**; nechte okno
    otevřené až do kroku 3.
-2. **Přidat tiskárnu:** Zebra ZD220 DT, tento agent, sériové číslo USB z kroku 1, „Výchozí
-   tiskárna pro expedici“. **Automatický tisk zatím vypněte** (zapne se až po akceptaci).
+2. Tiskárnu přidáte až v kroku 4 – agent ji po instalaci sám nahlásí.
 
 **3. Instalace (opakovatelná, při dalším spuštění jen aktualizuje):**
 
@@ -73,7 +72,12 @@ Při dalším spuštění nastavení i tajemství zůstanou. Novou hodnotu zadá
 
 - `systemctl status ayvo-print-agent`;
 - `journalctl -u ayvo-print-agent -f` (token se v logu nikdy neobjeví);
-- v AYVO OS u agenta „Ozval se“ a u tiskárny „Připravena“.
+- v AYVO OS **Obnovit stav**: u agenta „Ozval se“;
+- **Přidat tiskárnu:** vyberte toto Raspberry Pi, potom nahlášenou Zebru (porovnejte sériové
+  číslo s krokem 1), „Výchozí tiskárna pro expedici“, **automatický tisk zatím vypněte** (zapne
+  se až po akceptaci), uložte. Nic se nevybere samo; když agent nic nehlásí, zkontrolujte USB a
+  stav obnovte (ruční zadání čísla je pod „Pokročilé“);
+- u tiskárny „Připravena“.
 
 **5. Restart:** `sudo reboot`. Po startu musí agent znovu hlásit „Ozval se“, bez zásahu.
 

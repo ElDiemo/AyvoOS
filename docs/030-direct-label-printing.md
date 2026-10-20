@@ -59,7 +59,25 @@ assumed (unknown until the physical test); labels are sent exactly as PPL made t
 or cropped. ADMIN only (`printing:manage`, security administration).
 
 Print agents: created per site by ADMIN; the token is shown once (only its hash is stored),
-rotated or revoked; the agent's last contact and reported printer state are shown.
+rotated or revoked; the agent's last contact and reported printer state are shown. "Obnovit stav"
+reloads them; a printer's reported state is shown only while its agent reports in — otherwise
+"Stav neznámý – agent se neozývá", never a stale "Připravena".
+
+Adding a printer (2026-10-20 simplification): choose the Raspberry Pi, then one of the USB
+printers its agent reports (serial, product — sent with every heartbeat, stored on the agent),
+then save. Nothing is preselected — neither the agent nor a device, also when there is only one
+— and detection never creates, enables or reassigns a printer by itself. No reported device or
+several: the ADMIN is told so and chooses; the serial can still be typed under "Pokročilé".
+
+**Changing a printer's physical target** (disabling it, another agent, another USB serial —
+PRINT38-R3) cancels its work not sent yet (`QUEUED`, `CLAIMED`; the claimed job's `start` is then
+refused), with job events and the count in the `PRINTER_SAVED` audit. A `SENDING` job is left to
+its agent's report and never called safely cancelled. Cancelled labels are printed again
+explicitly (re-print), on the new device.
+
+Compatibility (PRINT38-R1): `site_carrier_settings.label_format` / `label_dpi` stay for the
+previous application (deployed during the migration, rollback target), always `PDF` / `203`; the
+new application writes them on every save and does not read them.
 
 ## 4. The print queue (ADR 0028)
 
@@ -70,6 +88,8 @@ rotated or revoked; the agent's last contact and reported printer state are show
   (possibly sent, result unknown); `CANCELLED` (before sending). An expired claim that never started
   returns to `QUEUED`; a started job without a result becomes `UNCERTAIN` and is never retried
   automatically.
+- A shipment labelled before this feature (PDF only, no ZPL fetch — PRINT38-R2) gets its ZPL fetch
+  when it is printed: idempotently, from the same carrier batch, never a new shipment.
 - Printing a shipment's labels happens automatically after "Dokončit a vytisknout štítky" when the
   site has an enabled default dispatch printer with automatic printing and the user may print
   (`printing:print`); otherwise "Tisknout štítky" does it explicitly. The target and the number of
@@ -101,10 +121,21 @@ started. All checked on the server, per site.
 
 ## 7. UI
 
-The order detail shows one next step, the carrier state, the number of labels, the target printer,
-the queue (per parcel), PDF previews and files (PDF; ZPL with `printing:print`), and "Vytisknout
-znovu" per parcel. Problems of the carrier, printer or agent are shown as they are; the order stays
-findable in its tab with the next step.
+The order detail shows one next step, then one **Štítky** card: where work on its way is printing
+("Rozpracovaný tisk jde na" — the printer each job was created for) and, separately, where a new
+print would go ("Nový tisk půjde na" — the current default, UI38-R1), the state per parcel, its
+PDF and "Vytisknout znovu", the complete PDF; preview, the ZPL file (with `printing:print`) and the
+print history are collapsed per parcel. Problems of the carrier, printer or agent are shown as
+they are; the order stays findable in its tab with the next step.
+
+After "Dokončit a vytisknout štítky" the picking screen reports what really happened, not just
+the HTTP answer: the carrier refused (with its reason), the labels are still being created, the
+ZPL is missing (nothing printed), or N of M labels went to the printer — each with the next step.
+
+Screenshots (`docs/screenshots/printing/`, made by `apps/web/e2e/workflow-printing.spec.ts` with
+`AYVO_SCREENSHOT_DIR`): adding a printer from detected devices (desktop), site printers (desktop,
+390, 320 px), the combined action (390), the order's Štítky card with the queue (desktop, 390, 320),
+all sent (390), active vs next target (320).
 
 ## 8. Tests (automated, no real PPL, no printer)
 
