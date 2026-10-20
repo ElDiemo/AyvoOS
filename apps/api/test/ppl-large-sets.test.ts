@@ -147,4 +147,61 @@ describe('PPL adapter: large sets, paging (simulated PPL)', () => {
     ppl.mode.down = true;
     expect(await gateway.cancelStatus({ parcels: outcome.numbers }, signal())).toBe('UNKNOWN');
   });
+
+  it('tracking (doc 031): each number answered by its own shipmentNumber, in Czech, across pages', async () => {
+    ppl.mode.pageCap = 20;
+    const outcome = await created(request(30));
+    const [first, second, last] = [outcome.numbers[0]!, outcome.numbers[1]!, outcome.numbers[29]!];
+    // Shaped as the PPL TEST environment answered on 2026-10-20 (statusId + textual code).
+    ppl.mode.events[first] = [
+      {
+        statusId: 900,
+        code: 'WaitingForShipment',
+        phase: 'Order',
+        group: 'WaitingForShipment',
+        eventDate: '2026-10-21T08:00:00+02:00',
+        name: 'Čekáme na přijetí zásilky do přepravy.',
+      },
+      {
+        statusId: 150,
+        code: 'PickedUp',
+        phase: 'InTransport',
+        group: 'PickedUp',
+        eventDate: '2026-10-21T14:10:00+02:00',
+        name: 'Zásilku jsme převzali od odesílatele.',
+      },
+    ];
+    ppl.mode.events[last] = [
+      {
+        statusId: 450,
+        code: 'Delivered',
+        phase: 'Delivered',
+        group: 'Delivered',
+        eventDate: '2026-10-22T10:00:00+02:00',
+        name: 'Zásilku jsme doručili příjemci.',
+      },
+      { statusId: 450, code: 'Delivered', eventDate: 'not a date' },
+    ];
+    // A number PPL does not know is reported as missing, never borrowed from another.
+    const asked = [last, 'NOT-A-PPL-NUMBER', first, second];
+    const t = await gateway.track({ parcels: asked }, signal());
+    expect(t.parcels.map((p) => [p.number, p.found, p.events.map((e) => e.meaning)])).toEqual([
+      [last, true, ['DELIVERED']],
+      ['NOT-A-PPL-NUMBER', false, []],
+      [first, true, ['DATA', 'PICKED_UP']],
+      [second, true, []],
+    ]);
+    expect(t.parcels[0]!.dropped).toBe(1);
+    expect(t.parcels[2]!.events[1]).toMatchObject({
+      statusId: 150,
+      code: 'PickedUp',
+      phase: 'InTransport',
+      occurredAt: new Date('2026-10-21T12:10:00Z'),
+    });
+    const lookups = ppl.seen.filter((s) => s.method === 'GET' && s.path === '/shipment').slice(-1);
+    expect(lookups[0]!.lang).toBe('cs-CZ');
+    // An outage: no answer at all (never a partial one).
+    ppl.mode.down = true;
+    await expect(gateway.track({ parcels: [first] }, signal())).rejects.toThrow();
+  });
 });

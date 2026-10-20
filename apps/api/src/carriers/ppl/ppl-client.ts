@@ -138,6 +138,8 @@ export class PplClient {
       json?: unknown;
       signal: AbortSignal;
       once?: boolean;
+      /** Further documented request headers (e.g. Accept-Language) — never authentication. */
+      headers?: Record<string, string>;
     },
   ): Promise<PplResponse> {
     const url = new URL(`${this.connection.baseUrl}${path}`);
@@ -150,6 +152,7 @@ export class PplClient {
       const res = await this.fetchImpl(url, {
         method,
         headers: {
+          ...opts.headers,
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
           ...(opts.json !== undefined ? { 'Content-Type': 'application/json' } : {}),

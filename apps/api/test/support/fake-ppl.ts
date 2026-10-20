@@ -45,6 +45,11 @@ type Mode = {
   /** Numbers already picked up from the sender. */
   pickedUp: string[];
   /**
+   * Tracking events per number (`trackAndTrace.events`), shaped as the PPL TEST environment
+   * answered on 2026-10-20 (statusId, code, phase, group, eventDate, name).
+   */
+  events: Record<string, object[]>;
+  /**
    * GET /shipment returns no item's own CUST for a set, only the shipment's referenceId (positions
    * in the set without a documented relation to the items sent).
    */
@@ -104,6 +109,8 @@ export class FakePpl {
     host: string;
     /** The query string of the request (paging and lookups are asserted on it). */
     query: URLSearchParams;
+    /** The Accept-Language header, if any. */
+    lang: string | null;
   }[] = [];
   private serial = 4_000_000_000;
 
@@ -138,6 +145,7 @@ export class FakePpl {
       cancelFailures: 0,
       cancelRefuse: [],
       pickedUp: [],
+      events: {},
       setCustFromShipment: false,
       pageCap: null,
       putFailures: 0,
@@ -190,6 +198,8 @@ export class FakePpl {
       client,
       host: req.headers.host ?? '',
       query: url.searchParams,
+      lang:
+        typeof req.headers['accept-language'] === 'string' ? req.headers['accept-language'] : null,
     });
     if (this.mode.down) return this.json(res, 503, { title: 'Service unavailable' });
 
@@ -419,6 +429,7 @@ export class FakePpl {
               : 'Undelivered, DataShipment, Active',
           externalNumbers: this.mode.hideExternals ? [] : [{ code: 'CUST', externalNumber: x.ref }],
           shipmentSet: x.set,
+          trackAndTrace: { events: this.mode.events[x.number] ?? [] },
         })),
         {
           'X-Paging-Total-Items-Count': String(matching.length),

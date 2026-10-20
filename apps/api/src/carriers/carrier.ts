@@ -105,6 +105,50 @@ export interface CarrierLabelFile {
  */
 export type CarrierCancelStatus = 'CANCELLED' | 'PENDING' | 'NOT_CANCELLED' | 'UNKNOWN';
 
+/**
+ * What a carrier's tracking event means for AYVO (doc 031 §2), from the carrier's documented code
+ * list — never guessed. Only PICKED_UP and DELIVERED change states; UNKNOWN is kept as unknown.
+ */
+export type TrackingMeaning =
+  | 'DATA'
+  | 'PICKED_UP'
+  | 'IN_TRANSIT'
+  | 'DELIVERED'
+  | 'PICKUP_POINT'
+  | 'NOT_DELIVERED'
+  | 'LOST'
+  | 'RETURNING'
+  | 'CANCELLED'
+  | 'UNKNOWN';
+
+/** One event of one parcel as the carrier reports it (its own code, phase and time). */
+export interface CarrierTrackingEvent {
+  /** The carrier's numeric status (PPL: `statusId`, = `GET /codelist/status` code). */
+  statusId: number | null;
+  /** The carrier's textual event code (PPL: e.g. `Deleted.Cancelled`). */
+  code: string | null;
+  phase: string | null;
+  group: string | null;
+  /** The carrier's own wording (may be in another language). */
+  name: string | null;
+  occurredAt: Date;
+  meaning: TrackingMeaning;
+}
+
+/**
+ * The tracking of each asked number: `found: false` when the carrier did not return it (the
+ * parcel stays as last known). Each number is answered by itself — never matched by position.
+ */
+export interface CarrierTracking {
+  parcels: {
+    number: string;
+    found: boolean;
+    events: CarrierTrackingEvent[];
+    /** Events the carrier returned without a usable time (not stored). */
+    dropped: number;
+  }[];
+}
+
 /** The carrier refused the request: nothing was created / nothing changed (definitive). */
 export class CarrierRejectedError extends Error {
   constructor(
@@ -183,6 +227,11 @@ export interface CarrierGateway {
     query: { shipmentRef: string; parcels: string[] },
     signal: AbortSignal,
   ): Promise<CarrierCancelStatus>;
+  /**
+   * Tracking of these parcel numbers (doc 031). Read-only at the carrier. Throws when the carrier
+   * cannot answer completely (an outage) — the caller keeps the last known state.
+   */
+  track(query: { parcels: string[] }, signal: AbortSignal): Promise<CarrierTracking>;
 }
 
 export const CARRIERS = Symbol('CARRIERS');
