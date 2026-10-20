@@ -157,7 +157,8 @@ export const shipmentsCs = {
   } as Record<string, string>,
   print: {
     title: 'Tisk štítků',
-    target: (printer: string) => `Tiskárna: ${printer}`,
+    target: (printer: string) => `Nový tisk půjde na: ${printer}`,
+    activeTarget: (printers: string) => `Rozpracovaný tisk jde na: ${printers}`,
     noPrinter:
       'Provozovna nemá výchozí expediční tiskárnu. Stáhněte PDF a vytiskněte štítky ručně.',
     agentOffline: (agent: string) =>

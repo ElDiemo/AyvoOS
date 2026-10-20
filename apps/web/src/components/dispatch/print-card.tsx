@@ -14,6 +14,7 @@ import { buttonClass, Card, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { shipmentsCs } from '@/i18n/cs/shipments';
 import { orderErrorText } from './order-errors';
+import { printTargets } from './print-status';
 
 const t = shipmentsCs.print;
 type Send = (path: string, body: object) => Promise<OrderShipment>;
@@ -76,6 +77,7 @@ export function PrintCard({
   const anyJob = latest.some((j) => j !== null);
   const sent = latest.filter((j) => j?.status === 'SENT').length;
   const zpl = s.zpl;
+  const targets = printTargets(data);
 
   async function printAll() {
     if (!printer) return;
@@ -96,10 +98,19 @@ export function PrintCard({
   return (
     <Card title={t.title} testId="print-card">
       <div className="flex flex-col gap-3 text-sm">
+        {/* UI38-R1: work on its way keeps its printer; a new print goes to the default. */}
+        {targets.active.length > 0 && (
+          <p data-testid="print-active-target">
+            <span className="font-medium">{t.activeTarget(targets.active.join(', '))}</span>
+          </p>
+        )}
         {printer ? (
           <p data-testid="print-target">
-            <span className="font-medium">{t.target(`${printer.name} (${printer.model})`)}</span>
-            {printer.reportedState && (
+            <span className={targets.active.length > 0 ? '' : 'font-medium'}>
+              {t.target(`${printer.name} (${printer.model})`)}
+            </span>
+            {/* A state is shown only while the agent reports in — never a stale "ready". */}
+            {printer.agent.online && printer.reportedState && (
               <span className="text-stone-600"> · {t.printerState[printer.reportedState]}</span>
             )}
           </p>

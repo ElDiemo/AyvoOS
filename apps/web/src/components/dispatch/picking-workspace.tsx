@@ -23,6 +23,7 @@ import { ordersCs } from '@/i18n/cs/orders';
 import { apiGet, apiSend } from '@/lib/client-api';
 import { useScanFocusReturn } from '@/lib/scan-focus';
 import { orderErrorText } from './order-errors';
+import { combinedOutcome } from './print-status';
 import { OrderLines } from './order-lines';
 
 const t = ordersCs.pick;
@@ -155,10 +156,8 @@ export function PickingWorkspace({
         }),
       );
       if (result.ok) {
-        setMessage({
-          tone: 'ok',
-          text: printer ? t.labelsQueued(printer.name) : t.labelsPrepared,
-        });
+        // What really happened (the carrier may have refused or still be working).
+        setMessage(combinedOutcome(result.value, printer?.name ?? null));
       } else if (result.error) {
         // The picking may be complete although a later step failed: the order shows how to go on.
         setMessage({

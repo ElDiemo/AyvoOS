@@ -150,9 +150,6 @@ export const ordersCs = {
     completeAndLabel: 'Dokončit a připravit štítky',
     printTarget: (printer: string) => `Tisk na: ${printer}`,
     noAutoPrint: 'Štítky se připraví u dopravce; tisk spustíte na detailu objednávky.',
-    labelsQueued: (printer: string) =>
-      `Štítky se připravují u dopravce a půjdou do tiskárny ${printer}. Po nalepení potvrďte na objednávce „Připraveno k vyzvednutí“.`,
-    labelsPrepared: 'Štítky se připravují u dopravce. Tisk a další krok najdete na objednávce.',
     openOrder: 'Otevřít objednávku – štítky a tisk',
     completeHelp: 'Dokončit lze jen při přesném splnění všech produktů.',
     ready: 'Kompletace dokončena',
