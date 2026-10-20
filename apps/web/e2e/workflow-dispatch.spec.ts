@@ -191,7 +191,7 @@ test('Objednávky: a manual order in whole crates; bottles from the crate capaci
   await form.getByRole('button', { name: 'Založit objednávku' }).click();
   await expect(page).toHaveURL(/\/dispatch\/orders\/ORD-\d{6}$/);
   orderCode = page.url().split('/').pop()!;
-  await expect(page.getByTestId('order-status')).toHaveText('Otevřená');
+  await expect(page.getByTestId('order-status')).toHaveText('Vytvořená');
   expect(orderCode).toMatch(/^ORD-\d{6}$/);
   await expect(page.getByTestId(`line-crates-${kit.productCode}`)).toHaveText('0 / 2');
   await expect(page.getByTestId(`line-bottles-${kit.productCode}`)).toHaveText('0 / 4');
