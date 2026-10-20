@@ -75,6 +75,28 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
       crateUrls: made.map((c) => c.crateUrl),
     };
   }
+  /**
+   * Background rounds until nothing is due any more. Test files share one database, so other
+   * files' labelled shipments are in the rounds too (in batches): assertions look at this test's
+   * own shipment only, never at global counts.
+   */
+  async function drain() {
+    for (let i = 0; i < 100; i++) {
+      await tracking().due();
+      const now = new Date();
+      const due = await t.prisma.shipmentTracking.count({
+        where: {
+          stoppedAt: null,
+          nextAt: { lte: now },
+          OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+        },
+      });
+      if (due === 0) return;
+    }
+    throw new Error('tracking rounds did not settle');
+  }
+  const lastAttempt = async (shipmentId: string) =>
+    (await t.prisma.shipmentTracking.findUniqueOrThrow({ where: { shipmentId } })).lastAttemptAt;
   /** Makes the shipment due and looks once (as the poller would). */
   async function look(shipmentId: string) {
     await t.prisma.$executeRaw`INSERT INTO "shipment_tracking" ("shipment_id", "next_at")
@@ -224,14 +246,16 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
       include: { bottle: { select: { status: true } } },
     });
     expect(new Set(bottles.map((b) => b.bottle.status))).toEqual(new Set(['FILLED']));
-    // Nothing more is asked about a delivered order.
+    // Nothing more is asked about a delivered order — neither by the rounds nor on request.
+    const attempted = await lastAttempt(o.shipmentId);
+    await drain();
+    expect(await lastAttempt(o.shipmentId)).toEqual(attempted);
     const calls = testCarrierControl.trackCalls;
-    await tracking().due();
-    expect(testCarrierControl.trackCalls).toBe(calls);
     expect((await post(o.order, 'tracking/refresh').expect(200)).body).toMatchObject({
       shipment: { tracking: { stopped: 'DELIVERED' } },
     });
     expect(testCarrierControl.trackCalls).toBe(calls);
+    expect(await lastAttempt(o.shipmentId)).toEqual(attempted);
   });
 
   it('delivered without a pickup event: picked up with an unknown time (never invented); a late pickup event fills it', async () => {
@@ -267,7 +291,7 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
     );
     // A newly labelled shipment is scheduled and looked at by the poller round itself.
     expect(await t.prisma.shipmentTracking.count({ where: { shipmentId: o.shipmentId } })).toBe(0);
-    await tracking().due();
+    await drain();
     expect(
       (await t.prisma.shipmentTracking.findUniqueOrThrow({ where: { shipmentId: o.shipmentId } }))
         .lastSuccessAt,
@@ -326,9 +350,9 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
     });
     expect(v.shipment!.tracking!.lastError).toContain('poslední známý stav');
     // Paused: the poller leaves it alone; a person resumes it.
-    const calls = testCarrierControl.trackCalls;
-    await tracking().due();
-    expect(testCarrierControl.trackCalls).toBe(calls);
+    const attempted = await lastAttempt(o.shipmentId);
+    await drain();
+    expect(await lastAttempt(o.shipmentId)).toEqual(attempted);
     v = (await post(o.order, 'tracking/refresh').expect(200)).body as OrderShipment;
     expect(v.shipment!.tracking).toMatchObject({ stopped: null, failures: 0, lastError: null });
   });
@@ -376,7 +400,7 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
       where: { shipmentId: o.shipmentId },
       data: { leaseUntil: new Date(Date.now() - 1000) },
     });
-    await tracking().due();
+    await drain();
     expect((await detail(o.order)).status).toBe('HANDED_TO_CARRIER');
   });
 
