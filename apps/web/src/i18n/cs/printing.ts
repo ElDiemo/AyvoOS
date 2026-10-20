@@ -44,6 +44,25 @@ export const printingCs = {
   agent: 'Tiskový agent',
   usbSerial: 'Sériové číslo USB tiskárny',
   usbSerialHint: 'Podle něj agent najde právě tuto tiskárnu (lsusb -v / sysfs „serial“).',
+  chooseAgent: 'Vyberte Raspberry Pi…',
+  chooseAgentFirst: 'Nejdřív vyberte Raspberry Pi, ke kterému je Zebra připojená.',
+  device: 'Zebra připojená k Raspberry Pi',
+  devicesReported: (agent: string, at: string, online: boolean) =>
+    `Agent ${agent} hlásí tyto USB tiskárny (${at})${online ? '' : ' – agent se teď neozývá, seznam může být starý'}. Vyberte tu, která se má použít:`,
+  severalDevices:
+    'Agent vidí víc tiskáren – vyberte správnou podle sériového čísla na štítku tiskárny.',
+  noDevices: (agent: string) =>
+    `Agent ${agent} zatím žádnou USB tiskárnu nehlásí. Zkontrolujte, že je Zebra zapnutá a připojená, a obnovte stav. Sériové číslo lze zadat i ručně (Pokročilé).`,
+  unknownProduct: 'Neznámý model',
+  deviceTaken: (printer: string) => `už použita: ${printer}`,
+  refreshDevices: 'Obnovit nalezená zařízení',
+  advanced: 'Pokročilé: zadat sériové číslo ručně',
+  refresh: 'Obnovit stav',
+  refreshing: 'Obnovuji…',
+  refreshedAt: (at: string) => `Stav načten ${at}`,
+  refreshFailed: 'Stav se nepodařilo načíst. Zkuste to znovu.',
+  stateAgentOffline: (at: string | null) =>
+    `Stav neznámý – agent se neozývá${at ? ` (poslední hlášení ${at})` : ''}`,
   dispatchDefault: 'Výchozí tiskárna pro expedici',
   autoPrint: 'Automaticky tisknout po „Dokončit a vytisknout štítky“',
   enabled: 'Zapnutá',

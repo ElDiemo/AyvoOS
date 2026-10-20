@@ -7,7 +7,7 @@ import { CarrierSettings } from '@/components/admin/carrier-settings';
 import { SiteForm, SiteStatus } from '@/components/admin/site-form';
 import { SitePrinting } from '@/components/admin/site-printing';
 import { SiteWarehouseForm } from '@/components/admin/site-warehouse-form';
-import { Card, Notice } from '@/components/ui';
+import { buttonClass, Card, Notice } from '@/components/ui';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
@@ -47,15 +47,39 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="flex min-w-0 flex-col gap-6">
           {!site.addressComplete && <Notice tone="warning">{t.addressMissing}</Notice>}
+          {(carriers || printing) && (
+            <nav
+              aria-label={t.sections}
+              className="flex flex-wrap gap-2 text-sm"
+              data-testid="site-sections"
+            >
+              {carriers && (
+                <a href="#dopravci" className={buttonClass.secondary}>
+                  {t.sectionCarriers}
+                </a>
+              )}
+              {printing && (
+                <a href="#tiskarny" className={buttonClass.secondary}>
+                  {t.sectionPrinters}
+                </a>
+              )}
+            </nav>
+          )}
           <SiteForm site={site} />
           {carriers && (
-            <CarrierSettings
-              initial={carriers}
-              site={site}
-              canManageConnections={hasPermission(me, 'carriers:connections_manage')}
-            />
+            <div id="dopravci" className="scroll-mt-4">
+              <CarrierSettings
+                initial={carriers}
+                site={site}
+                canManageConnections={hasPermission(me, 'carriers:connections_manage')}
+              />
+            </div>
           )}
-          {printing && <SitePrinting initial={printing} timeZone={timeZone} />}
+          {printing && (
+            <div id="tiskarny" className="scroll-mt-4">
+              <SitePrinting initial={printing} timeZone={timeZone} />
+            </div>
+          )}
           <Card title={t.audit} className="relative overflow-x-auto">
             <AuditList events={site.audit} testId="site-audit" />
           </Card>

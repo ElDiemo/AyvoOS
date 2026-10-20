@@ -59,16 +59,48 @@ export function SitePrinting({
   const [form, setForm] = useState<PrinterForm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   const base = `admin/sites/${data.site.id}/printing`;
+  const online = new Map(data.agents.map((a) => [a.id, a.online]));
+  async function refresh() {
+    setRefreshing(true);
+    const next = await reload(base);
+    setRefreshing(false);
+    if (next) {
+      setData(next);
+      setRefreshedAt(new Date().toISOString());
+      setError(null);
+    } else setError(t.refreshFailed);
+  }
   const accept = (next: SitePrintingData) => {
     setData(next);
     router.refresh();
   };
 
   return (
-    <Card title={t.title} testId="site-printing">
+    <Card
+      title={t.title}
+      testId="site-printing"
+      action={
+        <button
+          type="button"
+          className={buttonClass.secondary}
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          data-testid="printing-refresh"
+        >
+          {refreshing ? t.refreshing : t.refresh}
+        </button>
+      }
+    >
       <div className="flex flex-col gap-6 text-sm">
         <p className="text-stone-600">{t.intro}</p>
+        {refreshedAt && (
+          <p className="text-xs text-stone-500" data-testid="printing-refreshed">
+            {t.refreshedAt(formatDateTimeCs(refreshedAt, timeZone))}
+          </p>
+        )}
         {(() => {
           const target = data.printers.find((p) => p.dispatchDefault && p.enabled);
           return target ? (
@@ -122,6 +154,7 @@ export function SitePrinting({
                 <PrinterRow
                   key={p.id}
                   printer={p}
+                  agentOnline={online.get(p.agent.id) ?? false}
                   timeZone={timeZone}
                   onEdit={() =>
                     setForm({
@@ -143,6 +176,9 @@ export function SitePrinting({
             <PrinterFormView
               form={form}
               agents={data.agents.filter((a) => !a.revokedAt)}
+              printers={data.printers}
+              timeZone={timeZone}
+              onRefresh={() => void refresh()}
               base={base}
               onChange={setForm}
               onCancel={() => setForm(null)}
@@ -165,7 +201,8 @@ export function SitePrinting({
                       id: null,
                       code: '',
                       name: '',
-                      agentId: data.agents.find((a) => !a.revokedAt)!.id,
+                      // Chosen explicitly — nothing preselected, even with one agent or device.
+                      agentId: '',
                       usbSerial: '',
                       dispatchDefault: !data.printers.some((p) => p.dispatchDefault),
                       autoPrint: true,
@@ -434,10 +471,12 @@ function AgentRow({
 
 function PrinterRow({
   printer,
+  agentOnline,
   timeZone,
   onEdit,
 }: {
   printer: Printer;
+  agentOnline: boolean;
   timeZone: string;
   onEdit: () => void;
 }) {
@@ -462,11 +501,16 @@ function PrinterRow({
         <span className="font-mono">{printer.usbSerial}</span>
       </p>
       <p className="text-xs text-stone-600" data-testid={`printer-${printer.code}-state`}>
-        {printer.reportedState
-          ? `${t.state[printer.reportedState]} · ${formatDateTimeCs(printer.reportedAt, timeZone)}${
-              printer.reportedDetail ? ` · ${printer.reportedDetail}` : ''
-            }`
-          : t.stateUnknown}
+        {/* Never a stale "Připravena": without its agent the state is unknown. */}
+        {!agentOnline
+          ? t.stateAgentOffline(
+              printer.reportedAt ? formatDateTimeCs(printer.reportedAt, timeZone) : null,
+            )
+          : printer.reportedState
+            ? `${t.state[printer.reportedState]} · ${formatDateTimeCs(printer.reportedAt, timeZone)}${
+                printer.reportedDetail ? ` · ${printer.reportedDetail}` : ''
+              }`
+            : t.stateUnknown}
       </p>
       <div>
         <button type="button" className={buttonClass.secondary} onClick={onEdit}>
@@ -480,6 +524,9 @@ function PrinterRow({
 function PrinterFormView({
   form,
   agents,
+  printers,
+  timeZone,
+  onRefresh,
   base,
   onChange,
   onCancel,
@@ -488,6 +535,9 @@ function PrinterFormView({
 }: {
   form: PrinterForm;
   agents: PrintAgent[];
+  printers: Printer[];
+  timeZone: string;
+  onRefresh: () => void;
   base: string;
   onChange: (f: PrinterForm) => void;
   onCancel: () => void;
@@ -498,6 +548,11 @@ function PrinterFormView({
   const { busy, run } = useAttempt();
   const set = <K extends keyof PrinterForm>(key: K, value: PrinterForm[K]) =>
     onChange({ ...form, [key]: value });
+  const agent = agents.find((a) => a.id === form.agentId) ?? null;
+  const devices = agent?.detectedDevices ?? [];
+  const takenBy = (serial: string) =>
+    printers.find((p) => p.usbSerial === serial && p.id !== form.id && p.agent.id === form.agentId);
+  const manual = form.usbSerial !== '' && !devices.some((d) => d.usbSerial === form.usbSerial);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const body = {
@@ -531,6 +586,25 @@ function PrinterFormView({
       className="flex flex-col gap-3 rounded border border-stone-200 p-3"
       data-testid="printer-form"
     >
+      <label className="flex min-w-0 flex-col gap-1">
+        <span className={label}>{t.agent}</span>
+        <select
+          className={inputClass}
+          value={form.agentId}
+          onChange={(e) => onChange({ ...form, agentId: e.target.value, usbSerial: '' })}
+          required
+          data-testid="printer-agent"
+        >
+          <option value="" disabled>
+            {t.chooseAgent}
+          </option>
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.code}){a.online ? '' : ` – ${t.offline}`}
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex min-w-0 flex-col gap-1">
           <span className={label}>{t.code}</span>
@@ -562,33 +636,76 @@ function PrinterFormView({
             <option value="ZEBRA_ZD220_DT">{t.modelSpec}</option>
           </select>
         </label>
-        <label className="flex min-w-0 flex-col gap-1">
-          <span className={label}>{t.agent}</span>
-          <select
-            className={inputClass}
-            value={form.agentId}
-            onChange={(e) => set('agentId', e.target.value)}
-            data-testid="printer-agent"
-          >
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} ({a.code})
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex min-w-0 flex-col gap-1 sm:col-span-2">
-          <span className={label}>{t.usbSerial}</span>
-          <input
-            value={form.usbSerial}
-            onChange={(e) => set('usbSerial', e.target.value)}
-            className={inputClass}
-            required
-            data-testid="printer-usb"
-          />
-          <span className="text-xs text-stone-500">{t.usbSerialHint}</span>
-        </label>
       </div>
+      <fieldset className="flex min-w-0 flex-col gap-2" data-testid="printer-device">
+        <legend className={label}>{t.device}</legend>
+        {!agent ? (
+          <p className="text-stone-600">{t.chooseAgentFirst}</p>
+        ) : devices.length === 0 ? (
+          <Notice tone="warning">
+            <span data-testid="printer-device-none">{t.noDevices(agent.code)}</span>
+          </Notice>
+        ) : (
+          <>
+            <p className="text-xs text-stone-500" data-testid="printer-device-reported">
+              {t.devicesReported(
+                agent.code,
+                agent.detectedAt ? formatDateTimeCs(agent.detectedAt, timeZone) : '–',
+                agent.online,
+              )}
+            </p>
+            {devices.length > 1 && <p className="text-stone-600">{t.severalDevices}</p>}
+            {devices.map((d) => {
+              const taken = takenBy(d.usbSerial);
+              return (
+                <label key={d.usbSerial} className="flex items-start gap-2">
+                  <input
+                    type="radio"
+                    name={`${id}-device`}
+                    className="mt-0.5 h-5 w-5"
+                    checked={form.usbSerial === d.usbSerial}
+                    disabled={!!taken}
+                    onChange={() => set('usbSerial', d.usbSerial)}
+                    data-testid={`printer-device-${d.usbSerial}`}
+                  />
+                  <span className="min-w-0 wrap-anywhere">
+                    {d.product ?? t.unknownProduct} · USB{' '}
+                    <span className="font-mono">{d.usbSerial}</span>
+                    {taken && (
+                      <span className="text-stone-500"> · {t.deviceTaken(taken.name)}</span>
+                    )}
+                  </span>
+                </label>
+              );
+            })}
+          </>
+        )}
+        {agent && (
+          <div>
+            <button
+              type="button"
+              className={buttonClass.secondary}
+              onClick={onRefresh}
+              data-testid="printer-device-refresh"
+            >
+              {t.refreshDevices}
+            </button>
+          </div>
+        )}
+        <details className="text-sm" open={manual}>
+          <summary className="cursor-pointer text-stone-600">{t.advanced}</summary>
+          <label className="mt-2 flex min-w-0 flex-col gap-1">
+            <span className={label}>{t.usbSerial}</span>
+            <input
+              value={form.usbSerial}
+              onChange={(e) => set('usbSerial', e.target.value)}
+              className={inputClass}
+              data-testid="printer-usb"
+            />
+            <span className="text-xs text-stone-500">{t.usbSerialHint}</span>
+          </label>
+        </details>
+      </fieldset>
       {check('dispatchDefault', t.dispatchDefault)}
       {check('autoPrint', t.autoPrint)}
       {check('enabled', t.enabled)}
@@ -596,7 +713,7 @@ function PrinterFormView({
         <button
           type="submit"
           className={buttonClass.primary}
-          disabled={busy}
+          disabled={busy || !form.agentId || !form.usbSerial.trim()}
           data-testid="printer-save"
         >
           {t.save}
