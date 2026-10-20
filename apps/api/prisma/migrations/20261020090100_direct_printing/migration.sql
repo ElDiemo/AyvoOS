@@ -98,6 +98,8 @@ CREATE TABLE "print_agents" (
     "revoked_by" UUID,
     "last_seen_at" TIMESTAMPTZ(3),
     "last_version" TEXT,
+    "detected_devices" JSONB,
+    "detected_at" TIMESTAMPTZ(3),
     "created_at" TIMESTAMPTZ(3) NOT NULL,
     "created_by" UUID NOT NULL,
     CONSTRAINT "print_agents_pkey" PRIMARY KEY ("id")

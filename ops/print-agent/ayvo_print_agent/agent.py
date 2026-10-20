@@ -136,8 +136,10 @@ class Api:
             raise ApiError(status, None)
         return json.loads(raw)
 
-    def heartbeat(self, printers: list[dict]) -> dict:
-        return self._json("POST", "heartbeat", {"version": VERSION, "printers": printers})
+    def heartbeat(self, printers: list[dict], devices: list[dict]) -> dict:
+        return self._json(
+            "POST", "heartbeat", {"version": VERSION, "printers": printers, "devices": devices}
+        )
 
     def claim(self) -> dict | None:
         return self._json("POST", "jobs/claim", {}).get("job")
@@ -180,6 +182,36 @@ def find_printer(sysfs: Path, dev_dir: Path, serial: str) -> Path | None:
             except OSError:
                 continue
     return None
+
+
+SERIAL = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _attr(lp: Path, name: str) -> str | None:
+    for candidate in (lp / "device" / ".." / name, lp / "device" / name):
+        try:
+            return candidate.read_text("utf-8", "replace").strip()[:100] or None
+        except OSError:
+            continue
+    return None
+
+
+def detect_printers(sysfs: Path) -> list[dict]:
+    """The USB printers seen now (serial, product, manufacturer). Reported to AYVO OS only as a
+    suggestion for the ADMIN: nothing is assigned or enabled because of it."""
+    found: dict[str, dict] = {}
+    if not sysfs.is_dir():
+        return []
+    for lp in sorted(sysfs.glob("lp*")):
+        serial = _attr(lp, "serial")
+        if not serial or not SERIAL.match(serial):
+            continue
+        found[serial] = {
+            "usbSerial": serial,
+            "product": _attr(lp, "product"),
+            "manufacturer": _attr(lp, "manufacturer"),
+        }
+    return list(found.values())[:10]
 
 
 class Journal:
@@ -321,7 +353,7 @@ class Agent:
                     "detail": None if dev else f"USB {p['usbSerial']} nenalezena",
                 }
             )
-        answer = self.api.heartbeat(states)
+        answer = self.api.heartbeat(states, detect_printers(self.config.sysfs_usbmisc))
         self.printers = answer.get("printers", [])
         self._last_heartbeat = now
 

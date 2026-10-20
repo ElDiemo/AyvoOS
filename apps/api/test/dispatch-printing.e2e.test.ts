@@ -231,6 +231,23 @@ describe.skipIf(!hasDatabase)('direct printing: labels, print queue, print agent
     ).body as PrintAgentToken;
     await agent(first.token!).post('heartbeat', { version: '1', printers: [] }).expect(401);
     await agent(rotated.token!).post('heartbeat', { version: '1', printers: [] }).expect(200);
+    // Detected USB printers are stored as a suggestion only — no printer is created or changed.
+    const printersBefore = await t.prisma.printer.count();
+    await agent(rotated.token!)
+      .post('heartbeat', {
+        version: '1',
+        printers: [],
+        devices: [{ usbSerial: 'D4J2211', product: 'ZTC ZD220-203dpi ZPL', manufacturer: 'Zebra' }],
+      })
+      .expect(200);
+    const listed = (await http().get(admin('')).expect(200)).body as SitePrinting;
+    expect(listed.agents.find((a) => a.id === first.agent.id)!.detectedDevices).toEqual([
+      { usbSerial: 'D4J2211', product: 'ZTC ZD220-203dpi ZPL', manufacturer: 'Zebra' },
+    ]);
+    expect(await t.prisma.printer.count()).toBe(printersBefore);
+    await agent(rotated.token!)
+      .post('heartbeat', { version: '1', printers: [], devices: [{ usbSerial: 'x y' }] })
+      .expect(400);
     await http()
       .post(admin(`/agents/${first.agent.id}/revoke`))
       .send({ requestId: rid(), reason: 'Zařízení vyřazeno' })

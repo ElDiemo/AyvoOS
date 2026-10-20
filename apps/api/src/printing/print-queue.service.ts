@@ -259,7 +259,12 @@ export class PrintQueueService {
     const now = new Date();
     await this.prisma.printAgent.update({
       where: { id: agent.id },
-      data: { lastSeenAt: now, lastVersion: input.version },
+      data: {
+        lastSeenAt: now,
+        lastVersion: input.version,
+        // What the agent sees now; an ADMIN chooses from it — nothing is assigned here.
+        ...(input.devices ? { detectedDevices: input.devices, detectedAt: now } : {}),
+      },
     });
     for (const p of input.printers) {
       // Only its own printers; anything else is ignored.

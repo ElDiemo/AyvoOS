@@ -2839,20 +2839,24 @@ model ShipmentLabelFetch {
 /// A print agent (Raspberry Pi) of one site: a machine principal, never a user (ADR 0028). Only
 /// the SHA-256 hash of its token is stored; the token is shown once.
 model PrintAgent {
-  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  code          String    @unique
-  name          String
-  siteId        String    @map("site_id") @db.Uuid
-  tokenHash     String    @unique @map("token_hash")
+  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code            String    @unique
+  name            String
+  siteId          String    @map("site_id") @db.Uuid
+  tokenHash       String    @unique @map("token_hash")
   /// The token's last 4 characters, to recognise it — never the token.
-  tokenHint     String    @map("token_hint")
-  tokenIssuedAt DateTime  @map("token_issued_at") @db.Timestamptz(3)
-  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(3)
-  revokedBy     String?   @map("revoked_by") @db.Uuid
-  lastSeenAt    DateTime? @map("last_seen_at") @db.Timestamptz(3)
-  lastVersion   String?   @map("last_version")
-  createdAt     DateTime  @map("created_at") @db.Timestamptz(3)
-  createdBy     String    @map("created_by") @db.Uuid
+  tokenHint       String    @map("token_hint")
+  tokenIssuedAt   DateTime  @map("token_issued_at") @db.Timestamptz(3)
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy       String?   @map("revoked_by") @db.Uuid
+  lastSeenAt      DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  lastVersion     String?   @map("last_version")
+  /// The USB printers the agent last found (serial, product) — only offered to an ADMIN, never
+  /// assigned or enabled by themselves.
+  detectedDevices Json?     @map("detected_devices")
+  detectedAt      DateTime? @map("detected_at") @db.Timestamptz(3)
+  createdAt       DateTime  @map("created_at") @db.Timestamptz(3)
+  createdBy       String    @map("created_by") @db.Uuid
 
   site     Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
   creator  User            @relation("PrintAgentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)

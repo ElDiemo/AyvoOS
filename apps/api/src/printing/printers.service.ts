@@ -32,6 +32,8 @@ const agentView = (a: {
   revokedAt: Date | null;
   lastSeenAt: Date | null;
   lastVersion: string | null;
+  detectedDevices: unknown;
+  detectedAt: Date | null;
 }): PrintAgent => ({
   id: a.id,
   code: a.code,
@@ -42,6 +44,10 @@ const agentView = (a: {
   lastSeenAt: a.lastSeenAt?.toISOString() ?? null,
   lastVersion: a.lastVersion,
   online: !a.revokedAt && !!a.lastSeenAt && Date.now() - a.lastSeenAt.getTime() < ONLINE_MS,
+  detectedDevices: Array.isArray(a.detectedDevices)
+    ? (a.detectedDevices as PrintAgent['detectedDevices'])
+    : [],
+  detectedAt: a.detectedAt?.toISOString() ?? null,
 });
 
 /**

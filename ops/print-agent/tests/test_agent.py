@@ -24,6 +24,7 @@ class FakeServer:
 
     def __init__(self):
         self.jobs: list[dict] = []
+        self.heartbeats: list[dict] = []
         self.results: list[tuple[str, str]] = []
         self.starts: list[str] = []
         self.start_status = 200
@@ -58,6 +59,7 @@ class FakeServer:
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if self.path.endswith("/heartbeat"):
+                    server.heartbeats.append(body)
                     return self._send(200, {"agent": {"code": "RPI", "site": "S"}, "printers": [
                         {"id": str(uuid.uuid4()), "code": "ZD", "usbSerial": "SER1", "enabled": True}]})
                 if self.path.endswith("/jobs/claim"):
@@ -128,6 +130,17 @@ class AgentTest(unittest.TestCase):
 
     def printed(self) -> bytes:
         return (self.dev / "lp0").read_bytes()
+
+    def test_heartbeat_reports_the_detected_usb_printers(self):
+        (self.tmp / "sys" / "lp0" / "device" / "product").write_text("ZTC ZD220-203dpi ZPL\n")
+        bad = self.tmp / "sys" / "lp1" / "device"
+        bad.mkdir(parents=True)
+        (bad / "serial").write_text("not a serial!\n")  # never reported
+        self.agent().heartbeat(force=True)
+        self.assertEqual(
+            self.server.heartbeats[-1]["devices"],
+            [{"usbSerial": "SER1", "product": "ZTC ZD220-203dpi ZPL", "manufacturer": None}],
+        )
 
     def test_prints_exactly_the_jobs_bytes_and_reports_sent(self):
         job = self.server.job()

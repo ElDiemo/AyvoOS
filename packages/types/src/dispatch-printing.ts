@@ -22,6 +22,13 @@ export const PRINTER_MODEL_SPEC = {
   ZEBRA_ZD220_DT: { name: 'Zebra ZD220 DT', language: 'ZPL', dpi: 203, connection: 'USB' },
 } as const;
 
+export const detectedDeviceSchema = z.strictObject({
+  usbSerial: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/),
+  product: z.string().max(100).nullable(),
+  manufacturer: z.string().max(100).nullable(),
+});
+export type DetectedDevice = z.infer<typeof detectedDeviceSchema>;
+
 export const printAgentSchema = z.object({
   id: z.uuid(),
   code: z.string(),
@@ -34,6 +41,9 @@ export const printAgentSchema = z.object({
   lastVersion: z.string().nullable(),
   /** Contacted the server within the last 2 minutes. */
   online: z.boolean(),
+  /** USB printers the agent reported with its last contact (never selected by themselves). */
+  detectedDevices: z.array(detectedDeviceSchema),
+  detectedAt: z.iso.datetime().nullable(),
 });
 export type PrintAgent = z.infer<typeof printAgentSchema>;
 
@@ -106,6 +116,8 @@ export type SavePrinterRequest = z.infer<typeof savePrinterRequestSchema>;
 
 export const agentHeartbeatRequestSchema = z.strictObject({
   version: z.string().trim().min(1).max(40),
+  /** The USB printers this agent sees now (doc 030 §3) — a suggestion for the ADMIN only. */
+  devices: z.array(detectedDeviceSchema).max(10).optional(),
   printers: z
     .array(
       z.strictObject({
