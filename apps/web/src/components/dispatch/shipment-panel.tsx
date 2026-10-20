@@ -151,6 +151,7 @@ export function ShipmentPanel({
         <PrintCard
           code={code}
           data={data}
+          labelsHref={s.label ? labelsHref : null}
           canPrint={canPrint}
           canReprint={canReprint}
           canPrepare={canPrepare}
@@ -198,26 +199,11 @@ export function ShipmentPanel({
                 parcel={parcel}
                 editable={s.status === 'DRAFT' && canPrepare}
                 code={code}
-                labelHref={`/api/admin/orders/${code}/shipment/parcels/${parcel.parcelNo}/label`}
                 timeZone={timeZone}
                 onDone={done}
               />
             ))}
           </ul>
-          {s.label && (
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <a
-                href={labelsHref}
-                target="_blank"
-                rel="noopener"
-                className={buttonClass.secondary}
-                data-testid="open-labels"
-              >
-                {t.openLabels}
-              </a>
-              <span className="text-xs text-stone-500">{t.labelsNote}</span>
-            </div>
-          )}
           {canResolveUncertain &&
             // As the server: a claimed request after its window; an accepted one only after its
             // automatic checks ended.
@@ -519,14 +505,12 @@ function ParcelRow({
   parcel,
   editable,
   code,
-  labelHref,
   timeZone,
   onDone,
 }: {
   parcel: ShipmentParcel;
   editable: boolean;
   code: string;
-  labelHref: string;
   timeZone: string;
   onDone: () => void;
 }) {
@@ -586,17 +570,6 @@ function ParcelRow({
           </div>
         )}
       </dl>
-      {parcel.label && (
-        <a
-          href={labelHref}
-          target="_blank"
-          rel="noopener"
-          className="mt-2 inline-block text-sm underline underline-offset-2"
-          data-testid={`parcel-${parcel.parcelNo}-label`}
-        >
-          {t.parcelLabel(parcel.label.format)}
-        </a>
-      )}
       {editable && !open && (
         <button
           type="button"

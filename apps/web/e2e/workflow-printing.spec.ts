@@ -267,21 +267,43 @@ test('the site printer and its agent in the administration; the token is shown o
   // After a reload the token is gone for good.
   await page.reload();
   expect(await page.content()).not.toContain(agentToken);
+  // The simulated agent reports in, with the USB printers it sees — two, so nothing is chosen
+  // for the ADMIN.
+  await json(
+    await agent(page.request).post('heartbeat', {
+      version: '0.1.0',
+      printers: [],
+      devices: [
+        { usbSerial: `E2E${suffix}`, product: 'ZTC ZD220-203dpi ZPL', manufacturer: 'Zebra' },
+        { usbSerial: `OTHER${suffix}`, product: 'ZTC ZD220-203dpi ZPL', manufacturer: 'Zebra' },
+      ],
+    }),
+  );
+  await card.getByTestId('printing-refresh').click();
+  await expect(card.getByTestId('printing-refreshed')).toBeVisible();
+  await expect(card.getByTestId(`agent-RPI-E2E-${suffix}-online`)).toHaveText('Ozval se');
+  // Add a printer: the Raspberry first, then the detected Zebra, then confirm.
   await card.getByTestId('add-printer').click();
   const form = card.getByTestId('printer-form');
+  await expect(form.getByTestId('printer-agent')).toHaveValue('');
+  await expect(form.getByTestId('printer-save')).toBeDisabled();
   await form.getByTestId('printer-code').fill(`ZD-E2E-${suffix}`);
   await form.getByTestId('printer-name').fill('Zebra expedice (E2E)');
   await form
     .getByTestId('printer-agent')
     .selectOption({ label: `Raspberry Pi – expedice (E2E) (RPI-E2E-${suffix})` });
-  await form.getByTestId('printer-usb').fill(`E2E${suffix}`);
+  await expect(form.getByTestId(`printer-device-E2E${suffix}`)).not.toBeChecked();
+  await expect(form.getByTestId(`printer-device-OTHER${suffix}`)).not.toBeChecked();
+  await expect(form.getByTestId('printer-save')).toBeDisabled(); // no silent choice
+  await shot(page, 'printing-00-add-printer-detected-desktop');
+  await form.getByTestId(`printer-device-E2E${suffix}`).check();
   await expect(form.getByTestId('printer-dispatchDefault')).toBeChecked();
   await form.getByTestId('printer-save').click();
+  await expect(card.getByTestId(`printer-ZD-E2E-${suffix}`)).toContainText(`E2E${suffix}`);
   await expect(card.getByTestId(`printer-ZD-E2E-${suffix}`)).toContainText('Výchozí pro expedici');
   await expect(card.getByTestId('printing-summary')).toContainText(
     'Štítky expedice půjdou na: Zebra expedice (E2E)',
   );
-  // The simulated agent reports in.
   const printing = await json<{ printers: { id: string; code: string }[] }>(
     await page.request.get(`/api/admin/sites/${siteId}/printing`),
   );
@@ -292,14 +314,20 @@ test('the site printer and its agent in the administration; the token is shown o
       printers: [{ printerId, state: 'READY', detail: null }],
     }),
   );
-  await page.reload();
-  await expect(card.getByTestId(`agent-RPI-E2E-${suffix}-online`)).toHaveText('Ozval se');
+  await card.getByTestId('printing-refresh').click();
   await expect(card.getByTestId(`printer-ZD-E2E-${suffix}-state`)).toContainText('Připravena');
+  // Direct navigation from the top of the site detail.
+  await page.getByTestId('site-sections').getByRole('link', { name: 'Tiskárny' }).click();
+  await expect(page).toHaveURL(/#tiskarny$/);
   await card.scrollIntoViewIfNeeded();
   await shot(page, 'printing-01-site-printers-desktop');
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow(page);
   await shot(page, 'printing-01-site-printers-390');
+  await page.setViewportSize({ width: 320, height: 700 });
+  await noOverflow(page);
+  await shot(page, 'printing-01-site-printers-320');
+  await page.setViewportSize({ width: 390, height: 844 });
 });
 
 test('one action completes, labels and queues three labels on the printer shown', async ({
@@ -320,18 +348,24 @@ test('one action completes, labels and queues three labels on the printer shown'
   // A double tap is one action.
   await button.dblclick();
   await expect(page.getByTestId('picking-ready')).toContainText('Kompletace dokončena');
-  await expect(page.getByTestId('pick-message')).toContainText('Zebra expedice (E2E)');
+  // What really happened, not just "done": 3 of 3 went to the printer.
+  await expect(page.getByTestId('pick-message')).toContainText(
+    '3 z 3 jde do tiskárny Zebra expedice (E2E)',
+  );
   await page.getByTestId('open-order').click();
   await page.waitForURL(`**/dispatch/orders/${orderCode}`);
   await expect(page.getByTestId('order-status')).toHaveText('Kompletace dokončena');
   const card = page.getByTestId('print-card');
   await expect(card.getByTestId('print-target')).toContainText('Zebra expedice (E2E)');
+  await expect(card.getByTestId('print-active-target')).toContainText('Zebra expedice (E2E)');
   for (const n of [1, 2, 3]) {
     await expect(card.getByTestId(`print-parcel-${n}-status`)).toHaveText('Čeká ve frontě');
   }
   // Files per parcel: its PDF (preview, download) and its ZPL; the complete A4 document too.
   for (const n of [1, 2, 3]) {
-    const pdf = await page.request.get((await card.getByTestId(`pdf-${n}`).getAttribute('href'))!);
+    const pdf = await page.request.get(
+      (await card.getByTestId(`parcel-${n}-label`).getAttribute('href'))!,
+    );
     expect(pdf.headers()['content-type']).toContain('application/pdf');
     const zpl = await page.request.get((await card.getByTestId(`zpl-${n}`).getAttribute('href'))!);
     expect(zpl.headers()['content-type']).toContain('application/zpl');
@@ -342,6 +376,9 @@ test('one action completes, labels and queues three labels on the printer shown'
     (await page.getByTestId('open-labels').getAttribute('href'))!,
   );
   expect(complete.headers()['content-type']).toContain('application/pdf');
+  // Technical details are collapsed until asked for.
+  await expect(card.getByTestId('preview-1')).toBeHidden();
+  await card.getByTestId('parcel-1-details').locator('summary').click();
   await card.getByTestId('preview-1').click();
   await expect(card.getByTestId('preview-frame-1')).toBeVisible();
   const detail = await json<{ shipment: { request: { attemptNo: number } } }>(
@@ -368,6 +405,10 @@ test('the simulated agent prints; an uncertain label is re-printed alone, the du
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow(page);
   await shot(page, 'printing-03-order-three-parcels-queue-390');
+  await page.setViewportSize({ width: 320, height: 700 });
+  await noOverflow(page);
+  await shot(page, 'printing-03-order-three-parcels-queue-320');
+  await page.setViewportSize({ width: 390, height: 844 });
 
   await card.getByTestId('reprint-2').click();
   const dialog = page.getByTestId('reprint-dialog-2');
@@ -385,6 +426,7 @@ test('the simulated agent prints; an uncertain label is re-printed alone, the du
   // Sent ≠ applied: the operator still confirms "Připraveno k vyzvednutí".
   await expect(page.getByTestId('order-status')).toHaveText('Kompletace dokončena');
   await expect(page.getByTestId('confirm-ready')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
   await shot(page, 'printing-04-all-sent-390');
 });
 
@@ -422,10 +464,38 @@ test('PRINT38-R2: a shipment labelled before direct printing (PDF only) prints f
   await expect(card.getByTestId('print-parcel-1-status')).toHaveText('Čeká ve frontě');
   await page.reload();
   await expect(card.getByTestId('print-parcel-1-status')).toHaveText('Čeká ve frontě');
-  await expect(card.getByTestId('zpl-1')).toBeVisible();
+  await expect(card.getByTestId('zpl-1')).toHaveCount(1);
   const detail = await json<{
     shipment: { zpl: { status: string } | null; request: { attemptNo: number } };
   }>(await request.get(`/api/admin/orders/${legacyOrder}/shipment`));
   expect(detail.shipment.zpl?.status).toBe('DONE');
   expect(detail.shipment.request.attemptNo).toBe(1); // the same shipment, nothing new at the carrier
+
+  // UI38-R1: another default printer afterwards — the queued work keeps its printer, and the
+  // card says so separately from where a new print would go.
+  const printing = await json<{ agents: { id: string; code: string }[] }>(
+    await request.get(`/api/admin/sites/${siteId}/printing`),
+  );
+  await json(
+    await request.post(`/api/admin/sites/${siteId}/printing/printers`, {
+      data: {
+        requestId: crypto.randomUUID(),
+        id: null,
+        code: `ZD-B-${suffix}`,
+        name: 'Zebra B (E2E)',
+        agentId: printing.agents.find((a) => a.code === `RPI-E2E-${suffix}`)!.id,
+        usbSerial: `OTHER${suffix}`,
+        model: 'ZEBRA_ZD220_DT',
+        dispatchDefault: true,
+        autoPrint: true,
+        enabled: true,
+      },
+    }),
+  );
+  await page.reload();
+  await expect(card.getByTestId('print-active-target')).toContainText('Zebra expedice (E2E)');
+  await expect(card.getByTestId('print-target')).toContainText('Nový tisk půjde na: Zebra B (E2E)');
+  await page.setViewportSize({ width: 320, height: 700 });
+  await noOverflow(page);
+  await shot(page, 'printing-05-active-and-next-target-320');
 });

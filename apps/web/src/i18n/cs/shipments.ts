@@ -64,7 +64,6 @@ export const shipmentsCs = {
     confirm: 'Potvrdit předání',
   },
   openLabels: 'Otevřít všechny štítky',
-  parcelLabel: (format: string) => `Štítek balíku (${format})`,
   parcelLabelNo: (n: number, format: string) => `Štítek balíku ${n} (${format})`,
   testEnvironment: 'Testovací prostředí dopravce',
   labelsNote: 'Opakovaný tisk používá uložené štítky – u dopravce nic nového nevzniká.',
@@ -156,7 +155,8 @@ export const shipmentsCs = {
     FORBIDDEN: 'K této akci nemáte oprávnění.',
   } as Record<string, string>,
   print: {
-    title: 'Tisk štítků',
+    title: 'Štítky',
+    details: 'Podrobnosti (náhled, soubor pro tiskárnu, historie tisku)',
     target: (printer: string) => `Nový tisk půjde na: ${printer}`,
     activeTarget: (printers: string) => `Rozpracovaný tisk jde na: ${printers}`,
     noPrinter:

@@ -45,13 +45,15 @@ export function JobChip({ status, testId }: { status: PrintJobStatus; testId?: s
 }
 
 /**
- * Tisk štítků on the order (doc 030 §7): where the labels go, how far each one is, PDF preview
- * and files per parcel, re-print of ONE parcel. Nothing here says "printed" — only "sent to the
- * printer"; the operator confirms the applied labels separately.
+ * Štítky on the order (doc 030 §7) — the one place for labels: where they go, how far each one
+ * is, the PDF (all and per parcel), re-print of ONE parcel; the ZPL file, preview and print
+ * history are collapsed per parcel. Nothing here says "printed" — only "sent to the printer";
+ * the operator confirms the applied labels separately.
  */
 export function PrintCard({
   code,
   data,
+  labelsHref,
   canPrint,
   canReprint,
   canPrepare,
@@ -61,6 +63,8 @@ export function PrintCard({
 }: {
   code: string;
   data: OrderShipment;
+  /** The complete label document (PDF), when the carrier made one. */
+  labelsHref: string | null;
   canPrint: boolean;
   canReprint: boolean;
   canPrepare: boolean;
@@ -190,6 +194,20 @@ export function PrintCard({
             />
           ))}
         </ul>
+        {labelsHref && (
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              href={labelsHref}
+              target="_blank"
+              rel="noopener"
+              className={buttonClass.secondary}
+              data-testid="open-labels"
+            >
+              {shipmentsCs.openLabels}
+            </a>
+            <span className="text-xs text-stone-500">{shipmentsCs.labelsNote}</span>
+          </div>
+        )}
       </div>
     </Card>
   );
@@ -235,34 +253,14 @@ function ParcelPrint({
       )}
       <div className="flex flex-wrap items-center gap-2">
         {pdf && (
-          <>
-            <button
-              type="button"
-              className={buttonClass.secondary}
-              aria-expanded={preview}
-              onClick={() => setPreview((v) => !v)}
-              data-testid={`preview-${parcel.parcelNo}`}
-            >
-              {t.preview}
-            </button>
-            <a
-              href={`${base}/label`}
-              target="_blank"
-              rel="noopener"
-              className="text-sm underline underline-offset-2"
-              data-testid={`pdf-${parcel.parcelNo}`}
-            >
-              {t.pdf}
-            </a>
-          </>
-        )}
-        {zpl && canPrint && (
           <a
-            href={`${base}/label/zpl`}
+            href={`${base}/label`}
+            target="_blank"
+            rel="noopener"
             className="text-sm underline underline-offset-2"
-            data-testid={`zpl-${parcel.parcelNo}`}
+            data-testid={`parcel-${parcel.parcelNo}-label`}
           >
-            {t.zpl(zpl.dpi)}
+            {t.pdf}
           </a>
         )}
         {canReprint && printer && zpl && (
@@ -276,31 +274,57 @@ function ParcelPrint({
           />
         )}
       </div>
-      {preview && pdf && (
-        <iframe
-          src={`${base}/label#toolbar=0`}
-          title={`${t.preview} – ${shipmentsCs.parcel(parcel.parcelNo)}`}
-          className="h-96 w-full max-w-md rounded border border-stone-200 bg-white"
-          data-testid={`preview-frame-${parcel.parcelNo}`}
-        />
-      )}
-      {parcel.printJobs.length > 0 && (
-        <details className="text-xs text-stone-600">
-          <summary className="cursor-pointer">{t.history}</summary>
-          <ol className="mt-1 flex flex-col gap-1">
-            {parcel.printJobs.map((j) => (
-              <li key={j.code} className="flex flex-wrap items-center gap-2">
-                <span className="font-mono">{t.job(j.code)}</span>
-                <JobChip status={j.status} />
-                <span>
-                  {j.printer} · {j.requestedBy} · {formatDateTimeCs(j.createdAt, timeZone)}
-                </span>
-                {j.reason && <span>· {j.reason}</span>}
-              </li>
-            ))}
-          </ol>
-        </details>
-      )}
+      {/* Technical details, collapsed: preview, the printer's file, every print of this parcel. */}
+      <details className="text-xs text-stone-600" data-testid={`parcel-${parcel.parcelNo}-details`}>
+        <summary className="cursor-pointer">{t.details}</summary>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {pdf && (
+            <button
+              type="button"
+              className={buttonClass.secondary}
+              aria-expanded={preview}
+              onClick={() => setPreview((v) => !v)}
+              data-testid={`preview-${parcel.parcelNo}`}
+            >
+              {t.preview}
+            </button>
+          )}
+          {zpl && canPrint && (
+            <a
+              href={`${base}/label/zpl`}
+              className="text-sm underline underline-offset-2"
+              data-testid={`zpl-${parcel.parcelNo}`}
+            >
+              {t.zpl(zpl.dpi)}
+            </a>
+          )}
+        </div>
+        {preview && pdf && (
+          <iframe
+            src={`${base}/label#toolbar=0`}
+            title={`${t.preview} – ${shipmentsCs.parcel(parcel.parcelNo)}`}
+            className="mt-2 h-96 w-full max-w-md rounded border border-stone-200 bg-white"
+            data-testid={`preview-frame-${parcel.parcelNo}`}
+          />
+        )}
+        {parcel.printJobs.length > 0 && (
+          <>
+            <p className="mt-2 font-medium">{t.history}</p>
+            <ol className="mt-1 flex flex-col gap-1">
+              {parcel.printJobs.map((j) => (
+                <li key={j.code} className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono">{t.job(j.code)}</span>
+                  <JobChip status={j.status} />
+                  <span>
+                    {j.printer} · {j.requestedBy} · {formatDateTimeCs(j.createdAt, timeZone)}
+                  </span>
+                  {j.reason && <span>· {j.reason}</span>}
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+      </details>
     </li>
   );
 }
