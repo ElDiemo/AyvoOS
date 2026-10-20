@@ -67,17 +67,48 @@ export function combinedOutcome(data: OrderShipment, printer: string | null): Ou
       text: `Štítky jsou vytvořené, ale soubory pro tiskárnu (ZPL) se nepodařilo získat – nic se netiskne. ${s.zpl.errorMessage ?? ''} Pokračujte na objednávce.`.trim(),
     };
   }
-  const queued = s.parcels.filter(
-    (p) => p.printJobs[0] && ACTIVE.includes(p.printJobs[0].status),
-  ).length;
-  if (queued > 0) {
+  // UI38-R2: what each label's latest job really reached — not only whether one is still active.
+  const jobs = s.parcels.map((p) => p.printJobs[0] ?? null);
+  const n = (...st: PrintJobStatus[]) => jobs.filter((j) => j && st.includes(j.status)).length;
+  const total = s.parcels.length;
+  const active = n(...ACTIVE);
+  const sent = n('SENT');
+  const failed = n('FAILED');
+  const doubtful = n('UNCERTAIN');
+  // Waiting for the printer's files only while they are really missing.
+  if (active + sent + failed + doubtful === 0) {
+    if (s.printWaiting.length > 0 || s.zpl?.status === 'PENDING') {
+      return {
+        tone: 'info',
+        text: `Štítky jsou vytvořené; tisk na ${printer} čeká na soubory pro tiskárnu (ZPL). Stav sledujte na objednávce.`,
+      };
+    }
     return {
-      tone: 'ok',
-      text: `Štítky jsou vytvořené a ${queued} z ${s.parcels.length} jde do tiskárny ${printer}. Po nalepení potvrďte na objednávce „Připraveno k vyzvednutí“.`,
+      tone: 'info',
+      text: 'Štítky jsou vytvořené, tisk ale nezačal. Spusťte ho na objednávce.',
     };
   }
+  const where = [...new Set(jobs.flatMap((j) => (j ? [j.printer] : [])))].join(', ') || printer;
+  const parts: string[] = [];
+  if (sent > 0)
+    parts.push(
+      `${sent} z ${total} odesláno do tiskárny ${where} (vytištění tím není potvrzené – zkontrolujte štítky)`,
+    );
+  if (active > 0) parts.push(`${active} z ${total} jde do tiskárny ${where}`);
+  if (failed > 0)
+    parts.push(
+      `${failed} z ${total} se nepodařilo odeslat – nevytiskly se; vytiskněte je na objednávce znovu`,
+    );
+  if (doubtful > 0)
+    parts.push(
+      `${doubtful} z ${total} nejisté – nejdřív zkontrolujte, zda štítek vyjel; nic se neopakuje automaticky`,
+    );
+  const next =
+    failed + doubtful > 0
+      ? 'Další krok najdete na objednávce.'
+      : 'Po nalepení potvrďte na objednávce „Připraveno k vyzvednutí“.';
   return {
-    tone: 'info',
-    text: `Štítky jsou vytvořené; tisk na ${printer} čeká na soubory pro tiskárnu (ZPL). Stav sledujte na objednávce.`,
+    tone: failed + doubtful > 0 ? 'error' : 'ok',
+    text: `Štítky jsou vytvořené: ${parts.join('; ')}. ${next}`,
   };
 }

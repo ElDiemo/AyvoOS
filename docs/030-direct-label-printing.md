@@ -130,7 +130,10 @@ they are; the order stays findable in its tab with the next step.
 
 After "Dokončit a vytisknout štítky" the picking screen reports what really happened, not just
 the HTTP answer: the carrier refused (with its reason), the labels are still being created, the
-ZPL is missing (nothing printed), or N of M labels went to the printer — each with the next step.
+ZPL failed (nothing printed), and per label how far its job got (UI38-R2): on its way, sent to the
+printer (not a confirmed physical print), not sent (print it again on the order) or uncertain
+(check the physical result first; never retried automatically). "Waiting for the ZPL" only while
+it is really missing.
 
 Screenshots (`docs/screenshots/printing/`, made by `apps/web/e2e/workflow-printing.spec.ts` with
 `AYVO_SCREENSHOT_DIR`): adding a printer from detected devices (desktop), site printers (desktop,

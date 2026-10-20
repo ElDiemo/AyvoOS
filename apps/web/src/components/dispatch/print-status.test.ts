@@ -111,6 +111,79 @@ describe('combinedOutcome: an HTTP 200 is not success by itself', () => {
     });
   });
 
+  // UI38-R2: no active job does not mean "waiting for the ZPL".
+  const done = (...st: PrintJobView['status'][]) =>
+    combinedOutcome(
+      data({ parcels: parcels(...st.map((x) => [x, 'Zebra A'] as [typeof x, string])) }),
+      'Zebra B',
+    );
+
+  it('all SENT: sent to the printer — not claimed as physically printed, not waiting', () => {
+    const o = done('SENT', 'SENT', 'SENT');
+    expect(o.tone).toBe('ok');
+    expect(o.text).toContain('3 z 3 odesláno do tiskárny Zebra A');
+    expect(o.text).toContain('vytištění tím není potvrzené');
+    expect(o.text).not.toContain('čeká');
+  });
+
+  it('all FAILED: not sent, nothing printed, print again on the order', () => {
+    const o = done('FAILED', 'FAILED');
+    expect(o.tone).toBe('error');
+    expect(o.text).toContain('2 z 2 se nepodařilo odeslat');
+    expect(o.text).toContain('vytiskněte je na objednávce znovu');
+    expect(o.text).not.toContain('čeká');
+  });
+
+  it('UNCERTAIN: check the physical result first; nothing is retried automatically', () => {
+    const o = done('UNCERTAIN');
+    expect(o.tone).toBe('error');
+    expect(o.text).toContain('nejdřív zkontrolujte, zda štítek vyjel');
+    expect(o.text).toContain('nic se neopakuje automaticky');
+    expect(o.text).not.toContain('čeká');
+  });
+
+  it('a mixed result names each part', () => {
+    const o = done('SENT', 'FAILED', 'UNCERTAIN', 'QUEUED');
+    expect(o.tone).toBe('error');
+    for (const part of [
+      '1 z 4 odesláno do tiskárny',
+      '1 z 4 jde do tiskárny',
+      '1 z 4 se nepodařilo odeslat',
+      '1 z 4 nejisté',
+    ])
+      expect(o.text).toContain(part);
+  });
+
+  it('a repeated request after a lost answer, the agent having sent everything meanwhile', () => {
+    // The replay returns today's state: every job SENT, the ZPL done, nothing waiting.
+    const replay = data({
+      parcels: parcels(['SENT', 'Zebra B'], ['SENT', 'Zebra B']),
+      printWaiting: [],
+    });
+    const o = combinedOutcome(replay, 'Zebra B');
+    expect(o).toEqual({
+      tone: 'ok',
+      text: expect.stringContaining('2 z 2 odesláno do tiskárny Zebra B'),
+    });
+  });
+
+  it('waits for the ZPL only while it is really missing', () => {
+    const pending = combinedOutcome(
+      data({
+        zpl: { status: 'PENDING', dpi: 203, attempts: 1, errorCode: null, errorMessage: null },
+        printWaiting: [{ kind: 'SHIPMENT', printer: 'Zebra B', parcelNo: null, requestedAt: '' }],
+      }),
+      'Zebra B',
+    );
+    expect([pending.tone, pending.text.includes('čeká na soubory pro tiskárnu')]).toEqual([
+      'info',
+      true,
+    ]);
+    // ZPL done, no job and nothing waiting: printing did not start — said so, not "waiting".
+    const none = combinedOutcome(data({}), 'Zebra B');
+    expect(none.text).toContain('tisk ale nezačal');
+  });
+
   it('without printing: labels ready, printing on the order', () => {
     expect(combinedOutcome(data({}), null).tone).toBe('ok');
   });
