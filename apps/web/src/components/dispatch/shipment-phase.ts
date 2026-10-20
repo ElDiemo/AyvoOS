@@ -13,13 +13,15 @@ export type ShipmentPhase =
   | 'CANCELLING'
   | 'LABELED'
   | 'READY_FOR_PICKUP'
-  | 'HANDED_OVER';
+  | 'HANDED_OVER'
+  | 'DELIVERED';
 
 /**
  * The one current step of the dispatch, from the order status and its shipment (doc 029). The
  * order status is the process; the shipment only tells where the carrier request stands.
  */
 export function shipmentPhase(status: OrderStatus, data: OrderShipment): ShipmentPhase | null {
+  if (status === 'DELIVERED') return 'DELIVERED';
   if (status === 'HANDED_TO_CARRIER') return 'HANDED_OVER';
   if (status === 'READY_FOR_PICKUP') return 'READY_FOR_PICKUP';
   if (status !== 'READY_TO_DISPATCH') return null;

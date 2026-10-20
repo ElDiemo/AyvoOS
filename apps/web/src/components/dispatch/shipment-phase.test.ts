@@ -29,6 +29,7 @@ const shipment = (over: Partial<Shipment> = {}, site: CarrierInfo = carrier): Or
     pollingStopped: false,
     zpl: null,
     printWaiting: [],
+    tracking: null,
     createdAt: '2026-10-18T10:00:00.000Z',
     ...over,
   },

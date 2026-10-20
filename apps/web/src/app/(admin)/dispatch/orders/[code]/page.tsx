@@ -151,13 +151,17 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
           <ol className="flex flex-col gap-2 text-sm">
             {order.history.map((e, i) => (
               <li key={i}>
-                <span className="font-medium">{t.events[e.type] ?? e.type}</span>
+                <span className="font-medium">
+                  {(e.source === 'CARRIER' ? t.carrierEvents[e.type] : undefined) ??
+                    t.events[e.type] ??
+                    e.type}
+                </span>
                 {e.shipment && <span className="font-mono"> · {e.shipment}</span>}
                 {e.parcels !== null && <span> · {t.parcels(e.parcels)}</span>}
                 {e.crate && <span className="font-mono"> · {e.crate}</span>}
                 {e.reason && <span> · {e.reason}</span>}
                 <span className="block text-xs text-stone-500">
-                  {e.actor} · {formatDateTimeCs(e.occurredAt, timeZone)}
+                  {e.actor ?? t.byCarrier} · {formatDateTimeCs(e.occurredAt, timeZone)}
                 </span>
               </li>
             ))}

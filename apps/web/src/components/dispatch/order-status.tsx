@@ -12,7 +12,8 @@ const tone: Record<string, string> = {
   PICKING: 'border-amber-300 bg-amber-50 text-amber-950',
   READY_TO_DISPATCH: 'border-sky-300 bg-sky-50 text-sky-950',
   READY_FOR_PICKUP: 'border-emerald-300 bg-emerald-50 text-emerald-900',
-  HANDED_TO_CARRIER: 'border-stone-300 bg-stone-100 text-stone-800',
+  HANDED_TO_CARRIER: 'border-violet-300 bg-violet-50 text-violet-900',
+  DELIVERED: 'border-stone-300 bg-stone-100 text-stone-800',
   CANCELLED: 'border-stone-200 bg-stone-100 text-stone-500',
 };
 
