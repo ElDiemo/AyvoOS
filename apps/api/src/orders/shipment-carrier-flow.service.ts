@@ -491,6 +491,7 @@ export class ShipmentCarrierFlow {
          SET "lease_until" = now() + make_interval(secs => ${LEASE_SECONDS}),
              "attempts" = f."attempts" + 1, "updated_at" = now()
        WHERE f."id" = ${fetchId}::uuid AND f."status" = 'PENDING'
+         AND f."attempts" < ${MAX_VARIANT_ATTEMPTS}
          AND (f."lease_until" IS NULL OR f."lease_until" < now())
          AND NOT EXISTS (SELECT 1 FROM "shipment_label_fetches" o
                           WHERE o."shipment_id" = f."shipment_id" AND o."id" <> f."id"
@@ -582,6 +583,31 @@ export class ShipmentCarrierFlow {
         return;
       }
     }
+    try {
+      await this.storeVariant(s, request.id, fetchId, fetch.dpi, byNo, by);
+    } catch (error) {
+      // Storing failed after the carrier answered: retried with back-off (bounded) — never a
+      // silent loop of format changes at the carrier.
+      this.log.error(`Label variant of ${s.code} not stored: ${String(error)}`);
+      await this.retryVariant(
+        fetchId,
+        by,
+        'LABELS_NOT_STORED',
+        'The printer labels could not be stored',
+      );
+    }
+  }
+
+  private async storeVariant(
+    s: { id: string; code: string; orderId: string; parcels: { id: string; parcelNo: number }[] },
+    requestId: string,
+    fetchId: string,
+    dpi: number,
+    byNo: Map<number, CarrierLabelFile & { parcelNo: number }>,
+    by: By,
+  ): Promise<void> {
+    const fetch = { dpi };
+    const request = { id: requestId };
     const stored: { parcelId: string; file: CarrierLabelFile; key: string }[] = [];
     for (const p of s.parcels) {
       const file = byNo.get(p.parcelNo)!;
@@ -705,9 +731,14 @@ export class ShipmentCarrierFlow {
       });
       if (labels.length !== parcelIds.length) continue; // that resolution is not stored yet
       const items = [];
+      let busy = false;
       for (const l of labels) {
-        // A parcel already on its way to a printer is not sent twice by a shipment-wide request.
-        if (r.kind === 'SHIPMENT' && (await this.printQueue.activeJob(tx, l.parcelId!))) continue;
+        // A parcel already on its way to a printer is never sent twice (one active job per
+        // parcel): a shipment-wide request skips it, a re-print waits until that job ended.
+        if (await this.printQueue.activeJob(tx, l.parcelId!)) {
+          busy = true;
+          continue;
+        }
         items.push({
           parcelId: l.parcelId!,
           labelId: l.id,
@@ -716,6 +747,7 @@ export class ShipmentCarrierFlow {
           sizeBytes: l.sizeBytes,
         });
       }
+      if (r.kind === 'REPRINT' && busy) continue;
       await this.printQueue.enqueue(tx, r.id, items, at);
     }
   }
@@ -727,6 +759,24 @@ export class ShipmentCarrierFlow {
        WHERE f."status" = 'PENDING' AND f."next_at" <= now()
          AND (f."lease_until" IS NULL OR f."lease_until" < now())
        ORDER BY f."next_at" LIMIT ${limit}`;
+    // A fetch whose attempts ran out (e.g. after failures past the carrier call) ends for a person.
+    const exhausted = await this.prisma.shipmentLabelFetch.findMany({
+      where: {
+        status: 'PENDING',
+        attempts: { gte: MAX_VARIANT_ATTEMPTS },
+        OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }],
+      },
+      include: { shipment: { select: { createdBy: true, operationRequestId: true } } },
+    });
+    for (const f of exhausted) {
+      await this.endVariant(
+        f.id,
+        { actorId: f.shipment.createdBy, operationId: f.shipment.operationRequestId },
+        f.errorCode ?? 'LABELS_NOT_DOWNLOADED',
+        f.errorMessage ?? 'The printer labels could not be stored',
+        true,
+      );
+    }
     for (const f of due) {
       const s = await this.prisma.shipment.findUnique({
         where: { id: f.shipment_id },

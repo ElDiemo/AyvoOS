@@ -12,7 +12,7 @@ import { CODE_PREFIX, formatCode } from '../common/codes.js';
 import { domainError } from '../common/domain-error.js';
 import { allocateSerials } from '../database/code-counters.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { Prisma } from '../generated/prisma/client.js';
 import { FILE_STORAGE, type FileStorage } from '../storage/file-storage.js';
 import type { AgentPrincipal } from './print-agent.guard.js';
 
@@ -103,6 +103,14 @@ export class PrintQueueService {
       include: { printer: { select: { agentId: true } } },
     });
     if (request.status !== 'WAITING_FOR_LABELS') return;
+    if (items.length === 0) {
+      // Every label is already on its way to a printer: nothing more to print for this request.
+      await tx.printRequest.update({
+        where: { id: request.id },
+        data: { status: 'QUEUED', resolvedAt: at },
+      });
+      return;
+    }
     const { first } = await allocateSerials(tx, 'print_job', items.length);
     let serial = first;
     for (const item of items) {
@@ -158,26 +166,46 @@ export class PrintQueueService {
       where: { shipmentId, status: 'WAITING_FOR_LABELS' },
       data: { status: 'CANCELLED', resolvedAt: at },
     });
-    const jobs = await tx.printJob.findMany({
-      where: { shipmentId, status: { in: ['QUEUED', 'CLAIMED'] } },
-      select: { id: true },
+    return this.cancelOpen(
+      tx,
+      Prisma.sql`"shipment_id" = ${shipmentId}::uuid`,
+      actorId,
+      at,
+      'Příprava přepravy se ruší – štítek je neplatný',
+    );
+  }
+
+  /**
+   * A printer disabled or moved to another agent, or its agent revoked: its waiting requests and
+   * jobs not started yet are cancelled (a started one ends as the agent reports it) — never left
+   * to a device that will not print them, never redirected silently.
+   */
+  async cancelForPrinter(tx: Tx, printerId: string, actorId: string, at: Date, detail: string) {
+    await tx.printRequest.updateMany({
+      where: { printerId, status: 'WAITING_FOR_LABELS' },
+      data: { status: 'CANCELLED', resolvedAt: at },
     });
-    for (const j of jobs) {
-      await tx.printJob.update({
-        where: { id: j.id },
-        data: { status: 'CANCELLED', finishedAt: at, detail: 'Přeprava zrušena' },
-      });
+    return this.cancelOpen(tx, Prisma.sql`"printer_id" = ${printerId}::uuid`, actorId, at, detail);
+  }
+
+  /** One conditional update (a concurrent start wins; nothing fails), then the history. */
+  private async cancelOpen(
+    tx: Tx,
+    where: Prisma.Sql,
+    actorId: string,
+    at: Date,
+    detail: string,
+  ): Promise<number> {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      UPDATE "print_jobs" SET "status" = 'CANCELLED', "finished_at" = ${at}, "detail" = ${detail}
+       WHERE ${where} AND "status" IN ('QUEUED', 'CLAIMED')
+      RETURNING "id"`;
+    for (const r of rows) {
       await tx.printJobEvent.create({
-        data: {
-          jobId: j.id,
-          status: 'CANCELLED',
-          occurredAt: at,
-          actorUserId: actorId,
-          detail: 'Příprava přepravy se ruší – štítek je neplatný',
-        },
+        data: { jobId: r.id, status: 'CANCELLED', occurredAt: at, actorUserId: actorId, detail },
       });
     }
-    return jobs.length;
+    return rows.length;
   }
 
   /** Cancels one job that has not started (an operator's decision, with a reason). */
@@ -256,7 +284,8 @@ export class PrintQueueService {
       data: { lastSeenAt: new Date() },
     });
     const token = randomBytes(24).toString('base64url');
-    const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
       UPDATE "print_jobs" j
          SET "status" = 'CLAIMED', "claim_token" = ${token}, "claimed_at" = now(),
              "lease_until" = now() + make_interval(secs => ${CLAIM_LEASE_SECONDS})
@@ -266,26 +295,27 @@ export class PrintQueueService {
                         ORDER BY q."created_at", q."serial"
                         LIMIT 1 FOR UPDATE OF q SKIP LOCKED)
       RETURNING j."id"`;
-    if (rows.length === 0) return { job: null };
-    const job = await this.prisma.printJob.findUniqueOrThrow({
-      where: { id: rows[0]!.id },
-      include: { printer: { select: { usbSerial: true } } },
+      if (rows.length === 0) return { job: null };
+      const job = await tx.printJob.findUniqueOrThrow({
+        where: { id: rows[0]!.id },
+        include: { printer: { select: { usbSerial: true } } },
+      });
+      await tx.printJobEvent.create({
+        data: { jobId: job.id, status: 'CLAIMED', occurredAt: job.claimedAt!, agentId: agent.id },
+      });
+      return {
+        job: {
+          id: job.id,
+          code: job.code,
+          printerId: job.printerId,
+          usbSerial: job.printer.usbSerial,
+          claimToken: token,
+          leaseUntil: job.leaseUntil!.toISOString(),
+          sizeBytes: job.sizeBytes,
+          sha256: job.sha256,
+        },
+      };
     });
-    await this.prisma.printJobEvent.create({
-      data: { jobId: job.id, status: 'CLAIMED', occurredAt: job.claimedAt!, agentId: agent.id },
-    });
-    return {
-      job: {
-        id: job.id,
-        code: job.code,
-        printerId: job.printerId,
-        usbSerial: job.printer.usbSerial,
-        claimToken: token,
-        leaseUntil: job.leaseUntil!.toISOString(),
-        sizeBytes: job.sizeBytes,
-        sha256: job.sha256,
-      },
-    };
   }
 
   /** The stored ZPL of a job this agent holds (claimed or sending) — nothing else. */
@@ -402,39 +432,44 @@ export class PrintQueueService {
    * agent writes only after a confirmed start; a started job without a result becomes UNCERTAIN.
    */
   async sweep(): Promise<{ requeued: number; uncertain: number }> {
-    const requeued = await this.prisma.$queryRaw<{ id: string }[]>`
+    const result = await this.prisma.$transaction(async (tx) => {
+      const requeued = await tx.$queryRaw<{ id: string }[]>`
       UPDATE "print_jobs" SET "status" = 'QUEUED', "claim_token" = NULL, "claimed_at" = NULL,
                               "lease_until" = NULL
        WHERE "status" = 'CLAIMED' AND "lease_until" < now()
       RETURNING "id"`;
-    const uncertain = await this.prisma.$queryRaw<{ id: string }[]>`
+      const uncertain = await tx.$queryRaw<{ id: string }[]>`
       UPDATE "print_jobs" SET "status" = 'UNCERTAIN', "finished_at" = now(),
                               "detail" = 'Agent nenahlásil výsledek – štítek se mohl vytisknout'
        WHERE "status" = 'SENDING' AND "lease_until" < now()
       RETURNING "id"`;
-    const now = new Date();
-    for (const r of requeued) {
-      await this.prisma.printJobEvent.create({
-        data: {
-          jobId: r.id,
-          status: 'CLAIM_EXPIRED',
-          occurredAt: now,
-          detail: 'Agent úlohu nespustil – vrácena do fronty',
-        },
-      });
+      const now = new Date();
+      for (const r of requeued) {
+        await tx.printJobEvent.create({
+          data: {
+            jobId: r.id,
+            status: 'CLAIM_EXPIRED',
+            occurredAt: now,
+            detail: 'Agent úlohu nespustil – vrácena do fronty',
+          },
+        });
+      }
+      for (const r of uncertain) {
+        await tx.printJobEvent.create({
+          data: {
+            jobId: r.id,
+            status: 'UNCERTAIN',
+            occurredAt: now,
+            detail: 'Bez výsledku od agenta',
+          },
+        });
+      }
+      return { requeued: requeued.map((r) => r.id), uncertain: uncertain.map((r) => r.id) };
+    });
+    for (const id of result.uncertain) {
+      this.log.warn(`Print job ${id}: no result after sending started — UNCERTAIN`);
     }
-    for (const r of uncertain) {
-      await this.prisma.printJobEvent.create({
-        data: {
-          jobId: r.id,
-          status: 'UNCERTAIN',
-          occurredAt: now,
-          detail: 'Bez výsledku od agenta',
-        },
-      });
-      this.log.warn(`Print job ${r.id}: no result after sending started — UNCERTAIN`);
-    }
-    return { requeued: requeued.length, uncertain: uncertain.length };
+    return { requeued: result.requeued.length, uncertain: result.uncertain.length };
   }
 
   private async lockJob(tx: Tx, agent: AgentPrincipal, jobId: string) {

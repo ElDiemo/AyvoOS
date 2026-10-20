@@ -623,7 +623,8 @@ export class OrdersService implements OnModuleInit {
         throw domainError(403, 'FORBIDDEN', 'You may not print labels');
       }
       const current = await this.printers.dispatchPrinter(site.siteId);
-      if (current?.id !== input.printerId) {
+      // The printer shown must still be the site's default one with automatic printing.
+      if (current?.id !== input.printerId || !current.autoPrint) {
         throw domainError(
           409,
           'PRINTER_CHANGED',

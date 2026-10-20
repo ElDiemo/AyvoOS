@@ -17,6 +17,7 @@ import { OperationRequestsService } from '../database/operation-requests.service
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { newAgentToken } from './agent-token.js';
+import { PrintQueueService } from './print-queue.service.js';
 
 type Tx = Prisma.TransactionClient;
 /** An agent counts as online when it contacted the server within this time. */
@@ -55,6 +56,7 @@ export class PrintersService {
     private readonly prisma: PrismaService,
     private readonly operations: OperationRequestsService,
     private readonly audit: AuditService,
+    private readonly queue: PrintQueueService,
   ) {}
 
   async view(siteId: string): Promise<SitePrinting> {
@@ -239,11 +241,16 @@ export class PrintersService {
           where: { id: agentId },
           data: { revokedAt: now, revokedBy: actorId },
         });
-        // Its printers stop being the default (a revoked agent can no longer print).
+        // Its printers are disabled (a revoked agent can no longer print) and their waiting
+        // jobs cancelled — never left to a device that will not print them.
+        const printers = await tx.printer.findMany({ where: { agentId }, select: { id: true } });
         await tx.printer.updateMany({
-          where: { agentId, dispatchDefault: true },
-          data: { dispatchDefault: false, updatedAt: now, updatedBy: actorId },
+          where: { agentId },
+          data: { dispatchDefault: false, enabled: false, updatedAt: now, updatedBy: actorId },
         });
+        for (const p of printers) {
+          await this.queue.cancelForPrinter(tx, p.id, actorId, now, 'Tiskový agent zrušen');
+        }
         await this.audit.record(
           {
             type: 'PRINT_AGENT_REVOKED',
@@ -314,6 +321,16 @@ export class PrintersService {
           updatedAt: now,
           updatedBy: actorId,
         };
+        // Disabled or moved to another agent: its waiting work is cancelled, never redirected.
+        if (before && (!input.enabled || before.agentId !== input.agentId)) {
+          await this.queue.cancelForPrinter(
+            tx,
+            before.id,
+            actorId,
+            now,
+            input.enabled ? 'Tiskárna převedena na jiného agenta' : 'Tiskárna vypnuta',
+          );
+        }
         const saved = before
           ? await tx.printer.update({ where: { id: before.id }, data })
           : await tx.printer.create({

@@ -97,7 +97,7 @@ describe.skipIf(!hasDatabase)('direct printing: labels, print queue, print agent
     const job = await claim(token);
     if (!job) return null;
     const data = await binary(
-      agent(token).get(`jobs/${job.id}/data?claim=${job.claimToken}`),
+      agent(token).get(`jobs/${job.id}/data`).set('X-Ayvo-Claim', job.claimToken),
     ).expect(200);
     const bytes = data.body as Buffer;
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(job.sha256);
@@ -596,6 +596,116 @@ describe.skipIf(!hasDatabase)('direct printing: labels, print queue, print agent
     expect(await claim(other.token!)).toBeNull();
     const again = await post(order, 'print', { printerId: printerA });
     expect([again.status, again.body.code]).toEqual([409, 'PRINT_EXISTS']);
+  });
+
+  it('review: a reprint never races a waiting print; exhausted ZPL fetches stop; no auto-print off', async () => {
+    const { order } = await picked(2);
+    testCarrierControl.variant = ['FAIL'];
+    await completeAndPrint(order, printerA).expect(200);
+    // The shipment's print waits for its ZPL: a re-print of a parcel would print it twice.
+    const reprint = await post(order, 'parcels/1/reprint', {
+      printerId: printerA,
+      reason: 'Druhý štítek',
+      acknowledgeDuplicate: true,
+    });
+    expect([reprint.status, reprint.body.code]).toEqual([409, 'PRINT_IN_PROGRESS']);
+    // A fetch whose attempts ran out ends for a person — no endless format changes at the carrier.
+    const calls = testCarrierControl.variantCalls;
+    await t.prisma
+      .$executeRaw`UPDATE "shipment_label_fetches" SET "attempts" = 10, "next_at" = now() WHERE "shipment_id" = (SELECT "id" FROM "shipments" WHERE "order_id" = (SELECT "id" FROM "orders" WHERE "code" = ${order}) AND "status" = 'LABELED')`;
+    await flow().variantsDue(20);
+    expect(testCarrierControl.variantCalls).toBe(calls);
+    expect((await view(order)).shipment!.zpl).toMatchObject({ status: 'FAILED' });
+    // "Získat ZPL znovu" starts a fresh, bounded round; the waiting print then goes on.
+    await post(order, 'zpl/retry').expect(200);
+    expect(await jobsOf(order)).toHaveLength(2);
+    // Automatic printing switched off: the combined action never prints on that printer.
+    const p = await t.prisma.printer.findUniqueOrThrow({ where: { id: printerA } });
+    await http()
+      .post(admin('/printers'))
+      .send(
+        printerBody(
+          { id: p.id, code: p.code, name: p.name, agentId: p.agentId, usbSerial: p.usbSerial },
+          { dispatchDefault: true, autoPrint: false },
+        ),
+      )
+      .expect(200);
+    const second = await picked(1);
+    const off = await completeAndPrint(second.order, printerA);
+    expect([off.status, off.body.code]).toEqual([409, 'PRINTER_CHANGED']);
+  });
+
+  it('review: a printer disabled or an agent revoked cancels its waiting jobs; printing again is possible', async () => {
+    const { order } = await picked(2);
+    await completeAndPrint(order, printerA).expect(200);
+    const p = await t.prisma.printer.findUniqueOrThrow({ where: { id: printerA } });
+    await http()
+      .post(admin('/printers'))
+      .send(
+        printerBody(
+          { id: p.id, code: p.code, name: p.name, agentId: p.agentId, usbSerial: p.usbSerial },
+          { dispatchDefault: false, enabled: false },
+        ),
+      )
+      .expect(200);
+    expect((await jobsOf(order)).map((j) => j.status)).toEqual(['CANCELLED', 'CANCELLED']);
+    expect(await claim(agentA.token)).toBeNull();
+    // Cancelled jobs do not block printing on another printer.
+    await post(order, 'print', { printerId: printerB }).expect(200);
+    expect((await jobsOf(order)).filter((j) => j.status === 'QUEUED')).toHaveLength(2);
+    // The other agent revoked: its printer disabled, its waiting jobs cancelled.
+    const extra = (
+      await http()
+        .post(admin('/agents'))
+        .send({
+          requestId: rid(),
+          code: `RPI-V-${rid().slice(0, 4).toUpperCase()}`,
+          name: 'Zrušený',
+        })
+        .expect(200)
+    ).body as PrintAgentToken;
+    const moved = await t.prisma.printer.findUniqueOrThrow({ where: { id: printerB } });
+    await http()
+      .post(admin('/printers'))
+      .send(
+        printerBody(
+          {
+            id: moved.id,
+            code: moved.code,
+            name: moved.name,
+            agentId: extra.agent.id,
+            usbSerial: moved.usbSerial,
+          },
+          { dispatchDefault: false },
+        ),
+      )
+      .expect(200);
+    // Moving the printer to another agent never hands it the old agent's jobs.
+    expect((await jobsOf(order)).every((j) => j.status === 'CANCELLED')).toBe(true);
+    await http()
+      .post(admin(`/agents/${extra.agent.id}/revoke`))
+      .send({ requestId: rid(), reason: 'Zařízení vyřazeno' })
+      .expect(200);
+    expect((await t.prisma.printer.findUniqueOrThrow({ where: { id: printerB } })).enabled).toBe(
+      false,
+    );
+    // Restore for the other tests (printer B back on its own agent).
+    await http()
+      .post(admin('/printers'))
+      .send(
+        printerBody(
+          {
+            id: moved.id,
+            code: moved.code,
+            name: moved.name,
+            agentId: agentB.id,
+            usbSerial: moved.usbSerial,
+          },
+          { dispatchDefault: false },
+        ),
+      )
+      .expect(200);
+    await setDefault(printerA);
   });
 
   it('the database keeps the queue honest even without the API', async () => {

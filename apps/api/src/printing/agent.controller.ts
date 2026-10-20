@@ -18,7 +18,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
-  Query,
+  Headers,
   StreamableFile,
 } from '@nestjs/common';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -53,12 +53,13 @@ export class AgentController {
     return this.queue.claim(agent);
   }
 
+  /** The claim token travels in a header (never in a URL that proxies may log). */
   @PrintAgentAccess()
   @Get('jobs/:id/data')
   async data(
     @CurrentAgent() agent: AgentPrincipal,
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('claim') claim: string,
+    @Headers('x-ayvo-claim') claim: string | undefined,
   ): Promise<StreamableFile> {
     const bytes = await this.queue.data(agent, id, String(claim ?? ''));
     return new StreamableFile(bytes, { type: 'application/zpl', disposition: 'attachment' });

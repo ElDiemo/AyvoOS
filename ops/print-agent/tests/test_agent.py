@@ -46,7 +46,10 @@ class FakeServer:
 
             def do_GET(self):
                 server.tokens_seen.add(self.headers.get("X-Ayvo-Print-Agent", ""))
-                if "/data" in self.path:
+                if self.path.endswith("/data"):
+                    # The claim token only in its header — never in the URL.
+                    if not self.headers.get("X-Ayvo-Claim") or "?" in self.path:
+                        return self._send(404, {"code": "JOB_NOT_FOUND"})
                     return self._send(200, server.data_bytes, "application/zpl")
                 self._send(404, {"code": "NOT_FOUND"})
 
@@ -152,6 +155,13 @@ class AgentTest(unittest.TestCase):
         self.agent().once()
         self.assertEqual(self.printed(), b"")
         self.assertEqual(self.server.results, [])
+
+    def test_an_unclear_start_error_writes_nothing_and_says_so(self):
+        job = self.server.job()
+        self.server.start_status = 502
+        self.agent().once()
+        self.assertEqual(self.printed(), b"")
+        self.assertEqual(self.server.results, [(job["id"], "FAILED_BEFORE_SEND")])
 
     def test_bytes_that_do_not_match_the_job_are_not_printed(self):
         job = self.server.job()

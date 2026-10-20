@@ -331,6 +331,7 @@ BEGIN
           AND p."shipment_id" = NEW."shipment_id"
           AND s."status" = 'LABELED' AND s."order_id" = NEW."order_id" AND s."site_id" = NEW."site_id"
           AND pr."site_id" = NEW."site_id" AND pr."agent_id" = NEW."agent_id" AND pr."enabled"
+          AND EXISTS (SELECT 1 FROM "print_agents" a WHERE a."id" = NEW."agent_id" AND a."revoked_at" IS NULL)
           AND rq."printer_id" = NEW."printer_id" AND rq."shipment_id" = NEW."shipment_id"
           AND (rq."parcel_id" IS NULL OR rq."parcel_id" = NEW."parcel_id")) THEN
     RAISE EXCEPTION 'AYVO: a print job prints the stored ZPL of its own parcel on its request''s printer' USING ERRCODE = 'check_violation';

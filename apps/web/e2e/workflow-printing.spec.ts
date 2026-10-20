@@ -67,7 +67,9 @@ async function claim(request: APIRequestContext): Promise<Job | null> {
 }
 async function printOne(request: APIRequestContext, outcome: 'SENT' | 'UNCERTAIN') {
   const job = (await claim(request))!;
-  const data = await agent(request).get(`jobs/${job.id}/data?claim=${job.claimToken}`);
+  const data = await request.get(`/api/agent/v1/jobs/${job.id}/data`, {
+    headers: { 'X-Ayvo-Print-Agent': agentToken, 'X-Ayvo-Claim': job.claimToken },
+  });
   expect(data.status()).toBe(200);
   expect((await data.body()).toString('latin1')).toMatch(/^\^XA/);
   await json(await agent(request).post(`jobs/${job.id}/start`, { claimToken: job.claimToken }));

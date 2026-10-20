@@ -800,7 +800,9 @@ export class ShipmentsService {
   ): Promise<void> {
     const printer = await this.printers.usablePrinter(tx, site.siteId, printerId);
     const existing = await tx.printRequest.count({
-      where: { shipmentId: shipment.id, kind: 'SHIPMENT', status: { not: 'CANCELLED' } },
+      // Only a request still waiting is the same decision (jobs already created or cancelled are
+      // judged by the caller: print() refuses while any job is on its way or possibly printed).
+      where: { shipmentId: shipment.id, kind: 'SHIPMENT', status: 'WAITING_FOR_LABELS' },
     });
     if (existing > 0) return;
     await this.printQueue.createRequest(tx, {
@@ -843,8 +845,15 @@ export class ShipmentsService {
         if (order.status !== 'READY_TO_DISPATCH' && order.status !== 'READY_FOR_PICKUP') {
           throw domainError(409, 'ORDER_NOT_READY_TO_DISPATCH', 'Nothing to print for this order');
         }
+        // Cancelled or proven unsent jobs do not count; anything waiting, on its way or possibly
+        // printed does (then single parcels are printed again instead).
         const printed =
-          (await tx.printJob.count({ where: { shipmentId: shipment.id } })) +
+          (await tx.printJob.count({
+            where: {
+              shipmentId: shipment.id,
+              status: { in: ['QUEUED', 'CLAIMED', 'SENDING', 'SENT', 'UNCERTAIN'] },
+            },
+          })) +
           (await tx.printRequest.count({
             where: { shipmentId: shipment.id, kind: 'SHIPMENT', status: 'WAITING_FOR_LABELS' },
           }));
@@ -888,7 +897,17 @@ export class ShipmentsService {
           where: { shipmentId: shipment.id, parcelNo },
         });
         if (!parcel) throw domainError(404, 'PARCEL_NOT_FOUND', 'No such parcel');
-        if (await this.printQueue.activeJob(tx, parcel.id)) {
+        // On its way to a printer already, or waiting for its ZPL in another print request.
+        if (
+          (await this.printQueue.activeJob(tx, parcel.id)) ||
+          (await tx.printRequest.count({
+            where: {
+              shipmentId: shipment.id,
+              status: 'WAITING_FOR_LABELS',
+              OR: [{ parcelId: null }, { parcelId: parcel.id }],
+            },
+          })) > 0
+        ) {
           throw domainError(409, 'PRINT_IN_PROGRESS', 'This label is on its way to a printer');
         }
         if ((await this.printQueue.possiblyPrinted(tx, parcel.id)) && !input.acknowledgeDuplicate) {

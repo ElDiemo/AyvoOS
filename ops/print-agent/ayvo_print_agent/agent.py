@@ -99,12 +99,16 @@ class Api:
         self.config = config
         self.opener = opener or urllib.request.build_opener(_NoRedirect()).open
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> tuple[int, bytes]:
+    def _request(
+        self, method: str, path: str, body: dict | None = None, claim: str | None = None
+    ) -> tuple[int, bytes]:
         url = f"{self.config.api_base}/agent/v1/{path}"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("X-Ayvo-Print-Agent", self.config.token)
         req.add_header("Accept", "application/json")
+        if claim:
+            req.add_header("X-Ayvo-Claim", claim)  # never in the URL (proxy logs)
         if data is not None:
             req.add_header("Content-Type", "application/json")
         if self.config.basic_auth:
@@ -140,7 +144,7 @@ class Api:
 
     def data(self, job_id: str, claim: str) -> bytes:
         _check_id(job_id)
-        status, raw = self._request("GET", f"jobs/{job_id}/data?claim={urllib.request.quote(claim)}")
+        status, raw = self._request("GET", f"jobs/{job_id}/data", claim=claim)
         if status != 200:
             raise ApiError(status, None)
         return raw
@@ -351,11 +355,14 @@ class Agent:
         try:
             self.api.start(job_id, claim)
         except ApiError as e:
-            # Refused (e.g. the shipment is being cancelled): never printed.
-            log.warning("job %s: start refused (%s) — not printed", job_id, e)
-            self.journal.write(job_id, {"id": job_id, "claim": claim, "state": "refused"})
-            self.journal.done(job_id)
-            return True
+            if e.status in (404, 409):
+                # Refused (e.g. the shipment is being cancelled): never printed.
+                log.warning("job %s: start refused (%s) — not printed", job_id, e)
+                self.journal.write(job_id, {"id": job_id, "claim": claim, "state": "refused"})
+                self.journal.done(job_id)
+                return True
+            # Another error: the server may have started the job — say truthfully nothing was written.
+            return fail(f"Spuštění úlohy nepotvrzeno ({e}) – nic neodesláno")
         except OSError as e:
             # The start may or may not have reached the server: do not write.
             return fail(f"Spuštění úlohy nepotvrzeno ({e}) – nic neodesláno")
