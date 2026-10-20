@@ -937,6 +937,18 @@ export class ShipmentsService {
         if (order.status !== 'READY_TO_DISPATCH' && order.status !== 'READY_FOR_PICKUP') {
           throw domainError(409, 'ORDER_NOT_READY_TO_DISPATCH', 'Nothing to print for this order');
         }
+        // A parcel with the carrier has its label on it (doc 031): only single re-prints remain.
+        if (
+          (await tx.shipmentParcelProgress.count({
+            where: { shipmentId: shipment.id, pickedUpSource: { not: null } },
+          })) > 0
+        ) {
+          throw domainError(
+            409,
+            'PARCELS_WITH_CARRIER',
+            'The carrier already has parcels of this shipment: print a single parcel again instead',
+          );
+        }
         // Cancelled or proven unsent jobs do not count; anything waiting, on its way or possibly
         // printed does (then single parcels are printed again instead).
         const printed =

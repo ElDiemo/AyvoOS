@@ -506,19 +506,18 @@ export class ShipmentTrackingService {
           nextAt: schedule.nextAt?.toISOString() ?? null,
           stopped: (schedule.stopReason as 'DELIVERED' | 'CANCELLED' | 'GAVE_UP' | null) ?? null,
         }
-      : progress.length > 0
-        ? {
-            pickedUp: progress.filter((p) => p.pickedUpSource).length,
-            delivered: progress.filter((p) => p.deliveredAt).length,
-            parcels: parcelIds.length,
-            lastSuccessAt: null,
-            lastAttemptAt: null,
-            lastError: null,
-            failures: 0,
-            nextAt: null,
-            stopped: null,
-          }
-        : null;
+      : // Labelled but not scheduled yet (the next poller round does it): nothing checked so far.
+        {
+          pickedUp: progress.filter((p) => p.pickedUpSource).length,
+          delivered: progress.filter((p) => p.deliveredAt).length,
+          parcels: parcelIds.length,
+          lastSuccessAt: null,
+          lastAttemptAt: null,
+          lastError: null,
+          failures: 0,
+          nextAt: null,
+          stopped: null,
+        };
     return { summary, parcels };
   }
 }

@@ -139,6 +139,9 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
     // The carrier has a parcel: no ordinary cancellation releases the order and its crates.
     const cancel = await post(o.order, 'cancel', { reason: 'Hotel zrušil' });
     expect([cancel.status, cancel.body.code]).toEqual([409, 'PARCELS_WITH_CARRIER']);
+    // …nor prints the whole shipment again (the picked-up parcel has its label on it).
+    const print = await post(o.order, 'print', { printerId: randomUUID() });
+    expect([print.status, print.body.code]).toEqual([409, 'PARCELS_WITH_CARRIER']);
 
     // The same answer again: nothing doubled.
     const before = await t.prisma.shipmentTrackingEvent.count({
