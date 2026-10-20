@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { e2eSql } from './e2e-db';
 import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from './labeling-setup';
 
 /**
@@ -21,6 +22,8 @@ let orderCode = '';
 let siteId = '';
 let agentToken = '';
 let printerId = '';
+let legacyOrder = '';
+let legacyCrate: { url: string; code: string } | null = null;
 const suffix = Date.now().toString(36).slice(-4).toUpperCase();
 
 type Res = Awaited<ReturnType<APIRequestContext['get']>>;
@@ -142,7 +145,7 @@ const measurement = (extra: Record<string, unknown>) => ({
 test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
   const request = context.request;
-  const printed = await printedBottles(request, `tisk-mydlo-${Date.now()}`, 6);
+  const printed = await printedBottles(request, `tisk-mydlo-${Date.now()}`, 8);
   const kit = await labelingSetup(request, {
     versionId: printed.versionId,
     capacity: 2,
@@ -181,7 +184,7 @@ test.beforeAll(async ({ browser }) => {
     kit.liquidCode,
     (await receiveStock(request, kit.liquidCode, '5000'))!,
   );
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const urls = printed.urls.slice(i * 2, i * 2 + 2);
     const crate = await labelledCrate(request, kit, {
       versionId: printed.versionId,
@@ -193,7 +196,8 @@ test.beforeAll(async ({ browser }) => {
       bottleUrls: urls,
       category: 'HAND_SOAP',
     });
-    crates.push(crate);
+    if (i < 3) crates.push(crate);
+    else legacyCrate = crate;
   }
   siteId = (
     await json<{ sites: { id: string; code: string }[] }>(await request.get('/api/auth/me'))
@@ -226,6 +230,18 @@ test.beforeAll(async ({ browser }) => {
           hotelCode,
           requestedShipDate: calendar.today,
           lines: [{ productCode: kit.productCode, crates: 3 }],
+        },
+      }),
+    )
+  ).code;
+  legacyOrder = (
+    await json<{ code: string }>(
+      await request.post('/api/admin/orders', {
+        data: {
+          requestId: crypto.randomUUID(),
+          hotelCode,
+          requestedShipDate: calendar.today,
+          lines: [{ productCode: kit.productCode, crates: 1 }],
         },
       }),
     )
@@ -370,4 +386,46 @@ test('the simulated agent prints; an uncertain label is re-printed alone, the du
   await expect(page.getByTestId('order-status')).toHaveText('Kompletace dokončena');
   await expect(page.getByTestId('confirm-ready')).toBeVisible();
   await shot(page, 'printing-04-all-sent-390');
+});
+
+test('PRINT38-R2: a shipment labelled before direct printing (PDF only) prints from the order', async ({
+  page,
+}) => {
+  const request = page.request;
+  // Completed and labelled without printing…
+  await json(
+    await request.post(`/api/admin/orders/${legacyOrder}/crates`, {
+      data: { requestId: crypto.randomUUID(), scannedValue: legacyCrate!.url },
+    }),
+  );
+  await json(
+    await request.post(`/api/admin/orders/${legacyOrder}/complete-and-label`, {
+      data: { requestId: crypto.randomUUID(), printerId: null },
+    }),
+  );
+  // …then made into the state of a shipment labelled before doc 030 (test-only): PDF, no ZPL,
+  // no ZPL fetch at all.
+  const shipment = `(SELECT s."id" FROM "shipments" s JOIN "orders" o ON o."id" = s."order_id" WHERE o."code" = '${legacyOrder}' AND s."status" = 'LABELED')`;
+  await e2eSql([
+    'ALTER TABLE "shipment_labels" DISABLE TRIGGER "shipment_labels_immutable"',
+    'ALTER TABLE "shipment_label_fetches" DISABLE TRIGGER "shipment_label_fetches_no_delete"',
+    `DELETE FROM "shipment_labels" WHERE "format" = 'ZPL' AND "shipment_id" = ${shipment}`,
+    `DELETE FROM "shipment_label_fetches" WHERE "shipment_id" = ${shipment}`,
+    'ALTER TABLE "shipment_labels" ENABLE TRIGGER "shipment_labels_immutable"',
+    'ALTER TABLE "shipment_label_fetches" ENABLE TRIGGER "shipment_label_fetches_no_delete"',
+  ]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/dispatch/orders/${legacyOrder}`);
+  const card = page.getByTestId('print-card');
+  await expect(card.getByTestId('zpl-1')).toHaveCount(0);
+  await card.getByTestId('print-all').click();
+  await expect(card.getByTestId('print-parcel-1-status')).toHaveText('Čeká ve frontě');
+  await page.reload();
+  await expect(card.getByTestId('print-parcel-1-status')).toHaveText('Čeká ve frontě');
+  await expect(card.getByTestId('zpl-1')).toBeVisible();
+  const detail = await json<{
+    shipment: { zpl: { status: string } | null; request: { attemptNo: number } };
+  }>(await request.get(`/api/admin/orders/${legacyOrder}/shipment`));
+  expect(detail.shipment.zpl?.status).toBe('DONE');
+  expect(detail.shipment.request.attemptNo).toBe(1); // the same shipment, nothing new at the carrier
 });

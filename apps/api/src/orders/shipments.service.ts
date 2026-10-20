@@ -822,7 +822,29 @@ export class ShipmentsService {
       shipment: shipment.code,
       printer: printer.name,
     });
+    await this.ensureVariant(tx, shipment.id, printer.dpi, step.occurredAt);
     await this.flow.releasePrints(tx, shipment.id, step.occurredAt);
+  }
+
+  /**
+   * PRINT38-R2: a labelled shipment whose ZPL at this resolution is neither stored nor being
+   * fetched (e.g. labelled before doc 030) gets its fetch now — from the same carrier batch, never
+   * a new shipment. Idempotent: an existing fetch (pending, failed or done) is left as it is.
+   */
+  private async ensureVariant(tx: Tx, shipmentId: string, dpi: number, at: Date): Promise<void> {
+    const s = await tx.shipment.findUniqueOrThrow({
+      where: { id: shipmentId },
+      select: { status: true, _count: { select: { parcels: true } } },
+    });
+    if (s.status !== 'LABELED') return; // a shipment still being created gets it with its labels
+    const stored = await tx.shipmentLabel.count({
+      where: { shipmentId, format: 'ZPL', dpi, parcelId: { not: null } },
+    });
+    if (stored >= s._count.parcels) return;
+    await tx.$executeRaw`
+      INSERT INTO "shipment_label_fetches" ("shipment_id", "format", "dpi", "next_at", "created_at", "updated_at")
+      VALUES (${shipmentId}::uuid, 'ZPL', ${dpi}, ${at}, ${at}, ${at})
+      ON CONFLICT ("shipment_id", "format", "dpi") DO NOTHING`;
   }
 
   /** "Tisknout štítky": every parcel label of the shipment on the printer the operator saw. */
@@ -832,7 +854,7 @@ export class ShipmentsService {
     code: string,
     input: PrintShipmentRequest,
   ): Promise<OrderShipment> {
-    await this.operations.run(
+    const { result } = await this.operations.run(
       'SHIPMENT_PRINT',
       input.requestId,
       { actorId, siteId: site.siteId, code, printerId: input.printerId },
@@ -866,9 +888,10 @@ export class ShipmentsService {
         }
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         await this.planPrint(tx, site, order.id, shipment, input.printerId, step);
-        return { code };
+        return { code, shipmentId: shipment.id };
       },
     );
+    await this.flow.fetchVariantsOf(result.shipmentId, { actorId, operationId: input.requestId });
     return this.view(site, code);
   }
 
@@ -883,7 +906,7 @@ export class ShipmentsService {
     parcelNo: number,
     input: ReprintParcelRequest,
   ): Promise<OrderShipment> {
-    await this.operations.run(
+    const { result } = await this.operations.run(
       'SHIPMENT_REPRINT',
       input.requestId,
       { actorId, siteId: site.siteId, code, parcelNo, ...input, requestId: undefined },
@@ -938,10 +961,12 @@ export class ShipmentsService {
           printer: printer.name,
           reason: input.reason,
         });
+        await this.ensureVariant(tx, shipment.id, printer.dpi, step.occurredAt);
         await this.flow.releasePrints(tx, shipment.id, step.occurredAt);
-        return { code };
+        return { code, shipmentId: shipment.id };
       },
     );
+    await this.flow.fetchVariantsOf(result.shipmentId, { actorId, operationId: input.requestId });
     return this.view(site, code);
   }
 

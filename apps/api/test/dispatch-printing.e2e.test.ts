@@ -708,6 +708,45 @@ describe.skipIf(!hasDatabase)('direct printing: labels, print queue, print agent
     await setDefault(printerA);
   });
 
+  it('PRINT38-R2: a shipment labelled before doc 030 (PDF only, no ZPL fetch) prints after fetching its ZPL', async () => {
+    const { order } = await picked(2);
+    testCarrierControl.variant = ['FAIL'];
+    await completeAndPrint(order, null).expect(200);
+    // The legacy state: labelled with PDF, no ZPL and no fetch at all (test-only removal).
+    await t.prisma.$transaction([
+      t.prisma.$executeRawUnsafe(
+        'ALTER TABLE "shipment_label_fetches" DISABLE TRIGGER "shipment_label_fetches_no_delete"',
+      ),
+      t.prisma
+        .$executeRaw`DELETE FROM "shipment_label_fetches" WHERE "shipment_id" IN (SELECT s."id" FROM "shipments" s JOIN "orders" o ON o."id" = s."order_id" WHERE o."code" = ${order})`,
+      t.prisma.$executeRawUnsafe(
+        'ALTER TABLE "shipment_label_fetches" ENABLE TRIGGER "shipment_label_fetches_no_delete"',
+      ),
+    ]);
+    const legacy = (await view(order)).shipment!;
+    expect([legacy.status, legacy.zpl]).toEqual(['LABELED', null]);
+    expect(legacy.parcels.every((p) => p.labels.map((l) => l.format).join() === 'PDF')).toBe(true);
+    const calls = testCarrierControl.calls.length;
+    // "Tisknout": the missing ZPL is fetched from the SAME shipment, then the jobs follow.
+    const id = rid();
+    const printed = (
+      (await post(order, 'print', { printerId: printerA, requestId: id }).expect(200))
+        .body as OrderShipment
+    ).shipment!;
+    expect(printed.zpl).toMatchObject({ status: 'DONE', dpi: 203 });
+    expect(printed.printWaiting).toEqual([]);
+    expect(await jobsOf(order)).toHaveLength(2);
+    expect(testCarrierControl.calls).toHaveLength(calls); // no new shipment
+    // The same click again (a lost answer): nothing more.
+    await post(order, 'print', { printerId: printerA, requestId: id }).expect(200);
+    expect(await jobsOf(order)).toHaveLength(2);
+    expect(
+      await t.prisma.shipmentLabelFetch.count({ where: { shipment: { order: { code: order } } } }),
+    ).toBe(1);
+    // A reload shows the same truth.
+    expect((await view(order)).shipment!.zpl).toMatchObject({ status: 'DONE' });
+  });
+
   it('the database keeps the queue honest even without the API', async () => {
     const { order } = await picked(1);
     await completeAndPrint(order, printerA).expect(200);
