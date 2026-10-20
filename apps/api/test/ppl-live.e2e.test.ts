@@ -14,6 +14,7 @@ import {
   scanCrate,
 } from './support/order-fixtures.js';
 import { INITIAL_SITE_ID } from './support/sign-in.js';
+import { createExchangeLog } from './support/ppl-exchange-log.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
 /**
@@ -22,7 +23,10 @@ import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js'
  * Synthetic data only, in the per-run test database (never the live DEV database), files in a
  * temporary store. No pickup is ever ordered (the adapter has no such call). An uncertain request
  * is recorded, never re-sent. The report (AYVO_PPL_LIVE_REPORT) holds only non-secret facts: what
- * was called (method + path), states, numbers of the TEST environment, label sizes.
+ * was called (method + path), states, numbers of the TEST environment, label sizes. Every exchange
+ * (exact body sent, response received; no token, credential, phone or e-mail) is appended to
+ * AYVO_PPL_LIVE_EXCHANGES — a directory outside git, required: nothing is sent without it, and the
+ * evidence survives the test database (support/ppl-exchange-log.ts).
  */
 const live =
   process.env.AYVO_PPL_LIVE === '1' &&
@@ -136,8 +140,17 @@ describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authori
   }
 
   beforeAll(async () => {
-    // Record what is called (method, path, status) — never headers or bodies.
-    const real = globalThis.fetch;
+    // Without a place for the evidence, nothing is sent at all.
+    const exchanges = process.env.AYVO_PPL_LIVE_EXCHANGES;
+    if (!exchanges)
+      throw new Error('AYVO_PPL_LIVE_EXCHANGES (a directory outside git) is required');
+    const log = createExchangeLog(exchanges, [
+      process.env.PPL_TEST_CLIENT_ID!,
+      process.env.PPL_TEST_CLIENT_SECRET!,
+    ]);
+    report.exchangeLog = log.file;
+    // Record what is called (method, path, status) in the report; bodies only in the exchange log.
+    const real = log.wrap(globalThis.fetch.bind(globalThis));
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input instanceof Request ? input.url : input));
       const entry = {
