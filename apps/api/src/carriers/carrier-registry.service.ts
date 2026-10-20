@@ -7,7 +7,7 @@ import { carrierProblems, settingsSnapshot } from './carrier-settings.rules.js';
 import { PplClient } from './ppl/ppl-client.js';
 import { isPplConnection, pplBaseUrl } from './ppl/ppl-connections.js';
 import { PplGateway } from './ppl/ppl-gateway.js';
-import { TEST_CARRIER_SETTINGS, TestCarrier } from './test-carrier.js';
+import { TestCarrier, testCarrierSettings } from './test-carrier.js';
 
 /**
  * The carrier per site (doc 022 §8, doc 029 §9, ADR 0027). A NEW request needs the site's PPL
@@ -55,7 +55,7 @@ export class CarrierRegistryService implements CarrierRegistry {
     if (this.test) {
       // A carrier without cancellation is never used for a new shipment (doc 029 §4).
       return this.test.rules.canCancel
-        ? { gateway: this.test, settings: TEST_CARRIER_SETTINGS }
+        ? { gateway: this.test, settings: testCarrierSettings() }
         : { gateway: null, reason: 'CANCELLATION_UNSUPPORTED' };
     }
     const row = await this.prisma.siteCarrierSetting.findUnique({ where: { siteId } });

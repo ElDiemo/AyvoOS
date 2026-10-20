@@ -1,6 +1,6 @@
 import type { CarrierInfo, OrderShipment, Shipment } from '@ayvo/types';
 import { describe, expect, it } from 'vitest';
-import { shipmentPhase } from './shipment-phase';
+import { labelLinks, shipmentPhase } from './shipment-phase';
 
 const carrier: CarrierInfo = {
   configured: true,
@@ -85,5 +85,58 @@ describe('shipmentPhase (doc 029): one next step from the order status and its s
     expect(shipmentPhase('READY_TO_DISPATCH', shipment({ status: 'CANCELLING' }))).toBe(
       'CANCELLING',
     );
+  });
+});
+
+describe('labelLinks (UI36-R1): only files that exist', () => {
+  const parcel = (parcelNo: number, format: 'PDF' | 'ZPL' | null) =>
+    ({ parcelNo, label: format ? { format, dpi: format === 'ZPL' ? 203 : null } : null }) as never;
+  const labeled = (formats: ('PDF' | 'ZPL' | null)[], complete: boolean) =>
+    shipment({
+      status: 'LABELED',
+      parcels: formats.map((f, i) => parcel(i + 1, f)),
+      label: complete ? { format: 'PDF', dpi: null, createdAt: '2026-10-18T10:00:00.000Z' } : null,
+    }).shipment;
+
+  it('single PDF labels: each parcel, no complete document', () => {
+    expect(labelLinks('ORD-000001', labeled(['PDF', 'PDF'], false))).toEqual([
+      {
+        href: '/api/admin/orders/ORD-000001/shipment/parcels/1/label',
+        kind: 'PARCEL',
+        parcelNo: 1,
+        format: 'PDF',
+      },
+      {
+        href: '/api/admin/orders/ORD-000001/shipment/parcels/2/label',
+        kind: 'PARCEL',
+        parcelNo: 2,
+        format: 'PDF',
+      },
+    ]);
+  });
+
+  it('single ZPL labels: each parcel as ZPL, no complete document', () => {
+    const links = labelLinks('ORD-000001', labeled(['ZPL', 'ZPL', 'ZPL'], false));
+    expect(links.map((l) => [l.kind, l.format])).toEqual([
+      ['PARCEL', 'ZPL'],
+      ['PARCEL', 'ZPL'],
+      ['PARCEL', 'ZPL'],
+    ]);
+  });
+
+  it('A4: each parcel and the complete document', () => {
+    const links = labelLinks('ORD-000001', labeled(['PDF', 'PDF', 'PDF'], true));
+    expect(links.at(-1)).toEqual({
+      href: '/api/admin/orders/ORD-000001/shipment/labels',
+      kind: 'COMPLETE',
+      parcelNo: null,
+      format: 'PDF',
+    });
+    expect(links.filter((l) => l.kind === 'PARCEL')).toHaveLength(3);
+  });
+
+  it('nothing stored yet: no links', () => {
+    expect(labelLinks('ORD-000001', labeled([null, null], false))).toEqual([]);
+    expect(labelLinks('ORD-000001', null)).toEqual([]);
   });
 });
