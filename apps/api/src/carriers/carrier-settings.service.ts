@@ -171,6 +171,9 @@ export class CarrierSettingsService {
           senderEmail: settings.sender.email,
           productCode: settings.productCode,
           labelLayout: settings.label.layout,
+          // Compatible values for the previous application (PRINT38-R1); unused by this one.
+          labelFormat: 'PDF',
+          labelDpi: 203,
         };
         const now = new Date();
         const reset =

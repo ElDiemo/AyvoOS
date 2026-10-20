@@ -2761,6 +2761,10 @@ model SiteCarrierSetting {
   /// The carrier's product code, chosen from the list verified with `verified_connection`.
   productCode        String?   @map("product_code")
   /// SINGLE = one label per parcel (thermal printer); A4 = also a complete A4 document.
+  /// Kept for the previous application (PRINT38-R1, rollback); always PDF / 203 since doc 030 —
+  /// the format and resolution of printed labels belong to the printer.
+  labelFormat        String    @default("PDF") @map("label_format")
+  labelDpi           Int       @default(203) @map("label_dpi")
   labelLayout        String    @default("SINGLE") @map("label_layout")
   verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(3)
   verifiedBy         String?   @map("verified_by") @db.Uuid

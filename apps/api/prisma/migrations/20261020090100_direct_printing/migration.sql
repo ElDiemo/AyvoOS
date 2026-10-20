@@ -75,11 +75,12 @@ CREATE TRIGGER "shipment_label_fetches_no_truncate" BEFORE TRUNCATE ON "shipment
 -- =============================================================================================
 -- 2. The label format and resolution belong to the printer, not to the carrier settings
 -- =============================================================================================
-
-ALTER TABLE "site_carrier_settings" DROP CONSTRAINT "site_carrier_settings_label_check";
-ALTER TABLE "site_carrier_settings" DROP COLUMN "label_format", DROP COLUMN "label_dpi";
-ALTER TABLE "site_carrier_settings"
-  ADD CONSTRAINT "site_carrier_settings_label_check" CHECK ("label_layout" IN ('SINGLE', 'A4'));
+-- PRINT38-R1: the columns STAY (the previous application, still deployed while this migration
+-- runs and the target of a rollback, reads and writes them). The new application no longer uses
+-- them; it requests PDF from the carrier (ZPL follows per printer), so the compatible value is
+-- PDF / 203 dpi — which the previous application then also uses. The check stays as it was.
+UPDATE "site_carrier_settings" SET "label_format" = 'PDF', "label_dpi" = 203
+ WHERE "label_format" <> 'PDF' OR "label_dpi" <> 203;
 
 -- =============================================================================================
 -- 3. Print agents (ADR 0028): a machine principal per site; only the token's hash is stored

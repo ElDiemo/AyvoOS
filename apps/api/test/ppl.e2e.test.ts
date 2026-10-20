@@ -516,6 +516,11 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     await ready();
     const r = await save({ label: { format: 'ZPL', dpi: 203, layout: 'A4' } });
     expect(r.status).toBe(400);
+    // PRINT38-R1: the previous application (rollback) still reads these columns — kept, PDF / 203.
+    const row = await t.prisma.siteCarrierSetting.findUniqueOrThrow({
+      where: { siteId: INITIAL_SITE_ID },
+    });
+    expect([row.labelFormat, row.labelDpi]).toEqual(['PDF', 203]);
   });
 
   it('disabled or incomplete settings and other sites: no new PPL shipment', async () => {
