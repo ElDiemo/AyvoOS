@@ -128,6 +128,11 @@ refusals), the PPL adapter against the simulated PPL shaped as the TEST answers
 and the browser (`apps/web/e2e/workflow-tracking.spec.ts`: events written into the e2e database as
 the carrier would report them, "Obnovit tracking", desktop, 390 and 320 px).
 
+Screenshots (`docs/screenshots/tracking/`, from `workflow-tracking.spec.ts` with
+`AYVO_SCREENSHOT_DIR`): partial pickup (desktop), in transit with two delivered (desktop, 390,
+320), delivered (390, 320). The dispatch screenshots (`docs/screenshots/shipment/`) show the
+renamed states.
+
 ## 7. Boundaries
 
 No physical returns, stock count, hotel portal, billing or ESG; the public QR passport is
