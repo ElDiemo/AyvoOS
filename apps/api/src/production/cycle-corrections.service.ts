@@ -24,11 +24,13 @@ import type { Prisma } from '../generated/prisma/client.js';
 export const crateAllocated = (status?: string) =>
   status === 'DISPATCHED'
     ? domainError(409, 'CRATE_DISPATCHED', 'This crate was handed to the carrier with its order')
-    : domainError(
-        409,
-        'CRATE_ALLOCATED',
-        'This crate is loaded into an order: remove it from the order first',
-      );
+    : status === 'DELIVERED'
+      ? domainError(409, 'CRATE_DELIVERED', 'This crate was delivered with its order')
+      : domainError(
+          409,
+          'CRATE_ALLOCATED',
+          'This crate is loaded into an order: remove it from the order first',
+        );
 
 const crateReady = () =>
   domainError(

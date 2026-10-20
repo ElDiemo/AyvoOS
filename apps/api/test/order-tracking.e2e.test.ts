@@ -7,6 +7,7 @@ import {
   ShipmentTrackingService,
   TRACKING_MAX_FAILURES,
 } from '../src/orders/shipment-tracking.service.js';
+import { correctCrate } from './support/labeling-fixtures.js';
 import { crateFactory, createHotel, createOrder, scanCrate } from './support/order-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
@@ -71,6 +72,7 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
       order: order.code,
       shipmentId: shipment.id,
       numbers: v.shipment!.parcels.map((p) => p.carrierParcelNumber!),
+      crateUrls: made.map((c) => c.crateUrl),
     };
   }
   /** Makes the shipment due and looks once (as the poller would). */
@@ -404,6 +406,28 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
     ]);
   });
 
+  it('a delivered crate stays held: corrections and another order get a clear 409', async () => {
+    const o = await labelled(1);
+    testCarrierControl.track(
+      o.numbers[0]!,
+      { statusId: PICKED_UP, at: at(1) },
+      { statusId: DELIVERED, at: at(30) },
+    );
+    await look(o.shipmentId);
+    expect(await cycles(o.order)).toEqual(['DELIVERED']);
+    const crate = await t.prisma.shipmentParcel.findFirstOrThrow({
+      where: { shipmentId: o.shipmentId },
+      include: { crate: { select: { code: true } } },
+    });
+    const fix = await correctCrate(t, crate.crate.code, 'reopen');
+    expect([fix.status, fix.body.code]).toEqual([409, 'CRATE_DELIVERED']);
+    const other = await createOrder(t, hotel, [
+      { productCode: factory.kit.productCode, crates: 1 },
+    ]);
+    const scan = await scanCrate(t, other.code, o.crateUrls[0]!);
+    expect([scan.status, scan.body.code]).toEqual([409, 'CRATE_DELIVERED']);
+  });
+
   it('the database refuses what tracking may not do', async () => {
     const o = await labelled(2);
     const [n1] = o.numbers as [string, string];
@@ -419,6 +443,17 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
       t.prisma
         .$executeRaw`UPDATE "shipments" SET "status" = 'CANCELLING' WHERE "id" = ${o.shipmentId}::uuid`,
     ).rejects.toThrow(/already has is not cancelled/);
+    // A crate cycle with the carrier changes only by its delivery — nothing else of it.
+    await expect(
+      t.prisma.$executeRaw`UPDATE "crate_cycles" c SET "ready_to_fill_at" = now()
+        FROM "shipment_parcels" p WHERE p."cycle_id" = c."id" AND p."shipment_id" = ${o.shipmentId}::uuid
+          AND c."status" = 'DISPATCHED'`,
+    ).rejects.toThrow(/changes only to delivered/);
+    await expect(
+      t.prisma.$executeRaw`UPDATE "crate_cycles" c SET "status" = 'ALLOCATED'
+        FROM "shipment_parcels" p WHERE p."cycle_id" = c."id" AND p."shipment_id" = ${o.shipmentId}::uuid
+          AND c."status" = 'DISPATCHED'`,
+    ).rejects.toThrow(/changes only to delivered/);
     // History and progress are never removed or undone.
     await expect(
       t.prisma

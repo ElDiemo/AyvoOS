@@ -462,6 +462,14 @@ export class OrdersService implements OnModuleInit {
             { crate: crate.code },
           );
         }
+        if (cycle.status === 'DELIVERED') {
+          throw domainErrorWithDetails(
+            409,
+            'CRATE_DELIVERED',
+            'This crate was delivered with another order (returns are not recorded yet)',
+            { crate: crate.code },
+          );
+        }
         if (cycle.status !== 'FILLED') {
           throw domainErrorWithDetails(
             409,

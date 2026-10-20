@@ -192,6 +192,7 @@ export const ordersCs = {
     UNKNOWN_PRODUCT: 'Neznámý nebo archivovaný produkt.',
     PRODUCT_WITHOUT_RECIPE: 'Produkt nemá aktivní recepturu s typem bedny.',
     CRATE_DISPATCHED: 'Bedna už byla předána dopravci s jinou objednávkou.',
+    CRATE_DELIVERED: 'Bedna byla s objednávkou doručena; vratky se zatím neevidují.',
     ORDER_NOT_CANCELLABLE:
       'Objednávku teď nelze stornovat: připravenou k vyzvednutí nejdřív vraťte zrušením přípravy přepravy, předanou dopravci už ne.',
     SHIPMENT_AT_CARRIER:

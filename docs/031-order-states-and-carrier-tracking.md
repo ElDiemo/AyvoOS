@@ -109,6 +109,15 @@ creating one or ordering a pickup was not authorised). Questions prepared for PP
    does it mean?
 5. Can events arrive late or out of order, and can an event's time change between two answers?
 
+**Open decisions for the owner** (not decided in code):
+
+- A site may be deactivated while it holds orders "Převzatá dopravcem" (unchanged rule of doc
+  029), although tracking still writes their events. Should such orders keep the site active?
+- A parcel going back to the sender, lost, or left at a pick-up point keeps the order "Převzatá
+  dopravcem" (shown as a warning) and tracking goes on every 15 minutes until every parcel is
+  delivered or 12 looks in a row fail. Should tracking end, or the order get another handling,
+  in these cases?
+
 ## 6. Tests
 
 Simulated only (no real PPL): API tests with the test carrier (`test/order-tracking.e2e.test.ts`:

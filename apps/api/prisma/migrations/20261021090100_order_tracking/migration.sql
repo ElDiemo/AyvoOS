@@ -377,6 +377,11 @@ BEGIN
   IF OLD."status" = 'DELIVERED' THEN
     RAISE EXCEPTION 'AYVO: a delivered crate cycle does not change yet' USING ERRCODE = 'restrict_violation';
   END IF;
+  -- A cycle with the carrier changes only by its delivery (nothing else of it, ever).
+  IF OLD."status" = 'DISPATCHED' AND (NEW."status" <> 'DELIVERED'
+       OR (to_jsonb(NEW) - 'status') IS DISTINCT FROM (to_jsonb(OLD) - 'status')) THEN
+    RAISE EXCEPTION 'AYVO: a dispatched crate cycle changes only to delivered' USING ERRCODE = 'restrict_violation';
+  END IF;
   IF NEW."status" <> OLD."status" AND NOT (
        (OLD."status" = 'OPEN_ASSEMBLY' AND NEW."status" IN ('READY_TO_FILL', 'FILLING', 'ABORTED'))
     OR (OLD."status" = 'READY_TO_FILL' AND NEW."status" IN ('OPEN_ASSEMBLY', 'FILLING', 'ABORTED'))

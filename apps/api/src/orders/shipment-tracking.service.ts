@@ -131,12 +131,16 @@ export class ShipmentTrackingService {
       return 'FAILED';
     }
     const fetchedAt = new Date();
+    let applied: boolean | null;
     try {
-      await this.prisma.$transaction(async (tx) =>
-        this.apply(tx, shipmentId, answer, fetchedAt, {
-          carrierCode: gateway.code,
-          environment: gateway.environment,
-        }),
+      applied = await this.prisma.$transaction(
+        async (tx) =>
+          this.apply(tx, shipmentId, answer, fetchedAt, {
+            carrierCode: gateway.code,
+            environment: gateway.environment,
+          }),
+        // As the other mutating operations: a large order or a wait for its lock may take time.
+        { maxWait: 20_000, timeout: 30_000 },
       );
     } catch (error) {
       // Nothing of this look was stored (one transaction): counted as a failed look.
@@ -147,13 +151,18 @@ export class ShipmentTrackingService {
       );
       return 'FAILED';
     }
+    // Cancelled meanwhile (under the order lock): nothing applied; look again later.
+    if (applied === null) {
+      await this.release(shipmentId, this.interval);
+      return 'NOT_TRACKED';
+    }
     return 'SYNCED';
   }
 
   /**
    * Stores the answer and moves the parcels, their crate cycles and the order forward — in one
    * transaction, under the order's lock (two looks never apply the same proof twice). Returns
-   * whether every parcel is delivered.
+   * whether every parcel is delivered, or null when the shipment is no longer labelled.
    */
   private async apply(
     tx: Tx,
@@ -161,7 +170,7 @@ export class ShipmentTrackingService {
     answer: CarrierTracking,
     fetchedAt: Date,
     carrier: { carrierCode: string; environment: string },
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     const s = await tx.shipment.findUniqueOrThrow({
       where: { id: shipmentId },
       select: { id: true, code: true, orderId: true, siteId: true },
@@ -184,7 +193,7 @@ export class ShipmentTrackingService {
         },
       },
     });
-    if (live.status !== 'LABELED') return false;
+    if (live.status !== 'LABELED') return null;
     const byNumber = new Map(answer.parcels.map((p) => [p.number, p]));
     // Each event by its own parcel number — never by position in the answer.
     const rows = live.parcels.flatMap((p) =>

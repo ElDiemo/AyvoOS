@@ -11,11 +11,11 @@ const cycleInclude = {
 export type CycleRecord = Prisma.CrateCycleGetPayload<{ include: typeof cycleInclude }>;
 
 /**
- * Held by an order — loaded (ALLOCATED, doc 028) or handed to the carrier with it (DISPATCHED,
- * doc 029): no labelling, filling, correction, refill or repack touches such a crate.
+ * Held by an order — loaded (ALLOCATED, doc 028), with the carrier (DISPATCHED, doc 029) or
+ * delivered (DELIVERED, doc 031): no labelling, filling, correction, refill or repack touches it.
  */
 export const isHeldByOrder = (status: string): boolean =>
-  status === 'ALLOCATED' || status === 'DISPATCHED';
+  status === 'ALLOCATED' || status === 'DISPATCHED' || status === 'DELIVERED';
 
 /**
  * Crate cycles and their members (ADR 0021, ADR 0025 proposed, doc 025 §3.2): one circulation of
