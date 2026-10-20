@@ -6,6 +6,8 @@
 set -uo pipefail
 
 API_BASE="${1:-https://dev.ayvo.co/api}"
+# Overridable only for the agent's own tests (a fake sysfs); never needed on a Raspberry Pi.
+USBMISC="${AYVO_PREFLIGHT_USBMISC:-/sys/class/usbmisc}"
 HOST="$(printf '%s' "$API_BASE" | sed -E 's#^https://([^/:]+).*#\1#')"
 problems=()
 ok() { printf '  ok    %s\n' "$*"; }
@@ -82,7 +84,7 @@ else
 fi
 if lsmod 2>/dev/null | grep -q '^usblp'; then ok "kernel module usblp loaded"; else warn "usblp not loaded (it loads when the printer is plugged in)"; fi
 found=0
-for lp in /sys/class/usbmisc/lp*; do
+for lp in "$USBMISC"/lp*; do
   [[ -e "$lp" ]] || continue
   found=1
   name="$(basename "$lp")"
@@ -92,9 +94,10 @@ for lp in /sys/class/usbmisc/lp*; do
   perm="$(stat -c '%U:%G %a' "$dev" 2>/dev/null || echo 'missing')"
   ok "$name: product '$product', USB serial '$serial', device $dev ($perm)"
 done
-[[ $found -eq 1 ]] || bad "no USB printer device in /sys/class/usbmisc (printer off or unplugged?)"
+[[ $found -eq 1 ]] || bad "no USB printer device in $USBMISC (printer off or unplugged?)"
 if command -v lpstat >/dev/null && lpstat -v 2>/dev/null | grep -qi 'usb://Zebra'; then
-  warn "CUPS has a queue for the Zebra — it may hold the device; the agent writes to $dev directly"
+  # PRINT38-R4: no USB device may have been found above — never refer to one here.
+  warn "CUPS has a queue for the Zebra — it may hold the printer; the agent writes to /dev/usb/lpN directly (CUPS is left as it is)"
 fi
 
 echo "== Existing agent installation"
