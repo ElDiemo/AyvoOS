@@ -141,7 +141,10 @@ and the carrier of an **existing** request (its connection and environment only)
 - **Mapping parcels to crates:** batch status has no per-parcel index. Each set item therefore
   carries its own `externalNumbers` (`CUST` = our parcel reference); `GET /shipment` returns
   `externalNumbers` per shipment number → each number is mapped by that proof. If the proof is
-  missing, the labels are not accepted (open for a person) — never mapped by position.
+  missing, the labels are not accepted (open for a person) — never mapped by position. A set is
+  sent **without** a shipment-level `externalNumbers`: PPL applies a shipment-level `CUST` to every
+  parcel of the set (live runs 2026-10-19 and -20, PPL support); `referenceId` stays. A single
+  parcel keeps its shipment-level `CUST`.
 - **No idempotency key, duplicate `referenceId` behaviour and `CustomerReferences` matching are not
   documented**; a lost `Location` header has no documented lookup → such a request stays uncertain.
 - Labels: `labelSettings.format` (`Pdf`/`Zpl`/…), `dpi` 203–1200 (ZPL); per-parcel `labelUrl`
@@ -314,7 +317,7 @@ shipment, no re-sent request — only a token and `GET` calls:
 All four now read `Undelivered, DataShipment, Active, Canceled`. So PPL did cancel them, but the
 event time is not when the API shows it: for …251 the flag was still absent 8 minutes after the
 event. This is PPL's answer only — **our application's recovery and completion of a cancellation
-(`CANCELLING` → `CANCELLED`) against the real API is still not verified**: the run's two
+(`CANCELLING` → confirmed, shipment back to `DRAFT`) against the real API is still not verified**: the run's two
 shipments ended `CANCELLING`, their test database is gone, and nothing was re-run.
 
 For PPL support (outside git, `/opt/ayvo/ppl-support/`): the original PDF labels of the set (individual
@@ -332,10 +335,41 @@ answer, the Authorization header, credential and token values (also scrubbed fro
 line that would still hold one is refused), phone numbers and e-mail addresses; label files only by
 size and hash. The file is mode 600 and survives the per-run test database.
 
-**Questions for PPL from the run:** (1) set items' own `externalNumbers` are documented ("pro každý
-balík zvlášť") but `GET /shipment` returns the shipment's `CUST` for every set parcel — how is each
-created number tied to the item sent (is `shipmentInSetNumber` = the item's position in
-`shipmentSetItems`)? Does a shipment-level `CUST` override the items' own? (2) Cancellations are processed
+### 10a. Second live run — a set without the shipment-level `CUST` (2026-10-20, owner-authorized, once)
+
+PPL support: the shipment-level `externalNumbers` overrides the items' own. The owner authorized
+ONE 3-crate set with only that changed: `referenceId` kept, the shipment-level `CUST` left out
+(the array omitted), the three item `CUST` references kept; everything else as in the first run
+(BUSS, PDF, complete A4, the same synthetic sender and recipient). Scenario
+`AYVO_PPL_LIVE_SCENARIO=set` (rehearsed first against the simulator with `AYVO_PPL_LIVE_DRYRUN=1`);
+references never used at PPL before (`SHP-000101-1`). Verify (token + product list) created
+nothing; no pickup ordered; nothing re-sent. The exact body sent and every answer are kept outside
+git (`/opt/ayvo/ppl-support/2026-10-20-live-set-without-shipment-cust/`, exchange log as above).
+
+| Crate        | `CUST` sent      | `CUST` returned by `GET /shipment` | PPL number  | Label (individual)                                   |
+| ------------ | ---------------- | ---------------------------------- | ----------- | ---------------------------------------------------- |
+| AYV-C-000001 | `SHP-000101-1-1` | `SHP-000101-1-1`                   | 80256049255 | PDF 127 × 101 mm; prints the number, 1/3 and its ref |
+| AYV-C-000002 | `SHP-000101-1-2` | `SHP-000101-1-2`                   | 80256049256 | PDF 127 × 101 mm; prints the number, 2/3 and its ref |
+| AYV-C-000003 | `SHP-000101-1-3` | `SHP-000101-1-3`                   | 80256049257 | PDF 127 × 101 mm; prints the number, 3/3 and its ref |
+
+- Exactly three numbers (`shipmentSet`: master …255, `shipmentsInSet` 3); each returned its own
+  `CUST`, so the adapter mapped every crate by its reference (no position used) → `LABELED`.
+- The complete A4 document (one page, 297 × 210 mm, the three labels) from
+  `shipment/batch/{id}/label`. It and every individual label were downloaded twice — identical,
+  served from our store; **one** `POST shipment/batch` in total. Labels checked visually.
+- Cancellation through the application: 3 × `POST /shipment/{n}/cancel` → `202` at 13:07:32 UTC;
+  bounded `cancel/resolve` every 30 s: `CANCELLING` until `Canceled` was visible on all three, then
+  the shipment was back to `DRAFT` at 13:17:41 UTC (~10 min). **This verifies our cancellation
+  completion against the real TEST API** (not verified by the first run).
+- The fix is in the adapter (`PplGateway.batch`): a set is sent without the shipment-level `CUST`.
+  Regression: the simulator now applies a shipment-level `CUST` to every set parcel, as PPL does,
+  and `ppl.e2e.test.ts` checks the body; the old code fails 3 tests there. One crate is unchanged
+  (shipment-level `CUST`, covered by the simulated tests; not re-run live — not authorized).
+
+**Still not verified:** physical printing (no printer); the production environment.
+
+**Questions for PPL from the runs:** (1) answered (§10a): a shipment-level `CUST` overrides the
+items' own; without it each set parcel returns its own — to be confirmed for production. (2) Cancellations are processed
 in the TEST environment (see the later observation), but how long after the `Deleted.Cancelled`
 event does `shipmentState` carry `Canceled` — in TEST and in production?
 (3) Label size: the TEST label is 127 × 101 mm (CZ) — matches the e-mail, not the documentation's

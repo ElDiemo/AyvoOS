@@ -1,10 +1,11 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import type { OrderShipment, PplSettings, VerifyCarrierResult } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
 import type { PplClient } from '../src/carriers/ppl/ppl-client.js';
+import { allocateSerials } from '../src/database/code-counters.js';
 import { ShipmentCarrierFlow } from '../src/orders/shipment-carrier-flow.service.js';
 import {
   completeOrder,
@@ -14,6 +15,7 @@ import {
   scanCrate,
 } from './support/order-fixtures.js';
 import { INITIAL_SITE_ID } from './support/sign-in.js';
+import { FakePpl } from './support/fake-ppl.js';
 import { createExchangeLog } from './support/ppl-exchange-log.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
@@ -28,18 +30,30 @@ import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js'
  * AYVO_PPL_LIVE_EXCHANGES — a directory outside git, required: nothing is sent without it, and the
  * evidence survives the test database (support/ppl-exchange-log.ts).
  */
+/** A rehearsal of the same scenario against the simulated PPL (nothing leaves the machine). */
+const dryRun = process.env.AYVO_PPL_LIVE_DRYRUN === '1';
+/** BUSS = PPL's documented "PPL Parcel CZ Business"; the simulator lists its own codes. */
+const PRODUCT = dryRun ? 'SIM-A' : 'BUSS';
 const live =
-  process.env.AYVO_PPL_LIVE === '1' &&
-  !!process.env.PPL_TEST_CLIENT_ID &&
-  !!process.env.PPL_TEST_CLIENT_SECRET;
+  dryRun ||
+  (process.env.AYVO_PPL_LIVE === '1' &&
+    !!process.env.PPL_TEST_CLIENT_ID &&
+    !!process.env.PPL_TEST_CLIENT_SECRET);
 
 const BASE_PATH = '/ecs/ppl/myapi2';
+/**
+ * `full` — the first run (2026-10-19): verify, 1 crate, 3 crates, cancel both.
+ * `set` — owner-authorized 2026-10-20: ONE 3-crate set only, without the shipment-level CUST
+ * (PPL support: it overrides the items' own), then its cancellation.
+ */
+const scenario = process.env.AYVO_PPL_LIVE_SCENARIO ?? 'full';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authorized live run', () => {
   let t: TestApp;
   let factory: Awaited<ReturnType<typeof crateFactory>>;
   let hotel: string;
+  let stopFake: (() => Promise<void>) | undefined;
   const report: Record<string, unknown> = { startedAt: new Date().toISOString() };
   const calls: { method: string; path: string; status: number | null; at: string }[] = [];
   const http = () => request(t.app.getHttpServer());
@@ -144,9 +158,25 @@ describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authori
     const exchanges = process.env.AYVO_PPL_LIVE_EXCHANGES;
     if (!exchanges)
       throw new Error('AYVO_PPL_LIVE_EXCHANGES (a directory outside git) is required');
+    const fake = dryRun ? new FakePpl('ayvo-dry-run-client', 'ayvo-dry-run-secret') : null;
+    if (fake) {
+      await fake.start();
+      stopFake = () => fake.stop();
+    }
+    const connection = fake
+      ? {
+          PPL_TEST_CLIENT_ID: fake.clientId,
+          PPL_TEST_CLIENT_SECRET: fake.clientSecret,
+          PPL_TEST_API_BASE_URL_FOR_TESTS: fake.base,
+        }
+      : {
+          PPL_TEST_CLIENT_ID: process.env.PPL_TEST_CLIENT_ID!,
+          PPL_TEST_CLIENT_SECRET: process.env.PPL_TEST_CLIENT_SECRET!,
+        };
+    report.dryRun = dryRun;
     const log = createExchangeLog(exchanges, [
-      process.env.PPL_TEST_CLIENT_ID!,
-      process.env.PPL_TEST_CLIENT_SECRET!,
+      connection.PPL_TEST_CLIENT_ID,
+      connection.PPL_TEST_CLIENT_SECRET,
     ]);
     report.exchangeLog = log.file;
     // Record what is called (method, path, status) in the report; bodies only in the exchange log.
@@ -165,8 +195,7 @@ describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authori
       return res;
     });
     t = await createTestApp({
-      PPL_TEST_CLIENT_ID: process.env.PPL_TEST_CLIENT_ID!,
-      PPL_TEST_CLIENT_SECRET: process.env.PPL_TEST_CLIENT_SECRET!,
+      ...connection,
       CARRIER_POLL_SECONDS: '0',
       CARRIER_CALL_TIMEOUT_SECONDS: '30',
     });
@@ -192,185 +221,387 @@ describe.skipIf(!live || !hasDatabase)('PPL CPL TEST environment — one authori
     }
     vi.restoreAllMocks();
     await t?.close();
+    await stopFake?.();
   });
 
-  it('runs the authorized scenario', async () => {
-    // 1. Settings and "Ověřit připojení" (token + product code list).
-    const sender = {
-      name: 'AYVO TEST odesilatel',
-      street: 'Prumyslova 1',
-      city: 'Prerov',
-      postalCode: '75002',
-      country: 'CZ',
-      contact: 'Testovaci expedice',
-      phone: '+420 581 000 001',
-      email: 'expedice@example.com',
-    };
-    const save = (over: object = {}) =>
-      http()
-        .put(settingsUrl)
-        .send({
-          requestId: randomUUID(),
-          enabled: true,
-          connection: 'PPL_TEST',
-          sender,
-          productCode: null,
-          label: { format: 'PDF', dpi: 203, layout: 'SINGLE' },
-          ...over,
-        });
+  // Synthetic sender and settings, the same in every scenario (results stay comparable).
+  const sender = {
+    name: 'AYVO TEST odesilatel',
+    street: 'Prumyslova 1',
+    city: 'Prerov',
+    postalCode: '75002',
+    country: 'CZ',
+    contact: 'Testovaci expedice',
+    phone: '+420 581 000 001',
+    email: 'expedice@example.com',
+  };
+  const save = (over: object = {}) =>
+    http()
+      .put(settingsUrl)
+      .send({
+        requestId: randomUUID(),
+        enabled: true,
+        connection: 'PPL_TEST',
+        sender,
+        productCode: null,
+        label: { format: 'PDF', dpi: 203, layout: 'SINGLE' },
+        ...over,
+      });
+
+  /** Settings + "Ověřit připojení" (token and product list only — no shipment). */
+  async function verifiedProduct() {
     await save().expect(200);
     const verified = (await http().post(`${settingsUrl}/verify`).send({ requestId: randomUUID() }))
       .body as VerifyCarrierResult;
-    report.verify = {
-      ok: verified.ok,
-      error: verified.error,
-      products: verified.settings?.verified?.products,
-    };
+    report.verify = { ok: verified.ok, error: verified.error };
     expect(verified.ok).toBe(true);
-    const products = verified.settings.verified!.products.map((p) => p.code);
-    // The test needs one domestic parcel service; BUSS is PPL's documented "PPL Parcel CZ Business".
-    expect(products).toContain('BUSS');
-    report.productUsed = 'BUSS';
-    const settled = (await save({ productCode: 'BUSS' }).expect(200)).body as PplSettings;
-    expect(settled.problems).toEqual([]);
+    expect(verified.settings.verified!.products.map((p) => p.code)).toContain(PRODUCT);
+    report.productUsed = PRODUCT;
+  }
 
-    // 2. One crate: one shipment, its own label; re-download creates nothing.
-    const one = await completed(1);
-    const posts0 = batchPosts();
-    let s = ((await post(one.order, 'labels').expect(200)).body as OrderShipment).shipment!;
-    report.oneCrateFirstAnswer = { status: s.status, request: s.request };
-    s = await settle(one.order);
-    report.oneCrate = {
-      order: one.order,
-      crates: one.crates,
-      status: s.status,
-      request: s.request,
-      shipmentRef: s.carrierShipmentRef,
-      parcels: s.parcels.map((p) => ({
-        parcelNo: p.parcelNo,
-        crate: p.crate,
-        number: p.carrierParcelNumber,
-        label: p.label,
-      })),
-    };
-    expect.soft(batchPosts() - posts0).toBe(1);
-    if (s.status === 'LABELED') {
-      const f1 = await download(`/api/admin/orders/${one.order}/shipment/parcels/1/label`);
-      const f2 = await download(`/api/admin/orders/${one.order}/shipment/parcels/1/label`);
-      report.oneCrateLabel = {
-        status: f1.status,
-        type: f1.type,
-        bytes: f1.bytes,
-        pdf: f1.pdf,
-        size: f1.size,
-        sameOnRepeat: f1.body.equals(f2.body),
+  it.skipIf(scenario !== 'full')(
+    'runs the authorized scenario',
+    async () => {
+      // 1. Settings and "Ověřit připojení" (token + product code list).
+      await save().expect(200);
+      const verified = (
+        await http().post(`${settingsUrl}/verify`).send({ requestId: randomUUID() })
+      ).body as VerifyCarrierResult;
+      report.verify = {
+        ok: verified.ok,
+        error: verified.error,
+        products: verified.settings?.verified?.products,
       };
-      if (process.env.AYVO_PPL_LIVE_FILES) {
-        writeFileSync(`${process.env.AYVO_PPL_LIVE_FILES}/one-crate-parcel-1.pdf`, f1.body);
-      }
-      expect.soft(batchPosts() - posts0).toBe(1);
-      report.oneCratePplRecord = await pplRecord([s.parcels[0]!.carrierParcelNumber!]);
-    }
+      expect(verified.ok).toBe(true);
+      const products = verified.settings.verified!.products.map((p) => p.code);
+      // The test needs one domestic parcel service; BUSS is PPL's documented "PPL Parcel CZ Business".
+      expect(products).toContain('BUSS');
+      report.productUsed = 'BUSS';
+      const settled = (await save({ productCode: 'BUSS' }).expect(200)).body as PplSettings;
+      expect(settled.problems).toEqual([]);
 
-    // 3. Three crates, with the complete A4 document: each number mapped to its crate.
-    await save({ productCode: 'BUSS', label: { format: 'PDF', dpi: 203, layout: 'A4' } }).expect(
-      200,
-    );
-    const three = await completed(3);
-    const posts1 = batchPosts();
-    let s3 = ((await post(three.order, 'labels').expect(200)).body as OrderShipment).shipment!;
-    report.threeCratesFirstAnswer = { status: s3.status, request: s3.request };
-    s3 = await settle(three.order);
-    const req3 = await t.prisma.shipmentCarrierRequest.findFirst({
-      where: { shipment: { order: { code: three.order } } },
-      orderBy: { attemptNo: 'desc' },
-      select: { clientReference: true, result: true, status: true, errorCode: true },
-    });
-    report.threeCrates = {
-      order: three.order,
-      crates: three.crates,
-      status: s3.status,
-      request: s3.request,
-      clientReference: req3?.clientReference,
-      result: req3?.result,
-      parcels: s3.parcels.map((p) => ({
-        parcelNo: p.parcelNo,
-        crate: p.crate,
-        number: p.carrierParcelNumber,
-        label: p.label,
-      })),
-    };
-    expect.soft(batchPosts() - posts1).toBe(1);
-    const numbers = ((req3?.result as { numbers?: string[] } | null)?.numbers ?? []).filter(
-      Boolean,
-    );
-    if (numbers.length > 0) report.threeCratesPplRecord = await pplRecord(numbers);
-    if (s3.status === 'LABELED') {
-      const files = [];
-      for (const p of s3.parcels) {
-        const f = await download(
-          `/api/admin/orders/${three.order}/shipment/parcels/${p.parcelNo}/label`,
-        );
-        files.push({
+      // 2. One crate: one shipment, its own label; re-download creates nothing.
+      const one = await completed(1);
+      const posts0 = batchPosts();
+      let s = ((await post(one.order, 'labels').expect(200)).body as OrderShipment).shipment!;
+      report.oneCrateFirstAnswer = { status: s.status, request: s.request };
+      s = await settle(one.order);
+      report.oneCrate = {
+        order: one.order,
+        crates: one.crates,
+        status: s.status,
+        request: s.request,
+        shipmentRef: s.carrierShipmentRef,
+        parcels: s.parcels.map((p) => ({
           parcelNo: p.parcelNo,
           crate: p.crate,
-          type: f.type,
-          bytes: f.bytes,
-          pdf: f.pdf,
-          size: f.size,
-        });
+          number: p.carrierParcelNumber,
+          label: p.label,
+        })),
+      };
+      expect.soft(batchPosts() - posts0).toBe(1);
+      if (s.status === 'LABELED') {
+        const f1 = await download(`/api/admin/orders/${one.order}/shipment/parcels/1/label`);
+        const f2 = await download(`/api/admin/orders/${one.order}/shipment/parcels/1/label`);
+        report.oneCrateLabel = {
+          status: f1.status,
+          type: f1.type,
+          bytes: f1.bytes,
+          pdf: f1.pdf,
+          size: f1.size,
+          sameOnRepeat: f1.body.equals(f2.body),
+        };
         if (process.env.AYVO_PPL_LIVE_FILES) {
-          writeFileSync(
-            `${process.env.AYVO_PPL_LIVE_FILES}/three-crates-parcel-${p.parcelNo}.pdf`,
-            f.body,
-          );
+          writeFileSync(`${process.env.AYVO_PPL_LIVE_FILES}/one-crate-parcel-1.pdf`, f1.body);
         }
+        expect.soft(batchPosts() - posts0).toBe(1);
+        report.oneCratePplRecord = await pplRecord([s.parcels[0]!.carrierParcelNumber!]);
       }
-      const c1 = await download(`/api/admin/orders/${three.order}/shipment/labels`);
-      const c2 = await download(`/api/admin/orders/${three.order}/shipment/labels`);
-      if (process.env.AYVO_PPL_LIVE_FILES) {
-        writeFileSync(`${process.env.AYVO_PPL_LIVE_FILES}/three-crates-complete.pdf`, c1.body);
-      }
-      report.threeCratesLabels = {
-        parcels: files,
-        complete: { status: c1.status, type: c1.type, bytes: c1.bytes, pdf: c1.pdf, size: c1.size },
-        completeSameOnRepeat: c1.body.equals(c2.body),
+
+      // 3. Three crates, with the complete A4 document: each number mapped to its crate.
+      await save({ productCode: 'BUSS', label: { format: 'PDF', dpi: 203, layout: 'A4' } }).expect(
+        200,
+      );
+      const three = await completed(3);
+      const posts1 = batchPosts();
+      let s3 = ((await post(three.order, 'labels').expect(200)).body as OrderShipment).shipment!;
+      report.threeCratesFirstAnswer = { status: s3.status, request: s3.request };
+      s3 = await settle(three.order);
+      const req3 = await t.prisma.shipmentCarrierRequest.findFirst({
+        where: { shipment: { order: { code: three.order } } },
+        orderBy: { attemptNo: 'desc' },
+        select: { clientReference: true, result: true, status: true, errorCode: true },
+      });
+      report.threeCrates = {
+        order: three.order,
+        crates: three.crates,
+        status: s3.status,
+        request: s3.request,
+        clientReference: req3?.clientReference,
+        result: req3?.result,
+        parcels: s3.parcels.map((p) => ({
+          parcelNo: p.parcelNo,
+          crate: p.crate,
+          number: p.carrierParcelNumber,
+          label: p.label,
+        })),
       };
       expect.soft(batchPosts() - posts1).toBe(1);
-    }
+      const numbers = ((req3?.result as { numbers?: string[] } | null)?.numbers ?? []).filter(
+        Boolean,
+      );
+      if (numbers.length > 0) report.threeCratesPplRecord = await pplRecord(numbers);
+      if (s3.status === 'LABELED') {
+        const files = [];
+        for (const p of s3.parcels) {
+          const f = await download(
+            `/api/admin/orders/${three.order}/shipment/parcels/${p.parcelNo}/label`,
+          );
+          files.push({
+            parcelNo: p.parcelNo,
+            crate: p.crate,
+            type: f.type,
+            bytes: f.bytes,
+            pdf: f.pdf,
+            size: f.size,
+          });
+          if (process.env.AYVO_PPL_LIVE_FILES) {
+            writeFileSync(
+              `${process.env.AYVO_PPL_LIVE_FILES}/three-crates-parcel-${p.parcelNo}.pdf`,
+              f.body,
+            );
+          }
+        }
+        const c1 = await download(`/api/admin/orders/${three.order}/shipment/labels`);
+        const c2 = await download(`/api/admin/orders/${three.order}/shipment/labels`);
+        if (process.env.AYVO_PPL_LIVE_FILES) {
+          writeFileSync(`${process.env.AYVO_PPL_LIVE_FILES}/three-crates-complete.pdf`, c1.body);
+        }
+        report.threeCratesLabels = {
+          parcels: files,
+          complete: {
+            status: c1.status,
+            type: c1.type,
+            bytes: c1.bytes,
+            pdf: c1.pdf,
+            size: c1.size,
+          },
+          completeSameOnRepeat: c1.body.equals(c2.body),
+        };
+        expect.soft(batchPosts() - posts1).toBe(1);
+      }
 
-    // 4. Cancellation of both, confirmed only by PPL's own state (bounded; never guessed).
-    const cancelled: Record<string, unknown> = {};
-    for (const order of [one.order, three.order]) {
-      const before = (await view(order)).shipment!;
-      if (!['LABELED', 'REQUESTING'].includes(before.status)) {
-        cancelled[order] = { skipped: before.status };
-        continue;
+      // 4. Cancellation of both, confirmed only by PPL's own state (bounded; never guessed).
+      const cancelled: Record<string, unknown> = {};
+      for (const order of [one.order, three.order]) {
+        const before = (await view(order)).shipment!;
+        if (!['LABELED', 'REQUESTING'].includes(before.status)) {
+          cancelled[order] = { skipped: before.status };
+          continue;
+        }
+        const first = await post(order, 'cancel', { reason: 'Syntetický test – storno' });
+        let c = (first.body as OrderShipment).shipment;
+        const trail = [{ at: new Date().toISOString(), status: c?.status ?? first.body.code }];
+        const until = Date.now() + 240_000;
+        while (c?.status === 'CANCELLING' && Date.now() < until) {
+          await sleep(10_000);
+          const r = await post(order, 'cancel/resolve');
+          c = (r.body as OrderShipment).shipment;
+          trail.push({ at: new Date().toISOString(), status: c?.status ?? r.body.code });
+        }
+        const ev = await t.prisma.orderEvent.findMany({
+          where: { order: { code: order } },
+          select: { type: true },
+          orderBy: { occurredAt: 'asc' },
+        });
+        cancelled[order] = { trail, final: c?.status, events: ev.map((e) => e.type) };
       }
-      const first = await post(order, 'cancel', { reason: 'Syntetický test – storno' });
-      let c = (first.body as OrderShipment).shipment;
-      const trail = [{ at: new Date().toISOString(), status: c?.status ?? first.body.code }];
-      const until = Date.now() + 240_000;
-      while (c?.status === 'CANCELLING' && Date.now() < until) {
-        await sleep(10_000);
-        const r = await post(order, 'cancel/resolve');
-        c = (r.body as OrderShipment).shipment;
-        trail.push({ at: new Date().toISOString(), status: c?.status ?? r.body.code });
-      }
-      const ev = await t.prisma.orderEvent.findMany({
-        where: { order: { code: order } },
-        select: { type: true },
-        orderBy: { occurredAt: 'asc' },
+      report.cancel = cancelled;
+      const all = [
+        ...((report.oneCrate as { parcels: { number: string | null }[] }).parcels ?? []),
+        ...((report.threeCrates as { parcels: { number: string | null }[] }).parcels ?? []),
+      ]
+        .map((p) => p.number)
+        .filter((n): n is string => !!n);
+      if (all.length > 0) report.afterCancelPplRecord = await pplRecord(all);
+    },
+    900_000,
+  );
+
+  it.skipIf(scenario !== 'set')(
+    'one 3-crate set without the shipment-level CUST',
+    async () => {
+      // References never sent to PPL before (the first run used SHP-000001-1 and SHP-000002-1).
+      await t.prisma.$transaction(async (tx) => {
+        await allocateSerials(tx, 'order', 100);
+        await allocateSerials(tx, 'shipment', 100);
       });
-      cancelled[order] = { trail, final: c?.status, events: ev.map((e) => e.type) };
-    }
-    report.cancel = cancelled;
-    const all = [
-      ...((report.oneCrate as { parcels: { number: string | null }[] }).parcels ?? []),
-      ...((report.threeCrates as { parcels: { number: string | null }[] }).parcels ?? []),
-    ]
-      .map((p) => p.number)
-      .filter((n): n is string => !!n);
-    if (all.length > 0) report.afterCancelPplRecord = await pplRecord(all);
-  }, 900_000);
+      await verifiedProduct();
+      // The same settings as the first run's set: the product, PDF, the complete A4 document.
+      await save({ productCode: PRODUCT, label: { format: 'PDF', dpi: 203, layout: 'A4' } }).expect(
+        200,
+      );
+      const three = await completed(3);
+      const posts = batchPosts();
+      let s = ((await post(three.order, 'labels').expect(200)).body as OrderShipment).shipment!;
+      report.firstAnswer = { status: s.status, request: s.request };
+      try {
+        s = await settle(three.order);
+        const req = await t.prisma.shipmentCarrierRequest.findFirst({
+          where: { shipment: { order: { code: three.order } } },
+          orderBy: { attemptNo: 'desc' },
+          select: { clientReference: true, result: true, status: true, errorCode: true },
+        });
+        // What was really sent: the batch body from the exchange log (never rebuilt).
+        const sent = readFileSync(report.exchangeLog as string, 'utf8')
+          .trim()
+          .split('\n')
+          .map(
+            (l) => JSON.parse(l) as { phase: string; method: string; path: string; body: unknown },
+          )
+          .filter(
+            (e) => e.phase === 'sent' && e.method === 'POST' && e.path.endsWith('/shipment/batch'),
+          )
+          .map(
+            (e) =>
+              (e.body as { json: { shipments: Record<string, unknown>[] } }).json.shipments[0]!,
+          );
+        expect(sent).toHaveLength(1);
+        const body = sent[0] as {
+          referenceId: string;
+          externalNumbers?: unknown;
+          shipmentSet: {
+            numberOfShipments: number;
+            shipmentSetItems: { externalNumbers: { code: string; externalNumber: string }[] }[];
+          };
+        };
+        const sentRefs = body.shipmentSet.shipmentSetItems.map(
+          (i) => i.externalNumbers[0]!.externalNumber,
+        );
+        report.sent = {
+          referenceId: body.referenceId,
+          shipmentLevelExternalNumbers: body.externalNumbers ?? null,
+          numberOfShipments: body.shipmentSet.numberOfShipments,
+          itemRefs: sentRefs,
+        };
+        expect.soft(body.externalNumbers).toBeUndefined();
+        expect.soft(new Set(sentRefs).size).toBe(3);
+
+        const numbers = ((req?.result as { numbers?: string[] } | null)?.numbers ?? []).filter(
+          Boolean,
+        );
+        const record = numbers.length > 0 ? await pplRecord(numbers) : null;
+        const returned = new Map(
+          (
+            (record?.shipments ?? []) as {
+              shipmentNumber?: string;
+              externalNumbers?: { code?: string; externalNumber?: string }[];
+            }[]
+          ).map((x) => [
+            x.shipmentNumber,
+            (x.externalNumbers ?? []).filter((e) => e.code === 'CUST').map((e) => e.externalNumber),
+          ]),
+        );
+        report.set = {
+          order: three.order,
+          status: s.status,
+          request: s.request,
+          clientReference: req?.clientReference,
+          numbers,
+          pplRecord: record,
+        };
+        // 1. Exactly three parcels.
+        expect.soft(numbers).toHaveLength(3);
+        // 2.–3. Each number returns its own CUST, which names exactly one crate.
+        const rows = [];
+        for (const p of s.parcels) {
+          const sentRef = `${req?.clientReference}-${p.parcelNo}`;
+          rows.push({
+            parcelNo: p.parcelNo,
+            crate: p.crate,
+            sentRef,
+            sentInBody: sentRefs[p.parcelNo - 1] === sentRef,
+            number: p.carrierParcelNumber,
+            returnedCust: p.carrierParcelNumber
+              ? (returned.get(p.carrierParcelNumber) ?? null)
+              : null,
+            label: null as unknown,
+          });
+        }
+        report.rows = rows;
+        // Three different numbers, three different crates, each sent reference returned once.
+        expect.soft(new Set(rows.map((r) => r.number)).size).toBe(3);
+        expect.soft(new Set(rows.map((r) => r.crate)).size).toBe(3);
+        expect.soft([...returned.values()].flat().sort()).toEqual([...sentRefs].sort());
+        for (const r of rows) {
+          expect.soft(r.sentInBody).toBe(true);
+          expect.soft(r.returnedCust).toEqual([r.sentRef]);
+        }
+        // 4.–5. Individual labels, the complete document; downloads twice, nothing new created.
+        if (s.status === 'LABELED') {
+          for (const r of rows) {
+            const f1 = await download(
+              `/api/admin/orders/${three.order}/shipment/parcels/${r.parcelNo}/label`,
+            );
+            const f2 = await download(
+              `/api/admin/orders/${three.order}/shipment/parcels/${r.parcelNo}/label`,
+            );
+            r.label = {
+              status: f1.status,
+              pdf: f1.pdf,
+              bytes: f1.bytes,
+              size: f1.size,
+              sameOnRepeat: f1.body.equals(f2.body),
+            };
+            if (process.env.AYVO_PPL_LIVE_FILES) {
+              writeFileSync(
+                `${process.env.AYVO_PPL_LIVE_FILES}/set-parcel-${r.parcelNo}-${r.number}.pdf`,
+                f1.body,
+              );
+            }
+          }
+          const c1 = await download(`/api/admin/orders/${three.order}/shipment/labels`);
+          const c2 = await download(`/api/admin/orders/${three.order}/shipment/labels`);
+          if (process.env.AYVO_PPL_LIVE_FILES) {
+            writeFileSync(`${process.env.AYVO_PPL_LIVE_FILES}/set-complete.pdf`, c1.body);
+          }
+          report.complete = {
+            status: c1.status,
+            pdf: c1.pdf,
+            bytes: c1.bytes,
+            size: c1.size,
+            sameOnRepeat: c1.body.equals(c2.body),
+          };
+        }
+        report.batchPosts = batchPosts() - posts;
+        expect.soft(batchPosts() - posts).toBe(1);
+        expect.soft(s.status).toBe('LABELED');
+      } finally {
+        // Cancellation of whatever was created — bounded; an uncertain creation is never re-sent.
+        const before = (await view(three.order)).shipment!;
+        if (['LABELED', 'REQUESTING'].includes(before.status)) {
+          const first = await post(three.order, 'cancel', { reason: 'Syntetický test – storno' });
+          let c = (first.body as OrderShipment).shipment;
+          const trail = [{ at: new Date().toISOString(), status: c?.status ?? first.body.code }];
+          const until = Date.now() + 15 * 60_000;
+          while (c?.status === 'CANCELLING' && Date.now() < until) {
+            await sleep(30_000);
+            const r = await post(three.order, 'cancel/resolve');
+            c = (r.body as OrderShipment).shipment;
+            trail.push({ at: new Date().toISOString(), status: c?.status ?? r.body.code });
+          }
+          // Every number PPL created (also when the parcels could not be mapped).
+          const numbers = (report.set as { numbers?: string[] } | undefined)?.numbers ?? [];
+          report.cancel = {
+            trail,
+            final: c?.status,
+            pplRecord: numbers.length > 0 ? await pplRecord(numbers) : null,
+          };
+        } else {
+          report.cancel = { skipped: before.status };
+        }
+      }
+    },
+    1_500_000,
+  );
 });

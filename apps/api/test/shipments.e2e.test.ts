@@ -761,7 +761,12 @@ describe.skipIf(!hasDatabase)('dispatch without a configured carrier (DEV today)
     const http = () => request(t.app.getHttpServer());
     const v = (await http().get(`/api/admin/orders/${order.code}/shipment`).expect(200))
       .body as OrderShipment;
-    expect(v.carrier).toMatchObject({ configured: false, unavailable: 'NOT_CONFIGURED' });
+    // No usable carrier. Which reason depends on whether another test file (shared database, no
+    // fixed order) left PPL settings on this site — this app has no PPL credentials either way.
+    expect(v.carrier).toMatchObject({ configured: false });
+    expect(['NOT_CONFIGURED', 'DISABLED', 'CREDENTIALS_MISSING', 'INCOMPLETE']).toContain(
+      v.carrier.unavailable,
+    );
     expect(v.shipment!.carrier).toMatchObject({ configured: false, code: null });
     const res = await http()
       .post(`/api/admin/orders/${order.code}/shipment/labels`)

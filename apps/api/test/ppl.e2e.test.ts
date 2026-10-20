@@ -189,6 +189,21 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     expect(s.status).toBe('LABELED');
     const b = lastBatch();
     expect(b.body.shipments[0]!.shipmentSet).toMatchObject({ numberOfShipments: 3 });
+    // Regression (live runs 2026-10-19/-20, PPL support): a shipment-level CUST would override
+    // every item's own in GET /shipment (the simulator does the same) — a set never carries one.
+    expect(b.body.shipments[0]!.externalNumbers).toBeUndefined();
+    expect(b.body.shipments[0]!.referenceId).toBe(s.request!.clientReference);
+    expect(
+      (
+        b.body.shipments[0]!.shipmentSet as {
+          shipmentSetItems: { externalNumbers: { code: string; externalNumber: string }[] }[];
+        }
+      ).shipmentSetItems.map((i) => i.externalNumbers),
+    ).toEqual(
+      [1, 2, 3].map((n) => [
+        { code: 'CUST', externalNumber: `${s.request!.clientReference}-${n}` },
+      ]),
+    );
     for (const [i, p] of s.parcels.entries()) {
       expect(p.crate).toBe(crates[i]!.crateCode);
       const expected = b.numbers.find(
@@ -348,7 +363,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     expect(ppl.batches.size).toBe(batches);
   });
 
-  it('as in the real TEST environment: set parcels carry only the shipment CUST — nothing mapped', async () => {
+  it('set parcels returned without their own CUST (only the shipment reference) — nothing mapped', async () => {
     await ready();
     const { order } = await completed(3);
     ppl.mode.setCustFromShipment = true;

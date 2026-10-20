@@ -202,7 +202,9 @@ export class PplGateway implements CarrierGateway {
           note: latin(request.orderCode),
           sender: s.sender ? address('sender', s.sender) : undefined,
           recipient: address('recipient', request.recipient),
-          externalNumbers: [{ code: 'CUST', externalNumber: request.clientReference }],
+          // A set carries only its items' own CUST references: a shipment-level CUST overrides them
+          // in GET /shipment (live runs 2026-10-19 and 2026-10-20, PPL support) and the parcels could
+          // not be told apart. A single parcel is the shipment itself and keeps it.
           ...(set
             ? {
                 shipmentSet: {
@@ -212,7 +214,7 @@ export class PplGateway implements CarrierGateway {
                   })),
                 },
               }
-            : {}),
+            : { externalNumbers: [{ code: 'CUST', externalNumber: request.clientReference }] }),
         },
       ],
     };

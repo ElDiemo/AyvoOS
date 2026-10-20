@@ -45,11 +45,21 @@ type Mode = {
   /** Numbers already picked up from the sender. */
   pickedUp: string[];
   /**
-   * As observed in the real TEST environment (2026-10-19): GET /shipment returns the SHIPMENT's
-   * CUST reference for every parcel of a set (not each item's own), plus shipmentSet positions.
+   * GET /shipment returns no item's own CUST for a set, only the shipment's referenceId (positions
+   * in the set without a documented relation to the items sent).
    */
   setCustFromShipment: boolean;
 };
+
+/** The shipment-level CUST of a set, if one was sent (PPL then returns it for every parcel). */
+function shipmentCust(b: Batch): string | null {
+  const s = b.body.shipments[0] as {
+    shipmentSet?: unknown;
+    externalNumbers?: { code?: string; externalNumber?: string }[];
+  };
+  if (!s.shipmentSet) return null;
+  return s.externalNumbers?.find((e) => e.code === 'CUST')?.externalNumber ?? null;
+}
 
 interface Batch {
   id: string;
@@ -275,7 +285,9 @@ export class FakePpl {
           ref:
             this.mode.setCustFromShipment && b.numbers.length > 1
               ? String(b.body.shipments[0]!.referenceId)
-              : n.ref,
+              : // As the real TEST environment (live runs 2026-10-19 and -20): a shipment-level
+                // CUST overrides every set item's own.
+                (shipmentCust(b) ?? n.ref),
           set:
             b.numbers.length > 1
               ? {
