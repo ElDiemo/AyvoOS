@@ -39,7 +39,7 @@ export const carriersCs = {
   title: 'Dopravci a expedice',
   ppl: 'PPL',
   intro:
-    'Nastavení PPL pro tuto provozovnu. Nové přepravy vzniknou jen s úplným, ověřeným a zapnutým nastavením; již vytvořené přepravy si ponechávají nastavení, se kterým vznikly.',
+    'Připojení PPL, odesílatel a služba pro tuto provozovnu (tiskárny jsou v sekci Tiskárny). Nové přepravy vzniknou jen s úplným, ověřeným a zapnutým nastavením; již vytvořené přepravy si ponechávají nastavení, se kterým vznikly.',
   enabled: 'Používat PPL pro nové přepravy této provozovny',
   testEnvironment: 'Testovací prostředí',
   testEnvironmentHint:

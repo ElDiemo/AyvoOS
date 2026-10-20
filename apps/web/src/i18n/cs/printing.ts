@@ -1,10 +1,14 @@
 /** Správa systému → Provozovny → detail → Tiskárny (doc 030 §3, ADR 0028). */
 export const printingCs = {
-  title: 'Tiskárny a tiskoví agenti',
+  title: 'Tiskárny',
   intro:
-    'Tiskárna je fyzické zařízení provozovny připojené přes USB k tiskovému agentovi (Raspberry Pi). Nastavení dopravce (účet PPL) je jinde – účet dopravce není tiskárna.',
-  agents: 'Tiskoví agenti',
-  printers: 'Tiskárny',
+    'Kam se tisknou přepravní štítky: tiskový agent (Raspberry Pi), k němu přes USB připojená Zebra (podle sériového čísla), výchozí tiskárna pro expedici a automatický tisk. Připojení PPL, odesílatel a služba jsou v sekci Dopravci a expedice – účet dopravce není tiskárna.',
+  agents: '1. Tiskový agent (Raspberry Pi)',
+  printers: '2. Tiskárna (Zebra ZD220 DT)',
+  summaryDefault: (printer: string, auto: boolean) =>
+    `Štítky expedice půjdou na: ${printer}${auto ? ' · automatický tisk zapnutý' : ' · automatický tisk vypnutý (tisk se spouští ručně na objednávce)'}`,
+  summaryNone:
+    'Výchozí tiskárna pro expedici není nastavená – „Dokončit a vytisknout štítky“ připraví štítky, ale nic nevytiskne.',
   noAgents: 'Zatím žádný tiskový agent. Nejdřív přidejte agenta, potom tiskárnu.',
   noPrinters: 'Zatím žádná tiskárna.',
   online: 'Ozval se',

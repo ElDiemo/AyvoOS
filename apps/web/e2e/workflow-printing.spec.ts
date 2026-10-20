@@ -240,6 +240,7 @@ test('the site printer and its agent in the administration; the token is shown o
   await page.goto(`/admin/sites/${siteId}`);
   const card = page.getByTestId('site-printing');
   await expect(card).toContainText('účet dopravce není tiskárna');
+  await expect(card.getByTestId('printing-summary')).toContainText('není nastavená');
   await card.getByTestId('agent-code').fill(`RPI-E2E-${suffix}`);
   await card.getByTestId('agent-name').fill('Raspberry Pi – expedice (E2E)');
   await card.getByTestId('add-agent').click();
@@ -261,6 +262,9 @@ test('the site printer and its agent in the administration; the token is shown o
   await expect(form.getByTestId('printer-dispatchDefault')).toBeChecked();
   await form.getByTestId('printer-save').click();
   await expect(card.getByTestId(`printer-ZD-E2E-${suffix}`)).toContainText('Výchozí pro expedici');
+  await expect(card.getByTestId('printing-summary')).toContainText(
+    'Štítky expedice půjdou na: Zebra expedice (E2E)',
+  );
   // The simulated agent reports in.
   const printing = await json<{ printers: { id: string; code: string }[] }>(
     await page.request.get(`/api/admin/sites/${siteId}/printing`),

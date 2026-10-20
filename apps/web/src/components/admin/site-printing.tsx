@@ -69,6 +69,18 @@ export function SitePrinting({
     <Card title={t.title} testId="site-printing">
       <div className="flex flex-col gap-6 text-sm">
         <p className="text-stone-600">{t.intro}</p>
+        {(() => {
+          const target = data.printers.find((p) => p.dispatchDefault && p.enabled);
+          return target ? (
+            <p className="font-medium" data-testid="printing-summary">
+              {t.summaryDefault(`${target.name} (${target.code})`, target.autoPrint)}
+            </p>
+          ) : (
+            <Notice tone="warning">
+              <span data-testid="printing-summary">{t.summaryNone}</span>
+            </Notice>
+          );
+        })()}
         {token && (
           <TokenNotice agent={token.agent} token={token.value} onDismiss={() => setToken(null)} />
         )}

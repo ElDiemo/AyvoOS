@@ -1,60 +1,89 @@
-# AYVO tiskový agent (Raspberry Pi → Zebra ZD220 DT)
+# AYVO tiskový agent: Raspberry Pi → USB → Zebra ZD220 DT
 
-Doc 030, ADR 0028. Agent si přes HTTPS (tailnet) vyzvedává **jen své** tiskové úlohy z AYVO OS a
-posílá uložené ZPL přímo do jedné USB tiskárny Zebra ZD220 DT (203 dpi). Jen standardní knihovna
-Pythonu 3 (≥ 3.10), žádné další balíčky.
+Doc 030, ADR 0028. Agent si přes HTTPS v tailnetu vyzvedává **jen své** tiskové úlohy z AYVO OS
+a posílá uložené ZPL přímo do jedné USB tiskárny Zebra ZD220 DT (203 dpi). Používá jen Python 3
+(≥ 3.9, testováno na 3.12), bez dalších balíčků.
 
-> **Stav (2026-10-20):** software a automatické testy hotové (falešné API a falešné zařízení).
-> **Fyzicky neověřeno** – Raspberry Pi ani tiskárna nebyly k dispozici. Velikost etiket, tmavost a
-> rychlost tisku se ověří až na skutečných etiketách; agent štítky nikdy nezmenšuje ani neořezává.
+> **Stav (2026-10-20):** software je hotový a testovaný proti falešnému API a falešnému zařízení.
+> **Na skutečném Raspberry Pi ani Zebře neověřeno.** Agent funguje až proti AYVO OS s PR #38
+> (dnes není na DEV nasazený). Fyzické převzetí: [ACCEPTANCE.md](ACCEPTANCE.md).
 
-## Co agent dělá a co nedělá
+## Zásady
 
-- Vlastní identita: token tiskového agenta (vytvoří ADMIN v **Správa systému → Provozovny → detail →
-  Tiskárny**; zobrazí se jen jednou). Žádné přístupy PPL, žádný uživatelský účet AYVO.
-- Tailscale je jen síť – autentizaci dělá token (hlavička `X-Ayvo-Print-Agent`).
-- Žádný otevřený port, žádné příkazy z webu, žádné stahování z cizích adres: všechny URL skládá
-  z nakonfigurované základní adresy, přesměrování odmítá.
-- Tiskárnu najde podle **sériového čísla USB** (`/sys/class/usbmisc/lp*/device/../serial`) a píše
-  jen bajty své úlohy (ověří velikost a SHA-256).
-- Před zápisem musí server úlohu **spustit** (u zrušené přepravy to odmítne → nic se netiskne).
-- Lokální deník (`/var/lib/ayvo-print-agent`, fsync po každém kroku) přežije restart:
-  převzato, ale nezapsáno → „neodesláno“; zápis začal → „nejisté“. **Nic se nevytiskne znovu samo.**
-- „Odesláno do tiskárny“ neznamená vytištěno ani nalepeno – to potvrzuje obsluha v AYVO OS.
+- **Existující Raspberry Pi OS:** nic se nepřeinstalovává, karta se nemaže. Neinstalují se
+  balíčky a nemění se síť, Tailscale ani CUPS.
+- **Agent neběží jako root:** běží jako systémový uživatel `ayvo-print` (skupina `lp` pro
+  `/dev/usb/lp*`) a po restartu se obnoví (systemd, `Restart=always`).
+- **Tajemství:** token agenta a heslo DEV Basic Auth se zadávají bez opisu na obrazovku. Ukládají
+  se jen do souborů s právy 600 v `/etc/ayvo-print-agent`. Nikdy nejsou v Gitu, v argumentech
+  příkazů, v historii shellu ani v logu.
+- **Tailscale je jen síť:** autentizaci dělá token agenta.
+- **Agent je opatrný:**
+  - nemá otevřený port a nesleduje přesměrování;
+  - tiskne jen bajty své úlohy (ověří velikost, SHA-256 a začátek `^XA`);
+  - před zápisem si úlohu nechá potvrdit serverem;
+  - podle deníku po restartu nic sám nevytiskne znovu.
 
-## Instalace (Raspberry Pi OS)
+## Postup (na Raspberry Pi, jako běžný uživatel se sudo)
 
-1. V AYVO OS: Provozovna → Tiskárny → **Přidat agenta** (kód např. `RPI-EXPEDICE`). Token si hned
-   zkopírujte – znovu se neukáže (při ztrátě „Vydat nový token“).
-2. Zjistěte sériové číslo tiskárny: `cat /sys/class/usbmisc/lp*/device/../serial` (tiskárna připojená
-   přes USB). V AYVO OS **Přidat tiskárnu**: model Zebra ZD220 DT, agent, sériové číslo USB, výchozí
-   pro expedici, automatický tisk.
-3. Na Raspberry Pi (jako root):
-   ```sh
-   useradd --system --no-create-home --groups lp ayvo-print
-   install -d -m 755 /opt/ayvo-print-agent
-   cp -r ayvo_print_agent /opt/ayvo-print-agent/
-   install -d -m 750 -o root -g ayvo-print /etc/ayvo-print-agent
-   install -m 640 -o root -g ayvo-print config.example.json /etc/ayvo-print-agent/config.json
-   # token a (jen DEV) heslo Basic Auth: soubory s právy 600, vlastník ayvo-print
-   install -m 600 -o ayvo-print /dev/null /etc/ayvo-print-agent/token
-   ```
-   Token vložte do `/etc/ayvo-print-agent/token` editorem (ne přes příkazovou řádku – zůstal by v historii).
-   Upravte `config.json` (`api_base`, u DEV i `basic_auth_user` a soubor s heslem).
-4. `cp systemd/ayvo-print-agent.service /etc/systemd/system/ && systemctl enable --now ayvo-print-agent`
-5. Kontrola: `journalctl -u ayvo-print-agent -f`; v AYVO OS u agenta „Ozval se“ a u tiskárny
-   „Připravena“. Jedno kolo ručně: `python3 -m ayvo_print_agent --once`.
+**0. Zkopírujte složku** `ops/print-agent` z repozitáře na Pi, např. `scp -r ops/print-agent pi@<pi>:~/`.
 
-## Fyzické převzetí (zatím NEPROVEDENO)
+**1. Zjištění stavu (jen čtení):**
 
-Na skutečné Zebře ZD220 DT a skutečných etiketách ověřit:
+```sh
+cd ~/print-agent
+bash preflight.sh https://dev.ayvo.co/api
+```
 
-1. tisk štítku PPL (ZPL 203 dpi) bez zmenšení a ořezu, čitelnost čárového kódu;
-2. odpojení USB během čekání (úloha zůstane ve frontě) a během tisku (výsledek „nejisté“);
-3. restart Raspberry Pi s rozpracovanou úlohou (žádný tisk navíc);
-4. storno přepravy s čekající úlohou (netiskne se).
+Skript vypíše:
+
+- systém, model, architekturu a synchronizaci času;
+- verzi Pythonu;
+- Tailscale, překlad `dev.ayvo.co` (musí být adresa `100.x`) a dostupnost serveru (na DEV
+  očekávaně `401`, protože se vyžaduje Basic Auth);
+- Zebru na USB (výrobce `0a5f`), zařízení `/dev/usb/lpN` a jeho **sériové číslo USB**;
+- případnou starší instalaci agenta.
+
+Pokračujte, až skončí `PREFLIGHT OK`. Sériové číslo si poznamenejte.
+
+**2. V AYVO OS (ADMIN):** Správa systému → Provozovny → provozovna → **Tiskárny**:
+
+1. **Přidat agenta** (např. kód `RPI-EXPEDICE`). Token se zobrazí **jen jednou**; nechte okno
+   otevřené až do kroku 3.
+2. **Přidat tiskárnu:** Zebra ZD220 DT, tento agent, sériové číslo USB z kroku 1, „Výchozí
+   tiskárna pro expedici“. **Automatický tisk zatím vypněte** (zapne se až po akceptaci).
+
+**3. Instalace (opakovatelná, při dalším spuštění jen aktualizuje):**
+
+```sh
+sudo bash install.sh --api-base https://dev.ayvo.co/api --basic-auth-user <DEV uživatel>
+```
+
+Skript se zeptá na token agenta a na heslo DEV Basic Auth; nic se nezobrazí. Pak:
+
+- vytvoří uživatele `ayvo-print`;
+- nahraje kód do `/opt/ayvo-print-agent`;
+- zapíše konfiguraci do `/etc/ayvo-print-agent`;
+- nainstaluje a spustí službu `ayvo-print-agent`.
+
+Při dalším spuštění nastavení i tajemství zůstanou. Novou hodnotu zadáte přepínačem
+`--set-token` nebo `--set-basic-auth-password`.
+
+**4. Kontrola:**
+
+- `systemctl status ayvo-print-agent`;
+- `journalctl -u ayvo-print-agent -f` (token se v logu nikdy neobjeví);
+- v AYVO OS u agenta „Ozval se“ a u tiskárny „Připravena“.
+
+**5. Restart:** `sudo reboot`. Po startu musí agent znovu hlásit „Ozval se“, bez zásahu.
+
+## Údržba
+
+- **Ztracený nebo prozrazený token:** v AYVO OS „Vydat nový token“, pak `sudo bash install.sh --set-token`.
+- **Vyřazení Pi:** v AYVO OS „Zrušit agenta“ (token přestane platit) a `sudo systemctl disable --now ayvo-print-agent`.
+- **Deník úloh:** `/var/lib/ayvo-print-agent`. Nemazat, dokud agent nenahlásil všechny výsledky.
 
 ## Testy
 
-`pnpm test` (v tomto adresáři; spouští i `pnpm test` v kořeni repozitáře) – falešné API AYVO OS a
-falešné zařízení, žádný hardware.
+`pnpm test` v tomto adresáři (spouští ho i `pnpm test` v kořeni repozitáře). Používá falešné
+API AYVO OS a falešné zařízení, žádný hardware. Skripty kontroluje `shellcheck`.
