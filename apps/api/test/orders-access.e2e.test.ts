@@ -113,6 +113,8 @@ describe.skipIf(!hasDatabase)('orders access and site isolation (real sign-in)',
         permissionCode: {
           in: ['hotels:read', 'hotels:manage', 'orders:read', 'orders:manage', 'orders:pick'],
         },
+        // System roles: custom roles of other test files (shared database) are not the matrix.
+        role: { isSystem: true },
       },
       select: { roleCode: true },
     });

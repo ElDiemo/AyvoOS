@@ -26,7 +26,7 @@ import { shipmentsCs } from '@/i18n/cs/shipments';
 import { apiSend } from '@/lib/client-api';
 import { formatDimensions, formatMass, kgToG } from '@/lib/measure';
 import { orderErrorText } from './order-errors';
-import { shipmentPhase, type ShipmentPhase } from './shipment-phase';
+import { labelLinks, shipmentPhase, type LabelLink, type ShipmentPhase } from './shipment-phase';
 
 const t = shipmentsCs;
 const p = t.phase;
@@ -84,6 +84,11 @@ export function ShipmentPanel({
   const parcels = s?.parcels.length ?? 0;
   const parcelWord = ordersCs.detail.parcels(parcels);
   const labelsHref = `/api/admin/orders/${code}/shipment/labels`;
+  const links = labelLinks(code, s);
+  // The next step offers the complete document if it exists, else every parcel's own label.
+  const nextLabels = links.some((l) => l.kind === 'COMPLETE')
+    ? links.filter((l) => l.kind === 'COMPLETE')
+    : links;
   const waiting = !!phase && WAITING.includes(phase) && !s?.pollingStopped;
   const now = useNow();
   useEffect(() => {
@@ -114,7 +119,7 @@ export function ShipmentPanel({
               send={send}
               onDone={done}
               onError={failed}
-              labelsHref={labelsHref}
+              labels={nextLabels}
               timeZone={timeZone}
             />
             {error && (
@@ -245,7 +250,7 @@ function NextStep({
   send,
   onDone,
   onError,
-  labelsHref,
+  labels,
   timeZone,
 }: {
   phase: ShipmentPhase;
@@ -256,7 +261,7 @@ function NextStep({
   send: Send;
   onDone: () => void;
   onError: (e: unknown) => void;
-  labelsHref: string;
+  labels: LabelLink[];
   timeZone: string;
 }) {
   const { busy, run } = useAttempt();
@@ -389,9 +394,22 @@ function NextStep({
                 {p.confirmReady}
               </button>
             )}
-            <a href={labelsHref} target="_blank" rel="noopener" className={buttonClass.secondary}>
-              {t.openLabels}
-            </a>
+            {/* Only files that exist (UI36-R1): the complete document when the carrier made one,
+                otherwise each parcel's own label. */}
+            {labels.map((l) => (
+              <a
+                key={l.href}
+                href={l.href}
+                target="_blank"
+                rel="noopener"
+                className={buttonClass.secondary}
+                data-testid={
+                  l.kind === 'COMPLETE' ? 'next-open-labels' : `next-label-${l.parcelNo}`
+                }
+              >
+                {l.kind === 'COMPLETE' ? t.openLabels : t.parcelLabelNo(l.parcelNo!, l.format)}
+              </a>
+            ))}
           </div>
           <ConfirmDialog
             open={dialog === 'ready'}

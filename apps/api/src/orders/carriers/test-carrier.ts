@@ -69,6 +69,8 @@ export const testCarrierControl = {
   partial: new Set<string>(),
   accepted: new Map<string, { request: CarrierShipmentRequest; fail: boolean }>(),
   labelsFail: new Set<string>(),
+  /** The label settings sites use with the test carrier (default: PDF + complete document). */
+  label: null as CarrierSettingsSnapshot['label'] | null,
   reset(): void {
     this.next = [];
     this.cancel = [];
@@ -83,6 +85,7 @@ export const testCarrierControl = {
     this.mismatch.clear();
     this.partial.clear();
     this.rules = defaultRules();
+    this.label = null;
   },
 };
 
@@ -92,6 +95,23 @@ export const TEST_CARRIER_SETTINGS: CarrierSettingsSnapshot = {
   label: { format: 'PDF', dpi: 203, complete: true },
   sender: null,
 };
+
+/** The settings a new request uses: the default, or the label settings a test chose. */
+export const testCarrierSettings = (): CarrierSettingsSnapshot => ({
+  ...TEST_CARRIER_SETTINGS,
+  label: testCarrierControl.label ?? TEST_CARRIER_SETTINGS.label,
+});
+
+/** A ZPL label of the test carrier (ASCII, says it is not real). */
+function labelZpl(created: Created, parcelNo: number): Uint8Array {
+  const p = created.parcels.find((x) => x.parcelNo === parcelNo)!;
+  const sent = created.request.parcels.find((x) => x.parcelNo === parcelNo)!;
+  return Buffer.from(
+    `^XA^FO20,20^FDTEST CARRIER - NOT A REAL LABEL^FS^FO20,60^FD${p.number}^FS` +
+      `^FO20,100^FDCrate: ${sent.crate}^FS^XZ\n`,
+    'ascii',
+  );
+}
 
 let serial = 0;
 function create(request: CarrierShipmentRequest): Created {
@@ -211,23 +231,36 @@ export class TestCarrier implements CarrierGateway {
     });
   }
 
-  labels(query: { shipmentRef: string; parcels: CarrierParcelNumber[] }, signal: AbortSignal) {
+  labels(
+    query: {
+      shipmentRef: string;
+      parcels: CarrierParcelNumber[];
+      settings: CarrierSettingsSnapshot;
+    },
+    signal: AbortSignal,
+  ) {
     return abortable(signal, async () => {
       if (testCarrierControl.labelsFail.delete(query.shipmentRef)) {
         throw new Error('test carrier: label download failed');
       }
       const found = byRef(query.shipmentRef);
       if (!found) throw new Error('test carrier: unknown shipment');
+      // As the request's settings say: ZPL or PDF per parcel; the complete document only as PDF.
+      const { format, dpi, complete } = query.settings.label;
       return {
         parcels: await Promise.all(
           query.parcels.map(async (p) => ({
             parcelNo: p.parcelNo,
-            format: 'PDF' as const,
-            dpi: 203,
-            bytes: await labelPdf(found, p.parcelNo),
+            format,
+            dpi: format === 'ZPL' ? dpi : null,
+            bytes:
+              format === 'ZPL' ? labelZpl(found, p.parcelNo) : await labelPdf(found, p.parcelNo),
           })),
         ),
-        complete: { format: 'PDF' as const, dpi: 203, bytes: await labelPdf(found, null) },
+        complete:
+          complete && format === 'PDF'
+            ? { format: 'PDF' as const, dpi: null, bytes: await labelPdf(found, null) }
+            : null,
       };
     });
   }

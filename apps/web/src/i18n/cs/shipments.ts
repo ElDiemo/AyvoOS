@@ -65,6 +65,7 @@ export const shipmentsCs = {
   },
   openLabels: 'Otevřít všechny štítky',
   parcelLabel: (format: string) => `Štítek balíku (${format})`,
+  parcelLabelNo: (n: number, format: string) => `Štítek balíku ${n} (${format})`,
   testEnvironment: 'Testovací prostředí dopravce',
   labelsNote: 'Opakovaný tisk používá uložené štítky – u dopravce nic nového nevzniká.',
   carrier: (name: string) => `Dopravce: ${name}`,

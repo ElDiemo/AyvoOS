@@ -219,7 +219,8 @@ describe.skipIf(!hasDatabase)('dispatch: shipment, parcels, carrier labels (doc 
     const one = await labelled({ soapOnly: true });
     const s1 = (await view(one.order)).shipment!;
     expect(s1.parcels).toHaveLength(1);
-    expect(s1.parcels[0]!.label).toEqual({ format: 'PDF', dpi: 203 });
+    // The printer resolution belongs to ZPL only.
+    expect(s1.parcels[0]!.label).toEqual({ format: 'PDF', dpi: null });
 
     const three = await labelled();
     const s = (await view(three.order)).shipment!;
@@ -256,6 +257,61 @@ describe.skipIf(!hasDatabase)('dispatch: shipment, parcels, carrier labels (doc 
     expect((await labels(three.order)).body.code).toBe('LABELS_EXIST');
     expect(testCarrierControl.calls).toHaveLength(calls);
     expect((await detail(three.order)).status).toBe('READY_TO_DISPATCH');
+  });
+
+  it('label files offered = files that exist: single PDF, single ZPL, complete A4 (UI36-R1)', async () => {
+    const file = (order: string, path: string) =>
+      http()
+        .get(`/api/admin/orders/${order}/shipment/${path}`)
+        .buffer(true)
+        .parse((res, cb) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (d: Buffer) => chunks.push(d));
+          res.on('end', () => cb(null, Buffer.concat(chunks)));
+        });
+    const cases = [
+      {
+        label: { format: 'PDF', dpi: 203, complete: false },
+        type: 'application/pdf',
+        magic: '%PDF-',
+      },
+      {
+        label: { format: 'ZPL', dpi: 203, complete: false },
+        type: 'application/zpl',
+        magic: '^XA',
+      },
+      {
+        label: { format: 'PDF', dpi: 203, complete: true },
+        type: 'application/pdf',
+        magic: '%PDF-',
+      },
+    ] as const;
+    for (const c of cases) {
+      testCarrierControl.label = { ...c.label };
+      const made = await labelled();
+      const s = (await view(made.order)).shipment!;
+      // The view announces the complete document only when it was stored.
+      expect(s.label === null).toBe(!c.label.complete);
+      for (const p of s.parcels) {
+        expect(p.label).toEqual({
+          format: c.label.format,
+          dpi: c.label.format === 'ZPL' ? 203 : null,
+        });
+        const f = await file(made.order, `parcels/${p.parcelNo}/label`).expect(200);
+        expect(f.headers['content-type']).toContain(c.type);
+        expect(f.headers['content-disposition']).toContain(
+          `${s.code}-balik-${p.parcelNo}.${c.label.format === 'ZPL' ? 'zpl' : 'pdf'}`,
+        );
+        expect((f.body as Buffer).subarray(0, c.magic.length).toString()).toBe(c.magic);
+      }
+      const complete = await file(made.order, 'labels');
+      if (c.label.complete) {
+        expect(complete.status).toBe(200);
+        expect((complete.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+      } else {
+        expect(complete.status).toBe(404);
+      }
+    }
   });
 
   it('double click and concurrent requests send exactly one carrier request', async () => {

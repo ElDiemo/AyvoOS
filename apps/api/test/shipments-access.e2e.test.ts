@@ -144,6 +144,7 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
             'shipments:resolve_uncertain',
           ],
         },
+        role: { isSystem: true },
       },
       select: { roleCode: true },
     });

@@ -1,6 +1,6 @@
 import type { Env } from '../../config/env.js';
 import type { CarrierRegistry } from './carrier.js';
-import { TEST_CARRIER_SETTINGS, TestCarrier } from './test-carrier.js';
+import { TestCarrier, testCarrierSettings } from './test-carrier.js';
 
 /**
  * The carrier per site (doc 022 §8). Without a configured carrier no new request is possible
@@ -16,7 +16,7 @@ export function carrierRegistry(env: Env): CarrierRegistry {
       !test
         ? { gateway: null, reason: 'NOT_CONFIGURED' }
         : test.rules.canCancel
-          ? { gateway: test, settings: TEST_CARRIER_SETTINGS }
+          ? { gateway: test, settings: testCarrierSettings() }
           : { gateway: null, reason: 'CANCELLATION_UNSUPPORTED' },
     forConnection: (ref) =>
       test &&
