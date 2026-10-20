@@ -89,9 +89,11 @@ export function SupplyPlanSummary({
                   b.blockers
                     .map((x) =>
                       t.blockers[x.code]!(
-                        // The product's name from the plan's rules (its code otherwise).
-                        plan.rules.find((r) => r.productCode === x.product)?.productName ??
-                          x.product,
+                        x.code === 'ORDER_REFUSED'
+                          ? x.detail
+                          : // The product's name from the plan's rules (its code otherwise).
+                            (plan.rules.find((r) => r.productCode === x.product)?.productName ??
+                              x.product),
                       ),
                     )
                     .join(' '),

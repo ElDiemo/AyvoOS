@@ -35,6 +35,7 @@ const BLOCKER_CODES = new Set<SupplyBlocker['code']>([
   'SITE_WITHOUT_WAREHOUSE',
   'HOTEL_OF_ANOTHER_SITE',
   'SITE_INACTIVE',
+  'ORDER_REFUSED',
 ]);
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -90,6 +91,9 @@ export class SupplyPlansService {
       validFrom: iso(plan.validFrom),
       validTo: plan.validTo ? iso(plan.validTo) : null,
     };
+    /** Does the current plan still have this day (rules and validity)? */
+    const stillPlanned = (day: string) =>
+      plannedDays(rules, { from: day, to: day }, validity).days.length > 0;
     const [blocked, orders] = await Promise.all([
       this.prisma.supplyPlanOccurrence.findMany({
         where: { planId: plan.id, status: 'BLOCKED', shipDate: { gte: dateOf(today) } },
@@ -120,10 +124,10 @@ export class SupplyPlansService {
       lastRunOkAt: plan.lastRunOkAt?.toISOString() ?? null,
       lastRunError: plan.lastRunError,
       nextShipDate: nextPlannedDay(rules, today, validity),
-      blocked: blocked.map((b) => ({
-        shipDate: iso(b.shipDate),
-        blockers: [{ code: b.blockedCode as SupplyBlocker['code'], product: b.blockedDetail }],
-      })),
+      // Only days the current, switched-on plan still has (an edit or a pause makes older ones moot).
+      blocked: blocked
+        .filter((b) => plan.status === 'ACTIVE' && stillPlanned(iso(b.shipDate)))
+        .map((b) => ({ shipDate: iso(b.shipDate), blockers: [storedBlocker(b)] })),
       orders: orders.map((o) => ({
         code: o.order!.code,
         status: o.order!.status,
@@ -208,17 +212,22 @@ export class SupplyPlansService {
         };
       });
       const blockers: SupplyBlocker[] = [
-        ...(siteBlocker ? [{ code: siteBlocker, product: null }] : []),
+        ...(siteBlocker ? [{ code: siteBlocker, product: null, detail: null }] : []),
         ...d.lines.flatMap((l): SupplyBlocker[] => {
           const p = products.get(l.productCode);
-          if (!p || !p.active) return [{ code: 'UNKNOWN_PRODUCT', product: l.productCode }];
-          if (!p.unit) return [{ code: 'PRODUCT_WITHOUT_RECIPE', product: l.productCode }];
+          if (!p || !p.active) {
+            return [{ code: 'UNKNOWN_PRODUCT', product: l.productCode, detail: null }];
+          }
+          if (!p.unit) {
+            return [{ code: 'PRODUCT_WITHOUT_RECIPE', product: l.productCode, detail: null }];
+          }
           return [];
         }),
       ];
       const occ = occurrences.find((o) => iso(o.shipDate) === d.shipDate) ?? null;
       if (blockers.length > 0) blockedDays += 1;
-      else if (!occ) {
+      // Not ordered yet (also when an earlier round blocked it and the blocker is gone now).
+      else if (!occ || occ.status === 'BLOCKED') {
         orders += 1;
         for (const l of lines) {
           const s = summary.get(l.productCode) ?? {
@@ -469,7 +478,7 @@ export class SupplyPlansService {
       );
       for (const day of days) {
         try {
-          const outcome = await this.occurrence(planId, day.shipDate, day.lines);
+          const outcome = await this.occurrence(planId, plan.version, day.shipDate, day.lines);
           if (outcome === 'CREATED') created += 1;
           if (outcome === 'BLOCKED') blocked += 1;
           if (outcome === 'STOPPED') break;
@@ -492,6 +501,8 @@ export class SupplyPlansService {
 
   private async occurrence(
     planId: string,
+    /** The version this round read its rules from: a newer one stops the round (next round). */
+    version: number,
     shipDate: string,
     lines: { productCode: string; crates: number }[],
   ): Promise<'CREATED' | 'EXISTS' | 'BLOCKED' | 'STOPPED'> {
@@ -509,6 +520,12 @@ export class SupplyPlansService {
             }[]
           >`SELECT "id", "status", "version", "activated_by", "site_id" FROM "supply_plans" WHERE "id" = ${planId}::uuid FOR UPDATE`;
           if (!plan || plan.status !== 'ACTIVE' || !plan.activated_by) return 'STOPPED' as const;
+          // Saved anew meanwhile: these lines may be stale — the next round uses the new version.
+          if (plan.version !== version) return 'STOPPED' as const;
+          // An inactive site is its own, visible reason (the order rules would say "no warehouse").
+          if ((await this.siteBlocker(tx, plan.site_id)) === 'SITE_INACTIVE') {
+            throw domainError(409, 'SITE_INACTIVE', 'The serving site is not active');
+          }
           const existing = await tx.supplyPlanOccurrence.findUnique({
             where: { planId_shipDate: { planId, shipDate: dateOf(shipDate) } },
           });
@@ -590,6 +607,8 @@ export class SupplyPlansService {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         return 'EXISTS';
       }
+      // The day became past during the round (midnight at the site): never a past order.
+      if (codeOf(error) === 'SHIP_DATE_IN_PAST') return 'EXISTS';
       const blocker = blockerOf(error);
       if (!blocker) throw error;
       await this.block(planId, shipDate, lines, blocker);
@@ -613,7 +632,7 @@ export class SupplyPlansService {
       INSERT INTO "supply_plan_occurrences"
         ("plan_id", "ship_date", "status", "plan_version", "snapshot", "blocked_code", "blocked_detail")
       VALUES (${planId}::uuid, ${shipDate}::date, 'BLOCKED', ${plan.version}, ${snapshot}::jsonb,
-              ${blocker.code}, ${blocker.product})
+              ${blocker.code}, ${blocker.code === 'ORDER_REFUSED' ? blocker.detail : blocker.product})
       ON CONFLICT ("plan_id", "ship_date") DO UPDATE
         SET "plan_version" = EXCLUDED."plan_version", "snapshot" = EXCLUDED."snapshot",
             "blocked_code" = EXCLUDED."blocked_code", "blocked_detail" = EXCLUDED."blocked_detail",
@@ -662,8 +681,13 @@ export class SupplyPlansService {
     return hotel;
   }
 
+  /**
+   * Serialises the management of one hotel's plan (also its creation, when no plan row exists
+   * yet) with a transaction-scoped advisory lock — never a lock on the hotel row, which a round
+   * creating an order needs for its foreign key (the order of locks would deadlock).
+   */
   private async lockHotelPlan(tx: Tx, hotelId: string): Promise<void> {
-    await tx.$executeRaw`SELECT 1 FROM "hotels" WHERE "id" = ${hotelId}::uuid FOR UPDATE`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`supply-plan:${hotelId}`}, 0))`;
     await tx.$executeRaw`SELECT 1 FROM "supply_plans" WHERE "hotel_id" = ${hotelId}::uuid FOR UPDATE`;
   }
 
@@ -704,10 +728,42 @@ export class SupplyPlansService {
 }
 
 /** The order rules' refusal as a blocker (other errors are failures of the round, not blockers). */
-function blockerOf(error: unknown): SupplyBlocker | null {
+function codeOf(error: unknown): string | null {
   if (!(error instanceof HttpException)) return null;
+  return (error.getResponse() as { code?: string })?.code ?? null;
+}
+
+/**
+ * A refusal of the order rules as a visible blocker of that day — a known one by its own code,
+ * any other refusal as ORDER_REFUSED with that code (never a silent stop of the whole plan).
+ * Database or connection errors are not refusals: the round fails and tries again later.
+ */
+function blockerOf(error: unknown): SupplyBlocker | null {
+  if (!(error instanceof HttpException)) {
+    // A database rule refusing the order (e.g. the site lost its WAREHOUSE capability).
+    const message = error instanceof Error ? error.message : '';
+    const rule = /AYVO: ([^\n]{1,200})/.exec(message);
+    return rule ? { code: 'ORDER_REFUSED', product: null, detail: rule[1]!.trim() } : null;
+  }
   const body = error.getResponse() as { code?: string; details?: { product?: string } };
-  const code = body?.code as SupplyBlocker['code'] | undefined;
-  if (!code || !BLOCKER_CODES.has(code)) return null;
-  return { code, product: body.details?.product ?? null };
+  if (!body?.code) return null;
+  const known = BLOCKER_CODES.has(body.code as SupplyBlocker['code']);
+  return known
+    ? {
+        code: body.code as SupplyBlocker['code'],
+        product: body.details?.product ?? null,
+        detail: null,
+      }
+    : { code: 'ORDER_REFUSED', product: null, detail: body.code };
+}
+
+/** A stored blocked occurrence as its blocker (ORDER_REFUSED keeps its detail, others a product). */
+function storedBlocker(b: {
+  blockedCode: string | null;
+  blockedDetail: string | null;
+}): SupplyBlocker {
+  const code = b.blockedCode as SupplyBlocker['code'];
+  return code === 'ORDER_REFUSED'
+    ? { code, product: null, detail: b.blockedDetail }
+    : { code, product: b.blockedDetail, detail: null };
 }

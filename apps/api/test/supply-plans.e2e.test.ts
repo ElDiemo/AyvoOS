@@ -114,7 +114,9 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
     expect(first.existingOrders.map((o) => o.code)).toEqual([manual.code]);
     expect(first.inHorizon).toBe(true);
     const blocked = p.days.find((d) => d.blockers.length > 0)!;
-    expect(blocked.blockers).toEqual([{ code: 'PRODUCT_WITHOUT_RECIPE', product: noRecipe }]);
+    expect(blocked.blockers).toEqual([
+      { code: 'PRODUCT_WITHOUT_RECIPE', product: noRecipe, detail: null },
+    ]);
     expect(blocked.lines[0]).toMatchObject({ bottles: null, capacity: null });
     // A 31st missing in a month of the window is reported, never moved.
     const short = p.skipped.filter((s) => s.day === 31);
@@ -373,13 +375,25 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
     ).toEqual(['2027-05-06']);
     const view = (await http().get(base(hotel)).expect(200)).body as SupplyPlanResponse;
     expect(view.plan!.blocked).toEqual([
-      { shipDate: '2027-05-07', blockers: [{ code: 'PRODUCT_WITHOUT_RECIPE', product: noRecipe }] },
+      {
+        shipDate: '2027-05-07',
+        blockers: [{ code: 'PRODUCT_WITHOUT_RECIPE', product: noRecipe, detail: null }],
+      },
     ]);
     // Tried again on the next round, still blocked — still no order and no second occurrence.
     expect(await round(hotel, '2027-05-05T09:00:00Z')).toEqual({ created: 0, blocked: 1 });
     expect(
       await t.prisma.supplyPlanOccurrence.count({ where: { planId: (await planOf(hotel)).id } }),
     ).toBe(2);
+    // The rule removed: the old blocker is moot and no longer shown as current.
+    await save(hotel, {
+      validFrom: '2027-05-01',
+      validTo: null,
+      rules: [{ productCode: product, crates: 1, days: [6, 8] }],
+    }).expect(200);
+    expect(
+      ((await http().get(base(hotel)).expect(200)).body as SupplyPlanResponse).plan!.blocked,
+    ).toEqual([]);
   });
 
   it('manual orders stay possible beside a plan; the nearby orders are shown, nothing merged', async () => {
@@ -449,6 +463,38 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
       .expect(200);
     o = await overview();
     expect(o.months.flatMap((m) => m.products).reduce((n, c) => n + c.openCrates, 0)).toBe(1);
+  });
+
+  it('a round never builds an order from a version saved meanwhile (it stops; the next round uses the new one)', async () => {
+    const hotel = (await createHotel(t)).code;
+    await save(hotel, {
+      validFrom: '2027-06-01',
+      validTo: null,
+      rules: [{ productCode: product, crates: 5, days: [10] }],
+    }).expect(200);
+    await activate(hotel).expect(200);
+    const read = await planOf(hotel); // the version a round read its rules from
+    await save(hotel, {
+      validFrom: '2027-06-01',
+      validTo: null,
+      rules: [{ productCode: product, crates: 3, days: [10] }],
+    }).expect(200);
+    const svc = plans() as unknown as {
+      occurrence: (p: string, v: number, d: string, l: object[]) => Promise<string>;
+    };
+    expect(
+      await svc.occurrence(read.id, read.version, '2027-06-10', [
+        { productCode: product, crates: 5 },
+      ]),
+    ).toBe('STOPPED');
+    expect(await ordersOf(hotel)).toEqual([]);
+    await round(hotel, '2027-06-05T08:00:00Z');
+    const [order] = await ordersOf(hotel);
+    expect(order!.lines[0]!.crates).toBe(3);
+    const occ = await t.prisma.supplyPlanOccurrence.findFirstOrThrow({
+      where: { orderId: order!.id },
+    });
+    expect(occ.planVersion).toBe(2);
   });
 
   it('practical hotel details: optional, with a reason, audited', async () => {

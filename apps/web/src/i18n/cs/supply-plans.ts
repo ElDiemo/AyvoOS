@@ -115,6 +115,8 @@ export const supplyPlansCs = {
     SITE_WITHOUT_WAREHOUSE: () => 'Provozovna nemá sklad.',
     SITE_INACTIVE: () => 'Provozovna není aktivní.',
     HOTEL_OF_ANOTHER_SITE: () => 'Hotel obsluhuje jiná provozovna.',
-  } as Record<string, (product: string | null) => string>,
+    ORDER_REFUSED: (detail: string | null) =>
+      `Objednávku nelze založit podle pravidel objednávek${detail ? ` (${detail})` : ''}.`,
+  } as Record<string, (productOrDetail: string | null) => string>,
   reasonLabel: 'Důvod změny',
 };

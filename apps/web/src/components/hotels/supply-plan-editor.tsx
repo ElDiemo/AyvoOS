@@ -489,7 +489,9 @@ function PreviewView({
   productName: (code: string) => string;
 }) {
   const blockerText = (b: SupplyPreview['days'][number]['blockers'][number]) =>
-    t.blockers[b.code]!(b.product ? productName(b.product) : null);
+    t.blockers[b.code]!(
+      b.code === 'ORDER_REFUSED' ? b.detail : b.product ? productName(b.product) : null,
+    );
   return (
     <Card title={t.preview.title} testId="plan-preview-result">
       <div className="flex flex-col gap-4 text-sm">

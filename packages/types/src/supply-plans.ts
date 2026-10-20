@@ -68,8 +68,11 @@ export const supplyBlockerSchema = z.object({
     'SITE_WITHOUT_WAREHOUSE',
     'HOTEL_OF_ANOTHER_SITE',
     'SITE_INACTIVE',
+    /** Another refusal of the order rules; `detail` says which (shown, never silent). */
+    'ORDER_REFUSED',
   ]),
   product: z.string().nullable(),
+  detail: z.string().nullable(),
 });
 export type SupplyBlocker = z.infer<typeof supplyBlockerSchema>;
 

@@ -569,7 +569,11 @@ export class OrdersService implements OnModuleInit {
       { month: string; code: string; name: string; crates: number; bottles: number }[]
     >`
       SELECT to_char(pp."delivered_at" AT TIME ZONE ${timeZone}, 'YYYY-MM') AS "month",
-             pr."code", pr."name", count(*)::int AS "crates", sum(c."member_count")::int AS "bottles"
+             pr."code", pr."name", count(*)::int AS "crates",
+             -- The crate's content as recorded when it was loaded into the order (insert-only):
+             -- a later return to the same cycle never changes a past delivery.
+             sum((SELECT count(*) FROM "order_allocation_bottles" ab
+                   WHERE ab."allocation_id" = p."allocation_id"))::int AS "bottles"
         FROM "shipment_parcel_progress" pp
         JOIN "shipment_parcels" p ON p."id" = pp."parcel_id"
         JOIN "shipments" s ON s."id" = p."shipment_id" AND s."status" <> 'CANCELLED'
