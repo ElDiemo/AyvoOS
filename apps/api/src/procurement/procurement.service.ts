@@ -18,6 +18,7 @@ import type {
 import { RECEIPT_DATE_MIN } from '@ayvo/types';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
+import { isUniqueViolation } from '../common/unique-violation.js';
 import { assertUnitScale, formatQuantity, quantity } from '../common/quantity.js';
 import { ADMIN_API } from '../common/routes.js';
 import { allocateSerials } from '../database/code-counters.js';
@@ -137,21 +138,23 @@ export class ProcurementService {
       note: input.note ?? null,
     };
     // The hash covers the normalized details: a replay of the old three-field body still matches.
-    const { result } = await this.operations.run(
-      'SUPPLIER_CREATE',
-      input.requestId,
-      { requestId: input.requestId, ...pickOldFields(details) },
-      async (tx) => {
-        await this.assertNameFree(tx, input.name, null);
-        const supplier = await tx.supplier.create({
-          data: { ...details, requestId: input.requestId },
-        });
-        // Revision 1 in the same transaction (the database checks it at commit).
-        await tx.supplierRevision.create({
-          data: { supplierId: supplier.id, revision: 1, ...details, changedById: actorId },
-        });
-        return { supplierId: supplier.id };
-      },
+    const { result } = await nameTaken(
+      this.operations.run(
+        'SUPPLIER_CREATE',
+        input.requestId,
+        { requestId: input.requestId, ...pickOldFields(details) },
+        async (tx) => {
+          await this.assertNameFree(tx, input.name, null);
+          const supplier = await tx.supplier.create({
+            data: { ...details, requestId: input.requestId },
+          });
+          // Revision 1 in the same transaction (the database checks it at commit).
+          await tx.supplierRevision.create({
+            data: { supplierId: supplier.id, revision: 1, ...details, changedById: actorId },
+          });
+          return { supplierId: supplier.id };
+        },
+      ),
     );
     return toSupplierDto(await this.getSupplier(result.supplierId), contacts);
   }
@@ -168,56 +171,62 @@ export class ProcurementService {
     actorId: string,
   ): Promise<SupplierDetailDto> {
     const { requestId, revision, reason, ...details } = input;
-    await this.operations.run(
-      'SUPPLIER_UPDATE',
-      requestId,
-      { id, actorId, revision, reason, ...details },
-      async (tx) => {
-        await tx.$executeRaw`SELECT 1 FROM "suppliers" WHERE "id" = ${id}::uuid FOR UPDATE`;
-        const current = await tx.supplier.findUnique({ where: { id } });
-        if (!current) throw new NotFoundException('Supplier not found');
-        if (current.archivedAt) {
-          throw domainError(422, 'SUPPLIER_INACTIVE', 'The supplier does not exist or is archived');
-        }
-        if (current.revision !== revision) {
-          throw domainErrorWithDetails(
-            409,
-            'SUPPLIER_CHANGED',
-            'The supplier was changed in the meantime; reload it and enter the change again',
-            { based: revision, current: current.revision },
+    await nameTaken(
+      this.operations.run(
+        'SUPPLIER_UPDATE',
+        requestId,
+        { id, actorId, revision, reason, ...details },
+        async (tx) => {
+          await tx.$executeRaw`SELECT 1 FROM "suppliers" WHERE "id" = ${id}::uuid FOR UPDATE`;
+          const current = await tx.supplier.findUnique({ where: { id } });
+          if (!current) throw new NotFoundException('Supplier not found');
+          if (current.archivedAt) {
+            throw domainError(
+              422,
+              'SUPPLIER_INACTIVE',
+              'The supplier does not exist or is archived',
+            );
+          }
+          if (current.revision !== revision) {
+            throw domainErrorWithDetails(
+              409,
+              'SUPPLIER_CHANGED',
+              'The supplier was changed in the meantime; reload it and enter the change again',
+              { based: revision, current: current.revision },
+            );
+          }
+          const changed = (Object.keys(details) as (keyof typeof details)[]).filter(
+            (k) => details[k] !== current[k],
           );
-        }
-        const changed = (Object.keys(details) as (keyof typeof details)[]).filter(
-          (k) => details[k] !== current[k],
-        );
-        if (changed.length === 0) {
-          throw domainError(422, 'SUPPLIER_UNCHANGED', 'Nothing was changed');
-        }
-        if (changed.includes('name')) await this.assertNameFree(tx, details.name, id);
-        const next = current.revision + 1;
-        await tx.supplierRevision.create({
-          data: {
-            supplierId: id,
-            revision: next,
-            ...details,
-            reason,
-            changedById: actorId,
-            requestId,
-          },
-        });
-        await tx.supplier.update({ where: { id }, data: { ...details, revision: next } });
-        // The values are in the revision; the audit names what changed and why.
-        await this.audit.record(
-          {
-            type: 'SUPPLIER_UPDATED',
-            actorUserId: actorId,
-            reason,
-            payload: { supplier: id, revision: next, changed },
-          },
-          tx,
-        );
-        return { supplierId: id };
-      },
+          if (changed.length === 0) {
+            throw domainError(422, 'SUPPLIER_UNCHANGED', 'Nothing was changed');
+          }
+          if (changed.includes('name')) await this.assertNameFree(tx, details.name, id);
+          const next = current.revision + 1;
+          await tx.supplierRevision.create({
+            data: {
+              supplierId: id,
+              revision: next,
+              ...details,
+              reason,
+              changedById: actorId,
+              requestId,
+            },
+          });
+          await tx.supplier.update({ where: { id }, data: { ...details, revision: next } });
+          // The values are in the revision; the audit names what changed and why.
+          await this.audit.record(
+            {
+              type: 'SUPPLIER_UPDATED',
+              actorUserId: actorId,
+              reason,
+              payload: { supplier: id, revision: next, changed },
+            },
+            tx,
+          );
+          return { supplierId: id };
+        },
+      ),
     );
     return this.supplierDetail(id, true);
   }
@@ -819,6 +828,18 @@ function safeFilename(name: string, ext: string): string {
     .trim()
     .slice(0, 200);
   return cleaned.length > 0 ? cleaned : `document.${ext}`;
+}
+
+/** A concurrent create/rename to the same name loses on the unique index: the same 409. */
+async function nameTaken<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw domainError(409, 'SUPPLIER_EXISTS', 'A supplier with this name already exists');
+    }
+    throw error;
+  }
 }
 
 type SupplierFields = Pick<

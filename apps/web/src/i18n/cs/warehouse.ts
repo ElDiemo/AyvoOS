@@ -216,7 +216,6 @@ export const warehouseCs = {
     sectionIdentity: 'Identifikace',
     sectionAddress: 'Adresa',
     sectionContact: 'Kontakt',
-    sectionNote: 'Poznámka',
     addressLine1: 'Ulice a číslo',
     addressLine2: 'Doplnění adresy',
     postalCode: 'PSČ',
@@ -246,13 +245,11 @@ export const warehouseCs = {
     revisionCreated: 'Založení',
     revisionCreatedBefore: 'Stav před evidencí změn (bez autora)',
     by: (who: string) => `upravil(a) ${who}`,
-    changes: 'Změny',
-    noFieldChanges: 'Beze změny údajů',
     current: 'aktuální',
     fields: {
       name: 'Název',
-      companyId: 'IČO / reg. č.',
-      vatId: 'DIČ',
+      companyId: 'IČO / registrační číslo',
+      vatId: 'DIČ / VAT ID',
       countryCode: 'Země',
       addressLine1: 'Ulice',
       addressLine2: 'Doplnění adresy',
@@ -295,7 +292,8 @@ export const warehouseCs = {
     looking: 'Hledám kód…',
     found: (name: string, code: string, unit: string) =>
       `Načteno: ${name} (${code}) · jednotka ${unit}`,
-    addedLine: (n: number) => `Položka je na řádku ${n}. Zadejte množství.`,
+    addedLine: (n: number) =>
+      `Položka je na řádku ${n} (zvýrazněn). Množství zadejte na řádku; čtečka může dál číst sem.`,
     alreadyOnLine: (n: number) =>
       `Tato položka už je na řádku ${n}. Nic se nepřidalo a množství se nezměnilo.`,
     unknown: (code: string) =>

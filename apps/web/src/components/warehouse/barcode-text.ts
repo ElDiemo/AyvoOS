@@ -9,6 +9,8 @@ const CZECH_LAYOUT = /[ěščřžýáíéůú]/i;
 
 /** null when the scanned text can be a goods barcode, else the Czech explanation. */
 export function barcodeProblem(code: string): string | null {
+  // Only "+": the digit 1 typed on a Czech layout (review 033-7).
+  if (/^\++$/.test(code)) return warehouseCs.barcodes.czechLayout;
   if (BARCODE_PATTERN.test(code)) return null;
   return CZECH_LAYOUT.test(code) ? warehouseCs.barcodes.czechLayout : warehouseCs.barcodes.invalid;
 }

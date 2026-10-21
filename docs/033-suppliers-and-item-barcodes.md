@@ -12,6 +12,9 @@ first, narrower part of issue #27; what is left of #27 is listed in §6. Builds 
 - Nothing is required except the name, also not of existing suppliers. The company id is the
   Czech IČO **or** a foreign registration number; it is never checked as an IČO, so a foreign
   supplier needs none, and DIČ is never required.
+- The database checks that a supplier starts at revision 1 with exactly those values and that no
+  revision is recorded without the change it describes (deferred constraint triggers). Concurrent
+  creations or renames to one name end in 409 `SUPPLIER_EXISTS`, never a 500.
 - Validation (API and DB CHECK): country `^[A-Z]{2}$`, phone `^\+?[0-9 ()/-]{6,30}$`, e-mail
   with `@`, trimmed texts with maximum lengths. No format of IČO/DIČ is imposed.
 
@@ -83,7 +86,13 @@ and Enter:
 - Enter in the field only looks the code up; it never submits or confirms the receipt.
 - A known code selects its item and shows its name, code and unit. Already on a line → nothing
   is added and the quantity is not touched; otherwise the first untouched preset line is used,
-  else a new line. The focus moves to that line's quantity.
+  else a new line. That line is highlighted; **the focus stays in the scan field**, because a
+  keyboard-wedge scanner types wherever the focus is.
+- A scanner read that lands in a quantity field anyway (the operator typed a quantity and scans
+  the next carton) is recognised as a burst — characters less than 50 ms apart, at least 4, ended
+  by Enter: the quantity gets its previous value back and the code goes to the scan. Human typing
+  is never affected. The lot field is left alone (a lot may be scanned into it on purpose).
+- A lookup still running when the receipt goes to review changes nothing.
 - Quantity, supplier, lot and document stay explicit operator input; the scan receives nothing.
 - Unknown code: nothing is created. With `inventory:barcodes_manage` the code can be assigned to
   an item right there (explicit action); otherwise the user chooses the item manually and is told

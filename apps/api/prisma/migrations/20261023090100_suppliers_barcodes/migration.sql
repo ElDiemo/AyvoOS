@@ -136,16 +136,20 @@ BEGIN
 END
 $$;
 
--- A new supplier is created together with its revision 1 (checked at commit).
+-- A new supplier is created at revision 1 together with exactly that revision (checked at
+-- commit). Values are read at commit time from the committed state of both rows.
 CREATE FUNCTION suppliers_initial_revision() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 DECLARE
   rev jsonb;
+  cur jsonb;
 BEGIN
+  SELECT to_jsonb(s) INTO cur FROM "suppliers" s WHERE s."id" = NEW."id";
   SELECT to_jsonb(r) INTO rev FROM "supplier_revisions" r
     WHERE r."supplier_id" = NEW."id" AND r."revision" = 1;
-  IF rev IS NULL THEN
+  IF NEW."revision" <> 1 OR rev IS NULL
+     OR (cur->>'revision')::int = 1 AND ayvo_supplier_details(rev) IS DISTINCT FROM ayvo_supplier_details(cur) THEN
     RAISE EXCEPTION 'AYVO: a supplier is created with its first revision'
       USING ERRCODE = 'restrict_violation';
   END IF;
@@ -155,6 +159,28 @@ $$;
 CREATE CONSTRAINT TRIGGER "suppliers_initial_revision" AFTER INSERT ON "suppliers"
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION suppliers_initial_revision();
+
+-- A revision is never recorded on its own: at commit the supplier must have reached it, and the
+-- latest revision must hold exactly the supplier's current details (no phantom history).
+CREATE FUNCTION supplier_revisions_applied() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+DECLARE
+  cur jsonb;
+BEGIN
+  SELECT to_jsonb(s) INTO cur FROM "suppliers" s WHERE s."id" = NEW."supplier_id";
+  IF cur IS NULL OR (cur->>'revision')::int < NEW."revision"
+     OR ((cur->>'revision')::int = NEW."revision"
+         AND ayvo_supplier_details(to_jsonb(NEW)) IS DISTINCT FROM ayvo_supplier_details(cur)) THEN
+    RAISE EXCEPTION 'AYVO: a supplier revision is recorded only together with the change it describes'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  RETURN NULL;
+END
+$$;
+CREATE CONSTRAINT TRIGGER "supplier_revisions_applied" AFTER INSERT ON "supplier_revisions"
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION supplier_revisions_applied();
 
 -- =============================================================================================
 -- Item barcodes: several per item, one active assignment per code, retired never deleted

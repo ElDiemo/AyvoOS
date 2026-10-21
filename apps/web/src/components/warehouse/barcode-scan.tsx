@@ -18,8 +18,43 @@ import { barcodeErrorText } from './item-barcodes';
 
 const t = warehouseCs.scan;
 
+/** Keystrokes closer than this belong to one scanner burst (people type far slower). */
+const BURST_GAP_MS = 50;
+const BURST_MIN_CHARS = 4;
+
+/**
+ * A scanner read typed into another field (e.g. a quantity the operator just entered): a fast
+ * burst of characters ended by Enter. The field gets its value from before the burst back and
+ * the code goes to the scan instead (review 033-1); slow, human typing is never affected.
+ */
+export function useScannerBurst() {
+  const burst = useRef<{ start: string; chars: string; last: number } | null>(null);
+  return (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    onScan: (code: string, restore: string) => void,
+  ) => {
+    const now = e.timeStamp;
+    const b = burst.current;
+    if (e.key === 'Enter') {
+      burst.current = null;
+      if (b && b.chars.length >= BURST_MIN_CHARS && now - b.last <= BURST_GAP_MS) {
+        e.preventDefault();
+        onScan(b.chars, b.start);
+      }
+      return;
+    }
+    if (e.key.length !== 1) return;
+    if (!b || now - b.last > BURST_GAP_MS) {
+      burst.current = { start: e.currentTarget.value, chars: e.key, last: now };
+    } else {
+      b.chars += e.key;
+      b.last = now;
+    }
+  };
+}
+
 export type ScannedItem = Pick<ItemRef, 'id' | 'code' | 'name' | 'unit'>;
-type Outcome = { line: number; added: boolean } | { full: true };
+export type ScanOutcome = { line: number; added: boolean } | { full: true } | { ignored: true };
 
 type Message =
   | { tone: 'ok'; text: string; detail: string }
@@ -35,10 +70,13 @@ export function BarcodeScan({
   items,
   canManage,
   onItem,
+  handleRef,
 }: {
   items: InventoryItem[];
   canManage: boolean;
-  onItem: (item: ScannedItem) => Outcome;
+  onItem: (item: ScannedItem) => ScanOutcome;
+  /** Lets the form pass on a scan that landed in another field (useScannerBurst). */
+  handleRef?: React.RefObject<((code: string) => void) | null>;
 }) {
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
@@ -61,6 +99,7 @@ export function BarcodeScan({
 
   function applyItem(item: ScannedItem) {
     const outcome = onItem(item);
+    if ('ignored' in outcome) return;
     if ('full' in outcome) {
       setMessage({ tone: 'warn', text: t.linesFull(RECEIPT_LINES_MAX) });
       return back();
@@ -73,6 +112,7 @@ export function BarcodeScan({
   }
 
   async function resolve(code: string) {
+    setAssignError(null);
     if (looksLikeLink(code)) {
       setMessage({ tone: 'warn', text: t.looksLikeQr });
       return back();
@@ -114,6 +154,25 @@ export function BarcodeScan({
     applyItem(found.item);
   }
 
+  function enqueue(code: string) {
+    setPending((n) => n + 1);
+    queue.current = queue.current
+      .then(() => resolve(code))
+      // One failed scan never stops the ones read after it (review 033-5).
+      .catch(() => back(code))
+      .finally(() => setPending((n) => n - 1));
+  }
+  useEffect(() => {
+    if (!handleRef) return;
+    handleRef.current = (code) => {
+      enqueue(code);
+      setRefocus((n) => n + 1);
+    };
+    return () => {
+      handleRef.current = null;
+    };
+  });
+
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== 'Enter') return;
     // The scanner's Enter must never submit or confirm anything else on the page.
@@ -122,8 +181,7 @@ export function BarcodeScan({
     const code = value.trim();
     if (!code) return;
     setValue('');
-    setPending((n) => n + 1);
-    queue.current = queue.current.then(() => resolve(code)).finally(() => setPending((n) => n - 1));
+    enqueue(code);
   }
 
   async function assignUnknown(code: string) {

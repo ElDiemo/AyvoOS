@@ -64,6 +64,12 @@ async function scan(page: Page, code: string) {
   await field.press('Enter');
 }
 
+/** A real scanner types fast into whatever has the focus, then Enter (review 033-1). */
+async function scannerTypes(page: Page, code: string) {
+  await page.keyboard.type(code, { delay: 5 });
+  await page.keyboard.press('Enter');
+}
+
 test('a foreign supplier with its address and contact; a correction keeps the history', async ({
   page,
 }) => {
@@ -229,8 +235,21 @@ test('receiving with a scanner: a scan selects the item only; Enter never submit
   await expect(result).toContainText(`Načteno: ${item.name} (${item.code})`);
   await expect(result).toContainText('Položka je na řádku 1');
   await expect(page.getByTestId('receipt-line-1').getByLabel('Položka')).toHaveValue(item.id);
-  await expect(page.getByTestId('receipt-line-1').getByLabel(/Množství/)).toBeFocused();
-  await page.keyboard.type('12');
+  await expect(page.getByTestId('receipt-line-1')).toHaveAttribute('data-scanned', 'true');
+  // The focus stays in the scan field: the next read goes there, never into a quantity.
+  await expect(scanField).toBeFocused();
+  await scannerTypes(page, ZEROS);
+  await expect(result).toContainText('už je na řádku 1');
+  await expect(page.getByTestId('receipt-line-1').getByLabel(/Množství/)).toHaveValue('');
+
+  // The operator types the quantity by hand (slowly), then the scanner reads again while the
+  // focus is still in the quantity: the read goes to the scan, the quantity stays 12.
+  const qty1 = page.getByTestId('receipt-line-1').getByLabel(/Množství/);
+  await qty1.click();
+  await page.keyboard.type('12', { delay: 120 });
+  await scannerTypes(page, ZEROS);
+  await expect(qty1).toHaveValue('12');
+  await expect(scanField).toBeFocused();
 
   // The same code again: no new line, the quantity stays.
   await scan(page, ZEROS);

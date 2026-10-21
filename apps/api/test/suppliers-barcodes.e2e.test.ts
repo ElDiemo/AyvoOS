@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 import { createSupplier, receiveItem } from './support/warehouse-fixtures.js';
+import { payloadHash } from '../src/database/operation-requests.service.js';
 
 const sfx = () => randomBytes(3).toString('hex').toUpperCase();
 
@@ -634,3 +635,76 @@ describe.skipIf(!hasDatabase)('supplier and barcode access (real sign-in)', () =
     ).toBe(403);
   });
 });
+
+/** Review 033: database holes, replays of older requests and races of names. */
+describe.skipIf(!hasDatabase)(
+  'supplier revisions: database guards and replays (review 033)',
+  () => {
+    let t: TestApp;
+    const http = () => request(t.app.getHttpServer());
+    beforeAll(async () => {
+      t = await createTestApp();
+    });
+    afterAll(async () => {
+      await t?.close();
+    });
+
+    it('no phantom revision and no supplier unlike its first revision', async () => {
+      const supplier = await createSupplier(t);
+      // A revision without the supplier reaching it: refused at commit.
+      await expect(
+        t.prisma.supplierRevision.create({
+          data: {
+            supplierId: supplier.id,
+            revision: 2,
+            name: supplier.name,
+            reason: 'podvržená historie',
+            changedById: (await t.prisma.user.findFirstOrThrow()).id,
+            requestId: randomUUID(),
+          },
+        }),
+      ).rejects.toThrow();
+      expect(await t.prisma.supplierRevision.count({ where: { supplierId: supplier.id } })).toBe(1);
+      // A supplier whose revision 1 says something else, or that starts at another revision.
+      for (const data of [
+        { revision: 1, city: 'Jinde' },
+        { revision: 5, city: null },
+      ]) {
+        await expect(
+          t.prisma.$transaction(async (tx) => {
+            const s = await tx.supplier.create({
+              data: { name: `Nesoulad ${sfx()}`, requestId: randomUUID(), ...data },
+            });
+            await tx.supplierRevision.create({
+              data: { supplierId: s.id, revision: 1, name: s.name },
+            });
+          }),
+        ).rejects.toThrow();
+      }
+    });
+
+    it('a create request sent before doc 033 replays to the same supplier', async () => {
+      const requestId = randomUUID();
+      const body = { requestId, name: `Před 033 ${sfx()}`, companyId: '12345678', vatId: null };
+      const first = await http().post('/api/admin/suppliers').send(body).expect(201);
+      const row = await t.prisma.operationRequest.findUniqueOrThrow({ where: { requestId } });
+      // Exactly the hash the old code stored for its three-field payload.
+      expect(row.payloadSha256).toBe(payloadHash('SUPPLIER_CREATE', body));
+      const replay = await http().post('/api/admin/suppliers').send(body).expect(201);
+      expect(replay.body.id).toBe(first.body.id);
+    });
+
+    it('two suppliers created at once under one name: one wins, the other gets SUPPLIER_EXISTS', async () => {
+      const name = `Souběh ${sfx()}`;
+      const results = await Promise.all(
+        [0, 1].map(() =>
+          http()
+            .post('/api/admin/suppliers')
+            .send({ requestId: randomUUID(), name, companyId: null, vatId: null }),
+        ),
+      );
+      expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+      expect(results.find((r) => r.status === 409)!.body.code).toBe('SUPPLIER_EXISTS');
+    });
+  },
+);

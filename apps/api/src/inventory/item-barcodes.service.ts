@@ -130,9 +130,10 @@ export class ItemBarcodesService {
       );
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
-      // A concurrent assignment won (the index): report its item like the check above.
-      await this.assertFree(this.prisma, input.code, null);
-      throw error;
+      // A concurrent assignment won (the index): report its holder like the check above.
+      const item = await this.prisma.inventoryItem.findUnique({ where: { code: itemCode } });
+      await this.assertFree(this.prisma, input.code, item?.id ?? null);
+      throw domainError(409, 'BARCODE_TAKEN', 'This barcode was assigned in the meantime');
     }
     return this.list(itemCode);
   }
