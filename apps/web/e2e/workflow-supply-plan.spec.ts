@@ -189,9 +189,55 @@ test('the plan: merged rules, a blocked product, the real preview; saved switche
   );
   await page.reload();
   await expect(page.getByTestId('plan-rule-3-product')).toHaveValue(noRecipe);
-  // Switching on: the preview again, an explicit confirmation.
+  const state = page.getByTestId('plan-state');
+  const crates = page.getByTestId('plan-rule-1-crates');
+  const planStatus = async () =>
+    (
+      await json<{ plan: { status: string; version: number } }>(
+        await page.request.get(`/api/admin/orders/hotel/${hotel}/supply-plan`),
+      )
+    ).plan;
+  // PLAN40-R1: a different quantity in the form, not saved — switching on is refused (only the
+  // saved plan is ever switched on; nothing saved or discarded behind the user's back).
+  await crates.fill('1');
+  await expect(state.getByTestId('plan-unsaved')).toBeVisible();
+  await page.getByTestId('plan-activate').click();
+  await expect(state.getByTestId('plan-activate-error')).toContainText('neuložené změny');
+  await expect(dialog).toBeHidden();
+  await expect(crates).toHaveValue('1'); // the edit is kept
+  // An invalid form: no dialog either.
+  await crates.fill('');
+  await page.getByTestId('plan-activate').click();
+  await expect(state.getByTestId('plan-activate-error')).toBeVisible();
+  await expect(dialog).toBeHidden();
+  expect(await planStatus()).toMatchObject({ status: 'INACTIVE', version: 2 });
+  // A preview of the form becomes visibly stale after an edit.
+  await crates.fill('2');
+  await expect(state.getByTestId('plan-unsaved')).toHaveCount(0);
+  await page.getByTestId('plan-preview').click();
+  const result = page.getByTestId('plan-preview-result');
+  await expect(result.getByTestId('plan-what')).toBeVisible();
+  await expect(result.getByTestId('plan-preview-stale')).toHaveCount(0);
+  await crates.fill('7');
+  await expect(result.getByTestId('plan-preview-stale')).toBeVisible();
+  await crates.fill('2');
+  await expect(result.getByTestId('plan-preview-stale')).toHaveCount(0);
+  // The saved plan's preview fails to load: no dialog, a clear message, nothing switched on.
+  await page.route(`**/api/admin/orders/hotel/${hotel}/supply-plan/preview`, (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ status: 503, body: '{"message":"unavailable"}' })
+      : route.continue(),
+  );
+  await page.getByTestId('plan-activate').click();
+  await expect(state.getByTestId('plan-activate-error')).toBeVisible();
+  await expect(dialog).toBeHidden();
+  await page.unroute(`**/api/admin/orders/hotel/${hotel}/supply-plan/preview`);
+  expect(await planStatus()).toMatchObject({ status: 'INACTIVE', version: 2 });
+  // Switching on: the saved plan's preview, its version, an explicit confirmation.
   await page.getByTestId('plan-activate').click();
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('plan-confirm-version')).toContainText('uložená verze 2');
+  await expect(dialog.getByTestId('plan-confirm-what')).toContainText(product.name);
   await expect(dialog.getByRole('button', { name: 'Ano, zapnout plán' })).toBeDisabled();
   await expect(
     page.getByTestId('plan-preview-result').getByTestId(`plan-day-${plus(4)}`),

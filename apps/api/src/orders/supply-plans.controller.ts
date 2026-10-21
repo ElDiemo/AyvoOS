@@ -6,6 +6,7 @@ import {
   supplyPlanPreviewRequestSchema,
   type ActivateSupplyPlanRequest,
   type PauseSupplyPlanRequest,
+  type SavedSupplyPreview,
   type SaveSupplyPlanRequest,
   type SupplyPlanPreviewRequest,
   type SupplyPlanResponse,
@@ -49,6 +50,16 @@ export class SupplyPlansController {
     @OperationalSite() site: SiteContext,
   ): Promise<SupplyPreview> {
     return this.plans.preview(site, hotel, body);
+  }
+
+  /** The saved plan's preview and its version — what switching on confirms; writes nothing. */
+  @RequirePermission('orders:plan_manage')
+  @Get('preview')
+  savedPreview(
+    @Param('hotel', HOTEL) hotel: string,
+    @OperationalSite() site: SiteContext,
+  ): Promise<SavedSupplyPreview> {
+    return this.plans.savedPreview(site, hotel);
   }
 
   @RequirePermission('orders:plan_manage')

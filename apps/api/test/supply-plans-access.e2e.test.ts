@@ -119,10 +119,11 @@ describe.skipIf(!hasDatabase)('supply plan access and site isolation (real sign-
     const rules = [{ productCode: product, crates: 1, days: [3] }];
     const reader = await createUser([await role(['orders:read', 'orders:manage', 'hotels:read'])]);
     expect((await as(reader).get(base)).status).toBe(200);
+    expect((await as(reader).get(`${base}/preview`)).status).toBe(403);
     for (const [path, body] of [
       ['', { requestId: randomUUID(), ...plan, rules, reason: 'zkouška' }],
       ['/preview', { ...plan, rules }],
-      ['/activate', { requestId: randomUUID(), confirm: true }],
+      ['/activate', { requestId: randomUUID(), confirm: true, version: 1 }],
       ['/pause', { requestId: randomUUID(), reason: 'zkouška' }],
     ] as const) {
       expect((await as(reader).post(`${base}${path}`, body)).status, path).toBe(403);

@@ -70,6 +70,12 @@ export const supplyPlansCs = {
     'Od zapnutí se budou automaticky zakládat běžné objednávky na nejbližších 14 dní podle náhledu níže. Přepravu, svoz, tisk štítků ani odeslání systém sám nikdy neudělá.',
   activateConfirm: 'Ano, zapnout plán',
   activateCheck: 'Zkontroloval(a) jsem náhled a chci plán zapnout.',
+  activateUnsaved:
+    'Formulář má neuložené změny. Zapnout lze jen uložený plán – změny nejdřív uložte s důvodem, nebo je vraťte.',
+  unsavedHint: 'Neuložené změny: zapnutí se týká jen uloženého plánu.',
+  activatePreviewFailed:
+    'Náhled uloženého plánu se nepodařilo načíst, proto plán nelze zapnout. Zkuste to znovu.',
+  confirmVersion: (v: number) => `Zapne se uložená verze ${v} – podle jejího náhledu:`,
   pause: 'Pozastavit plán',
   pauseTitle: 'Pozastavit plán zásobování?',
   pauseText:
@@ -78,6 +84,7 @@ export const supplyPlansCs = {
   resume: 'Znovu zapnout',
   preview: {
     title: 'Náhled příštích 30 dní',
+    stale: 'Formulář se od náhledu změnil – náhled už neodpovídá. Zobrazte nový náhled.',
     intro: (from: string, to: string, tz: string) =>
       `${from} – ${to} · dny podle časového pásma provozovny (${tz}). Náhled nic nezapisuje.`,
     whatTitle: 'Co se bude vytvářet',

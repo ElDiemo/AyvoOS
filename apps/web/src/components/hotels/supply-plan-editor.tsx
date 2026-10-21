@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  savedSupplyPreviewSchema,
   supplyPlanResponseSchema,
   supplyPreviewSchema,
   type OrderableProduct,
@@ -25,7 +26,7 @@ import { buttonClass, Card, EmptyState, Notice } from '@/components/ui';
 import { formatDateCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
 import { supplyPlansCs as t } from '@/i18n/cs/supply-plans';
-import { apiSend } from '@/lib/client-api';
+import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { PlanStatusBadge } from './supply-plan-summary';
 
 type Rule = { key: number; productCode: string; crates: string; days: number[] };
@@ -75,6 +76,13 @@ export function SupplyPlanEditor({
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [preview, setPreview] = useState<SupplyPreview | null>(null);
+  /** The form content the shown preview was computed from (a later edit makes it stale). */
+  const [previewOf, setPreviewOf] = useState<string | null>(null);
+  /** What switching on confirms: the SAVED plan's version and its preview (PLAN40-R1/R2). */
+  const [confirming, setConfirming] = useState<{ version: number; preview: SupplyPreview } | null>(
+    null,
+  );
+  const [activateError, setActivateError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<'save' | 'activate' | 'pause' | null>(null);
   const [reason, setReason] = useState('');
   const [reasonErr, setReasonErr] = useState<string | null>(null);
@@ -94,6 +102,22 @@ export function SupplyPlanEditor({
     }),
     [validFrom, validTo, rules],
   );
+
+  /** The saved plan in the form's shape; the form differs from it → unsaved changes. */
+  const savedBody = plan
+    ? JSON.stringify({
+        validFrom: plan.validFrom,
+        validTo: plan.validTo,
+        rules: plan.rules.map((r) => ({
+          productCode: r.productCode,
+          crates: r.crates,
+          days: r.days,
+        })),
+      })
+    : null;
+  const current = JSON.stringify(body());
+  const unsaved = savedBody !== null && current !== savedBody;
+  const stale = preview !== null && previewOf !== current;
 
   function validate(): boolean {
     const next: Record<string, string | null> = {
@@ -117,13 +141,36 @@ export function SupplyPlanEditor({
     const result = await previewing.run(JSON.stringify(b), () =>
       apiSend('POST', `admin/orders/hotel/${hotel}/supply-plan/preview`, supplyPreviewSchema, b),
     );
-    if (result.ok) setPreview(result.value);
-    else if (result.error) setFormError(orderErrorText(result.error));
+    if (result.ok) {
+      setPreview(result.value);
+      setPreviewOf(JSON.stringify(b));
+    } else if (result.error) setFormError(orderErrorText(result.error));
   }
 
-  /** Switching on always shows the current preview first (doc 032 §2). */
+  /**
+   * Switching on confirms the SAVED plan only (doc 032 §2, PLAN40-R1): with unsaved changes it is
+   * refused until they are saved with a reason (never saved or discarded silently); the dialog
+   * opens only after the saved plan's preview loaded, and carries its version (PLAN40-R2).
+   */
   async function askActivate() {
-    await showPreview();
+    setActivateError(null);
+    setConfirming(null);
+    if (unsaved) {
+      setActivateError(t.activateUnsaved);
+      return;
+    }
+    const result = await previewing.run(`saved-${savedBody}`, () =>
+      apiGet(`admin/orders/hotel/${hotel}/supply-plan/preview`, savedSupplyPreviewSchema),
+    );
+    if (!result.ok) {
+      setActivateError(result.error ? orderErrorText(result.error) : t.activatePreviewFailed);
+      return;
+    }
+    setConfirming(result.value);
+    setPreview(result.value.preview);
+    setPreviewOf(savedBody);
+    setChecked(false);
+    setReasonErr(null);
     setDialog('activate');
   }
 
@@ -132,13 +179,13 @@ export function SupplyPlanEditor({
       const invalid = reasonError(reason);
       setReasonErr(invalid);
       if (invalid) return;
-    } else if (!checked) return;
+    } else if (!checked || !confirming) return;
     const path = dialog === 'save' ? '' : dialog === 'activate' ? '/activate' : '/pause';
     const payload =
       dialog === 'save'
         ? { ...body(), reason: reason.trim() }
         : dialog === 'activate'
-          ? { confirm: true as const }
+          ? { confirm: true as const, version: confirming!.version }
           : { reason: reason.trim() };
     const result = await sending.run(JSON.stringify({ path, payload }), (requestId) =>
       apiSend('POST', `admin/orders/hotel/${hotel}/supply-plan${path}`, supplyPlanResponseSchema, {
@@ -150,12 +197,25 @@ export function SupplyPlanEditor({
       setDialog(null);
       setReason('');
       setChecked(false);
+      setConfirming(null);
       router.refresh();
-    } else if (result.error) setReasonErr(orderErrorText(result.error));
+    } else if (result.error) {
+      setReasonErr(orderErrorText(result.error));
+      // Changed by someone else meanwhile: this confirmation is void; a new preview is needed.
+      if (
+        result.error instanceof ClientApiError &&
+        result.error.code === 'SUPPLY_PLAN_VERSION_CHANGED'
+      ) {
+        setConfirming(null);
+        router.refresh();
+      }
+    }
   }
 
-  const setRule = (key: number, patch: Partial<Rule>) =>
+  const setRule = (key: number, patch: Partial<Rule>) => {
+    setActivateError(null);
     setRules(rules.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  };
   const productName = (code: string) => options.find((p) => p.code === code)?.name ?? code;
   const ordersCount = plan?.orders.length ?? 0;
 
@@ -175,6 +235,7 @@ export function SupplyPlanEditor({
                     type="button"
                     className={buttonClass.primary}
                     onClick={() => void askActivate()}
+                    disabled={previewing.busy}
                     data-testid="plan-activate"
                   >
                     {plan.status === 'PAUSED' ? t.resume : t.activate}
@@ -190,6 +251,20 @@ export function SupplyPlanEditor({
                   </button>
                 )}
               </div>
+            )}
+            {canManage && plan.status !== 'ACTIVE' && unsaved && !activateError && (
+              <p className="text-xs text-amber-900" data-testid="plan-unsaved">
+                {t.unsavedHint}
+              </p>
+            )}
+            {activateError && (
+              <p
+                role="alert"
+                className="font-medium text-red-700"
+                data-testid="plan-activate-error"
+              >
+                {activateError}
+              </p>
             )}
             {ordersCount > 0 && (
               <Notice tone="info">
@@ -390,7 +465,7 @@ export function SupplyPlanEditor({
           </form>
         </Card>
       )}
-      {preview && <PreviewView preview={preview} productName={productName} />}
+      {preview && <PreviewView preview={preview} productName={productName} stale={stale} />}
       {plan && (
         <Card title={t.ordersTitle} testId="plan-orders" id="plan-orders">
           {plan.orders.length === 0 ? (
@@ -442,7 +517,7 @@ export function SupplyPlanEditor({
               : t.pauseConfirm
         }
         busy={sending.busy}
-        confirmDisabled={dialog === 'activate' && !checked}
+        confirmDisabled={dialog === 'activate' && (!checked || !confirming)}
         onConfirm={send}
         onCancel={() => setDialog(null)}
         testId="plan-dialog"
@@ -454,6 +529,23 @@ export function SupplyPlanEditor({
               ? t.activateText
               : t.pauseText}
         </p>
+        {dialog === 'activate' && confirming && (
+          <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+            <p className="font-semibold" data-testid="plan-confirm-version">
+              {t.confirmVersion(confirming.version)}
+            </p>
+            <p className="mt-1">{t.preview.what(confirming.preview.summary.orders)}</p>
+            {confirming.preview.summary.products.length > 0 && (
+              <ul className="mt-1 list-disc pl-5" data-testid="plan-confirm-what">
+                {confirming.preview.summary.products.map((x) => (
+                  <li key={x.productCode}>
+                    {t.preview.whatLine(x.productName, x.crates, x.bottles)}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {dialog === 'save' && ordersCount > 0 && (
           <p className="mt-2 text-sm text-amber-900">{t.existingOrdersWarning(ordersCount)}</p>
         )}
@@ -484,9 +576,12 @@ export function SupplyPlanEditor({
 function PreviewView({
   preview: p,
   productName,
+  stale,
 }: {
   preview: SupplyPreview;
   productName: (code: string) => string;
+  /** The form changed since: the preview no longer shows what it contains. */
+  stale: boolean;
 }) {
   const blockerText = (b: SupplyPreview['days'][number]['blockers'][number]) =>
     t.blockers[b.code]!(
@@ -495,10 +590,18 @@ function PreviewView({
   return (
     <Card title={t.preview.title} testId="plan-preview-result">
       <div className="flex flex-col gap-4 text-sm">
+        {stale && (
+          <Notice tone="warning">
+            <span data-testid="plan-preview-stale">{t.preview.stale}</span>
+          </Notice>
+        )}
         <p className="text-stone-600">
           {t.preview.intro(formatDateCs(p.from), formatDateCs(p.to), p.timeZone)}
         </p>
-        <div className="rounded-md border border-stone-200 bg-stone-50 p-3" data-testid="plan-what">
+        <div
+          className={`rounded-md border border-stone-200 bg-stone-50 p-3 ${stale ? 'opacity-50' : ''}`}
+          data-testid="plan-what"
+        >
           <p className="font-semibold">{t.preview.whatTitle}</p>
           <p className="mt-1">{t.preview.what(p.summary.orders)}</p>
           {p.summary.products.length > 0 && (

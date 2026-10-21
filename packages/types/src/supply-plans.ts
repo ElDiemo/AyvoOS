@@ -47,10 +47,15 @@ export const saveSupplyPlanRequestSchema = z
   .refine(validRange, { message: 'The end is before the start', path: ['validTo'] });
 export type SaveSupplyPlanRequest = z.infer<typeof saveSupplyPlanRequestSchema>;
 
-/** Switching on needs an explicit confirmation by an authorised user. */
+/**
+ * Switching on needs an explicit confirmation by an authorised user, of the saved version they
+ * saw previewed (`savedSupplyPreviewSchema`): another version — saved meanwhile by anyone — is
+ * refused (409 SUPPLY_PLAN_VERSION_CHANGED) and needs a new preview.
+ */
 export const activateSupplyPlanRequestSchema = z.strictObject({
   requestId: z.uuid(),
   confirm: z.literal(true),
+  version: z.number().int().positive(),
 });
 export type ActivateSupplyPlanRequest = z.infer<typeof activateSupplyPlanRequestSchema>;
 
@@ -131,6 +136,13 @@ export const supplyPreviewSchema = z.object({
   }),
 });
 export type SupplyPreview = z.infer<typeof supplyPreviewSchema>;
+
+/** The preview of the SAVED plan and the version it was computed from (what switching on uses). */
+export const savedSupplyPreviewSchema = z.object({
+  version: z.number().int().positive(),
+  preview: supplyPreviewSchema,
+});
+export type SavedSupplyPreview = z.infer<typeof savedSupplyPreviewSchema>;
 
 export const supplyPlanSchema = z.object({
   hotel: z.object({ code: z.string(), name: z.string() }),

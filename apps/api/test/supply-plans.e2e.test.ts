@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { HotelDeliveries, OrderDetail, SupplyPlanResponse, SupplyPreview } from '@ayvo/types';
+import type {
+  HotelDeliveries,
+  OrderDetail,
+  SavedSupplyPreview,
+  SupplyPlanResponse,
+  SupplyPreview,
+} from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testCarrierControl } from '../src/carriers/test-carrier.js';
@@ -31,10 +37,21 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
     http()
       .post(base(hotel))
       .send({ requestId: rid(), reason: 'plán podle smlouvy', ...body });
-  const activate = (hotel: string) =>
-    http()
+  /** The saved plan's preview and the version it comes from (what the confirmation shows). */
+  const savedPreview = async (hotel: string) =>
+    (
+      await http()
+        .get(`${base(hotel)}/preview`)
+        .expect(200)
+    ).body as SavedSupplyPreview;
+  /** Switches on as a client does: the version of the saved plan's preview is confirmed. */
+  const activate = async (hotel: string) => {
+    const { version } = await savedPreview(hotel);
+    return http()
       .post(`${base(hotel)}/activate`)
-      .send({ requestId: rid(), confirm: true });
+      .send({ requestId: rid(), confirm: true, version })
+      .expect(200);
+  };
   const planOf = async (hotel: string) =>
     t.prisma.supplyPlan.findFirstOrThrow({ where: { hotel: { code: hotel } } });
   const ordersOf = (hotel: string) =>
@@ -156,7 +173,12 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
       .post(`${base(hotel)}/activate`)
       .send({ requestId: rid() });
     expect(unconfirmed.status).toBe(400);
-    const on = (await activate(hotel).expect(200)).body as SupplyPlanResponse;
+    // Without the confirmed version: refused as invalid (PLAN40-R2).
+    const versionless = await http()
+      .post(`${base(hotel)}/activate`)
+      .send({ requestId: rid(), confirm: true });
+    expect(versionless.status).toBe(400);
+    const on = (await activate(hotel)).body as SupplyPlanResponse;
     expect(on.plan).toMatchObject({ status: 'ACTIVE' });
     expect(on.plan!.activatedBy).not.toBeNull();
     const audit = await t.prisma.auditEvent.findMany({
@@ -170,6 +192,70 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
     expect(audit[0]!.payload).toMatchObject({ reason: 'plán podle smlouvy', rules: body.rules });
   });
 
+  it('two admins: a version saved after the preview is never switched on by the old confirmation (PLAN40-R2)', async () => {
+    const hotel = (await createHotel(t)).code;
+    // The preview looks at the real next 30 days of the site: every day of the month planned.
+    const { today } = (await http().get('/api/admin/orders/calendar').expect(200)).body as {
+      today: string;
+    };
+    const every = Array.from({ length: 31 }, (_, d) => d + 1);
+    const v1 = { validFrom: today, validTo: null };
+    await save(hotel, { ...v1, rules: [{ productCode: product, crates: 10, days: every }] }).expect(
+      200,
+    );
+    // Admin A previews the SAVED plan: version 1, 10 crates.
+    const seenByA = await savedPreview(hotel);
+    expect(seenByA.version).toBe(1);
+    expect(seenByA.preview.days[0]!.lines).toEqual([
+      expect.objectContaining({ productCode: product, crates: 10 }),
+    ]);
+    // Admin B saves version 2 meanwhile: 1 crate.
+    await save(hotel, { ...v1, rules: [{ productCode: product, crates: 1, days: every }] }).expect(
+      200,
+    );
+    // A confirms the old dialog: refused, nothing switched on, nothing audited as activated.
+    const requestId = rid();
+    const stale = await http()
+      .post(`${base(hotel)}/activate`)
+      .send({ requestId, confirm: true, version: seenByA.version });
+    expect([stale.status, stale.body.code]).toEqual([409, 'SUPPLY_PLAN_VERSION_CHANGED']);
+    expect(stale.body.details).toEqual({ confirmed: 1, saved: 2 });
+    expect(await planOf(hotel)).toMatchObject({
+      status: 'INACTIVE',
+      activatedAt: null,
+      version: 2,
+    });
+    const activated = () =>
+      t.prisma.auditEvent.count({
+        where: { type: 'SUPPLY_PLAN_ACTIVATED', payload: { path: ['hotel'], equals: hotel } },
+      });
+    expect(await activated()).toBe(0);
+    // A new preview shows version 2 (1 crate); confirming that one switches it on.
+    const fresh = await savedPreview(hotel);
+    expect(fresh.version).toBe(2);
+    expect(fresh.preview.days[0]!.lines).toEqual([
+      expect.objectContaining({ productCode: product, crates: 1 }),
+    ]);
+    const okId = rid();
+    await http()
+      .post(`${base(hotel)}/activate`)
+      .send({ requestId: okId, confirm: true, version: 2 })
+      .expect(200);
+    expect(await planOf(hotel)).toMatchObject({ status: 'ACTIVE', version: 2 });
+    expect(await activated()).toBe(1);
+    // The version is part of the idempotent payload: the same request id with another version is a
+    // conflict, the same request replayed is the same answer.
+    const reused = await http()
+      .post(`${base(hotel)}/activate`)
+      .send({ requestId: okId, confirm: true, version: 1 });
+    expect([reused.status, reused.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+    await http()
+      .post(`${base(hotel)}/activate`)
+      .send({ requestId: okId, confirm: true, version: 2 })
+      .expect(200);
+    expect(await activated()).toBe(1);
+  });
+
   it('the round: one complete order per day in the 14-day horizon, origin kept; no stock, cycles or carrier', async () => {
     const hotel = (await createHotel(t)).code;
     await save(hotel, {
@@ -180,7 +266,7 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
         { productCode: product, crates: 1, days: [11] },
       ],
     }).expect(200);
-    await activate(hotel).expect(200);
+    await activate(hotel);
     const before = await counts();
     // Prague 2027-01-10: the horizon is 10 → 23 January.
     expect(await round(hotel, '2027-01-10T09:00:00Z')).toEqual({ created: 2, blocked: 0 });
@@ -225,7 +311,7 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
       validTo: null,
       rules: [{ productCode: product, crates: 1, days: [2, 9, 16, 23] }],
     }).expect(200);
-    await activate(hotel).expect(200);
+    await activate(hotel);
     // Three rounds at once (several processes / a lost answer repeated).
     const results = await Promise.all([
       round(hotel, '2027-02-01T08:00:00Z'),
@@ -265,7 +351,7 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
       validTo: null,
       rules: [{ productCode: product, crates: 1, days: [29, 30, 31] }],
     }).expect(200);
-    await activate(hotel).expect(200);
+    await activate(hotel);
     await round(hotel, '2028-02-20T08:00:00Z'); // horizon 20 Feb → 4 Mar 2028
     expect(
       (await ordersOf(hotel)).map((o) => o.requestedShipDate.toISOString().slice(0, 10)),
@@ -279,7 +365,7 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
       validTo: null,
       rules: [{ productCode: product, crates: 1, days: [27, 28] }],
     }).expect(200);
-    await activate(hotel).expect(200);
+    await activate(hotel);
     // 27 March 23:30 UTC = 28 March 00:30 in Prague (summer time starts that night): the 27th is
     // already past at the site, though it is still the 27th in UTC.
     await round(hotel, '2027-03-27T23:30:00Z');
@@ -295,7 +381,7 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
       validTo: null,
       rules: [{ productCode: product, crates: 1, days: [5, 12] }],
     }).expect(200);
-    await activate(hotel).expect(200);
+    await activate(hotel);
     await round(hotel, '2027-04-01T08:00:00Z');
     const [first, second] = await ordersOf(hotel);
     // Sent earlier: an explicit change of the ship day (orders:manage, reason, audit, event).
@@ -368,7 +454,7 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
         { productCode: noRecipe, crates: 1, days: [7] },
       ],
     }).expect(200);
-    await activate(hotel).expect(200);
+    await activate(hotel);
     expect(await round(hotel, '2027-05-05T08:00:00Z')).toEqual({ created: 1, blocked: 1 });
     expect(
       (await ordersOf(hotel)).map((o) => o.requestedShipDate.toISOString().slice(0, 10)),
@@ -472,7 +558,7 @@ describe.skipIf(!hasDatabase)('hotel supply plans and automatic orders (doc 032)
       validTo: null,
       rules: [{ productCode: product, crates: 5, days: [10] }],
     }).expect(200);
-    await activate(hotel).expect(200);
+    await activate(hotel);
     const read = await planOf(hotel); // the version a round read its rules from
     await save(hotel, {
       validFrom: '2027-06-01',

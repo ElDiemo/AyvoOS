@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ActivateSupplyPlanRequest,
+  SavedSupplyPreview,
   PauseSupplyPlanRequest,
   SaveSupplyPlanRequest,
   SupplyBlocker,
@@ -345,6 +346,36 @@ export class SupplyPlansService {
     return this.get(site, hotelCode);
   }
 
+  /**
+   * The preview of the saved plan with the version it comes from, read consistently: the plan row
+   * is share-locked while its rules are read, so a save (which locks it for update) cannot slip
+   * in between. Switching on then confirms exactly this version (PLAN40-R1/R2).
+   */
+  async savedPreview(site: SiteContext, hotelCode: string): Promise<SavedSupplyPreview> {
+    const hotel = await this.servedHotel(site, hotelCode);
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "supply_plans" WHERE "hotel_id" = ${hotel.id}::uuid FOR SHARE`;
+      if (!row) throw domainError(404, 'NO_SUPPLY_PLAN', 'This hotel has no supply plan');
+      return tx.supplyPlan.findUniqueOrThrow({
+        where: { id: row.id },
+        include: {
+          rules: { include: { product: { select: { code: true } } }, orderBy: { position: 'asc' } },
+        },
+      });
+    });
+    const preview = await this.preview(site, hotelCode, {
+      validFrom: iso(saved.validFrom),
+      validTo: saved.validTo ? iso(saved.validTo) : null,
+      rules: saved.rules.map((r) => ({
+        productCode: r.product.code,
+        crates: r.crates,
+        days: r.days,
+      })),
+    });
+    return { version: saved.version, preview };
+  }
+
   /** Switches the plan on — only with an explicit confirmation; orders follow on the next round. */
   async activate(
     actorId: string,
@@ -355,7 +386,13 @@ export class SupplyPlansService {
     await this.operations.run(
       'SUPPLY_PLAN_ACTIVATE',
       input.requestId,
-      { actorId, siteId: site.siteId, hotelCode, confirm: input.confirm },
+      {
+        actorId,
+        siteId: site.siteId,
+        hotelCode,
+        confirm: input.confirm,
+        version: input.version,
+      },
       async (tx) => {
         const hotel = await this.servedHotel(site, hotelCode, tx);
         await this.lockHotelPlan(tx, hotel.id);
@@ -363,6 +400,15 @@ export class SupplyPlansService {
         if (!plan) throw domainError(404, 'NO_SUPPLY_PLAN', 'This hotel has no supply plan');
         if (plan.status === 'ACTIVE') {
           throw domainError(409, 'SUPPLY_PLAN_ACTIVE', 'The supply plan is already switched on');
+        }
+        // Under the plan lock: the confirmed version must still be the saved one (PLAN40-R2).
+        if (plan.version !== input.version) {
+          throw domainErrorWithDetails(
+            409,
+            'SUPPLY_PLAN_VERSION_CHANGED',
+            'The plan was changed after the preview; preview it again before switching it on',
+            { confirmed: input.version, saved: plan.version },
+          );
         }
         const at = new Date();
         await tx.supplyPlan.update({

@@ -31,6 +31,18 @@ the current recipe — never a constant 40), blockers, the hotel's existing orde
 summary "Co se bude vytvářet". A new plan is `INACTIVE`; switching it on needs an explicit
 confirmation (`confirm: true`) by an authorised user.
 
+Switching on concerns the **saved** plan only (Codex PLAN40-R1/R2):
+
+- `GET …/supply-plan/preview` returns the saved plan's preview together with its `version`, read
+  consistently (the plan row is share-locked while its rules are read). The confirmation dialog
+  opens only after this preview loaded and shows that version and its summary.
+- The request carries that `version`; under the plan lock the server refuses any other saved
+  version with 409 `SUPPLY_PLAN_VERSION_CHANGED` (someone saved meanwhile) — a new preview is
+  needed. The version is part of the idempotent payload.
+- With unsaved changes in the form, switching on is refused until they are saved with a reason
+  (or reverted) — never saved or discarded silently. An invalid form or a failed preview never
+  opens the dialog. A preview of the form is marked as no longer valid once the form changes.
+
 ## 3. Generating orders safely
 
 - Runs in the application's existing background rounds (like carrier polling — no separate

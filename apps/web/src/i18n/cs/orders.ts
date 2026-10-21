@@ -200,6 +200,8 @@ export const ordersCs = {
     ORDER_NOT_RESCHEDULABLE: 'Den odeslání lze měnit jen před předáním dopravci.',
     SAME_SHIP_DATE: 'Objednávka už se odesílá v tento den.',
     SUPPLY_PLAN_ACTIVE: 'Plán zásobování je už zapnutý.',
+    SUPPLY_PLAN_VERSION_CHANGED:
+      'Plán mezitím někdo změnil a uložil. Nic se nezapnulo – zavřete dialog a zobrazte náhled znovu.',
     SUPPLY_PLAN_NOT_ACTIVE: 'Pozastavit lze jen zapnutý plán.',
     NO_SUPPLY_PLAN: 'Hotel zatím nemá plán zásobování.',
     NOT_AYVO_QR: 'Toto není QR kód AYVO tohoto prostředí.',
