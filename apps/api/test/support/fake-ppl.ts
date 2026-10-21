@@ -51,6 +51,13 @@ type Mode = {
   setCustFromShipment: boolean;
   /** GET /shipment answers at most this many items per page (null: as many as Limit asks). */
   pageCap: number | null;
+  /** The next PUT shipment/batch/{id} answer 503 / 400. */
+  putFailures: number;
+  putRefuse: boolean;
+  /** After a PUT, the new labels appear only after this many batch status reads. */
+  variantDelayReads: number;
+  /** The ZPL of the LAST set parcel prints "1/1" (as seen in the TEST environment, 2026-10-20). */
+  zplWrongPosition: boolean;
 };
 
 /** The shipment-level CUST of a set, if one was sent (PPL then returns it for every parcel). */
@@ -68,12 +75,21 @@ interface Batch {
   body: { shipments: Record<string, unknown>[]; labelSettings?: { format?: string } };
   polls: number;
   numbers: { number: string; ref: string; master: boolean }[];
+  /**
+   * The label output versions of the batch (documented PUT shipment/batch/{id}): every change makes
+   * a new version whose data GUIDs differ (`<number>-v<version>`); old GUIDs keep their content.
+   */
+  versions: { format: 'Pdf' | 'Zpl'; dpi: number | null }[];
+  /** Status reads before the latest version becomes visible (simulates PPL's processing). */
+  hiddenReads: number;
 }
 
 export class FakePpl {
   private server!: Server;
   base = '';
   tokens = 0;
+  /** PUT shipment/batch/{id} calls (format changes). */
+  puts = 0;
   validToken = '';
   readonly mode: Mode = FakePpl.fresh();
   readonly batches = new Map<string, Batch>();
@@ -124,6 +140,10 @@ export class FakePpl {
       pickedUp: [],
       setCustFromShipment: false,
       pageCap: null,
+      putFailures: 0,
+      putRefuse: false,
+      variantDelayReads: 0,
+      zplWrongPosition: false,
     };
   }
 
@@ -239,7 +259,19 @@ export class FakePpl {
       }));
       if (this.mode.extraNumber)
         numbers.push({ number: String(this.serial++), ref: refs[0]!, master: false });
-      this.batches.set(id, { id, body, polls: 0, numbers });
+      const settings = body.labelSettings as { format?: string; dpi?: number } | undefined;
+      this.batches.set(id, {
+        id,
+        body,
+        polls: 0,
+        numbers,
+        versions: [
+          settings?.format === 'Zpl'
+            ? { format: 'Zpl', dpi: settings.dpi ?? 203 }
+            : { format: 'Pdf', dpi: null },
+        ],
+        hiddenReads: 0,
+      });
       return this.json(
         res,
         201,
@@ -248,19 +280,58 @@ export class FakePpl {
       );
     }
     const batchMatch = /^\/shipment\/batch\/([0-9a-f-]{36})$/.exec(path);
+    if (req.method === 'PUT' && batchMatch) {
+      // Documented: changes the label output of an existing batch (204); nothing is created.
+      const b = this.batches.get(batchMatch[1]!);
+      if (!b) return this.json(res, 404, { title: 'Not found' });
+      this.puts += 1;
+      if (this.mode.putFailures > 0) {
+        this.mode.putFailures -= 1;
+        return this.json(res, 503, { title: 'Service unavailable' });
+      }
+      const ls = (
+        JSON.parse(await this.body(req)) as { labelSettings?: { format?: string; dpi?: number } }
+      ).labelSettings;
+      if (
+        this.mode.putRefuse ||
+        !ls ||
+        (ls.format !== 'Zpl' && ls.format !== 'Pdf') ||
+        (ls.format === 'Zpl' && (!ls.dpi || ls.dpi < 203 || ls.dpi > 1200))
+      ) {
+        return this.json(res, 400, {
+          title: 'One or more validation errors occurred.',
+          status: 400,
+        });
+      }
+      b.versions.push(
+        ls.format === 'Zpl' ? { format: 'Zpl', dpi: ls.dpi! } : { format: 'Pdf', dpi: null },
+      );
+      b.hiddenReads = this.mode.variantDelayReads;
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     if (req.method === 'GET' && batchMatch) {
       const b = this.batches.get(batchMatch[1]!);
       if (!b) return this.json(res, 404, { title: 'Not found' });
       b.polls += 1;
+      // The latest version once visible (a PUT may still be processing).
+      let version = b.versions.length - 1;
+      if (b.hiddenReads > 0) {
+        b.hiddenReads -= 1;
+        version -= 1;
+      }
       const processing = b.polls <= this.mode.processingPolls;
       const state = (last: boolean) =>
         processing ? 'InProcess' : this.mode.partial && last ? 'Error' : 'Complete';
-      const label = (n: string) =>
-        this.mode.labelForeignHost
+      const label = (number: string) => {
+        const n = `${number}-v${version}`;
+        return this.mode.labelForeignHost
           ? `http://evil.example/data/${n}`
           : this.mode.labelRelative
             ? `${BASE_PATH}/data/${n}`
             : `${this.base}/data/${n}`;
+      };
       const [master, ...rest] = b.numbers;
       const related = rest
         .map((x, i) => ({
@@ -363,21 +434,37 @@ export class FakePpl {
         res.end();
         return;
       }
-      // The format of the batch this label belongs to.
-      const id = dataMatch[1]!;
-      const batch = [...this.batches.values()].find((b) => b.numbers.some((n) => n.number === id));
-      const zpl = batch?.body.labelSettings?.format === 'Zpl';
+      // The label of this number in the output version its GUID names.
+      const m = /^(\d+)-v(\d+)$/.exec(dataMatch[1]!);
+      const batch = m
+        ? [...this.batches.values()].find((b) => b.numbers.some((n) => n.number === m[1]))
+        : undefined;
+      const v = batch?.versions[Number(m?.[2])];
+      if (!m || !batch || !v) return this.json(res, 404, { title: 'Not found' });
       if (this.mode.labelHuge) {
         res.writeHead(200, { 'content-type': 'application/pdf' });
         res.end(Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(6 * 1024 * 1024, 32)]));
         return;
       }
-      res.writeHead(200, { 'content-type': zpl ? 'text/plain' : 'application/pdf' });
-      res.end(
-        zpl
-          ? `^XA^FO50,50^FD${dataMatch[1]}^FS^XZ`
-          : `%PDF-1.4\n% fake PPL label ${dataMatch[1]}\n%%EOF\n`,
-      );
+      const number = m[1]!;
+      const index = batch.numbers.findIndex((n) => n.number === number);
+      const count = batch.numbers.length;
+      // As PPL prints it: the number, "Ref.:" = the CUST in force, the position in the set.
+      const ref = shipmentCust(batch) ?? batch.numbers[index]!.ref;
+      const position =
+        this.mode.zplWrongPosition && v.format === 'Zpl' && count > 1 && index === count - 1
+          ? '1/1'
+          : `${index + 1}/${count}`;
+      if (v.format === 'Zpl') {
+        res.writeHead(200, { 'content-type': 'application/octet-stream' });
+        res.end(
+          `^XA^PW807^LH0,0^FO20,20^FDSIMULATED PPL - NOT A REAL LABEL^FS^FO20,60^FD${number}^FS` +
+            `^FO20,100^FDRef.: ${ref}^FS^FO20,140^FD${position}^FS^PQ1,0,0,^XZ`,
+        );
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/pdf' });
+      res.end(`%PDF-1.4\n% fake PPL label ${number} Ref.: ${ref} ${position}\n%%EOF\n`);
       return;
     }
     const completeMatch = /^\/shipment\/batch\/([0-9a-f-]{36})\/label$/.exec(path);

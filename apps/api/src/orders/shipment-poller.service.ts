@@ -39,6 +39,8 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
     this.running = true;
     try {
       await this.flow.pollDue();
+      // The ZPL of labelled shipments for printing (doc 030 §2).
+      await this.flow.variantsDue();
     } catch (error) {
       this.log.warn(`Carrier polling failed: ${String(error)}`);
     } finally {

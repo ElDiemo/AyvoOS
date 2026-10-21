@@ -215,12 +215,28 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       // Only "an internal AYVO mark" (doc 026).
       'GET /api/public/workstations/:token',
     ]);
-    // Without a session every other route answers 401 — guards run before any parameter parsing.
+    // Machine routes (ADR 0028): only the print agent's API, only under /api/agent/.
+    expect(
+      routes
+        .filter((r) => r.rule!.kind === 'agent')
+        .map((r) => `${r.method} ${r.route}`)
+        .sort(),
+    ).toEqual([
+      'GET /api/agent/v1/jobs/:id/data',
+      'POST /api/agent/v1/heartbeat',
+      'POST /api/agent/v1/jobs/:id/result',
+      'POST /api/agent/v1/jobs/:id/start',
+      'POST /api/agent/v1/jobs/claim',
+    ]);
+    // Without a session every other route answers 401 — guards run before any parameter parsing;
+    // an agent route without the agent's token too (a session never counts there).
     for (const r of routes.filter((x) => x.rule!.kind !== 'public')) {
       const path = r.route.replace(/:[a-zA-Z]+/g, 'x');
       const res = await (r.method === 'POST' ? http().post(path).send({}) : http().get(path));
       expect(res.status, `${r.method} ${r.route}`).toBe(401);
-      expect(res.body.code, `${r.method} ${r.route}`).toBe('UNAUTHENTICATED');
+      expect(res.body.code, `${r.method} ${r.route}`).toBe(
+        r.rule!.kind === 'agent' ? 'AGENT_UNAUTHORIZED' : 'UNAUTHENTICATED',
+      );
     }
   });
 

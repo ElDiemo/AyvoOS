@@ -32,8 +32,8 @@ const DEFAULT_INPUT: PplSettingsInput = {
     email: null,
   },
   productCode: null,
-  // The Zebra ZD220 prints at 203 dpi; A4 only when explicitly chosen.
-  label: { format: 'PDF', dpi: 203, layout: 'SINGLE' },
+  // One PDF label per parcel; the complete A4 document only when explicitly chosen.
+  label: { layout: 'SINGLE' },
 };
 
 /** The audited, non-secret view of what changed (field names and their new values). */
@@ -94,11 +94,7 @@ export class CarrierSettingsService {
             email: row.senderEmail,
           },
           productCode: row.productCode,
-          label: {
-            format: row.labelFormat as 'PDF' | 'ZPL',
-            dpi: row.labelDpi,
-            layout: row.labelLayout as 'SINGLE' | 'A4',
-          },
+          label: { layout: row.labelLayout as 'SINGLE' | 'A4' },
         }
       : DEFAULT_INPUT;
     return {
@@ -148,9 +144,6 @@ export class CarrierSettingsService {
             'This connection does not exist on the server',
           );
         }
-        if (settings.label.layout === 'A4' && settings.label.format !== 'PDF') {
-          throw domainError(422, 'A4_NEEDS_PDF', 'The complete A4 document exists only as PDF');
-        }
         // The site row serializes saves (also the very first one, before a settings row exists).
         await tx.$executeRaw`SELECT 1 FROM "sites" WHERE "id" = ${siteId}::uuid FOR UPDATE`;
         const before = await tx.siteCarrierSetting.findUnique({ where: { siteId } });
@@ -177,9 +170,10 @@ export class CarrierSettingsService {
           senderPhone: settings.sender.phone,
           senderEmail: settings.sender.email,
           productCode: settings.productCode,
-          labelFormat: settings.label.format,
-          labelDpi: settings.label.dpi,
           labelLayout: settings.label.layout,
+          // Compatible values for the previous application (PRINT38-R1); unused by this one.
+          labelFormat: 'PDF',
+          labelDpi: 203,
         };
         const now = new Date();
         const reset =

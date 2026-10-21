@@ -15,6 +15,8 @@ import {
   type CarrierRegistry,
   type CarrierShipmentRequest,
 } from '../carriers/carrier.js';
+import { PrintersService } from '../printing/printers.service.js';
+import { PrintQueueService } from '../printing/print-queue.service.js';
 import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { shipmentEvent, type Step } from './shipment-events.js';
 
@@ -36,6 +38,38 @@ const NEEDS_PERSON = new Set(['CARRIER_PARCEL_MISMATCH', 'LABELS_INVALID', 'CARR
 
 const step = (by: By): Step => ({ ...by, occurredAt: new Date() });
 const lease = () => new Date(Date.now() + LEASE_SECONDS * 1000);
+
+/** Bounded attempts of fetching a further label variant (back-off 10 s … 5 min, in SQL). */
+export const MAX_VARIANT_ATTEMPTS = 10;
+/** Without a dispatch printer the ZPL is fetched for the only supported device (doc 030 §2). */
+export const DEFAULT_ZPL_DPI = 203;
+
+/**
+ * Whether a ZPL label proves its parcel (doc 030 §2): it prints the parcel's carrier number, our
+ * reference (the parcel's own, or the shipment's for a single parcel) and — in a set — the
+ * parcel's position "n/N". A label printed with another position (seen in the TEST environment
+ * after a format change) is not accepted: a person decides.
+ */
+export function zplProblem(
+  bytes: Uint8Array,
+  p: {
+    number: string;
+    reference: string;
+    clientReference: string;
+    parcelNo: number;
+    count: number;
+  },
+): string | null {
+  const text = Buffer.from(bytes).toString('latin1');
+  if (!text.includes(p.number)) return `the label does not show its number ${p.number}`;
+  if (!text.includes(p.reference) && !(p.count === 1 && text.includes(p.clientReference))) {
+    return `the label of ${p.number} does not show its reference ${p.reference}`;
+  }
+  if (p.count > 1 && !new RegExp(`\\^FD\\s*${p.parcelNo}\\s*/\\s*${p.count}(?![0-9])`).test(text)) {
+    return `the label of ${p.number} does not show its position ${p.parcelNo}/${p.count}`;
+  }
+  return null;
+}
 
 /** Whether bytes really are the claimed label format (never trust a content type alone). */
 export function isLabelFile(file: CarrierLabelFile): boolean {
@@ -63,6 +97,8 @@ export class ShipmentCarrierFlow {
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
     @Inject(CARRIERS) private readonly carriers: CarrierRegistry,
     @Inject(ENV) private readonly env: Env,
+    private readonly printers: PrintersService,
+    private readonly printQueue: PrintQueueService,
   ) {}
 
   /** A carrier call with a hard time limit: an expired call is an unknown outcome. */
@@ -373,6 +409,7 @@ export class ShipmentCarrierFlow {
             sha256: createHash('sha256').update(x.file.bytes).digest('hex'),
             sizeBytes: x.file.bytes.byteLength,
             createdAt: now,
+            carrierRef: x.file.carrierRef ?? null,
           },
         });
       }
@@ -400,7 +437,361 @@ export class ShipmentCarrierFlow {
         shipment: a.shipment.code,
         parcels: parcels.length,
       });
+      // The ZPL of the same labels for printing follows (doc 030 §2), at the dispatch printer's
+      // resolution — unless the carrier already delivered ZPL.
+      const site = await tx.shipment.findUniqueOrThrow({
+        where: { id: a.shipmentId },
+        select: { siteId: true },
+      });
+      const dpi = (await this.printers.dispatchPrinter(site.siteId, tx))?.dpi ?? DEFAULT_ZPL_DPI;
+      if (!stored.some((x) => x.file.format === 'ZPL' && x.file.dpi === dpi)) {
+        await tx.shipmentLabelFetch.create({
+          data: {
+            shipmentId: a.shipmentId,
+            format: 'ZPL',
+            dpi,
+            nextAt: now,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      } else {
+        await this.releasePrints(tx, a.shipmentId, now);
+      }
     });
+    await this.fetchVariantsOf(attempt.shipmentId, by);
+  }
+
+  // --- further label variants (doc 030 §2) ---------------------------------------------------
+
+  /** Fetches the pending variants of one shipment now (errors are scheduled, never thrown). */
+  async fetchVariantsOf(shipmentId: string, by: By): Promise<void> {
+    const due = await this.prisma.shipmentLabelFetch.findMany({
+      where: { shipmentId, status: 'PENDING' },
+      select: { id: true },
+    });
+    for (const f of due) {
+      try {
+        await this.fetchVariant(f.id, by);
+      } catch (error) {
+        this.log.warn(`Label variant ${f.id}: ${String(error)}`);
+      }
+    }
+  }
+
+  /**
+   * One attempt to fetch a pending variant (leased: at most one fetch per shipment — the carrier's
+   * batch format is shared state). Stored only after every file proved its parcel; then waiting
+   * print requests become jobs. Carrier outages are retried with back-off (bounded); an answer
+   * that breaks the carrier's contract or a label that does not prove its parcel stops for a person.
+   */
+  async fetchVariant(fetchId: string, by: By): Promise<void> {
+    const leased = await this.prisma.$queryRaw<{ id: string }[]>`
+      UPDATE "shipment_label_fetches" f
+         SET "lease_until" = now() + make_interval(secs => ${LEASE_SECONDS}),
+             "attempts" = f."attempts" + 1, "updated_at" = now()
+       WHERE f."id" = ${fetchId}::uuid AND f."status" = 'PENDING'
+         AND f."attempts" < ${MAX_VARIANT_ATTEMPTS}
+         AND (f."lease_until" IS NULL OR f."lease_until" < now())
+         AND NOT EXISTS (SELECT 1 FROM "shipment_label_fetches" o
+                          WHERE o."shipment_id" = f."shipment_id" AND o."id" <> f."id"
+                            AND o."lease_until" > now())
+      RETURNING f."id"`;
+    if (leased.length === 0) return;
+    const fetch = await this.prisma.shipmentLabelFetch.findUniqueOrThrow({
+      where: { id: fetchId },
+      include: {
+        shipment: {
+          include: {
+            requests: { where: { status: 'SUCCEEDED' } },
+            parcels: { select: { id: true, parcelNo: true, carrierParcelNumber: true } },
+          },
+        },
+      },
+    });
+    const s = fetch.shipment;
+    const request = s.requests[0];
+    if (s.status !== 'LABELED' || !request || !s.carrierShipmentRef) {
+      // Cancelled or returned meanwhile: nothing to fetch for it any more.
+      await this.endVariant(
+        fetchId,
+        by,
+        'SHIPMENT_NOT_LABELED',
+        'The shipment is no longer labelled',
+        false,
+      );
+      return;
+    }
+    const carrier = await this.gatewayOf(s);
+    if (!carrier) {
+      await this.retryVariant(
+        fetchId,
+        by,
+        'CARRIER_CONNECTION_UNAVAILABLE',
+        'The carrier connection is not available',
+      );
+      return;
+    }
+    const parcels = s.parcels
+      .filter((p) => p.carrierParcelNumber)
+      .map((p) => ({ parcelNo: p.parcelNo, number: p.carrierParcelNumber! }));
+    let files: Awaited<ReturnType<CarrierGateway['labelVariant']>>;
+    try {
+      files = await this.call((signal) =>
+        carrier.labelVariant(
+          {
+            shipmentRef: s.carrierShipmentRef!,
+            carrierRef: request.carrierRef,
+            parcels,
+            format: 'ZPL',
+            dpi: fetch.dpi,
+          },
+          signal,
+        ),
+      );
+    } catch (error) {
+      if (error instanceof CarrierProtocolError) {
+        await this.endVariant(fetchId, by, 'LABELS_INVALID', error.message, true);
+      } else {
+        await this.retryVariant(
+          fetchId,
+          by,
+          'LABELS_NOT_DOWNLOADED',
+          'The carrier did not provide the ZPL now',
+        );
+      }
+      return;
+    }
+    const payload = request.payload as unknown as CarrierShipmentRequest;
+    const refs = new Map(payload.parcels.map((p) => [p.parcelNo, p.reference]));
+    const byNo = new Map(files.parcels.map((f) => [f.parcelNo, f]));
+    for (const p of parcels) {
+      const file = byNo.get(p.parcelNo);
+      const problem = !file
+        ? `no ZPL for ${p.number}`
+        : file.format !== 'ZPL' || file.dpi !== fetch.dpi || !isLabelFile(file)
+          ? `the file for ${p.number} is not a ZPL label at ${fetch.dpi} dpi`
+          : zplProblem(file.bytes, {
+              number: p.number,
+              reference: refs.get(p.parcelNo) ?? '',
+              clientReference: payload.clientReference,
+              parcelNo: p.parcelNo,
+              count: parcels.length,
+            });
+      if (problem) {
+        await this.endVariant(fetchId, by, 'LABEL_VARIANT_MISMATCH', problem, true);
+        return;
+      }
+    }
+    try {
+      await this.storeVariant(s, request.id, fetchId, fetch.dpi, byNo, by);
+    } catch (error) {
+      // Storing failed after the carrier answered: retried with back-off (bounded) — never a
+      // silent loop of format changes at the carrier.
+      this.log.error(`Label variant of ${s.code} not stored: ${String(error)}`);
+      await this.retryVariant(
+        fetchId,
+        by,
+        'LABELS_NOT_STORED',
+        'The printer labels could not be stored',
+      );
+    }
+  }
+
+  private async storeVariant(
+    s: { id: string; code: string; orderId: string; parcels: { id: string; parcelNo: number }[] },
+    requestId: string,
+    fetchId: string,
+    dpi: number,
+    byNo: Map<number, CarrierLabelFile & { parcelNo: number }>,
+    by: By,
+  ): Promise<void> {
+    const fetch = { dpi };
+    const request = { id: requestId };
+    const stored: { parcelId: string; file: CarrierLabelFile; key: string }[] = [];
+    for (const p of s.parcels) {
+      const file = byNo.get(p.parcelNo)!;
+      stored.push({ parcelId: p.id, file, key: await this.put(file) });
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT 1 FROM "orders" WHERE "id" = ${s.orderId}::uuid FOR UPDATE`;
+      const now = await tx.shipment.findUniqueOrThrow({
+        where: { id: s.id },
+        select: { status: true },
+      });
+      const f = await tx.shipmentLabelFetch.findUniqueOrThrow({ where: { id: fetchId } });
+      if (now.status !== 'LABELED' || f.status !== 'PENDING') return;
+      const at = new Date();
+      for (const x of stored) {
+        await tx.shipmentLabel.create({
+          data: {
+            shipmentId: s.id,
+            parcelId: x.parcelId,
+            requestId: request.id,
+            format: x.file.format,
+            dpi: x.file.dpi,
+            fileKey: x.key,
+            sha256: createHash('sha256').update(x.file.bytes).digest('hex'),
+            sizeBytes: x.file.bytes.byteLength,
+            createdAt: at,
+            carrierRef: x.file.carrierRef ?? null,
+          },
+        });
+      }
+      await tx.shipmentLabelFetch.update({
+        where: { id: fetchId },
+        data: {
+          status: 'DONE',
+          nextAt: null,
+          leaseUntil: null,
+          errorCode: null,
+          errorMessage: null,
+          updatedAt: at,
+        },
+      });
+      await shipmentEvent(
+        tx,
+        s.orderId,
+        'LABEL_VARIANT_STORED',
+        { ...by, occurredAt: at },
+        {
+          shipment: s.code,
+          format: 'ZPL',
+          dpi: fetch.dpi,
+          parcels: stored.length,
+        },
+      );
+      await this.releasePrints(tx, s.id, at);
+    });
+  }
+
+  /** Scheduled again with back-off; after the bound a person decides ("Získat ZPL znovu"). */
+  private async retryVariant(fetchId: string, by: By, code: string, message: string) {
+    const f = await this.prisma.shipmentLabelFetch.findUniqueOrThrow({ where: { id: fetchId } });
+    if (f.attempts >= MAX_VARIANT_ATTEMPTS) {
+      await this.endVariant(fetchId, by, code, message, true);
+      return;
+    }
+    await this.prisma.$executeRaw`
+      UPDATE "shipment_label_fetches"
+         SET "next_at" = now() + make_interval(secs => LEAST(10 * power(2, "attempts" - 1), 300)),
+             "lease_until" = NULL, "error_code" = ${code}, "error_message" = ${message}, "updated_at" = now()
+       WHERE "id" = ${fetchId}::uuid AND "status" = 'PENDING'`;
+  }
+
+  private async endVariant(
+    fetchId: string,
+    by: By,
+    code: string,
+    message: string,
+    notify: boolean,
+  ) {
+    await this.prisma.$transaction(async (tx) => {
+      const f = await tx.shipmentLabelFetch.findUniqueOrThrow({
+        where: { id: fetchId },
+        include: { shipment: { select: { code: true, orderId: true } } },
+      });
+      await tx.$executeRaw`SELECT 1 FROM "orders" WHERE "id" = ${f.shipment.orderId}::uuid FOR UPDATE`;
+      const changed = await tx.shipmentLabelFetch.updateMany({
+        where: { id: fetchId, status: 'PENDING' },
+        data: {
+          status: 'FAILED',
+          nextAt: null,
+          leaseUntil: null,
+          errorCode: code.slice(0, 100),
+          errorMessage: message.slice(0, 1000),
+          updatedAt: new Date(),
+        },
+      });
+      if (changed.count === 1 && notify) {
+        this.log.error(`Label variant of ${f.shipment.code} stopped: ${code} ${message}`);
+        await shipmentEvent(tx, f.shipment.orderId, 'LABEL_VARIANT_FAILED', step(by), {
+          shipment: f.shipment.code,
+          reason: message.slice(0, 500),
+        });
+      }
+    });
+  }
+
+  /**
+   * Waiting print requests of a labelled shipment become jobs once the ZPL at their printer's
+   * resolution exists for each of their parcels (doc 030 §4). Runs inside the caller's transaction.
+   */
+  async releasePrints(tx: Tx, shipmentId: string, at: Date): Promise<void> {
+    const s = await tx.shipment.findUniqueOrThrow({
+      where: { id: shipmentId },
+      select: { status: true, parcels: { select: { id: true } } },
+    });
+    if (s.status !== 'LABELED') return;
+    for (const r of await this.printQueue.waiting(tx, shipmentId)) {
+      if (!r.printer.enabled) continue;
+      const parcelIds = r.parcelId ? [r.parcelId] : s.parcels.map((p) => p.id);
+      const labels = await tx.shipmentLabel.findMany({
+        where: { shipmentId, parcelId: { in: parcelIds }, format: 'ZPL', dpi: r.printer.dpi },
+      });
+      if (labels.length !== parcelIds.length) continue; // that resolution is not stored yet
+      const items = [];
+      let busy = false;
+      for (const l of labels) {
+        // A parcel already on its way to a printer is never sent twice (one active job per
+        // parcel): a shipment-wide request skips it, a re-print waits until that job ended.
+        if (await this.printQueue.activeJob(tx, l.parcelId!)) {
+          busy = true;
+          continue;
+        }
+        items.push({
+          parcelId: l.parcelId!,
+          labelId: l.id,
+          fileKey: l.fileKey,
+          sha256: l.sha256,
+          sizeBytes: l.sizeBytes,
+        });
+      }
+      if (r.kind === 'REPRINT' && busy) continue;
+      await this.printQueue.enqueue(tx, r.id, items, at);
+    }
+  }
+
+  /** Background: pending variants due now (bounded per round). */
+  async variantsDue(limit = 5): Promise<number> {
+    const due = await this.prisma.$queryRaw<{ id: string; shipment_id: string }[]>`
+      SELECT f."id", f."shipment_id" FROM "shipment_label_fetches" f
+       WHERE f."status" = 'PENDING' AND f."next_at" <= now()
+         AND (f."lease_until" IS NULL OR f."lease_until" < now())
+       ORDER BY f."next_at" LIMIT ${limit}`;
+    // A fetch whose attempts ran out (e.g. after failures past the carrier call) ends for a person.
+    const exhausted = await this.prisma.shipmentLabelFetch.findMany({
+      where: {
+        status: 'PENDING',
+        attempts: { gte: MAX_VARIANT_ATTEMPTS },
+        OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }],
+      },
+      include: { shipment: { select: { createdBy: true, operationRequestId: true } } },
+    });
+    for (const f of exhausted) {
+      await this.endVariant(
+        f.id,
+        { actorId: f.shipment.createdBy, operationId: f.shipment.operationRequestId },
+        f.errorCode ?? 'LABELS_NOT_DOWNLOADED',
+        f.errorMessage ?? 'The printer labels could not be stored',
+        true,
+      );
+    }
+    for (const f of due) {
+      const s = await this.prisma.shipment.findUnique({
+        where: { id: f.shipment_id },
+        select: { createdBy: true, operationRequestId: true },
+      });
+      try {
+        await this.fetchVariant(f.id, {
+          actorId: s!.createdBy,
+          operationId: s!.operationRequestId,
+        });
+      } catch (error) {
+        this.log.warn(`Label variant ${f.id} failed: ${String(error)}`);
+      }
+    }
+    return due.length;
   }
 
   private async put(file: CarrierLabelFile): Promise<string> {

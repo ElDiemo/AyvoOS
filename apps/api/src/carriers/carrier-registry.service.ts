@@ -46,6 +46,7 @@ export class CarrierRegistryService implements CarrierRegistry {
         clientSecret: creds.clientSecret,
       }),
       creds.account,
+      this.env.CARRIER_LABEL_VARIANT_WAIT_MS,
     );
     this.gateways.set(code, { version: `${creds.version}:${creds.account}`, gateway });
     return gateway;

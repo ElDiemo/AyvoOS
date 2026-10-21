@@ -1,6 +1,12 @@
 'use client';
 
-import { orderDetailSchema, orderScanResultSchema, type OrderDetail } from '@ayvo/types';
+import {
+  orderDetailSchema,
+  orderScanResultSchema,
+  orderShipmentSchema,
+  type DispatchPrinter,
+  type OrderDetail,
+} from '@ayvo/types';
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -14,9 +20,10 @@ import {
 } from '@/components/workstations/use-scan-queue';
 import { formatDateCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
-import { apiSend } from '@/lib/client-api';
+import { apiGet, apiSend } from '@/lib/client-api';
 import { useScanFocusReturn } from '@/lib/scan-focus';
 import { orderErrorText } from './order-errors';
+import { combinedOutcome } from './print-status';
 import { OrderLines } from './order-lines';
 
 const t = ordersCs.pick;
@@ -36,7 +43,17 @@ type LogEntry = {
  * sends the SAME attempt; unresolved scans survive a reload of this tab, block leaving and the
  * site switch (before anything is sent) and block removing crates or completing.
  */
-export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
+export function PickingWorkspace({
+  initial,
+  combined,
+}: {
+  initial: OrderDetail;
+  /**
+   * "Dokončit a vytisknout štítky" (doc 030 §1): offered when the user may also prepare the
+   * shipment and the site has a carrier; `printer` = where the labels will be printed (null: none).
+   */
+  combined: { printer: DispatchPrinter | null } | null;
+}) {
   const router = useRouter();
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
@@ -125,8 +142,39 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
     }
   }
 
+  const parcels = order.lines.reduce((n, l) => n + l.requiredCrates, 0);
+  const printer = combined?.printer ?? null;
+
   async function finish() {
     if (!settled) return;
+    if (combined) {
+      // Completes, creates the labels once and prints them on the printer shown on the button.
+      const result = await action.run(`complete-and-label:${order.code}`, (requestId) =>
+        apiSend('POST', `admin/orders/${order.code}/complete-and-label`, orderShipmentSchema, {
+          requestId,
+          printerId: printer?.id ?? null,
+        }),
+      );
+      if (result.ok) {
+        // What really happened (the carrier may have refused or still be working).
+        setMessage(combinedOutcome(result.value, printer?.name ?? null));
+      } else if (result.error) {
+        // The picking may be complete although a later step failed: the order shows how to go on.
+        setMessage({
+          tone: 'error',
+          text: uncertain(result.error) ? t.uncertain : orderErrorText(result.error),
+        });
+      }
+      if (result.ok || (result.error && !uncertain(result.error))) {
+        try {
+          setOrder(await apiGet(`admin/orders/${order.code}`, orderDetailSchema));
+        } catch {
+          // shown on the next refresh
+        }
+        router.refresh();
+      }
+      return;
+    }
     const result = await action.run(`complete:${order.code}`, (requestId) =>
       apiSend('POST', `admin/orders/${order.code}/complete`, orderDetailSchema, { requestId }),
     );
@@ -165,6 +213,15 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
         >
           <p className="text-xl font-bold">{t.ready}</p>
           <p className="mt-1 text-sm">{t.readyText}</p>
+          {combined && (
+            <Link
+              href={`/dispatch/orders/${order.code}`}
+              className={cn(buttonClass.primary, 'mt-3 inline-block')}
+              data-testid="open-order"
+            >
+              {t.openOrder}
+            </Link>
+          )}
         </div>
       )}
       {order.status === 'CANCELLED' && (
@@ -240,8 +297,14 @@ export function PickingWorkspace({ initial }: { initial: OrderDetail }) {
             onClick={() => void finish()}
             data-testid="complete-picking"
           >
-            {t.complete}
+            {!combined ? t.complete : printer ? t.completeAndPrint(parcels) : t.completeAndLabel}
           </button>
+          {combined && printer && (
+            <p className="text-xs text-stone-600" data-testid="print-target">
+              {t.printTarget(`${printer.name} (${printer.model})`)}
+            </p>
+          )}
+          {combined && !printer && <p className="text-xs text-stone-500">{t.noAutoPrint}</p>}
           {!complete && <p className="text-xs text-stone-500">{t.completeHelp}</p>}
           {complete && !settled && <p className="text-xs text-stone-500">{t.waitForScans}</p>}
         </div>

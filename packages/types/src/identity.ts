@@ -84,6 +84,9 @@ export const PERMISSION_CODES = [
   'shipments:resolve_uncertain',
   'sites:carrier_manage',
   'carriers:connections_manage',
+  'printing:print',
+  'printing:reprint',
+  'printing:manage',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -100,6 +103,7 @@ export const SECURITY_ADMIN_PERMISSIONS: readonly PermissionCode[] = [
   'sites:carrier_manage',
   'sites:all_access',
   'carriers:connections_manage',
+  'printing:manage',
 ];
 
 /** Module of a permission (its code prefix) — the checkbox groups of the role editor. */
@@ -115,6 +119,7 @@ export const PERMISSION_MODULES = [
   'identity',
   'sites',
   'carriers',
+  'printing',
 ] as const;
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 export const permissionModule = (code: PermissionCode): PermissionModule =>
@@ -143,6 +148,8 @@ export const SITE_SCOPED_PERMISSIONS: readonly PermissionCode[] = [
   'shipments:prepare',
   'shipments:handover',
   'shipments:resolve_uncertain',
+  'printing:print',
+  'printing:reprint',
 ];
 
 /** Permissions that also need the active site and access to its warehouse (doc 022). */

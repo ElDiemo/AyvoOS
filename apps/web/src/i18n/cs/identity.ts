@@ -79,6 +79,12 @@ export const identityCs = {
       'Spravovat dopravce provozovny – připojení, odesílatel, služba, štítky, ověření připojení',
     'shipments:resolve_uncertain':
       'Výjimečně ručně uzavřít nejistý požadavek u dopravce (po ověření u dopravce; riziko duplicitní zásilky)',
+    'printing:print':
+      'Tisknout přepravní štítky objednávky na expediční tiskárně (i automaticky po dokončení) a stahovat ZPL',
+    'printing:reprint':
+      'Vytisknout štítek jednoho balíku znovu (výslovně, se zdůvodněním; upozorní na možný fyzický duplikát)',
+    'printing:manage':
+      'Spravovat tiskárny a tiskové agenty provozoven (token agenta se zobrazí jen jednou)',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
@@ -92,6 +98,7 @@ export const identityCs = {
     identity: 'Uživatelé a role',
     sites: 'Provozovny',
     carriers: 'Připojení dopravců',
+    printing: 'Tisk štítků',
   } as Record<string, string>,
   login: {
     title: 'Přihlášení do AYVO OS',
@@ -330,6 +337,10 @@ export const identityCs = {
       CARRIER_CONNECTION_VERIFIED: 'Ověření připojení k dopravci',
       CARRIER_CONNECTION_VERIFY_FAILED: 'Neúspěšné ověření připojení k dopravci',
       CARRIER_CREDENTIALS_REPLACED: 'Změna přístupových údajů k dopravci',
+      PRINT_AGENT_CREATED: 'Vytvoření tiskového agenta (token zobrazen jednou)',
+      PRINT_AGENT_TOKEN_ROTATED: 'Nový token tiskového agenta',
+      PRINT_AGENT_REVOKED: 'Zrušení tiskového agenta',
+      PRINTER_SAVED: 'Změna tiskárny',
     } as Record<string, string>,
   },
   roles_admin: {
@@ -419,6 +430,9 @@ export const identityCs = {
     } as Record<string, string>,
     canDeactivate: 'Deaktivaci nic nebrání. Historie zůstane dostupná ke čtení.',
     back: 'Provozovny',
+    sections: 'Sekce provozovny',
+    sectionCarriers: 'Dopravci a expedice',
+    sectionPrinters: 'Tiskárny',
     audit: 'Historie provozovny',
     empty: 'Žádné provozovny.',
   },

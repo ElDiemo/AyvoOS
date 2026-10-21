@@ -910,6 +910,15 @@ enum OperationKind {
   CARRIER_SETTINGS_UPDATE
   CARRIER_CONNECTION_VERIFY
   CARRIER_CREDENTIALS_REPLACE
+  /// doc 030: printing, re-printing, label variants, printers and print agents.
+  SHIPMENT_PRINT
+  SHIPMENT_REPRINT
+  SHIPMENT_LABEL_VARIANT_RETRY
+  PRINT_JOB_CANCEL
+  PRINTER_SAVE
+  PRINT_AGENT_CREATE
+  PRINT_AGENT_ROTATE
+  PRINT_AGENT_REVOKE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -952,6 +961,7 @@ model OperationRequest {
   shipments       Shipment[]               @relation("ShipmentOperation")
   parcelWeighings ShipmentParcelWeighing[] @relation("ParcelWeighOperation")
   carrierRequests ShipmentCarrierRequest[] @relation("CarrierRequestOperation")
+  printRequests   PrintRequest[]           @relation("PrintRequestOperation")
 
   @@map("operation_requests")
 }
@@ -1045,6 +1055,12 @@ model User {
   carrierSettingsVerified   SiteCarrierSetting[] @relation("CarrierSettingVerifiedBy")
   carrierSettingsUpdated    SiteCarrierSetting[] @relation("CarrierSettingUpdatedBy")
   carrierConnectionsUpdated CarrierConnection[]  @relation("CarrierConnectionUpdatedBy")
+  printAgentsCreated        PrintAgent[]         @relation("PrintAgentCreatedBy")
+  printAgentsRevoked        PrintAgent[]         @relation("PrintAgentRevokedBy")
+  printersCreated           Printer[]            @relation("PrinterCreatedBy")
+  printersUpdated           Printer[]            @relation("PrinterUpdatedBy")
+  printRequests             PrintRequest[]       @relation("PrintRequestedBy")
+  printJobEvents            PrintJobEvent[]      @relation("PrintJobEventBy")
 
   @@map("users")
 }
@@ -1315,7 +1331,11 @@ model Site {
 
   shipments Shipment[]
 
-  carrierSetting SiteCarrierSetting?
+  carrierSetting    SiteCarrierSetting?
+  printAgents       PrintAgent[]
+  printers          Printer[]
+  printRequests     PrintRequest[]
+  dispatchPrintJobs PrintJob[]
 
   @@map("sites")
 }
@@ -2179,16 +2199,18 @@ model Order {
   cancelledBy        String?     @map("cancelled_by") @db.Uuid
   cancelReason       String?     @map("cancel_reason")
 
-  hotel       Hotel                  @relation(fields: [hotelId], references: [id], onDelete: Restrict)
-  site        Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  creator     User                   @relation("OrderCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  completer   User?                  @relation("OrderCompletedBy", fields: [completedBy], references: [id], onDelete: Restrict)
-  canceller   User?                  @relation("OrderCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
-  operation   OperationRequest       @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
-  lines       OrderLine[]
-  allocations OrderCrateAllocation[]
-  events      OrderEvent[]
-  shipments   Shipment[]
+  hotel         Hotel                  @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  site          Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator       User                   @relation("OrderCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  completer     User?                  @relation("OrderCompletedBy", fields: [completedBy], references: [id], onDelete: Restrict)
+  canceller     User?                  @relation("OrderCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
+  operation     OperationRequest       @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  lines         OrderLine[]
+  allocations   OrderCrateAllocation[]
+  events        OrderEvent[]
+  shipments     Shipment[]
+  printRequests PrintRequest[]
+  printJobs     PrintJob[]
 
   @@index([siteId, requestedShipDate])
   @@index([hotelId])
@@ -2296,6 +2318,12 @@ enum OrderEventType {
   SHIPMENT_CANCEL_REQUESTED
   SHIPMENT_CANCEL_REFUSED
   CARRIER_LATE_ANSWER
+  /// doc 030: a further format of the stored labels (ZPL for printing) was stored / not obtained.
+  LABEL_VARIANT_STORED
+  LABEL_VARIANT_FAILED
+  PRINT_REQUESTED
+  REPRINT_REQUESTED
+  PRINT_JOBS_CANCELLED
 }
 
 /// Append-only order history (ADR 0006). DB: immutable.
@@ -2552,6 +2580,9 @@ model Shipment {
   parcels         ShipmentParcel[]
   requests        ShipmentCarrierRequest[]
   labels          ShipmentLabel[]
+  labelFetches    ShipmentLabelFetch[]
+  printRequests   PrintRequest[]
+  printJobs       PrintJob[]
 
   @@index([orderId])
   @@map("shipments")
@@ -2589,6 +2620,8 @@ model ShipmentParcel {
   packageDimension CrateTypeDimension?       @relation("ParcelPackage", fields: [packageDimensionId], references: [id], onDelete: Restrict)
   weighings        ShipmentParcelWeighing[]
   labels           ShipmentLabel[]
+  printRequests    PrintRequest[]
+  printJobs        PrintJob[]
 
   @@unique([shipmentId, parcelNo])
   @@unique([shipmentId, allocationId])
@@ -2689,12 +2722,16 @@ model ShipmentLabel {
   sha256     String
   sizeBytes  Int      @map("size_bytes")
   createdAt  DateTime @map("created_at") @db.Timestamptz(3)
+  /// The carrier's id of this file version (e.g. PPL's data GUID, which changes on every format
+  /// change) — no secret. One row per parcel (or complete document), format and dpi (doc 030 §2).
+  carrierRef String?  @map("carrier_ref")
 
-  shipment Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
-  parcel   ShipmentParcel?        @relation(fields: [parcelId], references: [id], onDelete: Restrict)
-  request  ShipmentCarrierRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  shipment  Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  parcel    ShipmentParcel?        @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  request   ShipmentCarrierRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  printJobs PrintJob[]
 
-  @@unique([shipmentId, parcelId])
+  @@index([parcelId])
   @@map("shipment_labels")
 }
 
@@ -2723,9 +2760,11 @@ model SiteCarrierSetting {
   senderEmail        String?   @map("sender_email")
   /// The carrier's product code, chosen from the list verified with `verified_connection`.
   productCode        String?   @map("product_code")
+  /// SINGLE = one label per parcel (thermal printer); A4 = also a complete A4 document.
+  /// Kept for the previous application (PRINT38-R1, rollback); always PDF / 203 since doc 030 —
+  /// the format and resolution of printed labels belong to the printer.
   labelFormat        String    @default("PDF") @map("label_format")
   labelDpi           Int       @default(203) @map("label_dpi")
-  /// SINGLE = one label per parcel (thermal printer); A4 = also a complete A4 document.
   labelLayout        String    @default("SINGLE") @map("label_layout")
   verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(3)
   verifiedBy         String?   @map("verified_by") @db.Uuid
@@ -2765,4 +2804,200 @@ model CarrierConnection {
   updater User @relation("CarrierConnectionUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
 
   @@map("carrier_connections")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Direct printing (doc 030, ADR 0028): label variants, print agents and printers per site, the
+// durable print queue. The database keeps the rules (triggers in 20261020090100_direct_printing).
+// ---------------------------------------------------------------------------------------------
+
+/// Fetching a further label variant (ZPL at a printer's dpi) of a labelled shipment: current state,
+/// leased (one fetch per shipment at a time — the carrier's batch format is shared), bounded.
+model ShipmentLabelFetch {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId   String    @map("shipment_id") @db.Uuid
+  format       String
+  dpi          Int
+  /// PENDING (to fetch, see next_at) | DONE | FAILED (attempts exhausted or the carrier's file
+  /// did not prove its parcel — a person decides).
+  status       String    @default("PENDING")
+  attempts     Int       @default(0)
+  nextAt       DateTime? @map("next_at") @db.Timestamptz(3)
+  leaseUntil   DateTime? @map("lease_until") @db.Timestamptz(3)
+  errorCode    String?   @map("error_code")
+  errorMessage String?   @map("error_message")
+  createdAt    DateTime  @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @map("updated_at") @db.Timestamptz(3)
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  @@unique([shipmentId, format, dpi])
+  @@index([status, nextAt])
+  @@map("shipment_label_fetches")
+}
+
+/// A print agent (Raspberry Pi) of one site: a machine principal, never a user (ADR 0028). Only
+/// the SHA-256 hash of its token is stored; the token is shown once.
+model PrintAgent {
+  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code            String    @unique
+  name            String
+  siteId          String    @map("site_id") @db.Uuid
+  tokenHash       String    @unique @map("token_hash")
+  /// The token's last 4 characters, to recognise it — never the token.
+  tokenHint       String    @map("token_hint")
+  tokenIssuedAt   DateTime  @map("token_issued_at") @db.Timestamptz(3)
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy       String?   @map("revoked_by") @db.Uuid
+  lastSeenAt      DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  lastVersion     String?   @map("last_version")
+  /// The USB printers the agent last found (serial, product) — only offered to an ADMIN, never
+  /// assigned or enabled by themselves.
+  detectedDevices Json?     @map("detected_devices")
+  detectedAt      DateTime? @map("detected_at") @db.Timestamptz(3)
+  createdAt       DateTime  @map("created_at") @db.Timestamptz(3)
+  createdBy       String    @map("created_by") @db.Uuid
+
+  site     Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator  User            @relation("PrintAgentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  revoker  User?           @relation("PrintAgentRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  printers Printer[]
+  jobs     PrintJob[]
+  events   PrintJobEvent[]
+
+  @@unique([id, siteId])
+  @@map("print_agents")
+}
+
+/// A physical printer of a site, attached by USB to one print agent of the same site. Only the
+/// Zebra ZD220 DT (ZPL, 203 dpi) is supported; the media size is not assumed (doc 030 §3).
+model Printer {
+  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  code            String    @unique
+  name            String
+  siteId          String    @map("site_id") @db.Uuid
+  agentId         String    @map("agent_id") @db.Uuid
+  model           String
+  language        String
+  dpi             Int
+  connection      String
+  usbSerial       String    @map("usb_serial")
+  dispatchDefault Boolean   @default(false) @map("dispatch_default")
+  autoPrint       Boolean   @default(false) @map("auto_print")
+  enabled         Boolean   @default(true)
+  /// As the agent last reported it (READY | NOT_FOUND | ERROR) — never assumed.
+  reportedState   String?   @map("reported_state")
+  reportedDetail  String?   @map("reported_detail")
+  reportedAt      DateTime? @map("reported_at") @db.Timestamptz(3)
+  createdAt       DateTime  @map("created_at") @db.Timestamptz(3)
+  createdBy       String    @map("created_by") @db.Uuid
+  updatedAt       DateTime  @map("updated_at") @db.Timestamptz(3)
+  updatedBy       String    @map("updated_by") @db.Uuid
+
+  site     Site           @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  agent    PrintAgent     @relation(fields: [agentId, siteId], references: [id, siteId], onDelete: Restrict)
+  creator  User           @relation("PrinterCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater  User           @relation("PrinterUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  requests PrintRequest[]
+  jobs     PrintJob[]
+
+  @@unique([agentId, usbSerial])
+  @@index([siteId])
+  @@map("printers")
+}
+
+/// The operator's decision to print (the shipment's labels, or one parcel again) on a printer
+/// fixed at that moment. Waits for the ZPL variant, then becomes one job per parcel.
+model PrintRequest {
+  id                    String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  siteId                String    @map("site_id") @db.Uuid
+  orderId               String    @map("order_id") @db.Uuid
+  shipmentId            String    @map("shipment_id") @db.Uuid
+  parcelId              String?   @map("parcel_id") @db.Uuid
+  printerId             String    @map("printer_id") @db.Uuid
+  /// SHIPMENT (every parcel) | REPRINT (one parcel, with a reason).
+  kind                  String
+  /// WAITING_FOR_LABELS | QUEUED (jobs created) | CANCELLED (the shipment's cancellation).
+  status                String    @default("WAITING_FOR_LABELS")
+  reason                String?
+  duplicateAcknowledged Boolean   @default(false) @map("duplicate_acknowledged")
+  requestedAt           DateTime  @map("requested_at") @db.Timestamptz(3)
+  requestedBy           String    @map("requested_by") @db.Uuid
+  operationRequestId    String    @unique @map("operation_request_id") @db.Uuid
+  resolvedAt            DateTime? @map("resolved_at") @db.Timestamptz(3)
+
+  site      Site             @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  order     Order            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  shipment  Shipment         @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  parcel    ShipmentParcel?  @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  printer   Printer          @relation(fields: [printerId], references: [id], onDelete: Restrict)
+  requester User             @relation("PrintRequestedBy", fields: [requestedBy], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation("PrintRequestOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  jobs      PrintJob[]
+
+  @@index([shipmentId])
+  @@map("print_requests")
+}
+
+/// One parcel label on its way to one printer (ADR 0028). QUEUED → CLAIMED → SENDING → SENT |
+/// FAILED | UNCERTAIN; QUEUED/CLAIMED → CANCELLED. SENT = all bytes written to the device — never
+/// proof of a printed or applied label.
+model PrintJob {
+  id             String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial         BigInt    @unique
+  code           String    @unique
+  siteId         String    @map("site_id") @db.Uuid
+  printRequestId String    @map("print_request_id") @db.Uuid
+  orderId        String    @map("order_id") @db.Uuid
+  shipmentId     String    @map("shipment_id") @db.Uuid
+  parcelId       String    @map("parcel_id") @db.Uuid
+  labelId        String    @map("label_id") @db.Uuid
+  /// The stored ZPL file of that label (checked against it by the database at creation).
+  fileKey        String    @map("file_key")
+  sha256         String
+  sizeBytes      Int       @map("size_bytes")
+  printerId      String    @map("printer_id") @db.Uuid
+  agentId        String    @map("agent_id") @db.Uuid
+  status         String    @default("QUEUED")
+  claimToken     String?   @map("claim_token")
+  claimedAt      DateTime? @map("claimed_at") @db.Timestamptz(3)
+  leaseUntil     DateTime? @map("lease_until") @db.Timestamptz(3)
+  startedAt      DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt     DateTime? @map("finished_at") @db.Timestamptz(3)
+  detail         String?
+  createdAt      DateTime  @map("created_at") @db.Timestamptz(3)
+
+  site     Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  request  PrintRequest    @relation(fields: [printRequestId], references: [id], onDelete: Restrict)
+  order    Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  shipment Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  parcel   ShipmentParcel  @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  label    ShipmentLabel   @relation(fields: [labelId], references: [id], onDelete: Restrict)
+  printer  Printer         @relation(fields: [printerId], references: [id], onDelete: Restrict)
+  agent    PrintAgent      @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  events   PrintJobEvent[]
+
+  @@unique([printRequestId, parcelId])
+  @@index([agentId, status])
+  @@index([shipmentId])
+  @@index([parcelId])
+  @@map("print_jobs")
+}
+
+/// The append-only history of a print job (who or which agent, what, when).
+model PrintJobEvent {
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  jobId       String   @map("job_id") @db.Uuid
+  status      String
+  occurredAt  DateTime @map("occurred_at") @db.Timestamptz(3)
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  agentId     String?  @map("agent_id") @db.Uuid
+  detail      String?
+
+  job   PrintJob    @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  actor User?       @relation("PrintJobEventBy", fields: [actorUserId], references: [id], onDelete: Restrict)
+  agent PrintAgent? @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  @@index([jobId, occurredAt])
+  @@map("print_job_events")
 }

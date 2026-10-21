@@ -27,9 +27,12 @@ const shipment = (over: Partial<Shipment> = {}, site: CarrierInfo = carrier): Or
     cancelRequest: null,
     label: null,
     pollingStopped: false,
+    zpl: null,
+    printWaiting: [],
     createdAt: '2026-10-18T10:00:00.000Z',
     ...over,
   },
+  printer: null,
   cancelled: [],
 });
 const request = (status: string, errorCode: string | null = null) =>
@@ -54,12 +57,17 @@ describe('shipmentPhase (doc 029): one next step from the order status and its s
   });
 
   it('never offers labels without a carrier or with missing required data', () => {
-    expect(shipmentPhase('READY_TO_DISPATCH', { carrier, shipment: null, cancelled: [] })).toBe(
-      'NO_SHIPMENT',
-    );
+    expect(
+      shipmentPhase('READY_TO_DISPATCH', { carrier, shipment: null, printer: null, cancelled: [] }),
+    ).toBe('NO_SHIPMENT');
     // An order completed before doc 029 at a site without a carrier: no button to be refused.
     expect(
-      shipmentPhase('READY_TO_DISPATCH', { carrier: none, shipment: null, cancelled: [] }),
+      shipmentPhase('READY_TO_DISPATCH', {
+        carrier: none,
+        shipment: null,
+        printer: null,
+        cancelled: [],
+      }),
     ).toBe('NO_CARRIER');
     expect(shipmentPhase('READY_TO_DISPATCH', shipment({ carrier: none }, none))).toBe(
       'NO_CARRIER',

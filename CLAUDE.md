@@ -69,6 +69,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   recipe version, crate tare and crate /
   shipping-package dimensions (g / mm), Hotovo weight snapshots; `catalog:weights_record`.
   Unknown is never 0; one shipped crate = one parcel = one label; no carrier limit hard-coded.
+  Dispatch and direct printing (doc 029, doc 030, owner 2026-10-18/-20; PR #36, #37, PR C for review):
+  shipments, parcels, carrier requests, labels in several formats (PDF preview + ZPL for printing,
+  never our own conversion), per-site carrier settings and encrypted carrier connections (ADR 0027),
+  printers and print agents per site (a machine principal with its own token — ADR 0028), the durable
+  print queue (jobs + append-only events; SENT ≠ printed; UNCERTAIN never retried automatically).
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

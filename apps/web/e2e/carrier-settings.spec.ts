@@ -77,8 +77,10 @@ test('ADMIN sets up PPL for a site: incomplete → verified → complete; nothin
   await expect(card.getByTestId('carrier-message')).toContainText('Připojení funguje');
   await expect(card.getByTestId('carrier-verified')).toContainText('Ověřeno');
   await card.getByTestId('carrier-product').selectOption('SIM-A');
-  await card.getByTestId('carrier-label-format').selectOption('ZPL');
-  await expect(card.getByTestId('carrier-label-dpi')).toHaveValue('203');
+  // No format or resolution here: PDF and ZPL come from PPL, the resolution from the printer.
+  await expect(card.getByTestId('carrier-label-format')).toHaveCount(0);
+  await expect(card.getByTestId('carrier-label-formats')).toContainText('ZPL');
+  await card.getByTestId('carrier-label-layout').selectOption('A4');
   await card.getByTestId('carrier-save').click();
   await expect(card.getByTestId('carrier-problems')).toContainText(
     'Nastavení je úplné – nové přepravy této provozovny mohou použít PPL.',
@@ -96,7 +98,7 @@ test('ADMIN sets up PPL for a site: incomplete → verified → complete; nothin
   // A changed connection invalidates the verification (only after saving it again).
   await page.reload();
   await expect(card.getByTestId('carrier-product')).toHaveValue('SIM-A');
-  await expect(card.getByTestId('carrier-label-format')).toHaveValue('ZPL');
+  await expect(card.getByTestId('carrier-label-layout')).toHaveValue('A4');
 
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 900 });

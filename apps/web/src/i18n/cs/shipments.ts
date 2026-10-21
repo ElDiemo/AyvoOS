@@ -64,7 +64,6 @@ export const shipmentsCs = {
     confirm: 'Potvrdit předání',
   },
   openLabels: 'Otevřít všechny štítky',
-  parcelLabel: (format: string) => `Štítek balíku (${format})`,
   parcelLabelNo: (n: number, format: string) => `Štítek balíku ${n} (${format})`,
   testEnvironment: 'Testovací prostředí dopravce',
   labelsNote: 'Opakovaný tisk používá uložené štítky – u dopravce nic nového nevzniká.',
@@ -143,5 +142,68 @@ export const shipmentsCs = {
       'Připojení k dopravci, přes které požadavek vznikl, není na serveru dostupné.',
     REQUEST_NOT_ABANDONABLE:
       'Tento požadavek nelze uzavřít ručně – dopravce zásilku vytvořil; zrušte ji přes dopravce.',
+    PRINTER_CHANGED:
+      'Výchozí tiskárna se mezitím změnila. Obnovte stránku a zkontrolujte, kam se bude tisknout.',
+    PRINTER_NOT_FOUND: 'Tato tiskárna u provozovny neexistuje.',
+    PRINTER_DISABLED: 'Tiskárna nebo její tiskový agent je vypnutý.',
+    PRINT_EXISTS: 'Štítky už byly odeslány k tisku – vytiskněte znovu jen konkrétní balík.',
+    PRINT_IN_PROGRESS: 'Tento štítek je právě na cestě do tiskárny.',
+    DUPLICATE_RISK:
+      'Štítek mohl být už vytištěný. Potvrďte, že může vzniknout druhý fyzický štítek.',
+    LABEL_VARIANT_EXISTS: 'ZPL těchto štítků už je uložené.',
+    JOB_NOT_CANCELLABLE: 'Úloha už odešla do tiskárny – nelze ji zrušit.',
+    FORBIDDEN: 'K této akci nemáte oprávnění.',
   } as Record<string, string>,
+  print: {
+    title: 'Štítky',
+    details: 'Podrobnosti (náhled, soubor pro tiskárnu, historie tisku)',
+    target: (printer: string) => `Nový tisk půjde na: ${printer}`,
+    activeTarget: (printers: string) => `Rozpracovaný tisk jde na: ${printers}`,
+    noPrinter:
+      'Provozovna nemá výchozí expediční tiskárnu. Stáhněte PDF a vytiskněte štítky ručně.',
+    agentOffline: (agent: string) =>
+      `Tiskový agent ${agent} se neozval – úlohy počkají ve frontě, nic se netiskne naslepo.`,
+    printerState: {
+      READY: 'Tiskárna připravena',
+      NOT_FOUND: 'Tiskárna nenalezena (odpojená USB?)',
+      ERROR: 'Chyba tiskárny',
+    } as Record<string, string>,
+    printAll: (n: number, printer: string) =>
+      `Vytisknout ${n} ${n === 1 ? 'štítek' : n < 5 ? 'štítky' : 'štítků'} na ${printer}`,
+    summary: (sent: number, total: number) => `Odesláno do tiskárny: ${sent} z ${total}`,
+    sentNote:
+      'Odeslání do tiskárny nepotvrzuje vytištění ani nalepení – zkontrolujte štítky na bednách.',
+    waiting: (printer: string) => `Tisk na ${printer} čeká na štítky pro tiskárnu (ZPL).`,
+    zplPending: 'Štítky pro tiskárnu (ZPL) se získávají od dopravce. PDF je k dispozici.',
+    zplFailed: 'Štítky pro tiskárnu (ZPL) se nepodařilo získat – nic se netiskne.',
+    zplRetry: 'Získat ZPL znovu',
+    status: {
+      QUEUED: 'Čeká ve frontě',
+      CLAIMED: 'Převzato agentem',
+      SENDING: 'Odesílá se do tiskárny',
+      SENT: 'Odesláno do tiskárny',
+      FAILED: 'Neodesláno (prokazatelně)',
+      UNCERTAIN: 'Nejisté – mohlo se vytisknout',
+      CANCELLED: 'Zrušeno',
+    } as Record<string, string>,
+    uncertainHelp:
+      'Výsledek není jistý. Zkontrolujte tiskárnu; teprve pak případně vytiskněte znovu (hrozí duplikát).',
+    reprint: 'Vytisknout znovu',
+    reprintTitle: (n: number) => `Vytisknout znovu štítek balíku ${n}?`,
+    reprintText: (printer: string) =>
+      `Použije se uložený štítek téhož balíku; u dopravce nic nového nevznikne. Tiskárna: ${printer}.`,
+    reprintReason: 'Důvod',
+    duplicateCheck: 'Rozumím, že může vzniknout druhý fyzický štítek; nepotřebný znehodnotím.',
+    reprintConfirm: 'Vytisknout znovu',
+    preview: 'Náhled PDF',
+    pdf: 'PDF',
+    zpl: (dpi: number | null) => `ZPL${dpi ? ` ${dpi} dpi` : ''}`,
+    history: 'Historie tisku',
+    job: (code: string) => `Úloha ${code}`,
+    destroyTitle: (shipment: string) => `Neplatné štítky zrušené přepravy ${shipment}`,
+    destroyText:
+      'Tyto štítky mohly být fyzicky vytištěné. Strhněte je z beden nebo je znehodnoťte – nesmí odejít s dopravcem.',
+    destroyLine: (n: number, crate: string, number: string | null) =>
+      `Balík ${n} · bedna ${crate}${number ? ` · ${number}` : ''}`,
+  },
 };

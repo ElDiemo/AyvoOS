@@ -6,6 +6,7 @@ import {
   type CanActivate,
   type ExecutionContext,
 } from '@nestjs/common';
+import { API_BASE_PATH } from '@ayvo/types';
 import { Reflector } from '@nestjs/core';
 import { ENV, type Env } from '../config/env.js';
 import { domainError } from '../common/domain-error.js';
@@ -77,6 +78,11 @@ export class AccessGuard implements CanActivate {
       throw forbidden();
     }
     if (rule.kind === 'public') return true;
+    if (rule.kind === 'agent') {
+      // Machine routes live only under /api/agent/; their own guard checks the agent's token.
+      if (!(req.url ?? '').startsWith(`${API_BASE_PATH}/agent/`)) throw forbidden();
+      return true;
+    }
 
     const resolution = await this.resolver.resolve(req);
     if (resolution.kind === 'anonymous') throw unauthenticated();

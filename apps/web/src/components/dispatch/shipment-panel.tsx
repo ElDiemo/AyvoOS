@@ -26,6 +26,7 @@ import { shipmentsCs } from '@/i18n/cs/shipments';
 import { apiSend } from '@/lib/client-api';
 import { formatDimensions, formatMass, kgToG } from '@/lib/measure';
 import { orderErrorText } from './order-errors';
+import { ACTIVE_JOB, LabelsToDestroy, PrintCard } from './print-card';
 import { labelLinks, shipmentPhase, type LabelLink, type ShipmentPhase } from './shipment-phase';
 
 const t = shipmentsCs;
@@ -39,6 +40,9 @@ type Props = {
   canHandOver: boolean;
   /** `shipments:resolve_uncertain`: the exceptional manual closing of an uncertain request. */
   canResolveUncertain: boolean;
+  /** `printing:print` (print, ZPL download) and `printing:reprint` (one label again) — doc 030. */
+  canPrint: boolean;
+  canReprint: boolean;
   timeZone: string;
 };
 
@@ -75,6 +79,8 @@ export function ShipmentPanel({
   canPrepare,
   canHandOver,
   canResolveUncertain,
+  canPrint,
+  canReprint,
   timeZone,
 }: Props) {
   const router = useRouter();
@@ -89,7 +95,13 @@ export function ShipmentPanel({
   const nextLabels = links.some((l) => l.kind === 'COMPLETE')
     ? links.filter((l) => l.kind === 'COMPLETE')
     : links;
-  const waiting = !!phase && WAITING.includes(phase) && !s?.pollingStopped;
+  // Also while the printer's ZPL is fetched or labels are on their way to the printer.
+  const printingActive =
+    !!s &&
+    (s.zpl?.status === 'PENDING' ||
+      s.printWaiting.length > 0 ||
+      s.parcels.some((x) => x.printJobs.some((j) => ACTIVE_JOB.includes(j.status))));
+  const waiting = (!!phase && WAITING.includes(phase) && !s?.pollingStopped) || printingActive;
   const now = useNow();
   useEffect(() => {
     if (!waiting) return;
@@ -107,6 +119,7 @@ export function ShipmentPanel({
 
   return (
     <div className="mb-6 flex flex-col gap-6">
+      <LabelsToDestroy data={data} />
       {phase && (
         <Card title={t.nextStep} testId="shipment-next-step">
           <div data-phase={phase} data-testid="shipment-phase" className="flex flex-col gap-3">
@@ -133,6 +146,19 @@ export function ShipmentPanel({
             )}
           </div>
         </Card>
+      )}
+      {s && s.status === 'LABELED' && (
+        <PrintCard
+          code={code}
+          data={data}
+          labelsHref={s.label ? labelsHref : null}
+          canPrint={canPrint}
+          canReprint={canReprint}
+          canPrepare={canPrepare}
+          send={send}
+          onDone={done}
+          timeZone={timeZone}
+        />
       )}
       {s && (
         <Card
@@ -173,26 +199,11 @@ export function ShipmentPanel({
                 parcel={parcel}
                 editable={s.status === 'DRAFT' && canPrepare}
                 code={code}
-                labelHref={`/api/admin/orders/${code}/shipment/parcels/${parcel.parcelNo}/label`}
                 timeZone={timeZone}
                 onDone={done}
               />
             ))}
           </ul>
-          {s.label && (
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <a
-                href={labelsHref}
-                target="_blank"
-                rel="noopener"
-                className={buttonClass.secondary}
-                data-testid="open-labels"
-              >
-                {t.openLabels}
-              </a>
-              <span className="text-xs text-stone-500">{t.labelsNote}</span>
-            </div>
-          )}
           {canResolveUncertain &&
             // As the server: a claimed request after its window; an accepted one only after its
             // automatic checks ended.
@@ -494,14 +505,12 @@ function ParcelRow({
   parcel,
   editable,
   code,
-  labelHref,
   timeZone,
   onDone,
 }: {
   parcel: ShipmentParcel;
   editable: boolean;
   code: string;
-  labelHref: string;
   timeZone: string;
   onDone: () => void;
 }) {
@@ -561,17 +570,6 @@ function ParcelRow({
           </div>
         )}
       </dl>
-      {parcel.label && (
-        <a
-          href={labelHref}
-          target="_blank"
-          rel="noopener"
-          className="mt-2 inline-block text-sm underline underline-offset-2"
-          data-testid={`parcel-${parcel.parcelNo}-label`}
-        >
-          {t.parcelLabel(parcel.label.format)}
-        </a>
-      )}
       {editable && !open && (
         <button
           type="button"

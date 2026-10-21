@@ -2,9 +2,13 @@ import type {
   AbandonLabelsRequest,
   CancelShipmentRequest,
   CarrierInfo,
+  CancelPrintJobRequest,
   HandOverRequest,
   MissingData,
   OrderShipment,
+  PrintShipmentRequest,
+  ReprintParcelRequest,
+  RetryLabelVariantRequest,
   ReadyForPickupRequest,
   RequestLabelsRequest,
   ResolveCancelRequest,
@@ -30,6 +34,8 @@ import {
   type CarrierSettingsSnapshot,
   type CarrierShipmentRequest,
 } from '../carriers/carrier.js';
+import { PrintersService } from '../printing/printers.service.js';
+import { PrintQueueService } from '../printing/print-queue.service.js';
 import { MAX_POLLS, ShipmentCarrierFlow, UNRESOLVED } from './shipment-carrier-flow.service.js';
 import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { shipmentEvent, type Step } from './shipment-events.js';
@@ -59,6 +65,8 @@ export class ShipmentsService {
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
     @Inject(CARRIERS) private readonly carriers: CarrierRegistry,
     @Inject(ENV) private readonly env: Env,
+    private readonly printers: PrintersService,
+    private readonly printQueue: PrintQueueService,
   ) {}
 
   /** The shipment of a just completed order (in the completion transaction). */
@@ -105,6 +113,7 @@ export class ShipmentsService {
         cancelRequester: { select: { displayName: true } },
         labels: { where: { parcelId: null }, select: { format: true, dpi: true, createdAt: true } },
         requests: { orderBy: { attemptNo: 'desc' }, take: 1 },
+        labelFetches: { orderBy: { createdAt: 'desc' }, take: 1 },
         parcels: {
           orderBy: { parcelNo: 'asc' },
           include: {
@@ -113,7 +122,10 @@ export class ShipmentsService {
               select: { capacity: true, product: { select: { code: true, name: true } } },
             },
             packageDimension: { select: { lengthMm: true, widthMm: true, heightMm: true } },
-            labels: { select: { format: true, dpi: true } },
+            labels: {
+              select: { format: true, dpi: true, createdAt: true },
+              orderBy: [{ format: 'asc' }, { dpi: 'asc' }],
+            },
             weighings: {
               orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
               take: 1,
@@ -126,6 +138,8 @@ export class ShipmentsService {
     });
     const choice = await this.carriers.forSite(site.siteId);
     const current = carrierInfo(choice);
+    const printer = await this.printers.dispatchPrinter(site.siteId);
+    const jobs = await this.printQueue.jobsOf(rows.flatMap((r) => r.parcels.map((p) => p.id)));
     const cancelled = rows
       .filter((r) => r.status === 'CANCELLED')
       .map((r) => ({
@@ -133,9 +147,19 @@ export class ShipmentsService {
         cancelledAt: r.cancelledAt!.toISOString(),
         cancelledBy: r.canceller!.displayName,
         reason: r.cancelReason!,
+        // Invalid labels that may physically exist: to be removed or destroyed (doc 030 §4).
+        labelsToDestroy: r.parcels
+          .filter((p) =>
+            (jobs.get(p.id) ?? []).some((j) => j.status === 'SENT' || j.status === 'UNCERTAIN'),
+          )
+          .map((p) => ({
+            parcelNo: p.parcelNo,
+            crate: p.crate.code,
+            number: p.carrierParcelNumber,
+          })),
       }));
     const live = rows.find((r) => r.status !== 'CANCELLED') ?? null;
-    if (!live) return { carrier: current, shipment: null, cancelled };
+    if (!live) return { carrier: current, shipment: null, printer, cancelled };
     // A shipment already at a carrier is shown with ITS carrier and environment (snapshot).
     const own = await this.flow.gatewayOf(live);
     // A draft is shown with the site's current carrier (the next request uses it).
@@ -154,7 +178,8 @@ export class ShipmentsService {
     const parcels = live.parcels.map((p) => {
       const w = p.weighings[0];
       const d = p.packageDimension;
-      const label = p.labels[0];
+      // The parcel's PDF (preview) if stored, else what exists.
+      const label = p.labels.find((l) => l.format === 'PDF') ?? p.labels[0];
       return {
         parcelNo: p.parcelNo,
         crate: p.crate.code,
@@ -178,8 +203,17 @@ export class ShipmentsService {
             : null,
         carrierParcelNumber: p.carrierParcelNumber,
         label: label ? { format: label.format as 'PDF' | 'ZPL', dpi: label.dpi } : null,
+        labels: p.labels.map((l) => ({
+          format: l.format as 'PDF' | 'ZPL',
+          dpi: l.dpi,
+          createdAt: l.createdAt.toISOString(),
+        })),
+        printJobs: jobs.get(p.id) ?? [],
       };
     });
+    const parcelNoOf = new Map(live.parcels.map((p) => [p.id, p.parcelNo]));
+    const waiting = await this.printQueue.waiting(this.prisma, live.id);
+    const fetch = live.labelFetches[0] ?? null;
     const request = live.requests[0] ?? null;
     const asked =
       live.status === 'CANCELLING'
@@ -238,8 +272,24 @@ export class ShipmentsService {
           (request.status === 'ACCEPTED' || request.status === 'CREATED') &&
           request.nextPollAt === null &&
           request.pollCount >= MAX_POLLS,
+        zpl: fetch
+          ? {
+              dpi: fetch.dpi,
+              status: fetch.status as 'PENDING' | 'DONE' | 'FAILED',
+              attempts: fetch.attempts,
+              errorCode: fetch.errorCode,
+              errorMessage: fetch.errorMessage,
+            }
+          : null,
+        printWaiting: waiting.map((w) => ({
+          kind: w.kind as 'SHIPMENT' | 'REPRINT',
+          printer: w.printer.name,
+          parcelNo: w.parcelId ? (parcelNoOf.get(w.parcelId) ?? null) : null,
+          requestedAt: w.requestedAt.toISOString(),
+        })),
         createdAt: live.createdAt.toISOString(),
       },
+      printer,
       cancelled,
     };
   }
@@ -252,6 +302,8 @@ export class ShipmentsService {
     site: SiteContext,
     code: string,
     parcelNo: number | null,
+    /** null = the parcel's own label as shown (its PDF if stored); ZPL = the printer's file. */
+    format: 'ZPL' | null = null,
   ): Promise<{ bytes: Buffer; filename: string; format: string }> {
     const order = await this.findOrder(this.prisma, code, site.siteId);
     if (!order) throw notFound();
@@ -261,16 +313,22 @@ export class ShipmentsService {
     });
     const label = live
       ? await this.prisma.shipmentLabel.findFirst({
-          where:
-            parcelNo === null
+          where: {
+            ...(parcelNo === null
               ? { shipmentId: live.id, parcelId: null }
-              : { shipmentId: live.id, parcel: { parcelNo } },
-          select: { fileKey: true, format: true },
+              : { shipmentId: live.id, parcel: { parcelNo } }),
+            ...(format ? { format } : {}),
+          },
+          // PDF before ZPL (format), the newest variant first.
+          orderBy: [{ format: 'asc' }, { createdAt: 'desc' }],
+          select: { fileKey: true, format: true, dpi: true },
         })
       : null;
     if (!live || !label) throw domainError(404, 'NO_LABELS', 'This label does not exist');
     const ext = label.format === 'ZPL' ? 'zpl' : 'pdf';
-    const name = parcelNo === null ? `${live.code}-stitky` : `${live.code}-balik-${parcelNo}`;
+    const name =
+      (parcelNo === null ? `${live.code}-stitky` : `${live.code}-balik-${parcelNo}`) +
+      (format === 'ZPL' && label.dpi ? `-${label.dpi}dpi` : '');
     return {
       bytes: await this.storage.get(label.fileKey),
       filename: `${name}.${ext}`,
@@ -357,12 +415,14 @@ export class ShipmentsService {
     site: SiteContext,
     code: string,
     input: RequestLabelsRequest,
+    /** Print the labels on this printer as soon as they exist (doc 030 §1; checked by caller). */
+    print: { printerId: string } | null = null,
   ): Promise<OrderShipment> {
     const choice = await this.carriers.forSite(site.siteId);
     const { result } = await this.operations.run(
       'SHIPMENT_LABELS_REQUEST',
       input.requestId,
-      { actorId, siteId: site.siteId, code },
+      { actorId, siteId: site.siteId, code, ...(print ? { printerId: print.printerId } : {}) },
       async (tx) => {
         const order = await this.lockOrder(tx, code, site.siteId);
         if (order.status !== 'READY_TO_DISPATCH') {
@@ -380,6 +440,7 @@ export class ShipmentsService {
             where: { shipmentId: shipment.id, status: { in: [...UNRESOLVED] } },
             select: { id: true },
           });
+          if (print) await this.planPrint(tx, site, order.id, shipment, print.printerId, step);
           return { attemptId: open.id };
         }
         if (shipment?.status === 'LABELED' || shipment?.status === 'CANCELLING') {
@@ -445,6 +506,7 @@ export class ShipmentsService {
           shipment: shipment.code,
           parcels: payload.request.parcels.length,
         });
+        if (print) await this.planPrint(tx, site, order.id, shipment, print.printerId, step);
         return { attemptId: row.id };
       },
     );
@@ -702,10 +764,288 @@ export class ShipmentsService {
           shipment: shipment.code,
           reason: input.reason,
         });
+        // Its labels become invalid: waiting print requests and jobs not started are cancelled now.
+        const cancelledJobs = await this.printQueue.cancelForShipment(
+          tx,
+          shipment.id,
+          actorId,
+          step.occurredAt,
+        );
+        if (cancelledJobs > 0) {
+          await shipmentEvent(tx, order.id, 'PRINT_JOBS_CANCELLED', step, {
+            shipment: shipment.code,
+            parcels: cancelledJobs,
+          });
+        }
         return { shipmentId: shipment.id };
       },
     );
     await this.flow.driveCancel(result.shipmentId, { actorId, operationId: input.requestId });
+    return this.view(site, code);
+  }
+
+  // --- printing (doc 030 §4) ------------------------------------------------------------------
+
+  /**
+   * Records the decision to print the shipment's labels on a printer of the site (fixed now —
+   * a later change of the default printer never redirects it). Jobs follow once the ZPL exists.
+   */
+  private async planPrint(
+    tx: Tx,
+    site: SiteContext,
+    orderId: string,
+    shipment: { id: string; code: string },
+    printerId: string,
+    step: Step,
+  ): Promise<void> {
+    const printer = await this.printers.usablePrinter(tx, site.siteId, printerId);
+    const existing = await tx.printRequest.count({
+      // Only a request still waiting is the same decision (jobs already created or cancelled are
+      // judged by the caller: print() refuses while any job is on its way or possibly printed).
+      where: { shipmentId: shipment.id, kind: 'SHIPMENT', status: 'WAITING_FOR_LABELS' },
+    });
+    if (existing > 0) return;
+    await this.printQueue.createRequest(tx, {
+      siteId: site.siteId,
+      orderId,
+      shipmentId: shipment.id,
+      parcelId: null,
+      printerId: printer.id,
+      kind: 'SHIPMENT',
+      reason: null,
+      duplicateAcknowledged: false,
+      actorId: step.actorId,
+      operationRequestId: step.operationId,
+      at: step.occurredAt,
+    });
+    await shipmentEvent(tx, orderId, 'PRINT_REQUESTED', step, {
+      shipment: shipment.code,
+      printer: printer.name,
+    });
+    await this.ensureVariant(tx, shipment.id, printer.dpi, step.occurredAt);
+    await this.flow.releasePrints(tx, shipment.id, step.occurredAt);
+  }
+
+  /**
+   * PRINT38-R2: a labelled shipment whose ZPL at this resolution is neither stored nor being
+   * fetched (e.g. labelled before doc 030) gets its fetch now — from the same carrier batch, never
+   * a new shipment. Idempotent: an existing fetch (pending, failed or done) is left as it is.
+   */
+  private async ensureVariant(tx: Tx, shipmentId: string, dpi: number, at: Date): Promise<void> {
+    const s = await tx.shipment.findUniqueOrThrow({
+      where: { id: shipmentId },
+      select: { status: true, _count: { select: { parcels: true } } },
+    });
+    if (s.status !== 'LABELED') return; // a shipment still being created gets it with its labels
+    const stored = await tx.shipmentLabel.count({
+      where: { shipmentId, format: 'ZPL', dpi, parcelId: { not: null } },
+    });
+    if (stored >= s._count.parcels) return;
+    await tx.$executeRaw`
+      INSERT INTO "shipment_label_fetches" ("shipment_id", "format", "dpi", "next_at", "created_at", "updated_at")
+      VALUES (${shipmentId}::uuid, 'ZPL', ${dpi}, ${at}, ${at}, ${at})
+      ON CONFLICT ("shipment_id", "format", "dpi") DO NOTHING`;
+  }
+
+  /** "Tisknout štítky": every parcel label of the shipment on the printer the operator saw. */
+  async print(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    input: PrintShipmentRequest,
+  ): Promise<OrderShipment> {
+    const { result } = await this.operations.run(
+      'SHIPMENT_PRINT',
+      input.requestId,
+      { actorId, siteId: site.siteId, code, printerId: input.printerId },
+      async (tx) => {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        const shipment = await this.liveShipment(tx, order.id);
+        if (!shipment || (shipment.status !== 'LABELED' && shipment.status !== 'REQUESTING')) {
+          throw domainError(409, 'NO_LABELS', 'The shipment has no labels to print');
+        }
+        if (order.status !== 'READY_TO_DISPATCH' && order.status !== 'READY_FOR_PICKUP') {
+          throw domainError(409, 'ORDER_NOT_READY_TO_DISPATCH', 'Nothing to print for this order');
+        }
+        // Cancelled or proven unsent jobs do not count; anything waiting, on its way or possibly
+        // printed does (then single parcels are printed again instead).
+        const printed =
+          (await tx.printJob.count({
+            where: {
+              shipmentId: shipment.id,
+              status: { in: ['QUEUED', 'CLAIMED', 'SENDING', 'SENT', 'UNCERTAIN'] },
+            },
+          })) +
+          (await tx.printRequest.count({
+            where: { shipmentId: shipment.id, kind: 'SHIPMENT', status: 'WAITING_FOR_LABELS' },
+          }));
+        if (printed > 0) {
+          throw domainError(
+            409,
+            'PRINT_EXISTS',
+            'These labels were sent to print already: print a single parcel again instead',
+          );
+        }
+        const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
+        await this.planPrint(tx, site, order.id, shipment, input.printerId, step);
+        return { code, shipmentId: shipment.id };
+      },
+    );
+    await this.flow.fetchVariantsOf(result.shipmentId, { actorId, operationId: input.requestId });
+    return this.view(site, code);
+  }
+
+  /**
+   * "Vytisknout znovu": ONE parcel label again (the stored label of the same parcel — nothing at the
+   * carrier), with a reason; after a possibly printed job only with the duplicate acknowledged.
+   */
+  async reprint(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    parcelNo: number,
+    input: ReprintParcelRequest,
+  ): Promise<OrderShipment> {
+    const { result } = await this.operations.run(
+      'SHIPMENT_REPRINT',
+      input.requestId,
+      { actorId, siteId: site.siteId, code, parcelNo, ...input, requestId: undefined },
+      async (tx) => {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        const shipment = await this.liveShipment(tx, order.id);
+        if (!shipment || shipment.status !== 'LABELED') {
+          throw domainError(409, 'NO_LABELS', 'Only the labels of a labelled shipment are printed');
+        }
+        const parcel = await tx.shipmentParcel.findFirst({
+          where: { shipmentId: shipment.id, parcelNo },
+        });
+        if (!parcel) throw domainError(404, 'PARCEL_NOT_FOUND', 'No such parcel');
+        // On its way to a printer already, or waiting for its ZPL in another print request.
+        if (
+          (await this.printQueue.activeJob(tx, parcel.id)) ||
+          (await tx.printRequest.count({
+            where: {
+              shipmentId: shipment.id,
+              status: 'WAITING_FOR_LABELS',
+              OR: [{ parcelId: null }, { parcelId: parcel.id }],
+            },
+          })) > 0
+        ) {
+          throw domainError(409, 'PRINT_IN_PROGRESS', 'This label is on its way to a printer');
+        }
+        if ((await this.printQueue.possiblyPrinted(tx, parcel.id)) && !input.acknowledgeDuplicate) {
+          throw domainError(
+            409,
+            'DUPLICATE_RISK',
+            'This label may already be printed: confirm that a second copy may appear',
+          );
+        }
+        const printer = await this.printers.usablePrinter(tx, site.siteId, input.printerId);
+        const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
+        await this.printQueue.createRequest(tx, {
+          siteId: site.siteId,
+          orderId: order.id,
+          shipmentId: shipment.id,
+          parcelId: parcel.id,
+          printerId: printer.id,
+          kind: 'REPRINT',
+          reason: input.reason,
+          duplicateAcknowledged: input.acknowledgeDuplicate,
+          actorId,
+          operationRequestId: input.requestId,
+          at: step.occurredAt,
+        });
+        await shipmentEvent(tx, order.id, 'REPRINT_REQUESTED', step, {
+          shipment: shipment.code,
+          parcelNo,
+          printer: printer.name,
+          reason: input.reason,
+        });
+        await this.ensureVariant(tx, shipment.id, printer.dpi, step.occurredAt);
+        await this.flow.releasePrints(tx, shipment.id, step.occurredAt);
+        return { code, shipmentId: shipment.id };
+      },
+    );
+    await this.flow.fetchVariantsOf(result.shipmentId, { actorId, operationId: input.requestId });
+    return this.view(site, code);
+  }
+
+  /** "Získat ZPL znovu": fetches the printer's labels again now (after an outage or a problem). */
+  async retryLabelVariant(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    input: RetryLabelVariantRequest,
+  ): Promise<OrderShipment> {
+    const { result } = await this.operations.run(
+      'SHIPMENT_LABEL_VARIANT_RETRY',
+      input.requestId,
+      { actorId, siteId: site.siteId, code },
+      async (tx) => {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        const shipment = await this.liveShipment(tx, order.id);
+        if (!shipment || shipment.status !== 'LABELED') {
+          throw domainError(409, 'NO_LABELS', 'Only the labels of a labelled shipment are fetched');
+        }
+        const dpi = (await this.printers.dispatchPrinter(site.siteId, tx))?.dpi ?? 203;
+        const now = new Date();
+        const fetch = await tx.shipmentLabelFetch.findUnique({
+          where: { shipmentId_format_dpi: { shipmentId: shipment.id, format: 'ZPL', dpi } },
+        });
+        if (fetch?.status === 'DONE') {
+          throw domainError(409, 'LABEL_VARIANT_EXISTS', 'The ZPL of these labels is stored');
+        }
+        if (fetch) {
+          await tx.shipmentLabelFetch.update({
+            where: { id: fetch.id },
+            data: {
+              status: 'PENDING',
+              attempts: 0,
+              nextAt: now,
+              errorCode: null,
+              errorMessage: null,
+              updatedAt: now,
+            },
+          });
+        } else {
+          await tx.shipmentLabelFetch.create({
+            data: {
+              shipmentId: shipment.id,
+              format: 'ZPL',
+              dpi,
+              nextAt: now,
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+        }
+        return { shipmentId: shipment.id };
+      },
+    );
+    await this.flow.fetchVariantsOf(result.shipmentId, { actorId, operationId: input.requestId });
+    return this.view(site, code);
+  }
+
+  /** Cancels one print job of this order that has not started (an operator's decision). */
+  async cancelPrintJob(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    jobCode: string,
+    input: CancelPrintJobRequest,
+  ): Promise<OrderShipment> {
+    await this.operations.run(
+      'PRINT_JOB_CANCEL',
+      input.requestId,
+      { actorId, siteId: site.siteId, code, jobCode, reason: input.reason },
+      async (tx) => {
+        const order = await this.lockOrder(tx, code, site.siteId);
+        const job = await tx.printJob.findFirst({ where: { code: jobCode, orderId: order.id } });
+        if (!job) throw domainError(404, 'JOB_NOT_FOUND', 'No such print job of this order');
+        await this.printQueue.cancelJob(tx, job.id, actorId, input.reason, new Date());
+        return { code };
+      },
+    );
     return this.view(site, code);
   }
 
