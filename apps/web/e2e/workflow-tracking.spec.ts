@@ -216,6 +216,14 @@ test('tracking: every parcel with the carrier, two delivered, an unknown code ke
     at: '2026-10-22T07:00:00Z',
     name: 'Simulace: neznámá událost',
   });
+  // Parcel 3 going back to the sender: a warning on that parcel, never a delivery (owner 2026-10-21).
+  await carrierReports(3, {
+    statusId: 718,
+    code: 'Return.Test',
+    meaning: 'RETURNING',
+    at: '2026-10-22T09:30:00Z',
+    name: 'Zásilka bude vrácena zpět odesílateli.',
+  });
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/dispatch/orders/${orderCode}`);
   const card = page.getByTestId('tracking-card');
@@ -224,6 +232,12 @@ test('tracking: every parcel with the carrier, two delivered, an unknown code ke
   await expect(page.getByTestId('order-status')).toHaveText('Převzatá dopravcem');
   await expect(card.getByTestId('tracking-parcel-1-state')).toContainText('Doručeno');
   await expect(card.getByTestId('tracking-parcel-3-state')).toContainText('Převzato');
+  const warning = card.getByTestId('tracking-warning-3');
+  await expect(warning).toContainText('Balík 3');
+  await expect(warning).toContainText('vrací se odesílateli – není doručení hotelu');
+  await expect(warning).toContainText('PPL: „Zásilka bude vrácena zpět odesílateli.“');
+  await expect(card.getByTestId('tracking-warnings')).not.toContainText('Balík 1');
+  await expect(card).toContainText('Nic se automaticky nestornuje');
   // The history is collapsed; it shows PPL's own code and the time it was fetched.
   const history = card.getByTestId('tracking-history-3');
   await expect(history.getByText('kód 7777')).toBeHidden();
@@ -252,6 +266,8 @@ test('tracking: the last parcel delivered — the order Doručená; checking end
   await card.getByTestId('tracking-refresh').click();
   await expect(card.getByTestId('tracking-summary')).toHaveText('Převzato 3/3 · Doručeno 3/3');
   await expect(page.getByTestId('order-status')).toHaveText('Doručená');
+  // The return reported before the delivery is no longer a current problem.
+  await expect(card.getByTestId('tracking-warnings')).toHaveCount(0);
   await expect(card.getByTestId('tracking-checked')).toContainText('ověřování skončilo');
   await expect(card.getByTestId('tracking-refresh')).toHaveCount(0);
   await noOverflow(page);

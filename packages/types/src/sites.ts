@@ -116,6 +116,7 @@ export const siteDependencySchema = z.object({
     'LAST_ACTIVE_SITE',
     'HOTELS_SERVED',
     'ORDERS_NOT_CLOSED',
+    'PARCELS_IN_TRANSIT',
   ]),
   detail: z.string(),
 });

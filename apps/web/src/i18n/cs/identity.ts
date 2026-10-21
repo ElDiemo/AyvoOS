@@ -427,6 +427,8 @@ export const identityCs = {
       HOTELS_SERVED:
         'Provozovna obsluhuje hotely. Přeřazení hotelů zatím neexistuje, proto ji nelze deaktivovat.',
       ORDERS_NOT_CLOSED: 'Provozovna má otevřené nebo k expedici připravené objednávky.',
+      PARCELS_IN_TRANSIT:
+        'Provozovna má objednávky s balíky převzatými dopravcem, které ještě nebyly doručeny.',
       WAREHOUSES: 'Provozovna má sklady.',
       LAST_ACTIVE_SITE: 'Je to poslední aktivní provozovna.',
     } as Record<string, string>,

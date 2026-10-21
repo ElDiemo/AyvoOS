@@ -20,6 +20,7 @@ import type {
   OrderView,
   RemoveOrderCrateRequest,
   RescheduleOrderRequest,
+  SiteDependency,
 } from '@ayvo/types';
 import { AuditService } from '../audit/audit.service.js';
 import { Inject, Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
@@ -80,16 +81,34 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * A site with orders not yet handed to the carrier stays active: they could no longer be
-   * picked, prepared or cancelled there (doc 022 §7, doc 029).
+   * picked, prepared or cancelled there (doc 022 §7, doc 029); so does one with parcels in transit.
    */
   onModuleInit(): void {
     this.siteDependencies.register(async (siteId, db) => {
       const n = await db.order.count({
         where: { siteId, status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'] } },
       });
-      return n > 0
-        ? [{ code: 'ORDERS_NOT_CLOSED', detail: `${n} order(s) are not yet handed over` }]
-        : [];
+      const found: SiteDependency[] =
+        n > 0
+          ? [{ code: 'ORDERS_NOT_CLOSED', detail: `${n} order(s) are not yet handed over` }]
+          : [];
+      // Owner 2026-10-21 (doc 031 §5): a parcel picked up and not yet delivered (also a partial
+      // pickup, a parcel returning, lost or at a pick-up point) keeps the site active.
+      const [row] = await db.$queryRaw<{ transit: number }[]>`
+        SELECT count(DISTINCT o."id")::int AS "transit"
+          FROM "shipment_parcel_progress" pp
+          JOIN "shipments" s ON s."id" = pp."shipment_id"
+          JOIN "orders" o ON o."id" = s."order_id"
+         WHERE o."site_id" = ${siteId}::uuid AND s."status" <> 'CANCELLED'
+           AND pp."picked_up_source" IS NOT NULL AND pp."delivered_at" IS NULL`;
+      const transit = row?.transit ?? 0;
+      if (transit > 0) {
+        found.push({
+          code: 'PARCELS_IN_TRANSIT',
+          detail: `${transit} order(s) have parcels picked up and not yet delivered`,
+        });
+      }
+      return found;
     });
   }
 

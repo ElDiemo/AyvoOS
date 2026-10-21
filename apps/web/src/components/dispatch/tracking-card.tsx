@@ -48,7 +48,9 @@ export function TrackingCard({
       ? [
           {
             parcelNo: p.parcelNo,
-            name: p.tracking.warning.name ?? t.meaning[p.tracking.warning.meaning]!,
+            number: p.carrierParcelNumber,
+            problem: t.meaning[p.tracking.warning.meaning]!,
+            carrierText: p.tracking.warning.name,
           },
         ]
       : [],
@@ -95,9 +97,13 @@ export function TrackingCard({
           <Notice tone="warning">
             <ul className="flex flex-col gap-1" data-testid="tracking-warnings">
               {warnings.map((w) => (
-                <li key={w.parcelNo}>{t.warning(w.parcelNo, w.name)}</li>
+                <li key={w.parcelNo} data-testid={`tracking-warning-${w.parcelNo}`}>
+                  <span className="font-medium">{t.warning(w.parcelNo, w.number, w.problem)}</span>
+                  {w.carrierText && <> {t.carrierSays(w.carrierText)}</>}
+                </li>
               ))}
             </ul>
+            <p className="mt-2 text-xs">{t.warningNote}</p>
           </Notice>
         )}
         {error && (

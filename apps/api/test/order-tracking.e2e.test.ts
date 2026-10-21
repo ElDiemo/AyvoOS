@@ -3,6 +3,7 @@ import type { OrderDetail, OrderShipment } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testCarrierControl } from '../src/carriers/test-carrier.js';
+import { SiteDependencyRegistry } from '../src/sites/site-dependencies.js';
 import {
   ShipmentTrackingService,
   TRACKING_MAX_FAILURES,
@@ -33,6 +34,8 @@ const PICKUP_POINT = 343;
 const NOT_DELIVERED = 458;
 const IN_TRANSIT = 500;
 const CANCELLED_AT_PPL = 999;
+const RETURNING = 718; // „Zásilka bude vrácena zpět odesílateli.“
+const LOST = 705; // „Zásilka nebyla doručena z důvodu ztráty.“
 
 describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () => {
   let t: TestApp;
@@ -450,6 +453,105 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
     ]);
     const scan = await scanCrate(t, other.code, o.crateUrls[0]!);
     expect([scan.status, scan.body.code]).toEqual([409, 'CRATE_DELIVERED']);
+  });
+
+  /**
+   * What would block deactivating a site holding only this order: the registered checks and the
+   * database's own refusal. Test files share one database (MAIN serves other files' hotels), so the
+   * order is moved to a fresh site inside a transaction that is always rolled back.
+   */
+  async function siteBlockers(order: string) {
+    const rollback = new Error('rollback');
+    let result: { codes: string[]; refused: string | null } | null = null;
+    await t.prisma
+      .$transaction(async (tx) => {
+        const [site] = await tx.$queryRaw<{ id: string }[]>`
+          INSERT INTO "sites" ("code", "name", "country_code", "time_zone", "default_locale",
+                               "default_currency", "capabilities")
+          VALUES (${`TR-${randomUUID().slice(0, 6).toUpperCase()}`}, 'Tracking – deaktivace', 'CZ',
+                  'Europe/Prague', 'cs-CZ', 'CZK', ARRAY['WAREHOUSE']::"SiteCapability"[])
+          RETURNING "id"`;
+        const id = site!.id;
+        // Simulates the order being the site's only one (its hotel is served elsewhere).
+        await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
+        await tx.$executeRaw`UPDATE "orders" SET "site_id" = ${id}::uuid WHERE "code" = ${order}`;
+        await tx.$executeRaw`SET LOCAL session_replication_role = origin`;
+        const codes = (await t.app.get(SiteDependencyRegistry).run(id, tx)).map((b) => b.code);
+        let refused: string | null = null;
+        await tx.$executeRaw`SAVEPOINT deactivate`;
+        try {
+          await tx.$executeRaw`UPDATE "sites" SET "active" = false, "deactivated_at" = now()
+                                WHERE "id" = ${id}::uuid`;
+        } catch (e) {
+          refused = (e as Error).message;
+          await tx.$executeRaw`ROLLBACK TO SAVEPOINT deactivate`;
+        }
+        result = { codes, refused };
+        throw rollback;
+      })
+      .catch((e: unknown) => {
+        if (e !== rollback) throw e;
+      });
+    return result!;
+  }
+
+  it('a parcel picked up and not delivered keeps the site active (owner 2026-10-21) — also a partial pickup, a return, a loss', async () => {
+    const o = await labelled(4);
+    const [n1, n2, n3, n4] = o.numbers as [string, string, string, string];
+    expect(await siteBlockers(o.order)).toMatchObject({ codes: ['ORDERS_NOT_CLOSED'] });
+
+    // Partial pickup: the order is still "Připravená k vyzvednutí" — both blockers.
+    testCarrierControl.track(n1, { statusId: PICKED_UP, at: at(10) });
+    await look(o.shipmentId);
+    expect((await detail(o.order)).status).toBe('READY_FOR_PICKUP');
+    let b = await siteBlockers(o.order);
+    expect(b.codes).toEqual(['ORDERS_NOT_CLOSED', 'PARCELS_IN_TRANSIT']);
+    expect(b.refused).toMatch(/stays active/);
+
+    // Every parcel picked up: "Převzatá dopravcem" — no longer "not closed", but in transit.
+    for (const n of [n2, n3, n4]) testCarrierControl.track(n, { statusId: PICKED_UP, at: at(11) });
+    await look(o.shipmentId);
+    expect((await detail(o.order)).status).toBe('HANDED_TO_CARRIER');
+    b = await siteBlockers(o.order);
+    expect(b.codes).toEqual(['PARCELS_IN_TRANSIT']);
+    expect(b.refused).toMatch(/parcels in transit stays active/);
+
+    // One delivered; the others returning, lost, not delivered: none of it is a delivery to the
+    // hotel. Each is a warning on its own parcel; nothing is cancelled, released or returned.
+    const movements = await t.prisma.inventoryMovement.count();
+    testCarrierControl.track(n1, { statusId: DELIVERED, at: at(20) });
+    testCarrierControl.track(n2, { statusId: RETURNING, at: at(21) });
+    testCarrierControl.track(n3, { statusId: LOST, at: at(22) });
+    testCarrierControl.track(n4, { statusId: NOT_DELIVERED, at: at(23) });
+    await look(o.shipmentId);
+    const d = await detail(o.order);
+    expect(d.status).toBe('HANDED_TO_CARRIER');
+    const v = await view(o.order);
+    expect(v.shipment!.status).toBe('LABELED');
+    expect(v.shipment!.tracking).toMatchObject({ pickedUp: 4, delivered: 1, stopped: null });
+    expect(v.shipment!.parcels.map((p) => p.tracking!.warning?.meaning ?? null)).toEqual([
+      null,
+      'RETURNING',
+      'LOST',
+      'NOT_DELIVERED',
+    ]);
+    expect(await cycles(o.order)).toEqual(['DELIVERED', 'DISPATCHED', 'DISPATCHED', 'DISPATCHED']);
+    expect(
+      await t.prisma.orderCrateAllocation.count({
+        where: { order: { code: o.order }, releasedAt: { not: null } },
+      }),
+    ).toBe(0);
+    expect(await t.prisma.inventoryMovement.count()).toBe(movements);
+    expect(d.history.map((h) => h.type)).not.toContain('CANCELLED');
+    b = await siteBlockers(o.order);
+    expect(b.codes).toEqual(['PARCELS_IN_TRANSIT']);
+    expect(b.refused).toMatch(/stays active/);
+
+    // The carrier finally delivers the rest: nothing blocks any more.
+    for (const n of [n2, n3, n4]) testCarrierControl.track(n, { statusId: DELIVERED, at: at(40) });
+    await look(o.shipmentId);
+    expect((await detail(o.order)).status).toBe('DELIVERED');
+    expect(await siteBlockers(o.order)).toEqual({ codes: [], refused: null });
   });
 
   it('the database refuses what tracking may not do', async () => {
