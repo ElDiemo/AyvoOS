@@ -30,11 +30,12 @@ export const ordersCs = {
     bottlesOf: 'Lahve načtené / požadované',
   },
   status: {
-    OPEN: 'Otevřená',
+    OPEN: 'Vytvořená',
     PICKING: 'Rozpracovaná',
     READY_TO_DISPATCH: 'Kompletace dokončena',
-    READY_FOR_PICKUP: 'Připraveno k vyzvednutí',
-    HANDED_TO_CARRIER: 'Předáno dopravci',
+    READY_FOR_PICKUP: 'Připravená k vyzvednutí',
+    HANDED_TO_CARRIER: 'Převzatá dopravcem',
+    DELIVERED: 'Doručená',
     CANCELLED: 'Stornovaná',
   } as Record<string, string>,
   of: (loaded: number, required: number) => `${loaded} / ${required}`,
@@ -72,7 +73,7 @@ export const ordersCs = {
       LABELS_NOT_CREATED: 'Dopravce potvrdil, že nic nevytvořil',
       PARCEL_WEIGHED: 'Balík skutečně zvážen',
       READY_FOR_PICKUP: 'Potvrzeno: připraveno k vyzvednutí',
-      HANDED_TO_CARRIER: 'Potvrzeno: předáno dopravci',
+      HANDED_TO_CARRIER: 'Ručně potvrzeno: předáno dopravci',
       SHIPMENT_CANCELLED: 'Příprava přepravy zrušena',
       SHIPMENT_CANCEL_REQUESTED: 'Zrušení u dopravce zahájeno',
       SHIPMENT_CANCEL_REFUSED: 'Dopravce zrušení odmítl',
@@ -82,7 +83,20 @@ export const ordersCs = {
       PRINT_REQUESTED: 'Tisk štítků zadán',
       REPRINT_REQUESTED: 'Opakovaný tisk štítku zadán',
       PRINT_JOBS_CANCELLED: 'Čekající tiskové úlohy zrušeny',
+      PARCEL_PICKED_UP: 'Dopravce převzal balík',
+      PARCEL_DELIVERED: 'Dopravce doručil balík',
+      DELIVERED: 'Doručeno: všechny balíky',
     } as Record<string, string>,
+    /** The same event types recorded from the carrier's tracking (doc 031). */
+    carrierEvents: {
+      HANDED_TO_CARRIER: 'Dopravce převzal všechny balíky',
+    } as Record<string, string>,
+    byCarrier: 'Podle trackingu dopravce',
+    pickupTimeUnknown: 'Čas převzetí balíku neznámý – dopravce doložil jen doručení.',
+    handedTimeUnknown:
+      'Přesný čas převzetí všech balíků dopravce nedoložil (u některého balíku je čas převzetí neznámý).',
+    establishedAt: (at: string) => `zjištěno trackingem ${at}`,
+    parcelNo: (n: number) => `balík ${n}`,
     pick: 'Kompletovat',
     resume: 'Pokračovat v kompletaci',
     cancel: 'Stornovat objednávku',
@@ -182,6 +196,7 @@ export const ordersCs = {
     UNKNOWN_PRODUCT: 'Neznámý nebo archivovaný produkt.',
     PRODUCT_WITHOUT_RECIPE: 'Produkt nemá aktivní recepturu s typem bedny.',
     CRATE_DISPATCHED: 'Bedna už byla předána dopravci s jinou objednávkou.',
+    CRATE_DELIVERED: 'Bedna byla s objednávkou doručena; vratky se zatím neevidují.',
     ORDER_NOT_CANCELLABLE:
       'Objednávku teď nelze stornovat: připravenou k vyzvednutí nejdřív vraťte zrušením přípravy přepravy, předanou dopravci už ne.',
     SHIPMENT_AT_CARRIER:
@@ -195,5 +210,6 @@ export const ordersCs = {
     FILLED: 'hotová',
     ALLOCATED: 'v objednávce',
     DISPATCHED: 'předaná dopravci',
+    DELIVERED: 'doručená',
   } as Record<string, string>,
 };

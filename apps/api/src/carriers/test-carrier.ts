@@ -10,7 +10,9 @@ import {
   type CarrierRules,
   type CarrierSettingsSnapshot,
   type CarrierShipmentRequest,
+  type CarrierTracking,
 } from './carrier.js';
+import { pplMeaning } from './ppl/ppl-tracking.js';
 
 /**
  * A FAKE carrier for automated tests only (CARRIER_PROVIDER=test, which the environment allows
@@ -78,6 +80,21 @@ export const testCarrierControl = {
    */
   variant: [] as ('FAIL' | 'PROTOCOL' | 'WRONG_POSITION')[],
   variantCalls: 0,
+  /**
+   * Tracking events per parcel number (doc 031), in PPL's code list terms (`statusId`) — the test
+   * carrier gives them the same meaning as the PPL adapter. Returned in the order given (tests use
+   * it to send late or repeated events).
+   */
+  tracking: new Map<string, { statusId: number | null; at: string; name?: string }[]>(),
+  /** Numbers the carrier does not return at all. */
+  trackMissing: new Set<string>(),
+  /** The next tracking calls fail (an outage). */
+  trackFail: 0,
+  trackCalls: 0,
+  /** Adds tracking events to a parcel number. */
+  track(number: string, ...events: { statusId: number | null; at: string; name?: string }[]): void {
+    this.tracking.set(number, [...(this.tracking.get(number) ?? []), ...events]);
+  },
   reset(): void {
     this.next = [];
     this.cancel = [];
@@ -95,6 +112,10 @@ export const testCarrierControl = {
     this.label = null;
     this.variant = [];
     this.variantCalls = 0;
+    this.tracking.clear();
+    this.trackMissing.clear();
+    this.trackFail = 0;
+    this.trackCalls = 0;
   },
 };
 
@@ -315,6 +336,33 @@ export class TestCarrier implements CarrierGateway {
       }
       found.cancelled = true;
       return mode === 'PENDING' ? 'PENDING' : 'CANCELLED';
+    });
+  }
+
+  track(query: { parcels: string[] }, signal: AbortSignal): Promise<CarrierTracking> {
+    return abortable(signal, async () => {
+      testCarrierControl.trackCalls += 1;
+      if (testCarrierControl.trackFail > 0) {
+        testCarrierControl.trackFail -= 1;
+        throw new Error('test carrier: tracking unavailable');
+      }
+      return {
+        parcels: query.parcels.map((number) => {
+          if (testCarrierControl.trackMissing.has(number)) {
+            return { number, found: false, events: [], dropped: 0 };
+          }
+          const events = (testCarrierControl.tracking.get(number) ?? []).map((e) => ({
+            statusId: e.statusId,
+            code: null,
+            phase: null,
+            group: null,
+            name: e.name ?? null,
+            occurredAt: new Date(e.at),
+            meaning: pplMeaning(e.statusId),
+          }));
+          return { number, found: true, events, dropped: 0 };
+        }),
+      };
     });
   }
 

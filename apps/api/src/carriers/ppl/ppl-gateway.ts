@@ -10,8 +10,10 @@ import {
   type CarrierRules,
   type CarrierSettingsSnapshot,
   type CarrierShipmentRequest,
+  type CarrierTracking,
 } from '../carrier.js';
 import { pplProblem, PplAuthError, type PplClient } from './ppl-client.js';
+import { pplEvents } from './ppl-tracking.js';
 
 /**
  * PPL CPL API adapter (doc 029 §5; ppl-cpl-api.apidog.io, read 2026-10-19). Asynchronous: a batch
@@ -172,6 +174,7 @@ interface ShipmentInfo {
   shipmentNumber?: string | null;
   shipmentState?: string | null;
   externalNumbers?: { code?: string | null; externalNumber?: string | null }[];
+  trackAndTrace?: { events?: unknown } | null;
 }
 
 export class PplGateway implements CarrierGateway {
@@ -519,7 +522,30 @@ export class PplGateway implements CarrierGateway {
    * `X-Paging-Total-Items-Count`). Every chunk is read page by page to its documented total;
    * null when any page cannot be read — the caller then knows nothing (never a partial truth).
    */
-  private async shipments(numbers: string[], signal: AbortSignal): Promise<ShipmentInfo[] | null> {
+  /**
+   * Tracking (doc 031): `GET /shipment` for these numbers, each answered by its own
+   * `shipmentNumber` (never by position). Names in Czech (`Accept-Language: cs-CZ`, as the code
+   * list evidence). An incomplete answer throws — the last known state stays.
+   */
+  async track(query: { parcels: string[] }, signal: AbortSignal): Promise<CarrierTracking> {
+    const found = await this.shipments(query.parcels, signal, { 'Accept-Language': 'cs-CZ' });
+    if (!found) throw new Error('PPL tracking unavailable');
+    const byNumber = new Map<string, ShipmentInfo>();
+    for (const sh of found) if (sh.shipmentNumber) byNumber.set(sh.shipmentNumber, sh);
+    return {
+      parcels: query.parcels.map((number) => {
+        const item = byNumber.get(number);
+        if (!item) return { number, found: false, events: [], dropped: 0 };
+        return { number, found: true, ...pplEvents(item) };
+      }),
+    };
+  }
+
+  private async shipments(
+    numbers: string[],
+    signal: AbortSignal,
+    headers?: Record<string, string>,
+  ): Promise<ShipmentInfo[] | null> {
     const all: ShipmentInfo[] = [];
     for (let i = 0; i < numbers.length; i += SHIPMENT_NUMBERS_MAX) {
       const chunk = numbers.slice(i, i + SHIPMENT_NUMBERS_MAX);
@@ -528,6 +554,7 @@ export class PplGateway implements CarrierGateway {
         const res = await this.client.request('GET', '/shipment', {
           query: { ShipmentNumbers: chunk, Limit: PAGE_SIZE, Offset: offset },
           signal,
+          headers,
         });
         if (res.status !== 200 || !Array.isArray(res.body)) return null;
         const items = res.body as ShipmentInfo[];

@@ -17,7 +17,7 @@ import {
  * crate of soap and two of gel, picked on a phone, becomes three parcels; the soap's reference
  * comes from its Hotovo snapshot, the gel parcels have none and are weighed; one click creates the
  * three labels; the PDF is re-opened without a new carrier request; "Připraveno k vyzvednutí" and
- * "Předáno dopravci" are explicit confirmations; nothing claims delivery. Screenshots
+ * the manual "Předáno dopravci" are explicit confirmations; nothing claims delivery. Screenshots
  * (AYVO_SCREENSHOT_DIR) are taken only after the real content is shown.
  */
 test.use({ storageState: 'e2e/.auth/admin.json', timezoneId: 'Europe/Prague' });
@@ -332,7 +332,7 @@ test('ready for pickup is an explicit confirmation of applied labels', async ({ 
     .getByLabel('Všech 3 štítků je vytištěných a nalepených na správných bednách.')
     .check();
   await dialog.getByRole('button', { name: 'Potvrdit' }).click();
-  await expect(page.getByTestId('order-status')).toHaveText('Připraveno k vyzvednutí');
+  await expect(page.getByTestId('order-status')).toHaveText('Připravená k vyzvednutí');
   await expect(page.getByTestId('shipment-phase')).toHaveAttribute(
     'data-phase',
     'READY_FOR_PICKUP',
@@ -350,16 +350,19 @@ test('handed to the carrier — not delivered; the crates and the hotel show it'
   const dialog = page.getByTestId('handover-dialog');
   await dialog.getByLabel('Dopravce bedny skutečně převzal.').check();
   await dialog.getByRole('button', { name: 'Potvrdit předání' }).click();
-  await expect(page.getByTestId('order-status')).toHaveText('Předáno dopravci');
+  // The manual confirmation (a fallback, doc 031) — recorded as such, not as the carrier's proof.
+  await expect(page.getByTestId('order-status')).toHaveText('Převzatá dopravcem');
   await expect(page.getByTestId('shipment-next-step')).toContainText('neznamená doručení hotelu');
-  await expect(page.getByTestId('order-history')).toContainText('Potvrzeno: předáno dopravci');
+  await expect(page.getByTestId('order-history')).toContainText(
+    'Ručně potvrzeno: předáno dopravci',
+  );
   await shots(page, 'shipment-05-handed-over');
   await page.goto(`/production/crates/${crates[0]!.code}`);
   await expect(page.getByText('Předaná dopravci (na cestě, ne u hotelu)').first()).toBeVisible();
   await page.goto(`/hotels/${hotelCode}`);
   await expect(page.getByTestId('hotel-orders')).toContainText(orderCode);
-  await expect(page.getByTestId('hotel-orders')).toContainText('Předáno dopravci');
+  await expect(page.getByTestId('hotel-orders')).toContainText('Převzatá dopravcem');
   await shot(page, 'shipment-06-hotel-390');
   await page.goto('/dispatch?view=closed');
-  await expect(page.getByTestId(`order-${orderCode}`)).toContainText('Předáno dopravci');
+  await expect(page.getByTestId(`order-${orderCode}`)).toContainText('Převzatá dopravcem');
 });

@@ -155,19 +155,24 @@ export function PrintCard({
             {t.waiting(w.printer)}
           </p>
         ))}
-        {!anyJob && s.printWaiting.length === 0 && canPrint && printer && (
-          <div>
-            <button
-              type="button"
-              className={buttonClass.primary}
-              disabled={printing.busy}
-              onClick={() => void printAll()}
-              data-testid="print-all"
-            >
-              {t.printAll(s.parcels.length, printer.name)}
-            </button>
-          </div>
-        )}
+        {/* Once the carrier has a parcel, its label is on it: only single re-prints (doc 031). */}
+        {!anyJob &&
+          s.printWaiting.length === 0 &&
+          !(s.tracking && s.tracking.pickedUp > 0) &&
+          canPrint &&
+          printer && (
+            <div>
+              <button
+                type="button"
+                className={buttonClass.primary}
+                disabled={printing.busy}
+                onClick={() => void printAll()}
+                data-testid="print-all"
+              >
+                {t.printAll(s.parcels.length, printer.name)}
+              </button>
+            </div>
+          )}
         {anyJob && (
           <p data-testid="print-summary">
             <span className="font-medium">{t.summary(sent, s.parcels.length)}</span>{' '}

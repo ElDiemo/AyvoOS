@@ -28,6 +28,7 @@ import { formatDimensions, formatMass, kgToG } from '@/lib/measure';
 import { orderErrorText } from './order-errors';
 import { ACTIVE_JOB, LabelsToDestroy, PrintCard } from './print-card';
 import { labelLinks, shipmentPhase, type LabelLink, type ShipmentPhase } from './shipment-phase';
+import { TrackingCard } from './tracking-card';
 
 const t = shipmentsCs;
 const p = t.phase;
@@ -155,6 +156,15 @@ export function ShipmentPanel({
           canPrint={canPrint}
           canReprint={canReprint}
           canPrepare={canPrepare}
+          send={send}
+          onDone={done}
+          timeZone={timeZone}
+        />
+      )}
+      {s?.tracking && (s.status === 'LABELED' || s.status === 'CANCELLING') && (
+        <TrackingCard
+          data={data}
+          canRefresh={canHandOver}
           send={send}
           onDone={done}
           timeZone={timeZone}
@@ -445,7 +455,7 @@ function NextStep({
             <div>
               <button
                 type="button"
-                className={buttonClass.primary}
+                className={buttonClass.secondary}
                 onClick={() => setDialog('handover')}
                 data-testid="confirm-handover"
               >
@@ -472,6 +482,12 @@ function NextStep({
       return (
         <Notice tone="info">
           <span className="font-semibold">{p.handedOver}.</span> {p.handedOverText}
+        </Notice>
+      );
+    case 'DELIVERED':
+      return (
+        <Notice tone="info">
+          <span className="font-semibold">{p.delivered}.</span> {p.deliveredText}
         </Notice>
       );
   }

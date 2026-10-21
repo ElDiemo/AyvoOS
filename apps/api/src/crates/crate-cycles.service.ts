@@ -11,11 +11,11 @@ const cycleInclude = {
 export type CycleRecord = Prisma.CrateCycleGetPayload<{ include: typeof cycleInclude }>;
 
 /**
- * Held by an order — loaded (ALLOCATED, doc 028) or handed to the carrier with it (DISPATCHED,
- * doc 029): no labelling, filling, correction, refill or repack touches such a crate.
+ * Held by an order — loaded (ALLOCATED, doc 028), with the carrier (DISPATCHED, doc 029) or
+ * delivered (DELIVERED, doc 031): no labelling, filling, correction, refill or repack touches it.
  */
 export const isHeldByOrder = (status: string): boolean =>
-  status === 'ALLOCATED' || status === 'DISPATCHED';
+  status === 'ALLOCATED' || status === 'DISPATCHED' || status === 'DELIVERED';
 
 /**
  * Crate cycles and their members (ADR 0021, ADR 0025 proposed, doc 025 §3.2): one circulation of
@@ -294,22 +294,60 @@ export class CrateCyclesService {
    * Handed to the carrier with its order (doc 029): ALLOCATED → DISPATCHED with its crate event.
    * Not delivered and not at the hotel; the members stay exactly as they are.
    */
+  /**
+   * Its parcel is with the carrier (doc 029, doc 031): by a manual hand-over (actor) or the
+   * carrier's proof (actor null = source CARRIER). Not delivered, not at the hotel.
+   */
   async dispatch(
     tx: Prisma.TransactionClient,
-    cycle: CycleRecord,
+    cycle: Pick<CycleRecord, 'id' | 'crateId' | 'siteId'>,
     input: {
-      actorId: string;
+      actorId: string | null;
       operationId: string;
       occurredAt: Date;
       order: string;
       shipment: string;
+      parcelNumber?: string;
     },
   ): Promise<void> {
     await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'DISPATCHED' } });
     await this.event(tx, cycle, 'DISPATCHED', input, {
       order: input.order,
       shipment: input.shipment,
+      parcelNumber: input.parcelNumber,
     });
+  }
+
+  /**
+   * Its parcel was delivered, per the carrier (doc 031). The cycle stays open (returns are not
+   * implemented) and nothing happens to the bottles — a delivery does not complete their reuse
+   * cycle (ADR 0011).
+   */
+  async deliver(
+    tx: Prisma.TransactionClient,
+    cycle: Pick<CycleRecord, 'id' | 'crateId' | 'siteId'>,
+    input: {
+      operationId: string;
+      occurredAt: Date;
+      order: string;
+      shipment: string;
+      parcelNumber: string;
+      pickupTimeUnknown: boolean;
+    },
+  ): Promise<void> {
+    await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'DELIVERED' } });
+    await this.event(
+      tx,
+      cycle,
+      'DELIVERED',
+      { ...input, actorId: null },
+      {
+        order: input.order,
+        shipment: input.shipment,
+        parcelNumber: input.parcelNumber,
+        pickupTimeUnknown: input.pickupTimeUnknown ? 'true' : undefined,
+      },
+    );
   }
 
   /** The cycle's active assignments, in ordinal order, with their bottles. */
@@ -391,8 +429,10 @@ export class CrateCyclesService {
       | 'MEMBER_ADDED'
       | 'ALLOCATED_TO_ORDER'
       | 'RELEASED_FROM_ORDER'
-      | 'DISPATCHED',
-    input: { actorId: string; operationId: string; occurredAt: Date },
+      | 'DISPATCHED'
+      | 'DELIVERED',
+    /** actorId null: recorded from the carrier (source CARRIER, ADR 0029). */
+    input: { actorId: string | null; operationId: string; occurredAt: Date },
     payload: Record<string, string | undefined> = {},
   ): Promise<void> {
     await tx.crateEvent.create({
@@ -402,6 +442,7 @@ export class CrateCyclesService {
         type,
         occurredAt: input.occurredAt,
         actorId: input.actorId,
+        source: input.actorId ? 'USER' : 'CARRIER',
         siteId: cycle.siteId,
         operationRequestId: input.operationId,
         payload: JSON.parse(JSON.stringify(payload)),

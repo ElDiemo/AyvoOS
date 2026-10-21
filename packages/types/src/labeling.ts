@@ -16,8 +16,10 @@ export const crateCycleStatusSchema = z.enum([
   'ABORTED',
   /** Held by an order (doc 028). */
   'ALLOCATED',
-  /** Handed to the carrier with its order (doc 029) — not at the hotel. */
+  /** Its parcel is with the carrier (doc 029, doc 031) — not at the hotel. */
   'DISPATCHED',
+  /** Its parcel was delivered, per the carrier (doc 031). */
+  'DELIVERED',
 ]);
 export type CrateCycleStatus = z.infer<typeof crateCycleStatusSchema>;
 

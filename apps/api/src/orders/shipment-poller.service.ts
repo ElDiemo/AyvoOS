@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ENV, type Env } from '../config/env.js';
 import { ShipmentCarrierFlow } from './shipment-carrier-flow.service.js';
+import { ShipmentTrackingService } from './shipment-tracking.service.js';
 
 /**
  * Bounded background polling of accepted carrier requests and of label downloads (doc 029 §3).
@@ -21,6 +22,7 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly flow: ShipmentCarrierFlow,
+    private readonly tracking: ShipmentTrackingService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -41,6 +43,8 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
       await this.flow.pollDue();
       // The ZPL of labelled shipments for printing (doc 030 §2).
       await this.flow.variantsDue();
+      // Tracking of labelled shipments at their carrier (doc 031).
+      await this.tracking.due();
     } catch (error) {
       this.log.warn(`Carrier polling failed: ${String(error)}`);
     } finally {

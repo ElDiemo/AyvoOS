@@ -43,12 +43,16 @@ export const shipmentsCs = {
     labeledText: (n: string) =>
       `Vytiskněte ${n} a nalepte každý na svou bednu. Teprve potom potvrďte „Připraveno k vyzvednutí“ – stažení PDF samo nic nepotvrzuje.`,
     confirmReady: 'Potvrdit: připraveno k vyzvednutí',
-    readyForPickup: 'Připraveno k vyzvednutí',
-    readyForPickupText: 'Štítky jsou nalepené. Po skutečném převzetí dopravcem potvrďte předání.',
-    confirmHandOver: 'Potvrdit předání dopravci',
-    handedOver: 'Předáno dopravci',
+    readyForPickup: 'Připravená k vyzvednutí',
+    readyForPickupText:
+      'Štítky jsou nalepené. Převzetí dopravcem se doplní samo podle jeho trackingu; ruční potvrzení je jen pro případ, kdy tracking převzetí neukáže.',
+    confirmHandOver: 'Ručně potvrdit předání dopravci',
+    handedOver: 'Převzatá dopravcem',
     handedOverText:
-      'Dopravce bedny převzal. To neznamená doručení hotelu ani to, že jsou lahve u hotelu – doručení a vratky se zatím neevidují.',
+      'Dopravce má všechny balíky. To ještě neznamená doručení hotelu – doručení se doplní samo podle trackingu dopravce.',
+    delivered: 'Doručená',
+    deliveredText:
+      'Dopravce potvrdil doručení všech balíků. Vratky beden a lahví se zatím neevidují.',
     noShipment: 'Přeprava vznikne s vytvořením štítků z dokončené kompletace.',
   },
   readyDialog: {
@@ -62,6 +66,48 @@ export const shipmentsCs = {
     text: 'Potvrďte až po skutečném převzetí. Bedny se tím označí jako předané – ne doručené.',
     check: 'Dopravce bedny skutečně převzal.',
     confirm: 'Potvrdit předání',
+  },
+  tracking: {
+    title: 'Přeprava u dopravce',
+    summary: (picked: number, delivered: number, total: number) =>
+      `Převzato ${picked}/${total} · Doručeno ${delivered}/${total}`,
+    checked: (at: string) => `Naposledy ověřeno u dopravce: ${at}`,
+    neverChecked: 'U dopravce zatím neověřeno – ověří se automaticky.',
+    next: (at: string) => `Další automatické ověření: ${at}`,
+    failed: (at: string, why: string) =>
+      `Poslední pokus (${at}) se nepovedl: ${why}. Zobrazený stav je poslední známý.`,
+    paused: (n: number) =>
+      `Automatické ověřování je po ${n} neúspěšných pokusech pozastavené. „Obnovit tracking“ ho znovu spustí.`,
+    refresh: 'Obnovit tracking',
+    refreshing: 'Ověřuji…',
+    done: 'Všechny balíky doručené – ověřování skončilo.',
+    waiting: 'Čeká na převzetí',
+    pickedCarrier: (at: string) => `Převzato ${at}`,
+    pickedManual: (at: string) => `Předání ručně potvrzeno ${at}`,
+    pickedImplied: 'Převzato (čas převzetí dopravce neuvedl)',
+    deliveredAt: (at: string) => `Doručeno ${at}`,
+    last: (name: string, at: string) => `Poslední událost: ${name} (${at})`,
+    missing: 'Dopravce tento balík při posledním ověření nevrátil – platí poslední známý stav.',
+    warning: (n: number, number: string | null, problem: string) =>
+      `Balík ${n}${number ? ` (${number})` : ''}: ${problem}.`,
+    carrierSays: (text: string) => `PPL: „${text}“`,
+    warningNote:
+      'Není to doručení hotelu. Nic se automaticky nestornuje, bedny zůstávají u objednávky a zásoby se nevracejí; tracking pokračuje.',
+    history: 'Historie trackingu',
+    code: (id: number | null, code: string | null) => `kód ${id ?? '–'}${code ? ` (${code})` : ''}`,
+    fetched: (at: string) => `načteno ${at}`,
+    meaning: {
+      DATA: 'jen data zásilky',
+      PICKED_UP: 'převzetí',
+      IN_TRANSIT: 'v přepravě',
+      DELIVERED: 'doručení',
+      PICKUP_POINT: 'výdejní místo – není doručení hotelu',
+      NOT_DELIVERED: 'nedoručeno – neúspěšný pokus o doručení',
+      LOST: 'ztráta zásilky',
+      RETURNING: 'vrací se odesílateli – není doručení hotelu',
+      CANCELLED: 'storno u dopravce',
+      UNKNOWN: 'neznámý kód',
+    } as Record<string, string>,
   },
   openLabels: 'Otevřít všechny štítky',
   parcelLabelNo: (n: number, format: string) => `Štítek balíku ${n} (${format})`,
@@ -142,6 +188,10 @@ export const shipmentsCs = {
       'Připojení k dopravci, přes které požadavek vznikl, není na serveru dostupné.',
     REQUEST_NOT_ABANDONABLE:
       'Tento požadavek nelze uzavřít ručně – dopravce zásilku vytvořil; zrušte ji přes dopravce.',
+    PARCELS_WITH_CARRIER:
+      'Dopravce už má balíky této zásilky – přípravu ani objednávku nelze běžně zrušit.',
+    TRACKING_BUSY: 'Dopravce se právě ověřuje – zkuste to za chvíli.',
+    NOT_TRACKED: 'Tracking se týká jen zásilky se štítky u dopravce.',
     PRINTER_CHANGED:
       'Výchozí tiskárna se mezitím změnila. Obnovte stránku a zkontrolujte, kam se bude tisknout.',
     PRINTER_NOT_FOUND: 'Tato tiskárna u provozovny neexistuje.',

@@ -18,6 +18,7 @@ import type {
   OrderSummary,
   OrderView,
   RemoveOrderCrateRequest,
+  SiteDependency,
 } from '@ayvo/types';
 import { Inject, Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { RecipesService } from '../catalog/recipes.service.js';
@@ -75,16 +76,34 @@ export class OrdersService implements OnModuleInit {
 
   /**
    * A site with orders not yet handed to the carrier stays active: they could no longer be
-   * picked, prepared or cancelled there (doc 022 §7, doc 029).
+   * picked, prepared or cancelled there (doc 022 §7, doc 029); so does one with parcels in transit.
    */
   onModuleInit(): void {
     this.siteDependencies.register(async (siteId, db) => {
       const n = await db.order.count({
         where: { siteId, status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'] } },
       });
-      return n > 0
-        ? [{ code: 'ORDERS_NOT_CLOSED', detail: `${n} order(s) are not yet handed over` }]
-        : [];
+      const found: SiteDependency[] =
+        n > 0
+          ? [{ code: 'ORDERS_NOT_CLOSED', detail: `${n} order(s) are not yet handed over` }]
+          : [];
+      // Owner 2026-10-21 (doc 031 §5): a parcel picked up and not yet delivered (also a partial
+      // pickup, a parcel returning, lost or at a pick-up point) keeps the site active.
+      const [row] = await db.$queryRaw<{ transit: number }[]>`
+        SELECT count(DISTINCT o."id")::int AS "transit"
+          FROM "shipment_parcel_progress" pp
+          JOIN "shipments" s ON s."id" = pp."shipment_id"
+          JOIN "orders" o ON o."id" = s."order_id"
+         WHERE o."site_id" = ${siteId}::uuid AND s."status" <> 'CANCELLED'
+           AND pp."picked_up_source" IS NOT NULL AND pp."delivered_at" IS NULL`;
+      const transit = row?.transit ?? 0;
+      if (transit > 0) {
+        found.push({
+          code: 'PARCELS_IN_TRANSIT',
+          detail: `${transit} order(s) have parcels picked up and not yet delivered`,
+        });
+      }
+      return found;
     });
   }
 
@@ -110,8 +129,11 @@ export class OrdersService implements OnModuleInit {
     const where = (v: OrderView): Prisma.OrderWhereInput => {
       const date = new Date(`${today}T00:00:00Z`);
       const base = { siteId: site.siteId };
-      // Closed = handed to the carrier or cancelled; everything else still needs work (doc 029).
-      if (v === 'closed') return { ...base, status: { in: ['HANDED_TO_CARRIER', 'CANCELLED'] } };
+      // Closed = with the carrier, delivered or cancelled; everything else still needs work at the
+      // site (doc 029, doc 031). A partly picked-up order stays open until every parcel is.
+      if (v === 'closed') {
+        return { ...base, status: { in: ['HANDED_TO_CARRIER', 'DELIVERED', 'CANCELLED'] } };
+      }
       const open = {
         ...base,
         status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'] as OrderStatus[] },
@@ -261,15 +283,18 @@ export class OrdersService implements OnModuleInit {
           reason?: string;
           shipment?: string;
           parcels?: number;
+          pickupTimeUnknown?: boolean;
         };
         return {
           type: e.type,
           occurredAt: e.occurredAt.toISOString(),
-          actor: e.actor.displayName,
+          actor: e.actor?.displayName ?? null,
+          source: e.source === 'CARRIER' ? ('CARRIER' as const) : ('USER' as const),
           crate: payload.crate ?? null,
           reason: payload.reason ?? null,
           shipment: payload.shipment ?? null,
           parcels: payload.parcels ?? null,
+          pickupTimeUnknown: payload.pickupTimeUnknown === true,
         };
       }),
       createdBy: row.creator.displayName,
@@ -455,6 +480,14 @@ export class OrdersService implements OnModuleInit {
             409,
             'CRATE_DISPATCHED',
             'This crate was handed to the carrier with another order',
+            { crate: crate.code },
+          );
+        }
+        if (cycle.status === 'DELIVERED') {
+          throw domainErrorWithDetails(
+            409,
+            'CRATE_DELIVERED',
+            'This crate was delivered with another order (returns are not recorded yet)',
             { crate: crate.code },
           );
         }
