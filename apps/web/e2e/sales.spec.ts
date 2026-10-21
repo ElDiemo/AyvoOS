@@ -258,7 +258,7 @@ test('two edits of the same prospect: the second is refused and keeps its input'
   await one.context().close();
 });
 
-test("another salesperson never sees A's prospect; the duplicate warning names nothing; ADMIN reassigns", async ({
+test("another salesperson never sees A's prospect, not even as a duplicate; ADMIN reassigns", async ({
   browser,
 }) => {
   const b = await signIn(browser, B.email);
@@ -268,16 +268,25 @@ test("another salesperson never sees A's prospect; the duplicate warning names n
   expect((await b.request.get(`/api/admin/sales/prospects/${prospectCode}`)).status()).toBe(404);
   await b.goto(`/sales/prospects?q=${encodeURIComponent(`U Lípy ${tag}`)}`);
   await expect(b.getByTestId('prospect-total')).toHaveText('0 zájemců');
-  // Creating the same hotel: a warning without names or contacts, then "Přesto založit".
+  // Creating the same hotel: B checks duplicates only among B's own prospects, so A's
+  // prospect gives no warning at all — not even a count (doc 034 §8).
+  await b.goto('/sales/prospects/new');
+  await b.getByLabel('Název hotelu nebo penzionu').fill(`Hotel U Lípy ${tag}`);
+  await b.getByLabel('Země').fill('AT');
+  await b.getByTestId('prospect-submit').click();
+  await b.waitForURL(/\/sales\/prospects\/AKV-\d{6}\?created=1$/);
+  await expect(b.getByTestId('prospect-owner')).toHaveText(B.name);
+  await expect(b.getByTestId('detail-duplicates')).toHaveCount(0);
+  await expect(b.locator('body')).not.toContainText('Salzburg');
+  const bCopy = b.url().match(/AKV-\d{6}/)![0];
+  // B's own copy is a duplicate B may see: a named link, then "Přesto založit".
   await b.goto('/sales/prospects/new');
   await b.getByLabel('Název hotelu nebo penzionu').fill(`Hotel U Lípy ${tag}`);
   await b.getByLabel('Země').fill('AT');
   await b.getByTestId('prospect-submit').click();
   const warning = b.getByTestId('duplicate-warning');
-  await expect(warning).toContainText('patří jinému obchodníkovi');
-  await expect(warning).not.toContainText('Recepce');
-  await expect(warning).not.toContainText('Salzburg');
-  await expect(warning.getByRole('link')).toHaveCount(0);
+  await expect(warning.getByRole('link')).toHaveCount(1);
+  await expect(warning.getByRole('link')).toHaveAttribute('href', `/sales/prospects/${bCopy}`);
   await b.getByTestId('create-anyway').click();
   await b.waitForURL(/\/sales\/prospects\/AKV-\d{6}\?created=1$/);
   await b.context().close();

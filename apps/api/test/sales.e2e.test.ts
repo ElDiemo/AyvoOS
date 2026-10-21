@@ -671,41 +671,63 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
       (await b.post('/prospects', prospect(`Cizí ${tag}`, { ownerId: people.a.id }))).status,
     ).toBe(403);
 
-    // The duplicate warning names nothing of A's prospect to B: a count only.
-    for (const extra of [
-      {},
-      { website: `tajny-${tag}.test` },
-      {
+    // Regression (doc 034 §8): B checks duplicates only among B's own prospects. A match with
+    // A's prospect — by name, website, e-mail or phone — answers exactly like no match at all.
+    const probes = (n: string) => ({
+      name: `/prospects/duplicates?name=${encodeURIComponent(`Tajný hotel ${n}`)}&countryCode=CZ`,
+      website: `/prospects/duplicates?website=${encodeURIComponent(`tajny-${n}.test`)}`,
+      email: `/prospects/duplicates?email=${encodeURIComponent(`reditel-${n}@tajny.test`)}`,
+      phone: `/prospects/duplicates?phone=${encodeURIComponent(n === tag ? '777 000 111' : '777 999 888')}`,
+    });
+    const other = randomUUID().slice(0, 6);
+    for (const key of ['name', 'website', 'email', 'phone'] as const) {
+      const hit = await b.get(probes(tag)[key]);
+      const miss = await b.get(probes(other)[key]);
+      expect(hit.status, key).toBe(200);
+      expect(hit.body, key).toEqual({ accessible: [] });
+      expect(hit.body, key).toEqual(miss.body);
+      // ADMIN checks everything and finds A's prospect.
+      const all = (await as(admin).get(probes(tag)[key]).expect(200)).body as DuplicateHint;
+      expect(
+        all.accessible.map((x) => x.code),
+        key,
+      ).toContain(code);
+    }
+    // Creating the same hotel is not refused and its response reveals nothing of A's prospect.
+    const same = await b.post(
+      '/prospects',
+      prospect(`Tajný hotel ${tag}`, {
+        website: `tajny-${tag}.test`,
         contact: {
           label: 'Recepce',
           position: null,
           email: email.toUpperCase(),
-          phone: null,
+          phone: '777000111',
           note: null,
           isPrimary: false,
         },
-      },
-    ]) {
-      const dup = await b.post('/prospects', prospect(`Tajný hotel ${tag}`, extra));
-      expect(dup.status).toBe(409);
-      expect(dup.body.code).toBe('POSSIBLE_DUPLICATE');
-      expect(dup.body.details).toEqual({ accessible: [], hidden: 1 });
-      expect(JSON.stringify(dup.body)).not.toMatch(/Kroměříž|Petr|reditel|AKV-/);
-    }
-    // A shared e-mail is allowed after the explicit confirmation (chains, one contact person).
-    await create(people.b.cookie, `Tajný hotel ${tag}`, { acknowledgeDuplicates: true });
-    // The owner sees the duplicate with its name; nothing was merged.
-    const hint = (
-      await a
-        .get(
-          `/prospects/duplicates?name=${encodeURIComponent(`Tajný hotel ${tag}`)}&countryCode=CZ`,
-        )
-        .expect(200)
-    ).body as DuplicateHint;
-    expect(hint).toEqual({
-      accessible: [expect.objectContaining({ code, reasons: ['NAME'] })],
-      hidden: 1,
+      }),
+    );
+    expect(same.status, JSON.stringify(same.body)).toBe(201);
+    const bCopy = same.body as ProspectDetail;
+    expect(bCopy.duplicates).toEqual({ accessible: [] });
+    expect(JSON.stringify(bCopy)).not.toMatch(/Kroměříž|Petr/);
+    expect(JSON.stringify(bCopy)).not.toContain(code);
+    // B's own second copy is a duplicate B may see, with a name and a link.
+    const own = await b.post('/prospects', prospect(`Tajný hotel ${tag}`));
+    expect(own.status).toBe(409);
+    expect(own.body.code).toBe('POSSIBLE_DUPLICATE');
+    expect(own.body.details).toEqual({
+      accessible: [expect.objectContaining({ code: bCopy.code, reasons: ['NAME'] })],
     });
+    // A finds only A's own prospect, never B's copy; ADMIN sees both; nothing was merged.
+    const hint = (await a.get(probes(tag).name).expect(200)).body as DuplicateHint;
+    expect(hint.accessible.map((x) => x.code)).toEqual([code]);
+    const aDetail = (await a.get(`/prospects/${code}`).expect(200)).body as ProspectDetail;
+    expect(aDetail.duplicates).toEqual({ accessible: [] });
+    const adminDetail = (await as(admin).get(`/prospects/${code}`).expect(200))
+      .body as ProspectDetail;
+    expect(adminDetail.duplicates.accessible.map((x) => x.code)).toEqual([bCopy.code]);
 
     // ADMIN sees all and reassigns: the open task moves along, A loses access, B gains it.
     const all = (

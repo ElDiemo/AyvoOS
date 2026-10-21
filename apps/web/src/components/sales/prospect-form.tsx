@@ -187,7 +187,7 @@ export function ProspectForm({
       const e = result.error;
       if (e instanceof ClientApiError && e.code === 'POSSIBLE_DUPLICATE') {
         const hint = duplicateHintSchema.safeParse(e.details);
-        setDuplicates(hint.success ? hint.data : { accessible: [], hidden: 0 });
+        setDuplicates(hint.success ? hint.data : { accessible: [] });
       } else setFormError(salesErrorText(e));
     }
   }
@@ -350,9 +350,6 @@ export function ProspectForm({
                   </li>
                 ))}
               </ul>
-            )}
-            {duplicates.hidden > 0 && (
-              <p data-testid="duplicate-hidden">{f.duplicateHidden(duplicates.hidden)}</p>
             )}
             <div>
               <button

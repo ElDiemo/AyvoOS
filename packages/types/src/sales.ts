@@ -403,7 +403,10 @@ export const salesEventSchema = z.object({
 export type SalesEvent = z.infer<typeof salesEventSchema>;
 
 export const duplicateHintSchema = z.object({
-  /** Possible duplicates the user may open. */
+  /**
+   * Possible duplicates among the prospects the user may open (all for sales:manage). Another
+   * salesperson's prospects are never matched, not even as a count (doc 034 §8).
+   */
   accessible: z.array(
     z.object({
       code: z.string(),
@@ -413,8 +416,6 @@ export const duplicateHintSchema = z.object({
       reasons: z.array(z.enum(['NAME', 'WEBSITE', 'EMAIL', 'PHONE'])),
     }),
   ),
-  /** Possible duplicates of other salespeople: a count only (ADMIN resolves them). */
-  hidden: z.number().int(),
 });
 export type DuplicateHint = z.infer<typeof duplicateHintSchema>;
 

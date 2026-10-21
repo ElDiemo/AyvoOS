@@ -239,7 +239,7 @@ export class ProspectsService {
     return { ...detail, duplicates };
   }
 
-  /** "Možná duplicita" while typing: only what the user may see, the rest as a count. */
+  /** "Možná duplicita" while typing: only among the prospects the user may see. */
   async checkDuplicates(scope: SalesScope, q: DuplicateQuery): Promise<DuplicateHint> {
     let exclude: string | undefined;
     if (q.exclude) exclude = (await visibleProspect(this.prisma, q.exclude, scope)).id;
@@ -269,14 +269,13 @@ export class ProspectsService {
     const site = websiteKey(c.website ?? null);
     const emails = c.emails.map(emailKey).filter((e): e is string => !!e);
     const phones = c.phones.map(phoneKey).filter((p): p is string => !!p);
-    if (!name && !site && !emails.length && !phones.length) return { accessible: [], hidden: 0 };
+    if (!name && !site && !emails.length && !phones.length) return { accessible: [] };
     const none = Prisma.sql`NULL`;
     const rows = await db.$queryRaw<
       {
         code: string;
         name: string;
         city: string | null;
-        owner_id: string;
         owner: string;
         by_name: boolean;
         by_site: boolean;
@@ -285,7 +284,7 @@ export class ProspectsService {
       }[]
     >`
       SELECT * FROM (
-        SELECT p."code", p."name", p."city", p."owner_id", o."display_name" AS "owner",
+        SELECT p."code", p."name", p."city", o."display_name" AS "owner",
           (${name}::text IS NOT NULL AND p."name_key" = ${name} AND p."country_code" = ${c.countryCode ?? null}) AS "by_name",
           (${site}::text IS NOT NULL AND p."website_key" = ${site}) AS "by_site",
           EXISTS (SELECT 1 FROM "sales_contacts" x WHERE x."prospect_id" = p."id" AND x."retired_at" IS NULL
@@ -293,13 +292,15 @@ export class ProspectsService {
           EXISTS (SELECT 1 FROM "sales_contacts" x WHERE x."prospect_id" = p."id" AND x."retired_at" IS NULL
                   AND x."phone_key" = ANY(${phones.length ? phones : none}::text[])) AS "by_phone"
         FROM "sales_prospects" p JOIN "users" o ON o."id" = p."owner_id"
-        WHERE p."id" IS DISTINCT FROM ${c.exclude ?? null}::uuid) d
+        WHERE p."id" IS DISTINCT FROM ${c.exclude ?? null}::uuid
+          AND (${scope.all}::boolean OR p."owner_id" = ${scope.userId}::uuid)) d
       WHERE "by_name" OR "by_site" OR "by_email" OR "by_phone"
       ORDER BY "code"
       LIMIT 50`;
-    const visible = rows.filter((r) => scope.all || r.owner_id === scope.userId);
+    // Only the user's own prospects (all for sales:manage): another salesperson's match changes
+    // neither this answer nor the create response — not even as a count (doc 034 §8).
     return {
-      accessible: visible.map((r) => ({
+      accessible: rows.map((r) => ({
         code: r.code,
         name: r.name,
         city: r.city,
@@ -311,8 +312,6 @@ export class ProspectsService {
           ...(r.by_phone ? (['PHONE'] as const) : []),
         ],
       })),
-      // Another salesperson's prospects: never a name, city or contact — only how many.
-      hidden: rows.length - visible.length,
     };
   }
 
@@ -353,7 +352,7 @@ export class ProspectsService {
             },
             tx,
           );
-          if (hint.accessible.length || hint.hidden) {
+          if (hint.accessible.length) {
             throw domainErrorWithDetails(
               409,
               'POSSIBLE_DUPLICATE',

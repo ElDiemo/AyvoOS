@@ -135,7 +135,7 @@ export default async function ProspectPage({
           </div>
         </Card>
 
-        {(p.duplicates.accessible.length > 0 || p.duplicates.hidden > 0) && (
+        {p.duplicates.accessible.length > 0 && (
           <Notice tone="warning">
             <span data-testid="detail-duplicates">
               {d.duplicates}:{' '}
@@ -147,7 +147,6 @@ export default async function ProspectPage({
                   </Link>
                 </span>
               ))}
-              {p.duplicates.hidden > 0 && ` ${t.form.duplicateHidden(p.duplicates.hidden)}`}
             </span>
           </Notice>
         )}

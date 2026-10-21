@@ -122,14 +122,12 @@ fine.
 - **Possible duplicate**: the same normalised name in the same country, the same website domain,
   or a contact with the same e-mail or phone (digits only). Creating a prospect with a possible
   duplicate needs an explicit "Přesto založit". Nothing is ever merged.
-- A salesperson sees only the duplicates they can access, with a link. Inaccessible ones are
-  reported only as a count ("u jiného obchodníka — řeší administrátor"), never with names or
-  contacts.
-- Known limit: the count of hidden duplicates tells a salesperson that a matching name, website,
-  e-mail or phone exists at another salesperson's prospect, without saying whose or which. A
-  salesperson could use the warning to probe whether a given e-mail is known. Accepted for v1,
-  since the warning is the point of the check. Restricting it to name and website is an option
-  for the owner.
+- The check runs **only among the prospects the user may access**: a salesperson's own prospects,
+  everything for `sales:manage` (ADMIN). Another salesperson's prospect is never matched — not as
+  a name, a count, a warning or a different API response — so the check cannot be used to probe
+  whether a name, website, e-mail or phone is known elsewhere. Two salespeople may therefore keep
+  the same hotel; ADMIN sees such pairs in the detail ("Možná duplicita") and resolves them by
+  reassignment.
 - **Concurrent edits**: every update of a prospect, contact or task carries the revision it was
   based on. A newer revision is refused with `409 …_CHANGED`, so the last save never silently
   overwrites somebody else's change. The form keeps the user's input and offers a reload.
@@ -173,3 +171,9 @@ Forms keep their input on any error. A repeated click reuses the request id.
 3. May a salesperson see a colleague's prospects (read-only), e.g. for a chain? Now: no.
 4. Should a closed task be reopenable? Now: no; a new task is created.
 5. Should a prospect created by mistake be archivable? Now: no deletion and no archive.
+
+## 12. Follow-up work (owner 2026-10-21, not in v1)
+
+- Editing an existing task in the UI (title, contact, assignee); v1 offers done, reschedule and
+  cancel, the API already supports `POST tasks/:id/update`.
+- Archiving a prospect created by mistake (§11.5).

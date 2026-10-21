@@ -146,10 +146,6 @@ export const salesCs = {
     duplicateTitle: 'Možná duplicita',
     duplicateText:
       'Podobný zájemce už existuje. Zkontrolujte ho; pokud jde o jiný hotel (např. řetězec), založte nového.',
-    duplicateHidden: (n: number) =>
-      n === 1
-        ? '1 podobný zájemce patří jinému obchodníkovi — případ vyřeší administrátor.'
-        : `${n} podobní zájemci patří jiným obchodníkům — případ vyřeší administrátor.`,
     duplicateReasons: {
       NAME: 'stejný název',
       WEBSITE: 'stejný web',
