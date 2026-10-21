@@ -158,8 +158,9 @@ and the carrier of an **existing** request (its connection and environment only)
 - Labels: `labelSettings.format` (`Pdf`/`Zpl`/…), `dpi` 203–1200 (ZPL); per-parcel `labelUrl`
   (`/data/{guid}`) on the same API host, Bearer token; batch valid ≤ 30 days (AYVO keeps a copy).
   Downloads go only to the configured API origin, without redirects, size-limited, content-checked.
-- Weight per set item optional; **unit not documented** → not sent until PPL confirms it
-  (mandatory towards Germany — DE is therefore not supported yet). No dimension fields.
+- Weight per parcel (`weighedShipmentInfo.weight`, "Váha zásilky deklarovaná odesílatelem")
+  optional; **kilograms** (PPL support 2026-10-21, see below). Mandatory for shipments to Germany
+  (documentation, release R2502). AYVO sends no weight, so Germany is refused. No dimension fields.
 - Latin characters only (examples contradict it) → diacritics are stripped in what is sent.
 - Cancel `POST /shipment/{number}/cancel` → `202` (asynchronous) → confirmed only when `GET /shipment`
   shows `Canceled`.
@@ -188,14 +189,62 @@ environment before any use):
 - Query parameters `ShipmentNumbers`, `Limit` (50), `Offset` — at most 50 numbers per order.
 - Text: diacritics removed and Ł/ß/Đ/typographic marks transliterated; a value longer than PPL's
   limit or with other characters refuses the request before sending (nothing is cut). Deliveries to
-  Germany are refused until the weight unit is confirmed.
+  Germany are refused because PPL requires a declared weight there and AYVO sends none (below).
+
+**Confirmed by PPL support (2026-10-21)** and what follows from it:
+
+- **Weight unit: kilograms.** The weight is not mandatory; PPL weighs every shipment at the depot
+  after pickup. Precision was not stated. AYVO stores grams as exact decimal strings (doc 025 §10,
+  `NUMERIC`): the exact conversion is a decimal shift by three places, without rounding —
+  `2595.000 g` → `2.595 kg`, `372.5 g` → `0.3725 kg`, `1850 g` → `1.85 kg`. The documentation
+  describes the field as `double`, minimum 0, "Délka: 9,2"; whether a value with more than two
+  decimals is accepted, rounded or refused is **not confirmed** — AYVO neither rounds nor
+  truncates on its own and sets no weight limit.
+- **No weight is sent** (`parcelWeight: NOT_USED`, unchanged). A parcel's calculated reference
+  (from the Hotovo snapshot and the reference measurements) is not a weighing of that parcel and
+  is never declared as one; an actual weighing (`PARCEL_WEIGHED`) exists only optionally. Which of
+  them AYVO would declare is an owner decision, not made.
+- **Germany:** the previous reason ("unit not confirmed") is gone. Still refused before anything
+  is sent (`PPL_COUNTRY_UNSUPPORTED`) because the documentation requires the weight for Germany
+  and AYVO sends none; every other validation stays. Support's "weight is not mandatory" is read
+  as the general rule, not as an exception to the documented German requirement.
+- **Products:** PPL's generic codes are CZ `PRIV` / `BUSS` / `SMART` and EU `CONN` / `COPL`;
+  which of them the contract allows is decided by PPL's sales. The site's service stays an
+  **explicit** setting chosen from the list `GET /codelist/product` returned to that connection
+  ("Ověřit připojení") — what the API offers. Nothing is chosen automatically, neither from the
+  API's list nor from the generic list, and a generic code missing from the connection's list is
+  refused. The application does not record contractual approval; the settings say so. Keeping
+  such a record would be a model change for the owner.
+- **Production access** already issued is valid; it is **not used** (no production connection
+  exists in code). The last request and PDF are no longer needed by support.
+- **Lookup after a lost answer:** support says it is possible, but named no endpoint, filter or
+  guarantee. The current documentation (read 2026-10-21) has `GET /shipment` with
+  `CustomerReferences` ("Zákaznická reference"), `DateFrom` / `DateTo` and others, but does not
+  say which reference `CustomerReferences` matches (the batch `referenceId`, documented as
+  "Jedinečná reference!", or the `CUST` external numbers), how far back it reaches, or what a
+  repeated `referenceId` does; the batch id is documented only as part of `Location` (UUID).
+  This is not unambiguous: a request without its batch id stays **uncertain** for a person,
+  nothing is looked up by guess and nothing is created again. "Possible" proves neither
+  idempotency nor that a creation may be repeated. **The one question for PPL:**
+
+  > If the answer to `POST /shipment/batch` (the `Location` header) is lost, which call
+  > identifies with certainty the shipments created by that request — e.g.
+  > `GET /shipment?CustomerReferences=<referenceId of the batch item>` — does
+  > `CustomerReferences` match `referenceId` or the `CUST` external numbers, for every parcel of
+  > a set, from which moment after the POST and for how long; and is a repeated `POST` with the
+  > same `referenceId` refused, or does it create another shipment?
+
+- Still open (unchanged, not worked around): the tracking questions of doc 031 §5, and the parcel
+  order "1/1" shown on every parcel of a set after the label format change (evidence
+  `/opt/ayvo/ppl-support/2026-10-20-format-change/`); the protections stay as they are.
 
 **Open questions for PPL** (also in the PR): duplicate `referenceId`; does `CustomerReferences`
 match `referenceId` or `externalNumbers`; lookup of a batch after a lost `Location`; is each set
-item's `externalNumbers` returned per parcel by `GET /shipment`; weight unit and precision; maximum
+item's `externalNumbers` returned per parcel by `GET /shipment`; weight precision (unit answered: kg); maximum
 parcels per set (20 / 50 / 100 in different places); cancellation cut-off and behaviour for set
 parcels; label size — e-mail 127 × 101 mm (CZ) / 150 × 101 mm (EU) vs. documentation 127 × 110 mm /
-150 × 100 mm; which product codes our contract allows (`BUSS`?), and whether diacritics are accepted.
+150 × 100 mm; which product codes our contract allows (generic list answered — the contract decides),
+and whether diacritics are accepted.
 
 ## 6. Permissions (catalogue migration; ADMIN only)
 

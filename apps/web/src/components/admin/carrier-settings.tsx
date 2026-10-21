@@ -259,6 +259,9 @@ export function CarrierSettings({
           {products.length === 0 && (
             <p className="text-xs text-stone-500">{t.serviceNotVerified}</p>
           )}
+          <p className="text-xs text-stone-500" data-testid="carrier-product-contract">
+            {t.serviceContractHint}
+          </p>
         </fieldset>
 
         <fieldset className="flex flex-col gap-3">

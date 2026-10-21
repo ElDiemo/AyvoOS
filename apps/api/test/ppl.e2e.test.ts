@@ -132,6 +132,16 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     const r = (await verify().expect(200)).body as VerifyCarrierResult;
     expect(r.ok).toBe(true);
     expect(r.settings.verified!.products.map((p) => p.code)).toEqual(['SIM-A', 'SIM-B']);
+    // What the API offers is never chosen by itself, nor is a generic product PPL support listed
+    // (CZ PRIV/BUSS/SMART, EU CONN/COPL) that this connection's list does not contain: the service
+    // is the site's explicit setting; contractual availability is PPL's sales (doc 029 §5).
+    expect(r.settings.productCode).toBeNull();
+    expect(r.settings.problems).toContain('NO_PRODUCT');
+    for (const generic of ['PRIV', 'BUSS', 'SMART', 'CONN', 'COPL']) {
+      expect((await save({ productCode: generic })).body.code, generic).toBe(
+        'PRODUCT_NOT_VERIFIED',
+      );
+    }
     // Verification reads only: no batch, no pickup order.
     expect(
       ppl.seen.filter((s) => s.method === 'POST' && s.path !== '/login/getAccessToken'),
@@ -177,7 +187,8 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     expect(sent.shipmentSet).toBeUndefined();
     // The printer resolution is sent only for ZPL.
     expect(lastBatch().body.labelSettings).toEqual({ format: 'Pdf' });
-    // No weight is sent while PPL does not document its unit; no depot, no pickup order.
+    // No weight is sent (kg and optional per PPL support; not decided which weighing AYVO would
+    // declare — never the calculated reference); no depot, no pickup order.
     expect(JSON.stringify(lastBatch().body)).not.toMatch(/weight|depot|order\/batch/i);
     expect(s.parcels[0]!.carrierParcelNumber).toBe(lastBatch().numbers[0]!.number);
   });
@@ -257,9 +268,17 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     let s = ((await post(a.order, 'labels').expect(200)).body as OrderShipment).shipment!;
     expect(s.request).toMatchObject({ status: 'SENT', errorCode: 'NO_ANSWER' });
     s = ((await post(a.order, 'resolve').expect(200)).body as OrderShipment).shipment!;
-    // PPL documents no lookup without the batch id: it stays uncertain for a person.
+    // Without the batch id it stays uncertain for a person: no guessed lookup (PPL support named no
+    // endpoint, filter or guarantee — doc 029 §5), and nothing created again.
     expect(s).toMatchObject({ status: 'REQUESTING', request: { status: 'SENT' } });
     expect(s.request!.errorMessage).toContain('batch id is unknown');
+    expect(
+      ppl.seen.filter(
+        (x) =>
+          x.method === 'GET' &&
+          ['CustomerReferences', 'DateFrom', 'DateTo'].some((q) => x.query.has(q)),
+      ),
+    ).toEqual([]);
     const batches = ppl.batches.size;
     await post(a.order, 'labels').expect(200);
     expect(ppl.batches.size).toBe(batches);
