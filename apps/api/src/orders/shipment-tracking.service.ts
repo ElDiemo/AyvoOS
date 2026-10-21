@@ -330,13 +330,23 @@ export class ShipmentTrackingService {
       (order.status === 'READY_TO_DISPATCH' || order.status === 'READY_FOR_PICKUP')
     ) {
       await tx.order.update({ where: { id: order.id }, data: { status: 'HANDED_TO_CARRIER' } });
+      // The moment every parcel was with the carrier is proven only when each has a documented
+      // pickup time (the latest of them). Otherwise — a parcel picked up with an unknown time — no
+      // other parcel's time stands for it: the event carries the moment tracking established the
+      // state, explicitly marked, never as the pickup time (TRACK39-R1).
+      const known = now.every((r) => r.pickedUpAt);
       await this.orderEvent(
         tx,
         order.id,
         'HANDED_TO_CARRIER',
-        latest(now.map((r) => r.pickedUpAt)) ?? fetchedAt,
+        known ? latest(now.map((r) => r.pickedUpAt))! : fetchedAt,
         await operation(),
-        { shipment: s.code, parcels: count, readyConfirmed: order.status === 'READY_FOR_PICKUP' },
+        {
+          shipment: s.code,
+          parcels: count,
+          readyConfirmed: order.status === 'READY_FOR_PICKUP',
+          pickupTimeUnknown: known ? undefined : true,
+        },
       );
     }
 

@@ -74,6 +74,12 @@ Neither shipment data, a generated label nor `Undelivered` is ever taken as a ph
   A repeated or late answer adds nothing (unique key) and never moves a state back. A delivery
   without a pickup event marks the parcel as picked up **with an unknown time**; a later pickup
   event fills in that time.
+- The order's "Dopravce převzal všechny balíky" carries the time every parcel was proven with the
+  carrier — the latest documented pickup — only when **each** parcel has a documented pickup
+  time. If one is unknown, no other parcel's time (and no fetch time) is shown as that pickup:
+  the event carries the moment tracking established the state, marked in the history as
+  "zjištěno trackingem … – přesný čas převzetí všech balíků dopravce nedoložil"; a parcel's
+  delivery without a pickup event is marked "čas převzetí balíku neznámý" (Codex TRACK39-R1).
 - An earlier manual "Předáno dopravci" stays recorded as `MANUAL` and is shown as "Předání ručně
   potvrzeno", distinct from the carrier's proof. The manual confirmation stays available as a
   fallback when tracking does not show the pickup.

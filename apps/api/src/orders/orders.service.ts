@@ -283,6 +283,7 @@ export class OrdersService implements OnModuleInit {
           reason?: string;
           shipment?: string;
           parcels?: number;
+          pickupTimeUnknown?: boolean;
         };
         return {
           type: e.type,
@@ -293,6 +294,7 @@ export class OrdersService implements OnModuleInit {
           reason: payload.reason ?? null,
           shipment: payload.shipment ?? null,
           parcels: payload.parcels ?? null,
+          pickupTimeUnknown: payload.pickupTimeUnknown === true,
         };
       }),
       createdBy: row.creator.displayName,

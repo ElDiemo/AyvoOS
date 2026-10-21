@@ -195,6 +195,12 @@ export const orderEventSchema = z.object({
   /** Shipment events: the shipment, parcel and carrier numbers concerned (doc 029). */
   shipment: z.string().nullable(),
   parcels: z.number().int().nullable(),
+  /**
+   * Carrier events (doc 031): a parcel's pickup time is unknown (delivered without a pickup
+   * event). On HANDED_TO_CARRIER the time is then when tracking established that every parcel is
+   * with the carrier — not a proven pickup time.
+   */
+  pickupTimeUnknown: z.boolean(),
 });
 export type OrderEvent = z.infer<typeof orderEventSchema>;
 
