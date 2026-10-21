@@ -136,20 +136,33 @@ BEGIN
 END
 $$;
 
--- A new supplier is created at revision 1 together with exactly that revision (checked at
--- commit). Values are read at commit time from the committed state of both rows.
+-- A new supplier starts at revision 1, recorded with exactly its values (checked at commit).
+-- Compatibility with the API before doc 033 (deploy window, application-only rollback): that API
+-- creates suppliers without a revision; then revision 1 is recorded here from the row itself,
+-- without author, reason or request — exactly like the suppliers that existed before.
 CREATE FUNCTION suppliers_initial_revision() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 DECLARE
   rev jsonb;
-  cur jsonb;
+  cur record;
 BEGIN
-  SELECT to_jsonb(s) INTO cur FROM "suppliers" s WHERE s."id" = NEW."id";
+  SELECT * INTO cur FROM "suppliers" s WHERE s."id" = NEW."id";
   SELECT to_jsonb(r) INTO rev FROM "supplier_revisions" r
     WHERE r."supplier_id" = NEW."id" AND r."revision" = 1;
-  IF NEW."revision" <> 1 OR rev IS NULL
-     OR (cur->>'revision')::int = 1 AND ayvo_supplier_details(rev) IS DISTINCT FROM ayvo_supplier_details(cur) THEN
+  IF NEW."revision" <> 1 THEN
+    RAISE EXCEPTION 'AYVO: a supplier is created with its first revision'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  IF rev IS NULL THEN
+    INSERT INTO "supplier_revisions" ("supplier_id", "revision", "name", "company_id", "vat_id",
+      "country_code", "address_line1", "address_line2", "postal_code", "city", "contact_name",
+      "contact_phone", "contact_email", "note", "created_at")
+    VALUES (cur."id", 1, cur."name", cur."company_id", cur."vat_id", cur."country_code",
+      cur."address_line1", cur."address_line2", cur."postal_code", cur."city", cur."contact_name",
+      cur."contact_phone", cur."contact_email", cur."note", cur."created_at");
+  ELSIF cur."revision" = 1
+        AND ayvo_supplier_details(rev) IS DISTINCT FROM ayvo_supplier_details(to_jsonb(cur)) THEN
     RAISE EXCEPTION 'AYVO: a supplier is created with its first revision'
       USING ERRCODE = 'restrict_violation';
   END IF;
@@ -181,6 +194,29 @@ $$;
 CREATE CONSTRAINT TRIGGER "supplier_revisions_applied" AFTER INSERT ON "supplier_revisions"
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION supplier_revisions_applied();
+
+-- The supplier revision a receipt was recorded under (doc 033), stored in the same transaction
+-- (the receipt locks the supplier row FOR SHARE, so a correction cannot commit in between). NULL
+-- for receipts recorded before doc 033 — and by an API before doc 033 during a deploy or
+-- rollback: their revision is not proven and is never reconstructed from timestamps.
+ALTER TABLE "goods_receipts" ADD COLUMN "supplier_revision" INTEGER;
+ALTER TABLE "goods_receipts" ADD CONSTRAINT "goods_receipts_supplier_id_supplier_revision_fkey"
+  FOREIGN KEY ("supplier_id", "supplier_revision")
+  REFERENCES "supplier_revisions"("supplier_id", "revision") ON DELETE RESTRICT ON UPDATE CASCADE;
+CREATE FUNCTION goods_receipts_supplier_revision() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF NEW."supplier_revision" IS NOT NULL AND NEW."supplier_revision" IS DISTINCT FROM
+     (SELECT "revision" FROM "suppliers" WHERE "id" = NEW."supplier_id") THEN
+    RAISE EXCEPTION 'AYVO: a receipt records the supplier revision current at its recording'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
+  RETURN NEW;
+END
+$$;
+CREATE TRIGGER "goods_receipts_supplier_revision" BEFORE INSERT ON "goods_receipts"
+  FOR EACH ROW EXECUTE FUNCTION goods_receipts_supplier_revision();
 
 -- =============================================================================================
 -- Item barcodes: several per item, one active assignment per code, retired never deleted

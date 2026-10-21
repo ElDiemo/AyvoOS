@@ -37,15 +37,9 @@ const DOCUMENT_TYPES: { type: string; ext: string; magic: number[] }[] = [
 ];
 
 const receiptInclude = {
-  // The names a supplier had (doc 033): a receipt shows the one it was recorded under.
-  supplier: {
-    include: {
-      revisions: {
-        select: { revision: true, name: true, createdAt: true },
-        orderBy: { revision: 'asc' as const },
-      },
-    },
-  },
+  // The supplier revision the receipt was recorded under (doc 033), if proven.
+  supplier: true,
+  supplierRevisionRecord: { select: { name: true } },
   documents: { include: { document: true }, orderBy: { linkedAt: 'asc' as const } },
   lines: {
     orderBy: { lineNo: 'asc' as const },
@@ -177,7 +171,8 @@ export class ProcurementService {
         requestId,
         { id, actorId, revision, reason, ...details },
         async (tx) => {
-          await tx.$executeRaw`SELECT 1 FROM "suppliers" WHERE "id" = ${id}::uuid FOR UPDATE`;
+          // NO KEY: documents and receipts may still reference the supplier; a receipt (FOR SHARE) waits.
+          await tx.$executeRaw`SELECT 1 FROM "suppliers" WHERE "id" = ${id}::uuid FOR NO KEY UPDATE`;
           const current = await tx.supplier.findUnique({ where: { id } });
           if (!current) throw new NotFoundException('Supplier not found');
           if (current.archivedAt) {
@@ -377,6 +372,9 @@ export class ProcurementService {
       input.requestId,
       { ...input, siteId: warehouse.siteId },
       async (tx) => {
+        // FOR SHARE: a correction of the supplier waits for this receipt (or this receipt for
+        // it), so the revision read here is the one the receipt is recorded under (doc 033).
+        await tx.$executeRaw`SELECT 1 FROM "suppliers" WHERE "id" = ${input.supplierId}::uuid FOR SHARE`;
         const supplier = await tx.supplier.findUnique({ where: { id: input.supplierId } });
         if (!supplier || supplier.archivedAt) {
           throw domainError(422, 'SUPPLIER_INACTIVE', 'The supplier does not exist or is archived');
@@ -431,6 +429,7 @@ export class ProcurementService {
             actorId: actor.userId,
             type: 'PURCHASE',
             supplierId: supplier.id,
+            supplierRevision: supplier.revision,
             supplierReference: input.supplierReference,
             receivedAt,
             note: input.note,
@@ -914,10 +913,13 @@ function toDocumentDto(d: SupplierDocument): SupplierDocumentDto {
   };
 }
 
-/** The supplier's name in effect when the receipt was recorded, if it differs from today's. */
+/**
+ * The supplier's name as recorded with the receipt (its stored revision), if it differs from
+ * today's. A receipt without a stored revision (older than doc 033) claims nothing.
+ */
 function nameAtReceipt(r: ReceiptRecord): string | null {
-  const then = r.supplier.revisions.filter((v) => v.createdAt <= r.createdAt).at(-1);
-  return then && then.name !== r.supplier.name ? then.name : null;
+  const then = r.supplierRevisionRecord?.name;
+  return then !== undefined && then !== r.supplier.name ? then : null;
 }
 
 function toReceiptDto(r: ReceiptRecord): GoodsReceipt {

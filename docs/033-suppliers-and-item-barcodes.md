@@ -13,7 +13,9 @@ first, narrower part of issue #27; what is left of #27 is listed in §6. Builds 
   Czech IČO **or** a foreign registration number; it is never checked as an IČO, so a foreign
   supplier needs none, and DIČ is never required.
 - The database checks that a supplier starts at revision 1 with exactly those values and that no
-  revision is recorded without the change it describes (deferred constraint triggers). Concurrent
+  revision is recorded without the change it describes (deferred constraint triggers). A supplier
+  inserted without any revision (the API before doc 033, §7) gets revision 1 recorded from its own
+  row, without author or reason. Concurrent
   creations or renames to one name end in 409 `SUPPLIER_EXISTS`, never a 500.
 - Validation (API and DB CHECK): country `^[A-Z]{2}$`, phone `^\+?[0-9 ()/-]{6,30}$`, e-mail
   with `@`, trimmed texts with maximum lengths. No format of IČO/DIČ is imposed.
@@ -37,9 +39,15 @@ losing any history (ADR 0006):
   taken by another supplier (case-insensitive) → 409 `SUPPLIER_EXISTS`. Idempotent per request
   id; audited as `SUPPLIER_UPDATED` with the reason and the names of the changed fields (the
   values are in the revision).
-- Receipts, documents and lots reference the supplier and are **never rewritten**. A receipt
-  shows today's name and, when it differs, the name it was recorded under
-  (`supplierNameAtReceipt`, from the revision in effect when the receipt was created).
+- Receipts, documents and lots reference the supplier and are **never rewritten**.
+- A new receipt stores the supplier revision it was recorded under
+  (`goods_receipts.supplier_revision`, FK to the revision) in its own transaction: it reads the
+  supplier `FOR SHARE`, a correction takes `FOR NO KEY UPDATE`, so the two are serialised and the
+  revision read is the one in effect. The DB refuses a stored revision other than the current one.
+  The receipt shows today's name and, when it differs, the name of that stored revision
+  (`supplierNameAtReceipt`). It is **never reconstructed from timestamps** (SUP42-R2).
+- Receipts recorded before doc 033 (or by an older API, §7) have no stored revision (NULL): they
+  claim nothing about the supplier's name at the time.
 
 ## 3. Goods barcodes of stock items
 
@@ -99,6 +107,7 @@ and Enter:
   that an administrator assigns codes. Retired codes, links (QR) and Czech-keyboard-layout input
   ("ěščř…" instead of digits — explained, never converted) are reported.
 - On a network error the form stays unchanged, the code returns to the field and the focus too.
+- After an unknown code was assigned in the form, the focus returns to the scan field (SUP42-R1).
 - Scans are processed in the order read. Manual item selection works as before.
 
 ## 6. Not in this change (issue #27 and later)
@@ -108,3 +117,30 @@ and Enter:
 - Supplier SKUs, pack sizes and conversions, GS1 parsing, price lists, purchase orders.
 - **Open question:** may receiving staff (`inventory:read` / `inventory:receive` without
   supplier management) see supplier contacts? Now: no.
+
+## 7. Deploy and rollback with the previous API (9a6231f)
+
+`scripts/deploy-dev.sh` migrates while the previous containers still run, and an
+application-only rollback (`--rollback <tag>`) runs older images on the migrated schema
+(doc 013). With the previous release on the new schema:
+
+| Previous API action                                | Effect                                                                                                                                                                                                         |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create a supplier (no revision)                    | works: revision 1 is recorded by the database from the row (no author, no reason)                                                                                                                              |
+| Archive a supplier                                 | works (unchanged guard path)                                                                                                                                                                                   |
+| Record a receipt (no `supplier_revision`)          | works: the column is nullable; that receipt claims no supplier revision                                                                                                                                        |
+| Read suppliers, receipts, documents                | works: new columns and tables are ignored                                                                                                                                                                      |
+| Barcodes, supplier corrections                     | not offered by the old release                                                                                                                                                                                 |
+| Sign-in of a user holding a new permission (ADMIN) | the **old web** refuses the permission list of `/auth/me` (its enum does not know `procurement:suppliers_edit`, `inventory:barcodes_manage`) — the same as with every earlier migration that added permissions |
+
+Consequences:
+
+- The deploy window (migration → new containers, normally seconds) is safe for data. ADMIN pages
+  of the old web may fail until the new web runs.
+- **Application-only rollback is not supported for ADMIN users** of the web (above). A rollback
+  therefore restores the pre-migration dump that the deploy script writes (doc 013 "After a
+  migration"), marks both migrations rolled back and then starts the previous images. Suppliers,
+  revisions, barcodes and receipts recorded after the deploy would be lost with the dump, so a
+  forward fix is preferred.
+- The migrations only add: columns (nullable or with a default), tables, functions, triggers and
+  permissions. Existing rows are not changed except that each existing supplier gets its revision 1.

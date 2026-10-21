@@ -196,6 +196,8 @@ export function BarcodeScan({
     );
     if (result.ok) {
       applyItem(item);
+      // The assign panel and its button disappear: the next read must land here (SUP42-R1).
+      back();
     } else if (result.error) {
       setAssignError(barcodeErrorText(result.error));
       back();

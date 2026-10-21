@@ -752,8 +752,9 @@ model SupplierRevision {
   requestId    String?  @unique @map("request_id") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  supplier  Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  changedBy User?    @relation("SupplierRevisionBy", fields: [changedById], references: [id], onDelete: Restrict)
+  receipts  GoodsReceipt[]
+  supplier  Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  changedBy User?          @relation("SupplierRevisionBy", fields: [changedById], references: [id], onDelete: Restrict)
 
   @@unique([supplierId, revision])
   @@map("supplier_revisions")
@@ -820,11 +821,14 @@ model GoodsReceipt {
   requestId         String           @unique @map("request_id") @db.Uuid
   /// The site whose warehouse received the goods (doc 022).
   siteId            String           @map("site_id") @db.Uuid
+  /// The supplier revision the receipt was recorded under (doc 033); NULL = not proven (older).
+  supplierRevision  Int?             @map("supplier_revision")
 
-  supplier  Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  site      Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  lines     GoodsReceiptLine[]
-  documents GoodsReceiptDocument[]
+  supplier               Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplierRevisionRecord SupplierRevision?      @relation(fields: [supplierId, supplierRevision], references: [supplierId, revision], onDelete: Restrict)
+  site                   Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  lines                  GoodsReceiptLine[]
+  documents              GoodsReceiptDocument[]
 
   @@index([supplierId])
   @@index([siteId, receivedAt])

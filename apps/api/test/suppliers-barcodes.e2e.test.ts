@@ -264,10 +264,16 @@ describe.skipIf(!hasDatabase)('supplier details and item barcodes (doc 033)', ()
     await expect(
       t.prisma.supplierRevision.deleteMany({ where: { supplierId: supplier.id } }),
     ).rejects.toThrow();
-    // A supplier without its first revision is refused at commit.
-    await expect(
-      t.prisma.supplier.create({ data: { name: `Bez revize ${sfx()}`, requestId: randomUUID() } }),
-    ).rejects.toThrow();
+    // The API before doc 033 creates a supplier without a revision (deploy window, rollback):
+    // revision 1 is recorded from the row itself, without author or reason.
+    const legacy = await t.prisma.supplier.create({
+      data: { name: `Bez revize ${sfx()}`, companyId: '87654321', requestId: randomUUID() },
+    });
+    expect(
+      await t.prisma.supplierRevision.findMany({ where: { supplierId: legacy.id } }),
+    ).toMatchObject([
+      { revision: 1, name: legacy.name, companyId: '87654321', reason: null, changedById: null },
+    ]);
     // Archived: never changed again (also not by a correction).
     await http()
       .post(`/api/admin/suppliers/${supplier.id}/archive`)
@@ -708,3 +714,94 @@ describe.skipIf(!hasDatabase)(
     });
   },
 );
+
+/**
+ * SUP42-R2: a receipt keeps the supplier revision it was recorded under, in its own transaction —
+ * never reconstructed from timestamps. Controlled race: a correction holds the supplier row while
+ * the receipt waits; the correction is recorded AFTER the receipt's transaction started.
+ */
+describe.skipIf(!hasDatabase)('receipt and supplier revision (SUP42-R2)', () => {
+  let t: TestApp;
+  const http = () => request(t.app.getHttpServer());
+  beforeAll(async () => {
+    t = await createTestApp();
+  });
+  afterAll(async () => {
+    await t?.close();
+  });
+
+  it('a correction committed while the receipt waits: the receipt records the new revision', async () => {
+    const supplier = await createSupplier(t, `Před souběhem ${sfx()}`);
+    const item = await newItem(t);
+    const user = await t.prisma.user.findFirstOrThrow();
+    const renamed = `Po souběhu ${sfx()}`;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const holding = new Promise<void>((r) => (locked = r));
+    const correction = t.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT 1 FROM "suppliers" WHERE "id" = ${supplier.id}::uuid FOR NO KEY UPDATE`;
+        locked();
+        await gate;
+        await tx.supplierRevision.create({
+          data: {
+            supplierId: supplier.id,
+            revision: 2,
+            name: renamed,
+            reason: 'souběh s příjmem',
+            changedById: user.id,
+            requestId: randomUUID(),
+            createdAt: new Date(), // after the receipt's transaction began
+          },
+        });
+        await tx.supplier.update({
+          where: { id: supplier.id },
+          data: { name: renamed, revision: 2 },
+        });
+      },
+      { maxWait: 10_000, timeout: 60_000 },
+    );
+    await holding;
+    const receiving = receiveItem(t, item.id, 4, { supplierId: supplier.id });
+    // The receipt's transaction is waiting for the supplier row.
+    await expect
+      .poll(
+        async () =>
+          (
+            await t.prisma.$queryRaw<{ n: bigint }[]>`
+              SELECT count(*) AS n FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock' AND query ILIKE '%FOR SHARE%'`
+          )[0]!.n,
+        { timeout: 15_000 },
+      )
+      .toBeGreaterThan(0n);
+    release();
+    await correction;
+    const receipt = await receiving;
+
+    const row = await t.prisma.goodsReceipt.findFirstOrThrow({ where: { code: receipt.code } });
+    // The revision actually read under the lock — stored, not reconstructed from times.
+    expect(row.supplierRevision).toBe(2);
+    const shown = (await http().get(`/api/admin/goods-receipts/${receipt.code}`).expect(200))
+      .body as GoodsReceipt;
+    expect(shown.supplier.name).toBe(renamed);
+    expect(shown.supplierNameAtReceipt).toBeNull();
+  });
+
+  it('the database refuses a receipt recorded under another than the current revision', async () => {
+    const supplier = await createSupplier(t);
+    const user = await t.prisma.user.findFirstOrThrow();
+    const site = await t.prisma.site.findFirstOrThrow();
+    for (const revision of [2, 99]) {
+      await expect(
+        t.prisma.$executeRaw`
+          INSERT INTO "goods_receipts" ("serial", "code", "type", "supplier_id", "supplier_revision",
+            "supplier_reference", "received_at", "actor_id", "request_id", "site_id")
+          VALUES (999000 + ${revision}, ayvo_format_code('GR-', 999000 + ${revision}), 'PURCHASE',
+            ${supplier.id}::uuid, ${revision}, 'DL-X', now(), ${user.id}::uuid, ${randomUUID()}::uuid,
+            ${site.id}::uuid)`,
+      ).rejects.toThrow();
+    }
+  });
+});

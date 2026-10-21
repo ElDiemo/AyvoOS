@@ -22,10 +22,12 @@ const SUPPLIER = 'Pumpen Werk GmbH (E2E)';
 const ZEROS = '0004006381333';
 const ALNUM = 'PW-77/a.9';
 const SECOND = '8594000000016';
+const THIRD = 'PB-0003';
 const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
 let supplierId = '';
 const item = { code: '', name: '', id: '' };
 const other = { code: '', name: '', id: '' };
+const third = { name: '' };
 
 async function shot(page: Page, name: string) {
   if (!SHOTS) return;
@@ -224,6 +226,28 @@ test('barcodes of stock items: exact text, several per item, conflicts named, re
 test('receiving with a scanner: a scan selects the item only; Enter never submits; errors keep the form', async ({
   page,
 }) => {
+  // A third item with a code: the target of the lookup held back during review.
+  await json(
+    await page.request.post('/api/admin/catalog/components', {
+      data: {
+        requestId: crypto.randomUUID(),
+        code: 'PUMP-E2E-BC3',
+        name: 'Pumpička bílá (E2E)',
+        kind: 'PUMP',
+        unitCode: 'pcs',
+        lotTracked: false,
+        categoryCode: null,
+        packageCapacity: null,
+        reason: 'čárové kódy v e2e testu',
+      },
+    }),
+  );
+  await json(
+    await page.request.post('/api/admin/inventory/items/PUMP-E2E-BC3/barcodes', {
+      data: { requestId: crypto.randomUUID(), code: THIRD },
+    }),
+  );
+  third.name = 'Pumpička bílá (E2E)';
   const before = await movements(page);
   await page.goto('/warehouse/receipts/new');
   await page.getByRole('combobox', { name: 'Dodavatel' }).selectOption({ label: SUPPLIER });
@@ -272,6 +296,19 @@ test('receiving with a scanner: a scan selects the item only; Enter never submit
   await expect(result).toContainText('Kód NEZNAMY-123 není přiřazen žádné skladové položce');
   await expect(page.getByTestId('scan-assign')).toBeVisible();
   await expect(scanField).toBeFocused();
+  // SUP42-R1: assign it right here; afterwards the focus is back in the scan field, so the next
+  // real read (typed into whatever has the focus) is not lost.
+  await page
+    .getByTestId('scan-assign')
+    .getByRole('combobox')
+    .selectOption({ label: `${item.name} (${item.code})` });
+  await page.getByRole('button', { name: 'Přiřadit a použít' }).click();
+  await expect(result).toContainText('už je na řádku 1');
+  await expect(page.getByTestId('scan-assign')).toHaveCount(0);
+  await expect(scanField).toBeFocused();
+  await scannerTypes(page, SECOND);
+  await expect(result).toContainText('už je na řádku 2');
+  await expect(page.getByTestId('receipt-line-1').getByLabel(/Množství/)).toHaveValue('12');
   // Retired: says so.
   await scan(page, ALNUM);
   await expect(result).toContainText(`Kód ${ALNUM} byl vyřazen`);
@@ -307,10 +344,38 @@ test('receiving with a scanner: a scan selects the item only; Enter never submit
     .setInputFiles({ name: 'dodaci-list.pdf', mimeType: 'application/pdf', buffer: PDF });
   await page.getByRole('button', { name: 'Nahrát doklad' }).click();
   await expect(page.getByTestId('receipt-documents')).toContainText('DL-SCAN-1');
+
+  // Review 033-2: a lookup still held back when the receipt goes to review changes nothing.
+  let releaseLookup!: () => void;
+  const held = new Promise<void>((r) => (releaseLookup = r));
+  await page.route('**/api/admin/inventory/barcodes/lookup**', async (route) => {
+    await held;
+    await route.continue();
+  });
+  await scanField.click();
+  await scannerTypes(page, THIRD);
+  await expect(result).toContainText('Hledám kód');
   await page.getByRole('button', { name: 'Zkontrolovat' }).click();
+  const review = page.getByTestId('receipt-review');
+  await expect(review).toBeVisible();
   await expect(page.getByTestId('barcode-scan')).toHaveCount(0);
+  const answered = page.waitForResponse('**/api/admin/inventory/barcodes/lookup**');
+  releaseLookup();
+  expect((await answered).status()).toBe(200);
+  await page.unroute('**/api/admin/inventory/barcodes/lookup**');
+  // Let the answer reach the page; nothing may change in the review.
+  await page.waitForTimeout(500);
+  await expect(review).not.toContainText(third.name);
+  await expect(review).toContainText(`${item.name}`);
+  await expect(review).toContainText('12');
+  await expect(review).toContainText(`${other.name}`);
+  expect(await movements(page)).toBe(before);
+
   await page.getByRole('button', { name: 'Potvrdit příjem' }).click();
   await expect(page).toHaveURL(/\/warehouse\/receipts\/GR-\d{6}\?created=1$/);
+  await expect(page.getByTestId('line-1')).toContainText('12');
+  await expect(page.getByTestId('line-2')).toContainText('3');
+  await expect(page.getByTestId('line-3')).toHaveCount(0);
   expect(await movements(page)).toBe(before + 2);
 });
 
