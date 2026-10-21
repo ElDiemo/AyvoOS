@@ -1,5 +1,8 @@
 # ADR 0026: DEV preview reachable only through our Tailscale tailnet
 
+> Owner update 2026-10-21: [ADR 0030](0030-dev-preview-without-basic-auth.md) removes only the
+> extra Basic Auth password described below. All network restrictions in this ADR remain.
+
 - **Status:** Accepted — directed by owner 2026-10-17 (DEV only)
 - **Date:** 2026-10-17
 - **Deciders:** AYVO owner; AYVO OS lead architect

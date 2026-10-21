@@ -77,8 +77,6 @@ function check(
       'APP_ENV=development',
       'DEV_DOMAIN=dev.example-preview.test',
       'ACME_EMAIL=ops@ayvo.test',
-      'DEV_BASIC_AUTH_USER=preview',
-      `DEV_BASIC_AUTH_HASH='$2a$14$${'a'.repeat(53)}'`,
       'POSTGRES_USER=ayvo',
       `POSTGRES_PASSWORD=${'p'.repeat(32)}`,
       'POSTGRES_DB=ayvo',
@@ -111,7 +109,7 @@ function check(
 }
 
 describe('deploy-dev.sh --check: WorkOS issuer against the discovery document', () => {
-  it('passes when WORKOS_JWT_ISSUER equals the discovery issuer exactly', () => {
+  it('passes without Basic Auth variables when WORKOS_JWT_ISSUER equals the discovery issuer exactly', () => {
     const { status, output } = check('ok');
     expect(output).toContain("WORKOS_JWT_ISSUER matches the client's WorkOS discovery document");
     expect(output).toContain('Check passed');

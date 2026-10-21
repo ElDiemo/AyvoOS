@@ -12,7 +12,7 @@ HERE = Path(__file__).resolve().parent.parent
 STUBS = {
     "tailscale": 'case "$1" in status) exit 0 ;; ip) echo 100.64.0.5 ;; esac',
     "getent": "echo '100.96.86.50 dev.ayvo.co'",
-    "curl": "echo 401",
+    "curl": "echo 200",
     "lsusb": "echo 'Bus 001 Device 004: ID 0a5f:0164 Zebra Technologies ZTC ZD220-203dpi ZPL'",
     "lsmod": "exit 0",
     "lpstat": "echo 'device for Zebra: usb://Zebra%20Technologies/ZTC%20ZD220-203dpi%20ZPL'",
@@ -22,9 +22,11 @@ STUBS = {
 
 
 class PreflightTest(unittest.TestCase):
-    def run_preflight(self, usbmisc: Path) -> subprocess.CompletedProcess:
+    def run_preflight(self, usbmisc: Path, health_status: int = 200) -> subprocess.CompletedProcess:
         bin_dir = Path(tempfile.mkdtemp())
         for name, body in STUBS.items():
+            if name == "curl":
+                body = f"echo {health_status}"
             p = bin_dir / name
             p.write_text(f"#!/bin/sh\n{body}\n")
             p.chmod(p.stat().st_mode | stat.S_IEXEC)
@@ -60,6 +62,13 @@ class PreflightTest(unittest.TestCase):
         self.assertIn("USB serial 'D4J221100123'", r.stdout)
         self.assertIn("PREFLIGHT OK", r.stdout)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_basic_auth_on_health_is_no_longer_expected(self):
+        sysfs = Path(tempfile.mkdtemp())
+        (sysfs / "lp0" / "device").mkdir(parents=True)
+        r = self.run_preflight(sysfs, health_status=401)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("unexpected authentication on health", r.stdout)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ a posílá uložené ZPL přímo do jedné USB tiskárny Zebra ZD220 DT (203 dpi
   balíčky a nemění se síť, Tailscale ani CUPS.
 - **Agent neběží jako root:** běží jako systémový uživatel `ayvo-print` (skupina `lp` pro
   `/dev/usb/lp*`) a po restartu se obnoví (systemd, `Restart=always`).
-- **Tajemství:** token agenta a heslo DEV Basic Auth se zadávají bez opisu na obrazovku. Ukládají
+- **Tajemství:** token agenta se zadává bez opisu na obrazovku. Ukládá
   se jen do souborů s právy 600 v `/etc/ayvo-print-agent`. Nikdy nejsou v Gitu, v argumentech
   příkazů, v historii shellu ani v logu.
 - **Tailscale je jen síť:** autentizaci dělá token agenta.
@@ -39,8 +39,7 @@ Skript vypíše:
 
 - systém, model, architekturu a synchronizaci času;
 - verzi Pythonu;
-- Tailscale, překlad `dev.ayvo.co` (musí být adresa `100.x`) a dostupnost serveru (na DEV
-  očekávaně `401`, protože se vyžaduje Basic Auth);
+- Tailscale, překlad `dev.ayvo.co` (musí být adresa `100.x`) a dostupnost serveru (health `200`);
 - Zebru na USB (výrobce `0a5f`), zařízení `/dev/usb/lpN` a jeho **sériové číslo USB**;
 - případnou starší instalaci agenta.
 
@@ -55,10 +54,10 @@ Pokračujte, až skončí `PREFLIGHT OK`. Sériové číslo si poznamenejte.
 **3. Instalace (opakovatelná, při dalším spuštění jen aktualizuje):**
 
 ```sh
-sudo bash install.sh --api-base https://dev.ayvo.co/api --basic-auth-user <DEV uživatel>
+sudo bash install.sh --api-base https://dev.ayvo.co/api
 ```
 
-Skript se zeptá na token agenta a na heslo DEV Basic Auth; nic se nezobrazí. Pak:
+Skript se zeptá na token agenta; nic se nezobrazí. Další sdílené heslo není potřeba (ADR 0030). Pak:
 
 - vytvoří uživatele `ayvo-print`;
 - nahraje kód do `/opt/ayvo-print-agent`;
@@ -66,7 +65,9 @@ Skript se zeptá na token agenta a na heslo DEV Basic Auth; nic se nezobrazí. P
 - nainstaluje a spustí službu `ayvo-print-agent`.
 
 Při dalším spuštění nastavení i tajemství zůstanou. Novou hodnotu zadáte přepínačem
-`--set-token` nebo `--set-basic-auth-password`.
+`--set-token`. Starší konfigurace s Basic Auth zůstává kompatibilní, server tyto údaje nevyžaduje.
+Při přechodu lze z konfigurace odstranit pouze `basic_auth_user` a `basic_auth_password_file`;
+token ani deník úloh se nemění a staré heslo se nikdy nevypisuje.
 
 **4. Kontrola:**
 

@@ -59,8 +59,6 @@ services:
       DEV_DOMAIN: ${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
       DEV_TAILNET_IPV4: ${DEV_TAILNET_IPV4}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the server env file}
-      DEV_BASIC_AUTH_USER: ${DEV_BASIC_AUTH_USER:?set DEV_BASIC_AUTH_USER in the server env file}
-      DEV_BASIC_AUTH_HASH: ${DEV_BASIC_AUTH_HASH:?set DEV_BASIC_AUTH_HASH in the server env file}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # TLS certificates and ACME account; kept across rebuilds to avoid re-issuance rate limits.

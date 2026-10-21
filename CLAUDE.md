@@ -163,7 +163,7 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   scale; no A4 imposition yet. Timestamps UTC, displayed in Europe/Prague.
 - **Milestone 1 is a DEV implementation only.** The single consolidated production-blocker list is
   in doc 016 ("Production blockers"); never mark QR size, printer output, storage, authentication
-  or production readiness as approved. Basic Auth is DEV-only.
+  or production readiness as approved. DEV Basic Auth was removed by the owner (ADR 0030).
 - `https://qr.ayvo.co` may appear only in `apps/api/src/common/qr-policy.ts`, the matching DB
   CHECK, their tests and docs — never as a default, preview or UI value (ADR 0014).
 - Label engine vs. bottles: `labels` must not import bottle code (doc 016 "Module structure");
@@ -197,7 +197,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   Tailscale IPv4 address (from `tailscale ip -4`, never `0.0.0.0`/IPv6) and aborts every peer
   outside the tailnet; the only public port is IPv4 :80 for ACME HTTP-01 (everything else
   aborted); private DNS (`dns`, CoreDNS) answers only `dev.ayvo.co` via Tailscale split DNS; the
-  root-installed host guard (`deploy/dev/host/`) is required. HTTP Basic Auth on everything,
+  root-installed host guard (`deploy/dev/host/`) is required. No HTTP Basic Auth (ADR 0030):
+  WorkOS application sessions and print-agent tokens remain mandatory on protected routes.
   `X-Robots-Tag: noindex, nofollow`. The API is **same-origin** at `/api/*` — NestJS owns the
   `/api` prefix (`API_BASE_PATH` in `@ayvo/types`); Caddy forwards the path unchanged. No API
   subdomain, no CORS, no CI/CD. `--edge` recreates only Caddy + DNS. Deploy only with `scripts/deploy-dev.sh`, and only

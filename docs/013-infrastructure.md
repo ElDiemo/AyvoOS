@@ -14,7 +14,7 @@ Status: Draft — foundation complete; DEV preview deployed (2026-10-10)
 - Production will later run on a **separate VPS** _(confirmed by owner 2026-10-10)_.
 - **No staging environment** for now _(confirmed by owner 2026-10-10)_.
 - Domain database models are still not implemented _(confirmed by owner 2026-10-10)_.
-- Caddy is the reverse proxy; the whole preview is behind HTTP Basic Auth and sends `X-Robots-Tag: noindex, nofollow` _(confirmed by owner 2026-10-10)_. Since 2026-10-17 it is reachable **only through our Tailscale tailnet** ([ADR 0026](adr/0026-dev-preview-tailnet-only.md)); the earlier "reachable from anywhere, no IP allowlist" is superseded.
+- Caddy is the reverse proxy and sends `X-Robots-Tag: noindex, nofollow`. DEV is reachable **only through our Tailscale tailnet** ([ADR 0026](adr/0026-dev-preview-tailnet-only.md)). The owner removed the additional shared Basic Auth password on 2026-10-21 ([ADR 0030](adr/0030-dev-preview-without-basic-auth.md)); normal WorkOS sign-in and agent-token authentication remain unchanged.
 - No separate public API subdomain: the browser-facing API is same-origin at `https://dev.ayvo.co/api/*`, so no CORS _(confirmed by owner 2026-10-10)_.
 - The `ayvo` user may use Docker on this DEV server _(confirmed by owner 2026-10-10)_.
 - No CI/CD yet: deployment is manual until the first domain is stable _(confirmed by owner 2026-10-10)_.
@@ -51,7 +51,7 @@ Decision records: [ADR 0013](adr/0013-dev-preview-deployment.md),
 `apps/api/Dockerfile`, `apps/web/Dockerfile`, `scripts/deploy-dev.sh`, `scripts/verify-dev-acme.sh`.
 
 ```
-tailnet ──443 (Tailscale IPv4 only)──▶ caddy (TLS, tailnet peer check, Basic Auth, X-Robots-Tag)
+tailnet ──443 (Tailscale IPv4 only)──▶ caddy (TLS, tailnet peer check, X-Robots-Tag)
 tailnet ──53 (Tailscale IPv4 only)───▶ dns (CoreDNS: dev.ayvo.co only, everything else REFUSED)
 internet ──80 (IPv4)──▶ caddy: ACME HTTP-01 only; everything else aborted
                        ├─ /api, /api/* ──▶ api:4000  (path unchanged) ──▶ postgres:5432, redis:6379
@@ -93,16 +93,14 @@ removes them. `ts:` = the server's Tailscale IPv4 address, read by the deploy sc
 Stored outside the repository in `/opt/ayvo/secrets/dev-preview.env` (mode 600, owned by `ayvo`;
 path overridable with `AYVO_DEV_ENV_FILE`). Placeholders are documented in `.env.example`.
 
-| Variable              | Value                                                          |
-| --------------------- | -------------------------------------------------------------- |
-| `APP_ENV`             | `development` (the script refuses anything else)               |
-| `DEV_DOMAIN`          | `dev.ayvo.co`                                                  |
-| `ACME_EMAIL`          | contact address for the Let's Encrypt account                  |
-| `DEV_BASIC_AUTH_USER` | Basic Auth user name                                           |
-| `DEV_BASIC_AUTH_HASH` | bcrypt hash from `caddy hash-password`, **in single quotes**   |
-| `POSTGRES_USER`       | e.g. `ayvo`                                                    |
-| `POSTGRES_DB`         | e.g. `ayvo_dev_preview`                                        |
-| `POSTGRES_PASSWORD`   | 24+ characters of `[A-Za-z0-9_-]`, e.g. `openssl rand -hex 32` |
+| Variable            | Value                                                          |
+| ------------------- | -------------------------------------------------------------- |
+| `APP_ENV`           | `development` (the script refuses anything else)               |
+| `DEV_DOMAIN`        | `dev.ayvo.co`                                                  |
+| `ACME_EMAIL`        | contact address for the Let's Encrypt account                  |
+| `POSTGRES_USER`     | e.g. `ayvo`                                                    |
+| `POSTGRES_DB`       | e.g. `ayvo_dev_preview`                                        |
+| `POSTGRES_PASSWORD` | 24+ characters of `[A-Za-z0-9_-]`, e.g. `openssl rand -hex 32` |
 
 `DATABASE_URL`, `REDIS_URL` and `API_URL` are derived inside `deploy/dev/compose.yml`, as are
 `PUBLIC_QR_BASE_URL` (`https://$DEV_DOMAIN/q`) and `FILE_STORAGE_DIR` (`/var/lib/ayvo/files`).
@@ -125,22 +123,20 @@ pre-migration `pg_dump` backup (open question below). Labels printed from DEV en
 7. Starts the stack with the new images and waits until every service is healthy.
 8. Verifies (all checks are mandatory; any failure fails the deployment):
    - API health is `ok` (PostgreSQL + Redis up); Caddy reaches `web:3000/` and `api:4000/api/health`;
-   - unauthenticated `https://dev.ayvo.co/` and `/api/health` answer 401 (waits for the first
-     certificate); `http://` redirects permanently to `https://dev.ayvo.co/`;
+   - `/login` answers 200 without Basic Auth; `/` redirects to WorkOS sign-in without a session;
+     `http://` redirects permanently to `https://dev.ayvo.co/`;
    - every HTTPS response checked carries `X-Robots-Tag` with `noindex` and `nofollow`;
-   - authenticated `/` returns 200 with the AYVO OS HTML page; authenticated `/api/health` returns
+   - the sign-in page returns AYVO OS HTML; protected API routes refuse missing sessions,
+     print-agent routes refuse missing tokens; `/api/health` returns
      200 with `status=ok`, `environment=development`, `database=up`, `redis=up`; and
      `/api/api/health` returns 404 (prefix not duplicated).
 9. Appends `SUCCESS` or `FAILED step=…` to `/opt/ayvo/logs/deployments-dev-preview.log`. On any
    failure it stops, prints container status and recent logs, and names the last good tag for
    rollback.
 
-**Verification credentials.** The Basic Auth user is always `DEV_BASIC_AUTH_USER` from the
-server env file; only the password is supplied, before anything changes: from
-`AYVO_DEV_VERIFY_PASSWORD_FILE` (a mode-600 file outside the repo, e.g. temporary), from
-`AYVO_DEV_VERIFY_PASSWORD`, or from a no-echo prompt on the terminal. The script removes these
-variables from its environment, passes the password to curl on stdin only (never on the command
-line) and never prints it. A rejected password is reported as such (401 for the configured user).
+**Verification credentials.** None are required for deployment checks (ADR 0030). The checks
+do not log in or bypass identity. A physical acceptance that writes records still needs an
+explicitly authorized application session; it no longer needs `dev-preview-verify.pass`.
 
 It never runs `docker compose down`, `down -v`, `volume rm` or prune commands.
 
@@ -162,13 +158,12 @@ ACME HTTP-01); inbound IPv4 TCP 80 reachable; Tailscale logged in; the host guar
 install -d -m 700 /opt/ayvo/secrets
 install -m 600 /dev/null /opt/ayvo/secrets/dev-preview.env
 openssl rand -hex 32                                   # -> POSTGRES_PASSWORD
-docker run --rm -it caddy:2-alpine caddy hash-password # -> DEV_BASIC_AUTH_HASH (single quotes!)
 $EDITOR /opt/ayvo/secrets/dev-preview.env              # fill in the variables above
 
 # 2. Validate (changes nothing)
 scripts/deploy-dev.sh --check
 
-# 3. Deploy and verify end to end (prompts for the Basic Auth password, without echo)
+# 3. Deploy and verify end to end (no shared Basic Auth password)
 scripts/deploy-dev.sh
 ```
 
