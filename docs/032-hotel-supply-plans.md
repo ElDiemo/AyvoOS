@@ -97,14 +97,19 @@ delivered. No hotel portal, no `HOTEL_USER` access, no CO2/ESG or consumption.
 
 ## 7. Open questions / not verified
 
-- Not decided by the owner (taken over from doc 031): whether orders "Převzatá dopravcem" keep a
-  site active, and what happens with returning, lost or pick-up-point parcels.
-- The delivered side of the overview chart is verified by API tests (a partly delivered order);
-  the browser test sees only the honest empty chart, because creating delivered parcels in the
-  browser test would need the full picking and carrier flow.
+- Decided by the owner on 2026-10-21 (doc 031 §5): a parcel picked up and not delivered keeps
+  the serving site active; a return, loss, failed attempt or pick-up point is never a delivery
+  and so never counts as delivered here.
+- The filled overview is verified in the browser too (`apps/web/e2e/workflow-deliveries.spec.ts`):
+  synthetic orders picked, labelled and handed over through the application, carrier events
+  SIMULATED in the e2e database and derived by "Obnovit tracking" — a fully delivered order, a
+  partly delivered one, an open and a cancelled one; desktop, 390 and 320 px. All its deliveries
+  happen in the month of the run, so the chart has one bar; a chart over several months with real
+  dates is not verified (no test invents past delivery dates).
 - Real PPL pickups and deliveries remain unverified (doc 031 §5).
 
 Screenshots (`docs/screenshots/supply-plans/`, from `apps/web/e2e/workflow-supply-plan.spec.ts`):
 hotel without a plan, plan with its 30-day preview, switched on with its orders, Expedice with
 "Odeslat dne", an order from the plan after a ship day change, the manual order overlap, the hotel
-with its plan, orders and deliveries — desktop, 390 and 320 px.
+with its plan, orders and deliveries — desktop, 390 and 320 px; the filled deliveries overview
+(`deliveries-01-filled-*`, from `workflow-deliveries.spec.ts`).
