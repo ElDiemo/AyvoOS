@@ -332,7 +332,8 @@ Deferred: everything in section 3 "Deliberately deferred" and the roadmap below.
 - **Rollback after applications or receipts exist:** the previous code cannot read
   `LABELED_EMPTY` bottles. Recovery is a forward fix, or a restore of the pre-migration dump
   **together with** the files volume (supplier documents live in file storage, not in the dump —
-  ADR 0016). Restores lose all later receipts and applications, so forward fixes are preferred.
+  ADR 0016). Restores lose all later receipts and applications, so forward fixes are preferred;
+  procedure: doc 013 "Restore a pre-migration dump".
 - No migration ever rewrites ledger or event rows.
 
 ## 14. Tests proving stock cannot drift or go negative

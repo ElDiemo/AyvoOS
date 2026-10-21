@@ -137,10 +137,12 @@ Consequences:
 
 - The deploy window (migration → new containers, normally seconds) is safe for data. ADMIN pages
   of the old web may fail until the new web runs.
-- **Application-only rollback is not supported for ADMIN users** of the web (above). A rollback
-  therefore restores the pre-migration dump that the deploy script writes (doc 013 "After a
-  migration"), marks both migrations rolled back and then starts the previous images. Suppliers,
-  revisions, barcodes and receipts recorded after the deploy would be lost with the dump, so a
-  forward fix is preferred.
+- **Application-only rollback is not supported for ADMIN users** of the web (above). Prefer a
+  forward fix. If the data must go back, follow doc 013 "Restore a pre-migration dump": the
+  deploy's dump is restored into a **new, empty database**, checked (history = the 36 migrations
+  of 9a6231f, schema status, fingerprint, ledger) and only then swapped in by renaming — with the
+  owner's separate approval, because every write since the dump (suppliers, revisions, barcodes,
+  receipts) is lost. No `pg_restore --clean` over the new schema and no `migrate resolve` of the
+  two successful migrations of this change.
 - The migrations only add: columns (nullable or with a default), tables, functions, triggers and
   permissions. Existing rows are not changed except that each existing supplier gets its revision 1.

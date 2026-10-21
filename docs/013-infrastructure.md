@@ -179,20 +179,65 @@ scripts/deploy-dev.sh
   or migrating, then runs the same verification. Tags: the deployment log or
   `docker images 'ayvo-dev-preview/*'`.
 - **After a migration:** migrations are forward-only. **Rolling back the application does not
-  reverse a schema migration** — the old images run against the new schema. Prefer forward
-  recovery: fix the problem in a new migration and deploy normally. Milestone 1's migrations only
-  add objects, so pre-Milestone-1 images ignore them. If the data must go back, restore the
-  pre-migration dump (a deliberate, destructive step on the DEV database), mark a failed migration
-  with `prisma migrate resolve --rolled-back <name>`, then roll back the images. **The files
-  volume is not part of the dump** — restoring the database does not restore or remove files.
+  reverse a schema migration** — the old images run against the new schema, which they may not
+  fully support (e.g. permissions added by the migration, doc 033 §7). **Prefer forward recovery:**
+  fix the problem in a new migration and deploy normally. Restoring the pre-migration dump is a
+  last resort, below.
 
-  ```bash
-  C="docker compose -f deploy/dev/compose.yml --env-file /opt/ayvo/secrets/dev-preview.env"
-  $C stop caddy web api
-  $C exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' \
-    < /opt/ayvo/backups/dev-preview/<dump-before-the-bad-release>.dump
-  scripts/deploy-dev.sh --rollback <previous-tag>
-  ```
+#### Restore a pre-migration dump (last resort, owner approval each time)
+
+**Separate, explicit owner approval** before step 2, every time: it names the dump file and states
+that **every write since that dump is lost** (records in old and new tables). The files volume is
+not part of the dump: files stored since the dump stay, unreferenced (never deleted
+automatically). Nothing below is done without that approval.
+
+Never:
+
+- `pg_restore --clean` into the running (newer) database — it does not remove tables, functions or
+  triggers the newer release added, and fails on their dependencies (verified 2026-10-21: 23
+  errors, the newer tables remained while `_prisma_migrations` already looked like the old one);
+- `prisma migrate resolve --rolled-back` for migrations that **succeeded** — that command only
+  marks a **failed** migration; a restored database simply carries the dump's own history;
+- dropping the current database: it is renamed and kept until the owner decides.
+
+Steps (`DB` = `POSTGRES_DB` of the server env file; `R` = `${DB}_restore_<UTC time>`):
+
+```bash
+C="docker compose -f deploy/dev/compose.yml --env-file /opt/ayvo/secrets/dev-preview.env"
+DUMP=/opt/ayvo/backups/dev-preview/<dump-before-the-bad-release>.dump
+# 1. the dump is readable — otherwise stop here
+$C exec -T postgres pg_restore --list < "$DUMP" > /dev/null
+# 2. (after the approval) no more writes
+$C stop caddy web api
+# 3. restore into a NEW, empty database: one transaction, stop at the first error
+$C exec -T postgres sh -c 'createdb -U "$POSTGRES_USER" '"$R"
+$C exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d '"$R"' --exit-on-error --single-transaction' < "$DUMP"
+```
+
+If step 3 fails, **stop**: the current database is untouched; keep `$R` for diagnosis and start
+the current release again (`scripts/deploy-dev.sh --rollback <current-tag>`).
+
+4. Check `$R` (read-only); any difference → stop as above:
+   - **history:** `SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL
+AND rolled_back_at IS NULL ORDER BY 1` equals the migration directories of the previous
+     release (`git ls-tree --name-only <previous-commit> apps/api/prisma/migrations/`, without
+     `migration_lock.toml`); no row with `finished_at IS NULL` or `rolled_back_at IS NOT NULL`;
+   - **schema:** the previous release's migrate image reports it up to date — only `status`, never
+     `deploy`: `POSTGRES_DB=$R AYVO_IMAGE_TAG=<previous-tag> $C --profile tools run --rm --no-deps
+migrate node_modules/.bin/prisma migrate status` → "Database schema is up to date!";
+   - **data:** the per-table fingerprint (count + md5 of every table, read-only transaction) equals
+     the one taken before the deploy; `SELECT count(*) FROM ayvo_inventory_drift()` is 0.
+5. Switch (connected to the `postgres` database; api and web are stopped):
+   `ALTER DATABASE "$DB" RENAME TO "${DB}_superseded_<UTC time>"; ALTER DATABASE "$R" RENAME TO "$DB";`
+6. `scripts/deploy-dev.sh --rollback <previous-tag>` (previous images, no migration, the same
+   verification), then the QR passport and ledger checks of the deploy procedure.
+
+Verified in isolation (2026-10-21, SUP42-R3, local dev PostgreSQL, scratch databases): dump of
+release 9a6231f → this PR's migrations and writes → restore into a new database: fingerprint
+identical (95 tables), history exactly the 36 migrations of 9a6231f, `migrate status` up to date,
+`migrate diff` against its schema empty, ledger drift 0; the API of 9a6231f on the restored
+database signed in, read and created a supplier, read receipts and stock. A second restore into
+the non-empty database ended with exit 1 and changed nothing.
 
 - **Take the preview offline** without losing data: `$C stop` (never `down -v`).
 - Old image tags and dumps accumulate; prune them manually when no longer needed.
