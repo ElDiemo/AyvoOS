@@ -183,7 +183,9 @@ export class PplGateway implements CarrierGateway {
   readonly connection: string;
   readonly environment: 'TEST' | 'PRODUCTION';
   readonly rules: CarrierRules = {
-    // The weight unit is not documented: nothing is sent until PPL confirms it (doc 029 §5).
+    // `weighedShipmentInfo.weight` is in kilograms and optional (PPL support 2026-10-21; PPL weighs
+    // every parcel at the depot after pickup). Nothing is sent: which weighing AYVO declares — never
+    // a calculated reference as if weighed — and the accepted precision are not decided (doc 029 §5).
     parcelWeight: 'NOT_USED',
     parcelDimensions: 'NOT_USED',
     senderAddress: 'REQUIRED',
@@ -209,7 +211,6 @@ export class PplGateway implements CarrierGateway {
   static batch(request: CarrierShipmentRequest) {
     const s = request.settings;
     const set = request.parcels.length > 1;
-    // Germany needs the parcel weight, whose unit PPL does not document (doc 029 §5).
     // Documented: at most 50 parcels per address in one set (shipmentSet.numberOfShipments) —
     // refused before anything is sent, never split into several shipments on our own.
     if (request.parcels.length > PPL_SET_MAX) {
@@ -218,10 +219,13 @@ export class PplGateway implements CarrierGateway {
         `PPL takes at most ${PPL_SET_MAX} parcels in one shipment set (this one has ${request.parcels.length})`,
       );
     }
+    // PPL documents the weight as mandatory for shipments to Germany (CPL release R2502, DE
+    // legislation) and AYVO sends no parcel weight (above) — refused before anything is sent.
+    // Only this reason remains: the unit is known (kg), and the weight is not mandatory elsewhere.
     if (request.recipient.countryCode === 'DE') {
       throw new CarrierRejectedError(
         'PPL_COUNTRY_UNSUPPORTED',
-        'Germany needs parcel weights; their unit is not confirmed by PPL yet',
+        'PPL requires a declared parcel weight for Germany (CPL R2502); AYVO does not send parcel weights yet',
       );
     }
     return {
@@ -307,6 +311,11 @@ export class PplGateway implements CarrierGateway {
     query: { clientReference: string; carrierRef: string | null; request: CarrierShipmentRequest },
     signal: AbortSignal,
   ): Promise<CarrierPollOutcome> {
+    // Without the batch id nothing is looked up and nothing is sent again. PPL support says a lookup
+    // after a lost answer is possible (2026-10-21) but named no endpoint, filter or guarantee, and
+    // the documentation does not say which reference `GET /shipment?CustomerReferences` matches,
+    // nor what a repeated `referenceId` does — "possible" proves neither idempotency nor that a
+    // creation may be repeated (doc 029 §5, the open question for PPL).
     if (!query.carrierRef) {
       return {
         kind: 'UNKNOWN',

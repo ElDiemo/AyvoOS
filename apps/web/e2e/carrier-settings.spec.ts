@@ -76,6 +76,11 @@ test('ADMIN sets up PPL for a site: incomplete → verified → complete; nothin
   await card.getByTestId('carrier-verify').click();
   await expect(card.getByTestId('carrier-message')).toContainText('Připojení funguje');
   await expect(card.getByTestId('carrier-verified')).toContainText('Ověřeno');
+  // The API's list is what PPL offers, not what the contract allows: nothing is chosen by itself
+  // (PPL support 2026-10-21, doc 029 §5) — the service is set explicitly per site.
+  await expect(card.getByTestId('carrier-message')).toContainText('smluvní dostupnost');
+  await expect(card.getByTestId('carrier-product')).toHaveValue('');
+  await expect(card.getByTestId('carrier-product-contract')).toContainText('nikdy nevybírá sama');
   await card.getByTestId('carrier-product').selectOption('SIM-A');
   // No format or resolution here: PDF and ZPL come from PPL, the resolution from the printer.
   await expect(card.getByTestId('carrier-label-format')).toHaveCount(0);

@@ -69,6 +69,8 @@ export const carriersCs = {
   service: 'Výchozí služba PPL',
   serviceNone: '– vyberte službu –',
   serviceNotVerified: 'Služby se načtou z PPL po ověření připojení.',
+  serviceContractHint:
+    'Seznam ukazuje služby, které nabízí API PPL. Které z nich smí AYVO používat, určuje smlouva s obchodním oddělením PPL – aplikace smluvní schválení neeviduje a službu nikdy nevybírá sama. Vyberte jen službu dohodnutou ve smlouvě.',
   label: 'Štítky',
   layout: 'Rozvržení',
   layoutSingle: 'Jeden štítek na balík',
@@ -88,7 +90,7 @@ export const carriersCs = {
   verifiedAt: (at: string, by: string, connection: string) =>
     `Ověřeno ${at} (${by}), připojení ${connection}.`,
   verifyOk: (n: number) =>
-    `Připojení funguje. PPL nabízí ${n} ${n === 1 ? 'službu' : n >= 2 && n <= 4 ? 'služby' : 'služeb'}.`,
+    `Připojení funguje. API PPL nabízí ${n} ${n === 1 ? 'službu' : n >= 2 && n <= 4 ? 'služby' : 'služeb'} (smluvní dostupnost určuje obchodní oddělení PPL).`,
   notVerified: 'Připojení zatím nebylo ověřeno.',
   ready: 'Nastavení je úplné – nové přepravy této provozovny mohou použít PPL.',
   problemsTitle: 'Nové přepravy PPL zatím nelze vytvořit:',
