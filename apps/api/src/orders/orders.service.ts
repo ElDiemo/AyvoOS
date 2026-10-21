@@ -290,6 +290,7 @@ export class OrdersService implements OnModuleInit {
           parcels?: number;
           from?: string;
           to?: string;
+          pickupTimeUnknown?: boolean;
         };
         return {
           type: e.type,
@@ -302,6 +303,7 @@ export class OrdersService implements OnModuleInit {
           parcels: payload.parcels ?? null,
           shipDateFrom: e.type === 'RESCHEDULED' ? (payload.from ?? null) : null,
           shipDateTo: e.type === 'RESCHEDULED' ? (payload.to ?? null) : null,
+          pickupTimeUnknown: payload.pickupTimeUnknown === true,
         };
       }),
       createdBy: row.creator.displayName,

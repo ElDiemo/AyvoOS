@@ -112,6 +112,10 @@ export const ordersCs = {
       HANDED_TO_CARRIER: 'Dopravce převzal všechny balíky',
     } as Record<string, string>,
     byCarrier: 'Podle trackingu dopravce',
+    pickupTimeUnknown: 'Čas převzetí balíku neznámý – dopravce doložil jen doručení.',
+    handedTimeUnknown:
+      'Přesný čas převzetí všech balíků dopravce nedoložil (u některého balíku je čas převzetí neznámý).',
+    establishedAt: (at: string) => `zjištěno trackingem ${at}`,
     parcelNo: (n: number) => `balík ${n}`,
     pick: 'Kompletovat',
     resume: 'Pokračovat v kompletaci',

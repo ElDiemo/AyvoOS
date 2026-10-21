@@ -205,8 +205,16 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
                 {e.parcels !== null && <span> · {t.parcels(e.parcels)}</span>}
                 {e.crate && <span className="font-mono"> · {e.crate}</span>}
                 {e.reason && <span> · {e.reason}</span>}
+                {e.pickupTimeUnknown && (
+                  <span className="block text-xs text-amber-800" data-testid="history-time-unknown">
+                    {e.type === 'HANDED_TO_CARRIER' ? t.handedTimeUnknown : t.pickupTimeUnknown}
+                  </span>
+                )}
                 <span className="block text-xs text-stone-500">
-                  {e.actor ?? t.byCarrier} · {formatDateTimeCs(e.occurredAt, timeZone)}
+                  {e.actor ?? t.byCarrier} ·{' '}
+                  {e.pickupTimeUnknown && e.type === 'HANDED_TO_CARRIER'
+                    ? t.establishedAt(formatDateTimeCs(e.occurredAt, timeZone))
+                    : formatDateTimeCs(e.occurredAt, timeZone)}
                 </span>
               </li>
             ))}

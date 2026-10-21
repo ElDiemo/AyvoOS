@@ -187,8 +187,14 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
     expect(d.status).toBe('HANDED_TO_CARRIER');
     expect(await cycles(o.order)).toEqual(['DISPATCHED', 'DISPATCHED', 'DISPATCHED']);
     const handed = d.history.filter((h) => h.type === 'HANDED_TO_CARRIER');
+    // Every pickup time documented: the latest is the proven moment all were with the carrier.
     expect(handed).toEqual([
-      expect.objectContaining({ source: 'CARRIER', actor: null, occurredAt: at(12) }),
+      expect.objectContaining({
+        source: 'CARRIER',
+        actor: null,
+        occurredAt: at(12),
+        pickupTimeUnknown: false,
+      }),
     ]);
 
     // Two delivered, the third at a pick-up point (not the hotel) → Doručeno 2/3.
@@ -280,6 +286,44 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
     v = await view(o.order);
     expect(v.shipment!.parcels[0]!.tracking!.pickedUp).toEqual({ source: 'CARRIER', at: at(5) });
     expect(await cycles(o.order)).toEqual(['DELIVERED', 'ALLOCATED']);
+  });
+
+  it('all with the carrier, one pickup time unknown: the history never claims another parcel’s time for the whole order (TRACK39-R1)', async () => {
+    const o = await labelled(2);
+    const [n1, n2] = o.numbers as [string, string];
+    // Parcel 1: only its delivery at 12:00 (pickup implied, time unknown); parcel 2: picked up 08:00.
+    testCarrierControl.track(n1, {
+      statusId: DELIVERED,
+      at: new Date(Date.UTC(2026, 9, 21, 12)).toISOString(),
+    });
+    testCarrierControl.track(n2, {
+      statusId: PICKED_UP,
+      at: new Date(Date.UTC(2026, 9, 21, 8)).toISOString(),
+    });
+    const before = Date.now();
+    await look(o.shipmentId);
+    const after = Date.now();
+    const v = await view(o.order);
+    expect(v.shipment!.tracking).toMatchObject({ pickedUp: 2, delivered: 1 });
+    expect(v.shipment!.parcels.map((p) => p.tracking!.pickedUp)).toEqual([
+      { source: 'CARRIER_IMPLIED', at: null },
+      { source: 'CARRIER', at: new Date(Date.UTC(2026, 9, 21, 8)).toISOString() },
+    ]);
+    const d = await detail(o.order);
+    expect(d.status).toBe('HANDED_TO_CARRIER');
+    const handed = d.history.filter((h) => h.type === 'HANDED_TO_CARRIER');
+    expect(handed).toHaveLength(1);
+    // Marked as unknown; its time is when tracking established the state — not 08:00 of parcel 2.
+    expect(handed[0]).toMatchObject({ source: 'CARRIER', actor: null, pickupTimeUnknown: true });
+    const t0 = new Date(handed[0]!.occurredAt).getTime();
+    expect(t0).toBeGreaterThanOrEqual(before - 1000);
+    expect(t0).toBeLessThanOrEqual(after + 1000);
+    expect(d.history.find((h) => h.type === 'PARCEL_DELIVERED')).toMatchObject({
+      pickupTimeUnknown: true,
+    });
+    expect(d.history.find((h) => h.type === 'PARCEL_PICKED_UP')).toMatchObject({
+      pickupTimeUnknown: false,
+    });
   });
 
   it('unknown and data-only codes are kept as they are and change nothing', async () => {
