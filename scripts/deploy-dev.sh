@@ -22,17 +22,8 @@
 #   AYVO_DEV_BACKUP_DIR   pre-migration dumps   (default /opt/ayvo/backups/dev-preview)
 #   AYVO_DEV_STATE_DIR    deployment log + lock (default /opt/ayvo/logs)
 #
-# Authenticated verification (required for deploy and rollback):
-#   The Basic Auth USER is always DEV_BASIC_AUTH_USER from the env file. Only the PASSWORD is
-#   supplied, read once before anything changes, from the first of:
-#   AYVO_DEV_VERIFY_PASSWORD_FILE  file holding the password (first line; owned by you, mode 600,
-#                                  outside the repo) — e.g. a temporary file deleted afterwards
-#   AYVO_DEV_VERIFY_PASSWORD       the password itself, e.g. without shell history:
-#                                    read -rsp 'Preview password: ' p; echo
-#                                    AYVO_DEV_VERIFY_PASSWORD="$p" scripts/deploy-dev.sh; unset p
-#   an interactive prompt on the terminal (no echo)
-#   The password is passed to curl on stdin only (never argv, never logged) and the variables are
-#   removed from the environment of every child process.
+# Verification needs no shared password (ADR 0030). It checks tailnet reachability, normal
+# application sign-in and API denial without a session; it never bypasses application identity.
 #
 # Safety guarantees:
 #   - Never runs `docker compose down`, `down -v`, `volume rm` or any prune: data volumes survive.
@@ -44,6 +35,8 @@
 
 set -Eeuo pipefail
 umask 077
+# Obsolete verification inputs must not leak to child processes if an old caller still sets them.
+unset AYVO_DEV_VERIFY_PASSWORD AYVO_DEV_VERIFY_PASSWORD_FILE AYVO_DEV_VERIFY_AUTH
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
@@ -58,14 +51,13 @@ readonly PROJECT="ayvo-dev-preview"
 readonly GUARD_UNIT="ayvo-dev-docker-guard.service"
 # The only endpoint trusted for the WorkOS discovery document (doc 021 §9); never configurable.
 readonly WORKOS_API_ORIGIN="https://api.workos.com"
-readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL DEV_BASIC_AUTH_USER DEV_BASIC_AUTH_HASH
+readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL
   POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB WORKOS_API_KEY WORKOS_CLIENT_ID
   WORKOS_JWT_ISSUER)
 
 MODE=deploy
 TAG=""
 STEP="startup"
-VERIFY_PASSWORD=""
 EDGE_BODY=""
 TAILNET_IPV4=""
 EDGE_BACKUP=""
@@ -194,11 +186,6 @@ validate_env() {
   [[ ${CFG[ACME_EMAIL]} =~ ^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$ ]] ||
     die "ACME_EMAIL is not a valid email address"
   [[ ! ${CFG[ACME_EMAIL]} =~ @example\.(com|org|net)$ ]] || die "ACME_EMAIL is still the placeholder"
-  [[ ${CFG[DEV_BASIC_AUTH_USER]} =~ ^[A-Za-z0-9._-]{3,64}$ ]] ||
-    die "DEV_BASIC_AUTH_USER must be 3-64 characters of [A-Za-z0-9._-]"
-  [[ ${CFG[DEV_BASIC_AUTH_USER]} != replace-me ]] || die "DEV_BASIC_AUTH_USER is still the placeholder"
-  [[ ${CFG[DEV_BASIC_AUTH_HASH]} =~ ^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$ ]] ||
-    die "DEV_BASIC_AUTH_HASH must be a bcrypt hash from 'caddy hash-password', in single quotes"
   [[ ${CFG[POSTGRES_USER]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_USER must match [a-z_][a-z0-9_]*"
   # Identity provider (ADR 0022, doc 021). Values are never printed.
   [[ ${CFG[WORKOS_API_KEY]} =~ ^sk_[A-Za-z0-9_]{10,}$ ]] ||
@@ -233,37 +220,6 @@ check_workos_issuer() {
     die "WORKOS_JWT_ISSUER does not exactly match the issuer of the client's WorkOS discovery document; copy the 'issuer' value from https://api.workos.com/user_management/<WORKOS_CLIENT_ID>/.well-known/openid-configuration (doc 021 §9)"
 }
 
-# --- verification credentials ------------------------------------------------------------------
-
-# Reads the Basic Auth password for the authenticated checks into VERIFY_PASSWORD (never exported)
-# and removes the input variables from the environment, so no child process inherits them.
-load_verify_password() {
-  local file=${AYVO_DEV_VERIFY_PASSWORD_FILE:-} from_env=${AYVO_DEV_VERIFY_PASSWORD:-}
-  local legacy=${AYVO_DEV_VERIFY_AUTH:+set}
-  unset AYVO_DEV_VERIFY_PASSWORD AYVO_DEV_VERIFY_PASSWORD_FILE AYVO_DEV_VERIFY_AUTH
-  [[ -z $legacy ]] ||
-    die "AYVO_DEV_VERIFY_AUTH (\"user:password\") is no longer supported: the user is always DEV_BASIC_AUTH_USER from the env file; pass only the password (see --help)"
-
-  if [[ -n $file ]]; then
-    [[ -f $file ]] || die "AYVO_DEV_VERIFY_PASSWORD_FILE not found: $file"
-    local real
-    real="$(realpath "$file")"
-    [[ $real != "$REPO_ROOT"/* ]] || die "AYVO_DEV_VERIFY_PASSWORD_FILE must live outside the repository: $real"
-    [[ $(stat -c '%u' "$real") == "$(id -u)" ]] || die "AYVO_DEV_VERIFY_PASSWORD_FILE must be owned by $(id -un): $real"
-    [[ $(stat -c '%a' "$real") =~ ^[0-7]00$ ]] || die "AYVO_DEV_VERIFY_PASSWORD_FILE must be mode 600: $real"
-    IFS= read -r VERIFY_PASSWORD <"$real" || [[ -n $VERIFY_PASSWORD ]] || die "AYVO_DEV_VERIFY_PASSWORD_FILE is empty: $real"
-    VERIFY_PASSWORD=${VERIFY_PASSWORD%$'\r'}
-  elif [[ -n $from_env ]]; then
-    VERIFY_PASSWORD=$from_env
-  elif { : </dev/tty; } 2>/dev/null; then
-    IFS= read -rsp "Basic Auth password for ${CFG[DEV_BASIC_AUTH_USER]}@${CFG[DEV_DOMAIN]} (for verification): " VERIFY_PASSWORD </dev/tty
-    printf '\n' >&2
-  else
-    die "authenticated verification needs the Basic Auth password: set AYVO_DEV_VERIFY_PASSWORD_FILE or AYVO_DEV_VERIFY_PASSWORD, or run from a terminal (see --help)"
-  fi
-  [[ -n $VERIFY_PASSWORD ]] || die "the Basic Auth verification password is empty"
-}
-
 # --- verification ------------------------------------------------------------------------------
 
 api_ready() {
@@ -277,40 +233,28 @@ api_ready() {
 # Requests through the Caddy endpoint on this host's Tailscale address (real hostname, SNI and
 # certificate; the source address is this server's tailnet address, so Caddy admits it).
 # Sets EDGE_STATUS, EDGE_ROBOTS (X-Robots-Tag), EDGE_LOCATION and EDGE_TYPE; the body is written
-# to $EDGE_BODY. With a second argument "auth" it sends Basic Auth as DEV_BASIC_AUTH_USER plus
-# VERIFY_PASSWORD through a curl config read from stdin, so the password never appears in argv,
-# the environment or any output. curl config strings are double-quoted: escape \ and ".
+# to $EDGE_BODY. No Basic Auth header or application session is sent (ADR 0030).
 edge() {
-  local url=$1 auth=${2:-} meta pass
-  local args=(--silent --show-error --max-time 10 --output "$EDGE_BODY"
+  local url=$1 method=${2:-GET} meta
+  local args=(--silent --show-error --max-time 10 --request "$method" --output "$EDGE_BODY"
     --resolve "${CFG[DEV_DOMAIN]}:443:$TAILNET_IPV4" --resolve "${CFG[DEV_DOMAIN]}:80:$TAILNET_IPV4"
-    --write-out '%{http_code}\n%header{x-robots-tag}\n%header{location}\n%{content_type}\n')
+    --write-out '%{http_code}\n%header{x-robots-tag}\n%header{location}\n%{content_type}\n%header{www-authenticate}\n')
   : >"$EDGE_BODY"
-  if [[ $auth == auth ]]; then
-    pass=${VERIFY_PASSWORD//\\/\\\\}
-    pass=${pass//\"/\\\"}
-    meta="$(printf 'user = "%s:%s"\n' "${CFG[DEV_BASIC_AUTH_USER]}" "$pass" | curl "${args[@]}" --config - "$url")" ||
-      return 1
-  else
-    meta="$(curl "${args[@]}" "$url")" || return 1
-  fi
+  meta="$(curl "${args[@]}" "$url")" || return 1
   local lines
   mapfile -t lines <<<"$meta"
   EDGE_STATUS=${lines[0]:-} EDGE_ROBOTS=${lines[1]:-} EDGE_LOCATION=${lines[2]:-} EDGE_TYPE=${lines[3]:-}
+  [[ -z ${lines[4]:-} ]] || die "unexpected WWW-Authenticate challenge from the DEV edge (Basic Auth must be disabled; ADR 0030)"
 }
 
-# expect_edge DESC URL STATUS [auth] — the status must match and X-Robots-Tag must carry
+# expect_edge DESC URL STATUS — the status must match and X-Robots-Tag must carry
 # noindex and nofollow (Caddy sets it on every response of the site, including 401s).
 expect_edge() {
-  local desc=$1 url=$2 want=$3 auth=${4:-}
-  edge "$url" "$auth" || {
+  local desc=$1 url=$2 want=$3 method=${4:-GET}
+  edge "$url" "$method" || {
     warn "$desc: request to $url failed"
     return 1
   }
-  if [[ $auth == auth && $EDGE_STATUS == 401 ]]; then
-    warn "$desc: Basic Auth credentials were rejected (401) for user '${CFG[DEV_BASIC_AUTH_USER]}' (DEV_BASIC_AUTH_USER). The password does not match DEV_BASIC_AUTH_HASH."
-    return 1
-  fi
   if [[ $EDGE_STATUS != "$want" ]]; then
     warn "$desc: expected HTTP $want, got HTTP $EDGE_STATUS"
     return 1
@@ -442,11 +386,10 @@ verify() {
   compose exec -T caddy wget -q -O /dev/null http://api:4000/api/health || die "api /api/health is not reachable from Caddy"
   ok "caddy -> web:3000/ and api:4000/api/health"
 
-  STEP="verify: public TLS endpoint https://$domain"
+  STEP="verify: tailnet TLS endpoint https://$domain"
   log "$STEP (the first deployment waits for the certificate)"
-  retry 180 expect_edge "unauthenticated GET /api/health" "https://$domain/api/health" 401 ||
-    die "https://$domain did not answer 401 + X-Robots-Tag. Check DNS for $domain, that ports 80/443 are open, and: docker compose -f deploy/dev/compose.yml logs caddy"
-  expect_edge "unauthenticated GET /" "https://$domain/" 401 || die "web route is not protected by Basic Auth"
+  retry 180 expect_edge "GET /login without Basic Auth" "https://$domain/login" 200 ||
+    die "https://$domain did not serve the sign-in page through the tailnet. Check Tailscale, split DNS and Caddy logs; never open public 443."
 
   STEP="verify: HTTP redirects to HTTPS"
   log "$STEP"
@@ -455,14 +398,14 @@ verify() {
     die "http://$domain/ must redirect permanently to https://$domain/ (got HTTP $EDGE_STATUS, Location '$EDGE_LOCATION')"
   ok "http://$domain/ -> $EDGE_STATUS $EDGE_LOCATION"
 
-  STEP="verify: web behind Basic Auth and application sign-in"
-  log "$STEP (user ${CFG[DEV_BASIC_AUTH_USER]})"
-  expect_edge "GET / without an application session" "https://$domain/" 307 auth ||
+  STEP="verify: web requires application sign-in"
+  log "$STEP"
+  expect_edge "GET / without an application session" "https://$domain/" 307 ||
     die "GET / must redirect to the sign-in page without an application session"
   [[ $EDGE_LOCATION == "/login?next=%2F" || $EDGE_LOCATION == "https://$domain/login?next=%2F" ]] ||
     die "GET / must redirect to /login (got Location '$EDGE_LOCATION')"
   ok "GET / -> sign-in page"
-  expect_edge "GET /login" "https://$domain/login" 200 auth || die "the sign-in page is not served"
+  expect_edge "GET /login" "https://$domain/login" 200 || die "the sign-in page is not served"
   if [[ $EDGE_TYPE != text/html* ]] || ! grep -q 'AYVO OS' "$EDGE_BODY"; then
     die "GET /login did not return the AYVO OS web application (Content-Type '$EDGE_TYPE')"
   fi
@@ -470,23 +413,31 @@ verify() {
 
   STEP="verify: API requires an application session"
   log "$STEP"
-  edge "https://$domain/api/auth/me" auth || die "request to /api/auth/me failed"
+  expect_edge "GET /api/auth/me without a session" "https://$domain/api/auth/me" 401 ||
+    die "request to /api/auth/me failed"
   [[ $EDGE_STATUS == 401 ]] && jq -e '.code == "UNAUTHENTICATED"' "$EDGE_BODY" >/dev/null ||
     die "GET /api/auth/me must answer 401 UNAUTHENTICATED without a session (got HTTP $EDGE_STATUS)"
   ok "GET /api/auth/me without a session -> 401 UNAUTHENTICATED"
 
-  STEP="verify: authenticated API health"
+  expect_edge "GET /api/admin/sites without a session" "https://$domain/api/admin/sites" 401 ||
+    die "protected administration must require an application session"
+  jq -e '.code == "UNAUTHENTICATED"' "$EDGE_BODY" >/dev/null || die "administration authentication failed"
+  expect_edge "POST /api/agent/v1/heartbeat without an agent token" "https://$domain/api/agent/v1/heartbeat" 401 POST ||
+    die "the print agent API must still require its own token"
+  jq -e '.code == "AGENT_UNAUTHORIZED"' "$EDGE_BODY" >/dev/null || die "print-agent authentication failed"
+
+  STEP="verify: API health through the tailnet"
   log "$STEP"
-  expect_edge "GET /api/health" "https://$domain/api/health" 200 auth || die "authenticated API check failed"
+  expect_edge "GET /api/health" "https://$domain/api/health" 200 || die "API health check failed"
   health="$(jq -c '{status, environment, database: .checks.database, redis: .checks.redis}' "$EDGE_BODY" 2>/dev/null)" ||
     die "GET /api/health did not return JSON"
   jq -e '.status == "ok" and .environment == "development" and .database == "up" and .redis == "up"' \
     <<<"$health" >/dev/null || die "GET /api/health is not healthy: $health"
   ok "GET /api/health -> $health"
 
-  STEP="verify: authenticated /api prefix handling"
+  STEP="verify: /api prefix handling"
   log "$STEP"
-  expect_edge "GET /api/api/health (prefix not duplicated)" "https://$domain/api/api/health" 404 auth ||
+  expect_edge "GET /api/api/health (prefix not duplicated)" "https://$domain/api/api/health" 404 ||
     die "/api prefix handling is wrong"
 
   STEP="verify: published ports"
@@ -551,10 +502,6 @@ if [[ $MODE == check ]]; then
   log "Check passed. Nothing was changed."
   exit 0
 fi
-
-STEP="validate verification credentials"
-load_verify_password
-ok "verification password loaded for Basic Auth user ${CFG[DEV_BASIC_AUTH_USER]}"
 
 STEP="validate docker access"
 docker info >/dev/null 2>&1 ||

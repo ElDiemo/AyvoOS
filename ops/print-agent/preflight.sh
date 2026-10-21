@@ -67,7 +67,7 @@ fi
 if command -v curl >/dev/null; then
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$API_BASE/health" 2>/dev/null || true)"
   case "$code" in
-    401) ok "$API_BASE/health answers 401 (reachable; Basic Auth required — expected on DEV)" ;;
+    401) bad "$API_BASE/health answers 401 — unexpected authentication on health (DEV no longer uses Basic Auth; ADR 0030)" ;;
     200) ok "$API_BASE/health answers 200 (reachable)" ;;
     *) bad "$API_BASE/health not reachable (HTTP '${code:-none}')" ;;
   esac

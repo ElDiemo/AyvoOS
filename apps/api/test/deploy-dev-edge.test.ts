@@ -46,6 +46,90 @@ describe('every placeholder of the edge configuration reaches its container (TS3
   });
 });
 
+describe('tailnet + application identity without a shared Basic Auth password (ADR 0030)', () => {
+  it('removes only Basic Auth and retains the real-peer check and application upstreams', () => {
+    const caddy = readFileSync(join(devDir, 'Caddyfile'), 'utf8');
+    expect(caddy).not.toMatch(/^\s*basic_auth\s*\{/m);
+    expect(serviceEnv('caddy')).not.toContain('DEV_BASIC_AUTH_USER');
+    expect(serviceEnv('caddy')).not.toContain('DEV_BASIC_AUTH_HASH');
+    expect(caddy).toContain('@outside not remote_ip 100.64.0.0/10');
+    expect(caddy).toMatch(/handle @outside\s*\{\s*abort\s*\}/);
+    expect(caddy).toContain('reverse_proxy api:4000');
+    expect(caddy).toContain('reverse_proxy web:3000');
+    expect(caddy).toContain('X-Robots-Tag "noindex, nofollow"');
+  });
+
+  it.skipIf(!hasDocker)(
+    'adapts the real Caddyfile with no Basic Auth variables or middleware',
+    () => {
+      const r = run('docker', [
+        'run',
+        '--rm',
+        '--mount',
+        `type=bind,src=${join(devDir, 'Caddyfile')},dst=/etc/caddy/Caddyfile,readonly`,
+        '-e',
+        'DEV_DOMAIN=dev.example-preview.test',
+        '-e',
+        'ACME_EMAIL=ops@ayvo.test',
+        'caddy:2-alpine',
+        'caddy',
+        'adapt',
+        '--config',
+        '/etc/caddy/Caddyfile',
+      ]);
+      expect(r.status, r.stderr).toBe(0);
+      const config = JSON.parse(r.stdout);
+      const text = JSON.stringify(config);
+      expect(text).not.toContain('http_basic');
+      expect(text).not.toContain('authentication');
+      expect(text).toContain('100.64.0.0/10');
+      expect(text).toContain('api:4000');
+      expect(text).toContain('web:3000');
+    },
+  );
+
+  it('verifies edge requests without credentials and rejects a Basic challenge', () => {
+    const bin = join(dir, 'edge-http-bin');
+    run('mkdir', ['-p', bin]);
+    // The real edge helper is exercised, not a copied implementation. No network or credentials.
+    const source = readFileSync(join(root, 'scripts/deploy-dev.sh'), 'utf8');
+    const helpers = source.split(/^# --- verification -+\n/m)[1]!.split('# --- tailnet only')[0]!;
+    writeFileSync(
+      join(bin, 'curl'),
+      `#!/usr/bin/env bash
+[[ "$*" != *--config* && "$*" != *--user* && "$*" != *Authorization* ]] || exit 90
+if [[ "$*" == *heartbeat* ]]; then
+  [[ "$*" == *'--request POST'* ]] || exit 91
+  printf '401\\nnoindex, nofollow\\n\\napplication/json\\n\\n'
+else
+  printf '200\\nnoindex, nofollow\\n\\ntext/html\\n%s\\n' "\${CHALLENGE:-}"
+fi
+`,
+    );
+    chmodSync(join(bin, 'curl'), 0o755);
+    const script = `set -euo pipefail
+declare -A CFG=([DEV_DOMAIN]=dev.example-preview.test)
+TAILNET_IPV4=100.64.0.1
+EDGE_BODY="$1"
+die() { echo "$*" >&2; exit 1; }
+warn() { echo "$*" >&2; }
+ok() { :; }
+${helpers}
+expect_edge login https://dev.example-preview.test/login 200
+expect_edge agent https://dev.example-preview.test/api/agent/v1/heartbeat 401 POST
+`;
+    const env = { PATH: `${bin}:${process.env.PATH}` };
+    const pass = run('bash', ['-c', script, 'edge-test', join(dir, 'http-body')], env);
+    expect(pass.status, pass.stderr).toBe(0);
+    const fail = run('bash', ['-c', script, 'edge-test', join(dir, 'http-body')], {
+      ...env,
+      CHALLENGE: 'Basic realm="preview"',
+    });
+    expect(fail.status).not.toBe(0);
+    expect(fail.stderr).toContain('unexpected WWW-Authenticate');
+  });
+});
+
 const get = (port: number) =>
   run('curl', ['-s', '-m', '3', `http://127.0.0.1:${port}/`]).stdout.trim();
 const until = (port: number, body: string) => {
@@ -61,8 +145,6 @@ beforeAll(() => {
     [
       'DEV_DOMAIN=dev.example-preview.test',
       'ACME_EMAIL=ops@ayvo.test',
-      'DEV_BASIC_AUTH_USER=preview',
-      `DEV_BASIC_AUTH_HASH='$2a$14$${'a'.repeat(53)}'`,
       'POSTGRES_USER=ayvo',
       `POSTGRES_PASSWORD=${'p'.repeat(32)}`,
       'POSTGRES_DB=ayvo',
@@ -355,7 +437,6 @@ exit 0`,
       AYVO_DEV_ENV_FILE: env,
       AYVO_DEV_STATE_DIR: join(dir, 'state'),
       AYVO_DEV_BACKUP_DIR: join(dir, 'bk'),
-      AYVO_DEV_VERIFY_PASSWORD: 'fixture-password',
     });
     const output = `${r.stdout}${r.stderr}`;
     expect(r.status).not.toBe(0);
