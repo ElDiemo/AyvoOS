@@ -75,6 +75,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   order and crate events with `source` USER | CARRIER (actor NULL only for CARRIER). Only the
   carrier's documented codes change states (PPL 150/151 pickup, 450–453 delivery); handed over /
   delivered only when every parcel is; a delivery never completes a bottle's reuse cycle.
+  Owner 2026-10-21: a parcel picked up and not delivered keeps the site active
+  (`PARCELS_IN_TRANSIT`, also DB); return / loss / failed attempt / pick-up point is never a
+  delivery — a warning on that parcel, nothing cancelled, released or returned automatically.
   Dispatch and direct printing (doc 029, doc 030, owner 2026-10-18/-20; PR #36, #37, PR C for review):
   shipments, parcels, carrier requests, labels in several formats (PDF preview + ZPL for printing,
   never our own conversion), per-site carrier settings and encrypted carrier connections (ADR 0027),

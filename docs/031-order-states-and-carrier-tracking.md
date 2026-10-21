@@ -109,24 +109,35 @@ creating one or ordering a pickup was not authorised). Questions prepared for PP
    does it mean?
 5. Can events arrive late or out of order, and can an event's time change between two answers?
 
-**Open decisions for the owner** (not decided in code):
+**Owner decisions (2026-10-21)** — formerly open:
 
-- A site may be deactivated while it holds orders "Převzatá dopravcem" (unchanged rule of doc
-  029), although tracking still writes their events. Should such orders keep the site active?
-- A parcel going back to the sender, lost, or left at a pick-up point keeps the order "Převzatá
-  dopravcem" (shown as a warning) and tracking goes on every 15 minutes until every parcel is
-  delivered or 12 looks in a row fail. Should tracking end, or the order get another handling,
-  in these cases?
+- **A parcel picked up and not yet delivered keeps the serving site active.** Every earlier
+  blocker stays (stock, warehouses, the last active site, hotels served, orders not yet handed
+  over). The new blocker `PARCELS_IN_TRANSIT` counts orders whose live shipment has a parcel with
+  a pickup (carrier, manual or implied) and no delivery — also a partial pickup (the order still
+  "Připravená k vyzvednutí", then both blockers), and an order whose parcels are returning, lost,
+  not delivered or at a pick-up point. The API check (`OrdersService`, registered with the site
+  dependencies) and the database trigger `sites_deactivation_dependencies` (migration
+  `20261021090200_site_parcels_in_transit`) say the same.
+- **A return to the sender, a loss, a failed delivery attempt or a pick-up point is not a delivery
+  to the hotel.** The order stays "Převzatá dopravcem"; the order detail shows the concrete problem
+  on the affected parcel (its number, our reading of PPL's code and PPL's own text) as a warning.
+  Nothing is cancelled, no crate is released, no stock is returned, and tracking goes on (every
+  15 minutes, until every parcel is delivered or 12 looks in a row fail). A later delivery event
+  of that parcel delivers it and the warning disappears. Physical returns are a separate, later
+  stage; no claims process exists.
 
 ## 6. Tests
 
 Simulated only (no real PPL): API tests with the test carrier (`test/order-tracking.e2e.test.ts`:
 partial pickup and delivery of three parcels, delivery without pickup, unknown codes, a missing
 parcel, outage with back-off and pause, concurrent looks, an expired lease, manual hand-over, DB
-refusals), the PPL adapter against the simulated PPL shaped as the TEST answers
+refusals, a site kept active by parcels in transit — partial pickup, return, loss, failed
+attempt — until all are delivered), the PPL adapter against the simulated PPL shaped as the TEST answers
 (`test/ppl-large-sets.test.ts`), access and site isolation (`test/shipments-access.e2e.test.ts`),
 and the browser (`apps/web/e2e/workflow-tracking.spec.ts`: events written into the e2e database as
-the carrier would report them, "Obnovit tracking", desktop, 390 and 320 px).
+the carrier would report them, "Obnovit tracking", a parcel returning to the sender shown as a
+warning on that parcel, desktop, 390 and 320 px).
 
 Screenshots (`docs/screenshots/tracking/`, from `workflow-tracking.spec.ts` with
 `AYVO_SCREENSHOT_DIR`): partial pickup (desktop), in transit with two delivered (desktop, 390,
