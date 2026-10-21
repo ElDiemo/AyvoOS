@@ -8,11 +8,73 @@ import {
 
 /** Suppliers, supplier documents and goods receipts (procurement module, doc 018). */
 
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullable()
+    .transform((v) => (v ? v : null));
+
+/**
+ * Optional supplier details (doc 033) — none is required, also not of existing suppliers. The
+ * company id is the Czech IČO or a foreign registration number: never required or checked as an
+ * IČO, so a foreign supplier needs none.
+ */
+export const supplierDetailsFields = {
+  countryCode: z
+    .string()
+    .trim()
+    .regex(/^([A-Z]{2})?$/, 'ISO 3166-1 alpha-2')
+    .nullable()
+    .transform((v) => (v ? v : null)),
+  addressLine1: optionalText(200),
+  addressLine2: optionalText(200),
+  postalCode: optionalText(20),
+  city: optionalText(120),
+  contactName: optionalText(160),
+  contactPhone: z
+    .string()
+    .trim()
+    .regex(/^(\+?[0-9 ()/-]{6,30})?$/, 'Phone number')
+    .nullable()
+    .transform((v) => (v ? v : null)),
+  contactEmail: z
+    .union([z.email().max(254), z.literal('')])
+    .nullable()
+    .transform((v) => (v ? v : null)),
+  note: optionalText(1000),
+};
+
+export const supplierAddressSchema = z.object({
+  addressLine1: z.string().nullable(),
+  addressLine2: z.string().nullable(),
+  postalCode: z.string().nullable(),
+  city: z.string().nullable(),
+  countryCode: z.string().nullable(),
+});
+export type SupplierAddress = z.infer<typeof supplierAddressSchema>;
+
+export const supplierContactSchema = z.object({
+  name: z.string().nullable(),
+  phone: z.string().nullable(),
+  email: z.string().nullable(),
+});
+
 export const supplierSchema = z.object({
   id: z.uuid(),
   name: z.string(),
   companyId: z.string().nullable(),
   vatId: z.string().nullable(),
+  address: supplierAddressSchema,
+  /**
+   * Contact person and internal note — omitted (not null) unless the caller manages suppliers
+   * (procurement:suppliers_manage or procurement:suppliers_edit): personal data of the supplier's
+   * staff is not part of reading stock (doc 033 §4).
+   */
+  contact: supplierContactSchema.optional(),
+  note: z.string().nullable().optional(),
+  revision: z.number().int(),
   createdAt: z.iso.datetime(),
   archivedAt: z.iso.datetime().nullable(),
 });
@@ -23,8 +85,56 @@ export const createSupplierRequestSchema = z.object({
   name: z.string().trim().min(1).max(120),
   companyId: z.string().trim().min(1).max(32).nullable(),
   vatId: z.string().trim().min(1).max(32).nullable(),
+  // Optional: a client that sends only name / IČO / DIČ (as before) creates the same supplier.
+  countryCode: supplierDetailsFields.countryCode.optional(),
+  addressLine1: supplierDetailsFields.addressLine1.optional(),
+  addressLine2: supplierDetailsFields.addressLine2.optional(),
+  postalCode: supplierDetailsFields.postalCode.optional(),
+  city: supplierDetailsFields.city.optional(),
+  contactName: supplierDetailsFields.contactName.optional(),
+  contactPhone: supplierDetailsFields.contactPhone.optional(),
+  contactEmail: supplierDetailsFields.contactEmail.optional(),
+  note: supplierDetailsFields.note.optional(),
 });
 export type CreateSupplierRequest = z.infer<typeof createSupplierRequestSchema>;
+
+/**
+ * POST /api/admin/suppliers/:id/revisions (procurement:suppliers_edit): the complete new version
+ * of the details, the revision it was based on (a newer one is refused, nothing is overwritten
+ * blindly) and a reason. Receipts and documents are never changed.
+ */
+export const updateSupplierRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  revision: z.number().int().min(1),
+  name: z.string().trim().min(1).max(120),
+  companyId: optionalText(32),
+  vatId: optionalText(32),
+  ...supplierDetailsFields,
+  reason: z.string().trim().min(3).max(500),
+});
+export type UpdateSupplierRequest = z.infer<typeof updateSupplierRequestSchema>;
+
+export const supplierRevisionSchema = z.object({
+  revision: z.number().int(),
+  name: z.string(),
+  companyId: z.string().nullable(),
+  vatId: z.string().nullable(),
+  address: supplierAddressSchema,
+  contact: supplierContactSchema,
+  note: z.string().nullable(),
+  /** null for revision 1 (creation). */
+  reason: z.string().nullable(),
+  /** Display name; null when not recorded (suppliers created before doc 033). */
+  changedBy: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type SupplierRevision = z.infer<typeof supplierRevisionSchema>;
+
+/** GET /api/admin/suppliers/:id — the revisions only for those who manage suppliers (contacts). */
+export const supplierDetailSchema = supplierSchema.extend({
+  revisions: z.array(supplierRevisionSchema).optional(),
+});
+export type SupplierDetail = z.infer<typeof supplierDetailSchema>;
 
 export const archiveSupplierRequestSchema = z.object({ requestId: z.uuid() });
 
@@ -150,6 +260,11 @@ export const goodsReceiptSchema = z.object({
   code: z.string(),
   type: z.enum(['PURCHASE']),
   supplier: z.object({ id: z.uuid(), name: z.string() }),
+  /**
+   * The supplier's name as it was when the receipt was recorded, when corrected since (doc 033);
+   * null when unchanged. The receipt itself is never rewritten.
+   */
+  supplierNameAtReceipt: z.string().nullable(),
   supplierReference: z.string(),
   receivedAt: z.iso.datetime(),
   note: z.string().nullable(),

@@ -10,12 +10,14 @@ import type {
   GoodsReceiptPage,
   LinkReceiptDocumentRequest,
   Supplier as SupplierDto,
+  SupplierDetail as SupplierDetailDto,
   SupplierDocument as SupplierDocumentDto,
+  UpdateSupplierRequest,
   UploadSupplierDocumentFields,
 } from '@ayvo/types';
 import { RECEIPT_DATE_MIN } from '@ayvo/types';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
-import { domainError } from '../common/domain-error.js';
+import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { assertUnitScale, formatQuantity, quantity } from '../common/quantity.js';
 import { ADMIN_API } from '../common/routes.js';
 import { allocateSerials } from '../database/code-counters.js';
@@ -34,7 +36,15 @@ const DOCUMENT_TYPES: { type: string; ext: string; magic: number[] }[] = [
 ];
 
 const receiptInclude = {
-  supplier: true,
+  // The names a supplier had (doc 033): a receipt shows the one it was recorded under.
+  supplier: {
+    include: {
+      revisions: {
+        select: { revision: true, name: true, createdAt: true },
+        orderBy: { revision: 'asc' as const },
+      },
+    },
+  },
   documents: { include: { document: true }, orderBy: { linkedAt: 'asc' as const } },
   lines: {
     orderBy: { lineNo: 'asc' as const },
@@ -77,40 +87,150 @@ export class ProcurementService {
 
   // --- suppliers -------------------------------------------------------------------------------
 
-  async listSuppliers(includeArchived: boolean): Promise<SupplierDto[]> {
+  /** `contacts`: the caller manages suppliers and may see contacts and notes (doc 033 §4). */
+  async listSuppliers(includeArchived: boolean, contacts: boolean): Promise<SupplierDto[]> {
     const suppliers = await this.prisma.supplier.findMany({
       where: includeArchived ? {} : { archivedAt: null },
       orderBy: { name: 'asc' },
     });
-    return suppliers.map(toSupplierDto);
+    return suppliers.map((x) => toSupplierDto(x, contacts));
   }
 
-  async createSupplier(input: CreateSupplierRequest): Promise<SupplierDto> {
+  /** One supplier; its revisions (with contacts) only for those who manage suppliers. */
+  async supplierDetail(id: string, contacts: boolean): Promise<SupplierDetailDto> {
+    const supplier = await this.getSupplier(id);
+    if (!contacts) return toSupplierDto(supplier, false);
+    const revisions = await this.prisma.supplierRevision.findMany({
+      where: { supplierId: id },
+      orderBy: { revision: 'desc' },
+      include: { changedBy: { select: { displayName: true } } },
+    });
+    return {
+      ...toSupplierDto(supplier, true),
+      revisions: revisions.map((r) => ({
+        revision: r.revision,
+        ...supplierFields(r),
+        reason: r.reason,
+        changedBy: r.changedBy?.displayName ?? null,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    };
+  }
+
+  async createSupplier(
+    input: CreateSupplierRequest,
+    actorId: string,
+    contacts: boolean,
+  ): Promise<SupplierDto> {
+    const details = {
+      name: input.name,
+      companyId: input.companyId,
+      vatId: input.vatId,
+      countryCode: input.countryCode ?? null,
+      addressLine1: input.addressLine1 ?? null,
+      addressLine2: input.addressLine2 ?? null,
+      postalCode: input.postalCode ?? null,
+      city: input.city ?? null,
+      contactName: input.contactName ?? null,
+      contactPhone: input.contactPhone ?? null,
+      contactEmail: input.contactEmail ?? null,
+      note: input.note ?? null,
+    };
+    // The hash covers the normalized details: a replay of the old three-field body still matches.
     const { result } = await this.operations.run(
       'SUPPLIER_CREATE',
       input.requestId,
-      input,
+      { requestId: input.requestId, ...pickOldFields(details) },
       async (tx) => {
-        const clash = await tx.$queryRaw<unknown[]>`
-        SELECT 1 FROM "suppliers" WHERE lower("name") = lower(${input.name})`;
-        if (clash.length > 0) {
-          throw domainError(409, 'SUPPLIER_EXISTS', 'A supplier with this name already exists');
-        }
+        await this.assertNameFree(tx, input.name, null);
         const supplier = await tx.supplier.create({
-          data: {
-            name: input.name,
-            companyId: input.companyId,
-            vatId: input.vatId,
-            requestId: input.requestId,
-          },
+          data: { ...details, requestId: input.requestId },
+        });
+        // Revision 1 in the same transaction (the database checks it at commit).
+        await tx.supplierRevision.create({
+          data: { supplierId: supplier.id, revision: 1, ...details, changedById: actorId },
         });
         return { supplierId: supplier.id };
       },
     );
-    return toSupplierDto(await this.getSupplier(result.supplierId));
+    return toSupplierDto(await this.getSupplier(result.supplierId), contacts);
   }
 
-  async archiveSupplier(id: string, requestId: string): Promise<SupplierDto> {
+  /**
+   * Correction of a supplier's details (doc 033): the next revision with author and reason, the
+   * current row in the same transaction. Based on a revision that is no longer current, it is
+   * refused (nothing overwritten blindly). Receipts, documents and lots are not touched; a receipt
+   * shows the name it was recorded under (supplierNameAtReceipt).
+   */
+  async updateSupplier(
+    id: string,
+    input: UpdateSupplierRequest,
+    actorId: string,
+  ): Promise<SupplierDetailDto> {
+    const { requestId, revision, reason, ...details } = input;
+    await this.operations.run(
+      'SUPPLIER_UPDATE',
+      requestId,
+      { id, actorId, revision, reason, ...details },
+      async (tx) => {
+        await tx.$executeRaw`SELECT 1 FROM "suppliers" WHERE "id" = ${id}::uuid FOR UPDATE`;
+        const current = await tx.supplier.findUnique({ where: { id } });
+        if (!current) throw new NotFoundException('Supplier not found');
+        if (current.archivedAt) {
+          throw domainError(422, 'SUPPLIER_INACTIVE', 'The supplier does not exist or is archived');
+        }
+        if (current.revision !== revision) {
+          throw domainErrorWithDetails(
+            409,
+            'SUPPLIER_CHANGED',
+            'The supplier was changed in the meantime; reload it and enter the change again',
+            { based: revision, current: current.revision },
+          );
+        }
+        const changed = (Object.keys(details) as (keyof typeof details)[]).filter(
+          (k) => details[k] !== current[k],
+        );
+        if (changed.length === 0) {
+          throw domainError(422, 'SUPPLIER_UNCHANGED', 'Nothing was changed');
+        }
+        if (changed.includes('name')) await this.assertNameFree(tx, details.name, id);
+        const next = current.revision + 1;
+        await tx.supplierRevision.create({
+          data: {
+            supplierId: id,
+            revision: next,
+            ...details,
+            reason,
+            changedById: actorId,
+            requestId,
+          },
+        });
+        await tx.supplier.update({ where: { id }, data: { ...details, revision: next } });
+        // The values are in the revision; the audit names what changed and why.
+        await this.audit.record(
+          {
+            type: 'SUPPLIER_UPDATED',
+            actorUserId: actorId,
+            reason,
+            payload: { supplier: id, revision: next, changed },
+          },
+          tx,
+        );
+        return { supplierId: id };
+      },
+    );
+    return this.supplierDetail(id, true);
+  }
+
+  private async assertNameFree(tx: Prisma.TransactionClient, name: string, except: string | null) {
+    const clash = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "suppliers" WHERE lower("name") = lower(${name})`;
+    if (clash.some((c) => c.id !== except)) {
+      throw domainError(409, 'SUPPLIER_EXISTS', 'A supplier with this name already exists');
+    }
+  }
+
+  async archiveSupplier(id: string, requestId: string, contacts: boolean): Promise<SupplierDto> {
     await this.operations.run('SUPPLIER_ARCHIVE', requestId, { supplierId: id }, async (tx) => {
       const supplier = await tx.supplier.findUnique({ where: { id } });
       if (!supplier) throw new NotFoundException('Supplier not found');
@@ -118,7 +238,7 @@ export class ProcurementService {
         await tx.supplier.update({ where: { id }, data: { archivedAt: new Date() } });
       return { supplierId: id };
     });
-    return toSupplierDto(await this.getSupplier(id));
+    return toSupplierDto(await this.getSupplier(id), contacts);
   }
 
   private async getSupplier(id: string): Promise<Supplier> {
@@ -701,15 +821,60 @@ function safeFilename(name: string, ext: string): string {
   return cleaned.length > 0 ? cleaned : `document.${ext}`;
 }
 
-function toSupplierDto(s: Supplier): SupplierDto {
+type SupplierFields = Pick<
+  Supplier,
+  | 'name'
+  | 'companyId'
+  | 'vatId'
+  | 'countryCode'
+  | 'addressLine1'
+  | 'addressLine2'
+  | 'postalCode'
+  | 'city'
+  | 'contactName'
+  | 'contactPhone'
+  | 'contactEmail'
+  | 'note'
+>;
+
+function supplierFields(s: SupplierFields) {
   return {
-    id: s.id,
     name: s.name,
     companyId: s.companyId,
     vatId: s.vatId,
+    address: {
+      addressLine1: s.addressLine1,
+      addressLine2: s.addressLine2,
+      postalCode: s.postalCode,
+      city: s.city,
+      countryCode: s.countryCode,
+    },
+    contact: { name: s.contactName, phone: s.contactPhone, email: s.contactEmail },
+    note: s.note,
+  };
+}
+
+/** Contacts and the note only for those who manage suppliers (omitted, not null). */
+function toSupplierDto(s: Supplier, contacts: boolean): SupplierDto {
+  const { contact, note, ...rest } = supplierFields(s);
+  return {
+    id: s.id,
+    ...rest,
+    ...(contacts && { contact, note }),
+    revision: s.revision,
     createdAt: s.createdAt.toISOString(),
     archivedAt: s.archivedAt?.toISOString() ?? null,
   };
+}
+
+/**
+ * The idempotency payload of SUPPLIER_CREATE: the three original fields as before (a retry of a
+ * request sent before doc 033 still matches), the new details only when given.
+ */
+function pickOldFields(d: SupplierFields) {
+  const { name, companyId, vatId, ...rest } = d;
+  const given = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== null));
+  return { name, companyId, vatId, ...given };
 }
 
 function toDocumentDto(d: SupplierDocument): SupplierDocumentDto {
@@ -728,11 +893,18 @@ function toDocumentDto(d: SupplierDocument): SupplierDocumentDto {
   };
 }
 
+/** The supplier's name in effect when the receipt was recorded, if it differs from today's. */
+function nameAtReceipt(r: ReceiptRecord): string | null {
+  const then = r.supplier.revisions.filter((v) => v.createdAt <= r.createdAt).at(-1);
+  return then && then.name !== r.supplier.name ? then.name : null;
+}
+
 function toReceiptDto(r: ReceiptRecord): GoodsReceipt {
   return {
     code: r.code,
     type: r.type,
     supplier: { id: r.supplier.id, name: r.supplier.name },
+    supplierNameAtReceipt: nameAtReceipt(r),
     supplierReference: r.supplierReference,
     receivedAt: r.receivedAt.toISOString(),
     note: r.note,

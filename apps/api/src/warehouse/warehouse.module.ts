@@ -3,6 +3,7 @@ import { AssetsModule } from '../assets/assets.module.js';
 import { InventoryModule } from '../inventory/inventory.module.js';
 import { LabelProductionModule } from '../label-production/label-production.module.js';
 import { ProcurementModule } from '../procurement/procurement.module.js';
+import { ItemBarcodesController } from './item-barcodes.controller.js';
 import { WarehouseController } from './warehouse.controller.js';
 import { WarehouseReadService } from './warehouse-read.service.js';
 
@@ -14,7 +15,7 @@ import { WarehouseReadService } from './warehouse-read.service.js';
  */
 @Module({
   imports: [AssetsModule, LabelProductionModule, InventoryModule, ProcurementModule],
-  controllers: [WarehouseController],
+  controllers: [WarehouseController, ItemBarcodesController],
   providers: [WarehouseReadService],
 })
 export class WarehouseModule {}

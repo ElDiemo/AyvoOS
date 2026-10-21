@@ -49,6 +49,7 @@ export default async function NewReceiptPage({
         suppliers={suppliers}
         items={items}
         canWriteCosts={hasPermission(me, 'procurement:cost_write')}
+        canManageBarcodes={hasPermission(me, 'inventory:barcodes_manage')}
         initialItemId={wanted ? (item?.id ?? null) : undefined}
       />
     </>

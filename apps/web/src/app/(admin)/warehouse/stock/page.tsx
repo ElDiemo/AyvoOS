@@ -2,22 +2,25 @@ import { stockOverviewSchema, supplierSchema } from '@ayvo/types';
 import Link from 'next/link';
 import { z } from 'zod';
 import { Card, Field, FieldList } from '@/components/ui';
+import { ItemBarcodes } from '@/components/warehouse/item-barcodes';
 import { ItemSettingsForm } from '@/components/warehouse/item-settings-form';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { formatDateTimeCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
-import { siteTimeZone } from '@/lib/session';
+import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const s = warehouseCs.stock;
 
 export default async function StockPage() {
   const tz = await siteTimeZone();
-  const [stock, suppliers] = await Promise.all([
+  const [stock, suppliers, me] = await Promise.all([
     apiGet('admin/inventory/stock', stockOverviewSchema),
     apiGet('admin/suppliers', z.array(supplierSchema)),
+    currentUser(),
   ]);
+  const canManageBarcodes = hasPermission(me, 'inventory:barcodes_manage');
   return (
     <>
       <WarehouseHeader
@@ -108,7 +111,8 @@ export default async function StockPage() {
                     )}
                   </>
                 )}
-                <details className="mt-6">
+                <ItemBarcodes itemCode={entry.item.code} canManage={canManageBarcodes} tz={tz} />
+                <details className="mt-4">
                   <summary className="cursor-pointer text-sm font-medium">{s.settings}</summary>
                   <div className="mt-3">
                     {entry.item.settings ? (
