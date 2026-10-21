@@ -86,6 +86,10 @@ export const orderSummarySchema = z.object({
   requestedShipDate: isoDateSchema,
   status: orderStatusSchema,
   totals: quantitiesSchema,
+  /** Ručně vytvořená / Z plánu zásobování (doc 032); the same states and workflow. */
+  origin: z.enum(['MANUAL', 'SUPPLY_PLAN']),
+  /** For an order from a plan: the occurrence's planned ship day (kept when the day moved). */
+  plannedShipDate: isoDateSchema.nullable(),
   createdAt: z.iso.datetime(),
 });
 export type OrderSummary = z.infer<typeof orderSummarySchema>;
@@ -185,6 +189,7 @@ export const orderEventSchema = z.object({
     'PARCEL_PICKED_UP',
     'PARCEL_DELIVERED',
     'DELIVERED',
+    'RESCHEDULED',
   ]),
   occurredAt: z.iso.datetime(),
   /** The user; null for an event recorded from the carrier (source CARRIER, doc 031). */
@@ -195,6 +200,9 @@ export const orderEventSchema = z.object({
   /** Shipment events: the shipment, parcel and carrier numbers concerned (doc 029). */
   shipment: z.string().nullable(),
   parcels: z.number().int().nullable(),
+  /** RESCHEDULED (doc 032): the planned ship day before and after. */
+  shipDateFrom: isoDateSchema.nullable(),
+  shipDateTo: isoDateSchema.nullable(),
   /**
    * Carrier events (doc 031): a parcel's pickup time is unknown (delivered without a pickup
    * event). On HANDED_TO_CARRIER the time is then when tracking established that every parcel is

@@ -70,7 +70,7 @@ export default async function OrdersPage({
         {list.items.length === 0 ? (
           <EmptyState>{t.empty[view]}</EmptyState>
         ) : (
-          <OrderRows orders={list.items} />
+          <OrderRows orders={list.items} today={list.today} />
         )}
       </Card>
       <Pager

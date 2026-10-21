@@ -3,6 +3,7 @@ import type {
   FulfillmentSiteOption,
   HotelDetail,
   HotelSummary,
+  UpdateHotelPracticalRequest,
 } from '@ayvo/types';
 import { Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
@@ -77,8 +78,64 @@ export class HotelsService implements OnModuleInit {
         countryCode: row.countryCode,
       },
       contact: { name: row.contactName, phone: row.contactPhone, email: row.contactEmail },
+      practical: {
+        deliveryNote: row.deliveryNote,
+        receivingContact: row.receivingContactName
+          ? {
+              name: row.receivingContactName,
+              phone: row.receivingContactPhone,
+              email: row.receivingContactEmail,
+            }
+          : null,
+      },
       createdBy: row.creator.displayName,
     };
+  }
+
+  /**
+   * The optional practical details (doc 032): delivery note and receiving contact. Never required
+   * of existing hotels; the address, main contact and serving site are not changed here. Reason
+   * and before/after audited. Orders keep their own snapshot.
+   */
+  async updatePractical(
+    actorId: string,
+    code: string,
+    input: UpdateHotelPracticalRequest,
+  ): Promise<HotelDetail> {
+    await this.operations.run(
+      'HOTEL_UPDATE',
+      input.requestId,
+      { actorId, code, ...input, requestId: undefined },
+      async (tx) => {
+        const row = await this.byCode(code, tx);
+        if (!row) throw new NotFoundException('Hotel not found');
+        await tx.$executeRaw`SELECT 1 FROM "hotels" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
+        const before = {
+          deliveryNote: row.deliveryNote,
+          receivingContactName: row.receivingContactName,
+          receivingContactPhone: row.receivingContactPhone,
+          receivingContactEmail: row.receivingContactEmail,
+        };
+        const after = {
+          deliveryNote: input.deliveryNote,
+          receivingContactName: input.receivingContactName,
+          receivingContactPhone: input.receivingContactPhone,
+          receivingContactEmail: input.receivingContactEmail,
+        };
+        await tx.hotel.update({ where: { id: row.id }, data: after });
+        await this.audit.record(
+          {
+            type: 'HOTEL_UPDATED',
+            actorUserId: actorId,
+            siteId: row.fulfillmentSiteId,
+            payload: { hotel: row.code, reason: input.reason, before, after },
+          },
+          tx,
+        );
+        return { code: row.code };
+      },
+    );
+    return this.detail(code);
   }
 
   fulfillmentSites(): Promise<FulfillmentSiteOption[]> {

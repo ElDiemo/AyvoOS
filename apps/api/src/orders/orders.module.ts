@@ -14,6 +14,9 @@ import { ShipmentDeriver } from './shipment-deriver.service.js';
 import { ShipmentPoller } from './shipment-poller.service.js';
 import { ShipmentsService } from './shipments.service.js';
 import { ShipmentTrackingService } from './shipment-tracking.service.js';
+import { SupplyPlanRunner } from './supply-plan-runner.service.js';
+import { SupplyPlansController } from './supply-plans.controller.js';
+import { SupplyPlansService } from './supply-plans.service.js';
 
 /**
  * orders module (doc 028, doc 029): manual orders, the picking of finished crates and their
@@ -32,7 +35,7 @@ import { ShipmentTrackingService } from './shipment-tracking.service.js';
     CarriersModule,
     PrintingModule,
   ],
-  controllers: [OrdersController, ShipmentsController],
+  controllers: [OrdersController, ShipmentsController, SupplyPlansController],
   providers: [
     OrdersService,
     ShipmentsService,
@@ -40,6 +43,8 @@ import { ShipmentTrackingService } from './shipment-tracking.service.js';
     ShipmentCarrierFlow,
     ShipmentPoller,
     ShipmentTrackingService,
+    SupplyPlansService,
+    SupplyPlanRunner,
   ],
 })
 export class OrdersModule {}

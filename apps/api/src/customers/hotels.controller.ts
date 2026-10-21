@@ -1,12 +1,14 @@
 import {
   createHotelRequestSchema,
   hotelCodeSchema,
+  updateHotelPracticalRequestSchema,
+  type UpdateHotelPracticalRequest,
   type CreateHotelRequest,
   type FulfillmentSiteOption,
   type HotelDetail,
   type HotelSummary,
 } from '@ayvo/types';
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
@@ -37,6 +39,19 @@ export class HotelsController {
     @Param('code', new ZodValidationPipe(hotelCodeSchema)) code: string,
   ): Promise<HotelDetail> {
     return this.hotels.detail(code);
+  }
+
+  /** "Upravit praktické údaje" (doc 032): optional details only, with a reason. */
+  @RequirePermission('hotels:manage')
+  @Post(':code/practical')
+  @HttpCode(200)
+  updatePractical(
+    @Param('code', new ZodValidationPipe(hotelCodeSchema)) code: string,
+    @Body(new ZodValidationPipe(updateHotelPracticalRequestSchema))
+    body: UpdateHotelPracticalRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<HotelDetail> {
+    return this.hotels.updatePractical(principal.userId, code, body);
   }
 
   @RequirePermission('hotels:manage')

@@ -2,12 +2,15 @@
 
 import {
   orderDetailSchema,
+  orderSummarySchema,
+  type OrderSummary,
   type HotelSummary,
   type OrderableProduct,
   type OrderCalendar,
 } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { z } from 'zod';
 import {
   describedBy,
   ErrorSummary,
@@ -16,10 +19,10 @@ import {
   useAttempt,
   useFocusFirstError,
 } from '@/components/catalog/form-kit';
-import { buttonClass, Card } from '@/components/ui';
+import { buttonClass, Card, Notice } from '@/components/ui';
 import { formatDateCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
-import { apiSend } from '@/lib/client-api';
+import { apiGet, apiSend } from '@/lib/client-api';
 import { orderErrorText } from './order-errors';
 
 const t = ordersCs.form;
@@ -55,6 +58,20 @@ export function OrderForm({
     return Number.isInteger(n) && n > 0 ? n : 0;
   };
   const lines = products.filter((p) => count(p.code) > 0);
+  // The hotel's orders around the chosen day (doc 032): a possible overlap is shown, never merged.
+  const nearbyKey = hotel && date && date >= today ? `${hotel}/${date}` : null;
+  const [found, setFound] = useState<{ key: string; rows: OrderSummary[] } | null>(null);
+  useEffect(() => {
+    if (!nearbyKey) return;
+    let live = true;
+    apiGet(`admin/orders/hotel/${nearbyKey.replace('/', '/nearby/')}`, z.array(orderSummarySchema))
+      .then((rows) => live && setFound({ key: nearbyKey, rows }))
+      .catch(() => live && setFound({ key: nearbyKey, rows: [] }));
+    return () => {
+      live = false;
+    };
+  }, [nearbyKey]);
+  const nearby = found && found.key === nearbyKey ? found.rows : [];
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -129,6 +146,21 @@ export function OrderForm({
             />
           </FormField>
         </div>
+        {nearby.length > 0 && (
+          <Notice tone="info">
+            <span className="font-semibold">{t.nearbyTitle}</span>
+            <ul className="mt-1 flex flex-col gap-0.5" data-testid="order-nearby">
+              {nearby.map((o) => (
+                <li key={o.code}>
+                  <span className="font-mono">{o.code}</span> ·{' '}
+                  {ordersCs.sendOn(formatDateCs(o.requestedShipDate))} · {ordersCs.origin[o.origin]}{' '}
+                  · {ordersCs.status[o.status] ?? o.status}
+                </li>
+              ))}
+            </ul>
+            <span className="mt-1 block text-xs">{t.nearbyHelp}</span>
+          </Notice>
+        )}
         <fieldset
           className="flex flex-col gap-2"
           aria-describedby={errors.lines ? `${id}-lines-error` : undefined}

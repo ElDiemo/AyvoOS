@@ -2,19 +2,19 @@
 export const ordersCs = {
   title: 'Objednávky',
   subtitle:
-    'Ruční objednávky hotelů této provozovny v celých bednách: kompletace, přepravní štítky, připraveno k vyzvednutí a předání dopravci. Doručení hotelu se zatím neeviduje.',
+    'Objednávky hotelů této provozovny v celých bednách – ruční i z plánu zásobování: kompletace, přepravní štítky, připraveno k vyzvednutí, převzetí a doručení podle trackingu dopravce.',
   newOrder: 'Nová objednávka',
   views: {
     today: 'Dnes',
     future: 'Budoucí',
     overdue: 'Po termínu',
-    closed: 'Předané a stornované',
+    closed: 'Předané, doručené a stornované',
   } as Record<string, string>,
   empty: {
     today: 'Na dnešek nečeká žádná objednávka.',
     future: 'Žádné budoucí objednávky.',
     overdue: 'Žádná objednávka po termínu.',
-    closed: 'Zatím žádná předaná ani stornovaná objednávka.',
+    closed: 'Zatím žádná předaná, doručená ani stornovaná objednávka.',
   } as Record<string, string>,
   page: (page: number, pages: number) => `Strana ${page} z ${pages}`,
   previous: 'Předchozí',
@@ -29,6 +29,15 @@ export const ordersCs = {
     cratesOf: 'Bedny načtené / požadované',
     bottlesOf: 'Lahve načtené / požadované',
   },
+  /** Origin of an order (doc 032): the same states, picking and dispatch either way. */
+  origin: {
+    MANUAL: 'Ručně vytvořená',
+    SUPPLY_PLAN: 'Z plánu zásobování',
+  } as Record<string, string>,
+  sendOn: (date: string) => `Odeslat dne ${date}`,
+  plannedFor: (date: string) => `podle plánu ${date}`,
+  shipNotDelivery:
+    'Den odeslání není zaručený den doručení – doručení se eviduje jen podle událostí dopravce.',
   status: {
     OPEN: 'Vytvořená',
     PICKING: 'Rozpracovaná',
@@ -44,6 +53,16 @@ export const ordersCs = {
     contact: 'Kontakt',
     site: 'Provozovna',
     shipDate: 'Požadované odeslání',
+    origin: 'Původ',
+    fromPlan: (planned: string) => `Z plánu zásobování hotelu · termín plánu ${planned}`,
+    futureReady: (date: string) =>
+      `Připravená předem – odeslat dne ${date}. Do té doby nepředávejte dopravci, pokud termín výslovně nezměníte.`,
+    reschedule: 'Změnit den odeslání',
+    rescheduleTitle: 'Změnit plánovaný den odeslání?',
+    rescheduleText:
+      'Změní se jen tato objednávka. Plán zásobování ani další objednávky se nemění; objednávka z plánu zůstane navázaná na svůj původní termín, takže plán za ni nezaloží náhradu.',
+    rescheduleDate: 'Nový den odeslání',
+    rescheduleConfirm: 'Změnit den odeslání',
     lines: 'Produkty',
     product: 'Produkt',
     crateType: 'Typ bedny',
@@ -60,6 +79,7 @@ export const ordersCs = {
     loadedBy: (by: string) => `načetl(a) ${by}`,
     history: 'Historie',
     events: {
+      RESCHEDULED: 'Změněn den odeslání',
       CREATED: 'Objednávka založena',
       CRATE_ADDED: 'Bedna načtena',
       CRATE_REMOVED: 'Bedna odebrána',
@@ -109,6 +129,9 @@ export const ordersCs = {
     parcels: (n: number) => `${n} ${n === 1 ? 'balík' : n < 5 ? 'balíky' : 'balíků'}`,
   },
   form: {
+    nearbyTitle: 'Hotel má v blízkých dnech tyto objednávky:',
+    nearbyHelp:
+      'Mohou se překrývat s touto objednávkou (např. pravidelná dodávka z plánu). Nic se automaticky neslučuje ani neruší – mimořádnou objednávku můžete založit i tak.',
     title: 'Nová objednávka',
     subtitle:
       'Pro jeden hotel a jeho doručovací adresu. Množství v celých bednách; počet lahví vychází z kapacity typu bedny.',
@@ -174,6 +197,13 @@ export const ordersCs = {
     complete_line: 'Hotovo',
   },
   errors: {
+    ORDER_NOT_RESCHEDULABLE: 'Den odeslání lze měnit jen před předáním dopravci.',
+    SAME_SHIP_DATE: 'Objednávka už se odesílá v tento den.',
+    SUPPLY_PLAN_ACTIVE: 'Plán zásobování je už zapnutý.',
+    SUPPLY_PLAN_VERSION_CHANGED:
+      'Plán mezitím někdo změnil a uložil. Nic se nezapnulo – zavřete dialog a zobrazte náhled znovu.',
+    SUPPLY_PLAN_NOT_ACTIVE: 'Pozastavit lze jen zapnutý plán.',
+    NO_SUPPLY_PLAN: 'Hotel zatím nemá plán zásobování.',
     NOT_AYVO_QR: 'Toto není QR kód AYVO tohoto prostředí.',
     WRONG_ENVIRONMENT: 'QR kód patří jinému prostředí AYVO.',
     NOT_A_CRATE: 'Toto není QR kód bedny.',

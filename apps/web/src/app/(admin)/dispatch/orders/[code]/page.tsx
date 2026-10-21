@@ -1,9 +1,16 @@
-import { orderCodeSchema, orderDetailSchema, orderShipmentSchema } from '@ayvo/types';
+import {
+  orderCalendarSchema,
+  orderCodeSchema,
+  orderDetailSchema,
+  orderShipmentSchema,
+} from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CancelOrder } from '@/components/dispatch/cancel-order';
 import { DispatchHeader } from '@/components/dispatch/dispatch-header';
 import { OrderLines } from '@/components/dispatch/order-lines';
+import { OriginBadge } from '@/components/dispatch/order-origin';
+import { RescheduleOrder } from '@/components/dispatch/reschedule-order';
 import { OrderStatusBadge } from '@/components/dispatch/order-status';
 import { ShipmentPanel } from '@/components/dispatch/shipment-panel';
 import { buttonClass, Card, EmptyState, Field, FieldList, Notice } from '@/components/ui';
@@ -22,11 +29,14 @@ const t = ordersCs.detail;
 export default async function OrderPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
   if (!orderCodeSchema.safeParse(code).success) notFound();
-  const [me, order, timeZone] = await Promise.all([
+  const [me, order, timeZone, calendar] = await Promise.all([
     currentUser(),
     apiGet(`admin/orders/${code}`, orderDetailSchema),
     siteTimeZone(),
+    apiGet('admin/orders/calendar', orderCalendarSchema),
   ]);
+  const before = ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP'].includes(order.status);
+  const future = before && order.requestedShipDate > calendar.today;
   const shipment =
     order.status !== 'OPEN' && order.status !== 'CANCELLED' && hasPermission(me, 'shipments:read')
       ? await apiGet(`admin/orders/${code}/shipment`, orderShipmentSchema)
@@ -43,6 +53,7 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
         title={
           <span className="flex flex-wrap items-center gap-3">
             <span className="font-mono">{order.code}</span> <OrderStatusBadge order={order} />
+            <OriginBadge origin={order.origin} />
           </span>
         }
         subtitle={`${order.hotel.name} · ${t.shipDate}: ${formatDateCs(order.requestedShipDate)}`}
@@ -58,10 +69,35 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
                 {order.totals.loadedCrates > 0 ? t.resume : t.pick}
               </Link>
             )}
+            {before && hasPermission(me, 'orders:manage') && (
+              <RescheduleOrder
+                code={order.code}
+                current={order.requestedShipDate}
+                today={calendar.today}
+              />
+            )}
             {cancellable && hasPermission(me, 'orders:manage') && <CancelOrder code={order.code} />}
           </>
         }
       />
+      {order.origin === 'SUPPLY_PLAN' && order.plannedShipDate && (
+        <p className="mb-2 text-sm text-stone-600" data-testid="order-from-plan">
+          {t.fromPlan(formatDateCs(order.plannedShipDate))}
+          {' · '}
+          <Link href={`/hotels/${order.hotel.code}#plan`} className="underline underline-offset-2">
+            {ordersCs.origin.SUPPLY_PLAN}
+          </Link>
+        </p>
+      )}
+      {future && order.status !== 'OPEN' && (
+        <div className="mb-4">
+          <Notice tone="info">
+            <span data-testid="order-future">
+              {t.futureReady(formatDateCs(order.requestedShipDate))}
+            </span>
+          </Notice>
+        </div>
+      )}
       {order.completedBy && order.status !== 'CANCELLED' && (
         <p className="mb-4 text-sm text-stone-600" data-testid="order-completed">
           {t.completed(order.completedBy)} · {formatDateTimeCs(order.completedAt, timeZone)}
@@ -156,6 +192,15 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
                     t.events[e.type] ??
                     e.type}
                 </span>
+                {e.type === 'CREATED' && order.origin === 'SUPPLY_PLAN' && (
+                  <span> · {ordersCs.origin.SUPPLY_PLAN}</span>
+                )}
+                {e.shipDateFrom && e.shipDateTo && (
+                  <span>
+                    {' '}
+                    · {formatDateCs(e.shipDateFrom)} → {formatDateCs(e.shipDateTo)}
+                  </span>
+                )}
                 {e.shipment && <span className="font-mono"> · {e.shipment}</span>}
                 {e.parcels !== null && <span> · {t.parcels(e.parcels)}</span>}
                 {e.crate && <span className="font-mono"> · {e.crate}</span>}
