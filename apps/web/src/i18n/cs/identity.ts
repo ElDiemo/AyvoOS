@@ -69,6 +69,8 @@ export const identityCs = {
     'orders:read': 'Zobrazit objednávky provozovny a jejich načtené bedny',
     'orders:manage': 'Zakládat a stornovat objednávky provozovny',
     'orders:pick': 'Kompletovat objednávky – načítat a odebírat hotové bedny, dokončit kompletaci',
+    'orders:plan_manage':
+      'Spravovat plány zásobování hotelů provozovny – pravidla, náhled, zapnutí a pozastavení',
     'shipments:read': 'Vidět přepravu objednávky – balíky, hmotnosti, štítky a přepravní čísla',
     'shipments:prepare':
       'Připravit přepravu – skutečné vážení, přepravní štítky u dopravce, připraveno k vyzvednutí, zrušení přípravy',

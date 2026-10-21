@@ -78,6 +78,12 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   Owner 2026-10-21: a parcel picked up and not delivered keeps the site active
   (`PARCELS_IN_TRANSIT`, also DB); return / loss / failed attempt / pick-up point is never a
   delivery — a warning on that parcel, nothing cancelled, released or returned automatically.
+  Hotel supply plans (doc 032, owner 2026-10-20): one plan per hotel (validity, INACTIVE →
+  ACTIVE ⇄ PAUSED, rules of product × whole crates × days 1–31), occurrences unique per plan and
+  local ship day (DB), orders with `origin` MANUAL | SUPPLY_PLAN pointing to their occurrence,
+  optional hotel receiving details; `orders:plan_manage` (ADMIN only). Plans only create ordinary
+  orders (never a carrier shipment, pickup, label print or dispatch); horizon 14 days, never a
+  past day; a cancelled or moved order is never created again. No hotel portal, no forecasting.
   Dispatch and direct printing (doc 029, doc 030, owner 2026-10-18/-20; PR #36, #37, PR C for review):
   shipments, parcels, carrier requests, labels in several formats (PDF preview + ZPL for printing,
   never our own conversion), per-site carrier settings and encrypted carrier connections (ADR 0027),

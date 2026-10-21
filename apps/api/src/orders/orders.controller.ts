@@ -10,6 +10,11 @@ import {
   orderListQuerySchema,
   hotelOrdersQuerySchema,
   removeOrderCrateRequestSchema,
+  rescheduleOrderRequestSchema,
+  isoDateSchema,
+  type RescheduleOrderRequest,
+  type HotelDeliveries,
+  type OrderSummary,
   type CancelOrderRequest,
   type CompleteAndLabelRequest,
   type CompleteOrderRequest,
@@ -83,6 +88,27 @@ export class OrdersController {
     return this.orders.ofHotel(site, hotel, query);
   }
 
+  /** Orders of the hotel around a day — the overlap warning of a manual order (doc 032). */
+  @RequirePermission('orders:read')
+  @Get('hotel/:hotel/nearby/:date')
+  nearby(
+    @Param('hotel', new ZodValidationPipe(hotelCodeSchema)) hotel: string,
+    @Param('date', new ZodValidationPipe(isoDateSchema)) date: string,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderSummary[]> {
+    return this.orders.nearby(site, hotel, date);
+  }
+
+  /** Delivered and open quantities per product and month (doc 032 §4); reading only. */
+  @RequirePermission('orders:read')
+  @Get('hotel/:hotel/deliveries')
+  deliveries(
+    @Param('hotel', new ZodValidationPipe(hotelCodeSchema)) hotel: string,
+    @OperationalSite() site: SiteContext,
+  ): Promise<HotelDeliveries> {
+    return this.orders.deliveries(site, hotel);
+  }
+
   @RequirePermission('orders:read')
   @Get(':code')
   detail(
@@ -153,6 +179,19 @@ export class OrdersController {
     @OperationalSite() site: SiteContext,
   ): Promise<OrderShipment> {
     return this.orders.completeAndLabel(principal, site, code, body);
+  }
+
+  /** "Změnit den odeslání" (doc 032 §3): explicit, with a reason; the plan is not changed. */
+  @RequirePermission('orders:manage')
+  @Post(':code/reschedule')
+  @HttpCode(200)
+  reschedule(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(rescheduleOrderRequestSchema)) body: RescheduleOrderRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<OrderDetail> {
+    return this.orders.reschedule(principal.userId, site, code, body);
   }
 
   @RequirePermission('orders:manage')

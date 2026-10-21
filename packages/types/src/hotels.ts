@@ -69,9 +69,52 @@ export const fulfillmentSiteOptionSchema = z.object({
 });
 export type FulfillmentSiteOption = z.infer<typeof fulfillmentSiteOptionSchema>;
 
+/** Optional practical details (doc 032) — never required of existing hotels. */
+export const hotelPracticalSchema = z.object({
+  /** Goods receipt hours, entrance, ramp, … (not sent to the carrier). */
+  deliveryNote: z.string().nullable(),
+  receivingContact: z
+    .object({ name: z.string(), phone: z.string().nullable(), email: z.string().nullable() })
+    .nullable(),
+});
+export type HotelPractical = z.infer<typeof hotelPracticalSchema>;
+
 export const hotelDetailSchema = hotelSummarySchema.extend({
   address: deliveryAddressSchema,
   contact: hotelContactSchema,
+  practical: hotelPracticalSchema,
   createdBy: z.string(),
 });
 export type HotelDetail = z.infer<typeof hotelDetailSchema>;
+
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullable()
+    .transform((v) => (v ? v : null));
+
+/** "Upravit praktické údaje" (hotels:manage): only the optional details; a reason is required. */
+export const updateHotelPracticalRequestSchema = z
+  .strictObject({
+    requestId: z.uuid(),
+    deliveryNote: optionalText(500),
+    receivingContactName: optionalText(160),
+    receivingContactPhone: z
+      .string()
+      .trim()
+      .regex(/^(\+?[0-9 ()/-]{6,30})?$/, 'Phone number')
+      .nullable()
+      .transform((v) => (v ? v : null)),
+    receivingContactEmail: z
+      .union([z.email().max(254), z.literal('')])
+      .nullable()
+      .transform((v) => (v ? v : null)),
+    reason: z.string().trim().min(3).max(500),
+  })
+  .refine(
+    (v) => !(v.receivingContactPhone || v.receivingContactEmail) || !!v.receivingContactName,
+    { message: 'A receiving contact needs a name', path: ['receivingContactName'] },
+  );
+export type UpdateHotelPracticalRequest = z.infer<typeof updateHotelPracticalRequestSchema>;
