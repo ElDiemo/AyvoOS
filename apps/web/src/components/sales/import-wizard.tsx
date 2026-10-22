@@ -47,6 +47,8 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
   const [ownerId, setOwnerId] = useState('');
   const [overrides, setOverrides] = useState<ImportOptions['overrides']>({});
   const [preview, setPreview] = useState<ImportPreview | null>(null);
+  /** The fixes the shown preview was made with; others must be checked before confirming. */
+  const [previewedFixes, setPreviewedFixes] = useState('{}');
   const [choice, setChoice] = useState<Record<number, Choice>>({});
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [page, setPage] = useState(1);
@@ -118,6 +120,7 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
       // a row just fixed starts with the default. A possible duplicate needs its confirmation.
       const wasOk = new Set(preview?.rows.filter((r) => !r.errors.length).map((r) => r.row));
       setPreview(p);
+      setPreviewedFixes(JSON.stringify(overrides));
       setChoice((old) =>
         Object.fromEntries(
           p.rows.map((r) => {
@@ -142,6 +145,7 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
     ? preview.rows.filter((r) => choice[r.row]?.include && !r.errors.length)
     : [];
   const blockedByDuplicates = selected.filter((r) => hasDuplicates(r) && !choice[r.row]?.ack);
+  const fixesPending = JSON.stringify(overrides) !== previewedFixes;
 
   async function confirm() {
     if (!selected.length) return setError(t.nothingSelected);
@@ -149,6 +153,8 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
     setError(null);
     const body = {
       ...options(),
+      // The server confirms only what this preview showed (the same file and decisions).
+      fingerprint: preview!.fingerprint,
       rows: selected.map((r) => ({ row: r.row, acknowledgeDuplicates: !!choice[r.row]?.ack })),
     };
     const result = await attempt.run(JSON.stringify(body) + file!.name + file!.size, (requestId) =>
@@ -160,6 +166,12 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
     }
     if (!result.error) return;
     fail(result.error);
+    // The file changed since the preview (saved again in Excel): a fresh preview, fresh choices.
+    if (result.error instanceof ClientApiError && result.error.code === 'IMPORT_PREVIEW_STALE') {
+      await check(false);
+      setError(salesErrorText(result.error));
+      return;
+    }
     // The world changed since the preview: show the current state, keep the user's choices.
     if (
       result.error instanceof ClientApiError &&
@@ -420,8 +432,8 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
                 </button>
               </nav>
             )}
-            {Object.keys(overrides).length > 0 && (
-              <div>
+            {fixesPending && (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <button
                   type="button"
                   className={buttonClass.secondary}
@@ -431,6 +443,9 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
                 >
                   {busy ? t.checking : t.recheck}
                 </button>
+                <p className="text-sm text-stone-600" data-testid="import-fixes-pending">
+                  {t.fixesPending}
+                </p>
               </div>
             )}
             <div className="flex flex-col gap-3 border-t border-stone-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -450,7 +465,11 @@ export function ImportWizard({ salespeople }: { salespeople: Salesperson[] | nul
                   type="button"
                   className={buttonClass.primary}
                   disabled={
-                    attempt.busy || busy || !selected.length || blockedByDuplicates.length > 0
+                    attempt.busy ||
+                    busy ||
+                    fixesPending ||
+                    !selected.length ||
+                    blockedByDuplicates.length > 0
                   }
                   onClick={() => setConfirming(true)}
                   data-testid="import-confirm"

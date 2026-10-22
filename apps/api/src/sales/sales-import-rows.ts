@@ -89,7 +89,7 @@ export const ORIGINAL_HEADING = 'Původní údaje z importu (význam nepotvrzen)
 
 export function buildDrafts(csv: ParsedCsv, options: ImportOptions): ImportDraft[] {
   const { mapping, defaults, overrides } = options;
-  return csv.rows.map(({ row, cells }) => {
+  return csv.rows.map(({ row, cells, badQuotes }) => {
     const errors: ImportRowError[] = [];
     const fail = (code: ImportRowError['code'], field: string | null, value: string | null) =>
       errors.push({ code, field, value: value === null ? null : short(value) });
@@ -110,6 +110,10 @@ export function buildDrafts(csv: ParsedCsv, options: ImportOptions): ImportDraft
     };
     const fix = overrides[String(row)] ?? {};
 
+    // Text after a closing quote: the cell cannot be read reliably, so the row is never imported.
+    for (const i of badQuotes) {
+      fail('QUOTE_INVALID', csv.headers[i] || `Sloupec ${i + 1}`, cells[i]!.trim());
+    }
     for (let i = mapping.length; i < cells.length; i++) {
       if (cells[i]!.trim()) {
         fail('EXTRA_CELLS', null, cells[i]!.trim());

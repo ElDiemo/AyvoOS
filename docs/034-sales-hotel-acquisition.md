@@ -219,7 +219,10 @@ any synchronisation are not part of this version.
 - **File**: comma or semicolon (detected from the header line), quotes, doubled quotes, empty
   cells, notes over several lines, UTF-8 (with or without BOM) or the Windows-1250 that Czech Excel
   writes. Every value is text: a phone keeps its "+" and leading zeros. The file stays in the
-  browser and is sent for each step; **it is never stored**.
+  browser and is sent for each step; **it is never stored**. Text after a closing quote
+  (`"Hotel A" dovětek`) is never cut off: the row gets the error „Za ukončovací uvozovkou…“
+  (`QUOTE_INVALID`) and cannot be imported; spaces there are ignored; such a header refuses the
+  file (`CSV_QUOTE_INVALID`).
 - **Limits**: 2 MB, 2000 data rows, 60 columns (`SALES_IMPORT_*` in `packages/types`). Larger
   files are refused with the reason (413 / `IMPORT_TOO_MANY_ROWS`); split them.
 - **Columns**: name, country, city, address, postal code, estimated rooms, accommodation type,
@@ -237,18 +240,26 @@ any synchronisation are not part of this version.
 - **Preview writes nothing.** It lists each row with its number (the spreadsheet row, header =
   1), concrete errors (missing name or country, unknown country or type, rooms that are not 1–100000,
   priority other than A/B/C, invalid e-mail or phone — e.g. "4,20777E+11" from Excel — too long
-  text, extra cells), duplicates within the file, and possible duplicates among the prospects the
+  text, extra cells, text after a closing quote), duplicates within the file, and possible duplicates among the prospects the
   user may see (the rules of §8, archived ones included). Nothing is merged or overwritten.
 - **Choice**: rows with errors cannot be selected. A possible duplicate is imported only when the
   user confirms it as a new record ("Je to jiný hotel — založit jako nový").
 - **Owner**: a salesperson imports only for themselves. ADMIN (`sales:manage`) may choose an
   active salesperson with Obchod.
+- **Only what the preview showed**: the preview returns a fingerprint of the file's bytes and of
+  every decision (mapping, defaults, typed fixes, owner, the user). The confirmation carries it; a
+  file saved again since, or other decisions, are refused (`IMPORT_PREVIEW_STALE`) and the wizard
+  loads the preview again — typed fixes kept, rows chosen anew, nothing confirmed automatically.
+  Typed fixes must be checked ("Použít opravy a znovu zkontrolovat") before the import can be
+  confirmed.
 - **Confirmation**: permissions, the target owner, every selected row and the duplicates are
   checked again on the server; anything that changed since the preview is refused with the rows
   concerned (`IMPORT_ROWS_INVALID`, `IMPORT_DUPLICATES_UNCONFIRMED`, `NOT_A_SALESPERSON`) and the
   wizard refreshes its preview. All selected rows are written in one transaction (all or nothing),
   idempotent per request id: a double click or a retry after a lost answer imports once; the same
-  request id with another selection is a conflict.
+  request id with another selection is a conflict. Confirmations for one owner run one at a time
+  (an advisory lock): a parallel one with another request id (a second tab, a reload after a lost
+  answer) finds the rows as possible duplicates and writes nothing.
 - **Result** (`IMP-000001`, page `/sales/prospects/import/IMP-…`): created prospects with their
   row numbers, the rows left out with the reasons. Stored append-only in `sales_imports` (row
   numbers and error codes only, never contact data); every created prospect keeps its import and

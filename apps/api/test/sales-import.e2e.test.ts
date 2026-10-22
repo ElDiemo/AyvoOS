@@ -45,6 +45,10 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     ownerId: null,
     ...extra,
   });
+  /** The fingerprint of a preview — a confirmation carries the one of the preview it follows. */
+  const previewed = async (cookie: string, csv: string, opts: object) =>
+    ((await upload(cookie, '/imports/preview', csv, opts).expect(200)).body as ImportPreview)
+      .fingerprint;
   const counts = async () => ({
     prospects: await t.prisma.salesProspect.count(),
     contacts: await t.prisma.salesContact.count(),
@@ -223,9 +227,11 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
   it('confirms only the selected rows, once, in one transaction; the result can be found again', async () => {
     const before = await counts();
     const opts = options(mapping, { defaults: { countryCode: 'CZ', contactLabel: 'Recepce' } });
+    const fingerprint = await previewed(people.a.cookie, table(), opts);
     // A row with errors cannot be selected.
     const bad = await upload(people.a.cookie, '/imports', table(), {
       ...opts,
+      fingerprint,
       requestId: randomUUID(),
       rows: [
         { row: 2, acknowledgeDuplicates: true },
@@ -237,6 +243,7 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     // A possible duplicate must be confirmed explicitly as a new record.
     const dup = await upload(people.a.cookie, '/imports', table(), {
       ...opts,
+      fingerprint,
       requestId: randomUUID(),
       rows: [{ row: 2, acknowledgeDuplicates: false }],
     });
@@ -250,6 +257,7 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     // Rows 2, 3 and 4 (7 is the same hotel as 2 — left out); a double click / lost answer: once.
     const body = {
       ...opts,
+      fingerprint,
       requestId: randomUUID(),
       rows: [
         { row: 2, acknowledgeDuplicates: true },
@@ -349,6 +357,7 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     // Duplicates: A's own prospects only — B's same hotel is not even hinted to A.
     await upload(people.b.cookie, '/imports', csv, {
       ...opts,
+      fingerprint: await previewed(people.b.cookie, csv, opts),
       requestId: randomUUID(),
       rows: [{ row: 2, acknowledgeDuplicates: false }],
     }).expect(201);
@@ -391,6 +400,7 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
       .expect(201);
     const late = await upload(people.a.cookie, '/imports', csv2, {
       ...opts,
+      fingerprint: prev2.fingerprint,
       requestId: randomUUID(),
       rows: [{ row: 2, acknowledgeDuplicates: false }],
     });
@@ -407,6 +417,7 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     const gone = await upload(admin, '/imports', csv, {
       ...opts,
       ownerId: people.c.id,
+      fingerprint: prevAdmin.fingerprint,
       requestId: randomUUID(),
       rows: [{ row: 2, acknowledgeDuplicates: true }],
     });
@@ -415,6 +426,121 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     // The importer loses Obchod: refused on the next request.
     const cSelf = await upload(people.c.cookie, '/imports/preview', csv, opts);
     expect([401, 403]).toContain(cSelf.status);
+    expect(await counts()).toEqual(before);
+  });
+
+  it('confirms only what the preview showed; parallel or repeated confirmations import once', async () => {
+    const csv = `Název;Země;Kontakt\r\nHotel Náhledový ${tag};CZ;\r\nPenzion Náhledový ${tag};SK;\r\n`;
+    const opts = options(['name', 'countryCode', 'contactLabel']);
+    const prev = (await upload(people.a.cookie, '/imports/preview', csv, opts).expect(200))
+      .body as ImportPreview;
+    expect(prev.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    const rows = [
+      { row: 2, acknowledgeDuplicates: false },
+      { row: 3, acknowledgeDuplicates: false },
+    ];
+    const confirm = (file: string, o: object, extra: object = {}) =>
+      upload(people.a.cookie, '/imports', file, {
+        ...o,
+        requestId: randomUUID(),
+        rows,
+        fingerprint: prev.fingerprint,
+        ...extra,
+      });
+    const before = await counts();
+    // Another file (e.g. saved again in Excel after the preview), the same row numbers: refused.
+    const otherFile = await confirm(csv.replace('Hotel Náhledový', 'Hotel Podvržený'), opts);
+    expect(otherFile.status).toBe(409);
+    expect(otherFile.body.code).toBe('IMPORT_PREVIEW_STALE');
+    // Other decisions than previewed: mapping, defaults, fixes, owner — refused as well.
+    for (const changed of [
+      options(['name', 'countryCode', 'ignore']),
+      options(['name', 'countryCode', 'contactLabel'], {
+        defaults: { countryCode: null, contactLabel: 'Recepce' },
+      }),
+      options(['name', 'countryCode', 'contactLabel'], { overrides: { '2': { name: 'Jiný' } } }),
+      options(['name', 'countryCode', 'contactLabel'], { ownerId: people.a.id }),
+    ]) {
+      const r = await confirm(csv, changed);
+      expect(r.body.code, JSON.stringify(changed)).toBe('IMPORT_PREVIEW_STALE');
+    }
+    // Another user's preview does not confirm this one.
+    const foreign = await upload(people.b.cookie, '/imports', csv, {
+      ...opts,
+      requestId: randomUUID(),
+      rows,
+      fingerprint: prev.fingerprint,
+    });
+    expect(foreign.body.code).toBe('IMPORT_PREVIEW_STALE');
+    // Without a preview at all.
+    const unpreviewed = await upload(people.a.cookie, '/imports', csv, {
+      ...opts,
+      requestId: randomUUID(),
+      rows,
+    });
+    expect(unpreviewed.status).toBe(400);
+    expect(await counts()).toEqual(before);
+
+    // Two confirmations at once with different request ids (two tabs, a reload after a lost
+    // answer): one import; the other finds its rows as possible duplicates and writes nothing.
+    const bodies = [1, 2].map(() => ({
+      ...opts,
+      requestId: randomUUID(),
+      rows,
+      fingerprint: prev.fingerprint,
+    }));
+    const results = await Promise.all(
+      bodies.map((b) => upload(people.a.cookie, '/imports', csv, b)),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    const won = results.findIndex((r) => r.status === 201);
+    expect(results[1 - won]!.body.code).toBe('IMPORT_DUPLICATES_UNCONFIRMED');
+    const after = {
+      ...before,
+      prospects: before.prospects + 2,
+      imports: before.imports + 1,
+    };
+    expect(await counts()).toEqual(after);
+    // A retry of the successful request (its answer was lost) returns the same import, once.
+    const retry = await upload(people.a.cookie, '/imports', csv, bodies[won]!).expect(201);
+    expect(retry.body.code).toBe(results[won]!.body.code);
+    expect(await counts()).toEqual(after);
+  });
+
+  it('writes nothing when the importer loses Obchod between the preview and the confirmation', async () => {
+    const email = unique('import-d');
+    const d = (
+      await http()
+        .post('/api/admin/identity/users')
+        .set('Cookie', admin)
+        .send({
+          email,
+          displayName: 'Importující Dana',
+          roles: ['SALES'],
+          siteIds: [],
+          warehouseCodes: [],
+          reason: 'salesperson',
+        })
+        .expect(201)
+    ).body as AdminUserDetail;
+    const cookie = await sessionCookie(t, email);
+    const csv = `Název;Země\r\nHotel Odebraný ${tag};CZ\r\n`;
+    const opts = options(['name', 'countryCode']);
+    const prev = (await upload(cookie, '/imports/preview', csv, opts).expect(200))
+      .body as ImportPreview;
+    const before = await counts();
+    await http()
+      .post(`/api/admin/identity/users/${d.id}/roles/revoke`)
+      .set('Cookie', admin)
+      .send({ role: 'SALES', reason: 'odchod' })
+      .expect((res) => expect([200, 201]).toContain(res.status));
+    const r = await upload(cookie, '/imports', csv, {
+      ...opts,
+      requestId: randomUUID(),
+      rows: [{ row: 2, acknowledgeDuplicates: false }],
+      fingerprint: prev.fingerprint,
+    });
+    expect([401, 403]).toContain(r.status);
     expect(await counts()).toEqual(before);
   });
 
@@ -427,6 +553,23 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     expect(quote.status).toBe(422);
     expect(quote.body).toMatchObject({ code: 'CSV_UNTERMINATED_QUOTE', details: { line: 2 } });
     expect((await upload(people.a.cookie, '/imports/inspect', '\r\n')).body.code).toBe('CSV_EMPTY');
+    // Text after a closing quote is never cut off: the row gets an error with its number.
+    const stray = (
+      await upload(
+        people.a.cookie,
+        '/imports/preview',
+        `Název;Země\r\n"Hotel Uvozovka ${tag}" s dovětkem;CZ\r\n"Hotel Správný ${tag}" ;CZ\r\n`,
+        options(['name', 'countryCode']),
+      ).expect(200)
+    ).body as ImportPreview;
+    expect(stray.rows.map((r) => [r.row, r.name, r.errors.map((e) => e.code)])).toEqual([
+      [2, `Hotel Uvozovka ${tag} s dovětkem`, ['QUOTE_INVALID']],
+      [3, `Hotel Správný ${tag}`, []],
+    ]);
+    expect(stray.rows[0]!.errors[0]!.field).toBe('Název');
+    expect(
+      (await upload(people.a.cookie, '/imports/inspect', '"Název"x;Země\r\nA;CZ\r\n')).body,
+    ).toMatchObject({ code: 'CSV_QUOTE_INVALID', details: { line: 1 } });
     expect((await upload(people.a.cookie, '/imports/inspect', 'Název;Země\r\n')).body.code).toBe(
       'CSV_NO_DATA',
     );
@@ -471,6 +614,7 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
     const res = (
       await upload(people.b.cookie, '/imports', big, {
         ...opts,
+        fingerprint: prev.fingerprint,
         requestId: randomUUID(),
         rows: prev.rows.map((r) => ({ row: r.row, acknowledgeDuplicates: false })),
       }).expect(201)

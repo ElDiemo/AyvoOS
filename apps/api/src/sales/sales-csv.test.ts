@@ -18,11 +18,12 @@ describe('sales CSV', () => {
       {
         row: 2,
         cells: ['Hotel "U Lípy"', 'CZ', '+420 777 000 111', 'první řádek\r\ndruhý; řádek'],
+        badQuotes: [],
       },
       // The phone stays text: "+" and leading zeros are kept.
-      { row: 3, cells: ['Penzion Žluťoučký kůň', '', '0049 30 123', ''] },
+      { row: 3, cells: ['Penzion Žluťoučký kůň', '', '0049 30 123', ''], badQuotes: [] },
       // An empty row still counts, so the numbers match the spreadsheet.
-      { row: 5, cells: ['Třetí', 'SK', '', ''] },
+      { row: 5, cells: ['Třetí', 'SK', '', ''], badQuotes: [] },
     ]);
   });
 
@@ -45,6 +46,25 @@ describe('sales CSV', () => {
       expect.unreachable();
     } catch (e) {
       expect(e).toMatchObject({ code: 'CSV_UNTERMINATED_QUOTE', line: 2 });
+    }
+  });
+
+  it('never drops text after a closing quote: the row is flagged, whitespace is tolerated', () => {
+    const p = parseCsv(
+      utf8('Název;Poznámka\r\n"Hotel A"B;x\r\n"Penzion" ;"ok"  \r\nC;"jedna"dvě "tři"\r\n'),
+    );
+    expect(p.rows).toEqual([
+      // Nothing is cut off; the cell is marked so the preview shows an error for that row.
+      { row: 2, cells: ['Hotel AB', 'x'], badQuotes: [0] },
+      { row: 3, cells: ['Penzion', 'ok'], badQuotes: [] },
+      { row: 4, cells: ['C', 'jednadvě "tři"'], badQuotes: [1] },
+    ]);
+    // A broken header cannot be mapped at all.
+    try {
+      parseCsv(utf8('"Název"x;Země\nA;CZ'));
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toMatchObject({ code: 'CSV_QUOTE_INVALID', line: 1 });
     }
   });
 

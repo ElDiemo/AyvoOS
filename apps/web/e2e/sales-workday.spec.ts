@@ -222,7 +222,11 @@ test('imports a table: columns, preview with errors and a duplicate, confirmatio
   await expect(row(5).getByTestId('import-include')).not.toBeChecked();
   // Fix a missing country in the preview; nothing has been written yet.
   await row(4).getByTestId('import-fix-country').fill('cz');
+  // A typed fix is not confirmed unchecked: the import waits for the check.
+  await expect(page.getByTestId('import-fixes-pending')).toBeVisible();
+  await expect(page.getByTestId('import-confirm')).toBeDisabled();
   await page.getByTestId('import-recheck').click();
+  await expect(page.getByTestId('import-fixes-pending')).toHaveCount(0);
   await expect(page.getByTestId('import-counts')).toHaveText(
     '5 řádků · 4 v pořádku · 1 s chybou · 1 možných duplicit',
   );
@@ -246,6 +250,34 @@ test('imports a table: columns, preview with errors and a duplicate, confirmatio
   await page.setViewportSize({ width: 1280, height: 900 });
   await shot(page, 'sales-06-import-preview-desktop');
 
+  await expect(page.getByTestId('import-selected')).toHaveText('Vybráno 3 z 5 řádků');
+  // The server says the file changed since the preview (saved again in Excel): nothing is
+  // imported, the preview is loaded again and the user confirms anew.
+  let refused = 0;
+  await page.route('**/api/admin/sales/imports', async (route) => {
+    if (refused++) return route.fallback();
+    await route.fulfill({
+      status: 409,
+      json: { statusCode: 409, code: 'IMPORT_PREVIEW_STALE', message: 'changed' },
+    });
+  });
+  await page.getByTestId('import-confirm').click();
+  await page
+    .getByTestId('import-confirm-dialog')
+    .getByRole('button', { name: 'Importovat 3 zájemce' })
+    .click();
+  await expect(page.getByTestId('import-error')).toContainText('od náhledu změnily');
+  await expect(page.getByTestId('import-counts')).toHaveText(
+    '5 řádků · 4 v pořádku · 1 s chybou · 1 možných duplicit',
+  );
+  await page.unroute('**/api/admin/sales/imports');
+  expect(
+    (
+      await json<{ total: number }>(
+        await page.request.get(`/api/admin/sales/prospects?q=${encodeURIComponent(tag)}`),
+      )
+    ).total,
+  ).toBe(3);
   await expect(page.getByTestId('import-selected')).toHaveText('Vybráno 3 z 5 řádků');
   await page.getByTestId('import-confirm').click();
   const confirm = page.getByTestId('import-confirm-dialog');

@@ -83,9 +83,16 @@ export const importOptionsSchema = z.strictObject({
 });
 export type ImportOptions = z.infer<typeof importOptionsSchema>;
 
-/** The confirmation: the rows to create, each duplicate explicitly confirmed as a new record. */
+/** What a preview showed (the file's bytes and every decision shaping its rows), as a hash. */
+export const importFingerprintSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
+/**
+ * The confirmation: the rows to create, each duplicate explicitly confirmed as a new record, and
+ * the fingerprint of the preview they were chosen in — another file or other decisions are refused.
+ */
 export const confirmImportSchema = importOptionsSchema.extend({
   requestId: z.uuid(),
+  fingerprint: importFingerprintSchema,
   rows: z
     .array(z.strictObject({ row: z.number().int().min(2), acknowledgeDuplicates: z.boolean() }))
     .min(1)
@@ -107,6 +114,7 @@ export const IMPORT_ROW_ERRORS = [
   'TEXT_TOO_LONG',
   'NOTE_TOO_LONG',
   'EXTRA_CELLS',
+  'QUOTE_INVALID',
 ] as const;
 export const importRowErrorSchema = z.object({
   code: z.enum(IMPORT_ROW_ERRORS),
@@ -143,6 +151,8 @@ export const importPreviewRowSchema = z.object({
 export type ImportPreviewRow = z.infer<typeof importPreviewRowSchema>;
 
 export const importPreviewSchema = z.object({
+  /** Sent back with the confirmation (the server confirms only what this preview showed). */
+  fingerprint: importFingerprintSchema,
   owner: userRefSchema,
   rows: z.array(importPreviewRowSchema),
   counts: z.object({

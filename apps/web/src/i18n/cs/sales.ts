@@ -458,6 +458,7 @@ export const salesCs = {
     fixName: 'Doplnit název',
     fixCountry: 'Doplnit zemi (např. CZ)',
     recheck: 'Použít opravy a znovu zkontrolovat',
+    fixesPending: 'Opravy se projeví až po kontrole — teprve potom lze import potvrdit.',
     noContact: 'bez kontaktu',
     notePreview: 'Poznámka',
     selected: (n: number, total: number) => `Vybráno ${n} z ${total} řádků`,
@@ -487,6 +488,8 @@ export const salesCs = {
       TEXT_TOO_LONG: 'Text je příliš dlouhý.',
       NOTE_TOO_LONG: 'Poznámka je delší než 4000 znaků.',
       EXTRA_CELLS: 'Řádek má víc hodnot než sloupců.',
+      QUOTE_INVALID:
+        'Za ukončovací uvozovkou následuje další text — buňku nelze spolehlivě přečíst. Opravte ji v souboru.',
     } satisfies Record<ImportRowError['code'], string>,
     resultTitle: (code: string) => `Import ${code}`,
     resultSummary: (created: number, total: number, owner: string) =>
@@ -535,6 +538,8 @@ export const salesCs = {
     CSV_NO_DATA: 'Soubor má jen záhlaví, žádné řádky.',
     CSV_UNTERMINATED_QUOTE:
       'V souboru chybí ukončovací uvozovky — zkontrolujte ho a uložte znovu jako CSV.',
+    CSV_QUOTE_INVALID:
+      'Záhlaví souboru má za uvozovkou další text — opravte ho a uložte znovu jako CSV.',
     IMPORT_FILE_MISSING: 'Vyberte soubor CSV.',
     IMPORT_TOO_MANY_ROWS: 'Soubor má víc než 2000 řádků. Rozdělte ho na menší části.',
     IMPORT_TOO_MANY_COLUMNS: 'Soubor má víc než 60 sloupců.',
@@ -542,6 +547,8 @@ export const salesCs = {
     IMPORT_MAPPING_DUPLICATE: 'Jeden údaj je přiřazen víc sloupcům.',
     IMPORT_NAME_NOT_MAPPED: 'Vyberte sloupec s názvem hotelu.',
     IMPORT_ROWS_INVALID: 'Některé vybrané řádky mají chyby. Náhled byl obnoven.',
+    IMPORT_PREVIEW_STALE:
+      'Soubor nebo nastavení se od náhledu změnily. Náhled byl načten znovu — zkontrolujte ho a vyberte řádky.',
     IMPORT_DUPLICATES_UNCONFIRMED:
       'Mezitím přibyl podobný zájemce. Zkontrolujte obnovený náhled a duplicity potvrďte.',
     IMPORT_ROW_UNKNOWN: 'Vybraný řádek v souboru není. Načtěte soubor znovu.',

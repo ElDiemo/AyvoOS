@@ -78,11 +78,13 @@ export class SalesImportService {
     const csv = this.read(file);
     this.checkMapping(csv, options);
     const owner = await this.owner(this.prisma, scope, options.ownerId);
+    const fileSha256 = createHash('sha256').update(file!.buffer).digest('hex');
     const { drafts, inFile, existing } = await this.analyse(this.prisma, scope, csv, options);
     const rows = drafts.map((d) =>
       previewRow(d, inFile.get(d.row) ?? [], existing.get(d.row) ?? []),
     );
     return {
+      fingerprint: previewFingerprint(scope.userId, fileSha256, options),
       owner,
       rows,
       counts: {
@@ -102,12 +104,24 @@ export class SalesImportService {
     const csv = this.read(file);
     this.checkMapping(csv, input);
     const fileSha256 = createHash('sha256').update(file!.buffer).digest('hex');
-    const { requestId, ...decisions } = input;
+    const { requestId, fingerprint, ...decisions } = input;
+    // Only what the preview showed: not a file saved again since, not other decisions.
+    if (fingerprint !== previewFingerprint(scope.userId, fileSha256, decisions)) {
+      throw domainError(
+        409,
+        'IMPORT_PREVIEW_STALE',
+        'The file or the import settings changed since the preview; check the preview again',
+      );
+    }
     const { result } = await this.operations.run(
       'SALES_IMPORT',
       requestId,
       { actorId: scope.userId, fileSha256, fileName: fileNameOf(file!), ...decisions },
       async (tx) => {
+        // One confirmation per owner at a time: a parallel one (another tab, a reload after a lost
+        // answer) then sees these prospects as possible duplicates instead of creating them again.
+        const lockKey = `sales-import:${input.ownerId ?? scope.userId}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
         // Checked again now — the owner may have lost Obchod since the preview.
         const owner = await this.owner(tx, scope, input.ownerId);
         const { drafts, inFile, existing } = await this.analyse(tx, scope, csv, input);
@@ -366,6 +380,16 @@ export class SalesImportService {
       existing: await existingDuplicates(db, scope, drafts),
     };
   }
+}
+
+/** The hash of what a preview showed to this user: the file's bytes and every decision. */
+function previewFingerprint(userId: string, fileSha256: string, o: ImportOptions): string {
+  const overrides = Object.keys(o.overrides)
+    .sort((a, b) => Number(a) - Number(b))
+    .map((row) => [row, o.overrides[row]!.name ?? null, o.overrides[row]!.countryCode ?? null]);
+  const { countryCode, contactLabel } = o.defaults;
+  const shown = [userId, fileSha256, o.mapping, countryCode, contactLabel, overrides, o.ownerId];
+  return createHash('sha256').update(JSON.stringify(shown)).digest('hex');
 }
 
 /** Possible duplicates among the prospects the user may see (the same rules as doc 034 §8). */

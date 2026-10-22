@@ -9,7 +9,7 @@ import type { ImportField } from '@ayvo/types';
 
 export class CsvError extends Error {
   constructor(
-    readonly code: 'CSV_EMPTY' | 'CSV_UNTERMINATED_QUOTE' | 'CSV_NO_DATA',
+    readonly code: 'CSV_EMPTY' | 'CSV_UNTERMINATED_QUOTE' | 'CSV_QUOTE_INVALID' | 'CSV_NO_DATA',
     /** The physical line where the problem starts (1-based). */
     readonly line: number | null = null,
   ) {
@@ -21,8 +21,11 @@ export interface ParsedCsv {
   encoding: 'UTF-8' | 'windows-1250';
   delimiter: ',' | ';';
   headers: string[];
-  /** Data records with their spreadsheet row number (the header is row 1). */
-  rows: { row: number; cells: string[] }[];
+  /**
+   * Data records with their spreadsheet row number (the header is row 1). `badQuotes`: cells with
+   * text after their closing quote — kept in the cell, never dropped, and the row is refused.
+   */
+  rows: { row: number; cells: string[]; badQuotes: number[] }[];
 }
 
 /** UTF-8 (with or without BOM); a file that is not valid UTF-8 is read as Windows-1250. */
@@ -49,13 +52,26 @@ function detectDelimiter(text: string): ',' | ';' {
   return semicolons >= commas && semicolons > 0 ? ';' : ',';
 }
 
-/** RFC 4180 records: quoted cells may hold the delimiter, doubled quotes and line breaks. */
-function records(text: string, delimiter: string): { line: number; cells: string[] }[] {
-  const out: { line: number; cells: string[] }[] = [];
+interface CsvRecord {
+  line: number;
+  cells: string[];
+  badQuotes: number[];
+}
+
+/**
+ * RFC 4180 records: quoted cells may hold the delimiter, doubled quotes and line breaks. Spaces
+ * after a closing quote are ignored; any other text there is kept (appended to the cell) and the
+ * cell is reported, so nothing is ever cut off silently.
+ */
+function records(text: string, delimiter: string): CsvRecord[] {
+  const out: CsvRecord[] = [];
   let cells: string[] = [];
+  let badQuotes: number[] = [];
   let cell = '';
   let quoted = false;
   let afterQuote = false;
+  /** Spaces after a closing quote: dropped at the end of the cell, kept before stray text. */
+  let tail = '';
   let line = 1;
   let start = 1;
   let quoteLine = 0;
@@ -84,23 +100,32 @@ function records(text: string, delimiter: string): { line: number; cells: string
       cells.push(cell);
       cell = '';
       afterQuote = false;
+      tail = '';
     } else if (ch === '\n' || ch === '\r') {
       if (ch === '\r' && text[i + 1] === '\n') i++;
       cells.push(cell);
-      out.push({ line: start, cells });
+      out.push({ line: start, cells, badQuotes });
       cells = [];
+      badQuotes = [];
       cell = '';
       afterQuote = false;
+      tail = '';
       line++;
       start = line;
     } else if (!afterQuote) {
       cell += ch;
+    } else if (ch === ' ' || ch === '\t') {
+      tail += ch;
+    } else {
+      if (badQuotes.at(-1) !== cells.length) badQuotes.push(cells.length);
+      cell += tail + ch;
+      tail = '';
     }
   }
   if (quoted) throw new CsvError('CSV_UNTERMINATED_QUOTE', quoteLine);
   if (cell !== '' || cells.length) {
     cells.push(cell);
-    out.push({ line: start, cells });
+    out.push({ line: start, cells, badQuotes });
   }
   return out;
 }
@@ -114,11 +139,15 @@ export function parseCsv(bytes: Uint8Array): ParsedCsv {
   const blank = (cells: string[]) => cells.every((c) => c.trim() === '');
   const headerIndex = all.findIndex((r) => !blank(r.cells));
   if (headerIndex < 0) throw new CsvError('CSV_EMPTY');
-  const headers = all[headerIndex]!.cells.map((h) => h.trim());
+  const header = all[headerIndex]!;
+  if (header.badQuotes.length) throw new CsvError('CSV_QUOTE_INVALID', header.line);
+  const headers = header.cells.map((h) => h.trim());
   const rows: ParsedCsv['rows'] = [];
   // Spreadsheet rows: every record counts (an empty row too), so the numbers match Excel.
   all.slice(headerIndex + 1).forEach((r, i) => {
-    if (!blank(r.cells)) rows.push({ row: headerIndex + 2 + i, cells: r.cells });
+    if (!blank(r.cells)) {
+      rows.push({ row: headerIndex + 2 + i, cells: r.cells, badQuotes: r.badQuotes });
+    }
   });
   if (!rows.length) throw new CsvError('CSV_NO_DATA');
   return { encoding, delimiter, headers, rows };
