@@ -91,3 +91,13 @@ describe('sales CSV', () => {
     expect(csvFile(['A', 'B'], [['1', null]])).toBe('\uFEFFA;B\r\n1;\r\n');
   });
 });
+
+describe('import file name', () => {
+  it('shows a Czech file name as typed (multipart hands it over as Latin-1)', async () => {
+    const { fileNameOf } = await import('./sales-import.service.js');
+    const latin1 = Buffer.from('zájemci květen.csv', 'utf8').toString('latin1');
+    expect(fileNameOf({ originalname: latin1 })).toBe('zájemci květen.csv');
+    expect(fileNameOf({ originalname: 'zajemci.csv' })).toBe('zajemci.csv');
+    expect(fileNameOf({ originalname: ' ' })).toBe('import.csv');
+  });
+});

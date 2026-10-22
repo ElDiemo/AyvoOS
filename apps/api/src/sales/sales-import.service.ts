@@ -33,6 +33,17 @@ export interface UploadedCsv {
 type Accessible = DuplicateHint['accessible'];
 
 /**
+ * The uploaded file's name as the user sees it: multipart parsers hand over UTF-8 names decoded
+ * as Latin-1 ("zÃ¡jemci.csv"), so a name that is valid UTF-8 once re-encoded is decoded again.
+ */
+export function fileNameOf(file: Pick<UploadedCsv, 'originalname'>): string {
+  const raw = file.originalname;
+  const utf8 = Buffer.from(raw, 'latin1').toString('utf8');
+  const name = /[\u0080-\u00ff]/.test(raw) && !utf8.includes('\uFFFD') ? utf8 : raw;
+  return name.trim() || 'import.csv';
+}
+
+/**
  * CSV import of prospects (doc 034 §13): inspect → map → preview (writes nothing) → confirm
  * (the selected rows in one transaction, idempotent per request id) → a result record that can be
  * found again. Ownership, the target owner and duplicates are checked again on confirmation.
@@ -49,7 +60,7 @@ export class SalesImportService {
   inspect(file: UploadedCsv | undefined): ImportInspection {
     const csv = this.read(file);
     return {
-      fileName: file!.originalname,
+      fileName: fileNameOf(file!),
       encoding: csv.encoding,
       delimiter: csv.delimiter,
       headers: csv.headers,
@@ -95,7 +106,7 @@ export class SalesImportService {
     const { result } = await this.operations.run(
       'SALES_IMPORT',
       requestId,
-      { actorId: scope.userId, fileSha256, fileName: file!.originalname, ...decisions },
+      { actorId: scope.userId, fileSha256, fileName: fileNameOf(file!), ...decisions },
       async (tx) => {
         // Checked again now — the owner may have lost Obchod since the preview.
         const owner = await this.owner(tx, scope, input.ownerId);
@@ -147,7 +158,7 @@ export class SalesImportService {
           data: {
             serial: importSerial,
             code,
-            fileName: file!.originalname.slice(0, 255) || 'import.csv',
+            fileName: fileNameOf(file!).slice(0, 255),
             fileSha256,
             encoding: csv.encoding,
             delimiter: csv.delimiter,
