@@ -8,14 +8,15 @@ import {
   type ProspectDetail,
   type ProspectStage,
   type Salesperson,
+  type SalesTask,
 } from '@ayvo/types';
 import { useId, useState } from 'react';
 import { fieldClass, FormField } from '@/components/catalog/form-kit';
 import { buttonClass } from '@/components/ui';
 import { salesCs } from '@/i18n/cs/sales';
 import { FormDialog } from './sales-dialog';
-import { salesNowLocal } from './sales-format';
-import { DialogError, useSalesSend } from './use-sales-send';
+import { dueLabel, salesNowLocal } from './sales-format';
+import { dialogError, useSalesSend } from './use-sales-send';
 
 type Contact = { id: string; label: string };
 const a = salesCs.activity;
@@ -65,7 +66,7 @@ export function ActivityDialog({
       busy={busy}
       wide
       testId="activity-dialog"
-      error={invalid ?? <DialogError error={error} />}
+      error={invalid ?? dialogError(error)}
       onClose={close}
       onSubmit={() => {
         setInvalid(null);
@@ -230,7 +231,7 @@ export function TaskDialog({
       submitLabel={tk.save}
       busy={busy}
       testId="task-dialog"
-      error={invalid ?? <DialogError error={error} />}
+      error={invalid ?? dialogError(error)}
       onClose={close}
       onSubmit={() => {
         setInvalid(null);
@@ -333,7 +334,7 @@ export function StageDialog({
       submitLabel={st.save}
       busy={busy}
       testId="stage-dialog"
-      error={invalid ?? <DialogError error={error} />}
+      error={invalid ?? dialogError(error)}
       onClose={close}
       onSubmit={() => {
         setInvalid(null);
@@ -426,7 +427,7 @@ export function OwnerDialog({
       submitLabel={o.save}
       busy={busy}
       testId="owner-dialog"
-      error={<DialogError error={error} />}
+      error={dialogError(error)}
       onClose={close}
       onSubmit={() => {
         if (!ownerId) return;
@@ -471,17 +472,170 @@ export function OwnerDialog({
   );
 }
 
+/**
+ * "Archivovat" (doc 034 §3a): not a stage, nothing deleted. With open tasks it is refused — the
+ * dialog lists them with a way to resolve them; nothing is cancelled automatically.
+ */
+export function ArchiveDialog({
+  prospect,
+  openTasks,
+  today: day,
+  open,
+  onClose,
+}: {
+  prospect: Pick<ProspectDetail, 'code' | 'revision'>;
+  openTasks: Pick<SalesTask, 'id' | 'title' | 'dueOn'>[];
+  today: string;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const id = useId();
+  const ad = salesCs.archiveDialog;
+  const [reason, setReason] = useState('');
+  const [invalid, setInvalid] = useState<string | null>(null);
+  const { busy, error, setError, send } = useSalesSend();
+  const close = () => {
+    setError(null);
+    setInvalid(null);
+    onClose();
+  };
+  const blocked = openTasks.length > 0;
+  return (
+    <FormDialog
+      open={open}
+      title={ad.title}
+      submitLabel={ad.save}
+      busy={busy}
+      testId="archive-dialog"
+      error={invalid ?? dialogError(error)}
+      onClose={close}
+      onSubmit={() => {
+        setInvalid(null);
+        if (blocked) return setInvalid(ad.openTasks(openTasks.length));
+        if (reason.trim().length < 3) return setInvalid(salesCs.invalid);
+        void send(
+          `admin/sales/prospects/${prospect.code}/archive`,
+          { revision: prospect.revision, reason: reason.trim() },
+          close,
+        );
+      }}
+    >
+      <p className="text-xs text-stone-500">{ad.text}</p>
+      {blocked ? (
+        <div
+          className="flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900"
+          data-testid="archive-open-tasks"
+        >
+          <p>{ad.openTasks(openTasks.length)}</p>
+          <ul className="list-disc pl-5">
+            {openTasks.map((t) => (
+              <li key={t.id}>
+                {t.title} · {dueLabel(t.dueOn, day).text}
+              </li>
+            ))}
+          </ul>
+          <a
+            href="#open-tasks"
+            className="font-medium underline"
+            onClick={close}
+            data-testid="archive-to-tasks"
+          >
+            {ad.toTasks}
+          </a>
+        </div>
+      ) : (
+        <FormField id={`${id}-reason`} label={ad.reason} help={ad.reasonHelp}>
+          <input
+            id={`${id}-reason`}
+            maxLength={500}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className={fieldClass(false)}
+            data-testid="archive-reason"
+          />
+        </FormField>
+      )}
+    </FormDialog>
+  );
+}
+
+/** "Obnovit": back among the active ones as it was — no new tasks, no invented contacts. */
+export function RestoreButton({
+  prospect,
+}: {
+  prospect: Pick<ProspectDetail, 'code' | 'revision'>;
+}) {
+  const id = useId();
+  const rd = salesCs.restoreDialog;
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const { busy, error, setError, send } = useSalesSend();
+  const close = () => {
+    setError(null);
+    setOpen(false);
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className={buttonClass.primary}
+        onClick={() => setOpen(true)}
+        data-testid="restore-prospect"
+      >
+        {salesCs.detail.restore}
+      </button>
+      <FormDialog
+        open={open}
+        title={rd.title}
+        submitLabel={rd.save}
+        busy={busy}
+        testId="restore-dialog"
+        error={dialogError(error)}
+        onClose={close}
+        onSubmit={() =>
+          void send(
+            `admin/sales/prospects/${prospect.code}/restore`,
+            {
+              revision: prospect.revision,
+              reason: reason.trim().length >= 3 ? reason.trim() : null,
+            },
+            close,
+          )
+        }
+      >
+        <p className="text-xs text-stone-500">{rd.text}</p>
+        <FormField id={`${id}-reason`} label={rd.reason}>
+          <input
+            id={`${id}-reason`}
+            maxLength={500}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className={fieldClass(false)}
+            data-testid="restore-reason"
+          />
+        </FormField>
+      </FormDialog>
+    </>
+  );
+}
+
 /** The quick actions at the top of the detail: activity, task, stage (and assignment for ADMIN). */
 export function ProspectActions({
   prospect,
   contacts,
   salespeople,
+  openTasks,
+  today: day,
 }: {
   prospect: Pick<ProspectDetail, 'code' | 'stage' | 'revision' | 'owner'>;
   contacts: Contact[];
   salespeople: Salesperson[] | null;
+  openTasks: Pick<SalesTask, 'id' | 'title' | 'dueOn'>[];
+  today: string;
 }) {
-  const [open, setOpen] = useState<'activity' | 'task' | 'stage' | 'owner' | null>(null);
+  const [open, setOpen] = useState<'activity' | 'task' | 'stage' | 'owner' | 'archive' | null>(
+    null,
+  );
   const d = salesCs.detail;
   return (
     <div className="flex flex-wrap gap-2" data-testid="prospect-actions">
@@ -519,6 +673,22 @@ export function ProspectActions({
           {d.changeOwner}
         </button>
       )}
+      <button
+        type="button"
+        className={`${buttonClass.secondary} sm:ml-auto`}
+        onClick={() => setOpen('archive')}
+        data-testid="archive-prospect"
+      >
+        {d.archive}
+      </button>
+      <ArchiveDialog
+        key={`archive-${prospect.revision}`}
+        prospect={prospect}
+        openTasks={openTasks}
+        today={day}
+        open={open === 'archive'}
+        onClose={() => setOpen(null)}
+      />
       <ActivityDialog
         code={prospect.code}
         contacts={contacts}

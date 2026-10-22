@@ -158,6 +158,22 @@ export const changeOwnerRequestSchema = z.strictObject({
 });
 export type ChangeOwnerRequest = z.infer<typeof changeOwnerRequestSchema>;
 
+/** "Archivovat": not a stage; refused while the prospect has open tasks (doc 034 §3a). */
+export const archiveProspectRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  revision: z.number().int().min(1),
+  reason: reasonSchema,
+});
+export type ArchiveProspectRequest = z.infer<typeof archiveProspectRequestSchema>;
+
+/** "Obnovit": the prospect returns as it was — no new tasks, no invented contacts. */
+export const restoreProspectRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  revision: z.number().int().min(1),
+  reason: reasonSchema.nullable(),
+});
+export type RestoreProspectRequest = z.infer<typeof restoreProspectRequestSchema>;
+
 export const saveContactRequestSchema = z.strictObject({
   requestId: z.uuid(),
   /** null = a new contact; else the revision the edit is based on. */
@@ -268,6 +284,8 @@ export const prospectListQuerySchema = z.object({
     .regex(/^[A-Z]{2}$/)
     .optional(),
   next: nextTaskFilterSchema.optional(),
+  /** Archived prospects are listed only on request (doc 034 §3a). */
+  archived: z.enum(['active', 'archived']).default('active'),
   page: z.coerce.number().int().min(1).max(10000).default(1),
 });
 export type ProspectListQuery = z.infer<typeof prospectListQuerySchema>;
@@ -331,6 +349,7 @@ export const prospectSummarySchema = z.object({
     .object({ id: z.uuid(), title: z.string(), dueOn: salesDateSchema, assignee: z.string() })
     .nullable(),
   openTasks: z.number().int(),
+  archivedAt: z.iso.datetime().nullable(),
 });
 export type ProspectSummary = z.infer<typeof prospectSummarySchema>;
 
@@ -381,6 +400,8 @@ export const salesEventTypeSchema = z.enum([
   'PROSPECT_UPDATED',
   'STAGE_CHANGED',
   'OWNER_CHANGED',
+  'PROSPECT_ARCHIVED',
+  'PROSPECT_RESTORED',
   'CONTACT_ADDED',
   'CONTACT_UPDATED',
   'CONTACT_RETIRED',
@@ -414,6 +435,8 @@ export const duplicateHintSchema = z.object({
       city: z.string().nullable(),
       owner: z.string(),
       reasons: z.array(z.enum(['NAME', 'WEBSITE', 'EMAIL', 'PHONE'])),
+      /** An archived prospect is still a possible duplicate (restore it rather than re-create). */
+      archived: z.boolean(),
     }),
   ),
 });
@@ -437,6 +460,8 @@ export const prospectDetailSchema = z.object({
   note: z.string().nullable(),
   owner: userRefSchema,
   revision: z.number().int(),
+  /** Archived (not a stage): read-only until restored. */
+  archived: z.object({ at: z.iso.datetime(), by: z.string(), reason: z.string() }).nullable(),
   createdAt: z.iso.datetime(),
   createdBy: z.string(),
   firstContactAt: z.iso.datetime().nullable(),
@@ -481,5 +506,11 @@ export const salesOverviewSchema = z.object({
 });
 export type SalesOverview = z.infer<typeof salesOverviewSchema>;
 
-export const salespersonSchema = z.object({ id: z.uuid(), name: z.string(), email: z.string() });
+export const salespersonSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  email: z.string(),
+  /** Holds sales:manage: may be given tasks on any prospect (doc 034 §7). */
+  manages: z.boolean(),
+});
 export type Salesperson = z.infer<typeof salespersonSchema>;

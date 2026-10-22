@@ -14,7 +14,7 @@ import { formatDateCs } from '@/i18n/cs/format';
 import { salesCs } from '@/i18n/cs/sales';
 import { FormDialog } from './sales-dialog';
 import { salesDateTime, salesLocalOf, salesNowLocal } from './sales-format';
-import { DialogError, useSalesSend } from './use-sales-send';
+import { dialogError, useSalesSend } from './use-sales-send';
 
 const h = salesCs.history;
 const a = salesCs.activity;
@@ -79,6 +79,10 @@ function eventText(e: SalesEvent): string {
       return `${String(p.label)}${diff ? ` · ${diff}` : ''}`;
     case 'PROSPECT_CREATED':
       return String(p.name);
+    case 'PROSPECT_ARCHIVED':
+      return `Důvod: ${String(p.reason)}`;
+    case 'PROSPECT_RESTORED':
+      return p.reason ? `Důvod: ${String(p.reason)}` : '';
     default:
       return diff;
   }
@@ -90,11 +94,14 @@ export function HistoryCard({
   activities,
   events,
   contacts,
+  readOnly = false,
 }: {
   code: string;
   activities: SalesActivity[];
   events: SalesEvent[];
   contacts: Contact[];
+  /** An archived prospect: no corrections until it is restored. */
+  readOnly?: boolean;
 }) {
   const [tab, setTab] = useState<'timeline' | 'all'>('timeline');
   const [correcting, setCorrecting] = useState<{
@@ -104,7 +111,11 @@ export function HistoryCard({
   const timeline: Entry[] = [
     ...activities.map((x): Entry => ({ kind: 'activity', at: x.occurredAt, activity: x })),
     ...events
-      .filter((e) => e.type === 'STAGE_CHANGED' || e.type === 'OWNER_CHANGED')
+      .filter((e) =>
+        ['STAGE_CHANGED', 'OWNER_CHANGED', 'PROSPECT_ARCHIVED', 'PROSPECT_RESTORED'].includes(
+          e.type,
+        ),
+      )
       .map((e): Entry => ({ kind: 'event', at: e.occurredAt, event: e })),
   ].sort((x, y) => (x.at < y.at ? 1 : x.at > y.at ? -1 : 0));
   const tabClass = (on: boolean) =>
@@ -146,7 +157,11 @@ export function HistoryCard({
                 <ActivityItem
                   key={entry.activity.id}
                   activity={entry.activity}
-                  onCorrect={(withdraw) => setCorrecting({ activity: entry.activity, withdraw })}
+                  onCorrect={
+                    readOnly
+                      ? null
+                      : (withdraw) => setCorrecting({ activity: entry.activity, withdraw })
+                  }
                 />
               ) : (
                 <li
@@ -159,7 +174,7 @@ export function HistoryCard({
                   </p>
                   <p>
                     <span className="font-medium text-stone-800">{h.events[entry.event.type]}</span>
-                    : {eventText(entry.event)}
+                    {eventText(entry.event) ? `: ${eventText(entry.event)}` : ''}
                   </p>
                 </li>
               ),
@@ -199,7 +214,7 @@ function ActivityItem({
   onCorrect,
 }: {
   activity: SalesActivity;
-  onCorrect: (withdraw: boolean) => void;
+  onCorrect: ((withdraw: boolean) => void) | null;
 }) {
   const original = x.withdrawn ? x.earlier.at(-1) : null;
   return (
@@ -223,7 +238,7 @@ function ActivityItem({
           {salesDateTime(x.occurredAt)}
           {x.contact && ` · ${x.contact.label}`}
         </p>
-        {!x.withdrawn && (
+        {!x.withdrawn && onCorrect && (
           <div className="flex gap-3 text-xs">
             <button
               type="button"
@@ -316,7 +331,7 @@ function CorrectDialog({
       submitLabel={withdraw ? a.withdraw : a.correct}
       busy={busy}
       testId="correct-dialog"
-      error={invalid ?? <DialogError error={error} />}
+      error={invalid ?? dialogError(error)}
       onClose={onClose}
       onSubmit={() => {
         setInvalid(null);

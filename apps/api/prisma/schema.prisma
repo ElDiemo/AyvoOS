@@ -934,6 +934,7 @@ enum OperationKind {
   SALES_ACTIVITY_RECORD
   SALES_ACTIVITY_CORRECT
   SALES_TASK_SAVE
+  SALES_PROSPECT_ARCHIVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1080,18 +1081,19 @@ model User {
   printRequests             PrintRequest[]       @relation("PrintRequestedBy")
   printJobEvents            PrintJobEvent[]      @relation("PrintJobEventBy")
 
-  salesProspectsOwned   SalesProspect[] @relation("SalesProspectOwner")
-  salesProspectsCreated SalesProspect[] @relation("SalesProspectCreatedBy")
-  salesProspectsUpdated SalesProspect[] @relation("SalesProspectUpdatedBy")
-  salesContactsCreated  SalesContact[]  @relation("SalesContactCreatedBy")
-  salesContactsUpdated  SalesContact[]  @relation("SalesContactUpdatedBy")
-  salesContactsRetired  SalesContact[]  @relation("SalesContactRetiredBy")
-  salesActivities       SalesActivity[] @relation("SalesActivityAuthor")
-  salesTasksAssigned    SalesTask[]     @relation("SalesTaskAssignee")
-  salesTasksCreated     SalesTask[]     @relation("SalesTaskCreatedBy")
-  salesTasksUpdated     SalesTask[]     @relation("SalesTaskUpdatedBy")
-  salesTasksClosed      SalesTask[]     @relation("SalesTaskClosedBy")
-  salesEvents           SalesEvent[]    @relation("SalesEventActor")
+  salesProspectsOwned    SalesProspect[] @relation("SalesProspectOwner")
+  salesProspectsCreated  SalesProspect[] @relation("SalesProspectCreatedBy")
+  salesProspectsUpdated  SalesProspect[] @relation("SalesProspectUpdatedBy")
+  salesProspectsArchived SalesProspect[] @relation("SalesProspectArchivedBy")
+  salesContactsCreated   SalesContact[]  @relation("SalesContactCreatedBy")
+  salesContactsUpdated   SalesContact[]  @relation("SalesContactUpdatedBy")
+  salesContactsRetired   SalesContact[]  @relation("SalesContactRetiredBy")
+  salesActivities        SalesActivity[] @relation("SalesActivityAuthor")
+  salesTasksAssigned     SalesTask[]     @relation("SalesTaskAssignee")
+  salesTasksCreated      SalesTask[]     @relation("SalesTaskCreatedBy")
+  salesTasksUpdated      SalesTask[]     @relation("SalesTaskUpdatedBy")
+  salesTasksClosed       SalesTask[]     @relation("SalesTaskClosedBy")
+  salesEvents            SalesEvent[]    @relation("SalesEventActor")
 
   @@map("users")
 }
@@ -3228,37 +3230,42 @@ model SupplyPlanOccurrence {
 
 /// A hotel prospect (current state; every change is a SalesEvent in the same transaction).
 model SalesProspect {
-  id                String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial            BigInt   @unique
-  code              String   @unique
+  id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial            BigInt    @unique
+  code              String    @unique
   name              String
-  nameKey           String   @map("name_key")
-  countryCode       String   @map("country_code") @db.Char(2)
+  nameKey           String    @map("name_key")
+  countryCode       String    @map("country_code") @db.Char(2)
   city              String?
-  addressLine1      String?  @map("address_line1")
-  addressLine2      String?  @map("address_line2")
-  postalCode        String?  @map("postal_code")
+  addressLine1      String?   @map("address_line1")
+  addressLine2      String?   @map("address_line2")
+  postalCode        String?   @map("postal_code")
   /// An estimate; unknown = null, never 0.
-  roomsEstimate     Int?     @map("rooms_estimate")
+  roomsEstimate     Int?      @map("rooms_estimate")
   /// HOTEL | PENSION | APARTMENTS | HOSTEL | OTHER
-  accommodationType String?  @map("accommodation_type")
+  accommodationType String?   @map("accommodation_type")
   website           String?
-  websiteKey        String?  @map("website_key")
+  websiteKey        String?   @map("website_key")
   source            String?
-  ownerId           String   @map("owner_id") @db.Uuid
+  ownerId           String    @map("owner_id") @db.Uuid
   /// A | B | C
   priority          String?
   /// NEW | CONTACTED | NEGOTIATION | OFFER | WON | LOST
-  stage             String   @default("NEW")
-  lostReason        String?  @map("lost_reason")
+  stage             String    @default("NEW")
+  lostReason        String?   @map("lost_reason")
   note              String?
-  revision          Int      @default(1)
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy         String   @map("created_by") @db.Uuid
-  updatedAt         DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
-  updatedBy         String   @map("updated_by") @db.Uuid
+  revision          Int       @default(1)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy         String    @map("created_by") @db.Uuid
+  updatedAt         DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy         String    @map("updated_by") @db.Uuid
+  /// Archived (not a stage): no new work until restored; nothing is deleted (doc 034 §3a).
+  archivedAt        DateTime? @map("archived_at") @db.Timestamptz(3)
+  archivedBy        String?   @map("archived_by") @db.Uuid
+  archiveReason     String?   @map("archive_reason")
 
   owner      User            @relation("SalesProspectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  archiver   User?           @relation("SalesProspectArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
   creator    User            @relation("SalesProspectCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   updater    User            @relation("SalesProspectUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
   contacts   SalesContact[]

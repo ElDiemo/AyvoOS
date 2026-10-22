@@ -1,4 +1,5 @@
 import {
+  archiveProspectRequestSchema,
   cancelTaskRequestSchema,
   changeOwnerRequestSchema,
   changeStageRequestSchema,
@@ -10,12 +11,14 @@ import {
   prospectCodeSchema,
   prospectListQuerySchema,
   recordActivityRequestSchema,
+  restoreProspectRequestSchema,
   rescheduleTaskRequestSchema,
   retireContactRequestSchema,
   saveContactRequestSchema,
   taskListQuerySchema,
   updateProspectRequestSchema,
   updateTaskRequestSchema,
+  type ArchiveProspectRequest,
   type CancelTaskRequest,
   type ChangeOwnerRequest,
   type ChangeStageRequest,
@@ -30,6 +33,7 @@ import {
   type ProspectPage,
   type RecordActivityRequest,
   type RescheduleTaskRequest,
+  type RestoreProspectRequest,
   type RetireContactRequest,
   type SalesOverview,
   type Salesperson,
@@ -141,6 +145,29 @@ export class SalesController {
     @CurrentPrincipal() p: Principal,
   ): Promise<ProspectDetail> {
     return this.prospects.changeOwner(scopeOf(p), code, body);
+  }
+
+  /** Archive / restore: the owner (or sales:manage) — never a stage change (doc 034 §3a). */
+  @RequirePermission('sales:work')
+  @Post('prospects/:code/archive')
+  @HttpCode(200)
+  archive(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(archiveProspectRequestSchema)) body: ArchiveProspectRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<ProspectDetail> {
+    return this.prospects.archive(scopeOf(p), code, body);
+  }
+
+  @RequirePermission('sales:work')
+  @Post('prospects/:code/restore')
+  @HttpCode(200)
+  restore(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(restoreProspectRequestSchema)) body: RestoreProspectRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<ProspectDetail> {
+    return this.prospects.restore(scopeOf(p), code, body);
   }
 
   @RequirePermission('sales:work')

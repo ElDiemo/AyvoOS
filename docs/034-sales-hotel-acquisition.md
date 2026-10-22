@@ -57,6 +57,26 @@ source, priority, note and contacts are optional and can be added later. The own
   unknown.
 - Source is free text (e.g. "doporučení", "veletrh"); no fixed list is invented.
 
+## 3a. Archiving (owner 2026-10-22, follow-up PR)
+
+A prospect created by mistake, a closed hotel or a duplicate record can be **archived** and later
+**restored**. Archiving is **not a stage**: the stage stays (an archived prospect is never shown as
+Neúspěšný), and nothing is deleted — contacts, activities, tasks and history all remain.
+
+- Archiving needs a reason (3–500 characters); restoring takes an optional one. Both are events
+  (`PROSPECT_ARCHIVED`, `PROSPECT_RESTORED`) with who and when.
+- A prospect **with open tasks is not archived**: the request is refused with the list of the open
+  tasks, and the dialog leads to them. Nothing is completed or cancelled automatically.
+- While archived the prospect is read-only: no profile, stage or owner change, no contact,
+  activity, correction or task. Held by the database too (triggers on prospects, contacts,
+  activities and tasks); the application refuses it first with `409 PROSPECT_ARCHIVED`.
+- Archived prospects are not in the default list, the search results or the overview; the list
+  shows them with the filter **Archiv → Archivovaní**. A duplicate check still finds them (marked
+  "archivovaný"), so a hotel is restored rather than created again.
+- The owner archives and restores their own prospects; `sales:manage` (ADMIN) any. Another
+  salesperson's prospect is a 404, as everywhere.
+- Restoring brings the prospect back as it was: the same stage and contacts, no new task.
+
 ## 4. Stages
 
 Nový → Oslovený → Jednání → Nabídka → Získaný / Neúspěšný.
@@ -93,6 +113,12 @@ fine.
 - Rescheduling, completion (with an optional result) and cancellation (with a reason) are
   events. A closed task is not reopened; a new task is created instead.
 - Completing a task never changes the stage.
+- **Editing** an open task (owner 2026-10-22): title, note and contact in the detail ("Upravit");
+  the due date moves through "Přesunout". The assignee is chosen only with `sales:manage`, and
+  only among the prospect's owner and sales administrators — a salesperson never gives work to
+  another salesperson. Each edit carries its revision; on a conflict the dialog keeps what was
+  typed, reloads the current state in place and lets the user save again. Closed tasks are not
+  edited or reopened (§11.4).
 - **Time zone**: due dates are calendar days, and "today" or "overdue" are evaluated on the server
   in **Europe/Prague** (`SALES_TIME_ZONE`). Activity times are entered and shown in the same zone,
   never in the device's zone. Salespeople in another time zone are an open question (§11).
@@ -159,6 +185,8 @@ Forms keep their input on any error. A repeated click reuses the request id.
 - `GET prospects`, `POST prospects`, `GET prospects/duplicates`, `GET prospects/:code`
 - `POST prospects/:code/update | stage`
 - `POST prospects/:code/owner` (`sales:manage`)
+- `POST prospects/:code/archive | restore`
+- `GET prospects?archived=archived` (archived only; default: the active ones)
 - `POST prospects/:code/contacts`, `POST prospects/:code/contacts/:id/update | retire`
 - `POST prospects/:code/activities`, `POST prospects/:code/activities/:id/correct`
 - `POST prospects/:code/tasks`, `GET tasks`, `POST tasks/:id/update | reschedule | done | cancel`
@@ -170,10 +198,10 @@ Forms keep their input on any error. A repeated click reuses the request id.
 2. Accommodation types and their names (proposal in §3).
 3. May a salesperson see a colleague's prospects (read-only), e.g. for a chain? Now: no.
 4. Should a closed task be reopenable? Now: no; a new task is created.
-5. Should a prospect created by mistake be archivable? Now: no deletion and no archive.
+5. ~~Should a prospect created by mistake be archivable?~~ Decided 2026-10-22: archive and
+   restore (§3a), never deletion.
 
-## 12. Follow-up work (owner 2026-10-21, not in v1)
+## 12. Follow-up work (owner 2026-10-21)
 
-- Editing an existing task in the UI (title, contact, assignee); v1 offers done, reschedule and
-  cancel, the API already supports `POST tasks/:id/update`.
-- Archiving a prospect created by mistake (§11.5).
+- Editing an existing task in the UI — done in the follow-up PR (§6).
+- Archiving a prospect — done in the follow-up PR (§3a).

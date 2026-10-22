@@ -5,7 +5,7 @@ import { useId, useState } from 'react';
 import { fieldClass, FormField } from '@/components/catalog/form-kit';
 import { Card, EmptyState } from '@/components/ui';
 import { salesCs } from '@/i18n/cs/sales';
-import { DialogError, useSalesSend } from './use-sales-send';
+import { dialogError, useSalesSend } from './use-sales-send';
 import { FormDialog } from './sales-dialog';
 
 const c = salesCs.contact;
@@ -30,7 +30,16 @@ const draftOf = (x: SalesContact | null): Draft => ({
 });
 
 /** Kontakty (doc 034 §2): a person or a designation; one main contact; retired, never deleted. */
-export function ContactsCard({ code, contacts }: { code: string; contacts: SalesContact[] }) {
+export function ContactsCard({
+  code,
+  contacts,
+  readOnly = false,
+}: {
+  code: string;
+  contacts: SalesContact[];
+  /** An archived prospect: contacts are shown, not changed. */
+  readOnly?: boolean;
+}) {
   const active = contacts.filter((x) => !x.retired);
   const retired = contacts.filter((x) => x.retired);
   const [editing, setEditing] = useState<SalesContact | 'new' | null>(null);
@@ -40,14 +49,16 @@ export function ContactsCard({ code, contacts }: { code: string; contacts: Sales
       title={c.title}
       testId="contacts"
       action={
-        <button
-          type="button"
-          className="font-medium text-stone-700 hover:underline"
-          onClick={() => setEditing('new')}
-          data-testid="add-contact"
-        >
-          {c.add}
-        </button>
+        readOnly ? undefined : (
+          <button
+            type="button"
+            className="font-medium text-stone-700 hover:underline"
+            onClick={() => setEditing('new')}
+            data-testid="add-contact"
+          >
+            {c.add}
+          </button>
+        )
       }
     >
       {active.length === 0 ? (
@@ -72,22 +83,24 @@ export function ContactsCard({ code, contacts }: { code: string; contacts: Sales
                     </span>
                   )}
                 </p>
-                <div className="flex gap-3 text-sm">
-                  <button
-                    type="button"
-                    className="text-stone-600 hover:underline"
-                    onClick={() => setEditing(x)}
-                  >
-                    {c.edit}
-                  </button>
-                  <button
-                    type="button"
-                    className="text-stone-600 hover:underline"
-                    onClick={() => setRetiring(x)}
-                  >
-                    {c.retire}
-                  </button>
-                </div>
+                {!readOnly && (
+                  <div className="flex gap-3 text-sm">
+                    <button
+                      type="button"
+                      className="text-stone-600 hover:underline"
+                      onClick={() => setEditing(x)}
+                    >
+                      {c.edit}
+                    </button>
+                    <button
+                      type="button"
+                      className="text-stone-600 hover:underline"
+                      onClick={() => setRetiring(x)}
+                    >
+                      {c.retire}
+                    </button>
+                  </div>
+                )}
               </div>
               {(x.email || x.phone) && (
                 <p className="flex flex-wrap gap-x-4 text-sm wrap-anywhere">
@@ -185,7 +198,7 @@ function ContactDialog({
       submitLabel={c.save}
       busy={busy}
       testId="contact-dialog"
-      error={invalid ?? <DialogError error={error} />}
+      error={invalid ?? dialogError(error)}
       onClose={onClose}
       onSubmit={() => {
         setInvalid(null);
@@ -250,7 +263,7 @@ function RetireDialog({
       submitLabel={c.retire}
       busy={busy}
       testId="retire-contact-dialog"
-      error={<DialogError error={error} />}
+      error={dialogError(error)}
       onClose={onClose}
       onSubmit={() => {
         if (reason.trim().length < 3) return;

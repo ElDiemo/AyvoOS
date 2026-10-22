@@ -50,6 +50,7 @@ export class SalesViews {
       include: {
         owner: { select: { id: true, displayName: true } },
         creator: { select: { displayName: true } },
+        archiver: { select: { displayName: true } },
         contacts: {
           include: { retirer: { select: { displayName: true } } },
           orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
@@ -91,6 +92,14 @@ export class SalesViews {
       note: p.note,
       owner: { id: p.owner.id, name: p.owner.displayName },
       revision: p.revision,
+      archived:
+        p.archivedAt && p.archiveReason
+          ? {
+              at: p.archivedAt.toISOString(),
+              by: p.archiver?.displayName ?? '',
+              reason: p.archiveReason,
+            }
+          : null,
       createdAt: p.createdAt.toISOString(),
       createdBy: p.creator.displayName,
       firstContactAt: contactTimes[0] ?? null,

@@ -4,6 +4,7 @@ import {
   IN_PROGRESS_STAGES,
   PROSPECT_PAGE_SIZE,
   stageChangeNeedsReason,
+  type ArchiveProspectRequest,
   type ChangeOwnerRequest,
   type ChangeStageRequest,
   type CreateProspectRequest,
@@ -14,6 +15,7 @@ import {
   type ProspectPage,
   type ProspectStage,
   type ProspectSummary,
+  type RestoreProspectRequest,
   type SalesOverview,
   type Salesperson,
   type UpdateProspectRequest,
@@ -26,6 +28,7 @@ import { PrismaService } from '../database/prisma.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import {
   addDays,
+  assertActive,
   changed,
   salesEvent,
   salesToday,
@@ -76,6 +79,7 @@ interface SummaryRow {
   next_due: Date | null;
   next_assignee: string | null;
   open_tasks: number;
+  archived_at: Date | null;
   total: number;
 }
 
@@ -106,6 +110,11 @@ export class ProspectsService {
     if (q.stage) where.push(Prisma.sql`p."stage" = ${q.stage}`);
     if (q.priority) where.push(Prisma.sql`p."priority" = ${q.priority}`);
     if (q.country) where.push(Prisma.sql`p."country_code" = ${q.country}`);
+    where.push(
+      q.archived === 'archived'
+        ? Prisma.sql`p."archived_at" IS NOT NULL`
+        : Prisma.sql`p."archived_at" IS NULL`,
+    );
     if (q.next === 'overdue') where.push(Prisma.sql`n."due_on" < ${today}::date`);
     if (q.next === 'today') where.push(Prisma.sql`n."due_on" = ${today}::date`);
     if (q.next === 'week') {
@@ -149,6 +158,7 @@ export class ProspectsService {
              n."id" AS "next_id", n."title" AS "next_title", n."due_on" AS "next_due",
              nu."display_name" AS "next_assignee",
              (SELECT count(*) FROM "sales_tasks" t WHERE t."prospect_id" = p."id" AND t."status" = 'OPEN')::int AS "open_tasks",
+             p."archived_at",
              count(*) OVER ()::int AS "total"
       FROM "sales_prospects" p
       JOIN "users" o ON o."id" = p."owner_id"
@@ -197,6 +207,7 @@ export class ProspectsService {
     ]);
     const where = [
       Prisma.sql`p."stage" IN (${Prisma.join(IN_PROGRESS_STAGES.map((s) => Prisma.sql`${s}`))})`,
+      Prisma.sql`p."archived_at" IS NULL`,
     ];
     if (!all) where.push(Prisma.sql`p."owner_id" = ${scope.userId}::uuid`);
     // Without a next step first: nobody knows what happens next with those.
@@ -277,6 +288,7 @@ export class ProspectsService {
         name: string;
         city: string | null;
         owner: string;
+        archived: boolean;
         by_name: boolean;
         by_site: boolean;
         by_email: boolean;
@@ -285,6 +297,7 @@ export class ProspectsService {
     >`
       SELECT * FROM (
         SELECT p."code", p."name", p."city", o."display_name" AS "owner",
+          (p."archived_at" IS NOT NULL) AS "archived",
           (${name}::text IS NOT NULL AND p."name_key" = ${name} AND p."country_code" = ${c.countryCode ?? null}) AS "by_name",
           (${site}::text IS NOT NULL AND p."website_key" = ${site}) AS "by_site",
           EXISTS (SELECT 1 FROM "sales_contacts" x WHERE x."prospect_id" = p."id" AND x."retired_at" IS NULL
@@ -311,6 +324,7 @@ export class ProspectsService {
           ...(r.by_email ? (['EMAIL'] as const) : []),
           ...(r.by_phone ? (['PHONE'] as const) : []),
         ],
+        archived: r.archived,
       })),
     };
   }
@@ -318,7 +332,12 @@ export class ProspectsService {
   /** People who can own prospects (active, holding sales:work) — for ADMIN's assignment. */
   salespeople(): Promise<Salesperson[]> {
     return this.prisma.$queryRaw<Salesperson[]>`
-      SELECT u."id", u."display_name" AS "name", u."email" FROM "users" u
+      SELECT u."id", u."display_name" AS "name", u."email", EXISTS (
+        SELECT 1 FROM "user_roles" ur
+        JOIN "roles" r ON r."code" = ur."role_code" AND r."active"
+        JOIN "role_permissions" rp ON rp."role_code" = r."code" AND rp."permission_code" = 'sales:manage'
+        WHERE ur."user_id" = u."id" AND ur."revoked_at" IS NULL) AS "manages"
+      FROM "users" u
       WHERE u."status" = 'ACTIVE' AND EXISTS (
         SELECT 1 FROM "user_roles" ur
         JOIN "roles" r ON r."code" = ur."role_code" AND r."active"
@@ -410,6 +429,7 @@ export class ProspectsService {
       { actorId: scope.userId, code, ...input, requestId: undefined },
       async (tx) => {
         const row = await visibleProspect(tx, code, scope, true);
+        assertActive(row);
         if (row.revision !== input.revision) {
           throw changed('PROSPECT_CHANGED', 'prospect', row.revision);
         }
@@ -452,6 +472,7 @@ export class ProspectsService {
       { actorId: scope.userId, code, ...input, requestId: undefined },
       async (tx) => {
         const row = await visibleProspect(tx, code, scope, true);
+        assertActive(row);
         if (row.revision !== input.revision) {
           throw changed('PROSPECT_CHANGED', 'prospect', row.revision);
         }
@@ -510,6 +531,7 @@ export class ProspectsService {
       { actorId: scope.userId, code, ...input, requestId: undefined },
       async (tx) => {
         const row = await visibleProspect(tx, code, scope, true);
+        assertActive(row);
         if (row.revision !== input.revision) {
           throw changed('PROSPECT_CHANGED', 'prospect', row.revision);
         }
@@ -569,6 +591,105 @@ export class ProspectsService {
             reason: input.reason,
             movedTasks: moved.length,
           },
+        });
+        return { code };
+      },
+    );
+    return this.detail(scope, code);
+  }
+
+  /**
+   * "Archivovat" (doc 034 §3a): not a stage, nothing is deleted or cancelled. Refused while the
+   * prospect has open tasks — the user completes or cancels them first.
+   */
+  async archive(scope: SalesScope, code: string, input: ArchiveProspectRequest) {
+    await this.operations.run(
+      'SALES_PROSPECT_ARCHIVE',
+      input.requestId,
+      { actorId: scope.userId, code, op: 'archive', ...input, requestId: undefined },
+      async (tx) => {
+        const row = await visibleProspect(tx, code, scope, true);
+        if (row.archivedAt) {
+          throw domainError(409, 'PROSPECT_ARCHIVED', 'This prospect is already archived');
+        }
+        if (row.revision !== input.revision) {
+          throw changed('PROSPECT_CHANGED', 'prospect', row.revision);
+        }
+        const open = await tx.salesTask.findMany({
+          where: { prospectId: row.id, status: 'OPEN' },
+          select: { id: true, title: true, dueOn: true },
+          orderBy: [{ dueOn: 'asc' }, { createdAt: 'asc' }],
+        });
+        if (open.length) {
+          throw domainErrorWithDetails(
+            409,
+            'PROSPECT_HAS_OPEN_TASKS',
+            'Complete or cancel the open tasks before archiving',
+            {
+              tasks: open.map((t) => ({
+                id: t.id,
+                title: t.title,
+                dueOn: t.dueOn.toISOString().slice(0, 10),
+              })),
+            },
+          );
+        }
+        const at = new Date();
+        await tx.salesProspect.update({
+          where: { id: row.id },
+          data: {
+            archivedAt: at,
+            archivedBy: scope.userId,
+            archiveReason: input.reason,
+            revision: row.revision + 1,
+            updatedAt: at,
+            updatedBy: scope.userId,
+          },
+        });
+        await salesEvent(tx, {
+          prospectId: row.id,
+          type: 'PROSPECT_ARCHIVED',
+          actorId: scope.userId,
+          requestId: input.requestId,
+          payload: { reason: input.reason, stage: row.stage },
+        });
+        return { code };
+      },
+    );
+    return this.detail(scope, code);
+  }
+
+  /** "Obnovit": back as it was — the same stage, contacts and history; no new tasks. */
+  async restore(scope: SalesScope, code: string, input: RestoreProspectRequest) {
+    await this.operations.run(
+      'SALES_PROSPECT_ARCHIVE',
+      input.requestId,
+      { actorId: scope.userId, code, op: 'restore', ...input, requestId: undefined },
+      async (tx) => {
+        const row = await visibleProspect(tx, code, scope, true);
+        if (!row.archivedAt) {
+          throw domainError(409, 'PROSPECT_NOT_ARCHIVED', 'This prospect is not archived');
+        }
+        if (row.revision !== input.revision) {
+          throw changed('PROSPECT_CHANGED', 'prospect', row.revision);
+        }
+        await tx.salesProspect.update({
+          where: { id: row.id },
+          data: {
+            archivedAt: null,
+            archivedBy: null,
+            archiveReason: null,
+            revision: row.revision + 1,
+            updatedAt: new Date(),
+            updatedBy: scope.userId,
+          },
+        });
+        await salesEvent(tx, {
+          prospectId: row.id,
+          type: 'PROSPECT_RESTORED',
+          actorId: scope.userId,
+          requestId: input.requestId,
+          payload: { reason: input.reason, archiveReason: row.archiveReason },
         });
         return { code };
       },
@@ -656,5 +777,6 @@ function toSummary(r: SummaryRow): ProspectSummary {
           }
         : null,
     openTasks: r.open_tasks,
+    archivedAt: r.archived_at?.toISOString() ?? null,
   };
 }

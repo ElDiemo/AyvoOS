@@ -78,4 +78,6 @@ export const isStale = (error: unknown) =>
     'TASK_CHANGED',
     'TASK_CLOSED',
     'ACTIVITY_ALREADY_CORRECTED',
+    'PROSPECT_ARCHIVED',
+    'PROSPECT_HAS_OPEN_TASKS',
   ].includes(error.code ?? '');
