@@ -935,6 +935,7 @@ enum OperationKind {
   SALES_ACTIVITY_CORRECT
   SALES_TASK_SAVE
   SALES_PROSPECT_ARCHIVE
+  SALES_IMPORT
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1085,6 +1086,8 @@ model User {
   salesProspectsCreated  SalesProspect[] @relation("SalesProspectCreatedBy")
   salesProspectsUpdated  SalesProspect[] @relation("SalesProspectUpdatedBy")
   salesProspectsArchived SalesProspect[] @relation("SalesProspectArchivedBy")
+  salesImportsOwned      SalesImport[]   @relation("SalesImportOwner")
+  salesImportsCreated    SalesImport[]   @relation("SalesImportCreatedBy")
   salesContactsCreated   SalesContact[]  @relation("SalesContactCreatedBy")
   salesContactsUpdated   SalesContact[]  @relation("SalesContactUpdatedBy")
   salesContactsRetired   SalesContact[]  @relation("SalesContactRetiredBy")
@@ -3263,9 +3266,13 @@ model SalesProspect {
   archivedAt        DateTime? @map("archived_at") @db.Timestamptz(3)
   archivedBy        String?   @map("archived_by") @db.Uuid
   archiveReason     String?   @map("archive_reason")
+  /// The confirmed CSV import (and its spreadsheet row) the prospect came from; immutable.
+  importId          String?   @map("import_id") @db.Uuid
+  importRow         Int?      @map("import_row")
 
   owner      User            @relation("SalesProspectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   archiver   User?           @relation("SalesProspectArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  import     SalesImport?    @relation(fields: [importId], references: [id], onDelete: Restrict)
   creator    User            @relation("SalesProspectCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   updater    User            @relation("SalesProspectUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
   contacts   SalesContact[]
@@ -3273,10 +3280,37 @@ model SalesProspect {
   tasks      SalesTask[]
   events     SalesEvent[]
 
+  @@unique([importId, importRow])
   @@index([ownerId])
   @@index([nameKey])
   @@index([websiteKey])
   @@map("sales_prospects")
+}
+
+/// A confirmed CSV import of prospects (doc 034 §13): append-only; the file is never stored.
+model SalesImport {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial       BigInt   @unique
+  code         String   @unique
+  fileName     String   @map("file_name")
+  fileSha256   String   @map("file_sha256")
+  encoding     String
+  delimiter    String
+  rowCount     Int      @map("row_count")
+  createdCount Int      @map("created_count")
+  ownerId      String   @map("owner_id") @db.Uuid
+  createdBy    String   @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  requestId    String   @unique @map("request_id") @db.Uuid
+  /// [{ row, errors: [code] }] — never contact data.
+  skipped      Json
+
+  owner     User            @relation("SalesImportOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  creator   User            @relation("SalesImportCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  prospects SalesProspect[]
+
+  @@index([createdBy, createdAt])
+  @@map("sales_imports")
 }
 
 /// A contact of a prospect: a person or a designation ("Recepce"). Retired, never deleted.

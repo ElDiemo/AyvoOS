@@ -96,6 +96,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   nothing outside Obchod is created. SALES is assignable, FINANCE and HOTEL_USER stay planned.
   Archiving a prospect (owner 2026-10-22, doc 034 §3a): archived at / by / reason on the prospect,
   not a stage, never with open tasks, read-only until restored (also DB); task edits in the UI.
+  CSV import / export of prospects (owner 2026-10-22, doc 034 §13): append-only `sales_imports`
+  (result only — the file is never stored), `import_id` / `import_row` on prospects; preview
+  writes nothing, confirmation re-checks everything in one transaction; export in the list's
+  scope with CSV-injection protection.
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,
