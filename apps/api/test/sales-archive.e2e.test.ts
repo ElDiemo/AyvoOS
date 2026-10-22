@@ -246,6 +246,57 @@ describe.skipIf(!hasDatabase)('Obchod — task edits and archiving', () => {
     expect(d.stage).toBe('NEW');
   });
 
+  it('a salesperson edits a task ADMIN took over, keeping (never changing) its assignee', async () => {
+    const a = as(people.a.cookie);
+    let d = await create(people.a.cookie, `Hotel Převzatý úkol ${tag}`);
+    d = (await a.post(`/prospects/${d.code}/tasks`, task('Poslat nabídku')).expect(200)).body;
+    const t0 = d.openTasks[0]!;
+    // ADMIN gives the task on A's prospect to themselves.
+    d = (
+      await as(admin)
+        .post(`/tasks/${t0.id}/update`, {
+          revision: t0.revision,
+          title: t0.title,
+          note: null,
+          contactId: null,
+          assigneeId: adminId,
+        })
+        .expect(200)
+    ).body;
+    const t1 = d.openTasks[0]!;
+    expect(t1.assignee.id).toBe(adminId);
+
+    // A changes only the title and the note; the assignee is sent back unchanged → saved.
+    const kept = await a.post(`/tasks/${t0.id}/update`, {
+      revision: t1.revision,
+      title: 'Poslat nabídku s ceníkem',
+      note: 'Po telefonu',
+      contactId: null,
+      assigneeId: adminId,
+    });
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    const t2 = (kept.body as ProspectDetail).openTasks[0]!;
+    expect(t2).toMatchObject({ title: 'Poslat nabídku s ceníkem', assignee: { id: adminId } });
+    const update = (kept.body as ProspectDetail).events.find(
+      (e) => e.type === 'TASK_UPDATED' && e.actor === people.a.name,
+    );
+    expect(update?.payload).not.toHaveProperty('changes.assigneeId');
+
+    // ...but A never changes who does it: not to themselves, not to another salesperson.
+    for (const assigneeId of [people.a.id, people.b.id]) {
+      const r = await a.post(`/tasks/${t0.id}/update`, {
+        revision: t2.revision,
+        title: t2.title,
+        note: 'Po telefonu',
+        contactId: null,
+        assigneeId,
+      });
+      expect(r.status, assigneeId).toBe(403);
+    }
+    d = (await a.get(`/prospects/${d.code}`).expect(200)).body;
+    expect(d.openTasks[0]).toMatchObject({ revision: t2.revision, assignee: { id: adminId } });
+  });
+
   it('archives with a reason, never as a stage; refused with open tasks; restored as it was', async () => {
     const a = as(people.a.cookie);
     const before = await counts();

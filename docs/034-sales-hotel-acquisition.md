@@ -116,7 +116,8 @@ fine.
 - **Editing** an open task (owner 2026-10-22): title, note and contact in the detail ("Upravit");
   the due date moves through "Přesunout". The assignee is chosen only with `sales:manage`, and
   only among the prospect's owner and sales administrators — a salesperson never gives work to
-  another salesperson. Each edit carries its revision; on a conflict the dialog keeps what was
+  another salesperson. A salesperson may edit a task ADMIN gave to someone else: the unchanged
+  assignee is kept, never changed (not even back to themselves). Each edit carries its revision; on a conflict the dialog keeps what was
   typed, reloads the current state in place and lets the user save again. Closed tasks are not
   edited or reopened (§11.4).
 - **Time zone**: due dates are calendar days, and "today" or "overdue" are evaluated on the server
