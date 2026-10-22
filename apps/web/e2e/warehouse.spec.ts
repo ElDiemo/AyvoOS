@@ -131,8 +131,12 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
     .getByRole('navigation', { name: 'Sklad' })
     .getByRole('link', { name: 'Dodavatelé' })
     .click();
-  await page.getByLabel('Název').fill('Lahve Test s.r.o.');
+  // Doc 033: "Nový dodavatel" opens the form; only the name is required.
+  await page.getByRole('link', { name: 'Nový dodavatel', exact: true }).click();
+  await page.getByLabel('Název', { exact: true }).fill('Lahve Test s.r.o.');
   await page.getByRole('button', { name: 'Založit dodavatele' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Lahve Test s.r.o.');
+  await page.getByRole('link', { name: 'Zpět na dodavatele' }).click();
   await expect(page.getByTestId('suppliers')).toContainText('Lahve Test s.r.o.');
 
   await page

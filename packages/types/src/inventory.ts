@@ -176,3 +176,66 @@ export const movementListQuerySchema = z.object({
   lotId: z.uuid().optional(),
 });
 export type MovementListQuery = z.infer<typeof movementListQuerySchema>;
+
+/**
+ * Goods barcodes of stock items (doc 033). The value is kept exactly as scanned — text, never a
+ * number (leading zeros and letters stay) — and is not limited to EAN: printable ASCII without
+ * spaces, 1–64 characters. A code identifies the item only: never a supplier, quantity, pack size
+ * or lot (no GS1 parsing). Separate from the public QR identities of bottles and crates.
+ */
+export const BARCODE_PATTERN = /^[\x21-\x7E]{1,64}$/;
+/** What a keyboard-wedge scanner sends, without the surrounding whitespace / Enter. */
+export const scannedCodeSchema = z.string().trim().regex(BARCODE_PATTERN, 'Barcode');
+
+export const itemRefSchema = z.object({
+  id: z.uuid(),
+  code: z.string(),
+  name: z.string(),
+  unit: inventoryUnitSchema,
+  archived: z.boolean(),
+});
+export type ItemRef = z.infer<typeof itemRefSchema>;
+
+export const itemBarcodeSchema = z.object({
+  id: z.uuid(),
+  code: z.string(),
+  assignedAt: z.iso.datetime(),
+  assignedBy: z.string(),
+  retiredAt: z.iso.datetime().nullable(),
+  retiredBy: z.string().nullable(),
+  retireReason: z.string().nullable(),
+});
+export type ItemBarcode = z.infer<typeof itemBarcodeSchema>;
+
+/** GET /api/admin/inventory/items/:code/barcodes — active first, then the retired history. */
+export const itemBarcodesSchema = z.object({
+  item: itemRefSchema,
+  barcodes: z.array(itemBarcodeSchema),
+});
+export type ItemBarcodes = z.infer<typeof itemBarcodesSchema>;
+
+/** POST /api/admin/inventory/items/:code/barcodes (inventory:barcodes_manage). */
+export const assignBarcodeRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  code: scannedCodeSchema,
+});
+export type AssignBarcodeRequest = z.infer<typeof assignBarcodeRequestSchema>;
+
+/** POST /api/admin/inventory/barcodes/:id/retire — never deleted, the history stays. */
+export const retireBarcodeRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  reason: z.string().trim().min(3).max(500),
+});
+export type RetireBarcodeRequest = z.infer<typeof retireBarcodeRequestSchema>;
+
+/**
+ * GET /api/admin/inventory/barcodes/lookup?code= — reads only, changes nothing. `item` is the
+ * item of the active assignment (null: unknown); `retired` tells that the code was assigned once
+ * and retired since (it identifies nothing now).
+ */
+export const barcodeLookupSchema = z.object({
+  code: z.string(),
+  item: itemRefSchema.nullable(),
+  retired: z.boolean(),
+});
+export type BarcodeLookup = z.infer<typeof barcodeLookupSchema>;

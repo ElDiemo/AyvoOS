@@ -470,9 +470,35 @@ model InventoryItem {
   bomLines     BomLine[]
   /// Catalogue profile (doc 023) — category designation, package capacity.
   component    CatalogComponent?
+  barcodes     InventoryItemBarcode[]
 
   @@unique([id, baseUnitId])
   @@map("inventory_items")
+}
+
+/// A goods barcode of a stock item (doc 033): exact text as scanned, several per item, one active
+/// assignment per code (partial unique index). Identifies the item only — never a supplier,
+/// quantity, pack size or lot. Kept apart from the QR identities of bottles and crates.
+/// DB: no delete; only the one-way retirement changes a row.
+model InventoryItemBarcode {
+  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId          String    @map("item_id") @db.Uuid
+  code            String
+  assignedAt      DateTime  @default(now()) @map("assigned_at") @db.Timestamptz(3)
+  assignedById    String    @map("assigned_by") @db.Uuid
+  requestId       String    @unique @map("request_id") @db.Uuid
+  retiredAt       DateTime? @map("retired_at") @db.Timestamptz(3)
+  retiredById     String?   @map("retired_by") @db.Uuid
+  retireReason    String?   @map("retire_reason")
+  retireRequestId String?   @unique @map("retire_request_id") @db.Uuid
+
+  item       InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  assignedBy User          @relation("BarcodeAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  retiredBy  User?         @relation("BarcodeRetiredBy", fields: [retiredById], references: [id], onDelete: Restrict)
+
+  @@index([itemId])
+  @@index([code])
+  @@map("inventory_item_barcodes")
 }
 
 /// Append-only planning settings of an item; the highest version is current.
@@ -673,20 +699,65 @@ model BomLine {
 
 /// DB: name unique (case-insensitive index); immutable except a one-way archive; DELETE rejected.
 model Supplier {
-  id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  name       String
-  companyId  String?   @map("company_id")
-  vatId      String?   @map("vat_id")
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
-  requestId  String    @unique @map("request_id") @db.Uuid
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name         String
+  companyId    String?   @map("company_id")
+  vatId        String?   @map("vat_id")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  archivedAt   DateTime? @map("archived_at") @db.Timestamptz(3)
+  requestId    String    @unique @map("request_id") @db.Uuid
+  /// Current revision (doc 033); the row changes only to the next recorded revision (DB guard).
+  revision     Int       @default(1)
+  /// Optional details (doc 033) — never required of existing suppliers. ISO 3166-1 alpha-2.
+  countryCode  String?   @map("country_code")
+  addressLine1 String?   @map("address_line1")
+  addressLine2 String?   @map("address_line2")
+  postalCode   String?   @map("postal_code")
+  city         String?
+  contactName  String?   @map("contact_name")
+  contactPhone String?   @map("contact_phone")
+  contactEmail String?   @map("contact_email")
+  note         String?
 
   documents        SupplierDocument[]
   receipts         GoodsReceipt[]
   lots             InventoryLot[]
   preferredForItem InventoryItemSetting[]
+  revisions        SupplierRevision[]
 
   @@map("suppliers")
+}
+
+/// Every version of a supplier's details (doc 033). Revision 1 = at creation (suppliers older than
+/// doc 033: their values then, without author or reason); later ones are corrections with author,
+/// reason and request. DB: append-only.
+model SupplierRevision {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  supplierId   String   @map("supplier_id") @db.Uuid
+  revision     Int
+  name         String
+  companyId    String?  @map("company_id")
+  vatId        String?  @map("vat_id")
+  countryCode  String?  @map("country_code")
+  addressLine1 String?  @map("address_line1")
+  addressLine2 String?  @map("address_line2")
+  postalCode   String?  @map("postal_code")
+  city         String?
+  contactName  String?  @map("contact_name")
+  contactPhone String?  @map("contact_phone")
+  contactEmail String?  @map("contact_email")
+  note         String?
+  reason       String?
+  changedById  String?  @map("changed_by") @db.Uuid
+  requestId    String?  @unique @map("request_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  receipts  GoodsReceipt[]
+  supplier  Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  changedBy User?          @relation("SupplierRevisionBy", fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@unique([supplierId, revision])
+  @@map("supplier_revisions")
 }
 
 enum SupplierDocumentKind {
@@ -750,11 +821,14 @@ model GoodsReceipt {
   requestId         String           @unique @map("request_id") @db.Uuid
   /// The site whose warehouse received the goods (doc 022).
   siteId            String           @map("site_id") @db.Uuid
+  /// The supplier revision the receipt was recorded under (doc 033); NULL = not proven (older).
+  supplierRevision  Int?             @map("supplier_revision")
 
-  supplier  Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  site      Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  lines     GoodsReceiptLine[]
-  documents GoodsReceiptDocument[]
+  supplier               Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplierRevisionRecord SupplierRevision?      @relation(fields: [supplierId, supplierRevision], references: [supplierId, revision], onDelete: Restrict)
+  site                   Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  lines                  GoodsReceiptLine[]
+  documents              GoodsReceiptDocument[]
 
   @@index([supplierId])
   @@index([siteId, receivedAt])
@@ -926,6 +1000,9 @@ enum OperationKind {
   SUPPLY_PLAN_ORDER
   ORDER_RESCHEDULE
   HOTEL_UPDATE
+  SUPPLIER_UPDATE
+  ITEM_BARCODE_ASSIGN
+  ITEM_BARCODE_RETIRE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -992,6 +1069,9 @@ model User {
   tareWeights          CrateTypeTareWeight[]
   crateDimensions      CrateTypeDimension[]
   hotelsCreated        Hotel[]                  @relation("HotelCreatedBy")
+  supplierRevisions    SupplierRevision[]       @relation("SupplierRevisionBy")
+  barcodesAssigned     InventoryItemBarcode[]   @relation("BarcodeAssignedBy")
+  barcodesRetired      InventoryItemBarcode[]   @relation("BarcodeRetiredBy")
   ordersCreated        Order[]                  @relation("OrderCreatedBy")
   supplyPlansCreated   SupplyPlan[]             @relation("SupplyPlanCreatedBy")
   supplyPlansUpdated   SupplyPlan[]             @relation("SupplyPlanUpdatedBy")

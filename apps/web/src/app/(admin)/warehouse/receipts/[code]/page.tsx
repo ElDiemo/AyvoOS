@@ -1,4 +1,5 @@
 import { goodsReceiptCodeSchema, goodsReceiptSchema } from '@ayvo/types';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, Field, FieldList } from '@/components/ui';
 import {
@@ -59,7 +60,16 @@ export default async function ReceiptPage({
       <div className="flex flex-col gap-6">
         <Card>
           <FieldList>
-            <Field label={r.supplier}>{receipt.supplier.name}</Field>
+            <Field label={r.supplier}>
+              <Link href={`/warehouse/suppliers/${receipt.supplier.id}`} className="underline">
+                {receipt.supplier.name}
+              </Link>
+              {receipt.supplierNameAtReceipt && (
+                <span className="block text-xs text-stone-500" data-testid="supplier-name-then">
+                  {r.supplierNameThen(receipt.supplierNameAtReceipt)}
+                </span>
+              )}
+            </Field>
             <Field label={r.reference}>{receipt.supplierReference}</Field>
             <Field label={r.receivedAt}>{formatDateTimeCs(receipt.receivedAt, tz)}</Field>
             {receipt.note && <Field label={r.note}>{receipt.note}</Field>}

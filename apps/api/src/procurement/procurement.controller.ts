@@ -17,7 +17,10 @@ import {
   type GoodsReceiptPage,
   type LinkReceiptDocumentRequest,
   type Supplier,
+  type SupplierDetail,
   type SupplierDocument,
+  type UpdateSupplierRequest,
+  updateSupplierRequestSchema,
   type UploadSupplierDocumentFields,
 } from '@ayvo/types';
 import {
@@ -53,6 +56,11 @@ import { receiptForViewer } from './receipt-visibility.js';
 const RECEIPT_CODE = new ZodValidationPipe(goodsReceiptCodeSchema);
 const supplierListQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 
+/** Contacts and notes of suppliers: only for those who manage suppliers (doc 033 §4). */
+const seesContacts = (p: Principal) =>
+  p.permissions.has('procurement:suppliers_manage') ||
+  p.permissions.has('procurement:suppliers_edit');
+
 /**
  * Admin API: suppliers, supplier documents, goods receipts (doc 018). Supplier master data is
  * company-wide; documents, receipts and prices belong to the receiving site and are read only at
@@ -69,16 +77,39 @@ export class ProcurementController {
   suppliers(
     @Query(new ZodValidationPipe(supplierListQuerySchema))
     q: z.infer<typeof supplierListQuerySchema>,
+    @CurrentPrincipal() principal: Principal,
   ): Promise<Supplier[]> {
-    return this.procurement.listSuppliers(q.archived === 'true');
+    return this.procurement.listSuppliers(q.archived === 'true', seesContacts(principal));
+  }
+
+  @RequirePermission('inventory:read')
+  @Get('suppliers/:id')
+  supplier(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<SupplierDetail> {
+    return this.procurement.supplierDetail(id, seesContacts(principal));
   }
 
   @RequirePermission('procurement:suppliers_manage')
   @Post('suppliers')
   createSupplier(
     @Body(new ZodValidationPipe(createSupplierRequestSchema)) body: CreateSupplierRequest,
+    @CurrentPrincipal() principal: Principal,
   ): Promise<Supplier> {
-    return this.procurement.createSupplier(body);
+    return this.procurement.createSupplier(body, principal.userId, true);
+  }
+
+  /** Correction of the details (ADMIN): the next revision with a reason; history kept. */
+  @RequirePermission('procurement:suppliers_edit')
+  @Post('suppliers/:id/revisions')
+  @HttpCode(200)
+  updateSupplier(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(updateSupplierRequestSchema)) body: UpdateSupplierRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<SupplierDetail> {
+    return this.procurement.updateSupplier(id, body, principal.userId);
   }
 
   @RequirePermission('procurement:suppliers_manage')
@@ -88,7 +119,7 @@ export class ProcurementController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(archiveSupplierRequestSchema)) body: { requestId: string },
   ): Promise<Supplier> {
-    return this.procurement.archiveSupplier(id, body.requestId);
+    return this.procurement.archiveSupplier(id, body.requestId, true);
   }
 
   @RequirePermission('procurement:documents_read')

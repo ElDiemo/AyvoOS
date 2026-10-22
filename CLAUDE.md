@@ -78,6 +78,13 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   Owner 2026-10-21: a parcel picked up and not delivered keeps the site active
   (`PARCELS_IN_TRANSIT`, also DB); return / loss / failed attempt / pick-up point is never a
   delivery — a warning on that parcel, nothing cancelled, released or returned automatically.
+  Supplier details and goods barcodes (doc 033, owner 2026-10-21): optional supplier address,
+  contact and note; corrections only as append-only `supplier_revisions` with a reason
+  (`procurement:suppliers_edit`, ADMIN), receipts never rewritten; contacts only for supplier
+  managers. `inventory_item_barcodes`: exact text codes, several per item, one active assignment
+  per code, retired never deleted (`inventory:barcodes_manage`, ADMIN); a code identifies the item
+  only (no supplier, quantity, pack, lot, GS1); separate from QR identities; a scan never moves
+  stock or submits a receipt.
   Hotel supply plans (doc 032, owner 2026-10-20): one plan per hotel (validity, INACTIVE →
   ACTIVE ⇄ PAUSED, rules of product × whole crates × days 1–31), occurrences unique per plan and
   local ship day (DB), orders with `origin` MANUAL | SUPPLY_PLAN pointing to their occurrence,

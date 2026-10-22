@@ -73,7 +73,8 @@ Implementation:
 - Images are built on the server; builds use server CPU and disk, and old image tags
   accumulate until pruned manually.
 - Migrations are forward-only. Rolling back across a schema change needs a compensating
-  migration or a restore from the pre-migration dump.
+  migration or a restore from the pre-migration dump (into a new database, owner approval each
+  time — doc 013 "Restore a pre-migration dump").
 - Docker-published ports (80/443) bypass host `ufw` rules; this is intended for those two
   ports only and is why no other service publishes a port.
 
