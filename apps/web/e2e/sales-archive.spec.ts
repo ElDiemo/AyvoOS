@@ -160,6 +160,7 @@ test('archive is refused with an open task, then archived, found by the filter a
   // Read-only until restored: no quick actions, no contact or profile edits, no corrections.
   await expect(page.getByTestId('prospect-actions')).toHaveCount(0);
   await expect(page.getByTestId('add-contact')).toHaveCount(0);
+  await expect(page.getByTestId('prospect-next')).toHaveCount(0);
   await expect(page.getByTestId('edit-prospect')).toHaveCount(0);
   await expect(page.getByTestId('contact-Recepce')).toBeVisible();
   for (const width of [390, 320]) {

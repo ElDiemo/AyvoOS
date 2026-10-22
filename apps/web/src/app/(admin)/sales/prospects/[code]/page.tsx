@@ -131,23 +131,28 @@ export default async function ProspectPage({
                 {d.lostReason}: {p.lostReason}
               </Notice>
             )}
-            <div
-              className="rounded-md border border-stone-200 bg-stone-50 px-4 py-3"
-              data-testid="prospect-next"
-            >
-              <p className="text-xs font-medium uppercase tracking-wide text-stone-500">
-                {d.nextTask}
-              </p>
-              {next && due ? (
-                <p className="mt-1 text-sm wrap-anywhere">
-                  <span className={cn('mr-2', dueClass[due.tone])}>{due.text}</span>
-                  <span className="font-medium">{next.title}</span>
-                  {next.contact && <span className="text-stone-500"> · {next.contact.label}</span>}
+            {/* An archived prospect takes no new work: no "add a task" prompt. */}
+            {!archived && (
+              <div
+                className="rounded-md border border-stone-200 bg-stone-50 px-4 py-3"
+                data-testid="prospect-next"
+              >
+                <p className="text-xs font-medium uppercase tracking-wide text-stone-500">
+                  {d.nextTask}
                 </p>
-              ) : (
-                <p className="mt-1 text-sm text-amber-800">{d.noNextTask}</p>
-              )}
-            </div>
+                {next && due ? (
+                  <p className="mt-1 text-sm wrap-anywhere">
+                    <span className={cn('mr-2', dueClass[due.tone])}>{due.text}</span>
+                    <span className="font-medium">{next.title}</span>
+                    {next.contact && (
+                      <span className="text-stone-500"> · {next.contact.label}</span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-sm text-amber-800">{d.noNextTask}</p>
+                )}
+              </div>
+            )}
             {!archived && (
               <ProspectActions
                 prospect={{ code: p.code, stage: p.stage, revision: p.revision, owner: p.owner }}
@@ -181,7 +186,7 @@ export default async function ProspectPage({
           <div className="flex min-w-0 flex-col gap-6">
             <Card title={t.task.open} testId="open-tasks" id="open-tasks">
               {p.openTasks.length === 0 ? (
-                <EmptyState>{t.task.none}</EmptyState>
+                <EmptyState>{archived ? t.task.noneArchived : t.task.none}</EmptyState>
               ) : (
                 <TaskList
                   tasks={p.openTasks}

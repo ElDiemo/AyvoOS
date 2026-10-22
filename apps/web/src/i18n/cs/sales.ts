@@ -297,6 +297,7 @@ export const salesCs = {
     open: 'Otevřené úkoly',
     closed: 'Uzavřené úkoly',
     none: 'Žádný otevřený úkol. Přidejte další krok, ať je jasné, co dál.',
+    noneArchived: 'Žádný otevřený úkol. Archivovaný zájemce nové úkoly nedostává.',
     done: 'Hotovo',
     doneTitle: 'Dokončit úkol',
     result: 'Výsledek (nepovinný)',
