@@ -52,6 +52,11 @@ UFW active, SSH with keys; **public SSH stays** as the fallback (nothing here to
   puts a chain first in `DOCKER-USER` for IPv4 **and** IPv6: new connections entering through the
   public interface towards a container are dropped, except IPv4 TCP :80. Tested with recorded
   `iptables`/`ip6tables` calls (`apps/api/test/deploy-prod.test.ts`).
+- **Right host first.** `install.sh`, `uninstall.sh` and `scripts/deploy-prod.sh` start with
+  `deploy/prod/host/prod-host.sh`: hostname `AyvoOS-PROD`, Tailscale IPv4 `100.88.139.2`, and no
+  trace of the DEV preview (its env file, guard, sysctl or containers; if the containers cannot
+  be listed, it refuses too). Anything else is refused before the first change. A renamed or
+  re-addressed server needs a reviewed change of that file.
 - `sudo bash deploy/prod/host/install.sh --check` verifies without changing anything: Docker,
   Tailscale address, the public default route, **no subnet routes shared by this node**, no Docker
   network inside `100.64.0.0/10`. Then `sudo bash deploy/prod/host/install.sh` backs up iptables,

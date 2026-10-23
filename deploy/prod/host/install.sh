@@ -14,6 +14,10 @@ set -Eeuo pipefail
 umask 022
 [[ $(id -u) == 0 ]] || { echo "run as root (sudo)" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The right server, and no DEV here, before the first change.
+# shellcheck source=prod-host.sh
+source "$HERE/prod-host.sh"
+assert_prod_host || exit 1
 CHECK_ONLY=false
 [[ ${1:-} == --check ]] && CHECK_ONLY=true
 fail() { echo "install.sh: $*" >&2; exit 1; }
