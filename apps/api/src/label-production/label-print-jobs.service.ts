@@ -23,6 +23,11 @@ import type { LabelPrintJob, Prisma } from '../generated/prisma/client.js';
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 import { LabelPdfRenderer } from '../labels/label-pdf-renderer.js';
+import {
+  requireQrJobPrintable,
+  requireQrLabelSettings,
+  requireQrWidths,
+} from '../labels/qr-label-settings.js';
 
 /** A GENERATING job older than this is considered abandoned (e.g. API restart) and may be retried. */
 export const STALE_GENERATION_MS = 10 * 60 * 1000;
@@ -62,6 +67,7 @@ export class LabelPrintJobsService {
   /** For a series of the given (active) site only; the job belongs to the series' site. */
   async createForBatch(batchCode: string, siteId: string): Promise<LabelPrintJobDto> {
     this.assertQrPolicy(this.env.PUBLIC_QR_BASE_URL);
+    const settings = requireQrLabelSettings(this.env);
     const batch = await this.bottles.getBatchForPrinting(batchCode, siteId);
     const bottles = await this.bottles.listBatchBottlesForPrinting(batch.id);
     if (bottles.length !== batch.quantityCreated) throw new Error('Creation batch is incomplete');
@@ -78,7 +84,7 @@ export class LabelPrintJobsService {
           labelCount: bottles.length,
           publicBaseUrl: this.env.PUBLIC_QR_BASE_URL,
           appEnvironment: this.env.APP_ENV,
-          qrErrorCorrection: this.env.LABEL_QR_ERROR_CORRECTION,
+          qrErrorCorrection: settings.errorCorrection,
         },
       });
       await tx.labelPrintJobItem.createMany({
@@ -176,6 +182,8 @@ export class LabelPrintJobsService {
     const job = await this.findJob(code, siteId);
     // A production process renders only production URLs; any other process never does.
     this.assertQrPolicy(job.publicBaseUrl);
+    // Checked before the claim: a refused job keeps its state (and stays retryable).
+    await this.assertPrintable(job);
     const now = new Date();
     // The claim identifies this attempt (attempts + 1); every later write is conditional on it,
     // so an attempt that was superseded (e.g. reclaimed after STALE_GENERATION_MS) can never
@@ -256,6 +264,8 @@ export class LabelPrintJobsService {
     if (job.status !== 'COMPLETED' || !job.fileStorageKey) {
       throw new ConflictException(`${job.code} has no PDF yet (status ${job.status})`);
     }
+    // A stored PDF is handed out only under the current, matching QR settings.
+    await this.assertPrintable(job);
     const ref = (await this.labels.getVersionRefs([job.labelTemplateVersionId])).get(
       job.labelTemplateVersionId,
     )!;
@@ -285,6 +295,11 @@ export class LabelPrintJobsService {
       devMarker: job.appEnvironment !== 'production',
     });
     return Buffer.from(pdf);
+  }
+
+  private async assertPrintable(job: LabelPrintJob): Promise<void> {
+    const settings = requireQrJobPrintable(this.env, job.qrErrorCorrection);
+    requireQrWidths(settings, await this.labels.qrElementWidths(job.labelTemplateVersionId));
   }
 
   private assertQrPolicy(baseUrl: string): void {

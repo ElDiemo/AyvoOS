@@ -68,8 +68,10 @@ system print production URLs, or production print anything else.
 
 Current production **candidate**: **15 mm** total box (quiet zone included), error correction
 **Q**, solid black on an opaque white square. Configurable via `LABEL_QR_MIN_SIZE_MM` and
-`LABEL_QR_ERROR_CORRECTION`; production refuses to start without both being set explicitly.
-Non-production defaults: EC Q, minimum 10 mm (so smaller variants can be tested).
+`LABEL_QR_ERROR_CORRECTION`; production has no default for them. Without both, production runs
+but refuses every operation that creates or prints our QR labels (ADR 0034 — supersedes the earlier
+"refuses to start"). Non-production defaults: EC Q, minimum 10 mm (so smaller variants can be
+tested).
 
 Approval requires a physical test of the validation sheet
 (`GET /api/admin/label-calibration/qr-validation-sheet.pdf`: 10/12/15/18 mm × EC M/Q, production

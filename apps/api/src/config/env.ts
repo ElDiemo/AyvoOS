@@ -3,6 +3,27 @@ import { qrBaseUrlViolation } from '../common/qr-policy.js';
 
 const QR_ERROR_CORRECTION_LEVELS = ['L', 'M', 'Q', 'H'] as const;
 
+/**
+ * The QR print settings as the application uses them. Production: exactly what is configured,
+ * never a candidate default (null = not set; only our QR label operations are then refused).
+ * Elsewhere unset values default to the provisional candidates 10 mm / Q.
+ */
+export function labelQrSettings(
+  appEnv: 'development' | 'test' | 'production',
+  minSizeMm: number | undefined,
+  errorCorrection: (typeof QR_ERROR_CORRECTION_LEVELS)[number] | undefined,
+) {
+  const production = appEnv === 'production';
+  return {
+    LABEL_QR_MIN_SIZE_MM: minSizeMm ?? (production ? null : 10),
+    LABEL_QR_ERROR_CORRECTION: errorCorrection ?? (production ? null : ('Q' as const)),
+  };
+}
+
+/** An empty or whitespace-only variable counts as not set. */
+const blankAsUnset = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
 /** Validated runtime configuration. Fails fast on startup if anything is missing or malformed. */
 export const envSchema = z
   .object({
@@ -73,10 +94,15 @@ export const envSchema = z
     ),
 
     // QR print settings — PROVISIONAL until the physical print/scan test (doc 016, ADR 0014).
-    // Production must set both explicitly; other environments default to the current candidate
-    // error correction (Q) and allow 10 mm so the validation sheet sizes can be tried.
-    LABEL_QR_MIN_SIZE_MM: z.coerce.number().min(5).max(100).optional(),
-    LABEL_QR_ERROR_CORRECTION: z.enum(QR_ERROR_CORRECTION_LEVELS).optional(),
+    // Other environments default to the current candidate error correction (Q) and allow 10 mm
+    // so the validation sheet sizes can be tried. Production has NO default: without both values
+    // the application runs, and only the operations that create or print our QR labels are
+    // refused (qr-label-settings.ts). An empty value (e.g. `${VAR:-}` in Compose) is "not set".
+    LABEL_QR_MIN_SIZE_MM: z.preprocess(blankAsUnset, z.coerce.number().min(5).max(100).optional()),
+    LABEL_QR_ERROR_CORRECTION: z.preprocess(
+      blankAsUnset,
+      z.enum(QR_ERROR_CORRECTION_LEVELS).optional(),
+    ),
 
     // Workstation session lease (doc 026): inactivity after which another authorized user may
     // take the station over (never automatic). Configuration, not a code constant (doc 020 §6).
@@ -277,18 +303,6 @@ export const envSchema = z
     const violation = qrBaseUrlViolation(env.APP_ENV, publicQrBaseUrl);
     if (violation) return fail('PUBLIC_QR_BASE_URL', violation);
 
-    if (production && env.LABEL_QR_MIN_SIZE_MM === undefined) {
-      return fail(
-        'LABEL_QR_MIN_SIZE_MM',
-        'Set the physically validated QR minimum size in production',
-      );
-    }
-    if (production && env.LABEL_QR_ERROR_CORRECTION === undefined) {
-      return fail(
-        'LABEL_QR_ERROR_CORRECTION',
-        'Set the physically validated QR error correction in production',
-      );
-    }
     if (production && env.FILE_STORAGE_DRIVER === 'local') {
       return fail(
         'FILE_STORAGE_DRIVER',
@@ -326,8 +340,7 @@ export const envSchema = z
       AUTH_PROVIDER: authProvider,
       APP_PUBLIC_ORIGIN: env.APP_PUBLIC_ORIGIN ?? 'http://localhost:3000',
       PUBLIC_QR_BASE_URL: publicQrBaseUrl,
-      LABEL_QR_MIN_SIZE_MM: env.LABEL_QR_MIN_SIZE_MM ?? 10,
-      LABEL_QR_ERROR_CORRECTION: env.LABEL_QR_ERROR_CORRECTION ?? ('Q' as const),
+      ...labelQrSettings(env.APP_ENV, env.LABEL_QR_MIN_SIZE_MM, env.LABEL_QR_ERROR_CORRECTION),
     };
   });
 

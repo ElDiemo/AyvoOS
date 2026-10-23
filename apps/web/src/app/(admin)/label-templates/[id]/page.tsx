@@ -134,12 +134,21 @@ function VersionCard({
                 height: `${(qr.heightMm / version.heightMm) * 100}%`,
               }}
             >
-              <QrCode
-                value={settings.qrPreviewUrl}
-                level={settings.qrErrorCorrection}
-                className="h-full w-full"
-                title={t.qrPosition}
-              />
+              {settings.qrErrorCorrection ? (
+                <QrCode
+                  value={settings.qrPreviewUrl}
+                  level={settings.qrErrorCorrection}
+                  className="h-full w-full"
+                  title={t.qrPosition}
+                />
+              ) : (
+                // Without the QR settings: only the QR position, no code.
+                <div
+                  className="h-full w-full border-2 border-dashed border-stone-500 bg-white/70"
+                  title={t.qrPosition}
+                  data-testid="qr-position-only"
+                />
+              )}
             </div>
           )}
         </div>

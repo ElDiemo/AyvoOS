@@ -9,7 +9,7 @@ import { notFound } from 'next/navigation';
 import { ProductionHeader } from '@/components/production/production-header';
 import { QrCode } from '@/components/qr-code';
 import { BottleStatusBadge } from '@/components/status';
-import { buttonClass, Card, Field, FieldList } from '@/components/ui';
+import { buttonClass, Card, Field, FieldList, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { productionCs } from '@/i18n/cs/production';
 import { apiGet } from '@/lib/api';
@@ -124,12 +124,19 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
           </Card>
         </div>
         <Card title={t.qr}>
-          <QrCode
-            value={bottle.publicUrl}
-            level={settings.qrErrorCorrection}
-            className="mx-auto w-full max-w-56"
-            title={t.qrTitle(bottle.code)}
-          />
+          {settings.qrErrorCorrection ? (
+            <QrCode
+              value={bottle.publicUrl}
+              level={settings.qrErrorCorrection}
+              className="mx-auto w-full max-w-56"
+              title={t.qrTitle(bottle.code)}
+            />
+          ) : (
+            // The bottle stays readable; only a QR code with unvalidated settings is not drawn.
+            <div data-testid="qr-settings-missing">
+              <Notice>{productionCs.qrSettingsMissing}</Notice>
+            </div>
+          )}
           <a
             href={bottle.publicUrl}
             target="_blank"

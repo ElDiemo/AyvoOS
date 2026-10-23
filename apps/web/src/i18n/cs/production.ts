@@ -8,7 +8,20 @@ const plural = (n: number, one: string, few: string, many: string) =>
 
 export const bottlesWord = (n: number) => `${n} ${plural(n, 'lahev', 'lahve', 'lahví')}`;
 
+/** API refusals of our QR label operations (apps/api/src/labels/qr-label-settings.ts). */
+export const qrLabelErrorsCs: Record<string, string> = {
+  QR_LABEL_SETTINGS_MISSING:
+    'QR etiketu teď nelze vytvořit ani vytisknout: ověřené parametry QR nejsou nastavené.',
+  QR_LABEL_SETTINGS_CHANGED:
+    'Tato tisková úloha vznikla s jinou úrovní opravy chyb QR, než je nastavená teď. Vytvořte novou tiskovou úlohu.',
+  QR_LABEL_TOO_SMALL: 'QR kód by byl menší než nastavená minimální velikost.',
+};
+
 export const productionCs = {
+  /** Production may run before the physical QR test: then only our QR labels are unavailable. */
+  qrSettingsMissing:
+    'Parametry QR etiket (fyzicky ověřená velikost a úroveň opravy chyb) zatím nejsou nastavené. ' +
+    'Tvorba, náhled a tisk QR etiket proto nejsou dostupné; ostatní funkce fungují normálně.',
   bottleStatus: {
     CREATED: 'Vytvořená identita',
     LABELED_EMPTY: 'Etiketa nalepena – prázdná lahev',
