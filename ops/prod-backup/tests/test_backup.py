@@ -104,16 +104,17 @@ class BackupTests(unittest.TestCase):
 
     # --- helpers --------------------------------------------------------------------------
 
-    def start(self, kind='hourly', **fake):
+    def start(self, kind='hourly', limits=None, **fake):
         env = dict(self.env, PYTHONPATH=f'{HERE.parent}:{HERE}',
-                   **{f'FAKE_S3_{k.upper()}': str(v) for k, v in fake.items()})
+                   **{f'FAKE_S3_{k.upper()}': str(v) for k, v in fake.items()},
+                   **{f'LAUNCH_{k.upper()}': str(v) for k, v in (limits or {}).items()})
         return subprocess.Popen(
             [sys.executable, str(HERE / 'launcher.py'), str(self.state), str(self.creds),
              self.container, kind], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True)
 
-    def run_backup(self, kind='hourly', **fake):
-        p = self.start(kind, **fake)
+    def run_backup(self, kind='hourly', limits=None, **fake):
+        p = self.start(kind, limits, **fake)
         out, err = p.communicate(timeout=300)
         return p.returncode, err
 
@@ -224,6 +225,26 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue(any('daily: NO successful backup' in line for line in lines), lines)
 
+    def test_a_dump_over_the_limit_is_stopped_and_removed(self):
+        # The test database dumps to tens of kB: a 2 kB cap is exceeded; nothing is filled up.
+        code, err = self.run_backup('hourly', limits={'max_dump_bytes': 2048})
+        self.assertEqual(code, 1, err)
+        failure = self.state_of('last-failure-hourly.json')
+        self.assertEqual(failure['step'], 'dump')
+        self.assertIn('exceeds the limit of 2048 bytes', failure['message'])
+        self.assertEqual(self.objects(), [])
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_too_little_free_space_refuses_before_anything_is_written(self):
+        # An unmeetable reserve stands for a full disk (never a real one).
+        code, err = self.run_backup('daily', limits={'reserve_bytes': 2**60})
+        self.assertEqual(code, 1, err)
+        failure = self.state_of('last-failure-daily.json')
+        self.assertEqual(failure['step'], 'space')
+        self.assertIn('database container has', failure['message'])
+        self.assertEqual(self.objects(), [])
+        self.assertEqual(self.leftovers(), ([], []))
+
     def test_a_lost_answer_after_the_upload_is_verified_not_written_twice(self):
         code, err = self.run_backup('hourly', lose_answer=1)
         self.assertEqual(code, 0, err)
@@ -325,6 +346,47 @@ class CredentialAndCommandTests(unittest.TestCase):
         code, lines = backup.status(state, backup.MAX_AGE_HOURS)
         self.assertEqual(code, 1)
         self.assertIn('STALE', lines[-1])
+
+    def test_fresh_backups_without_a_restore_check_are_not_ready(self):
+        state = self.tmp / 'state'
+        now = backup.utcnow().isoformat(timespec='seconds')
+        for kind in ('hourly', 'daily'):
+            backup.record(state, f'last-success-{kind}.json', {'finishedAt': now, 'key': 'k'})
+        code, lines = backup.status(state, backup.MAX_AGE_HOURS)
+        self.assertEqual(code, 1)
+        self.assertIn('NEVER RUN', lines[-1])
+
+    def test_the_space_check_needs_the_dump_and_the_reserve_on_both_disks(self):
+        gib = 1024**3
+
+        class Measured(backup.Backup):
+            def __init__(self, db, container, host, cap=10 * gib, reserve=2 * gib):
+                super().__init__(backup.Config(kind='hourly', reason='t', state_dir=Path('/x'),
+                                               max_dump_bytes=cap, reserve_bytes=reserve),
+                                 backup.Runner())
+                self.sizes = (db, container, host)
+
+            def database_bytes(self):
+                return self.sizes[0]
+
+            def container_free_bytes(self):
+                return self.sizes[1]
+
+            def host_free_bytes(self):
+                return self.sizes[2]
+
+        self.assertEqual(Measured(1 * gib, 3 * gib, 5 * gib).check_space(), 10 * gib)
+        with self.assertRaisesRegex(backup.BackupError, 'database container has 2.99 GiB'):
+            Measured(1 * gib, 3 * gib - 10 * 1024**2, 5 * gib).check_space()
+        with self.assertRaisesRegex(backup.BackupError, 'needs 5.00 GiB'):
+            Measured(1 * gib, 3 * gib, 5 * gib - 1).check_space()
+        # A database larger than the cap needs room for the cap only (the dump stops there).
+        self.assertEqual(Measured(500 * gib, 3 * gib, 5 * gib, cap=1 * gib).check_space(), gib)
+
+    def test_the_dump_is_written_through_a_byte_cap(self):
+        script = backup.dump_script('20260101T000000Z-00000000', 1000).decode()
+        self.assertIn('| head -c 1001 > /tmp/ayvo-backup-20260101T000000Z-00000000.dump', script)
+        self.assertIn('echo $? > /tmp/ayvo-backup-20260101T000000Z-00000000.rc', script)
 
     def test_an_unexpected_setup_failure_is_reported_not_a_traceback(self):
         blocker = self.tmp / 'not-a-directory'
