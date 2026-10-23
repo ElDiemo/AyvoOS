@@ -1,0 +1,75 @@
+# AYVO OS — Caddy for PRODUCTION (https://os.ayvo.co). Doc 036, ADR 0033 (tailnet only, as
+# ADR 0026 for DEV). Values come from the deploy script via compose.yml; none are secret.
+#
+# HTTPS is published only on the server's Tailscale IPv4 address, and every request is also
+# checked against the real TCP peer (remote_ip — never a forwarded header): only Tailscale's
+# 100.64.0.0/10. The Docker bridge gateway is NOT allowed — with Tailscale's SNAT on it would
+# stand for every peer, so the deploy script refuses to run with SNAT on instead.
+# The only public exception is IPv4 :80, where Caddy answers its own ACME HTTP-01 challenges.
+{
+	email {$ACME_EMAIL}
+}
+
+(tailnet) {
+	@outside not remote_ip 100.64.0.0/10
+}
+
+(headers) {
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Strict-Transport-Security "max-age=31536000"
+	}
+	header -Server
+}
+
+{$PROD_DOMAIN} {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	encode zstd gzip
+	import headers
+	import tailnet
+
+	handle @outside {
+		abort
+	}
+
+	handle {
+		# The normal application sign-in (WorkOS) protects every route; no Basic Auth.
+		# Same-origin API: /api and /api/* go to NestJS with the path UNCHANGED.
+		@api path /api /api/*
+		handle @api {
+			reverse_proxy api:4000 {
+				header_down -X-Powered-By
+			}
+		}
+		handle {
+			reverse_proxy web:3000 {
+				header_down -X-Powered-By
+			}
+		}
+	}
+}
+
+# Plain HTTP. Caddy answers its ACME HTTP-01 challenges before these routes; the public sees
+# nothing else (aborted, never the application); the tailnet is redirected to HTTPS.
+http://{$PROD_DOMAIN} {
+	import headers
+	import tailnet
+
+	handle @outside {
+		abort
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
+}
+
+# Any other host name or a bare IP address: nothing.
+http:// {
+	abort
+}

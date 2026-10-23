@@ -1,0 +1,230 @@
+# AYVO OS — PRODUCTION (https://os.ayvo.co) on AyvoOS-PROD. Doc 036, ADR 0033.
+#
+# The same application code as DEV, one approved release commit at a time; a separate Compose
+# project, database, Redis, volumes, images and configuration. Never DEV data, never DEV secrets.
+# Deploy only with scripts/deploy-prod.sh (it builds the images from a clean export of the release
+# commit and passes the server-only env files). Never run `docker compose config` without
+# `--quiet` here: it would print the secrets of the env files.
+#
+# Topology (internal through the tailnet, like DEV — ADR 0026):
+#   tailnet ──443/80──▶ caddy ──/api/*──▶ api ──▶ postgres, redis      (files: private S3, ADR 0032)
+#                              └──other───▶ web ──(server-side)──▶ api
+#   tailnet ──53─────▶ dns (CoreDNS: answers only os.ayvo.co, refuses everything else)
+#   internet ─80/IPv4─▶ caddy: ACME HTTP-01 challenges only; every other request is aborted
+#
+# Published ports: ONLY on the server's Tailscale IPv4 (PROD_TAILNET_IPV4, from `tailscale ip -4`
+# by the deploy script) — never 0.0.0.0 or IPv6 — except IPv4 :80 for certificate issuance.
+# web, api, postgres and redis publish nothing; postgres and redis have no egress.
+
+name: ayvo-prod
+
+x-logging: &logging # Rotated per container: at most 5 × 10 MB.
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '5'
+
+x-app: &app
+  restart: unless-stopped
+  logging: *logging
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - '${PROD_TAILNET_IPV4:?set by scripts/deploy-prod.sh from tailscale ip -4}:443:443'
+      - '${PROD_TAILNET_IPV4}:443:443/udp'
+      # The narrow public exception: Caddy answers ACME HTTP-01 challenges, aborts everything else.
+      - '0.0.0.0:80:80'
+    environment:
+      PROD_DOMAIN: ${PROD_DOMAIN:?set by scripts/deploy-prod.sh}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in /opt/ayvo/secrets/prod.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - edge
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:2019/config/']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dns:
+    image: coredns/coredns:1.11.3
+    restart: unless-stopped
+    logging: *logging
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    command: ['-conf', '/etc/coredns/Corefile']
+    environment:
+      PROD_DOMAIN: ${PROD_DOMAIN:?set by scripts/deploy-prod.sh}
+      PROD_TAILNET_IPV4: ${PROD_TAILNET_IPV4:?set by scripts/deploy-prod.sh from tailscale ip -4}
+    volumes:
+      - ./Corefile:/etc/coredns/Corefile:ro
+    ports:
+      - '${PROD_TAILNET_IPV4}:53:1053/udp'
+      - '${PROD_TAILNET_IPV4}:53:1053/tcp'
+    networks:
+      - dns
+
+  web:
+    <<: *app
+    image: ayvo-prod/web:${AYVO_RELEASE:?set by scripts/deploy-prod.sh}
+    build:
+      context: ${AYVO_RELEASE_DIR:?set by scripts/deploy-prod.sh}
+      dockerfile: apps/web/Dockerfile
+    environment:
+      APP_ENV: production
+      API_URL: http://api:4000
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    image: ayvo-prod/api:${AYVO_RELEASE:?set by scripts/deploy-prod.sh}
+    build:
+      context: ${AYVO_RELEASE_DIR:?set by scripts/deploy-prod.sh}
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Server-only secrets, read by Docker into the container — never through this file, a
+    # process argument or a log. Key names: doc 036 §4 (checked by `deploy-prod.sh --check`).
+    env_file:
+      - ${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}/prod-workos.env
+      - ${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}/prod-s3.env
+    environment:
+      APP_ENV: production
+      API_PORT: 4000
+      APP_PUBLIC_ORIGIN: https://${PROD_DOMAIN:?set by scripts/deploy-prod.sh}
+      AUTH_PROVIDER: workos
+      # WorkOS Production (not secret; the API key comes from prod-workos.env).
+      WORKOS_CLIENT_ID: client_01M4R7SYY9BSQQCT0RHV4E468Q
+      WORKOS_JWT_ISSUER: https://api.workos.com/user_management/client_01M4R7SYY9BSQQCT0RHV4E468Q
+      TRUSTED_PROXY_CIDRS: 172.16.0.0/12,192.168.0.0/16
+      DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      # Private application files (ADR 0032, #47): the bucket and its owner are not secret; the
+      # application identity's keys come from prod-s3.env (never the backup identity's).
+      FILE_STORAGE_DRIVER: s3
+      AWS_REGION: eu-north-1
+      S3_BUCKET: ayvo-prod-files-888725257303-eu-north-1-an
+      S3_EXPECTED_BUCKET_OWNER: '888725257303'
+      # Labels (ADR 0014, doc 016): the production QR base URL is set by the owner in prod.env.
+      # The PHYSICALLY VALIDATED QR size and error correction are optional there and have no
+      # default: until the owner records them, the application runs and only the creation and
+      # printing of our QR labels is refused (ADR 0034). Empty = not set.
+      PUBLIC_QR_BASE_URL: ${PUBLIC_QR_BASE_URL:?set PUBLIC_QR_BASE_URL in /opt/ayvo/secrets/prod.env (doc 036 §4)}
+      LABEL_QR_MIN_SIZE_MM: ${LABEL_QR_MIN_SIZE_MM:-}
+      LABEL_QR_ERROR_CORRECTION: ${LABEL_QR_ERROR_CORRECTION:-}
+      # Carriers: no connection is configured in production (PPL TEST is refused there).
+      CARRIER_CREDENTIALS_KEY: ${CARRIER_CREDENTIALS_KEY:-}
+    networks:
+      - edge
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  migrate:
+    image: ayvo-prod/api-migrate:${AYVO_RELEASE:?set by scripts/deploy-prod.sh}
+    build:
+      context: ${AYVO_RELEASE_DIR:?set by scripts/deploy-prod.sh}
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    profiles:
+      - tools
+    restart: 'no'
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  edge:
+  backend:
+    internal: true
+  dns:
+
+# Explicit names, separate from DEV's ayvo-dev-preview-*. Nothing removes them: the deploy script
+# never runs `down -v`, `volume rm` or a prune.
+volumes:
+  postgres-data:
+    name: ayvo-prod-postgres-data
+  redis-data:
+    name: ayvo-prod-redis-data
+  caddy-data:
+    name: ayvo-prod-caddy-data
+  caddy-config:
+    name: ayvo-prod-caddy-config
