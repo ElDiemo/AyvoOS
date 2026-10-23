@@ -46,8 +46,7 @@ export class PublicRateLimitGuard implements CanActivate {
     try {
       const client = await this.redis.ready();
       const result = await client.multi().incr(key).pexpire(key, windowMs, 'NX').pttl(key).exec();
-      current = Number(result?.[0]?.[1] ?? 0);
-      ttl = Number(result?.[2]?.[1] ?? windowMs);
+      ({ current, ttl } = counted(result));
     } catch (error) {
       this.logger.error(`Public rate limit store unavailable: ${(error as Error).name}`);
       res.setHeader('Retry-After', '30');
@@ -59,4 +58,32 @@ export class PublicRateLimitGuard implements CanActivate {
     }
     return true;
   }
+}
+
+/**
+ * The counter and its remaining window from the EXEC reply — or an error. ioredis reports a failed
+ * command inside EXEC as an Error in its slot (and an aborted transaction as null) instead of
+ * rejecting, so every slot is checked: INCR must be a positive integer, PEXPIRE NX 0 or 1 (0 is
+ * normal when the window is already running), PTTL a positive number of milliseconds. Anything
+ * else is no reliable answer and must never let the request through.
+ */
+export function counted(result: [Error | null, unknown][] | null): {
+  current: number;
+  ttl: number;
+} {
+  if (!Array.isArray(result) || result.length !== 3) throw new Error('RateLimitExecAborted');
+  for (const [error] of result) if (error) throw new Error('RateLimitCommandFailed');
+  const [[, incr], [, expire], [, pttl]] = result as [
+    [null, unknown],
+    [null, unknown],
+    [null, unknown],
+  ];
+  if (typeof incr !== 'number' || !Number.isSafeInteger(incr) || incr < 1) {
+    throw new Error('RateLimitBadCounter');
+  }
+  if (expire !== 0 && expire !== 1) throw new Error('RateLimitBadExpire');
+  if (typeof pttl !== 'number' || !Number.isFinite(pttl) || pttl <= 0) {
+    throw new Error('RateLimitBadTtl');
+  }
+  return { current: incr, ttl: pttl };
 }
