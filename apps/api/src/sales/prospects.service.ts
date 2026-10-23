@@ -236,8 +236,16 @@ export class ProspectsService {
   }
 
   async detail(scope: SalesScope, code: string): Promise<ProspectDetail> {
-    const row = await visibleProspect(this.prisma, code, scope);
-    const detail = await this.views.detail(row.id);
+    // The permission check and the detail come from ONE snapshot (REPEATABLE READ): a prospect
+    // handed to someone else in between is answered as it was when the check allowed it, never
+    // with what the new owner added since (Codex SALES44-R2).
+    const { row, detail } = await this.prisma.$transaction(
+      async (tx) => {
+        const row = await visibleProspect(tx, code, scope);
+        return { row, detail: await this.views.detail(row.id, tx) };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
+    );
     const contacts = detail.contacts.filter((c) => !c.retired);
     const duplicates = await this.duplicates(scope, {
       name: row.name,
