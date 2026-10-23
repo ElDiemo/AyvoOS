@@ -122,22 +122,53 @@ and the public QR checks of doc 037 §5.
 
 ## 6. First installation (owner, in this order)
 
-1. Docker, swap, the `ayvo` user, the read-only checkout (§2). Tailscale is already up.
-2. `sudo bash deploy/prod/host/install.sh --check`, then without `--check` (§3). Split DNS. The
-   public DNS **A** record `qr.ayvo.co` → the server's public IPv4 (no AAAA; doc 037).
-3. `/opt/ayvo/secrets/prod.env` from the example; check the existing files' key names (§4).
-4. The release: a commit on `origin/main` that contains this deployment, the S3 storage (#47), the
-   Next.js security update (#48) and whatever else the owner approves.
-5. `scripts/deploy-prod.sh --check --release <commit>` — must pass.
-6. `scripts/deploy-prod.sh --release <commit>`: the database is **new and empty**; it is created
-   only by `prisma migrate deploy` from the migrations — never a copy of DEV, never test seeds.
-   The script backs up nothing on an empty database (it says so), migrates, starts, verifies.
-7. The external negative test (§5).
-8. First administrator, once: `scripts/deploy-prod.sh --bootstrap-admin --email <owner's e-mail,
-verified in WorkOS> --name "<name>"` — the existing one-time mechanism (doc 021 §8); the
-   database allows one bootstrap ever. Then sign in with WorkOS + MFA. Every further user only by
-   an AYVO invitation (Správa systému → Uživatelé); salespeople get the `SALES` role.
-9. Backups (doc 035 §6): install, first backup and restore check by hand, then enable the timers.
+Every step is the owner's, on AyvoOS-PROD (SSH as an administrator, then `ayvo`). Nothing is copied
+from DEV. A step that fails stops the installation; nothing is skipped or replaced by a placeholder.
+
+1. **Read-only state check** (changes nothing): `hostname; free -h; swapon --show; df -h /;
+tailscale ip -4; docker --version; docker compose version; ls -l /opt/ayvo/secrets;
+systemctl status ayvo-prod-docker-guard; ls /opt/ayvo/repos/AyvoOS`.
+2. **Docker Engine + Compose plugin** from Docker's apt repository
+   (`https://docs.docker.com/engine/install/ubuntu/`), then `sudo usermod -aG docker ayvo`
+   (root-equivalent: only `ayvo`). Check: `docker compose version`.
+3. **4 GiB swap** (the web build needs ~3 GB; §2):
+   `sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile &&
+sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab`.
+   Check: `swapon --show` shows 4G.
+4. **Read-only release access:** as `ayvo`, `ssh-keygen -t ed25519 -f ~/.ssh/ayvoos_deploy -N ''`;
+   the public key becomes a **read-only deploy key** of the repository (GitHub → Settings → Deploy
+   keys, "Allow write access" off); then `git clone -c core.sshCommand='ssh -i
+~/.ssh/ayvoos_deploy -o IdentitiesOnly=yes' git@github.com:ElDiemo/AyvoOS.git
+/opt/ayvo/repos/AyvoOS`. It is only fetched and `git archive`d — never edited, never pushed.
+5. **Host guard and the edges' separation:** `sudo bash deploy/prod/host/install.sh --check`,
+   then without `--check` (§3). Tailscale split DNS `os.ayvo.co` → `100.88.139.2` (internal);
+   the public DNS A record of the QR host → the public IPv4, no AAAA (doc 037, when that edge is
+   part of the release).
+6. **`/opt/ayvo/secrets/prod.env`** from `deploy/prod/prod.env.example`, mode 600, values set on
+   the server only (new `POSTGRES_PASSWORD`, `ACME_EMAIL`, `PUBLIC_QR_BASE_URL` = the production QR
+   host). **No QR label settings** until the recorded physical validation (§8, ADR 0034); no DEV
+   value of any kind. Check the existing files' key names (§4).
+7. **The release:** one commit `C` on `origin/main` that contains this deployment and everything
+   the owner approved for production (#47 S3, #48, #50 backups, #53 QR settings, the public QR edge
+   if wanted). **`C` is first deployed and verified on DEV** (`scripts/deploy-dev.sh` from a
+   checkout of exactly `C`, owner approval as always); only the same `C` is then promoted here.
+8. `scripts/deploy-prod.sh --check --release <C>` — must pass (host, guard, files, release, WorkOS
+   issuer, DNS, Compose).
+9. `scripts/deploy-prod.sh --release <C>`: the database is **new and empty**; it is created only
+   by `prisma migrate deploy` from the migrations — never a copy of DEV, never test seeds or
+   demo records. The script backs up nothing on an empty database (it says so), migrates, starts,
+   verifies.
+10. The external negative test (§5, and doc 037 §5 for the QR host).
+11. **First administrator, once:** `scripts/deploy-prod.sh --bootstrap-admin --email <owner's
+e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism (doc 021 §8);
+    the database allows one bootstrap ever. **The first real sign-in with WorkOS + MFA is the
+    owner's own step** — no automated test borrows or creates a session for it.
+12. **Salesperson:** by a normal AYVO invitation (Správa systému → Uživatelé, role `SALES`); the
+    person accepts it and signs in with WorkOS + MFA.
+13. **Backups before any timer** (doc 035 §6): install the tool; one real backup to S3; download it
+    back and verify the checksum; the isolated restore check (`--network none`) must report OK;
+    **only then** enable the timers. Until that, production holds no data worth more than a fresh
+    installation.
 
 ## 7. Later releases, failure and rollback
 
