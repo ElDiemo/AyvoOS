@@ -1,0 +1,18 @@
+# AYVO OS — PROD backup freshness check (doc 035). Fails (visible in `systemctl --failed`, the
+# journal at priority err, and the login message) when the last hourly backup is older than
+# 2.5 h, the last daily older than 26 h, or the last run failed. Sends nothing anywhere.
+[Unit]
+Description=AYVO PROD: are the database backups fresh?
+
+[Service]
+Type=oneshot
+User=ayvo
+Group=ayvo
+Environment=PYTHONPATH=/usr/local/lib/ayvo-backup PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m ayvo_backup status
+StandardOutput=journal
+SyslogLevel=err
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/ayvo-backup

@@ -1,0 +1,10 @@
+# AYVO OS — PROD weekly restore check (doc 035). Not enabled by the installer.
+[Unit]
+Description=AYVO PROD: weekly restore check
+
+[Timer]
+OnCalendar=Sun *-*-* 04:20:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
