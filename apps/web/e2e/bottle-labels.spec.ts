@@ -169,9 +169,13 @@ test('create template, register 50 bottles, print labels, inspect a bottle', asy
   await expect(page.getByTestId('reuse-cycles')).toHaveText('0');
   await expect(page.locator('body')).not.toContainText(/BC-000001|mydlo1|CO2/);
 
-  // Unknown tokens are not found.
-  const missing = await page.goto('/q/AAAAAAAAAAAAAAAAAAAAAA');
-  expect(missing?.status()).toBe(404);
+  // Unknown and malformed tokens are not found — a public page without links into the app.
+  for (const token of ['AAAAAAAAAAAAAAAAAAAAAA', 'not-a-token']) {
+    const missing = await page.goto(`/q/${token}`);
+    expect(missing?.status()).toBe(404);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Not found');
+    await expect(page.getByRole('link')).toHaveCount(0);
+  }
 });
 
 test('Bottles live in Production: bottle list, creation history and series detail', async ({

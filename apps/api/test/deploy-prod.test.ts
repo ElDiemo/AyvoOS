@@ -27,6 +27,7 @@ const code = (text: string) =>
     .join('\n');
 const compose = read('deploy/prod/compose.yml');
 const caddyfile = read('deploy/prod/Caddyfile');
+const qrCaddyfile = read('deploy/prod/Caddyfile.qr');
 const corefile = read('deploy/prod/Corefile');
 const script = read('scripts/deploy-prod.sh');
 
@@ -50,7 +51,7 @@ describe('production Compose project', () => {
       expect(serviceBlock(s)).toMatch(/image: ayvo-prod\/(web|api|api-migrate):\$\{AYVO_RELEASE/);
     }
     const volumes = [...compose.matchAll(/^ {4}name: (\S+)$/gm)].map((m) => m[1]);
-    expect(volumes.length).toBe(4);
+    expect(volumes.length).toBe(6);
     expect(volumes.every((v) => v!.startsWith('ayvo-prod-'))).toBe(true);
     expect(code(compose)).not.toMatch(/ayvo-dev/);
   });
@@ -85,7 +86,7 @@ describe('production Compose project', () => {
     expect(compose).not.toContain('prod-s3-backup.env');
   });
 
-  it('publishes only Caddy and DNS on the tailnet address, and IPv4 :80 for ACME', () => {
+  it('publishes Caddy and DNS on the tailnet address, IPv4 :80 for ACME and the QR edge publicly', () => {
     const published = [...compose.matchAll(/^ {6}- '([^']+:\d+(?:\/(?:udp|tcp))?)'$/gm)].map(
       (m) => m[1],
     );
@@ -93,9 +94,23 @@ describe('production Compose project', () => {
       '${PROD_TAILNET_IPV4:?set by scripts/deploy-prod.sh from tailscale ip -4}:443:443',
       '${PROD_TAILNET_IPV4}:443:443/udp',
       '0.0.0.0:80:80',
+      '${PROD_PUBLIC_IPV4:?set by scripts/deploy-prod.sh from the public interface}:443:443/tcp',
       '${PROD_TAILNET_IPV4}:53:1053/udp',
       '${PROD_TAILNET_IPV4}:53:1053/tcp',
     ]);
+    // The public QR edge reaches web only — never the API, the databases or the internal edge.
+    const networks = (svc: string) =>
+      [
+        ...serviceBlock(svc)
+          .split(/^ {4}networks:\n/m)[1]!
+          .split(/^ {4}\S/m)[0]!
+          .matchAll(/^ {6}- (\S+)$/gm),
+      ].map((m) => m[1]);
+    expect(networks('qr-edge')).toEqual(['public']);
+    expect(networks('web')).toEqual(['edge', 'public']);
+    for (const svc of ['api', 'postgres', 'redis', 'caddy', 'dns']) {
+      expect(networks(svc), svc).not.toContain('public');
+    }
     for (const s of ['web', 'api', 'migrate', 'postgres', 'redis']) {
       expect(serviceBlock(s), s).not.toMatch(/^ {4}ports:/m);
     }
@@ -107,6 +122,9 @@ describe('production Compose project', () => {
       ...new Set([...text.matchAll(/\{\$([A-Z0-9_]+)\}/g)].map((m) => m[1]!)),
     ];
     for (const key of placeholders(caddyfile)) expect(serviceEnv('caddy'), key).toHaveProperty(key);
+    for (const key of placeholders(qrCaddyfile)) {
+      expect(serviceEnv('qr-edge'), key).toHaveProperty(key);
+    }
     for (const key of placeholders(corefile)) expect(serviceEnv('dns'), key).toHaveProperty(key);
   });
 
@@ -127,6 +145,8 @@ describe('production Compose project', () => {
     const env = {
       PROD_DOMAIN: 'os.example.test',
       PROD_TAILNET_IPV4: '100.100.100.100',
+      PROD_PUBLIC_IPV4: '198.51.100.7',
+      QR_DOMAIN: 'qr.example.test',
       AYVO_RELEASE: 'abcdef012345',
       AYVO_RELEASE_DIR: root,
       AYVO_PROD_SECRETS_DIR: secrets,
@@ -189,6 +209,38 @@ describe('production edge (Caddy)', () => {
   });
 });
 
+describe('public QR edge (Caddyfile.qr, doc 037)', () => {
+  const qr = code(qrCaddyfile);
+  it('serves only GET /<token> (rewritten to /q/<token>) and the static files; everything else 404', () => {
+    expect([...qr.matchAll(/^\{\$[A-Z_]+\} \{$/gm)].map((m) => m[0])).toEqual(['{$QR_DOMAIN} {']);
+    expect(qr).toContain('path_regexp token ^/([A-Za-z0-9_-]{22})$');
+    expect(qr).toContain('rewrite * /q/{re.token.1}?');
+    expect(qr).toMatch(
+      /@static \{\n\t\tmethod GET HEAD\n\t\tpath \/_next\/static\/\* \/icon\.svg\n\t\}/,
+    );
+    expect(qr).toMatch(/\thandle \{\n\t\trespond "Not found" 404\n\t\}/);
+    // Only web, never the API; no internal host, no sign-in, no tailnet rule needed here.
+    expect([...qr.matchAll(/reverse_proxy (\S+)/g)].map((m) => m[1])).toEqual(['web:3000']);
+    expect(qr).not.toMatch(/api:4000|PROD_DOMAIN|os\.ayvo|qr\.ayvo|basic_?auth|remote_ip/i);
+    expect(qr).toContain('strict_sni_host on');
+    expect(qr).toContain('disable_http_challenge');
+  });
+  it('strips what the internet must not send to the application', () => {
+    for (const h of [
+      'Cookie',
+      'Authorization',
+      'Next-Action',
+      'Rsc',
+      'Next-Router-State-Tree',
+      'X-Ayvo-Path',
+    ]) {
+      expect(qr).toContain(`header_up -${h}`);
+    }
+    expect(qr).toContain('header_up X-Forwarded-For {remote_host}');
+    expect(qr).toContain('header_down -Set-Cookie');
+  });
+});
+
 describe('production host guard (DOCKER-USER, IPv4 and IPv6)', () => {
   /** Fake iptables / ip6tables / ip recording their calls; `ip` reports `route` as default. */
   function fakeBin(route: string) {
@@ -203,14 +255,15 @@ describe('production host guard (DOCKER-USER, IPv4 and IPv6)', () => {
     }
     writeFileSync(
       join(bin, 'ip'),
-      `#!/bin/sh\necho "default via 192.0.2.1 dev ${route} proto dhcp"\n`,
+      `#!/bin/sh\ncase "$*" in *addr*) echo "2: ${route}    inet 198.51.100.7/32 scope global ${route}";;\n` +
+        `*) echo "default via 192.0.2.1 dev ${route} proto dhcp";; esac\n`,
     );
     chmodSync(join(bin, 'ip'), 0o755);
     return { bin, log };
   }
   const guard = join(prodDir, 'host/ayvo-prod-docker-guard');
 
-  it('drops new public connections to containers on IPv4 and IPv6; only IPv4 :80 passes', () => {
+  it('drops new public connections to containers on IPv4 and IPv6; only IPv4 :80 and the QR edge pass', () => {
     const { bin, log } = fakeBin('eth0');
     const res = run('sh', [guard, 'apply'], { PATH: `${bin}:/usr/bin:/bin` });
     expect(res.status, res.stderr).toBe(0);
@@ -233,6 +286,17 @@ describe('production host guard (DOCKER-USER, IPv4 and IPv6)', () => {
     const port80 =
       '-A AYVO-PROD-GUARD -p tcp -m conntrack --ctstate DNAT --ctorigdstport 80 -j RETURN';
     expect(family('iptables')).toContain(port80);
+    // The public QR edge: only the public address's :443, new connections limited per source.
+    const qr =
+      '-A AYVO-PROD-GUARD -p tcp -m conntrack --ctstate DNAT --ctorigdst 198.51.100.7 --ctorigdstport 443';
+    const v4 = family('iptables').filter((c) => c.startsWith('-A AYVO-PROD-GUARD'));
+    expect(v4).toEqual([
+      '-A AYVO-PROD-GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN',
+      port80,
+      `${qr} -m hashlimit --hashlimit-mode srcip --hashlimit-above 20/second --hashlimit-burst 60 --hashlimit-name ayvo-prod-qr -j DROP`,
+      `${qr} -j RETURN`,
+      '-A AYVO-PROD-GUARD -j DROP',
+    ]);
     // IPv6: no exception at all.
     expect(family('ip6tables').filter((c) => c.includes('--ctorigdstport'))).toEqual([]);
   });

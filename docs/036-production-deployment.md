@@ -41,8 +41,10 @@ UFW active, SSH with keys; **public SSH stays** as the fallback (nothing here to
 
 - HTTPS (443 TCP/UDP) and the private DNS (53) are published **only on the Tailscale IPv4**
   read from `tailscale ip -4` on every run (never configurable, never `0.0.0.0`, never IPv6).
-  Public IPv4 :80 is the single exception: Caddy answers its own ACME HTTP-01 challenges there and
-  aborts every other request — the application is never served on it.
+  Public IPv4 :80 is one exception: Caddy answers its own ACME HTTP-01 challenges there and
+  aborts every other request — the application is never served on it. The other is the separate
+  **public QR edge** on the public IPv4 :443, which serves only `GET /<token>` → the passport
+  (doc 037, ADR 0035); `os.ayvo.co` is never served there.
 - PostgreSQL, Redis, the API and the web server publish **no port**; postgres and redis are on an
   internal network without egress.
 - Caddy admits only peers from `100.64.0.0/10` by the real TCP peer address. The Docker gateway is
@@ -50,7 +52,8 @@ UFW active, SSH with keys; **public SSH stays** as the fallback (nothing here to
 - Sign-in is the normal application sign-in (WorkOS, MFA); no Basic Auth (as ADR 0030 for DEV).
 - **UFW does not filter Docker's published ports.** `deploy/prod/host/ayvo-prod-docker-guard`
   puts a chain first in `DOCKER-USER` for IPv4 **and** IPv6: new connections entering through the
-  public interface towards a container are dropped, except IPv4 TCP :80. Tested with recorded
+  public interface towards a container are dropped, except IPv4 TCP :80 and TCP :443 of the
+  public address (the QR edge; new connections limited per source). Tested with recorded
   `iptables`/`ip6tables` calls (`apps/api/test/deploy-prod.test.ts`).
 - **Right host first.** `install.sh`, `uninstall.sh` and `scripts/deploy-prod.sh` start with
   `deploy/prod/host/prod-host.sh`: hostname `AyvoOS-PROD`, Tailscale IPv4 `100.88.139.2`, and no
@@ -101,24 +104,27 @@ verified (§9).
 
 The script verifies through the tailnet address: API health (`production`, database up, Redis
 up), `/login` 200, `/` → sign-in, `/api/auth/me` and the administration 401 without a session,
-the published ports exactly as in §3, and — **as a local hint only** — that the public IPv4 refuses
-HTTPS and aborts :80.
+the published ports exactly as in §3, and — **as a local hint only** — that the public IPv4 serves
+only the QR passport (doc 037: unknown token, other paths, `os.ayvo.co`) and aborts :80.
 
 A test from the server itself is no proof for the internet. After the first installation and after
 every change of the edge or the host guard, the owner tests **from a machine outside the tailnet**:
 
 ```bash
 curl -m 10 -v https://os.ayvo.co/                    # name not resolvable publicly, or no connection
-curl -m 10 -v --resolve os.ayvo.co:443:2.29.17.36 https://os.ayvo.co/   # no connection
+curl -m 10 -v --resolve os.ayvo.co:443:2.29.17.36 https://os.ayvo.co/   # TLS failure (only the QR edge listens), never the app
 curl -m 10 -v http://2.29.17.36/                     # empty reply (aborted), never the app
 nc -vz -w 5 2.29.17.36 5432; nc -vz -w 5 2.29.17.36 6379; nc -vz -w 5 2.29.17.36 4000; nc -vz -w 5 2.29.17.36 3000
 # and the same for the server's public IPv6 address, if it has one (:80 and :443 must not connect)
 ```
 
+and the public QR checks of doc 037 §5.
+
 ## 6. First installation (owner, in this order)
 
 1. Docker, swap, the `ayvo` user, the read-only checkout (§2). Tailscale is already up.
-2. `sudo bash deploy/prod/host/install.sh --check`, then without `--check` (§3). Split DNS.
+2. `sudo bash deploy/prod/host/install.sh --check`, then without `--check` (§3). Split DNS. The
+   public DNS **A** record `qr.ayvo.co` → the server's public IPv4 (no AAAA; doc 037).
 3. `/opt/ayvo/secrets/prod.env` from the example; check the existing files' key names (§4).
 4. The release: a commit on `origin/main` that contains this deployment, the S3 storage (#47), the
    Next.js security update (#48) and whatever else the owner approves.

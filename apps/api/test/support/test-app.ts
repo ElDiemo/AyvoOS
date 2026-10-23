@@ -161,6 +161,8 @@ export async function createTestApp(
       AUTH_RATE_LIMIT_LOGIN_MAX: '100000',
       AUTH_RATE_LIMIT_CALLBACK_MAX: '100000',
       AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: '100000',
+      // Likewise the public passport limit (exercised in passport.e2e.test.ts with small values).
+      PUBLIC_RATE_LIMIT_MAX: '100000',
       // Background rounds are driven by the tests themselves (doc 030): no sweeper, no waiting
       // between batch status reads after a simulated format change.
       PRINT_SWEEP_SECONDS: '0',

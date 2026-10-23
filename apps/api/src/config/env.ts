@@ -148,6 +148,11 @@ export const envSchema = z
     AUTH_RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().min(1).max(100_000).default(30),
     AUTH_RATE_LIMIT_CALLBACK_MAX: z.coerce.number().int().min(1).max(100_000).default(30),
     AUTH_RATE_LIMIT_CALLBACK_FAILURES_MAX: z.coerce.number().int().min(1).max(100_000).default(10),
+    // Rate limit of the anonymous public routes (/api/public/*: QR passports), per client IP in
+    // Redis, fixed window. Behind the public QR edge the client is the visitor, never the web
+    // server (the web forwards the edge's X-Forwarded-For; doc 037).
+    PUBLIC_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3600).default(60),
+    PUBLIC_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000_000).default(120),
     // Proxies (IPs or CIDRs, comma-separated) whose X-Forwarded-For names the client. Empty: the
     // socket address is the client. DEV: the Docker networks Caddy reaches the API from.
     TRUSTED_PROXY_CIDRS: z
