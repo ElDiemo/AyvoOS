@@ -51,6 +51,9 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0031](0031-sales-function-and-ownership-scope.md)         | Obchod as its own function; sales access scoped by ownership             | Proposed — owner request 2026-10-21 (doc 034)                                             |
 | [0034](0034-qr-label-settings-guard-operations.md)         | Missing QR label settings refuse only QR label operations                | Accepted — owner decision 2026-10-23                                                      |
 
+Production storage implementation for review: [0032 — Private AWS S3 file storage](0032-production-private-s3-storage.md).
+Number 0031 is reserved by the pending sales-function change.
+
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
 0005, 0006 and 0008 were updated on 2026-10-10 to reflect the owner's
