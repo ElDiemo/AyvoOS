@@ -77,7 +77,7 @@ existence, mode, owner and **key names** (never prints a value) and refuses forb
 
 | File                                                  | Keys                                                                                                                                                                              | Used by               |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| `prod.env` (new, from `deploy/prod/prod.env.example`) | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `ACME_EMAIL`, `PUBLIC_QR_BASE_URL`, `LABEL_QR_MIN_SIZE_MM`, `LABEL_QR_ERROR_CORRECTION` (optional `CARRIER_CREDENTIALS_KEY`) | Compose interpolation |
+| `prod.env` (new, from `deploy/prod/prod.env.example`) | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `ACME_EMAIL`, `PUBLIC_QR_BASE_URL` (optional: `LABEL_QR_MIN_SIZE_MM` + `LABEL_QR_ERROR_CORRECTION` together, `CARRIER_CREDENTIALS_KEY`) | Compose interpolation |
 | `prod-workos.env` (exists)                            | `WORKOS_API_KEY`                                                                                                                                                                  | api (`env_file`)      |
 | `prod-s3.env` (exists)                                | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — the application identity                                                                                                           | api (`env_file`)      |
 | `prod-s3-backup.env` (exists)                         | the backup identity (doc 035) — refused if it equals the application's                                                                                                            | backups only          |
@@ -157,9 +157,12 @@ The API refuses to start in production unless all of these are real:
 3. File storage: `FILE_STORAGE_DRIVER=s3` with the application identity — needs **#47 merged**.
 4. `PUBLIC_QR_BASE_URL`: in production only the production QR host `https://qr.ayvo.co` is
    accepted (ADR 0014). The owner sets it in `prod.env`.
-5. `LABEL_QR_MIN_SIZE_MM` and `LABEL_QR_ERROR_CORRECTION`: **only from the recorded physical
-   print/scan validation** (doc 016 production blockers, ADR 0014). Not known today; the owner
-   sets them after the test. Until then production does not start — by design.
+5. `LABEL_QR_MIN_SIZE_MM` and `LABEL_QR_ERROR_CORRECTION` are **not** a start condition
+   (ADR 0034): they come only from the recorded physical print/scan validation (doc 016
+   production blockers, ADR 0014) and have no default. Until the owner sets both, production runs
+   (sign-in, Obchod, passports, history, carrier labels) and refuses only the creation and
+   printing of our QR labels (`QR_LABEL_SETTINGS_MISSING`). `--check` refuses only one of the
+   two.
 6. No `AUTH_PROVIDER=test`, no `CARRIER_PROVIDER=test`, no PPL TEST credentials (refused).
 
 ## 9. Risks and open items

@@ -134,12 +134,13 @@ services:
       AWS_REGION: eu-north-1
       S3_BUCKET: ayvo-prod-files-888725257303-eu-north-1-an
       S3_EXPECTED_BUCKET_OWNER: '888725257303'
-      # Labels (ADR 0014, doc 016): the production QR base URL and the PHYSICALLY VALIDATED QR
-      # size and error correction are set by the owner in prod.env — no default exists, and the
-      # API refuses to start without them.
+      # Labels (ADR 0014, doc 016): the production QR base URL is set by the owner in prod.env.
+      # The PHYSICALLY VALIDATED QR size and error correction are optional there and have no
+      # default: until the owner records them, the application runs and only the creation and
+      # printing of our QR labels is refused (ADR 0034). Empty = not set.
       PUBLIC_QR_BASE_URL: ${PUBLIC_QR_BASE_URL:?set PUBLIC_QR_BASE_URL in /opt/ayvo/secrets/prod.env (doc 036 §4)}
-      LABEL_QR_MIN_SIZE_MM: ${LABEL_QR_MIN_SIZE_MM:?set the physically validated LABEL_QR_MIN_SIZE_MM in prod.env (doc 036 §4)}
-      LABEL_QR_ERROR_CORRECTION: ${LABEL_QR_ERROR_CORRECTION:?set the physically validated LABEL_QR_ERROR_CORRECTION in prod.env (doc 036 §4)}
+      LABEL_QR_MIN_SIZE_MM: ${LABEL_QR_MIN_SIZE_MM:-}
+      LABEL_QR_ERROR_CORRECTION: ${LABEL_QR_ERROR_CORRECTION:-}
       # Carriers: no connection is configured in production (PPL TEST is refused there).
       CARRIER_CREDENTIALS_KEY: ${CARRIER_CREDENTIALS_KEY:-}
     networks:
