@@ -90,7 +90,7 @@ export class WarehouseReadService {
   }
 
   /**
-   * Planning view of the same numbers (SALES, doc 021): item, available, reserved, low stock.
+   * Planning view of the same numbers (inventory:stock_summary, doc 021): item, available, reserved, low stock.
    * Built as an explicit allow-list so no lot, supplier or other operational field leaks.
    */
   async stockSummary(warehouse: WarehouseContext): Promise<StockSummary> {

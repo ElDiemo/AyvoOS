@@ -70,7 +70,7 @@ const ROLE_MATRIX: Record<SystemRoleCode, readonly string[]> = {
     'production:session_takeover',
     'production:cycle_correct',
   ],
-  SALES: ['inventory:stock_summary'],
+  SALES: ['sales:work'],
   FINANCE: [
     'inventory:read',
     'procurement:cost_read',
@@ -638,8 +638,45 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     });
   });
 
-  it('SALES reads a planning-only stock summary and nothing operational', async () => {
-    const sales = await createUser(['SALES']);
+  it('SALES works in Obchod only: no site, no stock, nothing operational (doc 034)', async () => {
+    // Assignable through the API since Obchod exists, without any site.
+    const salesperson = await createUser(['SALES'], []);
+    const salesCookie = await session(salesperson.email);
+    const me = (await http().get('/api/auth/me').set('Cookie', salesCookie).expect(200))
+      .body as CurrentUser;
+    expect(me.permissions).toEqual(['sales:work']);
+    expect(me.activeSiteId).toBeNull();
+    await http().get('/api/admin/sales/overview').set('Cookie', salesCookie).expect(200);
+    await http().get('/api/admin/sales/prospects').set('Cookie', salesCookie).expect(200);
+    for (const path of [
+      '/api/admin/inventory/stock-summary',
+      '/api/admin/inventory/stock',
+      '/api/admin/goods-receipts',
+      '/api/admin/bottles',
+      '/api/admin/orders',
+      '/api/admin/hotels',
+      '/api/admin/identity/users',
+      '/api/admin/sales/salespeople',
+    ]) {
+      expect((await http().get(path).set('Cookie', salesCookie)).status, path).toBe(403);
+    }
+  });
+
+  it('a planning role reads the stock summary only and nothing operational', async () => {
+    // The former SALES template (doc 021) lives on as a custom role ADMIN may build.
+    await http()
+      .post('/api/admin/identity/roles')
+      .set('Cookie', adminCookie)
+      .send({
+        code: 'E2E_PLANNING',
+        name: 'Plánování (test)',
+        description: 'Stock availability for planning',
+        permissions: ['inventory:stock_summary'],
+        copiedFrom: null,
+        reason: 'planning availability test',
+      })
+      .expect(201);
+    const sales = await createUser(['E2E_PLANNING']);
     const cookie = await session(sales.email);
     const summary = (
       await http().get('/api/admin/inventory/stock-summary').set('Cookie', cookie).expect(200)
@@ -675,7 +712,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       expect((await http().post(path).set('Cookie', cookie).send({})).status, path).toBe(403);
     }
     // Warehouse-scoped like every stock read: without the warehouse no summary either.
-    const unscoped = await createUser(['SALES'], []);
+    const unscoped = await createUser(['E2E_PLANNING'], []);
     const unscopedCookie = await session(unscoped.email);
     await http()
       .get('/api/admin/inventory/stock-summary')
