@@ -75,13 +75,13 @@ Server-only files in `/opt/ayvo/secrets`, owner `ayvo`, mode 600. The deploy scr
 existence, mode, owner and **key names** (never prints a value) and refuses forbidden keys
 (`APP_ENV`, `AUTH_PROVIDER`, `CARRIER_PROVIDER`, `PPL_TEST_*`, `FILE_STORAGE_*`, `DEV_*`):
 
-| File                                                  | Keys                                                                                                                                                                              | Used by               |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| File                                                  | Keys                                                                                                                                                                                         | Used by               |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | `prod.env` (new, from `deploy/prod/prod.env.example`) | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `ACME_EMAIL`, `PUBLIC_QR_BASE_URL` (optional: `LABEL_QR_MIN_SIZE_MM` + `LABEL_QR_ERROR_CORRECTION` together, `CARRIER_CREDENTIALS_KEY`) | Compose interpolation |
-| `prod-workos.env` (exists)                            | `WORKOS_API_KEY`                                                                                                                                                                  | api (`env_file`)      |
-| `prod-s3.env` (exists)                                | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — the application identity                                                                                                           | api (`env_file`)      |
-| `prod-s3-backup.env` (exists)                         | the backup identity (doc 035) — refused if it equals the application's                                                                                                            | backups only          |
-| `prod-workos-client.env` (exists)                     | not read by this release (`--check` lists its key names)                                                                                                                          | —                     |
+| `prod-workos.env` (exists)                            | `WORKOS_API_KEY`                                                                                                                                                                             | api (`env_file`)      |
+| `prod-s3.env` (exists)                                | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — the application identity                                                                                                                      | api (`env_file`)      |
+| `prod-s3-backup.env` (exists)                         | the backup identity (doc 035) — refused if it equals the application's                                                                                                                       | backups only          |
+| `prod-workos-client.env` (exists)                     | not read by this release (`--check` lists its key names)                                                                                                                                     | —                     |
 
 If an existing file uses other key names, rename them on the server; values are never copied
 anywhere else. Fixed, non-secret values are in `compose.yml`: `APP_ENV=production` (api and web),
