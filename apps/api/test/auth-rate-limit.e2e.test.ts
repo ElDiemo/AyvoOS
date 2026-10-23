@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AuthRateLimitService } from '../src/identity/auth-rate-limit.service.js';
 import { prepareInvitedUser } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
@@ -180,6 +181,78 @@ describe.skipIf(!hasDatabase)('sign-in rate limiting', () => {
       expect(me.body.user.email).toBe(email);
     } finally {
       await noRedis.close();
+    }
+  });
+
+  it('an unreliable counter (failed EXEC slot, not a number, no window) refuses sign-in; a missing one does not', async () => {
+    // An isolated Redis database: the planted keys never meet another test's counters.
+    const base = process.env.REDIS_URL ?? 'redis://localhost:6379';
+    const isolated = await createTestApp(
+      { REDIS_URL: `${base.replace(/\/\d+$/, '')}/15`, TRUSTED_PROXY_CIDRS: '127.0.0.1,::1' },
+      {},
+      { auth: 'real', redis: 'real' },
+    );
+    try {
+      const redis = await isolated.redis.ready();
+      const http2 = () => request(isolated.app.getHttpServer());
+      const key = AuthRateLimitService.key;
+      const unavailable = (res: request.Response) =>
+        expect([res.status, (res.body as { code?: string }).code]).toEqual([
+          503,
+          'AUTH_UNAVAILABLE',
+        ]);
+
+      // Counting (login): INCR fails inside EXEC on a hash or a non-numeric value.
+      for (const plant of [
+        (k: string) => redis.hset(k, 'x', '1'),
+        (k: string) => redis.set(k, 'abc', 'PX', 60_000),
+      ]) {
+        const client = ip();
+        await plant(key('login', client));
+        unavailable(
+          await http2()
+            .get('/api/auth/login')
+            .set('X-Forwarded-For', client)
+            .set('Accept', 'application/json'),
+        );
+        await redis.del(key('login', client));
+      }
+
+      // Checking without counting (callback failures): not a number, a hash, or no window.
+      for (const plant of [
+        (k: string) => redis.set(k, 'abc', 'PX', 60_000),
+        (k: string) => redis.hset(k, 'x', '1'),
+        (k: string) => redis.set(k, '1'),
+      ]) {
+        const client = ip();
+        await plant(key('callback_failure', client));
+        const res = await http2()
+          .get('/api/auth/callback')
+          .set('X-Forwarded-For', client)
+          .set('Accept', 'application/json')
+          .query({ code: 'x', state: 'y' });
+        unavailable(res);
+        await redis.del(key('callback_failure', client));
+      }
+
+      // No counter yet is the normal state before a first attempt: sign-in proceeds.
+      const fresh = ip();
+      for (const bucket of ['login', 'callback', 'callback_failure'] as const) {
+        await redis.del(key(bucket, fresh));
+      }
+      const start = await http2()
+        .get('/api/auth/login')
+        .set('X-Forwarded-For', fresh)
+        .query({ next: '/', login_hint: email });
+      expect(start.status).toBe(302);
+      const callback = await http2()
+        .get('/api/auth/callback')
+        .set('X-Forwarded-For', fresh)
+        .query({ code: 'x', state: 'y' });
+      expect(callback.status).not.toBe(503);
+      expect(callback.status).not.toBe(429);
+    } finally {
+      await isolated.close();
     }
   });
 });
