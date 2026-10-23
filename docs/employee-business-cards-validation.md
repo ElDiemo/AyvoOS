@@ -112,3 +112,18 @@ downloaded vCard and publication isolation, and now compares it with the origina
 presentation in the same browser. It must pass fresh CI on the final head before
 merge. Phone address-book import on physical iPhone/Android remains unverified.
 No DNS/Apache/public-host change is part of this follow-up.
+
+### Review follow-up (Claude, 2026-10-23, on 1c3ec38)
+
+- The pixel comparison failed in CI (largest channel difference 9 at 1440 px; 12 at 390/320 px)
+  only at the avatar shadow and the card's bottom corners: the DEV notice moves the card 26 px
+  down and blurred shadows rasterize per absolute position. The reference card is now drawn at
+  exactly the same position (relative offset, no layout change); the ≤ 1 tolerance is unchanged
+  and passes at 1440, 390 and 320 px.
+- The reference matches the live `id.ayvo.co/tomas-hanzl` stylesheet (only number formatting such
+  as `.85`/`0.85` differs) and Font Awesome 6.4.0 from cdnjs; `legacy-logo.svg` and both fonts are
+  byte-identical to the originals; glyphs f35d, f095, f0e0, f08c (brands), f2c2.
+- Favicon: the existing `id.ayvo.co/favicon.ico` (byte-identical, 6 PNG sizes) for `/id/*` only,
+  via `app/id/layout.tsx`; AYVO OS keeps its own icon (checked in the browser test).
+- The browser test now checks the downloaded vCard line by line (UTF-8 diacritics, CRLF, only
+  published fields, no login e-mail), the `text/vcard; charset=utf-8` header and every card link.

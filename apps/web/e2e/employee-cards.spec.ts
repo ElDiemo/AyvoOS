@@ -1,6 +1,6 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { expect, test } from '@playwright/test';
 
@@ -142,7 +142,56 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   const download = await pendingDownload;
   expect(download.suggestedFilename()).toBe(`${slug}.vcf`);
   const file = await download.path();
-  expect(await readFile(file!, 'utf8')).toContain('FN:Jana Vizitková');
+  // UTF-8 with diacritics, CRLF lines, only the published public fields.
+  const vcard = await readFile(file!, 'utf8');
+  expect(vcard.split('\r\n')).toEqual([
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    'FN:Jana Vizitková',
+    'N:;;;;',
+    'TITLE:Obchodní zástupkyně',
+    'NOTE:Syntetická ukázka\\, nikoli skutečný zaměstnanec.',
+    'TEL;TYPE=WORK,VOICE:+420 111 222 333',
+    'EMAIL;TYPE=WORK:vizitka@example.com',
+    'URL:https://example.com',
+    'X-SOCIALPROFILE;TYPE=linkedin:https://www.linkedin.com/in/example',
+    'END:VCARD',
+    '',
+  ]);
+  expect(vcard).not.toContain('@ayvo.test');
+  const vcf = await anonymous.request.get(`/id/${slug}/contact.vcf`);
+  expect(vcf.headers()['content-type']).toBe('text/vcard; charset=utf-8');
+  // The original links: web and LinkedIn open safely, phone and e-mail as tel:/mailto:.
+  const card = publicPage.getByRole('article');
+  for (const [name, href] of <[string, string][]>[
+    ['Visit AYVO', 'https://example.com'],
+    ['Call', 'tel:+420111222333'],
+    ['Email', 'mailto:vizitka@example.com'],
+    ['LinkedIn', 'https://www.linkedin.com/in/example'],
+    ['Save contact', `${slug}/contact.vcf`],
+  ]) {
+    await expect(card.getByRole('link', { name })).toHaveAttribute('href', href);
+  }
+  await expect(card.getByRole('link', { name: 'Visit AYVO' })).toHaveAttribute(
+    'rel',
+    'noopener noreferrer',
+  );
+  // The existing id.ayvo.co favicon on cards only; AYVO OS keeps its own icon.
+  const icons = (target: typeof publicPage) =>
+    target
+      .locator('link[rel="icon"]')
+      .evaluateAll((links) =>
+        links.map((link) => new URL((link as HTMLLinkElement).href).pathname),
+      );
+  expect(await icons(publicPage)).toEqual(['/employee-card/favicon.ico']);
+  const favicon = await anonymous.request.get('/employee-card/favicon.ico');
+  expect(favicon.status()).toBe(200);
+  expect(
+    createHash('sha256')
+      .update(await favicon.body())
+      .digest('hex'),
+  ).toBe('53af376423d364ac89250cddf073f317a3e7d7e049439f96d40501311770be62');
+  expect(await icons(page)).not.toContain('/employee-card/favicon.ico');
 
   await editor.getByLabel('Veřejné jméno').fill('Jana – rozepsaná neveřejná změna');
   await expect(editor.getByRole('button', { name: 'Zveřejnit uložený koncept' })).toBeDisabled();
@@ -204,6 +253,20 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
       path: resolve(screenshots, `employee-card-public-${width}.png`),
       fullPage: true,
     });
+    // The DEV notice above the card moves it down; blurred shadows rasterize per absolute
+    // position, so the reference card is drawn at exactly the same place (no layout change).
+    const [actualBox, referenceBox] = await Promise.all([
+      publicPage.getByRole('article').boundingBox(),
+      reference.locator('.card').boundingBox(),
+    ]);
+    await reference.locator('.card').evaluate((card: HTMLElement, shift: number) => {
+      card.style.position = 'relative';
+      card.style.top = `${(parseFloat(card.style.top) || 0) + shift}px`;
+    }, actualBox!.y - referenceBox!.y);
+    const moved = (await reference.locator('.card').boundingBox())!;
+    for (const key of ['x', 'y', 'width', 'height'] as const) {
+      expect(moved[key], key).toBeCloseTo(actualBox![key], 2);
+    }
     const actualImage = await publicPage
       .getByRole('article')
       .screenshot({ animations: 'disabled' });
