@@ -63,17 +63,11 @@ export class AuthRateLimitService {
     const windowMs = this.env.AUTH_RATE_LIMIT_WINDOW_SECONDS * 1000;
     try {
       const client = await this.redis.ready();
-      let current: number;
-      let ttl: number;
-      if (count) {
-        const result = await client.multi().incr(key).pexpire(key, windowMs, 'NX').pttl(key).exec();
-        current = Number(result?.[0]?.[1] ?? 0);
-        ttl = Number(result?.[2]?.[1] ?? windowMs);
-      } else {
-        const [value, pttl] = await Promise.all([client.get(key), client.pttl(key)]);
-        current = Number(value ?? 0);
-        ttl = pttl;
-      }
+      // One transaction each, so the counter and its window are read together.
+      const reply = count
+        ? await client.multi().incr(key).pexpire(key, windowMs, 'NX').pttl(key).exec()
+        : await client.multi().get(key).pttl(key).exec();
+      const { current, ttl } = count ? afterHit(reply) : beforeHit(reply, windowMs);
       const limit = this.max(bucket);
       const exceeded = count ? current > limit : current >= limit;
       return { allowed: !exceeded, retryAfterSeconds: Math.max(1, Math.ceil(ttl / 1000)) };
@@ -84,4 +78,46 @@ export class AuthRateLimitService {
       return { allowed: false, retryAfterSeconds: 30, unavailable: true };
     }
   }
+}
+
+type ExecReply = [Error | null, unknown][] | null;
+
+/**
+ * The checked slots of an EXEC reply. ioredis reports a failed command inside EXEC as an Error in
+ * its slot (and an aborted transaction as null) instead of rejecting: any of that is no answer.
+ */
+function slots(reply: ExecReply, length: number): unknown[] {
+  if (!Array.isArray(reply) || reply.length !== length) throw new Error('RateLimitExecAborted');
+  for (const [error] of reply) if (error) throw new Error('RateLimitCommandFailed');
+  return reply.map(([, value]) => value);
+}
+
+const positiveTtl = (ttl: unknown): ttl is number =>
+  typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0;
+
+/** INCR, PEXPIRE NX, PTTL: a counter ≥ 1 with a running window (PEXPIRE NX 0 = already running). */
+export function afterHit(reply: ExecReply): { current: number; ttl: number } {
+  const [incr, expire, ttl] = slots(reply, 3);
+  if (typeof incr !== 'number' || !Number.isSafeInteger(incr) || incr < 1) {
+    throw new Error('RateLimitBadCounter');
+  }
+  if (expire !== 0 && expire !== 1) throw new Error('RateLimitBadExpire');
+  if (!positiveTtl(ttl)) throw new Error('RateLimitBadTtl');
+  return { current: incr, ttl };
+}
+
+/**
+ * GET, PTTL without counting: no counter yet (null, -2) is the normal state before a first attempt
+ * — zero, never a refusal. An existing counter must be a whole number ≥ 0 with a running window.
+ */
+export function beforeHit(reply: ExecReply, windowMs: number): { current: number; ttl: number } {
+  const [value, ttl] = slots(reply, 2);
+  if (value === null) {
+    if (ttl !== -2) throw new Error('RateLimitBadTtl');
+    return { current: 0, ttl: windowMs };
+  }
+  if (typeof value !== 'string' || !/^\d{1,15}$/.test(value))
+    throw new Error('RateLimitBadCounter');
+  if (!positiveTtl(ttl)) throw new Error('RateLimitBadTtl');
+  return { current: Number(value), ttl };
 }

@@ -1,0 +1,15 @@
+# AYVO OS — PROD host guard for published Docker ports (doc 036). See ayvo-prod-docker-guard.
+[Unit]
+Description=AYVO PROD: drop public traffic to Docker containers (except IPv4 :80 for ACME)
+After=docker.service network-online.target
+Wants=network-online.target
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ayvo-prod-docker-guard apply
+ExecStop=/usr/local/sbin/ayvo-prod-docker-guard remove
+
+[Install]
+WantedBy=docker.service multi-user.target
