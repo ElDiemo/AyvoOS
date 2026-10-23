@@ -997,6 +997,8 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
+  employeeCard         EmployeeCard?
+  employeeCardPhotos   EmployeeCardPhoto[]
   itemWeights          ItemReferenceWeight[]
   productWeights       ProductReferenceWeight[]
   tareWeights          CrateTypeTareWeight[]
@@ -1099,6 +1101,32 @@ model User {
   salesEvents            SalesEvent[]    @relation("SalesEventActor")
 
   @@map("users")
+}
+
+/// Owner 2026-10-23: admin-managed public business card; draft and publication are separate.
+model EmployeeCard {
+  userId           String    @id @map("user_id") @db.Uuid
+  slug             String    @unique
+  version          Int       @default(1)
+  draft            Json
+  published        Json?
+  publishedVersion Int?      @map("published_version")
+  publishedAt      DateTime? @map("published_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("employee_cards")
+}
+
+/// Immutable, normalized PNG owned by one user. Original upload is never served or persisted.
+model EmployeeCardPhoto {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  storageKey String   @unique @map("storage_key")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("employee_card_photos")
 }
 
 /// Link of an external identity (provider + subject) to an AYVO user.

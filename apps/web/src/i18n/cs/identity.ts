@@ -309,6 +309,10 @@ export const identityCs = {
       ALREADY_ACTIVE: 'Účet už je aktivní.',
     } as Record<string, string>,
     auditTypes: {
+      EMPLOYEE_CARD_SAVED: 'Uložení konceptu veřejné vizitky',
+      EMPLOYEE_CARD_PUBLISHED: 'Zveřejnění vizitky',
+      EMPLOYEE_CARD_HIDDEN: 'Skrytí vizitky',
+      EMPLOYEE_CARD_PHOTO_ADDED: 'Nahrání fotografie vizitky',
       LOGIN_SUCCEEDED: 'Přihlášení',
       LOGIN_DENIED: 'Odmítnuté přihlášení',
       LOGOUT: 'Odhlášení',

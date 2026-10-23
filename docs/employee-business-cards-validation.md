@@ -1,0 +1,129 @@
+# Local validation — employee cards, 2026-10-23
+
+Implementation on `codex/employee-business-cards`, based on main `6a02953295ef38f225b865cbca5addf999cf1a49`.
+Local worktree is separate from Claude's checkouts. The implementation is now
+PR #55; nothing has been merged or deployed by this work. No live profiles,
+contacts, sessions or portraits were imported. Earlier checks below are historical;
+each follow-up still needs fresh CI on its exact head.
+
+## Verified
+
+- API TypeScript and ESLint, web TypeScript and ESLint, shared-types TypeScript/ESLint.
+- Prisma client generation and schema formatting. The entire migration history
+  including this new migration applied to fresh, synthetic PostgreSQL 18 databases.
+- API build (`nest build`).
+- Web build with **webpack**, on the final implementation. The default Turbopack
+  build was attempted but its CSS worker failed with OS EPERM when binding a port,
+  including after sandbox escalation. This was not a TypeScript failure; default
+  Turbopack and the normal Linux image build remain for CI.
+- Shared types: 34 tests passed (18 employee-card boundary cases).
+- Web: 104 tests passed, including escaping and inert preview buttons.
+- Employee-card API: 19 tests passed (9 unit + 10 integration). The final replay
+  change was rechecked with all 10 integration cases in another fresh database.
+  Authentication uses real AYVO guards/sessions plus the approved test-only
+  identity provider, not a DEV/PROD login bypass.
+- Integration cases include anonymous/SALES refusal, private upload and draft,
+  explicit publication and DTO whitelist, current-publication photo versions,
+  unmodified public data after draft edits, concurrent saves, stable slug,
+  idempotency conflicts, replaying an old publish after hide, photo revocation
+  during storage I/O, cross-user photo rejection, SQL checks, inactive-user
+  publication rejection, automatic hide and no automatic republication, fail-closed
+  Redis failure.
+- Browser acceptance: the normal administrator/operator auth setup passed. Full
+  card flow passed in installed Chrome using a new test profile: upload → draft →
+  public page → vCard download → private edit → reload → hide with unsaved text kept.
+  A second scenario covers concurrent first creation, preservation of entered
+  fields, adoption of the permanent server slug, and visible server-value comparison.
+  Final run: **both browser scenarios passed**, 2/2 in 35.4 seconds, including
+  an explicit check that the private preview photograph finished loading.
+- Screenshots in `docs/screenshots/employee-cards/`: editor and public card at
+  1440, 390 and 320 px. Browser asserts no horizontal page overflow. All names,
+  phone numbers, emails and portraits are synthetic (the photograph is initials).
+- Repository formatting and `git diff --check`.
+
+## Not passed / not claimed
+
+The complete API suite was attempted over an SSH-forwarded, resource-limited
+temporary PostgreSQL instance. Unrelated `catalog.e2e.test.ts` tests hit a 60 s
+timeout (one case reported 60024 ms; another subsequent case failed). The full run
+was stopped, rather than presented as green. The precise cause was not proved by
+a baseline run. **Full API/CI success is still a merge gate.** Do not weaken tests,
+increase production permissions or alter unrelated catalogue behavior to conceal it.
+
+The local API/Redis/database instances were test-only: separate named containers,
+loopback ports, ephemeral DB storage, resource limits 384 MiB/0.5 CPU for PostgreSQL
+and 64 MiB/0.25 CPU for Redis. Test execution ran on the notebook. Live application
+containers, their data and Claude's worktrees were not altered. Temporary instances
+and local listeners are removed/stopped after acceptance.
+
+No live domain takeover, Apache/DNS change, real-profile import, production S3
+acceptance, external visitor-IP/proxy test, normal Docker build or CI has been
+performed for this branch. See the cutover checklist and ADR 0036; these are not
+covered by a screenshot or a successful `/health` response.
+
+## First GitHub CI and follow-up
+
+PR #55 was pushed at `d2f18af`. Run `39989753581` passed quality (including the
+normal Linux/Turbopack build) and the full browser suite. API tests reported
+659 passed, 2 skipped and 3 failures: the public-route allowlist needed the
+three deliberately public card routes, and both schema-drift checks detected
+the implicit Prisma `ON UPDATE CASCADE` differing from the new SQL foreign
+keys' `NO ACTION`. This was not a green API run and was not dismissed as CI noise.
+
+The follow-up explicitly keeps `onUpdate: NoAction` in both Prisma relations,
+matching the already-written SQL without changing a migration. The access
+allowlist names only those three routes; it is not widened to all public paths.
+The editor gains a same-environment link to the published card, removed when
+hidden. A card-specific unavailable page has no links into the private OS.
+The browser regression checks the link and the hidden page. New CI is required
+on the follow-up head before merge/deploy. Initial screenshots predate this
+small editor-link addition; they remain examples, not proof of a live DEV page.
+
+The follow-up `f7994c1` subsequently passed complete CI run `39991623826`:
+quality, test and e2e; API 662 passed / 2 intentionally skipped, web 104,
+types 34, Playwright 147 passed / 1 skipped. This does not approve newer heads.
+
+## Original presentation restored (owner clarification)
+
+Read-only comparison with the complete public PHP output showed differences in
+the first implementation's icon substitutes, footer, typography and mobile padding.
+The new follow-up reuses the original geometry/CSS, the exact original logo and
+the same Font Awesome Free 6.4.0 fonts (self-hosted, licenses and hashes recorded).
+No PHP interpreter, separate live app, duplicate design or run-time CDN was added.
+
+An independent historical HTML/CSS fixture uses only synthetic person data and
+the same synthetic image, never a real employee/portrait copied into DEV. It is
+compared to the actual Next page at 1440, 390 and 320px. In local installed Chrome,
+card dimensions and element geometry match. Decoded screenshots differ only by
+one colour level (1/255) at a small number of composited rounded-edge pixels;
+the browser regression permits that rounding, not a broad percentage difference.
+Both a local development rendering and the optimized webpack build were compared.
+Production-style local rendering has no TEST notice; DEV/test retains the notice
+outside the unchanged card. This is a notebook check, not a DEV/PROD deployment.
+
+Local follow-up checks: web 105 tests, web TypeScript and targeted ESLint pass;
+optimized webpack build passes. The three vCard unit tests were rerun separately
+and pass; DB integration was explicitly disabled for that unit-only command.
+The ordinary sandbox first refused the native SWC cache; the rerun used the
+existing cache with filesystem permission, not dependency replacement.
+
+The full real-DB browser path still creates/publishes a synthetic card, checks the
+downloaded vCard and publication isolation, and now compares it with the original
+presentation in the same browser. It must pass fresh CI on the final head before
+merge. Phone address-book import on physical iPhone/Android remains unverified.
+No DNS/Apache/public-host change is part of this follow-up.
+
+### Review follow-up (Claude, 2026-10-23, on 1c3ec38)
+
+- The pixel comparison failed in CI (largest channel difference 9 at 1440 px; 12 at 390/320 px)
+  only at the avatar shadow and the card's bottom corners: the DEV notice moves the card 26 px
+  down and blurred shadows rasterize per absolute position. The reference card is now drawn at
+  exactly the same position (relative offset, no layout change); the ≤ 1 tolerance is unchanged
+  and passes at 1440, 390 and 320 px.
+- The reference matches the live `id.ayvo.co/tomas-hanzl` stylesheet (only number formatting such
+  as `.85`/`0.85` differs) and Font Awesome 6.4.0 from cdnjs; `legacy-logo.svg` and both fonts are
+  byte-identical to the originals; glyphs f35d, f095, f0e0, f08c (brands), f2c2.
+- Favicon: the existing `id.ayvo.co/favicon.ico` (byte-identical, 6 PNG sizes) for `/id/*` only,
+  via `app/id/layout.tsx`; AYVO OS keeps its own icon (checked in the browser test).
+- The browser test now checks the downloaded vCard line by line (UTF-8 diacritics, CRLF, only
+  published fields, no login e-mail), the `text/vcard; charset=utf-8` header and every card link.

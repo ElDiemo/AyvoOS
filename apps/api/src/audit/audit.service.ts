@@ -5,6 +5,10 @@ import { PrismaService } from '../database/prisma.service.js';
 
 /** Security and administration audit events (append-only, enforced by the database). */
 export type AuditType =
+  | 'EMPLOYEE_CARD_SAVED'
+  | 'EMPLOYEE_CARD_PUBLISHED'
+  | 'EMPLOYEE_CARD_HIDDEN'
+  | 'EMPLOYEE_CARD_PHOTO_ADDED'
   | 'LOGIN_SUCCEEDED'
   | 'LOGIN_DENIED'
   | 'LOGOUT'

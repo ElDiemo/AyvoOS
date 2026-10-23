@@ -6,7 +6,8 @@ import { AdminHeader } from '@/components/admin/admin-header';
 import { AuditList } from '@/components/admin/audit-list';
 import { UserAccessEditor } from '@/components/admin/user-access-editor';
 import { UserActions } from '@/components/admin/user-actions';
-import { Card, Field, FieldList, Notice } from '@/components/ui';
+import { EmployeeCardEditor } from '@/components/admin/employee-card-editor';
+import { buttonClass, Card, Field, FieldList, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiGet } from '@/lib/api';
@@ -30,6 +31,13 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
         title={<span className="wrap-anywhere">{user.displayName}</span>}
         subtitle={<span className="wrap-anywhere">{user.email}</span>}
         back={{ href: '/admin/users', label: t.back }}
+        actions={
+          hasPermission(me, 'identity:users_manage') ? (
+            <a href="#vizitka" className={buttonClass.secondary}>
+              Veřejná vizitka
+            </a>
+          ) : undefined
+        }
       />
       {user.invitation?.state === 'FAILED' && (
         <div className="mb-4" data-testid="invitation-warning">
@@ -104,6 +112,15 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
           <AuditList events={user.audit} testId="user-audit" />
         </Card>
       </div>
+      {hasPermission(me, 'identity:users_manage') && (
+        <div className="mt-6">
+          <EmployeeCardEditor
+            userId={user.id}
+            displayName={user.displayName}
+            active={user.status === 'ACTIVE'}
+          />
+        </div>
+      )}
     </>
   );
 }
