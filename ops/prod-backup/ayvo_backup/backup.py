@@ -390,14 +390,17 @@ class Backup:
         return dump, json.loads(stats.stdout)
 
     def remove_container_files(self) -> None:
-        # Stop a pg_dump still writing (after an interruption), then remove the files. The
-        # bracket keeps `pkill -f` from matching — and killing — this very shell.
-        pattern = '[/]' + self.container_files.lstrip('/')
+        # Stop a pg_dump still writing (after an interruption), then remove the files. Two
+        # separate calls: in one shell, `pkill -f` would match that shell's own command line
+        # (which names the files) and kill it before `rm` ran. pkill never matches itself.
         try:
-            self.docker_exec(
-                [self.cfg.pg_container, 'sh', '-c',
-                 f'pkill -f "{pattern}" 2>/dev/null; rm -f {self.container_files}.*'],
+            self.docker_exec([self.cfg.pg_container, 'pkill', '-f', self.container_files],
+                             timeout=60, step='cleanup')  # exit 1 = nothing was running
+            res = self.docker_exec(
+                [self.cfg.pg_container, 'sh', '-c', f'rm -f {self.container_files}.*'],
                 timeout=60, step='cleanup')
+            if res.returncode != 0:
+                log(f'could not remove the temporary files in the database container: {tail(res.stderr)}')
         except BackupError as e:
             log(f'could not remove the temporary files in the database container: {e}')
 
