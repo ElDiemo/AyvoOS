@@ -11,7 +11,9 @@ export type CodeCounterName =
   | 'hotel'
   | 'order'
   | 'shipment'
-  | 'print_job';
+  | 'print_job'
+  | 'sales_prospect'
+  | 'sales_import';
 
 /**
  * Allocates `count` consecutive serials from a gapless counter. Must run inside the business

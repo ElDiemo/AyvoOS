@@ -5,6 +5,7 @@ import { CatalogModule } from './catalog/catalog.module.js';
 import { ConfigModule } from './config/config.module.js';
 import { CratesModule } from './crates/crates.module.js';
 import { CustomersModule } from './customers/customers.module.js';
+import { SalesModule } from './sales/sales.module.js';
 import { OrdersModule } from './orders/orders.module.js';
 import { PrintingModule } from './printing/printing.module.js';
 import { WorkstationsModule } from './workstations/workstations.module.js';
@@ -51,6 +52,7 @@ import { WarehouseModule } from './warehouse/warehouse.module.js';
     ProductionModule,
     CatalogModule,
     CustomersModule,
+    SalesModule,
     PrintingModule,
     OrdersModule,
   ],

@@ -70,6 +70,7 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
   await expect(nav.getByRole('link')).toHaveText([
     'Přehled',
+    'Obchod',
     'Sklad',
     'Výroba',
     'Hotely',
@@ -149,19 +150,13 @@ test('a stock-summary role sees availability for planning and nothing operationa
 }) => {
   const admin = await browser.newContext({ storageState: ADMIN });
   const user = {
-    email: 'e2e-sales@ayvo.test',
-    displayName: 'Obchod Test',
+    email: 'e2e-planning@ayvo.test',
+    displayName: 'Plánování Test',
     siteIds: ['01990000-0000-7000-8000-000000000001'],
     warehouseCodes: [],
     reason: 'sales planning',
   };
-  // SALES is a planned system role (doc 021 §4c): the API refuses it even without the UI.
-  const refused = await admin.request.post('/api/admin/identity/users', {
-    data: { ...user, roles: ['SALES'] },
-  });
-  expect(refused.status()).toBe(422);
-  expect((await refused.json()).code).toBe('ROLE_NOT_AVAILABLE');
-  // Planning availability today: a custom role with the SALES template's permission.
+  // Planning availability: a custom role with the stock-summary permission (doc 021).
   expect(
     (
       await admin.request.post('/api/admin/identity/roles', {
@@ -170,7 +165,7 @@ test('a stock-summary role sees availability for planning and nothing operationa
           name: 'Plánování zásob',
           description: 'Stock availability for planning',
           permissions: ['inventory:stock_summary'],
-          copiedFrom: 'SALES',
+          copiedFrom: null,
           reason: 'sales planning',
         },
       })
@@ -188,7 +183,7 @@ test('a stock-summary role sees availability for planning and nothing operationa
   const sales = await browser.newContext();
   const page = await sales.newPage();
   await page.goto('/login');
-  await signInWithForm(page, 'e2e-sales@ayvo.test');
+  await signInWithForm(page, 'e2e-planning@ayvo.test');
   const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
   await expect(nav.getByRole('link')).toHaveText(['Přehled', 'Sklad']);
   await expect(page.getByTestId('module-availability')).toBeVisible();
