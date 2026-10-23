@@ -125,9 +125,16 @@ describe('loadEnv', () => {
       expect(() => loadEnv({ ...production, ...s3, AUTH_PROVIDER: 'test' })).toThrow(
         /AUTH_PROVIDER/,
       );
-      expect(() => loadEnv({ ...production, ...s3, LABEL_QR_MIN_SIZE_MM: undefined })).toThrow(
-        /LABEL_QR_MIN_SIZE_MM/,
-      );
+      // ADR 0034: the QR label settings are no start condition — production runs without them
+      // (null: only our QR label operations are refused), and gets no candidate default.
+      expect(
+        loadEnv({
+          ...production,
+          ...s3,
+          LABEL_QR_MIN_SIZE_MM: undefined,
+          LABEL_QR_ERROR_CORRECTION: '',
+        }),
+      ).toMatchObject({ LABEL_QR_MIN_SIZE_MM: null, LABEL_QR_ERROR_CORRECTION: null });
     });
 
     it.each([
