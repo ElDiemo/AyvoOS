@@ -130,6 +130,40 @@ describe.skipIf(!hasDatabase)('public bottle passport', () => {
     });
   });
 
+  it('QR54-R1: a failed command inside EXEC (wrong key type) is no answer → 503, never allowed', async () => {
+    // An isolated Redis database: the planted keys never meet another test's counters.
+    const base = process.env.REDIS_URL ?? 'redis://localhost:6379';
+    const isolated = await createTestApp(
+      {
+        REDIS_URL: `${base.replace(/\/\d+$/, '')}/15`,
+        TRUSTED_PROXY_CIDRS: '127.0.0.1/32,::1/128',
+      },
+      {},
+      { redis: 'real' },
+    );
+    try {
+      const redis = await isolated.redis.ready();
+      const ip = (n: number) => `198.51.100.${(randomBytes(1)[0]! % 200) + n}`;
+      const wrongType = ip(1);
+      const notANumber = ip(51);
+      // INCR fails inside EXEC with WRONGTYPE / "not an integer": ioredis reports it in the slot.
+      await redis.del(PublicRateLimitGuard.key(wrongType), PublicRateLimitGuard.key(notANumber));
+      await redis.hset(PublicRateLimitGuard.key(wrongType), 'x', '1');
+      await redis.set(PublicRateLimitGuard.key(notANumber), 'abc');
+      for (const visitor of [wrongType, notANumber]) {
+        const res = await request(isolated.app.getHttpServer())
+          .get(`/api/public/bottles/${bottle.publicToken}`)
+          .set('X-Forwarded-For', visitor);
+        expect(res.status, visitor).toBe(503);
+        expect(res.body).toMatchObject({ code: 'TEMPORARILY_UNAVAILABLE' });
+        expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+      }
+      await redis.del(PublicRateLimitGuard.key(wrongType), PublicRateLimitGuard.key(notANumber));
+    } finally {
+      await isolated.close();
+    }
+  });
+
   it('without a reliable rate limit store the public routes refuse (503), never unlimited', async () => {
     const noRedis = await createTestApp({}, {}, { redis: 'stub' });
     try {
