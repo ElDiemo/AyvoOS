@@ -1,5 +1,4 @@
 import {
-  crateLabelLayout,
   type CrateLabelPrintJob as CrateLabelPrintJobDto,
   type CreateCrateLabelPrintJobRequest,
 } from '@ayvo/types';
@@ -23,6 +22,11 @@ import { PrismaService } from '../database/prisma.service.js';
 import type { CrateLabelPrintJob, Prisma } from '../generated/prisma/client.js';
 import { CodeLabelRenderer } from '../labels/code-label-pdf.js';
 import { VALIDATION_URL_BASE } from '../labels/calibration-pdf.js';
+import {
+  assertCodeLabelLayout as assertLayout,
+  requireQrJobPrintable,
+  requireQrLabelSettings,
+} from '../labels/qr-label-settings.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 import { CratesService } from './crates.service.js';
 
@@ -35,9 +39,6 @@ const jobInclude = {
   items: { orderBy: { position: 'asc' as const }, include: { crate: { select: { code: true } } } },
 } satisfies Prisma.CrateLabelPrintJobInclude;
 type JobRecord = Prisma.CrateLabelPrintJobGetPayload<{ include: typeof jobInclude }>;
-
-const labelTooSmall = () =>
-  domainError(422, 'LABEL_TOO_SMALL', 'The label is too small for a readable QR code');
 
 /** What a crate label says besides the QR: the type code and capacity (auxiliary only). */
 const labelDetail = (type: { code: string; capacity: number }) =>
@@ -69,7 +70,8 @@ export class CrateLabelPrintJobsService {
     siteId: string,
   ): Promise<CrateLabelPrintJobDto> {
     this.assertQrPolicy(this.env.PUBLIC_QR_BASE_URL);
-    if (!crateLabelLayout(input.widthMm, input.heightMm)) throw labelTooSmall();
+    const settings = requireQrLabelSettings(this.env);
+    assertLayout(settings, input.widthMm, input.heightMm);
     const { result } = await this.operations.run(
       'CRATE_LABEL_PRINT',
       input.requestId,
@@ -96,7 +98,7 @@ export class CrateLabelPrintJobsService {
             heightMm: input.heightMm,
             publicBaseUrl: this.env.PUBLIC_QR_BASE_URL,
             appEnvironment: this.env.APP_ENV,
-            qrErrorCorrection: this.env.LABEL_QR_ERROR_CORRECTION,
+            qrErrorCorrection: settings.errorCorrection,
             createdBy: actorId,
             operationRequestId: input.requestId,
           },
@@ -153,6 +155,8 @@ export class CrateLabelPrintJobsService {
   async generate(code: string, siteId: string): Promise<CrateLabelPrintJobDto> {
     const job = await this.findJob(code, siteId);
     this.assertQrPolicy(job.publicBaseUrl);
+    // Checked before the claim: a refused job keeps its state (and stays retryable).
+    assertLayout(requireQrJobPrintable(this.env, job.qrErrorCorrection), job.widthMm, job.heightMm);
     const now = new Date();
     const attempt = job.attempts + 1;
     const claimed = await this.prisma.crateLabelPrintJob.updateMany({
@@ -233,6 +237,8 @@ export class CrateLabelPrintJobsService {
     if (job.status !== 'COMPLETED' || !job.fileStorageKey) {
       throw new ConflictException(`${job.code} has no PDF yet (status ${job.status})`);
     }
+    // A stored PDF is handed out only under the current, matching QR settings.
+    assertLayout(requireQrJobPrintable(this.env, job.qrErrorCorrection), job.widthMm, job.heightMm);
     return {
       bytes: await this.storage.get(job.fileStorageKey),
       filename: `${job.code}_crates_${job.widthMm}x${job.heightMm}mm_${job.labelCount}-labels.pdf`,
@@ -248,7 +254,8 @@ export class CrateLabelPrintJobsService {
     heightMm: number,
     crateTypeCode: string | undefined,
   ): Promise<Buffer> {
-    if (!crateLabelLayout(widthMm, heightMm)) throw labelTooSmall();
+    const settings = requireQrLabelSettings(this.env);
+    assertLayout(settings, widthMm, heightMm);
     const type = crateTypeCode
       ? await this.prisma.crateType.findUnique({ where: { code: crateTypeCode } })
       : null;
@@ -267,7 +274,7 @@ export class CrateLabelPrintJobsService {
           url: `${placeholder}/${'0'.repeat(22)}`,
         },
       ],
-      errorCorrection: this.env.LABEL_QR_ERROR_CORRECTION,
+      errorCorrection: settings.errorCorrection,
       devMarker: this.env.APP_ENV !== 'production',
       previewMarker: true,
     });

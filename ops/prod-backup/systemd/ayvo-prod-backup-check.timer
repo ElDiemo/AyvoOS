@@ -1,0 +1,10 @@
+# AYVO OS — PROD backup freshness check every 30 minutes (doc 035). Not enabled by the installer.
+[Unit]
+Description=AYVO PROD: backup freshness check
+
+[Timer]
+OnCalendar=*-*-* *:20,50:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

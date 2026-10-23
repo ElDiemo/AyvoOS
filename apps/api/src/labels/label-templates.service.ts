@@ -25,6 +25,7 @@ import type {
 } from '../generated/prisma/client.js';
 import { FILE_STORAGE, type FileStorage } from '../storage/file-storage.js';
 import { toArtworkDto } from './label-artwork.service.js';
+import { requireQrLabelSettings } from './qr-label-settings.js';
 
 /** Artwork and label proportions may differ by at most 1% (the artwork fills the label). */
 export const ASPECT_RATIO_TOLERANCE = 0.01;
@@ -271,6 +272,15 @@ export class LabelTemplatesService {
     };
   }
 
+  /** The widths (mm) of a version's QR elements, for the print-time size check. */
+  async qrElementWidths(versionId: string): Promise<number[]> {
+    const elements = await this.prisma.labelTemplateElement.findMany({
+      where: { versionId, type: 'QR_CODE' },
+      select: { widthMm: true },
+    });
+    return elements.map((e) => e.widthMm.toNumber());
+  }
+
   private async validateLayout(layout: LabelLayout): Promise<void> {
     const artwork = await this.prisma.labelArtwork.findUnique({ where: { id: layout.artworkId } });
     if (!artwork) throw new BadRequestException('Unknown artwork: upload the artwork first');
@@ -284,10 +294,14 @@ export class LabelTemplatesService {
           `the artwork needs a height of about ${expectedHeight} mm)`,
       );
     }
-    for (const element of layout.elements) {
-      if (element.type === 'QR_CODE' && element.widthMm < this.env.LABEL_QR_MIN_SIZE_MM) {
+    const qrElements = layout.elements.filter((element) => element.type === 'QR_CODE');
+    if (qrElements.length === 0) return;
+    // A QR element needs the validated QR settings (refused without them, qr-label-settings.ts).
+    const { minSizeMm } = requireQrLabelSettings(this.env);
+    for (const element of qrElements) {
+      if (element.widthMm < minSizeMm) {
         throw new BadRequestException(
-          `The QR code must be at least ${this.env.LABEL_QR_MIN_SIZE_MM} mm wide (quiet zone included)`,
+          `The QR code must be at least ${minSizeMm} mm wide (quiet zone included)`,
         );
       }
     }
