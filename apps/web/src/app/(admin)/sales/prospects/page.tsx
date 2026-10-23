@@ -1,4 +1,5 @@
 import {
+  API_BASE_PATH,
   PROSPECT_STAGES,
   prospectListQuerySchema,
   prospectPageSchema,
@@ -62,6 +63,17 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
     q.next ||
     archivedView
   );
+  const exportQuery = new URLSearchParams(
+    Object.entries({
+      q: q.q,
+      owner: q.owner,
+      stage: q.stage,
+      priority: q.priority,
+      country: q.country,
+      next: q.next,
+      archived: archivedView ? 'archived' : undefined,
+    }).filter((e): e is [string, string] => !!e[1]),
+  ).toString();
   const link = (p: number) => {
     const params = new URLSearchParams(
       Object.entries({ ...raw, page: String(p) }).filter((e): e is [string, string] => !!e[1]),
@@ -99,13 +111,32 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
         title={t.title}
         subtitle={t.subtitle}
         actions={
-          <Link
-            href="/sales/prospects/new"
-            className={buttonClass.primary}
-            data-testid="new-prospect"
-          >
-            {salesCs.overview.newProspect}
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/sales/prospects/new"
+              className={buttonClass.primary}
+              data-testid="new-prospect"
+            >
+              {salesCs.overview.newProspect}
+            </Link>
+            <Link
+              href="/sales/prospects/import"
+              className={buttonClass.secondary}
+              data-testid="import-prospects"
+            >
+              {salesCs.importer.open}
+            </Link>
+            {/* The current filters, every page; the API keeps it within the user's scope. */}
+            <a
+              href={`${API_BASE_PATH}/admin/sales/prospects/export?${exportQuery}`}
+              download
+              className={buttonClass.secondary}
+              title={salesCs.importer.exportHelp}
+              data-testid="export-prospects"
+            >
+              {salesCs.importer.export}
+            </a>
+          </div>
         }
       />
       <div className="flex flex-col gap-6">

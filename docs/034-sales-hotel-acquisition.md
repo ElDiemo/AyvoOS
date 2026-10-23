@@ -209,3 +209,82 @@ Forms keep their input on any error. A repeated click reuses the request id.
 
 - Editing an existing task in the UI — done in the follow-up PR (§6).
 - Archiving a prospect — done in the follow-up PR (§3a).
+
+## 13. CSV import and export (owner 2026-10-22, follow-up PR)
+
+The lists salespeople keep in spreadsheets today come into Obchod as CSV. XLSX, Google Sheets and
+any synchronisation are not part of this version.
+
+### Import
+
+**Nahrát → přiřadit sloupce → náhled → výslovně potvrdit → výsledek** (Akvizice → „Import CSV“).
+
+- **File**: comma or semicolon (detected from the header line), quotes, doubled quotes, empty
+  cells, notes over several lines, UTF-8 (with or without BOM) or the Windows-1250 that Czech Excel
+  writes. Every value is text: a phone keeps its "+" and leading zeros. The file stays in the
+  browser and is sent for each step; **it is never stored**. Text after a closing quote
+  (`"Hotel A" dovětek`) is never cut off: the row gets the error „Za ukončovací uvozovkou…“
+  (`QUOTE_INVALID`) and cannot be imported; spaces there are ignored; such a header refuses the
+  file (`CSV_QUOTE_INVALID`).
+- **Limits**: 2 MB, 2000 data rows, 60 columns (`SALES_IMPORT_*` in `packages/types`). Larger
+  files are refused with the reason (413 / `IMPORT_TOO_MANY_ROWS`); split them.
+- **Columns**: name, country, city, address, postal code, estimated rooms, accommodation type,
+  website, source, priority, note, and one contact (name or a designation such as "Recepce",
+  position, e-mail, phone). A proposal comes from the header names; the user decides. Unknown
+  columns are not used unless chosen.
+- **Old columns** such as "Stav", "Datum prvního oslovení", "Výsledek" or "Follow-up odeslán" are
+  never turned into calls, e-mails, completed tasks or a stage. They can be kept as labelled
+  original values in the note ("Původní údaje z importu (význam nepotvrzen): …"). Every imported
+  prospect starts in **Nový** without activities or tasks; no event time is invented.
+- **Required**: name and country. A missing value is completed in the preview (per row), or the
+  country for empty cells is set explicitly for the import. **The country is never derived** from
+  a domain, a phone number or the user's site. A contact without a name needs an explicitly chosen
+  designation (e.g. "Recepce"); no person is invented.
+- **Preview writes nothing.** It lists each row with its number (the spreadsheet row, header =
+  1), concrete errors (missing name or country, unknown country or type, rooms that are not 1–100000,
+  priority other than A/B/C, invalid e-mail or phone — e.g. "4,20777E+11" from Excel — too long
+  text, extra cells, text after a closing quote), duplicates within the file, and possible duplicates among the prospects the
+  user may see (the rules of §8, archived ones included). Nothing is merged or overwritten.
+- **Choice**: rows with errors cannot be selected. A possible duplicate is imported only when the
+  user confirms it as a new record ("Je to jiný hotel — založit jako nový").
+- **Owner**: a salesperson imports only for themselves. ADMIN (`sales:manage`) may choose an
+  active salesperson with Obchod.
+- **Only what the preview showed**: the preview returns a fingerprint of the file's bytes and of
+  every decision (mapping, defaults, typed fixes, owner, the user). The confirmation carries it; a
+  file saved again since, or other decisions, are refused (`IMPORT_PREVIEW_STALE`) and the wizard
+  loads the preview again — typed fixes kept, rows chosen anew, nothing confirmed automatically.
+  Typed fixes must be checked ("Použít opravy a znovu zkontrolovat") before the import can be
+  confirmed.
+- **Confirmation**: permissions, the target owner, every selected row and the duplicates are
+  checked again on the server; anything that changed since the preview is refused with the rows
+  concerned (`IMPORT_ROWS_INVALID`, `IMPORT_DUPLICATES_UNCONFIRMED`, `NOT_A_SALESPERSON`) and the
+  wizard refreshes its preview. All selected rows are written in one transaction (all or nothing),
+  idempotent per request id: a double click or a retry after a lost answer imports once; the same
+  request id with another selection is a conflict. Confirmations for one owner run one at a time
+  (an advisory lock): a parallel one with another request id (a second tab, a reload after a lost
+  answer) finds the rows as possible duplicates and writes nothing.
+- **Result** (`IMP-000001`, page `/sales/prospects/import/IMP-…`): created prospects with their
+  row numbers, the rows left out with the reasons. Stored append-only in `sales_imports` (row
+  numbers and error codes only, never contact data); every created prospect keeps its import and
+  row (`import_id`, `import_row`, immutable) and its `PROSPECT_CREATED` event names the import.
+  Only the importer and `sales:manage` see an import; nobody else can read its file, preview or
+  result.
+
+### Export
+
+Akvizice → „Export CSV“ downloads the **current filtered list, all pages** (at most 10000 rows,
+`EXPORT_TOO_LARGE` above), in the list's scope: a salesperson exports only their own prospects
+(an owner filter cannot widen it), ADMIN as chosen. Columns in Czech (so the import recognises
+them again): code, profile, stage, lost reason, owner, last contact, next step and its date, the
+main contact (or the first active one), the number of contacts, the note and whether archived.
+
+The file is UTF-8 with BOM, `;` and CRLF (opens in Czech Excel). **CSV injection**: a value
+starting with `=`, `+`, `-`, `@`, a tab or a carriage return is written with a leading apostrophe
+so that a spreadsheet shows it as text and never runs it. Only the exported text changes — the
+database keeps the original value, and the import removes that apostrophe again.
+
+### API
+
+- `GET prospects/export` (the list's query parameters)
+- `POST imports/inspect`, `POST imports/preview`, `POST imports` (multipart: `file` + JSON field
+  `options`), `GET imports`, `GET imports/:code`

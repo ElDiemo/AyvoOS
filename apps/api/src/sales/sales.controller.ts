@@ -1,5 +1,15 @@
 import {
+  SALES_IMPORT_MAX_BYTES,
   archiveProspectRequestSchema,
+  confirmImportSchema,
+  importCodeSchema,
+  importOptionsSchema,
+  type ConfirmImportRequest,
+  type ImportInspection,
+  type ImportOptions,
+  type ImportPreview,
+  type ImportResult,
+  type ImportSummary,
   cancelTaskRequestSchema,
   changeOwnerRequestSchema,
   changeStageRequestSchema,
@@ -43,17 +53,52 @@ import {
   type UpdateProspectRequest,
   type UpdateTaskRequest,
 } from '@ayvo/types';
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  StreamableFile,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
 import { CurrentPrincipal } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import { ProspectsService } from './prospects.service.js';
+import { SalesImportService, type UploadedCsv } from './sales-import.service.js';
 import { scopeOf } from './sales-access.js';
 import { SalesWorkService } from './sales-work.service.js';
 
 const CODE = new ZodValidationPipe(prospectCodeSchema);
+const IMPORT_CODE = new ZodValidationPipe(importCodeSchema);
+/** One CSV file in memory (never stored), at most SALES_IMPORT_MAX_BYTES (413 above). */
+const CSV_UPLOAD = FileInterceptor('file', {
+  limits: { fileSize: SALES_IMPORT_MAX_BYTES, files: 1, fields: 2 },
+});
+
+/** The JSON form field next to the uploaded file, validated by its shared contract. */
+class JsonField<T extends z.ZodType> extends ZodValidationPipe<T> {
+  override transform(value: unknown): z.infer<T> {
+    if (typeof value !== 'string') throw new BadRequestException('Send the options as JSON');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      throw new BadRequestException('Send the options as JSON');
+    }
+    return super.transform(parsed);
+  }
+}
 const UUID = new ParseUUIDPipe();
 
 /**
@@ -65,6 +110,7 @@ export class SalesController {
   constructor(
     private readonly prospects: ProspectsService,
     private readonly work: SalesWorkService,
+    private readonly imports: SalesImportService,
   ) {}
 
   @RequirePermission('sales:work')
@@ -102,6 +148,69 @@ export class SalesController {
   ): Promise<ProspectDetail> {
     const { code } = await this.prospects.create(scopeOf(p), body);
     return this.prospects.detail(scopeOf(p), code);
+  }
+
+  /** The filtered list as CSV — all pages, in the user's scope (doc 034 §13). */
+  @RequirePermission('sales:work')
+  @Get('prospects/export')
+  async exportCsv(
+    @Query(new ZodValidationPipe(prospectListQuerySchema)) query: ProspectListQuery,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<StreamableFile> {
+    const csv = await this.prospects.exportCsv(scopeOf(p), query);
+    return new StreamableFile(Buffer.from(csv, 'utf8'), {
+      type: 'text/csv; charset=utf-8',
+      disposition: `attachment; filename="zajemci-${new Date().toISOString().slice(0, 10)}.csv"`,
+    });
+  }
+
+  // --- CSV import (doc 034 §13): inspect → preview (writes nothing) → confirm ---------------
+
+  @RequirePermission('sales:work')
+  @Post('imports/inspect')
+  @HttpCode(200)
+  @UseInterceptors(CSV_UPLOAD)
+  inspectImport(@UploadedFile() file: UploadedCsv | undefined): ImportInspection {
+    return this.imports.inspect(file);
+  }
+
+  @RequirePermission('sales:work')
+  @Post('imports/preview')
+  @HttpCode(200)
+  @UseInterceptors(CSV_UPLOAD)
+  previewImport(
+    @UploadedFile() file: UploadedCsv | undefined,
+    @Body('options', new JsonField(importOptionsSchema)) options: ImportOptions,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<ImportPreview> {
+    return this.imports.preview(scopeOf(p), file, options);
+  }
+
+  @RequirePermission('sales:work')
+  @Post('imports')
+  @UseInterceptors(CSV_UPLOAD)
+  async confirmImport(
+    @UploadedFile() file: UploadedCsv | undefined,
+    @Body('options', new JsonField(confirmImportSchema)) body: ConfirmImportRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<ImportResult> {
+    const { code } = await this.imports.confirm(scopeOf(p), file, body);
+    return this.imports.result(scopeOf(p), code);
+  }
+
+  @RequirePermission('sales:work')
+  @Get('imports')
+  listImports(@CurrentPrincipal() p: Principal): Promise<ImportSummary[]> {
+    return this.imports.list(scopeOf(p));
+  }
+
+  @RequirePermission('sales:work')
+  @Get('imports/:code')
+  importResult(
+    @Param('code', IMPORT_CODE) code: string,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<ImportResult> {
+    return this.imports.result(scopeOf(p), code);
   }
 
   @RequirePermission('sales:work')

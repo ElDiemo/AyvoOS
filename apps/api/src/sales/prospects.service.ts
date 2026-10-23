@@ -3,7 +3,10 @@ import {
   CONTACT_ACTIVITY_KINDS,
   IN_PROGRESS_STAGES,
   PROSPECT_PAGE_SIZE,
+  SALES_EXPORT_MAX_ROWS,
+  SALES_TIME_ZONE,
   stageChangeNeedsReason,
+  type AccommodationType,
   type ArchiveProspectRequest,
   type ChangeOwnerRequest,
   type ChangeStageRequest,
@@ -36,6 +39,7 @@ import {
   type Db,
   type SalesScope,
 } from './sales-access.js';
+import { csvFile } from './sales-csv.js';
 import { emailKey, nameKey, phoneKey, websiteKey } from './sales-keys.js';
 import { SalesViews } from './sales-views.js';
 
@@ -83,6 +87,88 @@ interface SummaryRow {
   total: number;
 }
 
+interface ExportRow {
+  code: string;
+  name: string;
+  country_code: string;
+  city: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  postal_code: string | null;
+  rooms_estimate: number | null;
+  accommodation_type: AccommodationType | null;
+  website: string | null;
+  source: string | null;
+  priority: string | null;
+  stage: ProspectStage;
+  lost_reason: string | null;
+  note: string | null;
+  archived_at: Date | null;
+  owner_name: string;
+  last_contact: Date | null;
+  next_title: string | null;
+  next_due: Date | null;
+  contact_label: string | null;
+  contact_position: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  contacts: number;
+}
+
+/** Czech column names: the import recognises them again (doc 034 §13). */
+const EXPORT_HEADER = [
+  'Kód',
+  'Název',
+  'Země',
+  'Město',
+  'Adresa',
+  'Doplněk adresy',
+  'PSČ',
+  'Pokoje',
+  'Typ ubytování',
+  'Web',
+  'Zdroj',
+  'Priorita',
+  'Fáze',
+  'Důvod neúspěchu',
+  'Obchodník',
+  'Poslední kontakt',
+  'Další krok',
+  'Termín dalšího kroku',
+  'Kontaktní osoba',
+  'Pozice',
+  'E-mail',
+  'Telefon',
+  'Počet kontaktů',
+  'Poznámka',
+  'Archivováno',
+];
+const STAGE_CS: Record<ProspectStage, string> = {
+  NEW: 'Nový',
+  CONTACTED: 'Oslovený',
+  NEGOTIATION: 'Jednání',
+  OFFER: 'Nabídka',
+  WON: 'Získaný',
+  LOST: 'Neúspěšný',
+};
+const TYPE_CS: Record<AccommodationType, string> = {
+  HOTEL: 'Hotel',
+  PENSION: 'Penzion',
+  APARTMENTS: 'Apartmány',
+  HOSTEL: 'Hostel',
+  OTHER: 'Jiné',
+};
+/** "2026-10-21 14:30" in the sales time zone. */
+const pragueTime = (d: Date) =>
+  new Intl.DateTimeFormat('sv-SE', {
+    timeZone: SALES_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 /**
@@ -102,6 +188,90 @@ export class ProspectsService {
   /** The visible prospects with their next open task; stable order (next task, name, code). */
   async list(scope: SalesScope, q: ProspectListQuery): Promise<ProspectPage> {
     const today = salesToday();
+    const where = this.conditions(scope, q, today);
+    const page = q.page;
+    const rows = await this.summaries(where, PROSPECT_PAGE_SIZE, (page - 1) * PROSPECT_PAGE_SIZE);
+    return {
+      items: rows.map(toSummary),
+      total: rows[0]?.total ?? (page > 1 ? await this.count(where) : 0),
+      page,
+      pageSize: PROSPECT_PAGE_SIZE,
+      today,
+    };
+  }
+
+  /**
+   * The CSV export of the filtered list — every page, in the list's scope (doc 034 §13): own
+   * prospects without sales:manage. One main contact per prospect (the main one, else the first).
+   */
+  async exportCsv(scope: SalesScope, q: ProspectListQuery): Promise<string> {
+    const today = salesToday();
+    const where = this.conditions(scope, q, today);
+    const rows = await this.prisma.$queryRaw<ExportRow[]>`
+      WITH "next" AS (
+        SELECT DISTINCT ON (t."prospect_id") t."prospect_id", t."id", t."title", t."due_on"
+        FROM "sales_tasks" t WHERE t."status" = 'OPEN'
+        ORDER BY t."prospect_id", t."due_on", t."created_at", t."id")
+      SELECT p."code", p."name", p."country_code", p."city", p."address_line1", p."address_line2",
+             p."postal_code", p."rooms_estimate", p."accommodation_type", p."website", p."source",
+             p."priority", p."stage", p."lost_reason", p."note", p."archived_at",
+             o."display_name" AS "owner_name", ${lastContactSql} AS "last_contact",
+             n."title" AS "next_title", n."due_on" AS "next_due",
+             c."label" AS "contact_label", c."position" AS "contact_position",
+             c."email" AS "contact_email", c."phone" AS "contact_phone",
+             (SELECT count(*) FROM "sales_contacts" x WHERE x."prospect_id" = p."id" AND x."retired_at" IS NULL)::int AS "contacts"
+      FROM "sales_prospects" p
+      JOIN "users" o ON o."id" = p."owner_id"
+      LEFT JOIN "next" n ON n."prospect_id" = p."id"
+      LEFT JOIN LATERAL (
+        SELECT x."label", x."position", x."email", x."phone" FROM "sales_contacts" x
+        WHERE x."prospect_id" = p."id" AND x."retired_at" IS NULL
+        ORDER BY x."is_primary" DESC, x."created_at", x."id" LIMIT 1) c ON true
+      WHERE ${Prisma.join(where, ' AND ')}
+      ORDER BY p."name", p."code"
+      LIMIT ${SALES_EXPORT_MAX_ROWS + 1}`;
+    if (rows.length > SALES_EXPORT_MAX_ROWS) {
+      throw domainErrorWithDetails(
+        422,
+        'EXPORT_TOO_LARGE',
+        'Too many prospects for one export; filter the list first',
+        { limit: SALES_EXPORT_MAX_ROWS },
+      );
+    }
+    return csvFile(
+      EXPORT_HEADER,
+      rows.map((r) => [
+        r.code,
+        r.name,
+        r.country_code,
+        r.city,
+        r.address_line1,
+        r.address_line2,
+        r.postal_code,
+        r.rooms_estimate,
+        r.accommodation_type ? TYPE_CS[r.accommodation_type] : null,
+        r.website,
+        r.source,
+        r.priority,
+        STAGE_CS[r.stage],
+        r.lost_reason,
+        r.owner_name,
+        r.last_contact ? pragueTime(r.last_contact) : null,
+        r.next_title,
+        r.next_due ? r.next_due.toISOString().slice(0, 10) : null,
+        r.contact_label,
+        r.contact_position,
+        r.contact_email,
+        r.contact_phone,
+        r.contacts,
+        r.note,
+        r.archived_at ? 'ano' : 'ne',
+      ]),
+    );
+  }
+
+  /** The list's conditions on prospect `p` (and its next task `n`), always within the scope. */
+  private conditions(scope: SalesScope, q: ProspectListQuery, today: string): Prisma.Sql[] {
     const where: Prisma.Sql[] = [];
     // Without sales:manage only one's own prospects, whatever the query says.
     if (!scope.all || q.owner === 'me')
@@ -134,15 +304,7 @@ export class ProspectsService {
           AND (c."label" ILIKE ${like} OR c."email" ILIKE ${like}
                OR (length(${digits}) >= 4 AND c."phone_key" LIKE ${`%${digits.slice(-9)}%`}))))`);
     }
-    const page = q.page;
-    const rows = await this.summaries(where, PROSPECT_PAGE_SIZE, (page - 1) * PROSPECT_PAGE_SIZE);
-    return {
-      items: rows.map(toSummary),
-      total: rows[0]?.total ?? (page > 1 ? await this.count(where) : 0),
-      page,
-      pageSize: PROSPECT_PAGE_SIZE,
-      today,
-    };
+    return where;
   }
 
   private summaries(where: Prisma.Sql[], limit: number, offset: number, order?: Prisma.Sql) {
@@ -725,7 +887,7 @@ export class ProspectsService {
   }
 }
 
-function profileData(input: Pick<CreateProspectRequest, ProfileField>) {
+export function profileData(input: Pick<CreateProspectRequest, ProfileField>) {
   return {
     name: input.name,
     nameKey: nameKey(input.name),
