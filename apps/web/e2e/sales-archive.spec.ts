@@ -77,6 +77,78 @@ test.beforeAll(async ({ browser }) => {
   await c.context().close();
 });
 
+test('ADMIN takes over the task while the salesperson edits it: the reload sends the new assignee', async ({
+  browser,
+}) => {
+  const one = await signIn(browser, C.email);
+  const created = await json<ProspectDetail>(
+    await one.request.post(`/api/admin/sales/prospects/${code}/tasks`, {
+      data: {
+        requestId: crypto.randomUUID(),
+        title: 'Poslat ceník',
+        dueOn: pragueDay(2),
+        contactId: null,
+        assigneeId: null,
+        note: null,
+      },
+    }),
+  );
+  const t0 = created.openTasks.find((t) => t.title === 'Poslat ceník')!;
+  await one.goto(`/sales/prospects/${code}`);
+  await one.getByTestId('task-Poslat ceník').getByTestId('task-edit').click();
+  const dialog = one.getByTestId('task-edit-dialog');
+  await dialog.getByTestId('task-edit-title').fill('Poslat ceník a vzorky');
+  await dialog.getByTestId('task-edit-note').fill('Po telefonu s ředitelkou');
+
+  // Meanwhile ADMIN takes the task over (the salesperson's form still holds the old assignee).
+  const admin = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
+  const me = await json<{ user: { id: string } }>(await admin.request.get('/api/auth/me'));
+  await json(
+    await admin.request.post(`/api/admin/sales/tasks/${t0.id}/update`, {
+      data: {
+        requestId: crypto.randomUUID(),
+        revision: t0.revision,
+        title: t0.title,
+        note: null,
+        contactId: null,
+        assigneeId: me.user.id,
+      },
+    }),
+  );
+
+  // The first save is refused as stale; after reloading, the typed text is saved — with the
+  // assignee as the server has it now (never the hidden old one, which the API would refuse).
+  await dialog.getByTestId('task-edit-dialog-submit').click();
+  await expect(dialog.getByTestId('task-edit-dialog-error')).toContainText(
+    'Vaše úpravy zůstaly ve formuláři',
+  );
+  await dialog.getByTestId('dialog-reload').click();
+  await expect(dialog.getByTestId('task-edit-reloaded')).toBeVisible();
+  await expect(dialog.getByTestId('task-edit-title')).toHaveValue('Poslat ceník a vzorky');
+  await dialog.getByTestId('task-edit-dialog-submit').click();
+  await expect(dialog).not.toBeVisible();
+  await expect(one.getByTestId('task-Poslat ceník a vzorky')).toContainText(
+    'Po telefonu s ředitelkou',
+  );
+  const after = await json<ProspectDetail>(
+    await admin.request.get(`/api/admin/sales/prospects/${code}`),
+  );
+  expect(after.openTasks.find((t) => t.id === t0.id)).toMatchObject({
+    title: 'Poslat ceník a vzorky',
+    note: 'Po telefonu s ředitelkou',
+    assignee: { id: me.user.id },
+  });
+  // Leave the prospect as the following tests expect it (one open task).
+  const done = after.openTasks.find((t) => t.id === t0.id)!;
+  await json(
+    await admin.request.post(`/api/admin/sales/tasks/${t0.id}/cancel`, {
+      data: { requestId: crypto.randomUUID(), revision: done.revision, reason: 'konec testu' },
+    }),
+  );
+  await admin.close();
+  await one.context().close();
+});
+
 test('edits a task in the detail; a concurrent edit keeps what was typed', async ({ browser }) => {
   const one = await signIn(browser, C.email);
   await one.goto(`/sales/prospects/${code}`);

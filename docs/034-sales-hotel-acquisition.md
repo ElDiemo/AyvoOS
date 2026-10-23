@@ -134,6 +134,9 @@ fine.
 - Visibility is evaluated on the server for every read and write, including contacts, history,
   counts, search and duplicate warnings. Without `sales:manage` the user only works with
   prospects they own. Another person's prospect answers **404**, whether opened by URL or API.
+  The check and the detail it allows are read from one snapshot: a prospect handed to someone
+  else while a read is under way is answered as it was when the check allowed it, never with
+  what the new owner added since.
 - A salesperson cannot change the owner. ADMIN's reassignment moves the previous owner's open
   tasks of that prospect to the new owner, recorded as events.
 - Neither permission is bound to a site. Obchod needs no active site, warehouse or production.
