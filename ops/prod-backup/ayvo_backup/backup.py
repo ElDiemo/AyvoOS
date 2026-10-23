@@ -408,24 +408,32 @@ class Backup:
             raise BackupError('space', f'cannot read the database size: {tail(res.stderr)}')
 
     def check_space(self) -> int:
-        """Before anything is written: the expected dump (at most the database's size, at most
-        the cap) must fit with the reserve in the container's /tmp — the live database's disk —
-        and three times on the host (dump, read-back; the container's copy if it is the same
-        disk). Returns the byte cap for this dump."""
+        """Before anything is written: the byte cap this dump is held to (doc 035 §2 step 4).
+
+        The cap is what both disks can really take, never more: the configured cap, the database
+        container's free /tmp (the live database's disk) minus the reserve, and a third of the
+        host's free space minus the reserve (the host copy, the read-back, and the container's
+        copy when it is the same disk). If that budget is below the expected dump (the database's
+        size, at most the configured cap), the run is refused instead of failing half-way."""
         self.step = 'space'
-        cap = self.cfg.max_dump_bytes
-        expected = min(self.database_bytes(), cap)
         gib = lambda n: f'{n / 1024**3:.2f} GiB'  # noqa: E731
-        need_c = expected + self.cfg.reserve_bytes
+        reserve = self.cfg.reserve_bytes
+        expected = min(self.database_bytes(), self.cfg.max_dump_bytes)
         free_c = self.container_free_bytes()
-        if free_c < need_c:
-            raise BackupError('space', f'the database container has {gib(free_c)} free for /tmp, '
-                              f'needs {gib(need_c)} (dump up to {gib(expected)} + reserve)')
-        need_h = 3 * expected + self.cfg.reserve_bytes
         free_h = self.host_free_bytes()
-        if free_h < need_h:
+        budget_c = free_c - reserve
+        budget_h = (free_h - reserve) // 3
+        cap = min(self.cfg.max_dump_bytes, budget_c, budget_h)
+        if budget_c < expected:
+            raise BackupError('space', f'the database container has {gib(free_c)} free for /tmp, '
+                              f'needs {gib(expected + reserve)} (dump up to {gib(expected)} '
+                              '+ reserve)')
+        if budget_h < expected:
             raise BackupError('space', f'{self.workdir.parent} has {gib(free_h)} free, needs '
-                              f'{gib(need_h)} (dump, read-back and the container copy + reserve)')
+                              f'{gib(3 * expected + reserve)} (dump, read-back and the '
+                              'container copy + reserve)')
+        log(f'space: dump capped at {gib(cap)} (expected {gib(expected)}; container '
+            f'{gib(free_c)} free, host {gib(free_h)} free, reserve {gib(reserve)})')
         return cap
 
     def dump(self) -> tuple[Path, dict]:

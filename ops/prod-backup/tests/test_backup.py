@@ -375,13 +375,25 @@ class CredentialAndCommandTests(unittest.TestCase):
             def host_free_bytes(self):
                 return self.sizes[2]
 
-        self.assertEqual(Measured(1 * gib, 3 * gib, 5 * gib).check_space(), 10 * gib)
+        # Codex BACKUP50-R2: 1 GiB database, 3 GiB container, 5 GiB host, 2 GiB reserve — the
+        # budget is 1 GiB on each disk, so the dump is held to 1 GiB, not the configured 10 GiB.
+        self.assertEqual(Measured(1 * gib, 3 * gib, 5 * gib).check_space(), 1 * gib)
+        # More room: the cap grows with the smaller budget, never past the configured cap.
+        self.assertEqual(Measured(1 * gib, 6 * gib, 20 * gib).check_space(), 4 * gib)
+        self.assertEqual(Measured(1 * gib, 6 * gib, 11 * gib).check_space(), 3 * gib)
+        self.assertEqual(Measured(1 * gib, 100 * gib, 100 * gib).check_space(), 10 * gib)
         with self.assertRaisesRegex(backup.BackupError, 'database container has 2.99 GiB'):
             Measured(1 * gib, 3 * gib - 10 * 1024**2, 5 * gib).check_space()
         with self.assertRaisesRegex(backup.BackupError, 'needs 5.00 GiB'):
-            Measured(1 * gib, 3 * gib, 5 * gib - 1).check_space()
-        # A database larger than the cap needs room for the cap only (the dump stops there).
+            Measured(1 * gib, 3 * gib, 5 * gib - 3).check_space()
+        # A database larger than the configured cap: held to that cap if both disks take it.
         self.assertEqual(Measured(500 * gib, 3 * gib, 5 * gib, cap=1 * gib).check_space(), gib)
+        # Every cap returned fits both disks with the reserve, all copies included.
+        for db, c, h in ((1, 3, 5), (1, 6, 20), (2, 9, 9), (0.5, 2.5, 3.5)):
+            m = Measured(int(db * gib), int(c * gib), int(h * gib))
+            cap = m.check_space()
+            self.assertLessEqual(cap + 2 * gib, int(c * gib))
+            self.assertLessEqual(3 * cap + 2 * gib, int(h * gib))
 
     def test_the_dump_is_written_through_a_byte_cap(self):
         script = backup.dump_script('20260101T000000Z-00000000', 1000).decode()
