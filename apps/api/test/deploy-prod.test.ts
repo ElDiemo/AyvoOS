@@ -68,9 +68,11 @@ describe('production Compose project', () => {
       S3_BUCKET: 'ayvo-prod-files-888725257303-eu-north-1-an',
       S3_EXPECTED_BUCKET_OWNER: "'888725257303'",
     });
-    // QR / label values have no default: the owner sets the physically validated ones.
-    for (const key of ['PUBLIC_QR_BASE_URL', 'LABEL_QR_MIN_SIZE_MM', 'LABEL_QR_ERROR_CORRECTION']) {
-      expect(serviceEnv('api')[key]).toMatch(new RegExp(`^\\$\\{${key}:\\?`));
+    // The QR base URL is required; the physically validated QR label settings are optional and
+    // have no default (empty = not set; ADR 0034) — never a value in this file.
+    expect(serviceEnv('api').PUBLIC_QR_BASE_URL).toMatch(/^\$\{PUBLIC_QR_BASE_URL:\?/);
+    for (const key of ['LABEL_QR_MIN_SIZE_MM', 'LABEL_QR_ERROR_CORRECTION']) {
+      expect(serviceEnv('api')[key]).toBe(`\${${key}:-}`);
     }
     expect(compose).not.toMatch(
       /AUTH_PROVIDER: test|CARRIER_PROVIDER|PPL_TEST|APP_ENV: development/,
@@ -141,7 +143,24 @@ describe('production Compose project', () => {
       AWS_ACCESS_KEY_ID: 'AKIAFICTIONAL0000000',
       LABEL_QR_MIN_SIZE_MM: '15',
     });
-    // Without the physically validated QR values the configuration does not even render.
+    // Without the physically validated QR values it renders them empty (not set, ADR 0034).
+    writeFileSync(
+      join(secrets, 'no-qr-settings.env'),
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+        'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
+    );
+    const noQr = JSON.parse(
+      run(
+        'docker',
+        [...args, '--env-file', join(secrets, 'no-qr-settings.env'), 'config', '--format', 'json'],
+        env,
+      ).stdout,
+    );
+    expect(noQr.services.api.environment).toMatchObject({
+      LABEL_QR_MIN_SIZE_MM: '',
+      LABEL_QR_ERROR_CORRECTION: '',
+    });
+    // The QR base URL stays required: without it the configuration does not render.
     writeFileSync(
       join(secrets, 'incomplete.env'),
       'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n',
@@ -152,7 +171,7 @@ describe('production Compose project', () => {
       env,
     );
     expect(res.status).not.toBe(0);
-    expect(res.stderr).toMatch(/PUBLIC_QR_BASE_URL|LABEL_QR/);
+    expect(res.stderr).toMatch(/PUBLIC_QR_BASE_URL/);
   });
 });
 
@@ -416,6 +435,14 @@ describe('production deploy script', () => {
       expect(res.status, res.stderr).toBe(0);
       expect(res.stdout + res.stderr).not.toMatch(/fictional|AKIA/);
     });
+    it('accepts no QR label settings at all: the application starts without them (ADR 0034)', () => {
+      const res = check({
+        ...good,
+        'prod.env': prod.replace('LABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n', ''),
+      });
+      expect(res.status, res.stderr).toBe(0);
+      expect(res.stdout).toMatch(/QR label settings not set/);
+    });
     it.each([
       [
         'another key injected into the container',
@@ -439,13 +466,18 @@ describe('production deploy script', () => {
       ],
       [
         'an empty required value',
-        { 'prod.env': prod.replace('LABEL_QR_MIN_SIZE_MM=15', 'LABEL_QR_MIN_SIZE_MM=') },
-        /LABEL_QR_MIN_SIZE_MM is empty/,
+        { 'prod.env': prod.replace('ACME_EMAIL=ops@example.test', 'ACME_EMAIL=') },
+        /ACME_EMAIL is empty/,
       ],
       [
-        'a missing physically validated value',
+        'only one of the two QR label settings',
         { 'prod.env': prod.replace('LABEL_QR_ERROR_CORRECTION=Q\n', '') },
-        /lacks LABEL_QR_ERROR_CORRECTION/,
+        /sets only LABEL_QR_MIN_SIZE_MM: set both/,
+      ],
+      [
+        'one QR label setting empty',
+        { 'prod.env': prod.replace('LABEL_QR_MIN_SIZE_MM=15', 'LABEL_QR_MIN_SIZE_MM=') },
+        /sets only LABEL_QR_ERROR_CORRECTION: set both/,
       ],
       [
         'the backup identity given to the application',

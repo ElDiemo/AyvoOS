@@ -47,8 +47,10 @@ readonly KEEP_RELEASES=3
 # Required and allowed keys per env file (doc 036 §4). Anything else is refused: a file given to a
 # container through `env_file` must not inject e.g. NODE_OPTIONS, AWS_ENDPOINT_URL or a test
 # switch. Values are never printed.
-readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLIC_QR_BASE_URL LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
-readonly ALLOW_PROD="$KEYS_PROD CARRIER_CREDENTIALS_KEY"
+readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLIC_QR_BASE_URL"
+# The physically validated QR label settings are optional (ADR 0034): both or neither.
+readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
+readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY"
 readonly KEYS_WORKOS="WORKOS_API_KEY"
 # Client ID and issuer may be in the file too; compose.yml's fixed values take precedence.
 readonly ALLOW_WORKOS="$KEYS_WORKOS WORKOS_CLIENT_ID WORKOS_JWT_ISSUER"
@@ -177,10 +179,23 @@ check_env_file() {
   ok "$file: mode $mode, required keys present, no other keys"
 }
 
+# Both QR label settings, or neither (then only our QR label operations are refused, ADR 0034).
+# Never a default, never a value from DEV: only the recorded physical validation (doc 036 §8).
+check_qr_label_settings() {
+  local file=$1 key set=()
+  for key in $QR_LABEL_KEYS; do [[ -n $(env_value "$file" "$key") ]] && set+=("$key"); done
+  case ${#set[@]} in
+    0) ok "QR label settings not set: the application runs, our QR labels are refused (ADR 0034)" ;;
+    2) ok "QR label settings set (the owner's recorded physical validation)" ;;
+    *) die "$file sets only ${set[*]}: set both $QR_LABEL_KEYS or neither (ADR 0034)" ;;
+  esac
+}
+
 check_env_files() {
   STEP="check the server-only env files"
   log "$STEP"
   check_env_file "$SECRETS/prod.env" "$KEYS_PROD" "$ALLOW_PROD"
+  check_qr_label_settings "$SECRETS/prod.env"
   check_env_file "$SECRETS/prod-workos.env" "$KEYS_WORKOS" "$ALLOW_WORKOS"
   check_env_file "$SECRETS/prod-s3.env" "$KEYS_S3" "$ALLOW_S3"
   # The backup identity is never given to the application (doc 035).

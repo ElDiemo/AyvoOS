@@ -28,15 +28,17 @@ become a different product.
   gateway), Tailscale SNAT off, a host guard in `DOCKER-USER` for IPv4 and IPv6, and the public
   IPv4 :80 exception for ACME HTTP-01 only. Normal WorkOS sign-in with MFA; no Basic Auth.
 - **Start conditions are met, not bypassed.** Production starts only with the application's own
-  production checks satisfied: S3 file storage (ADR 0032), WorkOS production, the production QR
-  base URL and the physically validated QR settings (ADR 0014). Missing values are manual owner
+  production checks satisfied: S3 file storage (ADR 0032), WorkOS production and the production QR
+  base URL (ADR 0014). The physically validated QR settings are not a start condition: without
+  them only our QR label operations are refused (ADR 0034). Missing values are manual owner
   steps (doc 036 §8); none gets a placeholder.
 - **Data safety.** A verified dump (and S3 backup, doc 035) before every migration of a non-empty
   database; never `down -v`, volume removal or prune; never an automatic restore.
 
 ## Consequences
 
-- Until the physical QR validation is recorded, production does not start — also not for Obchod.
+- Until the physical QR validation is recorded, production runs, but our QR labels cannot be
+  created or printed (ADR 0034 — replaces the earlier "production does not start").
 - A release is a deliberate owner action; DEV may run newer code than production.
 - The server builds the images itself (4 GB RAM + swap); a registry would be a new decision.
 
