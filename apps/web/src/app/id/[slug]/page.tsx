@@ -1,6 +1,7 @@
 import { employeeCardSlugSchema, publicEmployeeCardSchema } from '@ayvo/types';
 import { notFound, redirect } from 'next/navigation';
 import { EmployeeCard } from '@/components/identity/employee-card';
+import styles from '@/components/identity/employee-card.module.css';
 import { fetchEmployeeCard } from '@/lib/employee-card-public';
 import { serverEnv } from '@/lib/env';
 
@@ -23,9 +24,9 @@ export default async function EmployeeCardPage({
   // Compatibility with the existing PHP Save contact link, keyed to the path, not query.slug.
   if ((await searchParams).vcard !== undefined) redirect(`${slug}/contact.vcf`);
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[#f6f6f6] p-4 sm:p-6">
+    <main className={styles.page}>
       {serverEnv.APP_ENV !== 'production' && (
-        <p className="max-w-sm text-center text-xs text-amber-900">
+        <p className={styles.notice}>
           TEST – ukázka vizitky ve vývojovém prostředí, ne skutečná veřejná vizitka.
         </p>
       )}

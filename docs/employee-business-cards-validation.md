@@ -1,8 +1,10 @@
 # Local validation — employee cards, 2026-10-23
 
 Implementation on `codex/employee-business-cards`, based on main `6a02953295ef38f225b865cbca5addf999cf1a49`.
-Local worktree is separate from Claude's checkouts. Nothing was pushed, merged or
-deployed; no live profiles, contacts, sessions or portraits were imported.
+Local worktree is separate from Claude's checkouts. The implementation is now
+PR #55; nothing has been merged or deployed by this work. No live profiles,
+contacts, sessions or portraits were imported. Earlier checks below are historical;
+each follow-up still needs fresh CI on its exact head.
 
 ## Verified
 
@@ -76,3 +78,37 @@ hidden. A card-specific unavailable page has no links into the private OS.
 The browser regression checks the link and the hidden page. New CI is required
 on the follow-up head before merge/deploy. Initial screenshots predate this
 small editor-link addition; they remain examples, not proof of a live DEV page.
+
+The follow-up `f7994c1` subsequently passed complete CI run `39991623826`:
+quality, test and e2e; API 662 passed / 2 intentionally skipped, web 104,
+types 34, Playwright 147 passed / 1 skipped. This does not approve newer heads.
+
+## Original presentation restored (owner clarification)
+
+Read-only comparison with the complete public PHP output showed differences in
+the first implementation's icon substitutes, footer, typography and mobile padding.
+The new follow-up reuses the original geometry/CSS, the exact original logo and
+the same Font Awesome Free 6.4.0 fonts (self-hosted, licenses and hashes recorded).
+No PHP interpreter, separate live app, duplicate design or run-time CDN was added.
+
+An independent historical HTML/CSS fixture uses only synthetic person data and
+the same synthetic image, never a real employee/portrait copied into DEV. It is
+compared to the actual Next page at 1440, 390 and 320px. In local installed Chrome,
+card dimensions and element geometry match. Decoded screenshots differ only by
+one colour level (1/255) at a small number of composited rounded-edge pixels;
+the browser regression permits that rounding, not a broad percentage difference.
+Both a local development rendering and the optimized webpack build were compared.
+Production-style local rendering has no TEST notice; DEV/test retains the notice
+outside the unchanged card. This is a notebook check, not a DEV/PROD deployment.
+
+Local follow-up checks: web 105 tests, web TypeScript and targeted ESLint pass;
+optimized webpack build passes. The three vCard unit tests were rerun separately
+and pass; DB integration was explicitly disabled for that unit-only command.
+The ordinary sandbox first refused the native SWC cache; the rerun used the
+existing cache with filesystem permission, not dependency replacement.
+
+The full real-DB browser path still creates/publishes a synthetic card, checks the
+downloaded vCard and publication isolation, and now compares it with the original
+presentation in the same browser. It must pass fresh CI on the final head before
+merge. Phone address-book import on physical iPhone/Android remains unverified.
+No DNS/Apache/public-host change is part of this follow-up.

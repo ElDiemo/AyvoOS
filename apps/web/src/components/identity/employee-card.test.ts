@@ -33,4 +33,21 @@ describe('business card presentation', () => {
     expect(html).toContain('Náhled veřejné vizitky');
     expect(html).toContain('Save contact');
   });
+  it('keeps the original icons, logo and public-link behaviour without a redesigned footer', () => {
+    const html = renderToStaticMarkup(
+      createElement(EmployeeCard, {
+        fields: { ...fields, linkedin: 'https://www.linkedin.com/in/example' },
+        photoUrl: '/id/jana/photo?version=1',
+        contactUrl: '/id/jana/contact.vcf',
+      }),
+    );
+    for (const glyph of ['\uf35d', '\uf095', '\uf0e0', '\uf08c', '\uf2c2'])
+      expect(html).toContain(glyph);
+    expect(html).toContain('/employee-card/legacy-logo.svg');
+    expect(html).toContain('alt="AYVO®"');
+    expect(html.match(/target="_blank"/g)).toHaveLength(2);
+    expect(html).not.toContain('/brand/ayvo-wordmark.svg');
+    expect(html).not.toContain('Refill. Redefine.');
+    expect(html).not.toContain('>AYVO</p>');
+  });
 });

@@ -38,7 +38,11 @@ not republish it.
 - Anonymous DTO is a strict whitelist, without internal user ID, draft, photo ID,
   login email, roles, scopes, audit or sessions. There is no anonymous directory.
   A separate Redis quota limits anonymous reads, failing closed if unavailable.
-- The current card layout and contact actions remain. vCard is UTF-8/CRLF with
+- The owner requires the existing PHP presentation, not a redesign. Reuse its
+  geometry, font sizes, spacing, exact logo and pinned Font Awesome Free 6.4.0
+  icons (self-hosted with license, not an external CDN). Check against independent
+  historical HTML/CSS on synthetic data, not a snapshot generated from the new UI.
+  The current card layout and contact actions remain. vCard is UTF-8/CRLF with
   proper escaping and 75-octet folding, without guessing given/family names.
 - Public Next routes live at `/id/[slug]`, `/photo` and `/contact.vcf`; relative
   media/contact links also work behind a root-path rewrite on `id.ayvo.co`.

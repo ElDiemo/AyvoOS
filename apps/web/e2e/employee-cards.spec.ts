@@ -94,8 +94,11 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   await editor.getByLabel('Pracovní telefon').fill('+420 111 222 333');
   await editor.getByLabel('Veřejný e-mail', { exact: true }).fill('vizitka@example.com');
   await editor.getByLabel('Web (HTTPS)', { exact: true }).fill('https://example.com');
+  await editor
+    .getByLabel('LinkedIn (HTTPS)', { exact: true })
+    .fill('https://www.linkedin.com/in/example');
   const require = createRequire(import.meta.url);
-  const { createCanvas } =
+  const { createCanvas, loadImage } =
     require('../../api/node_modules/@napi-rs/canvas') as typeof import('../../api/node_modules/@napi-rs/canvas');
   const canvas = createCanvas(64, 64);
   const context = canvas.getContext('2d');
@@ -163,9 +166,32 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
     .toBe(true);
   const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/employee-cards');
   await mkdir(screenshots, { recursive: true });
+  // Independent historical HTML/CSS, not a snapshot regenerated from the new component.
+  const reference = await anonymous.newPage();
+  // Keep the reference same-origin: about:blank would reject the self-hosted fonts by CORS.
+  await reference.goto('/employee-card/FONT-AWESOME-LICENSE.txt');
+  const legacy = await readFile(
+    resolve(import.meta.dirname, 'fixtures/employee-card-legacy.html'),
+    'utf8',
+  );
+  await reference.setContent(
+    legacy
+      .replace('{{ORIGIN}}', new URL(publicPage.url()).origin)
+      .replace('{{PHOTO}}', oldPhoto.replaceAll('&', '&amp;').replaceAll('"', '&quot;'))
+      .replace('{{CONTACT}}', `/id/${slug}/contact.vcf`),
+  );
+  for (const current of [publicPage, reference]) {
+    await current.evaluate(async () => {
+      await document.fonts.ready;
+      await Promise.all(Array.from(document.images).map((image) => image.decode()));
+    });
+  }
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await publicPage.setViewportSize({ width, height: 900 });
+    await reference.setViewportSize({ width, height: 900 });
+    await publicPage.mouse.move(0, 0);
+    await reference.mouse.move(0, 0);
     for (const current of [page, publicPage])
       expect(
         await current.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -178,7 +204,24 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
       path: resolve(screenshots, `employee-card-public-${width}.png`),
       fullPage: true,
     });
+    const actualImage = await publicPage
+      .getByRole('article')
+      .screenshot({ animations: 'disabled' });
+    const referenceImage = await reference.locator('.card').screenshot({ animations: 'disabled' });
+    const images = await Promise.all([loadImage(actualImage), loadImage(referenceImage)]);
+    expect([images[0]!.width, images[0]!.height]).toEqual([images[1]!.width, images[1]!.height]);
+    const pixels = images.map((image) => {
+      const context = createCanvas(image.width, image.height).getContext('2d');
+      context.drawImage(image, 0, 0);
+      return context.getImageData(0, 0, image.width, image.height).data;
+    });
+    let largestDifference = 0;
+    for (let i = 0; i < pixels[0]!.length; i++)
+      largestDifference = Math.max(largestDifference, Math.abs(pixels[0]![i]! - pixels[1]![i]!));
+    // A one-level rounding difference at composited rounded edges is not a design change.
+    expect(largestDifference, `unchanged legacy card pixels at ${width}px`).toBeLessThanOrEqual(1);
   }
+  await reference.close();
   await editor.getByLabel('Veřejné jméno').fill('Nesmí se ztratit při skrytí');
   await editor.getByLabel('Důvod změny', { exact: true }).fill('Skrytí testovací vizitky');
   await editor.getByRole('button', { name: 'Skrýt vizitku', exact: true }).click();
