@@ -46,6 +46,8 @@ before it expires is a manual owner decision.
    third of the host's free `/var/lib/ayvo-backup` minus the reserve (the host copy, the read-back,
    and the container's copy if it is the same disk). If that budget is below the expected dump
    (the database's size, at most the configured cap), the run fails at `space` and writes nothing.
+   `--max-dump-gb` must be a finite, positive size of at least one byte (0, negative, NaN or
+   infinite values are refused before anything runs); the reserve is never negative.
 5. **Dump** inside the running database container: one `REPEATABLE READ READ ONLY` transaction
    exports its snapshot; `pg_dump --format=custom --compress=6 --snapshot=…` dumps exactly that
    snapshot, and the same snapshot's statistics are written alongside — rows of every table,

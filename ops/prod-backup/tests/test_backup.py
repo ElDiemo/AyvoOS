@@ -400,6 +400,40 @@ class CredentialAndCommandTests(unittest.TestCase):
         self.assertIn('| head -c 1001 > /tmp/ayvo-backup-20260101T000000Z-00000000.dump', script)
         self.assertIn('echo $? > /tmp/ayvo-backup-20260101T000000Z-00000000.rc', script)
 
+    def test_an_invalid_dump_cap_is_refused_before_any_write_or_command(self):
+        # BACKUP50-R3: `head -c` with 0 or a negative count is no upper bound.
+        import contextlib
+        import io
+        from unittest import mock
+
+        def trap(*_a, **_k):
+            raise AssertionError('an external command was started')
+
+        state = self.tmp / 'state'
+        with mock.patch('subprocess.Popen', trap), mock.patch('subprocess.run', trap):
+            for value in ('-1', '0', '-0.5', 'nan', 'inf', '-inf', '1e-12', 'abc'):
+                for command in (['run', '--kind', 'hourly'], ['restore-check', '--latest', 'daily']):
+                    err = io.StringIO()
+                    with self.assertRaises(SystemExit) as exit_, contextlib.redirect_stderr(err):
+                        backup.main([*command, '--max-dump-gb', value, '--state-dir', str(state)])
+                    self.assertEqual(exit_.exception.code, 2, (value, command))
+                    self.assertIn('--max-dump-gb', err.getvalue())
+            self.assertFalse(state.exists())
+        # Also a Config built in code: the cap must be >= 1 byte, the reserve >= 0.
+        for bad in (0, -1, -1073741823, 1.5, True):
+            with self.assertRaisesRegex(ValueError, 'max_dump_bytes'):
+                backup.Config(kind='hourly', reason='t', max_dump_bytes=bad)
+        for bad in (-1, 0.5):
+            with self.assertRaisesRegex(ValueError, 'reserve_bytes'):
+                backup.Config(kind='hourly', reason='t', reserve_bytes=bad)
+        with self.assertRaisesRegex(ValueError, 'dump cap'):
+            backup.dump_script('20260101T000000Z-00000000', -1)
+        # Valid values still work: half a GiB, one byte, no reserve.
+        args = backup.parser().parse_args(['run', '--kind', 'hourly', '--max-dump-gb', '0.5'])
+        self.assertEqual(backup.config_from(args).max_dump_bytes, 512 * 1024**2)
+        self.assertEqual(backup.Config(kind='hourly', reason='t', max_dump_bytes=1,
+                                       reserve_bytes=0).max_dump_bytes, 1)
+
     def test_an_unexpected_setup_failure_is_reported_not_a_traceback(self):
         blocker = self.tmp / 'not-a-directory'
         blocker.write_text('x')

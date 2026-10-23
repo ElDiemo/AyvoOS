@@ -26,6 +26,7 @@ import base64
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -341,11 +342,25 @@ class Config:
     reserve_bytes: int = RESERVE_BYTES
     s3_factory: object = field(default=None, repr=False)
 
+    def __post_init__(self) -> None:
+        # The dump cap must be a real upper bound (`head -c` with 0 or a negative count is none),
+        # and the reserve can only add free space (BACKUP50-R3). Also for a Config built in code.
+        if (not isinstance(self.max_dump_bytes, int) or isinstance(self.max_dump_bytes, bool)
+                or self.max_dump_bytes < 1):
+            raise ValueError(f'max_dump_bytes must be a whole number of bytes >= 1, '
+                             f'not {self.max_dump_bytes!r}')
+        if (not isinstance(self.reserve_bytes, int) or isinstance(self.reserve_bytes, bool)
+                or self.reserve_bytes < 0):
+            raise ValueError(f'reserve_bytes must be a whole number of bytes >= 0, '
+                             f'not {self.reserve_bytes!r}')
+
 
 def dump_script(backup_id: str, max_bytes: int) -> bytes:
     """psql input: export a snapshot, run pg_dump in it, write the same snapshot's statistics.
     The dump goes through `head -c`: never more than max_bytes + 1 bytes are written (one byte
     more than the limit means "too large"); pg_dump's own exit code is kept in the .rc file."""
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes < 1:
+        raise ValueError(f'the dump cap must be >= 1 byte, not {max_bytes!r}')
     base = f'/tmp/ayvo-backup-{backup_id}'
     return f"""\\set ON_ERROR_STOP on
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
@@ -723,6 +738,18 @@ def install_signal_handlers(runner: Runner) -> None:
     signal.signal(signal.SIGINT, handler)
 
 
+def dump_cap_gb(text: str) -> float:
+    """--max-dump-gb: a finite, positive number of GiB that is at least one byte."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'not a number: {text!r}')
+    if not math.isfinite(value) or value <= 0 or int(value * 1024**3) < 1:
+        raise argparse.ArgumentTypeError(
+            f'must be a positive, finite size of at least one byte (got {text!r})')
+    return value
+
+
 def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument('--state-dir', default=STATE_DIR)
     p.add_argument('--bucket', default=BUCKET)
@@ -731,7 +758,7 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument('--credentials-file', default=CREDENTIALS_FILE)
     p.add_argument('--pg-container', default=PG_CONTAINER)
     p.add_argument('--aws-image', default=AWS_IMAGE)
-    p.add_argument('--max-dump-gb', type=float, default=MAX_DUMP_BYTES / 1024**3,
+    p.add_argument('--max-dump-gb', type=dump_cap_gb, default=MAX_DUMP_BYTES / 1024**3,
                    help='hard cap of one dump (default 10)')
 
 
