@@ -24,12 +24,53 @@ export const envSchema = z
       }, 'PUBLIC_QR_BASE_URL must not contain credentials')
       .optional(),
 
-    // File storage (ADR 0016). `local` is DEV-only: production refuses to start with it until
-    // an object-storage implementation exists.
-    FILE_STORAGE_DRIVER: z.enum(['local']).default('local'),
+    // ADR 0016 / 0032: local stays DEV-only. S3 is explicitly configured on production only;
+    // never pick it implicitly just because AWS credentials happen to exist in the process.
+    FILE_STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     // Root of the local file storage. Relative paths resolve against the working directory
     // (`apps/api` under `pnpm dev`, like the .env lookup).
     FILE_STORAGE_DIR: z.string().min(1).default('../../var/storage'),
+    AWS_REGION: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .regex(/^[a-z]{2}(?:-[a-z]+)+-\d+$/)
+        .optional(),
+    ),
+    // Explicit credentials only: no ambient profile, EC2 metadata or shared credentials fallback.
+    AWS_ACCESS_KEY_ID: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .min(16)
+        .max(128)
+        .regex(/^[A-Z0-9]+$/)
+        .optional(),
+    ),
+    AWS_SECRET_ACCESS_KEY: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .min(1)
+        .max(256)
+        .regex(/^[A-Za-z0-9/+=]+$/)
+        .optional(),
+    ),
+    // General-purpose AWS bucket name without dots (virtual-hosted TLS); no URL/ARN/endpoints.
+    S3_BUCKET: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/)
+        .optional(),
+    ),
+    S3_EXPECTED_BUCKET_OWNER: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .regex(/^\d{12}$/)
+        .optional(),
+    ),
 
     // QR print settings — PROVISIONAL until the physical print/scan test (doc 016, ADR 0014).
     // Production must set both explicitly; other environments default to the current candidate
@@ -253,6 +294,31 @@ export const envSchema = z
         'FILE_STORAGE_DRIVER',
         'Production file storage is not configured: local storage is DEV-only (ADR 0016)',
       );
+    }
+    if (env.FILE_STORAGE_DRIVER === 's3') {
+      if (!production) {
+        return fail('FILE_STORAGE_DRIVER', 'S3 storage is configured only in production');
+      }
+      if (
+        !env.AWS_REGION ||
+        !env.AWS_ACCESS_KEY_ID ||
+        !env.AWS_SECRET_ACCESS_KEY ||
+        !env.S3_BUCKET ||
+        !env.S3_EXPECTED_BUCKET_OWNER
+      ) {
+        return fail(
+          'FILE_STORAGE_DRIVER',
+          'S3 requires AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET and S3_EXPECTED_BUCKET_OWNER',
+        );
+      }
+    } else if (
+      env.AWS_REGION ||
+      env.AWS_ACCESS_KEY_ID ||
+      env.AWS_SECRET_ACCESS_KEY ||
+      env.S3_BUCKET ||
+      env.S3_EXPECTED_BUCKET_OWNER
+    ) {
+      return fail('FILE_STORAGE_DRIVER', 'Do not supply S3 configuration to local storage');
     }
 
     return {
