@@ -863,4 +863,58 @@ describe.skipIf(!hasDatabase)('direct printing: labels, print queue, print agent
       t.prisma.$executeRaw`DELETE FROM "print_job_events" WHERE "job_id" = ${job.id}::uuid`,
     ).rejects.toThrow();
   });
+
+  it('carrier labels (PPL PDF / ZPL) and their printing never need our QR label settings', async () => {
+    // Making the crates prints OUR bottle labels, so that is done by the configured process; the
+    // dispatch itself runs in a process without the QR settings (owner 2026-10-23).
+    const { order } = await picked(1);
+    const noQr = await createTestApp(ENV, {
+      LABEL_QR_MIN_SIZE_MM: null,
+      LABEL_QR_ERROR_CORRECTION: null,
+    });
+    try {
+      const api = () => request(noQr.app.getHttpServer());
+      const res = await api()
+        .post(`/api/admin/orders/${order}/complete-and-label`)
+        .send({ requestId: rid(), printerId: printerA });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const parcel = (res.body as OrderShipment).shipment!.parcels[0]!;
+      expect(parcel.labels.map((l) => l.format)).toEqual(['PDF', 'ZPL']);
+      for (const path of ['label', 'label/zpl']) {
+        await binary(api().get(`/api/admin/orders/${order}/shipment/parcels/1/${path}`)).expect(
+          200,
+        );
+      }
+      // The print agent receives and reports the job as before.
+      const job = (
+        (
+          await api()
+            .post('/api/agent/v1/jobs/claim')
+            .set('X-Ayvo-Print-Agent', agentA.token)
+            .send({})
+            .expect(200)
+        ).body as AgentClaim
+      ).job!;
+      const data = await binary(
+        api()
+          .get(`/api/agent/v1/jobs/${job.id}/data`)
+          .set('X-Ayvo-Print-Agent', agentA.token)
+          .set('X-Ayvo-Claim', job.claimToken),
+      ).expect(200);
+      expect((data.body as Buffer).toString('latin1')).toContain(parcel.carrierParcelNumber!);
+      await api()
+        .post(`/api/agent/v1/jobs/${job.id}/start`)
+        .set('X-Ayvo-Print-Agent', agentA.token)
+        .send({ claimToken: job.claimToken })
+        .expect(200);
+      await api()
+        .post(`/api/agent/v1/jobs/${job.id}/result`)
+        .set('X-Ayvo-Print-Agent', agentA.token)
+        .send({ claimToken: job.claimToken, outcome: 'SENT', detail: null })
+        .expect(200);
+      expect((await jobsOf(order))[0]!.status).toBe('SENT');
+    } finally {
+      await noQr.close();
+    }
+  });
 });

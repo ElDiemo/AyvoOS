@@ -195,12 +195,16 @@ export type CreateLabelTemplateVersionResponse = z.infer<
 
 /** Settings the label designer needs from the API. */
 export const labelDesignerSettingsSchema = z.object({
-  qrMinSizeMm: z.number().positive(),
+  /**
+   * Minimum QR size; null while the physically validated QR settings are not configured (then
+   * QR labels cannot be designed, created or printed — everything else works).
+   */
+  qrMinSizeMm: z.number().positive().nullable(),
   artworkMaxBytes: z.number().int().positive(),
   /** Allowed difference between artwork and label proportions (fraction, e.g. 0.01 = 1%). */
   aspectRatioTolerance: z.number().positive(),
-  /** Configured QR error correction (provisional until the physical print test). */
-  qrErrorCorrection: qrErrorCorrectionSchema,
+  /** Configured QR error correction (provisional until the physical print test), or null. */
+  qrErrorCorrection: qrErrorCorrectionSchema.nullable(),
   /** A URL as long as a real bottle URL, for a realistic QR preview in the designer. */
   qrPreviewUrl: z.url(),
 });

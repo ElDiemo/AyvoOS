@@ -49,6 +49,7 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0025](0025-same-crate-two-scans-explicit-hotovo.md)       | Same crate from labelling to dispatch, two bottle scans, explicit Hotovo | Proposed — process confirmed by owner 2026-10-14; model in doc 025 awaits approval        |
 | [0026](0026-dev-preview-tailnet-only.md)                   | DEV preview reachable only through our Tailscale tailnet                 | Accepted — directed by owner 2026-10-17 (DEV only)                                        |
 | [0031](0031-sales-function-and-ownership-scope.md)         | Obchod as its own function; sales access scoped by ownership             | Proposed — owner request 2026-10-21 (doc 034)                                             |
+| [0034](0034-qr-label-settings-guard-operations.md)         | Missing QR label settings refuse only QR label operations                | Accepted — owner decision 2026-10-23                                                      |
 
 Production storage implementation for review: [0032 — Private AWS S3 file storage](0032-production-private-s3-storage.md).
 Number 0031 is reserved by the pending sales-function change.

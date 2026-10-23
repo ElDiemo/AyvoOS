@@ -1,7 +1,6 @@
 import {
   CRATE_LABEL_SIZE_MM,
   createWorkstationRequestSchema,
-  crateLabelLayout,
   currentStationSessionSchema,
   openStationSessionRequestSchema,
   releaseStationSessionRequestSchema,
@@ -32,7 +31,6 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { z } from 'zod';
-import { domainError } from '../common/domain-error.js';
 import { qrBaseUrlViolation } from '../common/qr-policy.js';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -42,6 +40,7 @@ import { CurrentPrincipal, OperationalSite } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import type { SiteContext } from '../inventory/warehouse-context.js';
 import { CodeLabelRenderer } from '../labels/code-label-pdf.js';
+import { assertCodeLabelLayout, requireQrLabelSettings } from '../labels/qr-label-settings.js';
 import { StationSessionsService } from './station-sessions.service.js';
 import { WorkstationsService } from './workstations.service.js';
 
@@ -116,9 +115,8 @@ export class WorkstationsController {
   ): Promise<StreamableFile> {
     const violation = qrBaseUrlViolation(this.env.APP_ENV, this.env.PUBLIC_QR_BASE_URL);
     if (violation) throw new ForbiddenException(violation);
-    if (!crateLabelLayout(query.widthMm, query.heightMm)) {
-      throw domainError(422, 'LABEL_TOO_SMALL', 'The label is too small for a readable QR code');
-    }
+    const settings = requireQrLabelSettings(this.env);
+    assertCodeLabelLayout(settings, query.widthMm, query.heightMm);
     const station = await this.stations.findOfSite(code, site.siteId);
     const bytes = Buffer.from(
       await this.renderer.render({
@@ -132,7 +130,7 @@ export class WorkstationsController {
             url: this.stations.qrUrl(station.qrToken),
           },
         ],
-        errorCorrection: this.env.LABEL_QR_ERROR_CORRECTION,
+        errorCorrection: settings.errorCorrection,
         devMarker: this.env.APP_ENV !== 'production',
       }),
     );
