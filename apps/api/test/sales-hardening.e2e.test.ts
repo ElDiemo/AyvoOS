@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AdminUserDetail, ImportOptions, ImportPreview, ProspectPage } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -252,10 +252,60 @@ describe.skipIf(!hasDatabase)('Obchod — search by phone and concurrent creates
     // A possible duplicate stays a warning: confirmed explicitly, a second record is created.
     await create(people.a.cookie, prospect(name, { acknowledgeDuplicates: true })).expect(201);
     expect(await named(name)).toBe(2);
-    // Another salesperson's same hotel: no warning, no wait, nothing revealed.
+    // Another salesperson's same hotel: no warning, nothing revealed.
     const other = await create(people.b.cookie, prospect(name));
     expect(other.status).toBe(201);
     expect(JSON.stringify(other.body)).not.toContain(people.a.id);
+  });
+
+  it('an import for another salesperson is refused at once — it never waits on their writes', async () => {
+    const csv = `Název;Země\r\nHotel Cizí zámek ${tag};CZ\r\n`;
+    const opts = options(['name', 'countryCode']);
+    // A valid fingerprint for B as owner, computed like any client could (the formula is public).
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify([
+          people.a.id,
+          createHash('sha256').update(Buffer.from(csv, 'utf8')).digest('hex'),
+          opts.mapping,
+          null,
+          null,
+          [],
+          people.b.id,
+        ]),
+      )
+      .digest('hex');
+    // B is writing prospects right now: the test holds B's owner lock.
+    let release!: () => void;
+    let locked!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const isLocked = new Promise<void>((r) => (locked = r));
+    const holder = t.prisma.$transaction(
+      async (tx) => {
+        const key = `sales-prospects-of:${people.b.id}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+        locked();
+        await held;
+      },
+      { timeout: 60_000, maxWait: 10_000 },
+    );
+    await isLocked;
+    try {
+      const started = Date.now();
+      const res = await upload(people.a.cookie, '/imports', csv, {
+        ...opts,
+        ownerId: people.b.id,
+        requestId: randomUUID(),
+        rows: [{ row: 2, acknowledgeDuplicates: false }],
+        fingerprint,
+      }).timeout(5_000);
+      // Refused for the permission (not as a stale preview — the fingerprint matched), at once.
+      expect(res.status).toBe(403);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      release();
+      await holder;
+    }
   });
 
   it('an import waits for the same owner’s manual create being written, then warns', async () => {

@@ -118,11 +118,12 @@ export class SalesImportService {
       requestId,
       { actorId: scope.userId, fileSha256, fileName: fileNameOf(file!), ...decisions },
       async (tx) => {
+        // Checked again now — the owner may have lost Obchod since the preview. Before the lock:
+        // a request for someone the user may not import for never waits on that person's writes.
+        const owner = await this.owner(tx, scope, input.ownerId);
         // One write of new prospects per owner at a time (an import or a manual create): a
         // parallel one then sees these prospects as possible duplicates instead of passing them.
-        await lockOwnerProspects(tx, input.ownerId ?? scope.userId);
-        // Checked again now — the owner may have lost Obchod since the preview.
-        const owner = await this.owner(tx, scope, input.ownerId);
+        await lockOwnerProspects(tx, owner.id);
         const { drafts, inFile, existing } = await this.analyse(tx, scope, csv, input);
         const byRow = new Map(drafts.map((d) => [d.row, d]));
         const chosen = new Map<number, boolean>();

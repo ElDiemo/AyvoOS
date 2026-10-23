@@ -59,10 +59,6 @@ export function emailKey(email: string | null): string | null {
 }
 
 /**
- * The last nine digits of a phone number: "+420 721 000 111", "00420721000111" and "721 000 111"
- * are the same line. Fewer than six digits are too short to compare.
- */
-/**
  * The digits a search compares with phone numbers — only for a query written like a phone
  * ("+420 721 000 111", "(0662) 123-456", "721.000"), with at least four digits. A query with any
  * letter ("Penzion 2024") is a name: its digits never match a phone.
@@ -74,6 +70,10 @@ export function phoneQuery(q: string): string | null {
   return digits.length >= 4 ? digits.slice(-9) : null;
 }
 
+/**
+ * The last nine digits of a phone number: "+420 721 000 111", "00420721000111" and "721 000 111"
+ * are the same line. Fewer than six digits are too short to compare.
+ */
 export function phoneKey(phone: string | null): string | null {
   if (!phone) return null;
   const digits = phone.replace(/\D/g, '');
