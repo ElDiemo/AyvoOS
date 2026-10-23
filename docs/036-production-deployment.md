@@ -130,7 +130,9 @@ verified in WorkOS> --name "<name>"` — the existing one-time mechanism (doc 02
 
 ## 7. Later releases, failure and rollback
 
-- `--release <commit>`: export → build (one image at a time) → postgres/redis up → **dump of the
+- `--release <commit>`: export → build (one image at a time, the old release still serving) →
+  **api and web stopped** (nothing is written after the dump, the old code never runs on the new
+  schema; the application is unavailable until the new release has started) → postgres/redis up → **dump of the
   current database** (`/opt/ayvo/prod/backups/predeploy-…dump`, checked with `pg_restore --list`)
   and, with the backup tool installed, a verified S3 backup → `migrate deploy` → api/web, then
   caddy/dns → verify → record (`/opt/ayvo/prod/state`). Log: `/opt/ayvo/prod/deploy.log`.

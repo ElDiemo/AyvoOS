@@ -268,6 +268,94 @@ describe('production deploy script', () => {
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
 
+  describe('env file checks (names only, an explicit list per file)', () => {
+    /** Runs check_env_files of the real script on fictional files (its functions only). */
+    function check(files: Record<string, string>, mode = 0o600) {
+      const dir = mkdtempSync(join(tmp, 'secrets-'));
+      for (const [name, text] of Object.entries(files)) {
+        writeFileSync(join(dir, name), text);
+        chmodSync(join(dir, name), mode);
+      }
+      const lines = script.split('\n');
+      const from = lines.findIndex((l) => l.startsWith('readonly SECRETS='));
+      const to = lines.findIndex((l) => l.startsWith('# --- Compose'));
+      const harness = `set -Eeuo pipefail\n${lines.slice(from, to).join('\n')}\nSTEP=test\ncheck_env_files\n`;
+      return run('bash', ['-c', harness], { AYVO_PROD_SECRETS_DIR: dir, AYVO_PROD_DIR: dir });
+    }
+    const prod =
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'PUBLIC_QR_BASE_URL=https://qr.example.test\nLABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n';
+    const good = {
+      'prod.env': prod,
+      'prod-workos.env': '# WorkOS\nexport WORKOS_API_KEY="sk_test_fictional"\n',
+      'prod-s3.env':
+        'AWS_ACCESS_KEY_ID=AKIAAPPFICTIONAL0000\nAWS_SECRET_ACCESS_KEY=x\nAWS_REGION=eu-north-1\n',
+      'prod-s3-backup.env': 'AWS_ACCESS_KEY_ID=AKIABACKUPFICTIONAL0\nAWS_SECRET_ACCESS_KEY=y\n',
+    };
+
+    it('accepts complete private files and prints no value', () => {
+      const res = check(good);
+      expect(res.status, res.stderr).toBe(0);
+      expect(res.stdout + res.stderr).not.toMatch(/fictional|AKIA/);
+    });
+    it.each([
+      [
+        'another key injected into the container',
+        { 'prod-s3.env': `${good['prod-s3.env']}NODE_OPTIONS=--inspect\n` },
+        /must not set NODE_OPTIONS/,
+      ],
+      [
+        'an endpoint override',
+        { 'prod-s3.env': `${good['prod-s3.env']}AWS_ENDPOINT_URL=https://x.test\n` },
+        /must not set AWS_ENDPOINT_URL/,
+      ],
+      [
+        'a test switch',
+        { 'prod.env': `${prod}AUTH_PROVIDER=test\n` },
+        /must not set AUTH_PROVIDER/,
+      ],
+      [
+        'a bare key (filled from the environment)',
+        { 'prod-workos.env': 'WORKOS_API_KEY\n' },
+        /not KEY=VALUE/,
+      ],
+      [
+        'an empty required value',
+        { 'prod.env': prod.replace('LABEL_QR_MIN_SIZE_MM=15', 'LABEL_QR_MIN_SIZE_MM=') },
+        /LABEL_QR_MIN_SIZE_MM is empty/,
+      ],
+      [
+        'a missing physically validated value',
+        { 'prod.env': prod.replace('LABEL_QR_ERROR_CORRECTION=Q\n', '') },
+        /lacks LABEL_QR_ERROR_CORRECTION/,
+      ],
+      [
+        'the backup identity given to the application',
+        {
+          'prod-s3-backup.env':
+            "export AWS_ACCESS_KEY_ID='AKIAAPPFICTIONAL0000'\nAWS_SECRET_ACCESS_KEY=y\n",
+        },
+        /holds the backup identity/,
+      ],
+    ])('refuses %s', (_what, change, message) => {
+      const res = check({ ...good, ...change });
+      expect(res.status).toBe(1);
+      expect(res.stderr).toMatch(message);
+      expect(res.stderr).not.toMatch(/fictional|AKIA/);
+    });
+    it('refuses files readable by others', () => {
+      const res = check(good, 0o644);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toMatch(/must not be readable by group or others/);
+    });
+  });
+
+  it('exports the release with modes the non-root containers can read', () => {
+    expect(script).toMatch(
+      /umask 022[\s\S]*git -C "\$REPO_ROOT" archive[\s\S]*chmod -R a\+rX,go-w/,
+    );
+  });
+
   it.skipIf(!existsSync('/opt/ayvo/secrets/dev-preview.env'))(
     'refuses to run on the DEV server',
     () => {

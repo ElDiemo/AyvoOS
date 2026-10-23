@@ -44,13 +44,19 @@ readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly MIN_FREE_GB=8
 readonly KEEP_RELEASES=3
 
-# Required keys per env file (doc 036 §4). Values are never printed.
-readonly -a KEYS_PROD=(POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLIC_QR_BASE_URL
-  LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION)
-readonly -a KEYS_WORKOS=(WORKOS_API_KEY)
-readonly -a KEYS_S3=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY)
-# Never in production files: test switches, environment overrides, DEV-only connections.
-readonly FORBIDDEN_KEYS='^(APP_ENV|AUTH_PROVIDER|CARRIER_PROVIDER|PPL_TEST_[A-Z_]*|PPL_TEST_API_BASE_URL_FOR_TESTS|FILE_STORAGE_DRIVER|FILE_STORAGE_DIR|DEV_[A-Z_]*)$'
+# Required and allowed keys per env file (doc 036 §4). Anything else is refused: a file given to a
+# container through `env_file` must not inject e.g. NODE_OPTIONS, AWS_ENDPOINT_URL or a test
+# switch. Values are never printed.
+readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLIC_QR_BASE_URL LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
+readonly ALLOW_PROD="$KEYS_PROD CARRIER_CREDENTIALS_KEY"
+readonly KEYS_WORKOS="WORKOS_API_KEY"
+# Client ID and issuer may be in the file too; compose.yml's fixed values take precedence.
+readonly ALLOW_WORKOS="$KEYS_WORKOS WORKOS_CLIENT_ID WORKOS_JWT_ISSUER"
+readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
+# Region, bucket and owner may be in the file too; compose.yml's fixed values take precedence.
+readonly ALLOW_S3="$KEYS_S3 AWS_REGION S3_BUCKET S3_EXPECTED_BUCKET_OWNER"
+# The only endpoint trusted for the WorkOS discovery document (doc 021 §9); never configurable.
+readonly WORKOS_API_ORIGIN="https://api.workos.com"
 
 MODE=deploy
 RELEASE=""
@@ -80,7 +86,7 @@ on_exit() {
     echo "Production deployment stopped (step: $STEP). Nothing more was changed after it."
     [[ -n $BACKUP_FILE ]] && echo "Pre-migration dump: $BACKUP_FILE"
     if $MIGRATED; then
-      echo "Migrations of $RELEASE ran. Starting an older release is safe only if its code works"
+      echo "Migrations of $RELEASE were started. Starting an older release is safe only if its code works"
       echo "with the new schema (doc 036 §7); otherwise restore deliberately (doc 035 §4) — never"
       echo "automatically."
     fi
@@ -104,7 +110,9 @@ require_commands() {
 # Production never runs next to DEV, and DEV material never reaches this host.
 not_dev_server() {
   [[ ! -e /opt/ayvo/secrets/dev-preview.env ]] || die "this is the DEV server (dev-preview.env exists): production is never deployed here"
-  ! docker ps -a --format '{{.Names}}' | grep -q '^ayvo-dev-preview-' ||
+  local names
+  names="$(docker ps -a --format '{{.Names}}')" || die "cannot list the containers (is Docker running, is $(id -un) in the docker group?)"
+  ! grep -q '^ayvo-dev-preview-' <<<"$names" ||
     die "DEV preview containers exist on this host: production is never deployed next to DEV"
 }
 
@@ -130,34 +138,46 @@ check_host_guard() {
 
 # Keys of a KEY=VALUE file, without ever evaluating or printing a value.
 env_keys() { grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$1" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/'; }
+# One key's value (unquoted), for comparisons only — never printed, never evaluated.
+env_value() {
+  grep -E "^[[:space:]]*(export[[:space:]]+)?$2=" "$1" | tail -n1 |
+    sed -E "s/^[[:space:]]*(export[[:space:]]+)?$2=[[:space:]]*//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\\1/; s/^'(.*)'\$/\\1/"
+}
 
 check_env_file() {
-  local file=$1
-  shift
+  local file=$1 required=$2 allowed=$3
   [[ -f $file ]] || die "$file does not exist (doc 036 §4)"
   local mode owner
   mode="$(stat -c '%a' "$file")"
   owner="$(stat -c '%u' "$file")"
   [[ $mode =~ ^[0-7]00$ ]] || die "$file must not be readable by group or others (mode $mode, expected 600)"
   [[ $owner == "$(id -u)" || $owner == 0 ]] || die "$file must belong to $(id -un) or root"
+  # Every line is a comment, empty, or KEY=VALUE: a bare KEY would be filled from the environment.
+  grep -vqE '^[[:space:]]*(#.*)?$|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$file" &&
+    die "$file has a line that is not KEY=VALUE (line $(grep -nvE '^[[:space:]]*(#.*)?$|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$file" | head -n1 | cut -d: -f1))"
   local keys missing=() bad=() key
   keys="$(env_keys "$file")"
-  for key in "$@"; do grep -qx "$key" <<<"$keys" || missing+=("$key"); done
-  while read -r key; do [[ -z $key ]] || ! [[ $key =~ $FORBIDDEN_KEYS ]] || bad+=("$key"); done <<<"$keys"
+  for key in $required; do grep -qx "$key" <<<"$keys" || missing+=("$key"); done
+  while read -r key; do
+    [[ -z $key || " $allowed " == *" $key "* ]] || bad+=("$key")
+  done <<<"$keys"
   ((${#missing[@]} == 0)) || die "$file lacks ${missing[*]} (doc 036 §4)"
-  ((${#bad[@]} == 0)) || die "$file must not set ${bad[*]} (the production values are fixed in deploy/prod/compose.yml)"
-  ok "$file: mode $mode, required keys present"
+  ((${#bad[@]} == 0)) || die "$file must not set ${bad[*]} (allowed: $allowed; doc 036 §4)"
+  for key in $required; do
+    [[ -n $(env_value "$file" "$key") ]] || die "$file: $key is empty"
+  done
+  ok "$file: mode $mode, required keys present, no other keys"
 }
 
 check_env_files() {
   STEP="check the server-only env files"
   log "$STEP"
-  check_env_file "$SECRETS/prod.env" "${KEYS_PROD[@]}"
-  check_env_file "$SECRETS/prod-workos.env" "${KEYS_WORKOS[@]}"
-  check_env_file "$SECRETS/prod-s3.env" "${KEYS_S3[@]}"
+  check_env_file "$SECRETS/prod.env" "$KEYS_PROD" "$ALLOW_PROD"
+  check_env_file "$SECRETS/prod-workos.env" "$KEYS_WORKOS" "$ALLOW_WORKOS"
+  check_env_file "$SECRETS/prod-s3.env" "$KEYS_S3" "$ALLOW_S3"
   # The backup identity is never given to the application (doc 035).
-  if [[ -f $SECRETS/prod-s3-backup.env ]] && cmp -s <(grep -E '^AWS_ACCESS_KEY_ID=' "$SECRETS/prod-s3.env") \
-    <(grep -E '^AWS_ACCESS_KEY_ID=' "$SECRETS/prod-s3-backup.env"); then
+  if [[ -r $SECRETS/prod-s3-backup.env ]] &&
+    [[ $(env_value "$SECRETS/prod-s3.env" AWS_ACCESS_KEY_ID) == "$(env_value "$SECRETS/prod-s3-backup.env" AWS_ACCESS_KEY_ID)" ]]; then
     die "prod-s3.env holds the backup identity: the application uses its own S3 identity (ADR 0032)"
   fi
   if [[ -f $SECRETS/prod-workos-client.env ]]; then
@@ -178,6 +198,24 @@ check_release() {
   git -C "$REPO_ROOT" show "$RELEASE:apps/api/src/config/env.ts" | grep -q "'s3'" ||
     die "$RELEASE has no S3 file storage (ADR 0032, #47): production cannot start on local storage"
   ok "$RELEASE is on origin/main ($(git -C "$REPO_ROOT" log -1 --format='%cs %s' "$RELEASE"))"
+}
+
+# The issuer fixed in the release's compose.yml must be exactly the `issuer` of the WorkOS
+# client's discovery document (as DEV, doc 021 §9). Nothing secret is involved.
+check_workos_issuer() {
+  STEP="check the WorkOS issuer against the client's discovery document"
+  local file client issuer doc found
+  file="$(release_dir "$RELEASE")/deploy/prod/compose.yml"
+  client="$(sed -nE 's/^ +WORKOS_CLIENT_ID: ([A-Za-z0-9_]+)$/\1/p' "$file" | head -n1)"
+  issuer="$(sed -nE 's/^ +WORKOS_JWT_ISSUER: (https:[^ ]+)$/\1/p' "$file" | head -n1)"
+  [[ -n $client && -n $issuer ]] || die "compose.yml has no fixed WorkOS client ID and issuer"
+  doc="$(printf 'url = "%s/user_management/%s/.well-known/openid-configuration"\n' "$WORKOS_API_ORIGIN" "$client" |
+    curl -fsS --proto =https --max-redirs 0 --max-time 15 --max-filesize 65536 --config - 2>/dev/null)" ||
+    die "the WorkOS discovery document of $client could not be fetched"
+  found="$(jq -er 'if type == "object" and (.issuer | type) == "string" then .issuer else empty end' <<<"$doc" 2>/dev/null)" ||
+    die "the WorkOS discovery document has no issuer"
+  [[ $found == "$issuer" ]] || die "WORKOS_JWT_ISSUER in compose.yml ($issuer) is not the discovery issuer ($found)"
+  ok "WorkOS issuer matches the discovery document of $client"
 }
 
 check_resources() {
@@ -216,10 +254,15 @@ export_release() {
   fi
   log "$STEP -> $dir"
   rm -rf "$dir.partial"
-  mkdir -p "$dir.partial"
-  git -C "$REPO_ROOT" archive --format=tar "$RELEASE" | tar -x -C "$dir.partial"
-  printf '%s\n' "$RELEASE" >"$dir.partial/.ayvo-release"
-  chmod -R go-w "$dir.partial"
+  # Readable modes: the images copy the files with their modes and run as a non-root user, and
+  # CoreDNS reads its Corefile as non-root (the script's own umask is 077 for its secrets' sake).
+  (
+    umask 022
+    mkdir -p "$dir.partial"
+    git -C "$REPO_ROOT" archive --format=tar "$RELEASE" | tar -x --no-same-owner -C "$dir.partial"
+    printf '%s\n' "$RELEASE" >"$dir.partial/.ayvo-release"
+  )
+  chmod -R a+rX,go-w "$dir.partial"
   [[ ! -e $dir ]] || die "$dir exists but is not a complete export of $RELEASE: inspect and remove it by hand"
   mv "$dir.partial" "$dir"
   ok "exported $RELEASE (no .git, no .env)"
@@ -258,6 +301,14 @@ wait_healthy() {
 }
 
 backup_before_migration() {
+  STEP="stop the application writers (api, web) for a consistent backup"
+  # Nothing may be written after the dump, and the old code must not run against the new schema:
+  # the application is unavailable from here until start_services (doc 036 §7).
+  if [[ -n $(compose ps -q api web) ]]; then
+    log "$STEP"
+    compose stop web api || die "api/web did not stop"
+    ok "api and web stopped (the new release starts after the migration)"
+  fi
   STEP="back up the database before migrating"
   log "$STEP"
   local tables
@@ -381,17 +432,26 @@ record_release() {
   printf '%s\n' "$RELEASE" >"$PROD_DIR/state/current-release"
 }
 
-# Only this project's images, only of releases older than the newest $KEEP_RELEASES, never in use.
+# Only this project's images and release exports, only of releases other than the newest
+# $KEEP_RELEASES distinct ones and the previous one, never an image a container uses.
 remove_old_images() {
   STEP="remove old release images"
-  local keep in_use tag image
-  keep="$(tail -n "$KEEP_RELEASES" "$PROD_DIR/state/releases.log" | cut -c1-12 | sort -u)"
-  in_use="$(docker ps -a --format '{{.Image}}')"
+  local keep in_use tag image dir
+  keep="$( (
+    cut -c1-12 "$PROD_DIR/state/releases.log" | tac | awk '!seen[$0]++' | head -n "$KEEP_RELEASES"
+    [[ -z $PREVIOUS ]] || printf '%s\n' "${PREVIOUS:0:12}"
+  ) | sort -u)"
+  in_use="$(docker ps -a --format '{{.Image}}')" || die "cannot list the containers"
   for image in $(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E "^$IMAGE_PREFIX/(api|api-migrate|web):[0-9a-f]{12}$"); do
     tag=${image##*:}
     grep -qx "$tag" <<<"$keep" && continue
     grep -qx "$image" <<<"$in_use" && continue
     docker image rm "$image" >/dev/null && ok "removed old image $image"
+  done
+  for dir in "$PROD_DIR"/releases/*; do
+    [[ -d $dir && ${dir##*/} =~ ^[0-9a-f]{12}$ ]] || continue
+    grep -qx "${dir##*/}" <<<"$keep" && continue
+    rm -rf "$dir" && ok "removed old release export ${dir##*/}"
   done
 }
 
@@ -436,6 +496,10 @@ while (($#)); do
   shift
 done
 
+if [[ $MODE == deploy || $MODE == rollback ]]; then
+  mkdir -p "$PROD_DIR"
+  exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
+fi
 STEP="validate prerequisites"
 require_commands
 not_dev_server
@@ -453,6 +517,7 @@ case $MODE in
     check_release
     check_resources
     export_release
+    check_workos_issuer
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
     backup_status
@@ -460,11 +525,11 @@ case $MODE in
     ;;
   deploy)
     [[ -n $RELEASE ]] || die "--release <commit> is required (see --help)"
-    exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
     log "AYVO OS production deployment of $RELEASE at $(date -u +%FT%TZ) (running: ${PREVIOUS:-nothing})"
     check_release
     check_resources
     export_release
+    check_workos_issuer
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
     backup_status
@@ -488,7 +553,6 @@ case $MODE in
     for image in api web; do
       docker image inspect "$IMAGE_PREFIX/$image:$ROLLBACK" >/dev/null 2>&1 || die "image $IMAGE_PREFIX/$image:$ROLLBACK is gone"
     done
-    exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
     log "rollback to $ROLLBACK at $(date -u +%FT%TZ) (running: ${PREVIOUS:-nothing}). No migration runs."
     warn "the database keeps its current schema: this is safe only if $ROLLBACK works with it (doc 036 §7)"
     RELEASE=$(<"$(release_dir "$ROLLBACK")/.ayvo-release")
