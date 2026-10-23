@@ -19,6 +19,8 @@ export const metadata: Metadata = { title: 'AYVO' };
  */
 export default async function PublicQrPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
+  // Every QR token is 22 base64url characters (ADR 0014): anything else is not looked up.
+  if (!/^[A-Za-z0-9_-]{22}$/.test(token)) notFound();
   const path = encodeURIComponent(token);
   const passport = await apiGetPublic(`public/bottles/${path}`, publicBottlePassportSchema);
   const crate = passport ? null : await apiGetPublic(`public/crates/${path}`, publicCrateSchema);

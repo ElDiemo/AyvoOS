@@ -1,0 +1,9 @@
+{
+  "name": "@ayvo/prod-backup",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AYVO production database backups to S3 and their restore check (doc 035) — Python standard library only",
+  "scripts": {
+    "test": "cd tests && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=..:. python3 -m unittest discover -s . -t ."
+  }
+}

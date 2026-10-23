@@ -17,12 +17,14 @@
     "identity:bootstrap-admin": "node dist/identity/bootstrap-admin.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1152.0",
     "@ayvo/types": "workspace:*",
     "@nestjs/common": "^12.1.2",
     "@nestjs/core": "^12.1.2",
     "@nestjs/platform-express": "^12.1.2",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "@smithy/node-http-handler": "4.12.1",
     "ioredis": "^6.0.0",
     "jose": "6.2.12",
     "pdf-lib": "1.17.1",

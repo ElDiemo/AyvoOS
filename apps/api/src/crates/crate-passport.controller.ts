@@ -1,5 +1,6 @@
 import type { PublicCrate } from '@ayvo/types';
-import { Controller, Get, Header, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, Header, NotFoundException, Param, UseGuards } from '@nestjs/common';
+import { PublicRateLimitGuard } from '../common/public-rate-limit.guard.js';
 import { PUBLIC_PREFIX } from '../common/routes.js';
 import { Public } from '../identity/access.decorators.js';
 import { CratesService } from './crates.service.js';
@@ -9,6 +10,7 @@ import { CratesService } from './crates.service.js';
  * never its code, site, location, hotel, order, contents, count or history.
  */
 @Public()
+@UseGuards(PublicRateLimitGuard)
 @Controller(`${PUBLIC_PREFIX}/crates`)
 export class CratePassportController {
   constructor(private readonly crates: CratesService) {}
