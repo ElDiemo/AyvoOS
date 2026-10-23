@@ -75,6 +75,76 @@ describe('loadEnv', () => {
     expect(() => loadEnv(production)).toThrow(/Production file storage is not configured/);
   });
 
+  describe('explicit production S3 storage', () => {
+    const s3 = {
+      FILE_STORAGE_DRIVER: 's3',
+      AWS_REGION: 'eu-north-1',
+      AWS_ACCESS_KEY_ID: 'AKIAFAKE000000000000',
+      AWS_SECRET_ACCESS_KEY: 'fakeOnlyNotARealAwsSecret00000000000000000',
+      S3_BUCKET: 'ayvo-test-files',
+      S3_EXPECTED_BUCKET_OWNER: '123456789012',
+    };
+
+    it('accepts explicit S3 config without bypassing any other production guard', () => {
+      expect(loadEnv({ ...production, ...s3 })).toMatchObject(s3);
+      expect(() => loadEnv({ ...production, ...s3, AUTH_PROVIDER: 'test' })).toThrow(
+        /AUTH_PROVIDER/,
+      );
+      expect(() => loadEnv({ ...production, ...s3, LABEL_QR_MIN_SIZE_MM: undefined })).toThrow(
+        /LABEL_QR_MIN_SIZE_MM/,
+      );
+    });
+
+    it.each([
+      'AWS_REGION',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'S3_BUCKET',
+      'S3_EXPECTED_BUCKET_OWNER',
+    ] as const)('requires %s; never falls back to ambient credentials', (name) => {
+      expect(() => loadEnv({ ...production, ...s3, [name]: '' })).toThrow(/S3 requires/);
+    });
+
+    it.each(['development', 'test'])('never connects %s to production S3', (APP_ENV) => {
+      expect(() => loadEnv({ ...valid, ...s3, APP_ENV })).toThrow(
+        /S3 storage is configured only in production/,
+      );
+    });
+
+    it('refuses AWS configuration with local storage rather than silently ignoring it', () => {
+      expect(() => loadEnv({ ...valid, AWS_REGION: 'eu-north-1' })).toThrow(
+        /Do not supply S3 configuration/,
+      );
+      expect(
+        loadEnv({
+          ...valid,
+          AWS_REGION: '',
+          AWS_ACCESS_KEY_ID: '',
+          AWS_SECRET_ACCESS_KEY: '',
+          S3_BUCKET: '',
+          S3_EXPECTED_BUCKET_OWNER: '',
+        }).FILE_STORAGE_DRIVER,
+      ).toBe('local');
+    });
+
+    it('rejects URLs as bucket names, invalid owner IDs and secret injection without echoing them', () => {
+      const secret = 'private-value-must-not-be-printed\nAWS_REGION=other';
+      expect(() => loadEnv({ ...production, ...s3, S3_BUCKET: 'https://other.example' })).toThrow(
+        /S3_BUCKET/,
+      );
+      expect(() => loadEnv({ ...production, ...s3, S3_EXPECTED_BUCKET_OWNER: 'wrong' })).toThrow(
+        /S3_EXPECTED_BUCKET_OWNER/,
+      );
+      try {
+        loadEnv({ ...production, ...s3, AWS_SECRET_ACCESS_KEY: secret });
+        expect.fail('invalid secret was accepted');
+      } catch (error) {
+        expect(String(error)).toContain('AWS_SECRET_ACCESS_KEY');
+        expect(String(error)).not.toContain(secret);
+      }
+    });
+  });
+
   describe('identity and access (ADR 0022)', () => {
     it('uses the real provider outside tests and the fake provider only in tests', () => {
       expect(loadEnv(valid)).toMatchObject({
