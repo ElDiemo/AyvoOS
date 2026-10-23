@@ -3,16 +3,22 @@
 import { labelPrintJobSchema, type LabelPrintJob } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { apiGet, apiSend } from '@/lib/client-api';
+import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { formatBytes } from '@/lib/format';
 import { PrintJobStatus } from '@/components/status';
 import { buttonClass, ErrorNote } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
-import { productionCs } from '@/i18n/cs/production';
+import { productionCs, qrLabelErrorsCs } from '@/i18n/cs/production';
 
 const t = productionCs.printJob;
 const fail = (e: unknown) =>
-  productionCs.common.failed(e instanceof Error ? e.message : productionCs.common.unexpectedError);
+  productionCs.common.failed(
+    e instanceof ClientApiError && e.code && qrLabelErrorsCs[e.code]
+      ? qrLabelErrorsCs[e.code]!
+      : e instanceof Error
+        ? e.message
+        : productionCs.common.unexpectedError,
+  );
 
 /**
  * One print job with its actions: generate (PENDING), retry (FAILED), download (COMPLETED).

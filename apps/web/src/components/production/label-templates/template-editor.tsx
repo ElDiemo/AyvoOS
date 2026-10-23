@@ -4,12 +4,12 @@ import {
   createLabelTemplateVersionResponseSchema,
   labelTemplateVersionSchema,
   type LabelArtwork,
-  type LabelDesignerSettings,
   type LabelLayout,
   type LabelTemplateVersion,
 } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import type { ConfiguredDesignerSettings } from './qr-settings';
 import { apiSend } from '@/lib/client-api';
 import { clampBox, defaultBox, roundMm, type LabelSize, type QrBox } from '@/lib/label-geometry';
 import { ArtworkUploadField } from './artwork-upload-field';
@@ -33,7 +33,8 @@ export function TemplateEditor({
   settings,
 }: {
   mode: Mode;
-  settings: LabelDesignerSettings;
+  /** Only with the QR settings configured (the pages show qrSettingsMissing otherwise). */
+  settings: ConfiguredDesignerSettings;
 }) {
   const router = useRouter();
   const latest = mode.kind === 'version' ? mode.latest : null;

@@ -286,7 +286,8 @@ This is the single consolidated list (other documents link here).
 1. **Physical QR testing** — print the validation sheet; test after printing, on the curved
    bottle, warehouse and hotel light, wet, after repeated washing, modern and older phones.
 2. **QR size and error-correction approval** — record in ADR 0014; set `LABEL_QR_MIN_SIZE_MM` and
-   `LABEL_QR_ERROR_CORRECTION` in production (startup refuses without them).
+   `LABEL_QR_ERROR_CORRECTION` in production. Without them production runs, but every operation
+   that creates or prints our QR labels is refused (`QR_LABEL_SETTINGS_MISSING`, ADR 0034).
 3. **Printer verification** — printer model, DPI, label material, adhesive, washing conditions,
    print driver (100 % scale, exact size, black output).
 4. **`qr.ayvo.co` DNS and routing** of `/<token>` to the passport.
