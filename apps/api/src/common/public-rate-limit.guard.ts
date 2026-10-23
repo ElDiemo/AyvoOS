@@ -73,7 +73,11 @@ export function counted(result: [Error | null, unknown][] | null): {
 } {
   if (!Array.isArray(result) || result.length !== 3) throw new Error('RateLimitExecAborted');
   for (const [error] of result) if (error) throw new Error('RateLimitCommandFailed');
-  const [[, incr], [, expire], [, pttl]] = result as [unknown, unknown][];
+  const [[, incr], [, expire], [, pttl]] = result as [
+    [null, unknown],
+    [null, unknown],
+    [null, unknown],
+  ];
   if (typeof incr !== 'number' || !Number.isSafeInteger(incr) || incr < 1) {
     throw new Error('RateLimitBadCounter');
   }
