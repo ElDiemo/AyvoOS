@@ -26,11 +26,11 @@ start condition of the whole application is really met (§8); none is bypassed w
 Ubuntu 24.04, ~4 GB RAM, ~70 GiB free. Public IPv4 `2.29.17.36`, Tailscale IPv4 `100.88.139.2`.
 UFW active, SSH with keys; **public SSH stays** as the fallback (nothing here touches it).
 
-- Docker Engine + Compose plugin from Docker's apt repository; the `ayvo` user in the `docker`
-  group (that group is root-equivalent — only for `ayvo`).
+- Docker Engine 29.9.0 + Compose 5.6.0 from Docker's apt repository (installed 2026-10-23).
+  `ayvo` is not in the `docker` group (root-equivalent): the owner decides (§6 step 2).
 - **Swap**: the web image build needs about 3 GB; with 4 GB RAM and no swap the kernel's OOM
-  killer stops it (seen on DEV). Add a 4 GB swap file before the first build; the deploy script
-  refuses to build with less than 3 GB of RAM + swap available.
+  killer stops it (seen on DEV). A 4 GiB swap (`/swap-ayvo-prod`) exists since 2026-10-23; the
+  deploy script refuses to build with less than 3 GB of RAM + swap available.
 - Docker's own logs are rotated per container by `compose.yml` (5 × 10 MB). Releases keep the
   images of the three newest releases; older `ayvo-prod/*` images are removed by name. No
   `prune`, no volume removal, ever. The deploy script needs ≥ 8 GB free before a build.
@@ -128,18 +128,25 @@ from DEV. A step that fails stops the installation; nothing is skipped or replac
 1. **Read-only state check** (changes nothing): `hostname; free -h; swapon --show; df -h /;
 tailscale ip -4; docker --version; docker compose version; ls -l /opt/ayvo/secrets;
 systemctl status ayvo-prod-docker-guard; ls /opt/ayvo/repos/AyvoOS`.
-2. **Docker Engine + Compose plugin** from Docker's apt repository
-   (`https://docs.docker.com/engine/install/ubuntu/`), then `sudo usermod -aG docker ayvo`
-   (root-equivalent: only `ayvo`). Check: `docker compose version`.
-3. **4 GiB swap** (the web build needs ~3 GB; §2):
-   `sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile &&
-sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab`.
-   Check: `swapon --show` shows 4G.
+2. **Docker Engine + Compose plugin — already prepared (2026-10-23, record
+   `/home/ayvo/PROD-RUNTIME-PREPARED-20261023.md`):** Docker 29.9.0, Compose 5.6.0, `jq`. Only
+   verify (`docker --version; docker compose version; systemctl is-enabled docker`); never install
+   again. **Owner decision 2026-10-23: `ayvo` stays out of the `docker` group; the deploy script
+   runs with `sudo`.** It still accepts only env files owned by `ayvo` (or root) with mode 600,
+   and runs every `git` command as `ayvo` (`runuser`): that user's checkout, read-only deploy key
+   and `known_hosts` — never as root, never `safe.directory`, never relaxed host key checking.
+3. **4 GiB swap — already prepared** (`/swap-ayvo-prod`, one `/etc/fstab` entry). Only verify:
+   `swapon --show` shows 4G. **Never create a second swap file.**
 4. **Read-only release access:** as `ayvo`, `ssh-keygen -t ed25519 -f ~/.ssh/ayvoos_deploy -N ''`;
    the public key becomes a **read-only deploy key** of the repository (GitHub → Settings → Deploy
    keys, "Allow write access" off); then `git clone -c core.sshCommand='ssh -i
 ~/.ssh/ayvoos_deploy -o IdentitiesOnly=yes' git@github.com:ElDiemo/AyvoOS.git
 /opt/ayvo/repos/AyvoOS`. It is only fetched and `git archive`d — never edited, never pushed.
+   GitHub's host key goes into `ayvo`'s `~/.ssh/known_hosts` only after comparing it with the
+   published fingerprint (ED25519 `SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`,
+   docs.github.com → "GitHub's SSH key fingerprints"); host key checking stays on. The checkout,
+   the key (600) and `known_hosts` belong to `ayvo`; `--check` refuses a checkout of another
+   owner.
 5. **Host guard and the edges' separation:** `sudo bash deploy/prod/host/install.sh --check`,
    then without `--check` (§3). Tailscale split DNS `os.ayvo.co` → `100.88.139.2` (internal);
    the public DNS A record of the QR host → the public IPv4, no AAAA (doc 037, when that edge is
@@ -152,14 +159,14 @@ sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fs
    the owner approved for production (#47 S3, #48, #50 backups, #53 QR settings, the public QR edge
    if wanted). **`C` is first deployed and verified on DEV** (`scripts/deploy-dev.sh` from a
    checkout of exactly `C`, owner approval as always); only the same `C` is then promoted here.
-8. `scripts/deploy-prod.sh --check --release <C>` — must pass (host, guard, files, release, WorkOS
+8. `sudo scripts/deploy-prod.sh --check --release <C>` — must pass (host, guard, files, release, WorkOS
    issuer, DNS, Compose).
-9. `scripts/deploy-prod.sh --release <C>`: the database is **new and empty**; it is created only
+9. `sudo scripts/deploy-prod.sh --release <C>`: the database is **new and empty**; it is created only
    by `prisma migrate deploy` from the migrations — never a copy of DEV, never test seeds or
    demo records. The script backs up nothing on an empty database (it says so), migrates, starts,
    verifies.
 10. The external negative test (§5, and doc 037 §5 for the QR host).
-11. **First administrator, once:** `scripts/deploy-prod.sh --bootstrap-admin --email <owner's
+11. **First administrator, once:** `sudo scripts/deploy-prod.sh --bootstrap-admin --email <owner's
 e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism (doc 021 §8);
     the database allows one bootstrap ever. **The first real sign-in with WorkOS + MFA is the
     owner's own step** — no automated test borrows or creates a session for it.

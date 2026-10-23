@@ -1,0 +1,13 @@
+# AYVO OS — PROD daily database backup, a separate object under database/daily/ (doc 035).
+[Unit]
+Description=AYVO PROD: daily database backup
+
+[Timer]
+OnCalendar=*-*-* 02:35:00 UTC
+AccuracySec=1min
+# A day missed while the server was off is taken at the next boot.
+Persistent=true
+Unit=ayvo-prod-backup@daily.service
+
+[Install]
+WantedBy=timers.target

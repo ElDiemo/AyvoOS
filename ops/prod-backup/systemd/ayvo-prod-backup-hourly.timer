@@ -1,0 +1,12 @@
+# AYVO OS — PROD hourly database backup (doc 035). Not enabled by the installer.
+[Unit]
+Description=AYVO PROD: hourly database backup
+
+[Timer]
+OnCalendar=*-*-* *:05:00 UTC
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=ayvo-prod-backup@hourly.service
+
+[Install]
+WantedBy=timers.target
