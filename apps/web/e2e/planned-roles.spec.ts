@@ -1,15 +1,14 @@
 import { expect, test } from '@playwright/test';
 
 /**
- * Planned system roles in the browser (doc 021 §4c): SALES ("Obchod"), FINANCE ("Finance") and
- * HOTEL_USER ("Uživatel hotelu") appear disabled with "Připravuje se" when a user is created or
+ * Planned system roles in the browser (doc 021 §4c): FINANCE ("Finance") and HOTEL_USER ("Uživatel
+ * hotelu") appear disabled with "Připravuje se" when a user is created or
  * edited, never as selectable roles, and the role pages mark them as planned templates. The server
  * refuses them independently (API tests and identity.spec).
  */
 test.use({ storageState: 'e2e/.auth/admin.json' });
 
 const PLANNED = [
-  ['SALES', 'Obchod'],
   ['FINANCE', 'Finance'],
   ['HOTEL_USER', 'Uživatel hotelu'],
 ] as const;
@@ -36,6 +35,9 @@ test('user creation shows planned roles disabled, labelled "Připravuje se"', as
   for (const [, name] of PLANNED) {
     await expect(page.getByRole('checkbox', { name, exact: true })).toHaveCount(0);
   }
+  // SALES is assignable since Obchod exists (doc 034).
+  await expect(page.locator('[data-planned-role="SALES"]')).toHaveCount(0);
+  await expect(page.getByLabel('Obchod', { exact: true })).toBeEnabled();
 });
 
 test('the access editor shows planned roles only disabled, labelled "Připravuje se"', async ({

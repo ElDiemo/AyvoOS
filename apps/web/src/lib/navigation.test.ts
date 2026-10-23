@@ -67,7 +67,20 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(visibleModules(['identity:users_read']).map((m) => m.id)).toEqual(['admin']);
   });
 
-  it('SALES sees only the availability page of the warehouse; the module link opens it', () => {
+  it('SALES sees only Obchod with its three pages (doc 034)', () => {
+    const modules = visibleModules(['sales:work']);
+    expect(modules.map((m) => m.id)).toEqual(['sales']);
+    expect(modules[0]!.section).toBe('sales');
+    expect(modules[0]!.pages.map((p) => p.href)).toEqual([
+      '/sales',
+      '/sales/prospects',
+      '/sales/tasks',
+    ]);
+    expect(locate('/sales/prospects/AKV-000001').page?.id).toBe('prospects');
+    expect(locate('/sales').page?.id).toBe('overview');
+  });
+
+  it('a planning role sees only the availability page of the warehouse; the module link opens it', () => {
     const [warehouse, ...rest] = visibleModules(['inventory:stock_summary']);
     expect(rest).toEqual([]);
     expect(warehouse!.id).toBe('warehouse');

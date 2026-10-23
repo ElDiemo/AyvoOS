@@ -41,9 +41,12 @@ export interface NavPage {
 }
 
 export interface NavModule {
-  id: 'warehouse' | 'production' | 'hotels' | 'dispatch' | 'admin';
-  /** Operational modules ("Provoz") or the administration section ("Správa"). */
-  section: 'operations' | 'administration';
+  id: 'sales' | 'warehouse' | 'production' | 'hotels' | 'dispatch' | 'admin';
+  /**
+   * Obchod (doc 034: before a hotel is a customer, apart from operations), the operational
+   * modules ("Provoz") or the administration section ("Správa").
+   */
+  section: 'sales' | 'operations' | 'administration';
   label: string;
   href: string;
   description: string;
@@ -56,8 +59,34 @@ const w = shellCs.modules.warehouse;
 const p = shellCs.modules.production;
 const h = shellCs.modules.hotels;
 const d = shellCs.modules.dispatch;
+const s = shellCs.modules.sales;
 
 export const MODULES: readonly NavModule[] = [
+  {
+    // Obchod — hotel acquisition (doc 034): company-wide, no site; visibility by ownership (API).
+    id: 'sales',
+    section: 'sales',
+    permissions: ['sales:work'],
+    label: s.label,
+    href: '/sales',
+    description: s.description,
+    pages: [
+      {
+        id: 'overview',
+        href: '/sales',
+        label: s.pages.overview,
+        exact: true,
+        permission: 'sales:work',
+      },
+      {
+        id: 'prospects',
+        href: '/sales/prospects',
+        label: s.pages.prospects,
+        permission: 'sales:work',
+      },
+      { id: 'tasks', href: '/sales/tasks', label: s.pages.tasks, permission: 'sales:work' },
+    ],
+  },
   {
     id: 'warehouse',
     section: 'operations',
@@ -267,6 +296,7 @@ export type ProductionPageId =
 export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
 export type HotelsPageId = 'list' | 'new';
 export type DispatchPageId = 'orders' | 'new';
+export type SalesPageId = 'overview' | 'prospects' | 'tasks';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports

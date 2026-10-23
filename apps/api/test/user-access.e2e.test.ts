@@ -246,21 +246,21 @@ describe.skipIf(!hasDatabase)('user access editor', () => {
   it('keeps an existing planned role when it stays, and can remove it, but never adds it', async () => {
     const user = await createUser(['WAREHOUSE_OPERATOR']);
     await t.prisma.userRole.create({
-      data: { userId: user.id, roleCode: 'SALES', grantReason: 'assigned before the rule' },
+      data: { userId: user.id, roleCode: 'FINANCE', grantReason: 'assigned before the rule' },
     });
     const keep = await update(user.id, {
-      roles: ['SALES', 'WAREHOUSE_SUPERVISOR'],
+      roles: ['FINANCE', 'WAREHOUSE_SUPERVISOR'],
       siteIds: [INITIAL_SITE_ID],
     });
     expect(keep.status, JSON.stringify(keep.body)).toBe(200);
-    expect((await state(user.id)).roles).toEqual(['SALES', 'WAREHOUSE_SUPERVISOR']);
+    expect((await state(user.id)).roles).toEqual(['FINANCE', 'WAREHOUSE_SUPERVISOR']);
     const drop = await update(user.id, {
       roles: ['WAREHOUSE_SUPERVISOR'],
       siteIds: [INITIAL_SITE_ID],
     });
     expect(drop.status).toBe(200);
     const readd = await update(user.id, {
-      roles: ['SALES', 'WAREHOUSE_SUPERVISOR'],
+      roles: ['FINANCE', 'WAREHOUSE_SUPERVISOR'],
       siteIds: [INITIAL_SITE_ID],
     });
     expect(readd.status).toBe(422);

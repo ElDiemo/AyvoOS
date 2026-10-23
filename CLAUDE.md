@@ -89,6 +89,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   never our own conversion), per-site carrier settings and encrypted carrier connections (ADR 0027),
   printers and print agents per site (a machine principal with its own token — ADR 0028), the durable
   print queue (jobs + append-only events; SENT ≠ printed; UNCERTAIN never retried automatically).
+  Obchod — hotel acquisition (doc 034, ADR 0031, requested by the owner 2026-10-21; table design
+  subject to the owner's PR review): sales prospects, contacts, append-only activities (corrected
+  by new versions), tasks and append-only sales events; `sales:work` (SALES, own prospects) and
+  `sales:manage` (ADMIN, everything, assignment). Not site-scoped; prospects are not hotels and
+  nothing outside Obchod is created. SALES is assignable, FINANCE and HOTEL_USER stay planned.
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

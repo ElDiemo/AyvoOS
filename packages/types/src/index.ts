@@ -15,6 +15,7 @@ export * from './labels.js';
 export * from './orders.js';
 export * from './printing.js';
 export * from './procurement.js';
+export * from './sales.js';
 export * from './shipments.js';
 export * from './sites.js';
 export * from './supply-plans.js';

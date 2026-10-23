@@ -926,6 +926,14 @@ enum OperationKind {
   SUPPLY_PLAN_ORDER
   ORDER_RESCHEDULE
   HOTEL_UPDATE
+  SALES_PROSPECT_CREATE
+  SALES_PROSPECT_UPDATE
+  SALES_STAGE_CHANGE
+  SALES_OWNER_CHANGE
+  SALES_CONTACT_SAVE
+  SALES_ACTIVITY_RECORD
+  SALES_ACTIVITY_CORRECT
+  SALES_TASK_SAVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1071,6 +1079,19 @@ model User {
   printersUpdated           Printer[]            @relation("PrinterUpdatedBy")
   printRequests             PrintRequest[]       @relation("PrintRequestedBy")
   printJobEvents            PrintJobEvent[]      @relation("PrintJobEventBy")
+
+  salesProspectsOwned   SalesProspect[] @relation("SalesProspectOwner")
+  salesProspectsCreated SalesProspect[] @relation("SalesProspectCreatedBy")
+  salesProspectsUpdated SalesProspect[] @relation("SalesProspectUpdatedBy")
+  salesContactsCreated  SalesContact[]  @relation("SalesContactCreatedBy")
+  salesContactsUpdated  SalesContact[]  @relation("SalesContactUpdatedBy")
+  salesContactsRetired  SalesContact[]  @relation("SalesContactRetiredBy")
+  salesActivities       SalesActivity[] @relation("SalesActivityAuthor")
+  salesTasksAssigned    SalesTask[]     @relation("SalesTaskAssignee")
+  salesTasksCreated     SalesTask[]     @relation("SalesTaskCreatedBy")
+  salesTasksUpdated     SalesTask[]     @relation("SalesTaskUpdatedBy")
+  salesTasksClosed      SalesTask[]     @relation("SalesTaskClosedBy")
+  salesEvents           SalesEvent[]    @relation("SalesEventActor")
 
   @@map("users")
 }
@@ -3199,4 +3220,174 @@ model SupplyPlanOccurrence {
 
   @@unique([planId, shipDate])
   @@map("supply_plan_occurrences")
+}
+
+// =============================================================================================
+// sales module — Obchod: hotel acquisition (doc 034, ADR 0031). Prospects are not hotels.
+// =============================================================================================
+
+/// A hotel prospect (current state; every change is a SalesEvent in the same transaction).
+model SalesProspect {
+  id                String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial            BigInt   @unique
+  code              String   @unique
+  name              String
+  nameKey           String   @map("name_key")
+  countryCode       String   @map("country_code") @db.Char(2)
+  city              String?
+  addressLine1      String?  @map("address_line1")
+  addressLine2      String?  @map("address_line2")
+  postalCode        String?  @map("postal_code")
+  /// An estimate; unknown = null, never 0.
+  roomsEstimate     Int?     @map("rooms_estimate")
+  /// HOTEL | PENSION | APARTMENTS | HOSTEL | OTHER
+  accommodationType String?  @map("accommodation_type")
+  website           String?
+  websiteKey        String?  @map("website_key")
+  source            String?
+  ownerId           String   @map("owner_id") @db.Uuid
+  /// A | B | C
+  priority          String?
+  /// NEW | CONTACTED | NEGOTIATION | OFFER | WON | LOST
+  stage             String   @default("NEW")
+  lostReason        String?  @map("lost_reason")
+  note              String?
+  revision          Int      @default(1)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy         String   @map("created_by") @db.Uuid
+  updatedAt         DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy         String   @map("updated_by") @db.Uuid
+
+  owner      User            @relation("SalesProspectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  creator    User            @relation("SalesProspectCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater    User            @relation("SalesProspectUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  contacts   SalesContact[]
+  activities SalesActivity[]
+  tasks      SalesTask[]
+  events     SalesEvent[]
+
+  @@index([ownerId])
+  @@index([nameKey])
+  @@index([websiteKey])
+  @@map("sales_prospects")
+}
+
+/// A contact of a prospect: a person or a designation ("Recepce"). Retired, never deleted.
+model SalesContact {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  prospectId   String    @map("prospect_id") @db.Uuid
+  label        String
+  position     String?
+  email        String?
+  emailKey     String?   @map("email_key")
+  phone        String?
+  phoneKey     String?   @map("phone_key")
+  note         String?
+  isPrimary    Boolean   @default(false) @map("is_primary")
+  revision     Int       @default(1)
+  retiredAt    DateTime? @map("retired_at") @db.Timestamptz(3)
+  retiredBy    String?   @map("retired_by") @db.Uuid
+  retireReason String?   @map("retire_reason")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy    String    @map("created_by") @db.Uuid
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy    String    @map("updated_by") @db.Uuid
+
+  prospect   SalesProspect   @relation(fields: [prospectId], references: [id], onDelete: Restrict)
+  retirer    User?           @relation("SalesContactRetiredBy", fields: [retiredBy], references: [id], onDelete: Restrict)
+  creator    User            @relation("SalesContactCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater    User            @relation("SalesContactUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  activities SalesActivity[]
+  tasks      SalesTask[]
+  events     SalesEvent[]
+
+  @@unique([id, prospectId])
+  @@index([prospectId])
+  @@index([emailKey])
+  @@index([phoneKey])
+  @@map("sales_contacts")
+}
+
+/// What happened (append-only). A correction or withdrawal is a new row pointing to the old one.
+model SalesActivity {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  prospectId       String   @map("prospect_id") @db.Uuid
+  /// CALL | EMAIL_SENT | EMAIL_RECEIVED | MEETING | SAMPLES | OFFER | NOTE
+  kind             String
+  occurredAt       DateTime @map("occurred_at") @db.Timestamptz(3)
+  recordedAt       DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  authorId         String   @map("author_id") @db.Uuid
+  contactId        String?  @map("contact_id") @db.Uuid
+  content          String?
+  outcome          String?
+  correctsId       String?  @unique @map("corrects_id") @db.Uuid
+  correctionReason String?  @map("correction_reason")
+  withdrawn        Boolean  @default(false)
+  requestId        String   @unique @map("request_id") @db.Uuid
+
+  prospect    SalesProspect   @relation(fields: [prospectId], references: [id], onDelete: Restrict)
+  author      User            @relation("SalesActivityAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  contact     SalesContact?   @relation(fields: [contactId, prospectId], references: [id, prospectId], onDelete: Restrict, map: "sales_activities_contact_id_prospect_id_fkey")
+  corrects    SalesActivity?  @relation("SalesActivityCorrection", fields: [correctsId, prospectId], references: [id, prospectId], onDelete: Restrict, map: "sales_activities_corrects_id_prospect_id_fkey")
+  correctedBy SalesActivity[] @relation("SalesActivityCorrection")
+
+  @@unique([id, prospectId])
+  @@index([prospectId, occurredAt])
+  @@map("sales_activities")
+}
+
+/// What someone will do (current state; changes are SalesEvents).
+model SalesTask {
+  id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  prospectId String    @map("prospect_id") @db.Uuid
+  contactId  String?   @map("contact_id") @db.Uuid
+  title      String
+  note       String?
+  assigneeId String    @map("assignee_id") @db.Uuid
+  /// A calendar day in the sales time zone (Europe/Prague).
+  dueOn      DateTime  @map("due_on") @db.Date
+  /// OPEN | DONE | CANCELLED
+  status     String    @default("OPEN")
+  result     String?
+  revision   Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy  String    @map("created_by") @db.Uuid
+  updatedAt  DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy  String    @map("updated_by") @db.Uuid
+  closedAt   DateTime? @map("closed_at") @db.Timestamptz(3)
+  closedBy   String?   @map("closed_by") @db.Uuid
+
+  prospect SalesProspect @relation(fields: [prospectId], references: [id], onDelete: Restrict)
+  contact  SalesContact? @relation(fields: [contactId, prospectId], references: [id, prospectId], onDelete: Restrict, map: "sales_tasks_contact_id_prospect_id_fkey")
+  assignee User          @relation("SalesTaskAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  creator  User          @relation("SalesTaskCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater  User          @relation("SalesTaskUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  closer   User?         @relation("SalesTaskClosedBy", fields: [closedBy], references: [id], onDelete: Restrict)
+  events   SalesEvent[]
+
+  @@unique([id, prospectId])
+  @@index([prospectId])
+  @@map("sales_tasks")
+}
+
+/// Append-only history of every change of a prospect, its contacts and tasks.
+model SalesEvent {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  prospectId String   @map("prospect_id") @db.Uuid
+  type       String
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  actorId    String   @map("actor_id") @db.Uuid
+  contactId  String?  @map("contact_id") @db.Uuid
+  taskId     String?  @map("task_id") @db.Uuid
+  payload    Json
+  requestId  String   @map("request_id") @db.Uuid
+
+  prospect SalesProspect @relation(fields: [prospectId], references: [id], onDelete: Restrict)
+  actor    User          @relation("SalesEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  contact  SalesContact? @relation(fields: [contactId, prospectId], references: [id, prospectId], onDelete: Restrict, map: "sales_events_contact_id_prospect_id_fkey")
+  task     SalesTask?    @relation(fields: [taskId, prospectId], references: [id, prospectId], onDelete: Restrict, map: "sales_events_task_id_prospect_id_fkey")
+
+  @@index([prospectId, occurredAt])
+  @@index([taskId])
+  @@map("sales_events")
 }

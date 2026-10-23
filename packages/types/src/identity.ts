@@ -18,12 +18,13 @@ export const SYSTEM_ROLE_CODES = [
   'HOTEL_USER',
 ] as const;
 /**
- * System roles that are templates for modules that do not exist yet (finance, hotel portfolio
- * and commissions, the external hotel portal; doc 021 §4c). Their records and permission templates
- * stay, but they are **not assignable** now: the API refuses every new assignment and the UI shows
- * them as "Připravuje se". An assignment that already exists is kept (shown, revocable).
+ * System roles that are templates for modules that do not exist yet (finance, the external hotel
+ * portal; doc 021 §4c). Their records and permission templates stay, but they are **not
+ * assignable** now: the API refuses every new assignment and the UI shows them as "Připravuje
+ * se". An assignment that already exists is kept (shown, revocable). SALES is assignable since
+ * Obchod exists (doc 034).
  */
-export const PLANNED_SYSTEM_ROLE_CODES = ['SALES', 'FINANCE', 'HOTEL_USER'] as const;
+export const PLANNED_SYSTEM_ROLE_CODES = ['FINANCE', 'HOTEL_USER'] as const;
 export type PlannedSystemRoleCode = (typeof PLANNED_SYSTEM_ROLE_CODES)[number];
 
 /** Whether a role (system or custom) is a planned template that cannot be assigned yet. */
@@ -88,6 +89,8 @@ export const PERMISSION_CODES = [
   'printing:print',
   'printing:reprint',
   'printing:manage',
+  'sales:work',
+  'sales:manage',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -121,6 +124,7 @@ export const PERMISSION_MODULES = [
   'sites',
   'carriers',
   'printing',
+  'sales',
 ] as const;
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 export const permissionModule = (code: PermissionCode): PermissionModule =>
