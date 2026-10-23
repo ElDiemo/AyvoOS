@@ -26,11 +26,11 @@ start condition of the whole application is really met (§8); none is bypassed w
 Ubuntu 24.04, ~4 GB RAM, ~70 GiB free. Public IPv4 `2.29.17.36`, Tailscale IPv4 `100.88.139.2`.
 UFW active, SSH with keys; **public SSH stays** as the fallback (nothing here touches it).
 
-- Docker Engine + Compose plugin from Docker's apt repository; the `ayvo` user in the `docker`
-  group (that group is root-equivalent — only for `ayvo`).
+- Docker Engine 29.9.0 + Compose 5.6.0 from Docker's apt repository (installed 2026-10-23).
+  `ayvo` is not in the `docker` group (root-equivalent): the owner decides (§6 step 2).
 - **Swap**: the web image build needs about 3 GB; with 4 GB RAM and no swap the kernel's OOM
-  killer stops it (seen on DEV). Add a 4 GB swap file before the first build; the deploy script
-  refuses to build with less than 3 GB of RAM + swap available.
+  killer stops it (seen on DEV). A 4 GiB swap (`/swap-ayvo-prod`) exists since 2026-10-23; the
+  deploy script refuses to build with less than 3 GB of RAM + swap available.
 - Docker's own logs are rotated per container by `compose.yml` (5 × 10 MB). Releases keep the
   images of the three newest releases; older `ayvo-prod/*` images are removed by name. No
   `prune`, no volume removal, ever. The deploy script needs ≥ 8 GB free before a build.
@@ -123,13 +123,14 @@ from DEV. A step that fails stops the installation; nothing is skipped or replac
 1. **Read-only state check** (changes nothing): `hostname; free -h; swapon --show; df -h /;
 tailscale ip -4; docker --version; docker compose version; ls -l /opt/ayvo/secrets;
 systemctl status ayvo-prod-docker-guard; ls /opt/ayvo/repos/AyvoOS`.
-2. **Docker Engine + Compose plugin** from Docker's apt repository
-   (`https://docs.docker.com/engine/install/ubuntu/`), then `sudo usermod -aG docker ayvo`
-   (root-equivalent: only `ayvo`). Check: `docker compose version`.
-3. **4 GiB swap** (the web build needs ~3 GB; §2):
-   `sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile &&
-sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab`.
-   Check: `swapon --show` shows 4G.
+2. **Docker Engine + Compose plugin — already prepared (2026-10-23, record
+   `/home/ayvo/PROD-RUNTIME-PREPARED-20261023.md`):** Docker 29.9.0, Compose 5.6.0, `jq`. Only
+   verify (`docker --version; docker compose version; systemctl is-enabled docker`); never install
+   again. `ayvo` is **not** in the `docker` group: `scripts/deploy-prod.sh` needs the Docker socket,
+   so the owner decides explicitly between `sudo usermod -aG docker ayvo` (root-equivalent, as on
+   DEV) and running the deploy script with `sudo`.
+3. **4 GiB swap — already prepared** (`/swap-ayvo-prod`, one `/etc/fstab` entry). Only verify:
+   `swapon --show` shows 4G. **Never create a second swap file.**
 4. **Read-only release access:** as `ayvo`, `ssh-keygen -t ed25519 -f ~/.ssh/ayvoos_deploy -N ''`;
    the public key becomes a **read-only deploy key** of the repository (GitHub → Settings → Deploy
    keys, "Allow write access" off); then `git clone -c core.sshCommand='ssh -i
