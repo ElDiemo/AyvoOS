@@ -147,6 +147,7 @@ function SidebarContent({
   children?: React.ReactNode;
 }) {
   const { module: active } = locate(pathname, modules);
+  const sales = modules.filter((m) => m.section === 'sales');
   const operations = modules.filter((m) => m.section === 'operations');
   const administration = modules.filter((m) => m.section === 'administration');
   return (
@@ -164,6 +165,13 @@ function SidebarContent({
         <NavLink href="/" active={pathname === '/'} icon={ICONS.overview}>
           {shellCs.overview}
         </NavLink>
+        {/* Obchod (doc 034): its own block, apart from the operational modules below. */}
+        {sales.length > 0 && <div className="mt-4" />}
+        {sales.map((m) => (
+          <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
+            {m.label}
+          </NavLink>
+        ))}
         {operations.length > 0 && (
           <p className="mt-6 mb-1 px-3 text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">
             {shellCs.operations}
@@ -249,6 +257,8 @@ export function EnvironmentBadge({
 }
 
 const ICONS = {
+  // A handshake-like pair of strokes: Obchod (doc 034).
+  sales: 'M3 11l4-4 4 3 3-3 7 6M3 11l5 5 2-1 2 2 2-1 2 2 4-4M10 10l3 3',
   overview: 'M4 5h7v6H4zM13 5h7v3h-7zM13 10h7v9h-7zM4 13h7v6H4z',
   warehouse: 'M3 10l9-6 9 6v10H3zM7 20v-6h10v6M7 17h10',
   production: 'M4 20V9l5 3V9l5 3V5h6v15zM8 16h2M14 16h2',

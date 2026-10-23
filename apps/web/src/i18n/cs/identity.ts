@@ -21,8 +21,6 @@ export const identityCs = {
     section: 'Připravované role (zatím nelze přidělit)',
     help: 'Role je šablona pro modul, který zatím neexistuje. Nelze ji přidělit; dosavadní přidělení zůstává.',
     roles: {
-      SALES:
-        'Obchod: bude omezen na přidělené hotely a hotelové skupiny, ne na výrobní provozovny.',
       FINANCE: 'Finance: bude omezena účetní jednotkou; finanční modul zatím neexistuje.',
       HOTEL_USER:
         'Externí role hotelového portálu (smlouvy, faktury, ESG) — není to interní provozní role.',
@@ -87,6 +85,9 @@ export const identityCs = {
       'Vytisknout štítek jednoho balíku znovu (výslovně, se zdůvodněním; upozorní na možný fyzický duplikát)',
     'printing:manage':
       'Spravovat tiskárny a tiskové agenty provozoven (token agenta se zobrazí jen jednou)',
+    'sales:work':
+      'Pracovat s vlastními zájemci o spolupráci — zakládat, upravovat, kontakty, aktivity a úkoly',
+    'sales:manage': 'Vidět všechny zájemce a úkoly obchodu a přidělovat je obchodníkům',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
@@ -101,6 +102,7 @@ export const identityCs = {
     sites: 'Provozovny',
     carriers: 'Připojení dopravců',
     printing: 'Tisk štítků',
+    sales: 'Obchod',
   } as Record<string, string>,
   login: {
     title: 'Přihlášení do AYVO OS',
