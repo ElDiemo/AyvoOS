@@ -40,18 +40,19 @@ before it expires is a manual owner decision.
    or root; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`). They go
    into a mode-600 env file of the run directory for the AWS CLI container — never into a process
    argument, a log or the state files.
-4. **Space** before anything is written: the expected dump is the database's size, at most the
-   cap (`--max-dump-gb`, default 10 GiB). The database container's `/tmp` — the live database's
-   disk — must have it plus a 2 GiB reserve free, and the host's `/var/lib/ayvo-backup` three
-   times it (the host copy, the read-back, and the container's copy on the same disk) plus the
-   reserve. Otherwise the run fails at `space` and writes nothing.
+4. **Space** before anything is written. The dump is held to a byte cap that both disks can
+   really take: the smallest of the configured cap (`--max-dump-gb`, default 10 GiB), the
+   database container's free `/tmp` — the live database's disk — minus a 2 GiB reserve, and a
+   third of the host's free `/var/lib/ayvo-backup` minus the reserve (the host copy, the read-back,
+   and the container's copy if it is the same disk). If that budget is below the expected dump
+   (the database's size, at most the configured cap), the run fails at `space` and writes nothing.
 5. **Dump** inside the running database container: one `REPEATABLE READ READ ONLY` transaction
    exports its snapshot; `pg_dump --format=custom --compress=6 --snapshot=…` dumps exactly that
    snapshot, and the same snapshot's statistics are written alongside — rows of every table,
    foreign keys (and any not validated), user triggers, finished Prisma migrations, server
    version. That is the **manifest**: what a restore must reproduce. Timeout 30 min. The dump is
-   written through `head -c <cap + 1>`: it can never grow past the cap; a dump that reaches it
-   fails (`the dump exceeds the limit`) and is removed.
+   written through `head -c <cap + 1>` with the cap of step 4: it can never grow past what the
+   disks can take; a dump that reaches it fails (`the dump exceeds the limit`) and is removed.
 6. **Local check**: `pg_restore --list` reads the whole archive; size > 0; SHA-256.
 7. **Upload** with the pinned AWS CLI image (`amazon/aws-cli` 2.38.1 by digest, read-only, no
    capabilities): `put-object` with `--checksum-sha256` (S3 refuses a body that does not match),
