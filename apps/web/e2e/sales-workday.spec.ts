@@ -15,12 +15,7 @@ import { pragueDay, prospect, shot, signIn } from './sales-setup';
  */
 test.describe.configure({ mode: 'serial' });
 
-// Letters only: the search also matches phone digits contained in the query (doc 034 §8).
-const tag = Date.now()
-  .toString(36)
-  .slice(-5)
-  .toUpperCase()
-  .replace(/\d/g, (d) => 'GHIJKLMNOP'[Number(d)]!);
+const tag = Date.now().toString(36).slice(-5).toUpperCase();
 const D = { email: `e2e-obchod-d-${tag}@ayvo.test`.toLowerCase(), name: 'Dana Obchodnice' };
 const E = { email: `e2e-obchod-e-${tag}@ayvo.test`.toLowerCase(), name: 'Emil Obchodník' };
 let importUrl = '';

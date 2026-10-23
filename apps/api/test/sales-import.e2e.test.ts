@@ -28,10 +28,7 @@ describe.skipIf(!hasDatabase)('Obchod — CSV import and export', () => {
   const people: Record<'a' | 'b' | 'c', { id: string; cookie: string; name: string }> = {} as never;
   const http = () => request(t.app.getHttpServer());
   const unique = (n: string) => `${n}-${randomUUID().slice(0, 8)}@ayvo.test`;
-  // Letters only: the search also matches phone digits contained in the query (doc 034 §8).
-  const tag = randomUUID()
-    .slice(0, 6)
-    .replace(/\d/g, (d) => 'ghijklmnop'[Number(d)]!);
+  const tag = randomUUID().slice(0, 6);
   const base = '/api/admin/sales';
 
   const upload = (cookie: string, path: string, csv: string | Buffer, json?: object) => {

@@ -19,7 +19,7 @@ import { allocateSerials } from '../database/code-counters.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { contactData, profileData, ProspectsService } from './prospects.service.js';
-import type { Db, SalesScope } from './sales-access.js';
+import { lockOwnerProspects, type Db, type SalesScope } from './sales-access.js';
 import { CsvError, parseCsv, suggestMapping, type ParsedCsv } from './sales-csv.js';
 import { buildDrafts, fileDuplicates, type ImportDraft } from './sales-import-rows.js';
 import { nameKey } from './sales-keys.js';
@@ -118,12 +118,12 @@ export class SalesImportService {
       requestId,
       { actorId: scope.userId, fileSha256, fileName: fileNameOf(file!), ...decisions },
       async (tx) => {
-        // One confirmation per owner at a time: a parallel one (another tab, a reload after a lost
-        // answer) then sees these prospects as possible duplicates instead of creating them again.
-        const lockKey = `sales-import:${input.ownerId ?? scope.userId}`;
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-        // Checked again now — the owner may have lost Obchod since the preview.
+        // Checked again now — the owner may have lost Obchod since the preview. Before the lock:
+        // a request for someone the user may not import for never waits on that person's writes.
         const owner = await this.owner(tx, scope, input.ownerId);
+        // One write of new prospects per owner at a time (an import or a manual create): a
+        // parallel one then sees these prospects as possible duplicates instead of passing them.
+        await lockOwnerProspects(tx, owner.id);
         const { drafts, inFile, existing } = await this.analyse(tx, scope, csv, input);
         const byRow = new Map(drafts.map((d) => [d.row, d]));
         const chosen = new Map<number, boolean>();

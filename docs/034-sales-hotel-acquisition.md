@@ -158,6 +158,17 @@ fine.
   whether a name, website, e-mail or phone is known elsewhere. Two salespeople may therefore keep
   the same hotel; ADMIN sees such pairs in the detail ("Možná duplicita") and resolves them by
   reassignment.
+- **Creating at the same time**: every write that creates prospects for one owner — a manual
+  create or an import confirmation — runs one at a time for that owner (a transaction-scoped
+  advisory lock keyed by the owner). The second one checks possible duplicates against what the
+  first one committed, so neither slips past the other unseen; a possible duplicate is still only a
+  warning ("Přesto založit", or confirming the row in the import). The lock is keyed by the owner
+  written for and taken only after the right to write for that owner is checked: a salesperson
+  never waits on another salesperson's owner lock (a request for a colleague is refused at once).
+  Every create also takes the shared row of the prospect code counter until it commits — as
+  before this change — so a create can wait for any concurrent create; that wait shows only that
+  somebody is creating prospects right now, never whether a prospect similar to the typed one
+  exists. Nothing becomes unique (names, phones, e-mails stay free).
 - **Concurrent edits**: every update of a prospect, contact or task carries the revision it was
   based on. A newer revision is refused with `409 …_CHANGED`, so the last save never silently
   overwrites somebody else's change. The form keeps the user's input and offers a reload.
@@ -168,7 +179,10 @@ fine.
 - **Přehled** (`/sales`): my tasks today, overdue and upcoming (7 days), and my prospects in
   progress (Oslovený, Jednání, Nabídka). ADMIN can switch to everyone.
 - **Akvizice** (`/sales/prospects`):
-  - search by name, city and contacts (label, e-mail, phone);
+  - search by name, city and contacts (label, e-mail, phone). Phone numbers are compared only for
+    a query written like a phone (digits with spaces, "+", brackets, "/", "-" or ".", at least four
+    digits, compared by the last nine): "Penzion 2024" is a name and never finds a hotel whose
+    phone contains 2024. The export uses the same filter;
   - filters by owner (ADMIN), stage, priority, country and the next task (overdue, today, next 7
     days, none);
   - a page of 25 with the total count and a stable order: next task, then name, then code;
@@ -260,9 +274,10 @@ any synchronisation are not part of this version.
   concerned (`IMPORT_ROWS_INVALID`, `IMPORT_DUPLICATES_UNCONFIRMED`, `NOT_A_SALESPERSON`) and the
   wizard refreshes its preview. All selected rows are written in one transaction (all or nothing),
   idempotent per request id: a double click or a retry after a lost answer imports once; the same
-  request id with another selection is a conflict. Confirmations for one owner run one at a time
-  (an advisory lock): a parallel one with another request id (a second tab, a reload after a lost
-  answer) finds the rows as possible duplicates and writes nothing.
+  request id with another selection is a conflict. Confirmations and manual creates for one owner
+  run one at a time (§8): a parallel one with another request id (a second tab, a reload after a
+  lost answer, the same hotel typed by hand) finds the rows as possible duplicates and writes
+  nothing.
 - **Result** (`IMP-000001`, page `/sales/prospects/import/IMP-…`): created prospects with their
   row numbers, the rows left out with the reasons. Stored append-only in `sales_imports` (row
   numbers and error codes only, never contact data); every created prospect keeps its import and

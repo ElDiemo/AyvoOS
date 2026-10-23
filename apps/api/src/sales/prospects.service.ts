@@ -33,6 +33,7 @@ import {
   addDays,
   assertActive,
   changed,
+  lockOwnerProspects,
   salesEvent,
   salesToday,
   visibleProspect,
@@ -40,7 +41,7 @@ import {
   type SalesScope,
 } from './sales-access.js';
 import { csvFile } from './sales-csv.js';
-import { emailKey, nameKey, phoneKey, websiteKey } from './sales-keys.js';
+import { emailKey, nameKey, phoneKey, phoneQuery, websiteKey } from './sales-keys.js';
 import { SalesViews } from './sales-views.js';
 
 /** The profile fields of a prospect, compared and recorded field by field. */
@@ -296,13 +297,13 @@ export class ProspectsService {
     if (q.q) {
       const like = `%${escapeLike(q.q)}%`;
       const key = nameKey(q.q);
-      const digits = q.q.replace(/\D/g, '');
+      const digits = phoneQuery(q.q) ?? '';
       where.push(Prisma.sql`(
         p."name" ILIKE ${like} OR p."city" ILIKE ${like} OR p."code" ILIKE ${like}
         OR (${key} <> '' AND p."name_key" LIKE ${`%${escapeLike(key)}%`})
         OR EXISTS (SELECT 1 FROM "sales_contacts" c WHERE c."prospect_id" = p."id"
           AND (c."label" ILIKE ${like} OR c."email" ILIKE ${like}
-               OR (length(${digits}) >= 4 AND c."phone_key" LIKE ${`%${digits.slice(-9)}%`}))))`);
+               OR (${digits} <> '' AND c."phone_key" LIKE ${`%${digits}%`}))))`);
     }
     return where;
   }
@@ -529,6 +530,8 @@ export class ProspectsService {
       { actorId: scope.userId, ...input, requestId: undefined },
       async (tx) => {
         if (ownerId !== scope.userId) await this.assertSalesperson(tx, ownerId);
+        // The same owner's import may be writing right now: wait for it, then check against it.
+        await lockOwnerProspects(tx, ownerId);
         if (!input.acknowledgeDuplicates) {
           const hint = await this.duplicates(
             scope,

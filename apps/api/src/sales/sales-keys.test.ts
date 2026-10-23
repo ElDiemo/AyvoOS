@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emailKey, nameKey, phoneKey, websiteKey } from './sales-keys.js';
+import { emailKey, nameKey, phoneKey, phoneQuery, websiteKey } from './sales-keys.js';
 
 describe('possible-duplicate keys (doc 034 §8)', () => {
   it('compares names without accents, punctuation and generic words', () => {
@@ -20,5 +20,17 @@ describe('possible-duplicate keys (doc 034 §8)', () => {
     expect(phoneKey('+43 (0)662 123 456')).toBe('662123456');
     expect(phoneKey('112')).toBeNull();
     expect(emailKey(' Recepce@Lipa.CZ ')).toBe('recepce@lipa.cz');
+  });
+  it('searches phones only for a query written like a phone', () => {
+    expect(phoneQuery('+420 721 000 111')).toBe('721000111');
+    expect(phoneQuery(' (0662) 123-456 ')).toBe('0662123456'.slice(-9));
+    expect(phoneQuery('721.000')).toBe('721000');
+    expect(phoneQuery('0111')).toBe('0111');
+    // A name with digits is a name.
+    expect(phoneQuery('Penzion 2024')).toBeNull();
+    expect(phoneQuery('Hotel 1921b9')).toBeNull();
+    expect(phoneQuery('AKV-000123')).toBeNull();
+    expect(phoneQuery('123')).toBeNull();
+    expect(phoneQuery('+')).toBeNull();
   });
 });
