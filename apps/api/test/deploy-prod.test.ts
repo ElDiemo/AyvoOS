@@ -240,6 +240,96 @@ describe('production host guard (DOCKER-USER, IPv4 and IPv6)', () => {
   });
 });
 
+describe('the production host scripts refuse a wrong host before any change (PROD51-R1)', () => {
+  const MUTATING = ['install', 'systemctl', 'rm', 'cp', 'mkdir', 'chmod', 'sysctl', 'mv', 'ln'];
+  const devTraces = [
+    '/opt/ayvo/secrets/dev-preview.env',
+    '/usr/local/sbin/ayvo-dev-docker-guard',
+    '/etc/systemd/system/ayvo-dev-docker-guard.service',
+    '/etc/sysctl.d/60-ayvo-dev-tailnet.conf',
+  ].some((f) => existsSync(f));
+
+  /** A simulated host: every command that could change something only records its call. */
+  function simulate(host: {
+    name: string;
+    containers: string[];
+    tailnet: string;
+    docker?: boolean;
+  }) {
+    const bin = mkdtempSync(join(tmp, 'host-'));
+    const log = join(bin, 'mutations.log');
+    writeFileSync(log, '');
+    const fake = (name: string, body: string) => {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    };
+    fake('id', 'case "$1" in -u) echo 0;; *) exit 0;; esac');
+    fake('hostname', `echo ${host.name}`);
+    fake(
+      'docker',
+      host.docker === false
+        ? 'exit 1'
+        : `[ "$1" = ps ] && printf '${host.containers.join('\\n')}\\n'; exit 0`,
+    );
+    // tailscale: the address; `set` would change something.
+    fake(
+      'tailscale',
+      `case "$1" in ip) echo ${host.tailnet};; set) echo "tailscale $*" >> "${log}";; debug) echo '{"AdvertiseRoutes":null,"NoSNAT":false}';; esac`,
+    );
+    for (const name of MUTATING) fake(name, `echo "${name} $*" >> "${log}"`);
+    return {
+      run: (script: string) => run('bash', [join(root, script)], { PATH: `${bin}:/usr/bin:/bin` }),
+      mutations: () => readFileSync(log, 'utf8').trim(),
+    };
+  }
+  const scripts = ['deploy/prod/host/install.sh', 'deploy/prod/host/uninstall.sh'];
+
+  it('the DEV server (hostname, containers, address) changes nothing', () => {
+    const host = simulate({
+      name: 'AyvoOS',
+      containers: ['ayvo-dev-preview-api-1', 'ayvo-dev-preview-caddy-1'],
+      tailnet: '100.64.12.34',
+    });
+    for (const script of scripts) {
+      const res = host.run(script);
+      expect(res.status, `${script}: ${res.stdout}${res.stderr}`).toBe(1);
+      expect(res.stderr).toContain('refusing');
+      expect(host.mutations(), script).toBe('');
+    }
+  });
+
+  it.each([
+    [['ayvo-dev-preview-api-1'], '100.88.139.2', true, 'DEV preview containers'],
+    [[], '100.64.12.34', true, "Tailscale IPv4 is '100.64.12.34'"],
+    [[], '100.88.139.2', false, 'cannot list the containers'],
+  ])(
+    'the right name with %j / %s / docker %s changes nothing',
+    (containers, tailnet, docker, message) => {
+      const host = simulate({ name: 'AyvoOS-PROD', containers, tailnet, docker });
+      for (const script of scripts) {
+        const res = host.run(script);
+        expect(res.status, script).toBe(1);
+        // On the DEV server itself its real traces are found first.
+        expect(res.stderr).toContain(devTraces ? 'DEV preview found' : message);
+        expect(host.mutations(), script).toBe('');
+      }
+    },
+  );
+
+  it.skipIf(devTraces)(
+    'the production host passes the check (then the fakes record changes)',
+    () => {
+      const host = simulate({
+        name: 'AyvoOS-PROD',
+        containers: ['ayvo-prod-api-1'],
+        tailnet: '100.88.139.2',
+      });
+      host.run('deploy/prod/host/uninstall.sh');
+      expect(host.mutations()).toContain('systemctl');
+    },
+  );
+});
+
 describe('production deploy script', () => {
   it('is valid bash', () => {
     expect(run('bash', ['-n', join(root, 'scripts/deploy-prod.sh')]).status).toBe(0);
@@ -363,7 +453,7 @@ describe('production deploy script', () => {
         AYVO_PROD_DIR: join(tmp, 'prod'),
       });
       expect(res.status).toBe(1);
-      expect(res.stderr).toMatch(/this is the DEV server|is not installed/);
+      expect(res.stderr).toMatch(/refusing: this host is|DEV preview|is not installed/);
     },
   );
 });

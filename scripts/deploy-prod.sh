@@ -107,8 +107,16 @@ require_commands() {
   docker compose version >/dev/null 2>&1 || die "the Docker Compose plugin is missing"
 }
 
-# Production never runs next to DEV, and DEV material never reaches this host.
+# Production never runs next to DEV, and DEV material never reaches this host: the declared
+# production host (deploy/prod/host/prod-host.sh: hostname, Tailscale IPv4, no DEV traces).
 not_dev_server() {
+  # shellcheck source=../deploy/prod/host/prod-host.sh
+  source "$REPO_ROOT/deploy/prod/host/prod-host.sh"
+  assert_prod_host || die "not the production host"
+}
+
+# Kept as a second, independent check.
+not_dev_preview() {
   [[ ! -e /opt/ayvo/secrets/dev-preview.env ]] || die "this is the DEV server (dev-preview.env exists): production is never deployed here"
   local names
   names="$(docker ps -a --format '{{.Names}}')" || die "cannot list the containers (is Docker running, is $(id -un) in the docker group?)"
@@ -503,6 +511,7 @@ fi
 STEP="validate prerequisites"
 require_commands
 not_dev_server
+not_dev_preview
 tailnet_address
 check_host_guard
 check_env_files

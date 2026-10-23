@@ -8,6 +8,11 @@
 # /var/backups/ayvo-prod-host stay (iptables-restore can bring back an exact earlier state).
 set -Eeuo pipefail
 [[ $(id -u) == 0 ]] || { echo "run as root (sudo)" >&2; exit 1; }
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The right server, and no DEV here, before the first change.
+# shellcheck source=prod-host.sh
+source "$HERE/prod-host.sh"
+assert_prod_host || exit 1
 if docker ps --format '{{.Names}}' | grep -qE '^ayvo-prod-(caddy|dns)-'; then
   echo "ayvo-prod caddy/dns are still running: stop them first (docker compose -p ayvo-prod stop caddy dns)" >&2
   exit 1
