@@ -146,7 +146,7 @@ A database dump alone does not restore AYVO OS. Also needed:
   - Database password: set again in the env file and with `ALTER ROLE` in the restored database.
   - `CARRIER_CREDENTIALS_KEY` (ADR 0027, only if carriers are ever configured in production):
     **cannot be re-created** — encrypted carrier credentials in a restored dump are unreadable
-    without it and must be entered again. Production for Obchod only (doc 036) does not set it.
+    without it and must be entered again. Keep it with the other secrets the moment it is set.
 - **TLS certificates** (Caddy volume) are re-issued automatically; not backed up.
 
 ## 8. Availability risk
