@@ -126,9 +126,10 @@ systemctl status ayvo-prod-docker-guard; ls /opt/ayvo/repos/AyvoOS`.
 2. **Docker Engine + Compose plugin — already prepared (2026-10-23, record
    `/home/ayvo/PROD-RUNTIME-PREPARED-20261023.md`):** Docker 29.9.0, Compose 5.6.0, `jq`. Only
    verify (`docker --version; docker compose version; systemctl is-enabled docker`); never install
-   again. `ayvo` is **not** in the `docker` group: `scripts/deploy-prod.sh` needs the Docker socket,
-   so the owner decides explicitly between `sudo usermod -aG docker ayvo` (root-equivalent, as on
-   DEV) and running the deploy script with `sudo`.
+   again. **Owner decision 2026-10-23: `ayvo` stays out of the `docker` group; the deploy script
+   runs with `sudo`.** It still accepts only env files owned by `ayvo` (or root) with mode 600,
+   and runs every `git` command as `ayvo` (`runuser`): that user's checkout, read-only deploy key
+   and `known_hosts` — never as root, never `safe.directory`, never relaxed host key checking.
 3. **4 GiB swap — already prepared** (`/swap-ayvo-prod`, one `/etc/fstab` entry). Only verify:
    `swapon --show` shows 4G. **Never create a second swap file.**
 4. **Read-only release access:** as `ayvo`, `ssh-keygen -t ed25519 -f ~/.ssh/ayvoos_deploy -N ''`;
@@ -136,6 +137,11 @@ systemctl status ayvo-prod-docker-guard; ls /opt/ayvo/repos/AyvoOS`.
    keys, "Allow write access" off); then `git clone -c core.sshCommand='ssh -i
 ~/.ssh/ayvoos_deploy -o IdentitiesOnly=yes' git@github.com:ElDiemo/AyvoOS.git
 /opt/ayvo/repos/AyvoOS`. It is only fetched and `git archive`d — never edited, never pushed.
+   GitHub's host key goes into `ayvo`'s `~/.ssh/known_hosts` only after comparing it with the
+   published fingerprint (ED25519 `SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`,
+   docs.github.com → "GitHub's SSH key fingerprints"); host key checking stays on. The checkout,
+   the key (600) and `known_hosts` belong to `ayvo`; `--check` refuses a checkout of another
+   owner.
 5. **Host guard and the edges' separation:** `sudo bash deploy/prod/host/install.sh --check`,
    then without `--check` (§3). Tailscale split DNS `os.ayvo.co` → `100.88.139.2` (internal);
    the public DNS A record of the QR host → the public IPv4, no AAAA (doc 037, when that edge is
@@ -148,14 +154,14 @@ systemctl status ayvo-prod-docker-guard; ls /opt/ayvo/repos/AyvoOS`.
    the owner approved for production (#47 S3, #48, #50 backups, #53 QR settings, the public QR edge
    if wanted). **`C` is first deployed and verified on DEV** (`scripts/deploy-dev.sh` from a
    checkout of exactly `C`, owner approval as always); only the same `C` is then promoted here.
-8. `scripts/deploy-prod.sh --check --release <C>` — must pass (host, guard, files, release, WorkOS
+8. `sudo scripts/deploy-prod.sh --check --release <C>` — must pass (host, guard, files, release, WorkOS
    issuer, DNS, Compose).
-9. `scripts/deploy-prod.sh --release <C>`: the database is **new and empty**; it is created only
+9. `sudo scripts/deploy-prod.sh --release <C>`: the database is **new and empty**; it is created only
    by `prisma migrate deploy` from the migrations — never a copy of DEV, never test seeds or
    demo records. The script backs up nothing on an empty database (it says so), migrates, starts,
    verifies.
 10. The external negative test (§5, and doc 037 §5 for the QR host).
-11. **First administrator, once:** `scripts/deploy-prod.sh --bootstrap-admin --email <owner's
+11. **First administrator, once:** `sudo scripts/deploy-prod.sh --bootstrap-admin --email <owner's
 e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism (doc 021 §8);
     the database allows one bootstrap ever. **The first real sign-in with WorkOS + MFA is the
     owner's own step** — no automated test borrows or creates a session for it.

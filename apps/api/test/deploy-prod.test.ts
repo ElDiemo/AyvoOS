@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -347,7 +347,19 @@ describe('the production host scripts refuse a wrong host before any change (PRO
       tailnet: '100.64.12.34',
     });
     // Every command the script requires exists (as a harmless fake) — the host check decides.
-    for (const name of ['git', 'curl', 'jq', 'flock', 'tar', 'sha256sum', 'stat', 'ip', 'df']) {
+    for (const name of [
+      'git',
+      'curl',
+      'jq',
+      'flock',
+      'tar',
+      'sha256sum',
+      'stat',
+      'ip',
+      'df',
+      'getent',
+      'runuser',
+    ]) {
       writeFileSync(join(host.bin, name), '#!/bin/sh\nexit 0\n');
       chmodSync(join(host.bin, name), 0o755);
     }
@@ -388,7 +400,7 @@ describe('production deploy script', () => {
     for (const m of body.matchAll(/compose config[^\n]*/g)) expect(m[0]).toContain('--quiet');
     expect(body).not.toMatch(/(^|\s)(source|\.)\s+"?\$SECRETS/m);
     expect(body).toContain('merge-base --is-ancestor "$RELEASE" origin/main');
-    expect(body).toContain('git -C "$REPO_ROOT" archive');
+    expect(body).toContain('repo_git archive');
   });
 
   it('backs up before migrating, and starts the new release only after migrating', () => {
@@ -407,7 +419,15 @@ describe('production deploy script', () => {
 
   describe('env file checks (names only, an explicit list per file)', () => {
     /** Runs check_env_files of the real script on fictional files (its functions only). */
-    function check(files: Record<string, string>, mode = 0o600) {
+    /**
+     * Runs the env file checks. `owner` is the approved owner (default: the user running the
+     * tests, who owns the files); `asRoot` simulates `sudo` (only `id -u` without a user answers 0).
+     */
+    function check(
+      files: Record<string, string>,
+      mode = 0o600,
+      opts: { owner?: string; asRoot?: boolean; call?: string } = {},
+    ) {
       const dir = mkdtempSync(join(tmp, 'secrets-'));
       for (const [name, text] of Object.entries(files)) {
         writeFileSync(join(dir, name), text);
@@ -416,8 +436,15 @@ describe('production deploy script', () => {
       const lines = script.split('\n');
       const from = lines.findIndex((l) => l.startsWith('readonly SECRETS='));
       const to = lines.findIndex((l) => l.startsWith('# --- Compose'));
-      const harness = `set -Eeuo pipefail\n${lines.slice(from, to).join('\n')}\nSTEP=test\ncheck_env_files\n`;
-      return run('bash', ['-c', harness], { AYVO_PROD_SECRETS_DIR: dir, AYVO_PROD_DIR: dir });
+      const root = opts.asRoot
+        ? 'id() { if [[ $# == 1 && $1 == -u ]]; then echo 0; else command id "$@"; fi; }\n'
+        : '';
+      const harness = `set -Eeuo pipefail\n${root}${lines.slice(from, to).join('\n')}\nSTEP=test\n${opts.call ?? 'check_env_files'}\n`;
+      return run('bash', ['-c', harness], {
+        AYVO_PROD_SECRETS_DIR: dir,
+        AYVO_PROD_DIR: dir,
+        AYVO_PROD_OWNER: opts.owner ?? userInfo().username,
+      });
     }
     const prod =
       'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
@@ -493,6 +520,55 @@ describe('production deploy script', () => {
       expect(res.stderr).toMatch(message);
       expect(res.stderr).not.toMatch(/fictional|AKIA/);
     });
+    it('PROD51-R2: with sudo (root) it accepts the approved owner ayvo:600, not only root', () => {
+      const res = check(good, 0o600, { asRoot: true });
+      expect(res.status, res.stderr).toBe(0);
+    });
+    it('PROD51-R2: with sudo a foreign owner and unsafe modes stay refused', () => {
+      // The files belong to the test user; the approved owner is someone else.
+      const foreign = check(good, 0o600, { asRoot: true, owner: 'nobody' });
+      expect(foreign.status).toBe(1);
+      expect(foreign.stderr).toMatch(/must belong to nobody or root/);
+      const open = check(good, 0o640, { asRoot: true });
+      expect(open.status).toBe(1);
+      expect(open.stderr).toMatch(/must not be readable by group or others/);
+    });
+    it('runs only as root (sudo) or as the approved owner', () => {
+      expect(check(good, 0o600, { call: 'check_runner' }).status).toBe(0);
+      expect(
+        check(good, 0o600, { asRoot: true, owner: 'nobody', call: 'check_runner' }).status,
+      ).toBe(0);
+      const other = check(good, 0o600, { owner: 'nobody', call: 'check_runner' });
+      expect(other.status).toBe(1);
+      expect(other.stderr).toMatch(/run as root \(sudo\) or as nobody/);
+    });
+    it('git runs as the approved owner under sudo — never safe.directory or relaxed host keys', () => {
+      const bin = mkdtempSync(join(tmp, 'bin-'));
+      writeFileSync(join(bin, 'runuser'), '#!/bin/sh\necho "runuser $*"\n');
+      chmodSync(join(bin, 'runuser'), 0o755);
+      const res = run(
+        'bash',
+        [
+          '-c',
+          `id() { if [[ $# == 1 && $1 == -u ]]; then echo 0; else command id "$@"; fi; }\n` +
+            `REPO_ROOT=/opt/ayvo/repos/AyvoOS\nDEPLOY_OWNER=ayvo\n` +
+            script
+              .split('\n')
+              .slice(
+                script.split('\n').findIndex((l) => l.startsWith('repo_git() {')),
+                script.split('\n').findIndex((l) => l.startsWith('check_checkout() {')),
+              )
+              .join('\n') +
+            '\nrepo_git fetch --quiet origin main\n',
+        ],
+        { PATH: `${bin}:/usr/bin:/bin` },
+      );
+      expect(res.stdout).toMatch(
+        /^runuser -u ayvo -- env HOME=\S* git -C \/opt\/ayvo\/repos\/AyvoOS fetch --quiet origin main$/m,
+      );
+      expect(code(script)).not.toMatch(/safe\.directory|StrictHostKeyChecking|UserKnownHostsFile/);
+      expect(code(script)).not.toMatch(/^\s*git -C "\$REPO_ROOT" (fetch|archive|show|cat-file)/m);
+    });
     it('refuses files readable by others', () => {
       const res = check(good, 0o644);
       expect(res.status).toBe(1);
@@ -501,9 +577,7 @@ describe('production deploy script', () => {
   });
 
   it('exports the release with modes the non-root containers can read', () => {
-    expect(script).toMatch(
-      /umask 022[\s\S]*git -C "\$REPO_ROOT" archive[\s\S]*chmod -R a\+rX,go-w/,
-    );
+    expect(script).toMatch(/umask 022[\s\S]*repo_git archive[\s\S]*chmod -R a\+rX,go-w/);
   });
 
   it.skipIf(!existsSync('/opt/ayvo/secrets/dev-preview.env'))(

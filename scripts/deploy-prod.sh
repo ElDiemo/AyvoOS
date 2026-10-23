@@ -16,7 +16,12 @@
 # <commit> is a full 40-character commit that is already on origin/main (merged = approved). The
 # images are built from a clean `git archive` of exactly that commit — never from a working copy.
 #
+# Run it with sudo (doc 036 §6: `ayvo` is not in the docker group). The approved owner of the
+# repository and of the env files stays `ayvo`; git runs as that user (its read-only deploy key
+# and known_hosts), never as root and never with safe.directory or relaxed host key checking.
+#
 # Environment (optional):
+#   AYVO_PROD_OWNER        approved owner of the checkout and the env files (default ayvo)
 #   AYVO_PROD_SECRETS_DIR  server-only env files          (default /opt/ayvo/secrets)
 #   AYVO_PROD_DIR          releases, pre-migration dumps,
 #                          state, lock and log            (default /opt/ayvo/prod)
@@ -39,6 +44,7 @@ readonly DOMAIN=os.ayvo.co
 readonly IMAGE_PREFIX=ayvo-prod
 readonly GUARD_UNIT=ayvo-prod-docker-guard.service
 readonly SECRETS="${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}"
+readonly DEPLOY_OWNER="${AYVO_PROD_OWNER:-ayvo}"
 readonly PROD_DIR="${AYVO_PROD_DIR:-/opt/ayvo/prod}"
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly MIN_FREE_GB=8
@@ -103,7 +109,7 @@ trap 'STEP="$STEP (line $LINENO: $BASH_COMMAND)"' ERR
 
 require_commands() {
   local cmd
-  for cmd in docker git curl jq awk flock tar sha256sum stat tailscale ip systemctl sysctl df; do
+  for cmd in docker git curl jq awk flock tar sha256sum stat tailscale ip systemctl sysctl df getent runuser; do
     command -v "$cmd" >/dev/null || die "$cmd is not installed"
   done
   docker compose version >/dev/null 2>&1 || die "the Docker Compose plugin is missing"
@@ -154,6 +160,28 @@ env_value() {
     sed -E "s/^[[:space:]]*(export[[:space:]]+)?$2=[[:space:]]*//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\\1/; s/^'(.*)'\$/\\1/"
 }
 
+# The approved owner's UID; the script runs as root (sudo) or as that owner, nobody else.
+owner_uid() { id -u "$DEPLOY_OWNER" 2>/dev/null || die "the approved owner $DEPLOY_OWNER does not exist"; }
+check_runner() {
+  local me
+  me="$(id -u)"
+  [[ $me == 0 || $me == "$(owner_uid)" ]] || die "run as root (sudo) or as $DEPLOY_OWNER, not as $(id -un)"
+}
+
+# git always as the approved owner: its checkout, its read-only deploy key, its known_hosts.
+repo_git() {
+  if [[ $(id -u) == 0 ]]; then
+    runuser -u "$DEPLOY_OWNER" -- env HOME="$(getent passwd "$DEPLOY_OWNER" | cut -d: -f6)" \
+      git -C "$REPO_ROOT" "$@"
+  else
+    git -C "$REPO_ROOT" "$@"
+  fi
+}
+check_checkout() {
+  [[ $(stat -c '%U' "$REPO_ROOT/.git") == "$DEPLOY_OWNER" ]] ||
+    die "$REPO_ROOT must belong to $DEPLOY_OWNER (the read-only checkout, doc 036 §6)"
+}
+
 check_env_file() {
   local file=$1 required=$2 allowed=$3
   [[ -f $file ]] || die "$file does not exist (doc 036 §4)"
@@ -161,7 +189,8 @@ check_env_file() {
   mode="$(stat -c '%a' "$file")"
   owner="$(stat -c '%u' "$file")"
   [[ $mode =~ ^[0-7]00$ ]] || die "$file must not be readable by group or others (mode $mode, expected 600)"
-  [[ $owner == "$(id -u)" || $owner == 0 ]] || die "$file must belong to $(id -un) or root"
+  # The approved owner (ayvo, also when the script runs with sudo) or root; nobody else.
+  [[ $owner == "$(owner_uid)" || $owner == 0 ]] || die "$file must belong to $DEPLOY_OWNER or root"
   # Every line is a comment, empty, or KEY=VALUE: a bare KEY would be filled from the environment.
   grep -vqE '^[[:space:]]*(#.*)?$|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$file" &&
     die "$file has a line that is not KEY=VALUE (line $(grep -nvE '^[[:space:]]*(#.*)?$|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$file" | head -n1 | cut -d: -f1))"
@@ -211,16 +240,17 @@ check_env_files() {
 check_release() {
   STEP="check the release $RELEASE"
   log "$STEP"
+  check_checkout
   [[ $RELEASE =~ ^[0-9a-f]{40}$ ]] || die "--release needs a full 40-character commit"
-  git -C "$REPO_ROOT" fetch --quiet origin main || die "cannot fetch origin/main"
-  git -C "$REPO_ROOT" cat-file -e "$RELEASE^{commit}" 2>/dev/null || die "commit $RELEASE is not in the repository"
-  git -C "$REPO_ROOT" merge-base --is-ancestor "$RELEASE" origin/main ||
+  repo_git fetch --quiet origin main || die "cannot fetch origin/main"
+  repo_git cat-file -e "$RELEASE^{commit}" 2>/dev/null || die "commit $RELEASE is not in the repository"
+  repo_git merge-base --is-ancestor "$RELEASE" origin/main ||
     die "$RELEASE is not on origin/main: only a merged (approved) commit is released"
-  git -C "$REPO_ROOT" cat-file -e "$RELEASE:deploy/prod/compose.yml" 2>/dev/null ||
+  repo_git cat-file -e "$RELEASE:deploy/prod/compose.yml" 2>/dev/null ||
     die "$RELEASE has no deploy/prod/compose.yml"
-  git -C "$REPO_ROOT" show "$RELEASE:apps/api/src/config/env.ts" | grep -q "'s3'" ||
+  repo_git show "$RELEASE:apps/api/src/config/env.ts" | grep -q "'s3'" ||
     die "$RELEASE has no S3 file storage (ADR 0032, #47): production cannot start on local storage"
-  ok "$RELEASE is on origin/main ($(git -C "$REPO_ROOT" log -1 --format='%cs %s' "$RELEASE"))"
+  ok "$RELEASE is on origin/main ($(repo_git log -1 --format='%cs %s' "$RELEASE"))"
 }
 
 # The issuer fixed in the release's compose.yml must be exactly the `issuer` of the WorkOS
@@ -282,7 +312,7 @@ export_release() {
   (
     umask 022
     mkdir -p "$dir.partial"
-    git -C "$REPO_ROOT" archive --format=tar "$RELEASE" | tar -x --no-same-owner -C "$dir.partial"
+    repo_git archive --format=tar "$RELEASE" | tar -x --no-same-owner -C "$dir.partial"
     printf '%s\n' "$RELEASE" >"$dir.partial/.ayvo-release"
   )
   chmod -R a+rX,go-w "$dir.partial"
@@ -524,6 +554,7 @@ STEP="validate prerequisites"
 require_commands
 not_dev_server
 not_dev_preview
+check_runner
 if [[ $MODE == deploy || $MODE == rollback ]]; then
   mkdir -p "$PROD_DIR"
   exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
