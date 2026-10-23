@@ -217,7 +217,9 @@ function TaskEditDialog({
             title: v.title.trim(),
             note: v.note.trim() || null,
             contactId: v.contactId || null,
-            assigneeId: v.assigneeId,
+            // Without the right to choose (no `assignees`), always the assignee as the server has
+            // it now — after a reload ADMIN may have taken the task over (Codex SALES45-R2).
+            assigneeId: assignees ? v.assigneeId : task.assignee.id,
           },
           onClose,
         );
