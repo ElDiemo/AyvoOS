@@ -249,11 +249,11 @@ Tailwind 4 · Vitest · Playwright.
   `pnpm test`). The live copy in `/opt/ayvo/night-shift` changes only by the owner's installation.
 - `ops/prod-backup` — production database backups to S3 and their restore check (doc 035; Python
   standard library). Installed and its timers enabled only on AyvoOS-PROD by the owner.
+- `deploy/dev/` — DEV preview Compose stack + Caddyfile; `apps/*/Dockerfile` — app images (build
+  context = repo root, `.dockerignore` keeps `.env*` out); `scripts/deploy-dev.sh` — manual deploy.
 - `deploy/prod/` + `scripts/deploy-prod.sh` — the separate PRODUCTION installation on AyvoOS-PROD
   (doc 036, ADR 0033): the same release code, its own project, secrets, database and host guard.
   Run only there, only by the owner, only an approved commit on origin/main.
-- `deploy/dev/` — DEV preview Compose stack + Caddyfile; `apps/*/Dockerfile` — app images (build
-  context = repo root, `.dockerignore` keeps `.env*` out); `scripts/deploy-dev.sh` — manual deploy.
 
 ## Conventions
 
