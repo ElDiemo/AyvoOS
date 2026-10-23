@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadEnv } from './env.js';
+import { labelQrSettings, loadEnv } from './env.js';
 
 const valid = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/ayvo_test',
@@ -62,13 +62,48 @@ describe('loadEnv', () => {
     });
   });
 
-  it('requires physically validated QR settings in production (no defaults)', () => {
-    expect(() => loadEnv({ ...production, LABEL_QR_MIN_SIZE_MM: undefined })).toThrow(
-      /LABEL_QR_MIN_SIZE_MM/,
-    );
-    expect(() => loadEnv({ ...production, LABEL_QR_ERROR_CORRECTION: undefined })).toThrow(
-      /LABEL_QR_ERROR_CORRECTION/,
-    );
+  describe('QR label settings never stop the application (owner 2026-10-23)', () => {
+    it('production without them fails only for what else is missing (here: file storage)', () => {
+      for (const unset of [undefined, '', '  ']) {
+        const source = {
+          ...production,
+          LABEL_QR_MIN_SIZE_MM: unset,
+          LABEL_QR_ERROR_CORRECTION: unset,
+        };
+        expect(() => loadEnv(source)).toThrow(/Production file storage is not configured/);
+        expect(() => loadEnv(source)).not.toThrow(/LABEL_QR/);
+      }
+    });
+
+    it('production gets exactly what is configured, never the candidates 10 mm / Q', () => {
+      expect(labelQrSettings('production', undefined, undefined)).toEqual({
+        LABEL_QR_MIN_SIZE_MM: null,
+        LABEL_QR_ERROR_CORRECTION: null,
+      });
+      expect(labelQrSettings('production', 15, undefined)).toEqual({
+        LABEL_QR_MIN_SIZE_MM: 15,
+        LABEL_QR_ERROR_CORRECTION: null,
+      });
+      expect(labelQrSettings('production', 15, 'H')).toEqual({
+        LABEL_QR_MIN_SIZE_MM: 15,
+        LABEL_QR_ERROR_CORRECTION: 'H',
+      });
+    });
+
+    it('elsewhere an empty value (Compose `${VAR:-}`) is unset and gets the candidates', () => {
+      expect(
+        loadEnv({ ...valid, LABEL_QR_MIN_SIZE_MM: '', LABEL_QR_ERROR_CORRECTION: ' ' }),
+      ).toMatchObject({ LABEL_QR_MIN_SIZE_MM: 10, LABEL_QR_ERROR_CORRECTION: 'Q' });
+    });
+
+    it('a malformed value is still a configuration error at startup', () => {
+      expect(() => loadEnv({ ...valid, LABEL_QR_MIN_SIZE_MM: '2' })).toThrow(
+        /LABEL_QR_MIN_SIZE_MM/,
+      );
+      expect(() => loadEnv({ ...valid, LABEL_QR_ERROR_CORRECTION: 'X' })).toThrow(
+        /LABEL_QR_ERROR_CORRECTION/,
+      );
+    });
   });
 
   it('refuses to start production on local (container) file storage', () => {
