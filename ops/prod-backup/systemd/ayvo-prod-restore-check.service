@@ -1,0 +1,26 @@
+# AYVO OS — PROD weekly restore check of the newest daily backup (doc 035): restores it into a
+# NEW PostgreSQL container without network and compares rows, foreign keys, triggers and
+# migrations with the manifest. Never touches the running database.
+[Unit]
+Description=AYVO PROD: restore check of the newest daily backup
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ayvo
+Group=ayvo
+SupplementaryGroups=docker
+Environment=PYTHONPATH=/usr/local/lib/ayvo-backup PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m ayvo_backup restore-check --latest daily
+TimeoutStartSec=2h
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+StateDirectory=ayvo-backup
+StateDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ayvo-backup

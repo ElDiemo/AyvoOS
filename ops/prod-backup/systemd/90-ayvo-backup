@@ -1,0 +1,7 @@
+#!/bin/sh
+# AYVO OS — PROD: the backup state on every SSH login (doc 035). Reads local state only.
+echo
+echo "AYVO database backups:"
+PYTHONPATH=/usr/local/lib/ayvo-backup PYTHONDONTWRITEBYTECODE=1 \
+  /usr/bin/python3 -m ayvo_backup status 2>&1 | sed 's/^/  /' || true
+echo
