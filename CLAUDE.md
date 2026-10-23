@@ -236,6 +236,9 @@ Tailwind 4 · Vitest · Playwright.
 - `docker/compose.yml` — dev PostgreSQL + Redis only.
 - `ops/night-shift` — the night-shift controller (doc 024; Python standard library, tests run by
   `pnpm test`). The live copy in `/opt/ayvo/night-shift` changes only by the owner's installation.
+- `deploy/prod/` + `scripts/deploy-prod.sh` — the separate PRODUCTION installation on AyvoOS-PROD
+  (doc 036, ADR 0033): the same release code, its own project, secrets, database and host guard.
+  Run only there, only by the owner, only an approved commit on origin/main.
 - `deploy/dev/` — DEV preview Compose stack + Caddyfile; `apps/*/Dockerfile` — app images (build
   context = repo root, `.dockerignore` keeps `.env*` out); `scripts/deploy-dev.sh` — manual deploy.
 
