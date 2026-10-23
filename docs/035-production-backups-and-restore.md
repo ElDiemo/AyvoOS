@@ -40,19 +40,26 @@ before it expires is a manual owner decision.
    or root; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`). They go
    into a mode-600 env file of the run directory for the AWS CLI container — never into a process
    argument, a log or the state files.
-4. **Dump** inside the running database container: one `REPEATABLE READ READ ONLY` transaction
+4. **Space** before anything is written: the expected dump is the database's size, at most the
+   cap (`--max-dump-gb`, default 10 GiB). The database container's `/tmp` — the live database's
+   disk — must have it plus a 2 GiB reserve free, and the host's `/var/lib/ayvo-backup` three
+   times it (the host copy, the read-back, and the container's copy on the same disk) plus the
+   reserve. Otherwise the run fails at `space` and writes nothing.
+5. **Dump** inside the running database container: one `REPEATABLE READ READ ONLY` transaction
    exports its snapshot; `pg_dump --format=custom --compress=6 --snapshot=…` dumps exactly that
    snapshot, and the same snapshot's statistics are written alongside — rows of every table,
    foreign keys (and any not validated), user triggers, finished Prisma migrations, server
-   version. That is the **manifest**: what a restore must reproduce. Timeout 30 min.
-5. **Local check**: `pg_restore --list` reads the whole archive; size > 0; SHA-256.
-6. **Upload** with the pinned AWS CLI image (`amazon/aws-cli` 2.38.1 by digest, read-only, no
+   version. That is the **manifest**: what a restore must reproduce. Timeout 30 min. The dump is
+   written through `head -c <cap + 1>`: it can never grow past the cap; a dump that reaches it
+   fails (`the dump exceeds the limit`) and is removed.
+6. **Local check**: `pg_restore --list` reads the whole archive; size > 0; SHA-256.
+7. **Upload** with the pinned AWS CLI image (`amazon/aws-cli` 2.38.1 by digest, read-only, no
    capabilities): `put-object` with `--checksum-sha256` (S3 refuses a body that does not match),
    SSE-S3, `If-None-Match: *`. Then **verify**: `head-object` size, SHA-256 and metadata, and a
    **read-back** (`get-object`) hashed again. Up to 3 attempts (10 s, 30 s apart), 15 min each. A
    retry after a lost answer finds its own object (`412`) and accepts it only if it verifies.
-7. **Manifest** uploaded and verified the same way. A backup is complete only when both exist.
-8. **State**: `last-success-<kind>.json` (key, size, SHA-256, tables, rows, times) or
+8. **Manifest** uploaded and verified the same way. A backup is complete only when both exist.
+9. **State**: `last-success-<kind>.json` (key, size, SHA-256, tables, rows, times) or
    `last-failure-<kind>.json` (step and a message without secrets). Exit 0 / 1.
 
 On SIGTERM/SIGINT (systemd stop, timeout) the running command is killed, the run directory and
@@ -105,7 +112,9 @@ older backup without the owner deciding so.
 - The units fail visibly: `systemctl --failed`, `journalctl -u 'ayvo-prod-backup@*'`.
 - `ayvo-prod-backup-check.timer` (every 30 min) runs `status`: exit 1 — a failed unit logged at
   priority `err` — when the last hourly success is older than 2.5 h, the last daily older than
-  26 h, the last run of either failed, or the last restore check failed or is older than 8 days.
+  26 h, the last run of either failed, or the last restore check failed, is older than 8 days or
+  **never ran** (backups never restored are not known to be usable — so `status` stays red after
+  installation until the first restore check, §6 step 4).
 - Any failure of a run is recorded (`last-failure-<kind>.json`), also an unexpected one.
 - Every SSH login shows the same status (`/etc/update-motd.d/90-ayvo-backup`).
 - The deployment script (doc 036) shows the status before every release.
@@ -118,7 +127,10 @@ older backup without the owner deciding so.
    exists (`ayvo:ayvo`, mode 600) with the backup identity's `AWS_ACCESS_KEY_ID` and
    `AWS_SECRET_ACCESS_KEY` (rename the keys if the file uses other names; values are never
    copied anywhere else).
-2. `sudo bash ops/prod-backup/install.sh` — code, units, login message; enables nothing.
+2. `sudo bash ops/prod-backup/install.sh` — code, units, login message; enables nothing. Like
+   `uninstall.sh`, it first checks that this is AyvoOS-PROD (`ops/prod-backup/prod-host.sh`:
+   hostname `AyvoOS-PROD`, Tailscale IPv4 `100.88.139.2`, no trace of the DEV preview) and refuses
+   to change anything otherwise.
 3. First backup by hand: `sudo systemctl start ayvo-prod-backup@daily.service`, then
    `journalctl -u ayvo-prod-backup@daily -n 50` and `python3 -m ayvo_backup status`
    (`PYTHONPATH=/usr/local/lib/ayvo-backup`).

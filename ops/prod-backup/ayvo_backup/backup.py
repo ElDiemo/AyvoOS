@@ -59,6 +59,11 @@ MAX_RESTORE_CHECK_AGE_DAYS = 8
 # A daily backup waits this long for a running hourly one instead of being skipped.
 DAILY_LOCK_WAIT = 2700
 
+# Temporary space (doc 035 §2): a dump may not exceed this many bytes (a hard cap while it is
+# written), and every filesystem keeps this much free beyond what a run needs.
+MAX_DUMP_BYTES = 10 * 1024**3
+RESERVE_BYTES = 2 * 1024**3
+
 DUMP_TIMEOUT = 1800
 UPLOAD_TIMEOUT = 900
 UPLOAD_ATTEMPTS = 3
@@ -332,17 +337,21 @@ class Config:
     upload_timeout: int = UPLOAD_TIMEOUT
     retry_delays: tuple[int, ...] = RETRY_DELAYS
     daily_lock_wait: int = DAILY_LOCK_WAIT
+    max_dump_bytes: int = MAX_DUMP_BYTES
+    reserve_bytes: int = RESERVE_BYTES
     s3_factory: object = field(default=None, repr=False)
 
 
-def dump_script(backup_id: str) -> bytes:
-    """psql input: export a snapshot, run pg_dump in it, write the same snapshot's statistics."""
+def dump_script(backup_id: str, max_bytes: int) -> bytes:
+    """psql input: export a snapshot, run pg_dump in it, write the same snapshot's statistics.
+    The dump goes through `head -c`: never more than max_bytes + 1 bytes are written (one byte
+    more than the limit means "too large"); pg_dump's own exit code is kept in the .rc file."""
     base = f'/tmp/ayvo-backup-{backup_id}'
     return f"""\\set ON_ERROR_STOP on
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SELECT pg_export_snapshot() AS snap \\gset
 \\setenv AYVO_SNAPSHOT :snap
-\\! pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --compress=6 --snapshot="$AYVO_SNAPSHOT" --file={base}.dump; echo $? > {base}.rc
+\\! {{ pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --compress=6 --snapshot="$AYVO_SNAPSHOT"; echo $? > {base}.rc; }} | head -c {max_bytes + 1} > {base}.dump
 \\o {base}.stats.json
 {STATS_SQL}
 \\o
@@ -375,15 +384,66 @@ class Backup:
             [self.cfg.pg_container, 'sh', '-c', 'rm -f /tmp/ayvo-backup-[0-9]*Z-*'],
             timeout=60, step='cleanup')
 
+    def container_free_bytes(self) -> int:
+        """Free bytes for /tmp inside the database container (on the host's Docker disk)."""
+        res = self.docker_exec([self.cfg.pg_container, 'df', '-Pk', '/tmp'], timeout=30,
+                               step='space')
+        try:
+            return int(res.stdout.decode().splitlines()[-1].split()[3]) * 1024
+        except (IndexError, ValueError):
+            raise BackupError('space', 'cannot read the free space of the database container')
+
+    def host_free_bytes(self) -> int:
+        return shutil.disk_usage(self.workdir).free
+
+    def database_bytes(self) -> int:
+        res = self.docker_exec(
+            [self.cfg.pg_container, 'sh', '-c',
+             'exec psql -X -At -U "$POSTGRES_USER" -d "$POSTGRES_DB" '
+             '-c "SELECT pg_database_size(current_database())"'],
+            timeout=60, step='space')
+        try:
+            return int(res.stdout.strip())
+        except ValueError:
+            raise BackupError('space', f'cannot read the database size: {tail(res.stderr)}')
+
+    def check_space(self) -> int:
+        """Before anything is written: the expected dump (at most the database's size, at most
+        the cap) must fit with the reserve in the container's /tmp — the live database's disk —
+        and three times on the host (dump, read-back; the container's copy if it is the same
+        disk). Returns the byte cap for this dump."""
+        self.step = 'space'
+        cap = self.cfg.max_dump_bytes
+        expected = min(self.database_bytes(), cap)
+        gib = lambda n: f'{n / 1024**3:.2f} GiB'  # noqa: E731
+        need_c = expected + self.cfg.reserve_bytes
+        free_c = self.container_free_bytes()
+        if free_c < need_c:
+            raise BackupError('space', f'the database container has {gib(free_c)} free for /tmp, '
+                              f'needs {gib(need_c)} (dump up to {gib(expected)} + reserve)')
+        need_h = 3 * expected + self.cfg.reserve_bytes
+        free_h = self.host_free_bytes()
+        if free_h < need_h:
+            raise BackupError('space', f'{self.workdir.parent} has {gib(free_h)} free, needs '
+                              f'{gib(need_h)} (dump, read-back and the container copy + reserve)')
+        return cap
+
     def dump(self) -> tuple[Path, dict]:
+        cap = self.check_space()
         self.step = 'dump'
         c = self.cfg.pg_container
         res = self.docker_exec(
             ['-i', c, 'sh', '-c',
              'exec psql -X -q -At -U "$POSTGRES_USER" -d "$POSTGRES_DB"'],
-            timeout=self.cfg.dump_timeout, step='dump', input_bytes=dump_script(self.backup_id))
+            timeout=self.cfg.dump_timeout, step='dump',
+            input_bytes=dump_script(self.backup_id, cap))
         if res.returncode != 0:
             raise BackupError('dump', f'psql failed: {tail(res.stderr)}')
+        size = self.docker_exec([c, 'stat', '-c', '%s', f'{self.container_files}.dump'],
+                                timeout=30, step='dump')
+        if size.returncode != 0 or int(size.stdout.strip() or 0) > cap:
+            raise BackupError('dump', f'the dump exceeds the limit of {cap} bytes '
+                              '(stopped; raise --max-dump-gb only with the space for it)')
         rc = self.docker_exec([c, 'cat', f'{self.container_files}.rc'], timeout=30, step='dump')
         if rc.returncode != 0 or rc.stdout.strip() != b'0':
             raise BackupError('dump', f'pg_dump failed (exit {rc.stdout.strip().decode() or "?"})')
@@ -457,7 +517,11 @@ class Backup:
             raise BackupError('verify', f'{key}: stored metadata does not match')
         readback = self.workdir / 'readback'
         readback.unlink(missing_ok=True)
+        if self.host_free_bytes() < size + self.cfg.reserve_bytes:
+            raise BackupError('verify', f'not enough free space to read {key} back')
         s3.get(key, readback)
+        if readback.stat().st_size != size:
+            raise BackupError('verify', f'{key}: the downloaded copy has another size')
         if sha256_file(readback) != sha:
             raise BackupError('verify', f'{key}: the downloaded copy does not match')
         readback.unlink()
@@ -625,7 +689,9 @@ def status(state_dir: Path, max_age: dict[str, float]) -> tuple[int, list[str]]:
             bad = True
     check = read_state(state_dir, 'last-restore-check.json')
     if not check:
-        lines.append('restore check: never run')
+        # Backups that were never restored are not yet known to be usable (doc 035 §3).
+        lines.append('restore check: NEVER RUN — the backups are not verified yet')
+        bad = True
     else:
         age = (now - datetime.fromisoformat(check['finishedAt'])).total_seconds() / 86400
         failed = check.get('result') != 'OK'
@@ -657,6 +723,8 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument('--credentials-file', default=CREDENTIALS_FILE)
     p.add_argument('--pg-container', default=PG_CONTAINER)
     p.add_argument('--aws-image', default=AWS_IMAGE)
+    p.add_argument('--max-dump-gb', type=float, default=MAX_DUMP_BYTES / 1024**3,
+                   help='hard cap of one dump (default 10)')
 
 
 def parser() -> argparse.ArgumentParser:
@@ -684,7 +752,8 @@ def config_from(args: argparse.Namespace, **extra) -> Config:
         kind=getattr(args, 'kind', 'hourly'), reason=getattr(args, 'reason', 'restore-check'),
         bucket=args.bucket, owner=args.bucket_owner, region=args.region,
         credentials_file=Path(args.credentials_file), state_dir=Path(args.state_dir),
-        pg_container=args.pg_container, aws_image=args.aws_image, **extra)
+        pg_container=args.pg_container, aws_image=args.aws_image,
+        max_dump_bytes=int(args.max_dump_gb * 1024**3), **extra)
 
 
 def take_lock(cfg: Config, lock) -> bool:
