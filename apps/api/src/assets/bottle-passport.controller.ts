@@ -1,5 +1,6 @@
 import type { PublicBottlePassport } from '@ayvo/types';
-import { Controller, Get, Header, Param } from '@nestjs/common';
+import { Controller, Get, Header, Param, UseGuards } from '@nestjs/common';
+import { PublicRateLimitGuard } from '../common/public-rate-limit.guard.js';
 import { PUBLIC_PREFIX } from '../common/routes.js';
 import { BottlesService } from './bottles.service.js';
 import { Public } from '../identity/access.decorators.js';
@@ -10,6 +11,7 @@ import { Public } from '../identity/access.decorators.js';
  * public QR host can target exactly these routes (doc 012).
  */
 @Public()
+@UseGuards(PublicRateLimitGuard)
 @Controller(`${PUBLIC_PREFIX}/bottles`)
 export class BottlePassportController {
   constructor(private readonly bottles: BottlesService) {}

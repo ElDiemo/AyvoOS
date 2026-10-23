@@ -95,12 +95,24 @@ export async function apiGet<T extends z.ZodType>(
   return schema.parse(await res.json());
 }
 
-/** Anonymous GET of a public route (QR pages): null for 404, never a sign-in redirect. */
+/**
+ * Anonymous GET of a public route (QR pages): null for 404, never a sign-in redirect. No session
+ * travels with it. The edge's X-Forwarded-For is passed on, so the API's per-visitor rate limit
+ * sees the visitor and not this server (the API trusts it only from TRUSTED_PROXY_CIDRS; doc 037).
+ */
 export async function apiGetPublic<T extends z.ZodType>(
   path: string,
   schema: T,
 ): Promise<z.infer<T> | null> {
-  const res = await call(path);
+  const forwardedFor = (await headers()).get('x-forwarded-for');
+  const res = await fetch(
+    new URL(`${API_BASE_PATH}/${path.replace(/^\//, '')}`, serverEnv.API_URL),
+    {
+      cache: 'no-store',
+      headers: forwardedFor ? { 'x-forwarded-for': forwardedFor } : {},
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `API ${res.status} for ${path}`);
   return schema.parse(await res.json());
