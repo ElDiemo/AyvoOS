@@ -94,7 +94,7 @@ export class WarehouseController {
     return this.read.stock(warehouse);
   }
 
-  /** Read-only availability for planning (SALES); no operational, supplier or cost details. */
+  /** Read-only availability for planning (inventory:stock_summary); no operational, supplier or cost details. */
   @RequirePermission('inventory:stock_summary')
   @Get('inventory/stock-summary')
   stockSummary(@OperationalWarehouse() warehouse: WarehouseContext): Promise<StockSummary> {

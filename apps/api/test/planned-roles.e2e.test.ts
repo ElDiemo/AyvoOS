@@ -11,8 +11,8 @@ import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/si
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
 /**
- * Planned system roles (doc 021 §4c): SALES, FINANCE and HOTEL_USER are templates of modules that
- * do not exist yet. Every server-side assignment path refuses them, whatever the client sends;
+ * Planned system roles (doc 021 §4c): FINANCE and HOTEL_USER are templates of modules that
+ * do not exist yet (SALES is assignable since Obchod, doc 034). Every server-side assignment path refuses them, whatever the client sends;
  * active system roles and custom roles stay assignable; an assignment that already exists is kept
  * and can be revoked; the role records and their permission templates are unchanged.
  */
@@ -96,6 +96,7 @@ describe.skipIf(!hasDatabase)('planned system roles', () => {
       'WAREHOUSE_SUPERVISOR',
       'PRODUCTION_OPERATOR',
       'PRODUCTION_SUPERVISOR',
+      'SALES',
     ]) {
       const res = await createUser([role]);
       expect(res.status, role).toBe(201);
@@ -108,7 +109,7 @@ describe.skipIf(!hasDatabase)('planned system roles', () => {
       name: 'Plánovač zásob',
       description: 'Stock summary only',
       permissions: ['inventory:stock_summary'],
-      copiedFrom: 'SALES',
+      copiedFrom: null,
       reason: 'custom role from a planned template',
     });
     expect(custom.status, JSON.stringify(custom.body)).toBe(201);
@@ -160,7 +161,8 @@ describe.skipIf(!hasDatabase)('planned system roles', () => {
     for (const code of PLANNED_SYSTEM_ROLE_CODES) {
       expect(byCode[code], code).toMatchObject({ code, system: true, active: true });
     }
-    expect(byCode.SALES!.permissions).toEqual(['inventory:stock_summary']);
+    // SALES is the Obchod role now (doc 034): its planning stock permission was removed.
+    expect(byCode.SALES!.permissions).toEqual(['sales:work']);
     expect(byCode.HOTEL_USER!.permissions).toEqual([]);
     expect(byCode.FINANCE!.permissions).toContain('procurement:cost_write');
     const detail = (

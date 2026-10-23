@@ -24,6 +24,11 @@ export const shellCs = {
     test: { badge: 'TEST', label: 'Testovací prostředí – neslouží pro skutečný provoz' },
   },
   modules: {
+    sales: {
+      label: 'Obchod',
+      description: 'Akvizice hotelů: zájemci, kontakty, co proběhlo a co je potřeba udělat dál.',
+      pages: { overview: 'Přehled obchodu', prospects: 'Akvizice', tasks: 'Úkoly' },
+    },
     warehouse: {
       label: 'Sklad',
       description: 'Fyzické zásoby: příjem zboží, šarže, stav skladu, pohyby a dodavatelé.',
@@ -83,6 +88,10 @@ export const shellCs = {
     title: 'Přehled',
     subtitle: 'Provozní přehled AYVO OS. Zobrazuje pouze skutečná data z jednotlivých modulů.',
     openWarehouse: 'Otevřít sklad',
+    openSales: 'Otevřít obchod',
+    salesOverdue: 'Úkoly po termínu',
+    salesToday: 'Úkoly na dnes',
+    salesInProgress: 'Rozpracovaní zájemci',
     openAvailability: 'Otevřít dostupnost',
     availabilityDescription: 'Dostupnost zásob pro plánování (pouze pro čtení).',
     allAvailable: 'Všechny položky jsou nad minimální zásobou.',
