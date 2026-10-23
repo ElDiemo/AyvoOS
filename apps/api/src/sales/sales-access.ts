@@ -43,6 +43,18 @@ export async function visibleProspect(db: Db, code: string, scope: SalesScope, l
  * An archived prospect takes no new work — no edits, stage or owner changes, contacts, activities
  * or tasks — until it is restored (doc 034 §3a; also held by the database).
  */
+/**
+ * Serialises every write that creates prospects for one owner (a manual create, an import
+ * confirmation) until its transaction ends, so the second one checks possible duplicates against
+ * the first one's committed prospects instead of passing it unseen. Keyed by the owner the
+ * caller writes for — a salesperson only ever waits for writes into their own prospects, never
+ * for anything about another salesperson's. Possible duplicates stay warnings (doc 034 §8).
+ */
+export async function lockOwnerProspects(db: Db, ownerId: string): Promise<void> {
+  const key = `sales-prospects-of:${ownerId}`;
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+}
+
 export function assertActive(row: { archivedAt: Date | null }) {
   if (row.archivedAt) {
     throw domainError(
