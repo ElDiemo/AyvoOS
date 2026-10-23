@@ -84,7 +84,12 @@ export default async function CreateBottlesPage({
         <li className="text-stone-600">{productionCs.create.steps.labeled}</li>
         <li className="text-stone-600">{productionCs.create.steps.filled}</li>
       </ol>
-      {product && templates.length === 0 ? (
+      {settings.qrErrorCorrection === null ? (
+        // Identities exist only to be labelled: the API refuses the registration (nothing created).
+        <div data-testid="qr-settings-missing">
+          <Notice>{productionCs.qrSettingsMissing}</Notice>
+        </div>
+      ) : product && templates.length === 0 ? (
         <div className="flex flex-col gap-3" data-testid="bottles-no-design">
           <Notice tone="warning">{c.noApprovedDesign(product)}</Notice>
           <Link

@@ -1,6 +1,8 @@
 import type { BottleRegistrationResponse, CreateBottleRegistrationRequest } from '@ayvo/types';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { BottlesService } from '../assets/bottles.service.js';
+import { ENV, type Env } from '../config/env.js';
+import { requireQrLabelSettings } from '../labels/qr-label-settings.js';
 import { LabelPrintJobsService } from './label-print-jobs.service.js';
 
 /**
@@ -9,6 +11,8 @@ import { LabelPrintJobsService } from './label-print-jobs.service.js';
  *   2. label-production: create a PENDING print job for exactly those bottles (separate step).
  * Step 2 can fail without affecting step 1: the bottles stay registered and a print job can be
  * created from the batch page. PDF rendering is a further, separate step (generate).
+ * Without the validated QR settings nothing is created at all (identities exist only to be
+ * labelled): refused before step 1, so a retry after configuring creates everything once.
  */
 @Injectable()
 export class BottleRegistrationService {
@@ -17,6 +21,7 @@ export class BottleRegistrationService {
   constructor(
     private readonly bottles: BottlesService,
     private readonly printJobs: LabelPrintJobsService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   /** Registers bottles at the active site (doc 022 §6); the series and bottles belong to it. */
@@ -24,6 +29,7 @@ export class BottleRegistrationService {
     request: CreateBottleRegistrationRequest,
     siteId: string,
   ): Promise<BottleRegistrationResponse> {
+    requireQrLabelSettings(this.env);
     const { batch, replayed } = await this.bottles.createBatch({ ...request, siteId });
     try {
       // A replayed request returns the job prepared the first time (or completes the workflow

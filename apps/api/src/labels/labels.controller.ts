@@ -31,6 +31,7 @@ import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ENV, type Env } from '../config/env.js';
 import { CalibrationService } from './calibration.service.js';
+import { qrLabelSettings } from './qr-label-settings.js';
 import { LabelArtworkService } from './label-artwork.service.js';
 import { ASPECT_RATIO_TOLERANCE, LabelTemplatesService } from './label-templates.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
@@ -54,11 +55,14 @@ export class LabelsController {
   @RequirePermission('production:read')
   @Get('label-designer/settings')
   settings(): LabelDesignerSettings {
+    // Readable without the QR settings (null): bottle details and template history stay usable;
+    // only the QR label operations themselves are refused (qr-label-settings.ts).
+    const qr = qrLabelSettings(this.env);
     return {
-      qrMinSizeMm: this.env.LABEL_QR_MIN_SIZE_MM,
+      qrMinSizeMm: qr?.minSizeMm ?? null,
       artworkMaxBytes: this.env.LABEL_ARTWORK_MAX_BYTES,
       aspectRatioTolerance: ASPECT_RATIO_TOLERANCE,
-      qrErrorCorrection: this.env.LABEL_QR_ERROR_CORRECTION,
+      qrErrorCorrection: qr?.errorCorrection ?? null,
       // Same length as a real QR URL, so the preview has the real module density.
       qrPreviewUrl: publicQrUrl(this.env.PUBLIC_QR_BASE_URL, 'A'.repeat(22)),
     };
