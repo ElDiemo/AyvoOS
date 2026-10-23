@@ -1,9 +1,11 @@
 import { labelDesignerSettingsSchema, labelTemplateDetailSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
+import { isConfigured } from '@/components/production/label-templates/qr-settings';
 import { TemplateEditor } from '@/components/production/label-templates/template-editor';
 import { ProductionHeader } from '@/components/production/production-header';
 import { productionCs } from '@/i18n/cs/production';
+import { Notice } from '@/components/ui';
 import { apiGet } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
@@ -30,10 +32,16 @@ export default async function NewTemplateVersionPage({
         subtitle={productionCs.templates.editSubtitle(latest.label)}
         back={{ href: `/label-templates/${template.id}`, label: template.name }}
       />
-      <TemplateEditor
-        mode={{ kind: 'version', templateId: template.id, templateName: template.name, latest }}
-        settings={settings}
-      />
+      {isConfigured(settings) ? (
+        <TemplateEditor
+          mode={{ kind: 'version', templateId: template.id, templateName: template.name, latest }}
+          settings={settings}
+        />
+      ) : (
+        <div data-testid="qr-settings-missing">
+          <Notice>{productionCs.qrSettingsMissing}</Notice>
+        </div>
+      )}
     </>
   );
 }
