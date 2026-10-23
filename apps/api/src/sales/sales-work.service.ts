@@ -20,6 +20,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { contactData, ProspectsService } from './prospects.service.js';
 import {
   asDate,
+  assertActive,
   changed,
   dateOnly,
   salesEvent,
@@ -62,6 +63,7 @@ export class SalesWorkService {
       { actorId: scope.userId, code, contactId, ...input, requestId: undefined },
       async (tx) => {
         const p = await visibleProspect(tx, code, scope, true);
+        assertActive(p);
         const data = contactData(input);
         let id = contactId;
         if (id === null) {
@@ -167,6 +169,7 @@ export class SalesWorkService {
       { actorId: scope.userId, code, contactId, retire: true, ...input, requestId: undefined },
       async (tx) => {
         const p = await visibleProspect(tx, code, scope, true);
+        assertActive(p);
         const c = await this.lockContact(tx, p.id, contactId);
         if (c.retiredAt) throw domainError(422, 'CONTACT_RETIRED', 'This contact is retired');
         if (c.revision !== input.revision) throw changed('CONTACT_CHANGED', 'contact', c.revision);
@@ -226,6 +229,7 @@ export class SalesWorkService {
       { actorId: scope.userId, code, ...input, requestId: undefined },
       async (tx) => {
         const p = await visibleProspect(tx, code, scope, true);
+        assertActive(p);
         await this.activeContact(tx, p.id, input.contactId);
         const occurredAt = await this.pastInstant(tx, input.occurredAt);
         const a = await tx.salesActivity.create({
@@ -269,6 +273,7 @@ export class SalesWorkService {
       { actorId: scope.userId, code, activityId, ...input, requestId: undefined },
       async (tx) => {
         const p = await visibleProspect(tx, code, scope, true);
+        assertActive(p);
         const a = await tx.salesActivity.findFirst({
           where: { id: activityId, prospectId: p.id },
           include: { correctedBy: { select: { id: true } } },
@@ -363,6 +368,7 @@ export class SalesWorkService {
       { actorId: scope.userId, code, ...input, requestId: undefined },
       async (tx) => {
         const p = await visibleProspect(tx, code, scope, true);
+        assertActive(p);
         return { id: await this.newTask(tx, scope, p, input) };
       },
     );
@@ -462,7 +468,15 @@ export class SalesWorkService {
         if (input.contactId !== t.contactId) {
           await this.activeContact(tx, t.prospectId, input.contactId);
         }
-        const assigneeId = await this.assignee(tx, scope, t.prospect, input.assigneeId);
+        // Keeping the assignee is not a change (also when ADMIN gave the task to someone else);
+        // changing it is for sales:manage only — a salesperson never reassigns, not even to self.
+        if (input.assigneeId !== t.assigneeId && !scope.all) {
+          throw new ForbiddenException('Only an administrator changes who does a task');
+        }
+        const assigneeId =
+          input.assigneeId === t.assigneeId
+            ? t.assigneeId
+            : await this.assignee(tx, scope, t.prospect, input.assigneeId);
         const changes: Record<string, { before: unknown; after: unknown }> = {};
         if (t.title !== input.title) changes.title = { before: t.title, after: input.title };
         if (t.note !== input.note) changes.note = { before: t.note, after: input.note };

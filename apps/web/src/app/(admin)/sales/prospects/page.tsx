@@ -46,12 +46,22 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
       priority: q.priority,
       country: q.country,
       next: q.next,
+      archived: q.archived,
       page: q.page,
     }),
     canManage ? apiGet('admin/sales/salespeople', z.array(salespersonSchema)) : null,
   ]);
   const pages = Math.max(1, Math.ceil(page.total / page.pageSize));
-  const filtered = !!(q.q || q.owner || q.stage || q.priority || q.country || q.next);
+  const archivedView = q.archived === 'archived';
+  const filtered = !!(
+    q.q ||
+    q.owner ||
+    q.stage ||
+    q.priority ||
+    q.country ||
+    q.next ||
+    archivedView
+  );
   const link = (p: number) => {
     const params = new URLSearchParams(
       Object.entries({ ...raw, page: String(p) }).filter((e): e is [string, string] => !!e[1]),
@@ -113,7 +123,7 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
                 data-testid="prospect-search"
               />
             </label>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               {canManage &&
                 select('owner', t.owner, q.owner, [
                   ['me', t.ownerMe],
@@ -142,6 +152,19 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
                 />
               </label>
               {select('next', t.next, q.next, Object.entries(t.nextOptions))}
+              {/* Archived prospects only on request (doc 034 §3a); the default is the active ones. */}
+              <label className="flex min-w-0 flex-col gap-1 text-xs font-medium uppercase tracking-wide text-stone-500">
+                {t.archived}
+                <select
+                  name="archived"
+                  defaultValue={archivedView ? 'archived' : ''}
+                  className={cn(inputClass, 'normal-case tracking-normal')}
+                  data-testid="filter-archived"
+                >
+                  <option value="">{t.archivedOptions.active}</option>
+                  <option value="archived">{t.archivedOptions.archived}</option>
+                </select>
+              </label>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button type="submit" className={buttonClass.secondary} data-testid="apply-filters">
@@ -161,7 +184,13 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
 
         <Card>
           {page.items.length === 0 ? (
-            <EmptyState>{filtered ? t.emptyFiltered : t.empty}</EmptyState>
+            <EmptyState>
+              {archivedView && !(q.q || q.owner || q.stage || q.priority || q.country || q.next)
+                ? t.emptyArchived
+                : filtered
+                  ? t.emptyFiltered
+                  : t.empty}
+            </EmptyState>
           ) : (
             <>
               {/* Computer: a table. */}
@@ -241,6 +270,11 @@ function Stage({ p }: { p: ProspectSummary }) {
       )}
     >
       {salesCs.stages[p.stage]}
+      {p.archivedAt && (
+        <span className="ml-1 font-normal text-stone-500" data-testid="archived-badge">
+          · {t.archivedBadge}
+        </span>
+      )}
     </span>
   );
 }

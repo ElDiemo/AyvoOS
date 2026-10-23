@@ -346,6 +346,7 @@ export function ProspectForm({
                       {d.name}
                     </Link>
                     {d.city ? `, ${d.city}` : ''} · {d.owner} ·{' '}
+                    {d.archived && `${salesCs.list.archivedBadge} · `}
                     {d.reasons.map((r) => f.duplicateReasons[r]).join(', ')}
                   </li>
                 ))}

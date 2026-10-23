@@ -73,6 +73,9 @@ export const salesCs = {
     country: 'Země',
     next: 'Další krok',
     any: 'Vše',
+    archived: 'Archiv',
+    archivedOptions: { active: 'Aktivní', archived: 'Archivovaní' },
+    archivedBadge: 'archivovaný',
     nextOptions: {
       overdue: 'Po termínu',
       today: 'Dnes',
@@ -94,6 +97,7 @@ export const salesCs = {
     noContact: 'zatím žádný',
     noNext: 'Bez dalšího kroku',
     empty: 'Zatím žádný zájemce. Začněte tlačítkem „Nový zájemce“ — stačí název a země.',
+    emptyArchived: 'Žádný archivovaný zájemce.',
     emptyFiltered: 'Žádný zájemce neodpovídá hledání. Zkuste jiné slovo nebo zrušte filtry.',
     page: (p: number, pages: number) => `Strana ${p} z ${pages}`,
     previous: '← Předchozí',
@@ -207,6 +211,31 @@ export const salesCs = {
     profile: 'Údaje',
     saved: 'Uloženo.',
     createdNote: 'Zájemce založen. Zapište první aktivitu nebo přidejte další krok.',
+    archive: 'Archivovat',
+    archivedTitle: 'Zájemce je archivovaný',
+    archivedText: (by: string, at: string, reason: string) =>
+      `Archivoval(a) ${by}, ${at}. Důvod: ${reason}. Údaje i historie zůstaly; nová práce se přidává až po obnovení.`,
+    restore: 'Obnovit zájemce',
+  },
+
+  archiveDialog: {
+    title: 'Archivovat zájemce',
+    text: 'Archivace není fáze: zájemce nebude veden jako neúspěšný a nic se nesmaže. Mezi aktivními se přestane zobrazovat; najdete ho filtrem „Archivovaní“ a můžete ho obnovit.',
+    reason: 'Důvod archivace',
+    reasonHelp: 'Např. založeno omylem, hotel zavřel, duplicitní záznam.',
+    openTasks: (n: number) =>
+      n === 1
+        ? 'Zájemce má 1 otevřený úkol. Nejdřív ho dokončete nebo zrušte — nic se neruší automaticky.'
+        : `Zájemce má ${n} otevřené úkoly. Nejdřív je dokončete nebo zrušte — nic se neruší automaticky.`,
+    toTasks: 'Přejít k otevřeným úkolům',
+    save: 'Archivovat',
+  },
+
+  restoreDialog: {
+    title: 'Obnovit zájemce',
+    text: 'Zájemce se vrátí mezi aktivní ve stejné fázi, s kontakty i historií. Žádné úkoly se nevytvoří — další krok přidejte sami.',
+    reason: 'Důvod (nepovinný)',
+    save: 'Obnovit',
   },
 
   stageDialog: {
@@ -268,6 +297,7 @@ export const salesCs = {
     open: 'Otevřené úkoly',
     closed: 'Uzavřené úkoly',
     none: 'Žádný otevřený úkol. Přidejte další krok, ať je jasné, co dál.',
+    noneArchived: 'Žádný otevřený úkol. Archivovaný zájemce nové úkoly nedostává.',
     done: 'Hotovo',
     doneTitle: 'Dokončit úkol',
     result: 'Výsledek (nepovinný)',
@@ -281,6 +311,14 @@ export const salesCs = {
     cancelReason: 'Proč se úkol ruší',
     dueInPast: 'Termín nemůže být v minulosti.',
     assignedTo: (name: string) => `pro ${name}`,
+    edit: 'Upravit',
+    editTitle: 'Upravit úkol',
+    editNote: 'Termín změníte tlačítkem „Přesunout“.',
+    editSave: 'Uložit úkol',
+    reloaded: 'Aktuální stav načten. Vaše úpravy zůstaly — zkontrolujte je a uložte.',
+    assigneeHelp: 'Úkol lze dát obchodníkovi zájemce nebo správci obchodu.',
+    changedKept:
+      'Úkol mezitím upravil někdo jiný. Vaše úpravy zůstaly ve formuláři: načtěte aktuální stav a uložte znovu.',
     closedBy: (status: string, by: string, at: string) => `${status} · ${by}, ${at}`,
   },
 
@@ -306,6 +344,8 @@ export const salesCs = {
       PROSPECT_UPDATED: 'Údaje upraveny',
       STAGE_CHANGED: 'Změna fáze',
       OWNER_CHANGED: 'Předán obchodníkovi',
+      PROSPECT_ARCHIVED: 'Archivován',
+      PROSPECT_RESTORED: 'Obnoven',
       CONTACT_ADDED: 'Kontakt přidán',
       CONTACT_UPDATED: 'Kontakt upraven',
       CONTACT_RETIRED: 'Kontakt vyřazen',
@@ -337,6 +377,7 @@ export const salesCs = {
       contactId: 'kontakt',
       assigneeId: 'komu',
       assignee: 'komu',
+      reason: 'důvod',
     } as Record<string, string>,
   },
 
@@ -360,6 +401,10 @@ export const salesCs = {
     ACTIVITY_ALREADY_CORRECTED: 'Aktivitu mezitím někdo opravil. Načtěte aktuální stav.',
     ACTIVITY_WITHDRAWN: 'Aktivita byla stažena.',
     DUE_IN_PAST: 'Termín nemůže být v minulosti.',
+    PROSPECT_ARCHIVED: 'Zájemce je archivovaný. Nejdřív ho obnovte.',
+    PROSPECT_NOT_ARCHIVED: 'Zájemce není archivovaný.',
+    PROSPECT_HAS_OPEN_TASKS:
+      'Zájemce má otevřené úkoly. Nejdřív je dokončete nebo zrušte — nic se neruší automaticky.',
     ASSIGNEE_WITHOUT_ACCESS: 'Tento uživatel zájemce nevidí. Nejdřív mu zájemce předejte.',
     IDEMPOTENCY_CONFLICT: 'Požadavek se zkřížil s jiným. Zkuste to prosím znovu.',
     FORBIDDEN: 'K této akci nemáte oprávnění.',

@@ -8,14 +8,26 @@ import { salesCs } from '@/i18n/cs/sales';
 import { apiSend } from '@/lib/client-api';
 import { isStale, salesErrorText } from './sales-format';
 
-/** The error of a dialog, with a reload link when someone changed the record meanwhile. */
-export function DialogError({ error }: { error: unknown }) {
+/**
+ * The error of a dialog (null without one, so the dialog shows no empty alert), with a reload link
+ * when someone changed the record meanwhile. With `onReload` the reload refreshes the page data in
+ * place, so the dialog keeps what was typed.
+ */
+export function dialogError(
+  error: unknown,
+  { text, onReload }: { text?: string; onReload?: () => void } = {},
+): React.ReactNode {
   if (!error) return null;
   return (
     <>
-      <p>{salesErrorText(error)}</p>
+      <p>{(isStale(error) && text) || salesErrorText(error)}</p>
       {isStale(error) && (
-        <button type="button" className="mt-1 underline" onClick={() => window.location.reload()}>
+        <button
+          type="button"
+          className="mt-1 underline"
+          onClick={onReload ?? (() => window.location.reload())}
+          data-testid="dialog-reload"
+        >
           {salesCs.form.reload}
         </button>
       )}

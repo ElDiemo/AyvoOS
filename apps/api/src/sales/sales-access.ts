@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { SALES_TIME_ZONE } from '@ayvo/types';
-import { domainErrorWithDetails } from '../common/domain-error.js';
+import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import type { Principal } from '../identity/principal.js';
 
@@ -37,6 +37,20 @@ export async function visibleProspect(db: Db, code: string, scope: SalesScope, l
     throw new NotFoundException('Prospect not found');
   }
   return row;
+}
+
+/**
+ * An archived prospect takes no new work — no edits, stage or owner changes, contacts, activities
+ * or tasks — until it is restored (doc 034 §3a; also held by the database).
+ */
+export function assertActive(row: { archivedAt: Date | null }) {
+  if (row.archivedAt) {
+    throw domainError(
+      409,
+      'PROSPECT_ARCHIVED',
+      'This prospect is archived; restore it before working on it',
+    );
+  }
 }
 
 /** A stale edit: the row moved on since the user loaded it (never silently overwritten). */

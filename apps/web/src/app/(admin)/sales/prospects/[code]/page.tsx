@@ -5,7 +5,7 @@ import { notFound } from 'next/navigation';
 import { z } from 'zod';
 import { ContactsCard } from '@/components/sales/contacts-card';
 import { HistoryCard } from '@/components/sales/history-card';
-import { ProspectActions } from '@/components/sales/prospect-actions';
+import { ProspectActions, RestoreButton } from '@/components/sales/prospect-actions';
 import { dueClass, dueLabel, salesDateTime, stageClass } from '@/components/sales/sales-format';
 import { SalesHeader } from '@/components/sales/sales-header';
 import { TaskList } from '@/components/sales/task-list';
@@ -40,6 +40,13 @@ export default async function ProspectPage({
     ? await apiGet('admin/sales/salespeople', z.array(salespersonSchema))
     : null;
   const contacts = p.contacts.filter((c) => !c.retired).map((c) => ({ id: c.id, label: c.label }));
+  // Who a task may be given to: the owner, or a sales administrator (doc 034 §7).
+  const assignees = salespeople
+    ? salespeople
+        .filter((s) => s.manages || s.id === p.owner.id)
+        .map((s) => ({ id: s.id, label: s.name }))
+    : null;
+  const archived = p.archived;
   const next = p.openTasks[0] ?? null;
   const due = next ? dueLabel(next.dueOn, p.today) : null;
   const d = t.detail;
@@ -105,33 +112,56 @@ export default async function ProspectPage({
                 </dd>
               </div>
             </dl>
+            {archived && (
+              <div
+                className="flex flex-col gap-3 rounded-md border border-stone-300 bg-stone-100 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                data-testid="prospect-archived"
+              >
+                <p className="wrap-anywhere">
+                  <span className="font-semibold">{d.archivedTitle}.</span>{' '}
+                  {d.archivedText(archived.by, salesDateTime(archived.at), archived.reason)}
+                </p>
+                <div className="shrink-0">
+                  <RestoreButton prospect={p} />
+                </div>
+              </div>
+            )}
             {p.stage === 'LOST' && p.lostReason && (
               <Notice tone="info">
                 {d.lostReason}: {p.lostReason}
               </Notice>
             )}
-            <div
-              className="rounded-md border border-stone-200 bg-stone-50 px-4 py-3"
-              data-testid="prospect-next"
-            >
-              <p className="text-xs font-medium uppercase tracking-wide text-stone-500">
-                {d.nextTask}
-              </p>
-              {next && due ? (
-                <p className="mt-1 text-sm wrap-anywhere">
-                  <span className={cn('mr-2', dueClass[due.tone])}>{due.text}</span>
-                  <span className="font-medium">{next.title}</span>
-                  {next.contact && <span className="text-stone-500"> · {next.contact.label}</span>}
+            {/* An archived prospect takes no new work: no "add a task" prompt. */}
+            {!archived && (
+              <div
+                className="rounded-md border border-stone-200 bg-stone-50 px-4 py-3"
+                data-testid="prospect-next"
+              >
+                <p className="text-xs font-medium uppercase tracking-wide text-stone-500">
+                  {d.nextTask}
                 </p>
-              ) : (
-                <p className="mt-1 text-sm text-amber-800">{d.noNextTask}</p>
-              )}
-            </div>
-            <ProspectActions
-              prospect={{ code: p.code, stage: p.stage, revision: p.revision, owner: p.owner }}
-              contacts={contacts}
-              salespeople={salespeople}
-            />
+                {next && due ? (
+                  <p className="mt-1 text-sm wrap-anywhere">
+                    <span className={cn('mr-2', dueClass[due.tone])}>{due.text}</span>
+                    <span className="font-medium">{next.title}</span>
+                    {next.contact && (
+                      <span className="text-stone-500"> · {next.contact.label}</span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-sm text-amber-800">{d.noNextTask}</p>
+                )}
+              </div>
+            )}
+            {!archived && (
+              <ProspectActions
+                prospect={{ code: p.code, stage: p.stage, revision: p.revision, owner: p.owner }}
+                contacts={contacts}
+                salespeople={salespeople}
+                openTasks={p.openTasks}
+                today={p.today}
+              />
+            )}
           </div>
         </Card>
 
@@ -145,6 +175,7 @@ export default async function ProspectPage({
                   <Link href={`/sales/prospects/${x.code}`} className="underline">
                     {x.name}
                   </Link>
+                  {x.archived && ` (${t.list.archivedBadge})`}
                 </span>
               ))}
             </span>
@@ -153,14 +184,16 @@ export default async function ProspectPage({
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           <div className="flex min-w-0 flex-col gap-6">
-            <Card title={t.task.open} testId="open-tasks">
+            <Card title={t.task.open} testId="open-tasks" id="open-tasks">
               {p.openTasks.length === 0 ? (
-                <EmptyState>{t.task.none}</EmptyState>
+                <EmptyState>{archived ? t.task.noneArchived : t.task.none}</EmptyState>
               ) : (
                 <TaskList
                   tasks={p.openTasks}
                   today={p.today}
                   showAssignee={canManage}
+                  contacts={contacts}
+                  assignees={assignees}
                   testId="open-task-list"
                 />
               )}
@@ -180,21 +213,24 @@ export default async function ProspectPage({
               activities={p.activities}
               events={p.events}
               contacts={contacts}
+              readOnly={!!archived}
             />
           </div>
           <div className="flex min-w-0 flex-col gap-6">
-            <ContactsCard code={p.code} contacts={p.contacts} />
+            <ContactsCard code={p.code} contacts={p.contacts} readOnly={!!archived} />
             <Card
               title={d.profile}
               testId="prospect-profile"
               action={
-                <Link
-                  href={`/sales/prospects/${p.code}/edit`}
-                  className="font-medium text-stone-700 hover:underline"
-                  data-testid="edit-prospect"
-                >
-                  {d.edit}
-                </Link>
+                archived ? undefined : (
+                  <Link
+                    href={`/sales/prospects/${p.code}/edit`}
+                    className="font-medium text-stone-700 hover:underline"
+                    data-testid="edit-prospect"
+                  >
+                    {d.edit}
+                  </Link>
+                )
               }
             >
               <FieldList>
