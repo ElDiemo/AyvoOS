@@ -9,7 +9,7 @@ import {
 } from '@ayvo/types';
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
-import { dateOnly, salesToday } from './sales-access.js';
+import { dateOnly, salesToday, type Db } from './sales-access.js';
 
 const taskInclude = {
   prospect: { select: { code: true, name: true } },
@@ -44,8 +44,12 @@ export class SalesViews {
     return rows.map(toTask);
   }
 
-  async detail(prospectId: string): Promise<Omit<ProspectDetail, 'duplicates'>> {
-    const p = await this.prisma.salesProspect.findUniqueOrThrow({
+  /** The detail of a prospect, read with `db` (the caller's snapshot, after its access check). */
+  async detail(
+    prospectId: string,
+    db: Db = this.prisma,
+  ): Promise<Omit<ProspectDetail, 'duplicates'>> {
+    const p = await db.salesProspect.findUniqueOrThrow({
       where: { id: prospectId },
       include: {
         owner: { select: { id: true, displayName: true } },
