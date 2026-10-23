@@ -38,7 +38,7 @@ describe.skipIf(!hasDatabase)('custom roles and sites', () => {
   });
 
   /**
-   * Planned system roles (FINANCE, SALES, HOTEL_USER) are no longer assignable through the API
+   * Planned system roles (FINANCE, HOTEL_USER) are not assignable through the API
    * (doc 021 §4c); their templates are tested through an assignment written directly — like one
    * that already existed.
    */

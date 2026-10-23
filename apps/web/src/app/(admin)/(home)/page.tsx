@@ -1,4 +1,5 @@
 import {
+  salesOverviewSchema,
   bottleListResponseSchema,
   goodsReceiptPageSchema,
   stockOverviewSchema,
@@ -13,6 +14,7 @@ import { buttonClass, Notice, PageHeader, Stat } from '@/components/ui';
 import { formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { catalogCs } from '@/i18n/cs/catalog';
 import { identityCs } from '@/i18n/cs/identity';
+import { salesCs } from '@/i18n/cs/sales';
 import { shellCs } from '@/i18n/cs/shell';
 import { apiGet } from '@/lib/api';
 import { fetchApiHealth } from '@/lib/api-health';
@@ -91,12 +93,16 @@ export default async function HomePage() {
     !!activeSite?.capabilities.includes('PRODUCTION') && hasPermission(user, 'production:read');
   // The company-wide catalogue needs no site (doc 023); shown when production itself is not.
   const canCatalog = !canProduction && hasPermission(user, 'catalog:read');
-  const [health, warehouse, availability, production] = await Promise.all([
+  // Obchod needs no site at all (doc 034): a SALES-only account lands here and sees just this.
+  const canSales = hasPermission(user, 'sales:work');
+  const [health, warehouse, availability, production, sales] = await Promise.all([
     fetchApiHealth(serverEnv.API_URL),
     canWarehouse ? settle(warehouseFigures) : null,
     canAvailability ? settle(availabilityFigures) : null,
     canProduction ? settle(productionFigures) : null,
+    canSales ? settle(() => apiGet('admin/sales/overview', salesOverviewSchema)) : null,
   ]);
+  const salesModule = moduleById('sales');
   const warehouseModule = moduleById('warehouse');
   const productionModule = moduleById('production');
 
@@ -111,10 +117,53 @@ export default async function HomePage() {
             </Link>
           </Notice>
         )}
-        {!needsSite && !canWarehouse && !canAvailability && !canProduction && !canCatalog && (
-          <Notice tone="info">{h.noModules}</Notice>
-        )}
+        {!needsSite &&
+          !canWarehouse &&
+          !canAvailability &&
+          !canProduction &&
+          !canCatalog &&
+          !canSales && <Notice tone="info">{h.noModules}</Notice>}
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          {canSales && (
+            <ModulePanel
+              href={salesModule.href}
+              title={salesModule.label}
+              description={salesModule.description}
+              testId="module-sales"
+              openLabel={h.openSales}
+              actions={
+                <Link href="/sales/prospects/new" className={buttonClass.primary}>
+                  {salesCs.overview.newProspect}
+                </Link>
+              }
+            >
+              {sales ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <Stat
+                    label={h.salesOverdue}
+                    value={sales.counts.overdue}
+                    tone={sales.counts.overdue > 0 ? 'error' : 'neutral'}
+                    href="/sales"
+                    testId="home-sales-overdue"
+                  />
+                  <Stat
+                    label={h.salesToday}
+                    value={sales.counts.dueToday}
+                    tone={sales.counts.dueToday > 0 ? 'warning' : 'neutral'}
+                    href="/sales"
+                    testId="home-sales-today"
+                  />
+                  <Stat
+                    label={h.salesInProgress}
+                    value={sales.counts.inProgress}
+                    href="/sales/prospects"
+                  />
+                </div>
+              ) : (
+                <Notice>{shellCs.common.errorTitle}</Notice>
+              )}
+            </ModulePanel>
+          )}
           {canWarehouse && (
             <ModulePanel
               href={warehouseModule.href}
