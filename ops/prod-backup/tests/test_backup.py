@@ -254,16 +254,20 @@ class BackupTests(unittest.TestCase):
         self.assertIn('leftover', err)
         self.assertEqual(self.leftovers(), ([], []))
 
-    def test_a_second_run_while_one_is_running_is_skipped(self):
+    def test_a_second_hourly_run_is_skipped_a_daily_one_waits(self):
         p = self.start('hourly', put_sleep=5)
         self.wait_for(lambda: (self.bucket / '.put-started').exists(), 'the upload')
-        code, err = self.run_backup('daily')
+        code, err = self.run_backup('hourly')
         self.assertEqual(code, backup.EXIT_BUSY, err)
         self.assertIn('another backup is running', err)
-        self.assertEqual(self.state_of('last-skipped-daily.json')['reason'], 'busy')
+        self.assertEqual(self.state_of('last-skipped-hourly.json')['reason'], 'busy')
+        # The daily backup is not dropped because an hourly one is still running: it waits.
+        code, err = self.run_backup('daily')
+        self.assertEqual(code, 0, err)
         out, err = p.communicate(timeout=120)
         self.assertEqual(p.returncode, 0, err)
-        self.assertEqual(len(self.objects()), 2)
+        self.assertEqual(len([o for o in self.objects() if 'hourly' in o]), 2)
+        self.assertEqual(len([o for o in self.objects() if 'daily' in o]), 2)
 
 
 class CredentialAndCommandTests(unittest.TestCase):
@@ -303,6 +307,30 @@ class CredentialAndCommandTests(unittest.TestCase):
             self.assertIn(flag, argv)
         self.assertIn(backup.AWS_IMAGE, calls[0])
         self.assertNotIn('delete', argv.lower())
+
+    def test_status_reports_a_failed_or_old_restore_check(self):
+        state = self.tmp / 'state'
+        now = backup.utcnow().isoformat(timespec='seconds')
+        for kind in ('hourly', 'daily'):
+            backup.record(state, f'last-success-{kind}.json', {'finishedAt': now, 'key': 'k'})
+        backup.record(state, 'last-restore-check.json', {'finishedAt': now, 'result': 'OK'})
+        self.assertEqual(backup.status(state, backup.MAX_AGE_HOURS)[0], 0)
+        backup.record(state, 'last-restore-check.json',
+                      {'finishedAt': now, 'result': 'FAILED', 'message': 'public.orders: 1 rows'})
+        code, lines = backup.status(state, backup.MAX_AGE_HOURS)
+        self.assertEqual(code, 1)
+        self.assertIn('public.orders', lines[-1])
+        backup.record(state, 'last-restore-check.json',
+                      {'finishedAt': '2026-01-01T00:00:00+00:00', 'result': 'OK'})
+        code, lines = backup.status(state, backup.MAX_AGE_HOURS)
+        self.assertEqual(code, 1)
+        self.assertIn('STALE', lines[-1])
+
+    def test_an_unexpected_setup_failure_is_reported_not_a_traceback(self):
+        blocker = self.tmp / 'not-a-directory'
+        blocker.write_text('x')
+        code = backup.cmd_run(backup.Config(kind='hourly', reason='test', state_dir=blocker))
+        self.assertEqual(code, backup.EXIT_FAILED)
 
     def test_the_prefixes_are_exactly_the_lifecycle_rules(self):
         self.assertEqual(backup.PREFIXES, {'hourly': 'database/hourly/',

@@ -31,8 +31,9 @@ before it expires is a manual owner decision.
 
 ## 2. One backup (`python3 -m ayvo_backup run --kind hourly|daily`)
 
-1. **Lock** (`/var/lib/ayvo-backup/backup.lock`, non-blocking). A second run while one is running
-   is skipped with exit 75 and recorded (`last-skipped-<kind>.json`); it never waits or overlaps.
+1. **Lock** (`/var/lib/ayvo-backup/backup.lock`). An hourly run while another runs is skipped with
+   exit 75 and recorded (`last-skipped-<kind>.json`); a daily run waits for it (up to 45 min) so the
+   day's backup is not lost to a long hourly run. Runs never overlap.
 2. **Clean** leftovers of a killed run — only our own `run-<id>` directories and, inside the
    database container, only `/tmp/ayvo-backup-<id>.*`.
 3. **Credentials** from `/opt/ayvo/secrets/prod-s3-backup.env` (must be mode 600, owned by `ayvo`
@@ -55,8 +56,11 @@ before it expires is a manual owner decision.
    `last-failure-<kind>.json` (step and a message without secrets). Exit 0 / 1.
 
 On SIGTERM/SIGINT (systemd stop, timeout) the running command is killed, the run directory and
-the container's temporary files are removed and the failure is recorded. An interrupted upload
-leaves no object (a PUT is atomic). After SIGKILL the next run removes the leftovers (step 2).
+the container's temporary files are removed and the failure is recorded. The AWS CLI container is
+named and removed (`docker rm -f`) in every case, so an abandoned upload cannot finish later. A PUT
+is atomic: an interrupted one stores nothing; one that completed just before the interruption may
+leave a dump **without manifest** — never counted as a backup (`--latest` needs both) and expired
+by the lifecycle. After SIGKILL the next run removes the local leftovers (step 2).
 
 The backup identity needs `s3:PutObject`, `s3:GetObject` and `s3:ListBucket` (restore check
 `--latest`) on the backup bucket. It has **no `s3:DeleteObject` and no lifecycle permission** —
@@ -101,7 +105,8 @@ older backup without the owner deciding so.
 - The units fail visibly: `systemctl --failed`, `journalctl -u 'ayvo-prod-backup@*'`.
 - `ayvo-prod-backup-check.timer` (every 30 min) runs `status`: exit 1 — a failed unit logged at
   priority `err` — when the last hourly success is older than 2.5 h, the last daily older than
-  26 h, or the last run of either failed.
+  26 h, the last run of either failed, or the last restore check failed or is older than 8 days.
+- Any failure of a run is recorded (`last-failure-<kind>.json`), also an unexpected one.
 - Every SSH login shows the same status (`/etc/update-motd.d/90-ayvo-backup`).
 - The deployment script (doc 036) shows the status before every release.
 - Optional later, only with the owner's consent: a notification channel (e.g. an e-mail from

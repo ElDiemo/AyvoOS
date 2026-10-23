@@ -54,6 +54,10 @@ AWS_IMAGE = (
 PREFIXES = {'hourly': 'database/hourly/', 'daily': 'database/daily/'}
 # A backup older than this is "stale" for `status` (exit 1).
 MAX_AGE_HOURS = {'hourly': 2.5, 'daily': 26.0}
+# The weekly restore check (doc 035 §3): a failed one, or none for longer than this, is a problem.
+MAX_RESTORE_CHECK_AGE_DAYS = 8
+# A daily backup waits this long for a running hourly one instead of being skipped.
+DAILY_LOCK_WAIT = 2700
 
 DUMP_TIMEOUT = 1800
 UPLOAD_TIMEOUT = 900
@@ -235,9 +239,10 @@ class S3:
         """Where the container sees a file of the run directory."""
         return f'/data/{local.relative_to(self.workdir)}'
 
-    def command(self, args: list[str]) -> list[str]:
+    def command(self, args: list[str], name: str = 'ayvo-backup-aws') -> list[str]:
         return [
-            'docker', 'run', '--rm', '--read-only', '--tmpfs', '/tmp',
+            'docker', 'run', '--rm', '--name', name, '--label', 'com.ayvo.backup=1',
+            '--read-only', '--tmpfs', '/tmp',
             '--security-opt', 'no-new-privileges:true', '--cap-drop', 'ALL',
             '--user', f'{os.getuid()}:{os.getgid()}', '-e', 'HOME=/tmp',
             '--env-file', str(self.env_file),
@@ -246,7 +251,13 @@ class S3:
         ]
 
     def _call(self, args: list[str], step: str, timeout: int = UPLOAD_TIMEOUT):
-        res = self.runner.run(self.command(args), timeout=timeout, step=step)
+        # Killing the docker client (timeout, SIGTERM) does not stop the container: it is named
+        # and removed here in every case, so an abandoned upload cannot finish later.
+        name = f'ayvo-backup-aws-{secrets.token_hex(6)}'
+        try:
+            res = self.runner.run(self.command(args, name), timeout=timeout, step=step)
+        finally:
+            subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=60)
         return res.returncode, res.stdout or b'', tail(res.stderr)
 
     def put(self, local: Path, key: str, sha256_hex: str, metadata: dict[str, str]) -> None:
@@ -320,6 +331,7 @@ class Config:
     dump_timeout: int = DUMP_TIMEOUT
     upload_timeout: int = UPLOAD_TIMEOUT
     retry_delays: tuple[int, ...] = RETRY_DELAYS
+    daily_lock_wait: int = DAILY_LOCK_WAIT
     s3_factory: object = field(default=None, repr=False)
 
 
@@ -405,7 +417,8 @@ class Backup:
             log(f'could not remove the temporary files in the database container: {e}')
 
     def check_archive(self, dump: Path) -> None:
-        """pg_restore can read the whole table of contents (catches a truncated archive)."""
+        """pg_restore reads the archive's table of contents (a broken or foreign file fails here;
+        the data itself is proven only by the restore check, §3 of doc 035)."""
         self.step = 'check'
         with dump.open('rb') as f:
             res = self.docker_exec(['-i', self.cfg.pg_container, 'pg_restore', '--list'],
@@ -525,6 +538,7 @@ class RestoreCheck:
             f.write(f'POSTGRES_PASSWORD={secrets.token_urlsafe(24)}\n')
         r = self.runner.run(
             ['docker', 'run', '-d', '--rm', '--network', 'none', '--name', self.name,
+             '--memory', '1g', '--memory-swap', '2g',
              '--label', 'com.ayvo.restore-check=1', '--env-file', str(env_file), self.image],
             timeout=120, step='restore-check')
         if r.returncode != 0:
@@ -610,8 +624,16 @@ def status(state_dir: Path, max_age: dict[str, float]) -> tuple[int, list[str]]:
             lines.append(f'{kind}: LAST RUN FAILED {failed["finishedAt"]} at {failed["step"]}: {failed["message"]}')
             bad = True
     check = read_state(state_dir, 'last-restore-check.json')
-    lines.append(f'restore check: {check["finishedAt"]} {check["result"]}' if check
-                 else 'restore check: never run')
+    if not check:
+        lines.append('restore check: never run')
+    else:
+        age = (now - datetime.fromisoformat(check['finishedAt'])).total_seconds() / 86400
+        failed = check.get('result') != 'OK'
+        stale = age > MAX_RESTORE_CHECK_AGE_DAYS
+        bad |= failed or stale
+        lines.append(f'restore check: {check["finishedAt"]} ({age:.1f} days ago) {check.get("result")}'
+                     + (f': {check.get("message", "")}' if failed else '')
+                     + (' — STALE' if stale else ''))
     return (EXIT_FAILED if bad else EXIT_OK), lines
 
 
@@ -665,33 +687,50 @@ def config_from(args: argparse.Namespace, **extra) -> Config:
         pg_container=args.pg_container, aws_image=args.aws_image, **extra)
 
 
+def take_lock(cfg: Config, lock) -> bool:
+    """The backup lock; an hourly run gives up at once, a daily one waits for a running run."""
+    deadline = time.monotonic() + (cfg.daily_lock_wait if cfg.kind == 'daily' else 0)
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(min(10, max(0.1, deadline - time.monotonic())))
+
+
 def cmd_run(cfg: Config) -> int:
     runner = Runner()
     install_signal_handlers(runner)
-    cfg.state_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
-    lock = (cfg.state_dir / 'backup.lock').open('a')
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        log('another backup is running; this run is skipped')
-        record(cfg.state_dir, f'last-skipped-{cfg.kind}.json',
-               {'finishedAt': utcnow().isoformat(timespec='seconds'), 'reason': 'busy'})
-        return EXIT_BUSY
-    backup = Backup(cfg, runner)
     started = utcnow()
+    backup: Backup | None = None
+    lock = None
     try:
+        cfg.state_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
+        lock = (cfg.state_dir / 'backup.lock').open('a')
+        if not take_lock(cfg, lock):
+            log('another backup is running; this run is skipped')
+            record(cfg.state_dir, f'last-skipped-{cfg.kind}.json',
+                   {'finishedAt': utcnow().isoformat(timespec='seconds'), 'reason': 'busy'})
+            return EXIT_BUSY
+        backup = Backup(cfg, runner)
         result = backup.run()
-    except (BackupError, Interrupted, OSError) as e:
-        step = e.step if isinstance(e, BackupError) else backup.step
+    except Exception as e:  # noqa: BLE001 — every failure must be recorded, never a bare traceback
+        step = e.step if isinstance(e, BackupError) else (backup.step if backup else 'start')
         message = str(e) if isinstance(e, BackupError) else f'{type(e).__name__}: {e}'
-        record(cfg.state_dir, f'last-failure-{cfg.kind}.json', {
-            'finishedAt': utcnow().isoformat(timespec='seconds'), 'startedAt':
-            started.isoformat(timespec='seconds'), 'step': step, 'message': message[:500],
-            'id': backup.backup_id})
+        try:
+            record(cfg.state_dir, f'last-failure-{cfg.kind}.json', {
+                'finishedAt': utcnow().isoformat(timespec='seconds'), 'startedAt':
+                started.isoformat(timespec='seconds'), 'step': step, 'message': message[:500],
+                'id': backup.backup_id if backup else None})
+        except OSError as state_error:
+            log(f'the failure could not be recorded either: {state_error}')
         log(f'FAILED at {step}: {message}')
         return EXIT_FAILED
     finally:
-        lock.close()
+        if lock:
+            lock.close()
     result |= {'startedAt': started.isoformat(timespec='seconds'),
                'finishedAt': utcnow().isoformat(timespec='seconds')}
     record(cfg.state_dir, f'last-success-{cfg.kind}.json', result)
