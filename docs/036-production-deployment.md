@@ -1,0 +1,165 @@
+# 036 — Production deployment (AyvoOS-PROD, https://os.ayvo.co)
+
+Status: **prepared, not installed** (owner request 2026-10-22, clarified 2026-10-23). Nothing in
+this document has been run on AyvoOS-PROD. ADR 0033 records the decision.
+
+Production runs **the same application code as DEV** — one approved release commit at a time —
+with its own configuration, secrets, database, Redis, volumes and images. There is no
+production-only mode, no feature switch and no different navigation: a salesperson sees only
+Obchod because of the normal `SALES` role (doc 021, doc 034). Production starts only when every
+start condition of the whole application is really met (§8); none is bypassed with a placeholder.
+
+## 1. Pieces
+
+| Piece                                                                             | Where                                           |
+| --------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Compose project `ayvo-prod` (caddy, dns, web, api, migrate, postgres, redis)      | `deploy/prod/compose.yml`                       |
+| Edge: Caddy (tailnet only, ACME on public IPv4 :80), private DNS for `os.ayvo.co` | `deploy/prod/Caddyfile`, `deploy/prod/Corefile` |
+| Host guard for published Docker ports (IPv4 + IPv6), sysctl, install / uninstall  | `deploy/prod/host/`                             |
+| Deploy script (check, deploy, rollback, first administrator)                      | `scripts/deploy-prod.sh`                        |
+| Server-only env files (names)                                                     | `deploy/prod/prod.env.example`                  |
+| Database backups and restore check                                                | `ops/prod-backup`, doc 035 (separate PR)        |
+| Application files in private S3                                                   | ADR 0032 (#47)                                  |
+
+## 2. Server (AyvoOS-PROD)
+
+Ubuntu 24.04, ~4 GB RAM, ~70 GiB free. Public IPv4 `2.29.17.36`, Tailscale IPv4 `100.88.139.2`.
+UFW active, SSH with keys; **public SSH stays** as the fallback (nothing here touches it).
+
+- Docker Engine + Compose plugin from Docker's apt repository; the `ayvo` user in the `docker`
+  group (that group is root-equivalent — only for `ayvo`).
+- **Swap**: the web image build needs about 3 GB; with 4 GB RAM and no swap the kernel's OOM
+  killer stops it (seen on DEV). Add a 4 GB swap file before the first build; the deploy script
+  refuses to build with less than 3 GB of RAM + swap available.
+- Docker's own logs are rotated per container by `compose.yml` (5 × 10 MB). Releases keep the
+  images of the three newest releases; older `ayvo-prod/*` images are removed by name. No
+  `prune`, no volume removal, ever. The deploy script needs ≥ 8 GB free before a build.
+- The repository on the server: a read-only checkout (e.g. a GitHub deploy key) in
+  `/opt/ayvo/repos/AyvoOS`, used only to `git archive` an approved commit.
+
+## 3. Network: tailnet only, no Basic Auth
+
+- HTTPS (443 TCP/UDP) and the private DNS (53) are published **only on the Tailscale IPv4**
+  read from `tailscale ip -4` on every run (never configurable, never `0.0.0.0`, never IPv6).
+  Public IPv4 :80 is the single exception: Caddy answers its own ACME HTTP-01 challenges there and
+  aborts every other request — the application is never served on it.
+- PostgreSQL, Redis, the API and the web server publish **no port**; postgres and redis are on an
+  internal network without egress.
+- Caddy admits only peers from `100.64.0.0/10` by the real TCP peer address. The Docker gateway is
+  never admitted as a stand-in: Tailscale's SNAT must be off instead.
+- Sign-in is the normal application sign-in (WorkOS, MFA); no Basic Auth (as ADR 0030 for DEV).
+- **UFW does not filter Docker's published ports.** `deploy/prod/host/ayvo-prod-docker-guard`
+  puts a chain first in `DOCKER-USER` for IPv4 **and** IPv6: new connections entering through the
+  public interface towards a container are dropped, except IPv4 TCP :80. Tested with recorded
+  `iptables`/`ip6tables` calls (`apps/api/test/deploy-prod.test.ts`).
+- `sudo bash deploy/prod/host/install.sh --check` verifies without changing anything: Docker,
+  Tailscale address, the public default route, **no subnet routes shared by this node**, no Docker
+  network inside `100.64.0.0/10`. Then `sudo bash deploy/prod/host/install.sh` backs up iptables,
+  ip6tables, the sysctl and the Tailscale prefs to `/var/backups/ayvo-prod-host/<time>`, installs
+  the guard (enabled, re-applied on every Docker start), `ip_nonlocal_bind=1`, and turns SNAT off
+  (`tailscale set --snat-subnet-routes=false`; NoSNAT is false today).
+- Rollback: stop `caddy` and `dns`, then `sudo bash deploy/prod/host/uninstall.sh` (guard,
+  sysctl and SNAT back); `iptables-restore` / `ip6tables-restore` of a backup restores an exact
+  earlier state.
+- Tailscale split DNS for `os.ayvo.co` → `100.88.139.2` (the private DNS answers only that name
+  and refuses everything else; it is never a resolver) — set in the Tailscale admin console.
+
+## 4. Secrets and configuration
+
+Server-only files in `/opt/ayvo/secrets`, owner `ayvo`, mode 600. The deploy script checks
+existence, mode, owner and **key names** (never prints a value) and refuses forbidden keys
+(`APP_ENV`, `AUTH_PROVIDER`, `CARRIER_PROVIDER`, `PPL_TEST_*`, `FILE_STORAGE_*`, `DEV_*`):
+
+| File                                                  | Keys                                                                                                                                                                              | Used by               |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `prod.env` (new, from `deploy/prod/prod.env.example`) | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `ACME_EMAIL`, `PUBLIC_QR_BASE_URL`, `LABEL_QR_MIN_SIZE_MM`, `LABEL_QR_ERROR_CORRECTION` (optional `CARRIER_CREDENTIALS_KEY`) | Compose interpolation |
+| `prod-workos.env` (exists)                            | `WORKOS_API_KEY`                                                                                                                                                                  | api (`env_file`)      |
+| `prod-s3.env` (exists)                                | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — the application identity                                                                                                           | api (`env_file`)      |
+| `prod-s3-backup.env` (exists)                         | the backup identity (doc 035) — refused if it equals the application's                                                                                                            | backups only          |
+| `prod-workos-client.env` (exists)                     | not read by this release (`--check` lists its key names)                                                                                                                          | —                     |
+
+If an existing file uses other key names, rename them on the server; values are never copied
+anywhere else. Fixed, non-secret values are in `compose.yml`: `APP_ENV=production` (api and web),
+`APP_PUBLIC_ORIGIN=https://os.ayvo.co`, WorkOS client `client_01M4R7SYY9BSQQCT0RHV4E468Q` and its
+issuer `https://api.workos.com/user_management/client_01M4R7SYY9BSQQCT0RHV4E468Q`,
+`FILE_STORAGE_DRIVER=s3`, `eu-north-1`, bucket `ayvo-prod-files-888725257303-eu-north-1-an`,
+owner `888725257303`.
+
+WorkOS Production (dashboard, owner): redirect `https://os.ayvo.co/api/auth/callback`, initiate
+login `https://os.ayvo.co/api/auth/login`, sign-out `https://os.ayvo.co/login?signed_out=1`,
+public sign-up off, MFA required (confirmed by the owner); the first real sign-in is still to be
+verified (§9).
+
+**Never** `docker compose config` without `--quiet` on this server: it prints the env files.
+
+## 5. Verification after a deployment
+
+The script verifies through the tailnet address: API health (`production`, database up, Redis
+up), `/login` 200, `/` → sign-in, `/api/auth/me` and the administration 401 without a session,
+the published ports exactly as in §3, and — **as a local hint only** — that the public IPv4 refuses
+HTTPS and aborts :80.
+
+A test from the server itself is no proof for the internet. After the first installation and after
+every change of the edge or the host guard, the owner tests **from a machine outside the tailnet**:
+
+```bash
+curl -m 10 -v https://os.ayvo.co/                    # name not resolvable publicly, or no connection
+curl -m 10 -v --resolve os.ayvo.co:443:2.29.17.36 https://os.ayvo.co/   # no connection
+curl -m 10 -v http://2.29.17.36/                     # empty reply (aborted), never the app
+nc -vz -w 5 2.29.17.36 5432; nc -vz -w 5 2.29.17.36 6379; nc -vz -w 5 2.29.17.36 4000; nc -vz -w 5 2.29.17.36 3000
+# and the same for the server's public IPv6 address, if it has one (:80 and :443 must not connect)
+```
+
+## 6. First installation (owner, in this order)
+
+1. Docker, swap, the `ayvo` user, the read-only checkout (§2). Tailscale is already up.
+2. `sudo bash deploy/prod/host/install.sh --check`, then without `--check` (§3). Split DNS.
+3. `/opt/ayvo/secrets/prod.env` from the example; check the existing files' key names (§4).
+4. The release: a commit on `origin/main` that contains this deployment, the S3 storage (#47), the
+   Next.js security update (#48) and whatever else the owner approves.
+5. `scripts/deploy-prod.sh --check --release <commit>` — must pass.
+6. `scripts/deploy-prod.sh --release <commit>`: the database is **new and empty**; it is created
+   only by `prisma migrate deploy` from the migrations — never a copy of DEV, never test seeds.
+   The script backs up nothing on an empty database (it says so), migrates, starts, verifies.
+7. The external negative test (§5).
+8. First administrator, once: `scripts/deploy-prod.sh --bootstrap-admin --email <owner's e-mail,
+verified in WorkOS> --name "<name>"` — the existing one-time mechanism (doc 021 §8); the
+   database allows one bootstrap ever. Then sign in with WorkOS + MFA. Every further user only by
+   an AYVO invitation (Správa systému → Uživatelé); salespeople get the `SALES` role.
+9. Backups (doc 035 §6): install, first backup and restore check by hand, then enable the timers.
+
+## 7. Later releases, failure and rollback
+
+- `--release <commit>`: export → build (one image at a time) → postgres/redis up → **dump of the
+  current database** (`/opt/ayvo/prod/backups/predeploy-…dump`, checked with `pg_restore --list`)
+  and, with the backup tool installed, a verified S3 backup → `migrate deploy` → api/web, then
+  caddy/dns → verify → record (`/opt/ayvo/prod/state`). Log: `/opt/ayvo/prod/deploy.log`.
+- Any failure stops at that step and reports it, the dump, whether migrations ran and the previous
+  release. Nothing is undone silently, and **a database is never restored automatically** — an
+  older backup is never written over newer data without the owner deciding (doc 035 §4).
+- `--rollback <12-character release>` starts the images of an earlier release again without
+  building or migrating. Safe only when that code works with the current schema (migrations are
+  additive by policy; check the release notes). Otherwise: fix forward, or a deliberate restore.
+
+## 8. Start conditions of the whole application (none bypassed)
+
+The API refuses to start in production unless all of these are real:
+
+1. `APP_PUBLIC_ORIGIN` = `https://os.ayvo.co` — fixed in `compose.yml`.
+2. WorkOS: API key (file), client ID and issuer — set; the real sign-in still to be tried.
+3. File storage: `FILE_STORAGE_DRIVER=s3` with the application identity — needs **#47 merged**.
+4. `PUBLIC_QR_BASE_URL`: in production only the production QR host `https://qr.ayvo.co` is
+   accepted (ADR 0014). The owner sets it in `prod.env`.
+5. `LABEL_QR_MIN_SIZE_MM` and `LABEL_QR_ERROR_CORRECTION`: **only from the recorded physical
+   print/scan validation** (doc 016 production blockers, ADR 0014). Not known today; the owner
+   sets them after the test. Until then production does not start — by design.
+6. No `AUTH_PROVIDER=test`, no `CARRIER_PROVIDER=test`, no PPL TEST credentials (refused).
+
+## 9. Risks and open items
+
+- The AWS spend limit (20 USD/month) can suspend the project: then file storage and backups fail
+  (doc 035 §8). Billing is the owner's.
+- Building on a 4 GB server is slow and memory-bound (§2). Building elsewhere and transferring
+  images (e.g. a registry) would be an infrastructure decision of the owner — not prepared.
+- The first real WorkOS sign-in on `os.ayvo.co`, the external negative test and the restore check
+  have not been done (nothing is installed).
