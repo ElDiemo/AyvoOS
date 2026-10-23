@@ -504,14 +504,15 @@ while (($#)); do
   shift
 done
 
+STEP="validate prerequisites"
+# The right host before the first write of any kind (no directory, no log on another host).
+require_commands
+not_dev_server
+not_dev_preview
 if [[ $MODE == deploy || $MODE == rollback ]]; then
   mkdir -p "$PROD_DIR"
   exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
 fi
-STEP="validate prerequisites"
-require_commands
-not_dev_server
-not_dev_preview
 tailnet_address
 check_host_guard
 check_env_files

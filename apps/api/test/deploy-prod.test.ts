@@ -278,6 +278,7 @@ describe('the production host scripts refuse a wrong host before any change (PRO
     );
     for (const name of MUTATING) fake(name, `echo "${name} $*" >> "${log}"`);
     return {
+      bin,
       run: (script: string) => run('bash', [join(root, script)], { PATH: `${bin}:/usr/bin:/bin` }),
       mutations: () => readFileSync(log, 'utf8').trim(),
     };
@@ -315,6 +316,33 @@ describe('the production host scripts refuse a wrong host before any change (PRO
       }
     },
   );
+
+  it.each([
+    ['--check', '--release', 'a'.repeat(40)],
+    ['--release', 'a'.repeat(40)],
+    ['--rollback', 'a'.repeat(12)],
+  ])('deploy-prod.sh %s on the DEV server writes nothing — no directory, no log', (...args) => {
+    const host = simulate({
+      name: 'AyvoOS',
+      containers: ['ayvo-dev-preview-api-1'],
+      tailnet: '100.64.12.34',
+    });
+    // Every command the script requires exists (as a harmless fake) — the host check decides.
+    for (const name of ['git', 'curl', 'jq', 'flock', 'tar', 'sha256sum', 'stat', 'ip', 'df']) {
+      writeFileSync(join(host.bin, name), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(host.bin, name), 0o755);
+    }
+    const prodDir = join(tmp, `prod-${args[0]!.slice(2)}`);
+    const res = run('bash', [join(root, 'scripts/deploy-prod.sh'), ...args], {
+      PATH: `${host.bin}:/usr/bin:/bin`,
+      AYVO_PROD_DIR: prodDir,
+      AYVO_PROD_SECRETS_DIR: join(tmp, 'no-secrets'),
+    });
+    expect(res.status, res.stdout + res.stderr).toBe(1);
+    expect(res.stdout + res.stderr).toMatch(/refusing: this host is 'AyvoOS'|DEV preview found/);
+    expect(existsSync(prodDir), 'AYVO_PROD_DIR was created').toBe(false);
+    expect(host.mutations()).toBe('');
+  });
 
   it.skipIf(devTraces)(
     'the production host passes the check (then the fakes record changes)',
