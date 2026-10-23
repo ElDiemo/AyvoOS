@@ -100,6 +100,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   (result only — the file is never stored), `import_id` / `import_row` on prospects; preview
   writes nothing, confirmation re-checks everything in one transaction; export in the list's
   scope with CSV-injection protection.
+  Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
+  implementation/model pending PR review): one optional card per existing user, explicit public
+  fields, stable slug, separate versioned draft/publication and private normalized photos;
+  `identity:users_manage` only. Deactivation hides atomically; reactivation never republishes.
+  This feature does not authorize public-host cutover, real-profile imports or DNS changes.
   **Approved design, not
   implemented** (Production Core v0.1, doc 020): product-label approvals, crates, crate
   cycles/assignments/events, production orders and series, work sessions, inventory reservations,

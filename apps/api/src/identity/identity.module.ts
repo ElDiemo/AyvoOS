@@ -18,6 +18,12 @@ import { TestIdentityProvider } from './test.provider.js';
 import { UsersController } from './users.controller.js';
 import { UsersService } from './users.service.js';
 import { WorkOsIdentityProvider } from './workos.provider.js';
+import {
+  EmployeeCardsController,
+  PublicEmployeeCardsController,
+} from './employee-cards.controller.js';
+import { EmployeeCardsService } from './employee-cards.service.js';
+import { EmployeeCardRateLimit } from './employee-card-rate-limit.service.js';
 
 /**
  * identity module (Milestone 2C, ADR 0022, doc 021): external OIDC sign-in behind a provider
@@ -26,7 +32,13 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
  */
 @Module({
   imports: [InventoryModule, SitesModule],
-  controllers: [AuthController, UsersController, RolesController],
+  controllers: [
+    AuthController,
+    UsersController,
+    RolesController,
+    EmployeeCardsController,
+    PublicEmployeeCardsController,
+  ],
   providers: [
     AccessService,
     RolesService,
@@ -36,6 +48,8 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
     AuthService,
     AuthRateLimitService,
     UsersService,
+    EmployeeCardsService,
+    EmployeeCardRateLimit,
     {
       provide: IDENTITY_PROVIDER,
       inject: [ENV],

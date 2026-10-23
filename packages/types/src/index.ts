@@ -4,6 +4,7 @@ export * from './carriers.js';
 export * from './catalog.js';
 export * from './crates.js';
 export * from './dispatch-printing.js';
+export * from './employee-cards.js';
 export * from './health.js';
 export * from './hotels.js';
 export * from './identity.js';
