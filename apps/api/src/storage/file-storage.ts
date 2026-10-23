@@ -22,6 +22,19 @@ export class StorageObjectNotFoundError extends Error {
   }
 }
 
+/** Safe errors: never expose SDK exceptions (which can contain signed requests or credentials). */
+export class StorageObjectAlreadyExistsError extends Error {
+  constructor() {
+    super('Stored file already exists');
+  }
+}
+
+export class StorageUnavailableError extends Error {
+  constructor() {
+    super('File storage is unavailable');
+  }
+}
+
 export type StorageNamespace =
   | 'label-artworks'
   | 'label-print-jobs'

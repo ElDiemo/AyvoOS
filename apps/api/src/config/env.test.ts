@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadEnv } from './env.js';
+import { labelQrSettings, loadEnv } from './env.js';
 
 const valid = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/ayvo_test',
@@ -62,17 +62,129 @@ describe('loadEnv', () => {
     });
   });
 
-  it('requires physically validated QR settings in production (no defaults)', () => {
-    expect(() => loadEnv({ ...production, LABEL_QR_MIN_SIZE_MM: undefined })).toThrow(
-      /LABEL_QR_MIN_SIZE_MM/,
-    );
-    expect(() => loadEnv({ ...production, LABEL_QR_ERROR_CORRECTION: undefined })).toThrow(
-      /LABEL_QR_ERROR_CORRECTION/,
-    );
+  describe('QR label settings never stop the application (owner 2026-10-23)', () => {
+    it('production without them fails only for what else is missing (here: file storage)', () => {
+      for (const unset of [undefined, '', '  ']) {
+        const source = {
+          ...production,
+          LABEL_QR_MIN_SIZE_MM: unset,
+          LABEL_QR_ERROR_CORRECTION: unset,
+        };
+        expect(() => loadEnv(source)).toThrow(/Production file storage is not configured/);
+        expect(() => loadEnv(source)).not.toThrow(/LABEL_QR/);
+      }
+    });
+
+    it('production gets exactly what is configured, never the candidates 10 mm / Q', () => {
+      expect(labelQrSettings('production', undefined, undefined)).toEqual({
+        LABEL_QR_MIN_SIZE_MM: null,
+        LABEL_QR_ERROR_CORRECTION: null,
+      });
+      expect(labelQrSettings('production', 15, undefined)).toEqual({
+        LABEL_QR_MIN_SIZE_MM: 15,
+        LABEL_QR_ERROR_CORRECTION: null,
+      });
+      expect(labelQrSettings('production', 15, 'H')).toEqual({
+        LABEL_QR_MIN_SIZE_MM: 15,
+        LABEL_QR_ERROR_CORRECTION: 'H',
+      });
+    });
+
+    it('elsewhere an empty value (Compose `${VAR:-}`) is unset and gets the candidates', () => {
+      expect(
+        loadEnv({ ...valid, LABEL_QR_MIN_SIZE_MM: '', LABEL_QR_ERROR_CORRECTION: ' ' }),
+      ).toMatchObject({ LABEL_QR_MIN_SIZE_MM: 10, LABEL_QR_ERROR_CORRECTION: 'Q' });
+    });
+
+    it('a malformed value is still a configuration error at startup', () => {
+      expect(() => loadEnv({ ...valid, LABEL_QR_MIN_SIZE_MM: '2' })).toThrow(
+        /LABEL_QR_MIN_SIZE_MM/,
+      );
+      expect(() => loadEnv({ ...valid, LABEL_QR_ERROR_CORRECTION: 'X' })).toThrow(
+        /LABEL_QR_ERROR_CORRECTION/,
+      );
+    });
   });
 
   it('refuses to start production on local (container) file storage', () => {
     expect(() => loadEnv(production)).toThrow(/Production file storage is not configured/);
+  });
+
+  describe('explicit production S3 storage', () => {
+    const s3 = {
+      FILE_STORAGE_DRIVER: 's3',
+      AWS_REGION: 'eu-north-1',
+      AWS_ACCESS_KEY_ID: 'AKIAFAKE000000000000',
+      AWS_SECRET_ACCESS_KEY: 'fakeOnlyNotARealAwsSecret00000000000000000',
+      S3_BUCKET: 'ayvo-test-files',
+      S3_EXPECTED_BUCKET_OWNER: '123456789012',
+    };
+
+    it('accepts explicit S3 config without bypassing any other production guard', () => {
+      expect(loadEnv({ ...production, ...s3 })).toMatchObject(s3);
+      expect(() => loadEnv({ ...production, ...s3, AUTH_PROVIDER: 'test' })).toThrow(
+        /AUTH_PROVIDER/,
+      );
+      // ADR 0034: the QR label settings are no start condition — production runs without them
+      // (null: only our QR label operations are refused), and gets no candidate default.
+      expect(
+        loadEnv({
+          ...production,
+          ...s3,
+          LABEL_QR_MIN_SIZE_MM: undefined,
+          LABEL_QR_ERROR_CORRECTION: '',
+        }),
+      ).toMatchObject({ LABEL_QR_MIN_SIZE_MM: null, LABEL_QR_ERROR_CORRECTION: null });
+    });
+
+    it.each([
+      'AWS_REGION',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'S3_BUCKET',
+      'S3_EXPECTED_BUCKET_OWNER',
+    ] as const)('requires %s; never falls back to ambient credentials', (name) => {
+      expect(() => loadEnv({ ...production, ...s3, [name]: '' })).toThrow(/S3 requires/);
+    });
+
+    it.each(['development', 'test'])('never connects %s to production S3', (APP_ENV) => {
+      expect(() => loadEnv({ ...valid, ...s3, APP_ENV })).toThrow(
+        /S3 storage is configured only in production/,
+      );
+    });
+
+    it('refuses AWS configuration with local storage rather than silently ignoring it', () => {
+      expect(() => loadEnv({ ...valid, AWS_REGION: 'eu-north-1' })).toThrow(
+        /Do not supply S3 configuration/,
+      );
+      expect(
+        loadEnv({
+          ...valid,
+          AWS_REGION: '',
+          AWS_ACCESS_KEY_ID: '',
+          AWS_SECRET_ACCESS_KEY: '',
+          S3_BUCKET: '',
+          S3_EXPECTED_BUCKET_OWNER: '',
+        }).FILE_STORAGE_DRIVER,
+      ).toBe('local');
+    });
+
+    it('rejects URLs as bucket names, invalid owner IDs and secret injection without echoing them', () => {
+      const secret = 'private-value-must-not-be-printed\nAWS_REGION=other';
+      expect(() => loadEnv({ ...production, ...s3, S3_BUCKET: 'https://other.example' })).toThrow(
+        /S3_BUCKET/,
+      );
+      expect(() => loadEnv({ ...production, ...s3, S3_EXPECTED_BUCKET_OWNER: 'wrong' })).toThrow(
+        /S3_EXPECTED_BUCKET_OWNER/,
+      );
+      try {
+        loadEnv({ ...production, ...s3, AWS_SECRET_ACCESS_KEY: secret });
+        expect.fail('invalid secret was accepted');
+      } catch (error) {
+        expect(String(error)).toContain('AWS_SECRET_ACCESS_KEY');
+        expect(String(error)).not.toContain(secret);
+      }
+    });
   });
 
   describe('identity and access (ADR 0022)', () => {

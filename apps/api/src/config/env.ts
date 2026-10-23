@@ -3,6 +3,27 @@ import { qrBaseUrlViolation } from '../common/qr-policy.js';
 
 const QR_ERROR_CORRECTION_LEVELS = ['L', 'M', 'Q', 'H'] as const;
 
+/**
+ * The QR print settings as the application uses them. Production: exactly what is configured,
+ * never a candidate default (null = not set; only our QR label operations are then refused).
+ * Elsewhere unset values default to the provisional candidates 10 mm / Q.
+ */
+export function labelQrSettings(
+  appEnv: 'development' | 'test' | 'production',
+  minSizeMm: number | undefined,
+  errorCorrection: (typeof QR_ERROR_CORRECTION_LEVELS)[number] | undefined,
+) {
+  const production = appEnv === 'production';
+  return {
+    LABEL_QR_MIN_SIZE_MM: minSizeMm ?? (production ? null : 10),
+    LABEL_QR_ERROR_CORRECTION: errorCorrection ?? (production ? null : ('Q' as const)),
+  };
+}
+
+/** An empty or whitespace-only variable counts as not set. */
+const blankAsUnset = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
 /** Validated runtime configuration. Fails fast on startup if anything is missing or malformed. */
 export const envSchema = z
   .object({
@@ -24,18 +45,64 @@ export const envSchema = z
       }, 'PUBLIC_QR_BASE_URL must not contain credentials')
       .optional(),
 
-    // File storage (ADR 0016). `local` is DEV-only: production refuses to start with it until
-    // an object-storage implementation exists.
-    FILE_STORAGE_DRIVER: z.enum(['local']).default('local'),
+    // ADR 0016 / 0032: local stays DEV-only. S3 is explicitly configured on production only;
+    // never pick it implicitly just because AWS credentials happen to exist in the process.
+    FILE_STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     // Root of the local file storage. Relative paths resolve against the working directory
     // (`apps/api` under `pnpm dev`, like the .env lookup).
     FILE_STORAGE_DIR: z.string().min(1).default('../../var/storage'),
+    AWS_REGION: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .regex(/^[a-z]{2}(?:-[a-z]+)+-\d+$/)
+        .optional(),
+    ),
+    // Explicit credentials only: no ambient profile, EC2 metadata or shared credentials fallback.
+    AWS_ACCESS_KEY_ID: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .min(16)
+        .max(128)
+        .regex(/^[A-Z0-9]+$/)
+        .optional(),
+    ),
+    AWS_SECRET_ACCESS_KEY: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .min(1)
+        .max(256)
+        .regex(/^[A-Za-z0-9/+=]+$/)
+        .optional(),
+    ),
+    // General-purpose AWS bucket name without dots (virtual-hosted TLS); no URL/ARN/endpoints.
+    S3_BUCKET: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/)
+        .optional(),
+    ),
+    S3_EXPECTED_BUCKET_OWNER: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z
+        .string()
+        .regex(/^\d{12}$/)
+        .optional(),
+    ),
 
     // QR print settings — PROVISIONAL until the physical print/scan test (doc 016, ADR 0014).
-    // Production must set both explicitly; other environments default to the current candidate
-    // error correction (Q) and allow 10 mm so the validation sheet sizes can be tried.
-    LABEL_QR_MIN_SIZE_MM: z.coerce.number().min(5).max(100).optional(),
-    LABEL_QR_ERROR_CORRECTION: z.enum(QR_ERROR_CORRECTION_LEVELS).optional(),
+    // Other environments default to the current candidate error correction (Q) and allow 10 mm
+    // so the validation sheet sizes can be tried. Production has NO default: without both values
+    // the application runs, and only the operations that create or print our QR labels are
+    // refused (qr-label-settings.ts). An empty value (e.g. `${VAR:-}` in Compose) is "not set".
+    LABEL_QR_MIN_SIZE_MM: z.preprocess(blankAsUnset, z.coerce.number().min(5).max(100).optional()),
+    LABEL_QR_ERROR_CORRECTION: z.preprocess(
+      blankAsUnset,
+      z.enum(QR_ERROR_CORRECTION_LEVELS).optional(),
+    ),
 
     // Workstation session lease (doc 026): inactivity after which another authorized user may
     // take the station over (never automatic). Configuration, not a code constant (doc 020 §6).
@@ -236,23 +303,36 @@ export const envSchema = z
     const violation = qrBaseUrlViolation(env.APP_ENV, publicQrBaseUrl);
     if (violation) return fail('PUBLIC_QR_BASE_URL', violation);
 
-    if (production && env.LABEL_QR_MIN_SIZE_MM === undefined) {
-      return fail(
-        'LABEL_QR_MIN_SIZE_MM',
-        'Set the physically validated QR minimum size in production',
-      );
-    }
-    if (production && env.LABEL_QR_ERROR_CORRECTION === undefined) {
-      return fail(
-        'LABEL_QR_ERROR_CORRECTION',
-        'Set the physically validated QR error correction in production',
-      );
-    }
     if (production && env.FILE_STORAGE_DRIVER === 'local') {
       return fail(
         'FILE_STORAGE_DRIVER',
         'Production file storage is not configured: local storage is DEV-only (ADR 0016)',
       );
+    }
+    if (env.FILE_STORAGE_DRIVER === 's3') {
+      if (!production) {
+        return fail('FILE_STORAGE_DRIVER', 'S3 storage is configured only in production');
+      }
+      if (
+        !env.AWS_REGION ||
+        !env.AWS_ACCESS_KEY_ID ||
+        !env.AWS_SECRET_ACCESS_KEY ||
+        !env.S3_BUCKET ||
+        !env.S3_EXPECTED_BUCKET_OWNER
+      ) {
+        return fail(
+          'FILE_STORAGE_DRIVER',
+          'S3 requires AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET and S3_EXPECTED_BUCKET_OWNER',
+        );
+      }
+    } else if (
+      env.AWS_REGION ||
+      env.AWS_ACCESS_KEY_ID ||
+      env.AWS_SECRET_ACCESS_KEY ||
+      env.S3_BUCKET ||
+      env.S3_EXPECTED_BUCKET_OWNER
+    ) {
+      return fail('FILE_STORAGE_DRIVER', 'Do not supply S3 configuration to local storage');
     }
 
     return {
@@ -260,8 +340,7 @@ export const envSchema = z
       AUTH_PROVIDER: authProvider,
       APP_PUBLIC_ORIGIN: env.APP_PUBLIC_ORIGIN ?? 'http://localhost:3000',
       PUBLIC_QR_BASE_URL: publicQrBaseUrl,
-      LABEL_QR_MIN_SIZE_MM: env.LABEL_QR_MIN_SIZE_MM ?? 10,
-      LABEL_QR_ERROR_CORRECTION: env.LABEL_QR_ERROR_CORRECTION ?? ('Q' as const),
+      ...labelQrSettings(env.APP_ENV, env.LABEL_QR_MIN_SIZE_MM, env.LABEL_QR_ERROR_CORRECTION),
     };
   });
 

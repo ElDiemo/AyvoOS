@@ -2,6 +2,8 @@
  * Czech strings of Výroba → Bedny (physical returnable crates, doc 025 A1). Codes (AYV-C-…,
  * CR-…, PJ-…) and crate type codes stay language-neutral.
  */
+import { qrLabelErrorsCs } from './production';
+
 const plural = (n: number, one: string, few: string, many: string) =>
   n === 1 ? one : n >= 2 && n <= 4 ? few : many;
 
@@ -212,6 +214,7 @@ export const cratesCs = {
     UNKNOWN_CRATE_TYPE: 'Tento typ bedny neexistuje. Obnovte stránku.',
     CRATE_NOT_FOUND: 'Některá z beden v této provozovně neexistuje.',
     LABEL_TOO_SMALL: 'Na štítek této velikosti se čitelný QR kód nevejde.',
+    ...qrLabelErrorsCs,
     IDEMPOTENCY_CONFLICT: 'Požadavek se změnil během odesílání. Odešlete jej znovu.',
     FORBIDDEN: 'K této akci nemáte oprávnění.',
   } as Record<string, string>,

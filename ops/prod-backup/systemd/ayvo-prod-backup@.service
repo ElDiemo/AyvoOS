@@ -1,0 +1,32 @@
+# AYVO OS — PROD database backup to S3 (doc 035). %i = hourly | daily.
+# Installed by ops/prod-backup/install.sh; the timers are enabled only by the owner.
+[Unit]
+Description=AYVO PROD: %i database backup to S3
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ayvo
+Group=ayvo
+SupplementaryGroups=docker
+Environment=PYTHONPATH=/usr/local/lib/ayvo-backup PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m ayvo_backup run --kind %i
+# Dump (30 min) + up to 3 uploads with read-back (15 min each) + the manifest.
+TimeoutStartSec=2h
+# Exit 75 = another backup was running: logged and recorded, not a failure of this unit.
+SuccessExitStatus=75
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+StateDirectory=ayvo-backup
+StateDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ayvo-backup
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
