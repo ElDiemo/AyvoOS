@@ -120,10 +120,13 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
     .fill('Výslovné zveřejnění testovací vizitky');
   await editor.getByRole('button', { name: 'Zveřejnit uložený koncept' }).click();
   await expect(editor.getByText('Uložený koncept byl zveřejněn.')).toBeVisible();
+  const publishedLink = editor.getByRole('link', { name: 'Otevřít zveřejněnou vizitku' });
+  await expect(publishedLink).toHaveAttribute('href', `/id/${slug}`);
+  await expect(publishedLink).toHaveAttribute('target', '_blank');
 
   const anonymous = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const publicPage = await anonymous.newPage();
-  await publicPage.goto(`/id/${slug}`);
+  await publicPage.goto((await publishedLink.getAttribute('href'))!);
   await expect(publicPage.getByRole('heading', { name: 'Jana Vizitková' })).toBeVisible();
   await expect(publicPage.getByRole('img', { name: 'Jana Vizitková' })).toBeVisible();
   const oldPhoto = new URL(
@@ -180,8 +183,12 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   await editor.getByLabel('Důvod změny', { exact: true }).fill('Skrytí testovací vizitky');
   await editor.getByRole('button', { name: 'Skrýt vizitku', exact: true }).click();
   await expect(editor.getByText('Vizitka byla skryta.')).toBeVisible();
+  await expect(publishedLink).toHaveCount(0);
   await expect(editor.getByLabel('Veřejné jméno')).toHaveValue('Nesmí se ztratit při skrytí');
   expect((await anonymous.request.get(`/id/${slug}`)).status()).toBe(404);
   expect((await anonymous.request.get(oldPhoto!)).status()).toBe(404);
+  expect((await publicPage.reload())?.status()).toBe(404);
+  await expect(publicPage.getByRole('heading', { name: 'Contact unavailable' })).toBeVisible();
+  await expect(publicPage.getByRole('link')).toHaveCount(0);
   await anonymous.close();
 });

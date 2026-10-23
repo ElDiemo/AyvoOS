@@ -27,6 +27,7 @@ export const employeeCardsCs = {
   reload: 'Načíst aktuální stav',
   preview: 'Náhled konceptu',
   publishedPreview: 'Nyní zveřejněno',
+  openPublished: 'Otevřít zveřejněnou vizitku',
   slug: 'Adresa na vizitce',
   slugHelp: 'Např. tomas-hanzl. Po prvním uložení je trvalá, aby fungovaly vytištěné vizitky.',
   reason: 'Důvod změny',

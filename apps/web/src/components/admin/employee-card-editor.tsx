@@ -335,14 +335,24 @@ export function EmployeeCardEditor({
                 {t.publish}
               </button>
               {card?.published && (
-                <button
-                  type="button"
-                  disabled={busy || stale}
-                  className={buttonClass.danger}
-                  onClick={() => void action('hide')}
-                >
-                  {t.hide}
-                </button>
+                <>
+                  <a
+                    className={buttonClass.secondary}
+                    href={`/id/${card.slug}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t.openPublished}
+                  </a>
+                  <button
+                    type="button"
+                    disabled={busy || stale}
+                    className={buttonClass.danger}
+                    onClick={() => void action('hide')}
+                  >
+                    {t.hide}
+                  </button>
+                </>
               )}
             </div>
             <p className="text-xs text-stone-500">{t.publicationNotice}</p>

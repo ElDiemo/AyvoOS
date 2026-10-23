@@ -1113,7 +1113,7 @@ model EmployeeCard {
   publishedVersion Int?      @map("published_version")
   publishedAt      DateTime? @map("published_at") @db.Timestamptz(3)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
-  user             User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("employee_cards")
 }
@@ -1124,7 +1124,7 @@ model EmployeeCardPhoto {
   userId     String   @map("user_id") @db.Uuid
   storageKey String   @unique @map("storage_key")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@map("employee_card_photos")
 }

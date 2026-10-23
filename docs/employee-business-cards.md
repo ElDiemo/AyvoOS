@@ -19,6 +19,15 @@ unsaved editor text. A concurrent edit is 409; reload updates the server version
 but preserves entered fields for review. Mutations require a reason and audit.
 Deactivation hides in the database transaction; reactivation requires a new
 explicit publication. No editing/publishing by SALES or other ordinary users.
+After publication, **Otevřít zveřejněnou vizitku** opens `/id/<slug>` in a new
+tab in the current environment. It never jumps from DEV to the still-existing
+production PHP site. A hidden/unknown card shows a plain unavailable page,
+without a link into the internal OS.
+
+Owner clarification 2026-10-23: the first live preview may use the normal
+VPN-protected DEV address. Do not create an `id-dev` domain, open DEV ports or
+change DNS for this preview. The final production ID host must be anonymous and
+reachable without VPN; that is still the separate cutover below.
 
 ## API
 

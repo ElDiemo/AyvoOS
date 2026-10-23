@@ -58,3 +58,21 @@ No live domain takeover, Apache/DNS change, real-profile import, production S3
 acceptance, external visitor-IP/proxy test, normal Docker build or CI has been
 performed for this branch. See the cutover checklist and ADR 0036; these are not
 covered by a screenshot or a successful `/health` response.
+
+## First GitHub CI and follow-up
+
+PR #55 was pushed at `d2f18af`. Run `39989753581` passed quality (including the
+normal Linux/Turbopack build) and the full browser suite. API tests reported
+659 passed, 2 skipped and 3 failures: the public-route allowlist needed the
+three deliberately public card routes, and both schema-drift checks detected
+the implicit Prisma `ON UPDATE CASCADE` differing from the new SQL foreign
+keys' `NO ACTION`. This was not a green API run and was not dismissed as CI noise.
+
+The follow-up explicitly keeps `onUpdate: NoAction` in both Prisma relations,
+matching the already-written SQL without changing a migration. The access
+allowlist names only those three routes; it is not widened to all public paths.
+The editor gains a same-environment link to the published card, removed when
+hidden. A card-specific unavailable page has no links into the private OS.
+The browser regression checks the link and the hidden page. New CI is required
+on the follow-up head before merge/deploy. Initial screenshots predate this
+small editor-link addition; they remain examples, not proof of a live DEV page.
