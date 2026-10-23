@@ -160,8 +160,12 @@ fine.
   advisory lock keyed by the owner). The second one checks possible duplicates against what the
   first one committed, so neither slips past the other unseen; a possible duplicate is still only a
   warning ("Přesto založit", or confirming the row in the import). The lock is keyed by the owner
-  written for: a salesperson only ever waits for writes into their own prospects, never for
-  anything about another salesperson's. Nothing becomes unique (names, phones, e-mails stay free).
+  written for and taken only after the right to write for that owner is checked: a salesperson
+  never waits on another salesperson's owner lock (a request for a colleague is refused at once).
+  Every create also takes the shared row of the prospect code counter until it commits — as
+  before this change — so a create can wait for any concurrent create; that wait shows only that
+  somebody is creating prospects right now, never whether a prospect similar to the typed one
+  exists. Nothing becomes unique (names, phones, e-mails stay free).
 - **Concurrent edits**: every update of a prospect, contact or task carries the revision it was
   based on. A newer revision is refused with `409 …_CHANGED`, so the last save never silently
   overwrites somebody else's change. The form keeps the user's input and offers a reload.
