@@ -49,6 +49,7 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 | [0025](0025-same-crate-two-scans-explicit-hotovo.md)       | Same crate from labelling to dispatch, two bottle scans, explicit Hotovo | Proposed — process confirmed by owner 2026-10-14; model in doc 025 awaits approval        |
 | [0026](0026-dev-preview-tailnet-only.md)                   | DEV preview reachable only through our Tailscale tailnet                 | Accepted — directed by owner 2026-10-17 (DEV only)                                        |
 | [0031](0031-sales-function-and-ownership-scope.md)         | Obchod as its own function; sales access scoped by ownership             | Proposed — owner request 2026-10-21 (doc 034)                                             |
+| [0035](0035-public-qr-edge.md)                             | A separate public edge serves only the QR passport                       | Proposed — owner request 2026-10-23 (doc 037)                                             |
 
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,

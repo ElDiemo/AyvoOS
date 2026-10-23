@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# AYVO OS — deploy PRODUCTION (https://os.ayvo.co) on AyvoOS-PROD. Doc 036, ADR 0033.
+# AYVO OS — deploy PRODUCTION (https://os.ayvo.co) on AyvoOS-PROD. Doc 036, ADR 0033; the public
+# QR edge (https://<QR host>/<token>): doc 037, ADR 0035.
 #
 # Manual, by the owner, one approved release at a time. There is no CI/CD.
 #
@@ -103,7 +104,7 @@ trap 'STEP="$STEP (line $LINENO: $BASH_COMMAND)"' ERR
 
 require_commands() {
   local cmd
-  for cmd in docker git curl jq awk flock tar sha256sum stat tailscale ip systemctl sysctl df; do
+  for cmd in docker git curl jq awk flock tar sha256sum stat tailscale ip systemctl sysctl df getent base64; do
     command -v "$cmd" >/dev/null || die "$cmd is not installed"
   done
   docker compose version >/dev/null 2>&1 || die "the Docker Compose plugin is missing"
@@ -134,6 +135,37 @@ tailnet_address() {
   ip -4 -o addr show dev tailscale0 2>/dev/null | grep -q " inet $ip4/" ||
     die "Tailscale address $ip4 is not on interface tailscale0"
   PROD_TAILNET_IPV4=$ip4
+}
+
+# The public QR edge listens only on the server's public IPv4 (never 0.0.0.0, never IPv6).
+public_address() {
+  local ext
+  ext="$(ip -4 route show default | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+  [[ -n $ext && $ext != tailscale0 ]] || die "no public default route (or it is the tailnet)"
+  PROD_PUBLIC_IPV4="$(ip -4 -o addr show dev "$ext" scope global | awk '{ sub(/\/.*/, "", $4); print $4; exit }')"
+  [[ $PROD_PUBLIC_IPV4 =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "no public IPv4 address on $ext"
+}
+
+# The QR host is the one of PUBLIC_QR_BASE_URL (the API accepts only the production QR host there,
+# ADR 0014) — never a second, independently configured name.
+qr_domain() {
+  local base
+  base="$(env_value "$SECRETS/prod.env" PUBLIC_QR_BASE_URL)"
+  [[ $base =~ ^https://([a-z0-9]([a-z0-9.-]*[a-z0-9])?)$ ]] ||
+    die "PUBLIC_QR_BASE_URL must be https://<host> without a path (doc 037)"
+  QR_DOMAIN=${BASH_REMATCH[1]}
+  [[ $QR_DOMAIN != "$DOMAIN" ]] || die "the QR host must not be $DOMAIN (the internal application)"
+}
+
+# DNS of the QR host must point at this server (certificate issuance needs it; no AAAA yet).
+check_qr_dns() {
+  local a aaaa
+  a="$(getent ahostsv4 "$QR_DOMAIN" 2>/dev/null | awk '{ print $1 }' | sort -u | tr '\n' ' ')" || true
+  [[ " $a" == *" $PROD_PUBLIC_IPV4 "* ]] ||
+    die "$QR_DOMAIN must resolve to $PROD_PUBLIC_IPV4 (A record), found: ${a:-nothing}"
+  aaaa="$(getent ahostsv6 "$QR_DOMAIN" 2>/dev/null | awk '$1 ~ /:/ && $1 !~ /^::ffff:/ { print $1 }' | sort -u | tr '\n' ' ')" || true
+  [[ -z $aaaa ]] || warn "$QR_DOMAIN has AAAA records ($aaaa): IPv6 is not served (doc 037)"
+  ok "$QR_DOMAIN -> $PROD_PUBLIC_IPV4"
 }
 
 check_host_guard() {
@@ -262,6 +294,7 @@ compose() {
   local dir
   dir="$(release_dir "$AYVO_RELEASE")"
   PROD_DOMAIN=$DOMAIN PROD_TAILNET_IPV4=$PROD_TAILNET_IPV4 AYVO_RELEASE=$AYVO_RELEASE \
+    PROD_PUBLIC_IPV4=$PROD_PUBLIC_IPV4 QR_DOMAIN=$QR_DOMAIN \
     AYVO_RELEASE_DIR=$dir AYVO_PROD_SECRETS_DIR=$SECRETS \
     docker compose -p "$PROJECT" --project-directory "$dir/deploy/prod" \
     -f "$dir/deploy/prod/compose.yml" --env-file "$SECRETS/prod.env" "$@"
@@ -379,12 +412,12 @@ migrate() {
 }
 
 start_services() {
-  STEP="start api and web, then caddy and dns"
+  STEP="start api and web, then caddy, dns and the public QR edge"
   log "$STEP"
   compose up -d --no-build api web || die "api/web did not start"
   wait_healthy api || die "api did not become healthy"
   wait_healthy web || die "web did not become healthy"
-  compose up -d --no-build caddy dns || die "caddy/dns did not start"
+  compose up -d --no-build caddy dns qr-edge || die "caddy/dns/qr-edge did not start"
   ok "services running $AYVO_RELEASE"
 }
 
@@ -422,7 +455,8 @@ verify() {
   local -A allowed=(
     ["caddy $PROD_TAILNET_IPV4:443->443/tcp"]=1 ["caddy $PROD_TAILNET_IPV4:443->443/udp"]=1
     ["caddy 0.0.0.0:80->80/tcp"]=1
-    ["dns $PROD_TAILNET_IPV4:53->1053/tcp"]=1 ["dns $PROD_TAILNET_IPV4:53->1053/udp"]=1)
+    ["dns $PROD_TAILNET_IPV4:53->1053/tcp"]=1 ["dns $PROD_TAILNET_IPV4:53->1053/udp"]=1
+    ["qr-edge $PROD_PUBLIC_IPV4:443->443/tcp"]=1)
   for id in $(docker ps -q --filter "label=com.docker.compose.project=$PROJECT"); do
     while IFS= read -r line; do
       [[ -z $line || -n ${allowed[$line]:-} ]] || bad+=("$line")
@@ -431,21 +465,34 @@ verify() {
       | .value[] | "\($s) \(.HostIp):\(.HostPort)->\($t)"')
   done
   ((${#bad[@]} == 0)) || die "published ports outside the rule (doc 036 §3): ${bad[*]}"
-  ok "published: only $PROD_TAILNET_IPV4 (443 tcp/udp, 53) and public IPv4 :80 (ACME)"
+  ok "published: $PROD_TAILNET_IPV4 (443 tcp/udp, 53), public IPv4 :80 (ACME) and $PROD_PUBLIC_IPV4:443 (QR edge)"
 
-  # From this server — NOT a proof for the internet (doc 036 §5: the owner's test from outside).
-  STEP="verify (local hint only): the public addresses refuse HTTPS"
-  local pub4
-  pub4="$(ip -4 -o addr show scope global | awk '$2 != "tailscale0" && $2 !~ /^(docker|br-|veth)/ { sub(/\/.*/, "", $4); print $4; exit }')"
-  if [[ -n $pub4 ]]; then
-    code=0
-    curl -s -o /dev/null --max-time 5 --resolve "$DOMAIN:443:$pub4" "https://$DOMAIN/" || code=$?
-    [[ $code == 7 || $code == 28 ]] || die "https via the public IPv4 $pub4 must not connect (curl exit $code)"
-    code=0
-    curl -s -o /dev/null --max-time 5 --resolve "$DOMAIN:80:$pub4" "http://$DOMAIN/" || code=$?
-    [[ $code == 52 ]] || die "http via the public IPv4 must be aborted without an answer (curl exit $code)"
-    ok "public $pub4: no HTTPS, :80 aborted (local hint; the external test is doc 036 §5)"
-  fi
+  # From this server — NOT a proof for the internet (doc 037 §5: the owner's test from outside).
+  STEP="verify (local hint only): the public address serves only the QR passport"
+  local pub4=$PROD_PUBLIC_IPV4 unknown
+  unknown="$(head -c 16 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')"
+  qr_status() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$QR_DOMAIN:443:$pub4" "$@"; }
+  for ((i = 0; i < 90; i++)); do
+    code="$(qr_status "https://$QR_DOMAIN/$unknown" || true)"
+    [[ $code == 404 ]] && break
+    sleep 2
+  done
+  [[ $code == 404 ]] || die "https://$QR_DOMAIN/<unknown token> answered '$code' (DNS A record, TLS-ALPN on public :443, qr-edge logs)"
+  local path
+  for path in /login / /api/health /api/public/bottles/$unknown /q/$unknown /admin /sales; do
+    [[ $(qr_status "https://$QR_DOMAIN$path") == 404 ]] || die "https://$QR_DOMAIN$path must be a plain 404 (doc 037)"
+  done
+  # The internal application's name on the public address: no certificate, no answer.
+  code=0
+  curl -s -o /dev/null --max-time 5 --resolve "$DOMAIN:443:$pub4" "https://$DOMAIN/" || code=$?
+  [[ $code != 0 ]] || die "https://$DOMAIN must not be served on the public IPv4 $pub4"
+  # The QR certificate with another Host header: refused (strict SNI), never the application.
+  [[ $(qr_status -H "Host: $DOMAIN" "https://$QR_DOMAIN/login") == 421 ]] ||
+    die "a request for $DOMAIN through the QR name must be refused (421)"
+  code=0
+  curl -s -o /dev/null --max-time 5 --resolve "$DOMAIN:80:$pub4" "http://$DOMAIN/" || code=$?
+  [[ $code == 52 ]] || die "http via the public IPv4 must be aborted without an answer (curl exit $code)"
+  ok "public $pub4: only GET /<token> of $QR_DOMAIN; $DOMAIN and other paths refused (local hint; the external test is doc 037 §5)"
 }
 
 record_release() {
@@ -529,8 +576,10 @@ if [[ $MODE == deploy || $MODE == rollback ]]; then
   exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
 fi
 tailnet_address
+public_address
 check_host_guard
 check_env_files
+qr_domain
 mkdir -p "$PROD_DIR"
 exec 9>"$PROD_DIR/.deploy.lock"
 flock -n 9 || die "another production deployment is running"
@@ -543,6 +592,7 @@ case $MODE in
     check_resources
     export_release
     check_workos_issuer
+    check_qr_dns
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
     backup_status
@@ -555,6 +605,7 @@ case $MODE in
     check_resources
     export_release
     check_workos_issuer
+    check_qr_dns
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
     backup_status

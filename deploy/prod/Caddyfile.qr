@@ -1,0 +1,98 @@
+# AYVO OS — the PUBLIC QR edge (https://<QR host>/<token>, ADR 0035, doc 037). Values come from the
+# deploy script via compose.yml; none are secret. Anyone may reach this, without VPN or sign-in.
+#
+# It serves exactly one thing: the existing public passport page of a QR token, `GET /<token>`
+# (22 base64url characters), internally `/q/<token>` of the web application, plus the static files
+# that page needs. No other path, no API, no sign-in, no internal application: everything else is
+# a plain 404. It reaches only `web` (its own network); the API is not on that network.
+#
+# Certificates: TLS-ALPN-01 on this :443 (public IPv4 :80 belongs to the internal edge's ACME).
+{
+	email {$ACME_EMAIL}
+	servers {
+		# A request's Host must be the TLS server name (no os.ayvo.co behind a qr SNI).
+		strict_sni_host on
+		timeouts {
+			read_header 10s
+			read_body 10s
+			write 30s
+			idle 60s
+		}
+		max_header_size 16KB
+		protocols h1 h2
+	}
+}
+
+(headers) {
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=31536000"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		-Server
+		-X-Powered-By
+	}
+}
+
+# What reaches the web application from the internet: no cookie, no credentials, none of the
+# Next.js navigation/action headers, and the visitor's own address as X-Forwarded-For (any
+# incoming value is replaced — the API counts its rate limit per visitor, doc 037).
+(to_web) {
+	reverse_proxy web:3000 {
+		header_up X-Forwarded-For {remote_host}
+		header_up -Cookie
+		header_up -Authorization
+		header_up -Forwarded
+		header_up -X-Forwarded-Host
+		header_up -X-Ayvo-Path
+		header_up -X-Ayvo-Print-Agent
+		header_up -X-Ayvo-Claim
+		header_up -Rsc
+		header_up -Next-Action
+		header_up -Next-Router-State-Tree
+		header_up -Next-Router-Prefetch
+		header_up -Next-Router-Segment-Prefetch
+		header_up -Next-Url
+		header_down -Set-Cookie
+		header_down -X-Powered-By
+		# An upstream failure is a calm public answer, never a stack or an internal address.
+		@unavailable status 5xx
+		handle_response @unavailable {
+			respond "This AYVO page is temporarily unavailable." 503
+		}
+	}
+}
+
+{$QR_DOMAIN} {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	encode zstd gzip
+	import headers
+
+	@passport {
+		method GET HEAD
+		path_regexp token ^/([A-Za-z0-9_-]{22})$
+	}
+	handle @passport {
+		# The query string is dropped: the page needs none.
+		rewrite * /q/{re.token.1}?
+		import to_web
+	}
+
+	@static {
+		method GET HEAD
+		path /_next/static/* /icon.svg
+	}
+	handle @static {
+		import to_web
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

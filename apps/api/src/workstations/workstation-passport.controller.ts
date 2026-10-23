@@ -1,4 +1,5 @@
-import { Controller, Get, Header, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, Header, NotFoundException, Param, UseGuards } from '@nestjs/common';
+import { PublicRateLimitGuard } from '../common/public-rate-limit.guard.js';
 import { PUBLIC_PREFIX } from '../common/routes.js';
 import { QrRegistryService } from '../database/qr-registry.service.js';
 import { Public } from '../identity/access.decorators.js';
@@ -8,6 +9,7 @@ import { Public } from '../identity/access.decorators.js';
  * site, mode, users or anything about the work there.
  */
 @Public()
+@UseGuards(PublicRateLimitGuard)
 @Controller(`${PUBLIC_PREFIX}/workstations`)
 export class WorkstationPassportController {
   constructor(private readonly registry: QrRegistryService) {}
