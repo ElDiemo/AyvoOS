@@ -106,6 +106,7 @@ export const identityCs = {
     carriers: 'Připojení dopravců',
     printing: 'Tisk štítků',
     sales: 'Obchod',
+    finance: 'Finance',
   } as Record<string, string>,
   login: {
     title: 'Přihlášení do AYVO OS',
