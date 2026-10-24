@@ -317,7 +317,7 @@ describe('S3FileStorage (real SDK, synthetic HTTP only)', () => {
       APP_ENV: 'production',
       DATABASE_URL: 'postgresql://test:test@localhost/test',
       REDIS_URL: 'redis://localhost:6379',
-      AUTH_ENCRYPTION_KEY: '22'.repeat(32),
+      AUTH_ENCRYPTION_KEY: '5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28', // synthetic test value
       AUTH_SMTP_HOST: 'smtp.example.test',
       AUTH_SMTP_USER: 'synthetic-user',
       AUTH_SMTP_PASSWORD: 'synthetic-password',
