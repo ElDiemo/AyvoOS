@@ -34,7 +34,12 @@ describe.skipIf(!hasDatabase)('finance received documents', () => {
     const supplier = await http()
       .post('/api/admin/suppliers')
       .set('Origin', TEST_APP_ORIGIN)
-      .send({ requestId: randomUUID(), name: `Pronajímatel ${randomUUID().slice(0, 6)}`, companyId: null, vatId: null })
+      .send({
+        requestId: randomUUID(),
+        name: `Pronajímatel ${randomUUID().slice(0, 6)}`,
+        companyId: null,
+        vatId: null,
+      })
       .expect(201);
     supplierId = supplier.body.id;
   });
@@ -141,7 +146,12 @@ describe.skipIf(!hasDatabase)('finance received documents', () => {
     const archived = await http()
       .post('/api/admin/suppliers')
       .set('Origin', TEST_APP_ORIGIN)
-      .send({ requestId: randomUUID(), name: `Archiv ${randomUUID().slice(0, 6)}`, companyId: null, vatId: null })
+      .send({
+        requestId: randomUUID(),
+        name: `Archiv ${randomUUID().slice(0, 6)}`,
+        companyId: null,
+        vatId: null,
+      })
       .expect(201);
     await http()
       .post(`/api/admin/suppliers/${archived.body.id}/archive`)
