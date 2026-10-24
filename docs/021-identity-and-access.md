@@ -292,6 +292,13 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | POST   | `/api/admin/catalog/products/:code/recipes/:version/activate`     | `catalog:recipe_approve`                    | global                      |
 | POST   | `/api/admin/catalog/products/:code/recipes/:version/archive`      | `catalog:recipe_approve`                    | global                      |
 | GET    | `/api/admin/catalog/products/:code/recipes/:version/requirements` | `catalog:read`                              | global                      |
+| GET    | `/api/admin/finance/documents`                                    | `finance:documents_read`                    | global                      |
+| POST   | `/api/admin/finance/documents`                                    | `finance:documents_manage`                  | global                      |
+| GET    | `/api/admin/finance/documents/:code`                              | `finance:documents_read`                    | global                      |
+| GET    | `/api/admin/finance/documents/:code/content`                      | `finance:documents_read`                    | global                      |
+| POST   | `/api/admin/finance/documents/:code/correct`                      | `finance:documents_manage`                  | global                      |
+| POST   | `/api/admin/finance/documents/:code/void`                         | `finance:documents_manage`                  | global                      |
+| GET    | `/api/admin/finance/suppliers`                                    | `finance:documents_manage`                  | global                      |
 | GET    | `/api/admin/goods-receipts`                                       | `inventory:read`                            | active site + its warehouse |
 | POST   | `/api/admin/goods-receipts`                                       | `inventory:receive`                         | active site + its warehouse |
 | GET    | `/api/admin/goods-receipts/:code`                                 | `inventory:read`                            | active site + its warehouse |

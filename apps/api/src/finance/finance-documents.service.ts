@@ -201,13 +201,22 @@ export class FinanceDocumentsService {
       },
     });
     if (!doc) throw new NotFoundException('Doklad nenalezen');
+    // A supplier change is shown by name (the snapshot keeps the id).
+    const supplierIds = doc.events.map((e) => (e.snapshot as Record<string, unknown>).supplierId);
+    const names = await this.procurement.supplierNames(
+      supplierIds.filter((v): v is string => typeof v === 'string'),
+    );
     let before: Record<string, unknown> | null = null;
     const history: FinanceDocumentEvent[] = doc.events.map((e) => {
       const snap = e.snapshot as Record<string, unknown>;
       const changes: Record<string, [unknown, unknown]> = {};
       if (before)
         for (const k of SNAPSHOT_FIELDS)
-          if (before[k] !== snap[k]) changes[k] = [before[k], snap[k]];
+          if (before[k] !== snap[k])
+            changes[k] =
+              k === 'supplierId'
+                ? [names.get(String(before[k])) ?? before[k], names.get(String(snap[k])) ?? snap[k]]
+                : [before[k], snap[k]];
       before = snap;
       return {
         version: e.version,

@@ -14,6 +14,7 @@ export const financeCs = {
   fields: {
     code: 'Číslo v AYVO',
     supplier: 'Dodavatel',
+    supplierId: 'Dodavatel',
     kind: 'Druh',
     documentNumber: 'Číslo dokladu',
     issuedOn: 'Datum vystavení',

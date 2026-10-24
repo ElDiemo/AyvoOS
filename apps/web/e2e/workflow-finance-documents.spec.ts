@@ -79,7 +79,9 @@ test.describe('Přijaté doklady', () => {
     const history = page.getByTestId('finance-history');
     await expect(history).toContainText('Opraven');
     await expect(history).toContainText('Částka včetně DPH');
-    await expect(history).toContainText('Částka celkem: 25000.00 → 30250.00');
+    await expect(history).toContainText(
+      'Částka celkem: 25\u00a0000,00\u00a0CZK → 30\u00a0250,00\u00a0CZK',
+    );
 
     await mkdir(screenshots, { recursive: true });
     for (const width of [1440, 390]) {
