@@ -139,3 +139,93 @@ export type FinanceDocumentPage = z.infer<typeof financeDocumentPageSchema>;
 /** Suppliers offered when receiving a document (names only; managed in Sklad). */
 export const financeSupplierSchema = z.object({ id: z.uuid(), name: z.string() });
 export type FinanceSupplier = z.infer<typeof financeSupplierSchema>;
+
+/** N2 — the export for the accountant (doc 039 §7). */
+export const ACCOUNTING_EXPORT_MODES = ['FULL', 'SUPPLEMENT'] as const;
+export const accountingExportModeSchema = z.enum(ACCOUNTING_EXPORT_MODES);
+export type AccountingExportMode = z.infer<typeof accountingExportModeSchema>;
+export const accountingExportChangeSchema = z.enum(['NEW', 'CHANGED', 'VOIDED', 'INCLUDED']);
+export type AccountingExportChange = z.infer<typeof accountingExportChangeSchema>;
+
+/** A period of issue dates, at most 366 days. */
+export const accountingExportPeriodSchema = z
+  .object({
+    periodFrom: isoDateSchema,
+    periodTo: isoDateSchema,
+    mode: accountingExportModeSchema,
+  })
+  .refine((p) => p.periodTo >= p.periodFrom, {
+    message: 'Konec období nesmí být před začátkem.',
+    path: ['periodTo'],
+  })
+  .refine((p) => (Date.parse(p.periodTo) - Date.parse(p.periodFrom)) / 86_400_000 <= 366, {
+    message: 'Období může mít nejvýše 366 dní.',
+    path: ['periodTo'],
+  });
+export type AccountingExportPeriod = z.infer<typeof accountingExportPeriodSchema>;
+
+export const createAccountingExportSchema = z
+  .object({
+    requestId: z.uuid(),
+    periodFrom: isoDateSchema,
+    periodTo: isoDateSchema,
+    mode: accountingExportModeSchema,
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((p) => p.periodTo >= p.periodFrom, {
+    message: 'Konec období nesmí být před začátkem.',
+    path: ['periodTo'],
+  })
+  .refine((p) => (Date.parse(p.periodTo) - Date.parse(p.periodFrom)) / 86_400_000 <= 366, {
+    message: 'Období může mít nejvýše 366 dní.',
+    path: ['periodTo'],
+  });
+export type CreateAccountingExportRequest = z.infer<typeof createAccountingExportSchema>;
+
+export const accountingExportLineSchema = z.object({
+  code: z.string(),
+  supplier: z.string(),
+  kind: financeDocumentKindSchema,
+  documentNumber: z.string(),
+  issuedOn: isoDateSchema,
+  totalAmount: z.string().nullable(),
+  currency: z.string().nullable(),
+  version: z.number().int(),
+  change: accountingExportChangeSchema,
+  byteSize: z.number().int(),
+});
+export type AccountingExportLine = z.infer<typeof accountingExportLineSchema>;
+
+/** What an export would contain now (nothing is written). */
+export const accountingExportPreviewSchema = z.object({
+  periodFrom: isoDateSchema,
+  periodTo: isoDateSchema,
+  mode: accountingExportModeSchema,
+  lines: z.array(accountingExportLineSchema),
+  totalBytes: z.number().int(),
+  /** Over the limits (count or size): the export would be refused. */
+  tooLarge: z.boolean(),
+  limits: z.object({ documents: z.number().int(), bytes: z.number().int() }),
+});
+export type AccountingExportPreview = z.infer<typeof accountingExportPreviewSchema>;
+
+export const accountingExportSchema = z.object({
+  code: z.string(),
+  periodFrom: isoDateSchema,
+  periodTo: isoDateSchema,
+  mode: accountingExportModeSchema,
+  note: z.string().nullable(),
+  documentCount: z.number().int(),
+  byteSize: z.number().int(),
+  sha256: z.string(),
+  createdAt: z.iso.datetime(),
+  createdBy: z.string(),
+});
+export type AccountingExport = z.infer<typeof accountingExportSchema>;
+
+export const accountingExportDetailSchema = accountingExportSchema.extend({
+  lines: z.array(accountingExportLineSchema),
+  /** Documents of the period added, changed or voided after this export (to hand over later). */
+  laterChanges: z.array(accountingExportLineSchema),
+});
+export type AccountingExportDetail = z.infer<typeof accountingExportDetailSchema>;

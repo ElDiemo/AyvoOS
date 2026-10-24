@@ -139,6 +139,19 @@ export class ProcurementService {
     }
   }
 
+  /** Name and registration ids of suppliers by id (for other modules' exports). */
+  async supplierIdentities(
+    ids: readonly string[],
+  ): Promise<Map<string, { name: string; companyId: string | null; vatId: string | null }>> {
+    const rows = await this.prisma.supplier.findMany({
+      where: { id: { in: [...new Set(ids)] } },
+      select: { id: true, name: true, companyId: true, vatId: true },
+    });
+    return new Map(
+      rows.map((r) => [r.id, { name: r.name, companyId: r.companyId, vatId: r.vatId }]),
+    );
+  }
+
   /** Names of suppliers by id (for read models of other modules). */
   async supplierNames(ids: readonly string[]): Promise<Map<string, string>> {
     const rows = await this.prisma.supplier.findMany({

@@ -3,10 +3,11 @@ import { MulterModule } from '@nestjs/platform-express';
 import { ENV, type Env } from '../config/env.js';
 import { ProcurementModule } from '../procurement/procurement.module.js';
 import { FinanceController } from './finance.controller.js';
+import { AccountingExportsService } from './accounting-exports.service.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
 
 /**
- * finance module (doc 039): received documents (N1). Owns finance_* tables only; suppliers come
+ * finance module (doc 039): received documents (N1) and the accountant export (N2). Owns finance_* tables only; suppliers come
  * from ProcurementService. Company-wide (no site); FINANCE stays a planned role (doc 021 §4c).
  */
 @Module({
@@ -21,7 +22,7 @@ import { FinanceDocumentsService } from './finance-documents.service.js';
     }),
   ],
   controllers: [FinanceController],
-  providers: [FinanceDocumentsService],
+  providers: [FinanceDocumentsService, AccountingExportsService],
   exports: [FinanceDocumentsService],
 })
 export class FinanceModule {}

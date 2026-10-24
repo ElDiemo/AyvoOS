@@ -14,6 +14,13 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
+  accountingExportPeriodSchema,
+  createAccountingExportSchema,
+  type AccountingExport,
+  type AccountingExportDetail,
+  type AccountingExportPeriod,
+  type AccountingExportPreview,
+  type CreateAccountingExportRequest,
   correctFinanceDocumentSchema,
   financeDocumentListQuerySchema,
   uploadFinanceDocumentFieldsSchema,
@@ -31,9 +38,11 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
 import { CurrentPrincipal } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
+import { AccountingExportsService } from './accounting-exports.service.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
 
 const CODE = new ZodValidationPipe(z.string().regex(/^FD-\d{6,}$/));
+const EXPORT_CODE = new ZodValidationPipe(z.string().regex(/^AE-\d{6,}$/));
 /** Multipart sends empty optional fields as "": they mean "not given". */
 const uploadFields = z.preprocess(
   (v) =>
@@ -49,7 +58,56 @@ const uploadFields = z.preprocess(
  */
 @Controller(`${ADMIN_PREFIX}/finance`)
 export class FinanceController {
-  constructor(private readonly documents: FinanceDocumentsService) {}
+  constructor(
+    private readonly documents: FinanceDocumentsService,
+    private readonly exports: AccountingExportsService,
+  ) {}
+
+  // --- N2: export for the accountant (doc 039 §7) -------------------------------------------
+
+  @RequirePermission('finance:documents_read')
+  @Get('exports')
+  listExports(): Promise<AccountingExport[]> {
+    return this.exports.list();
+  }
+
+  /** What an export of the period would contain now; writes nothing. */
+  @RequirePermission('finance:exports_manage')
+  @Get('exports/preview')
+  previewExport(
+    @Query(new ZodValidationPipe(accountingExportPeriodSchema)) period: AccountingExportPeriod,
+  ): Promise<AccountingExportPreview> {
+    return this.exports.preview(period);
+  }
+
+  @RequirePermission('finance:exports_manage')
+  @Post('exports')
+  createExport(
+    @Body(new ZodValidationPipe(createAccountingExportSchema)) body: CreateAccountingExportRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<AccountingExportDetail> {
+    return this.exports.create(body, principal.userId);
+  }
+
+  @RequirePermission('finance:documents_read')
+  @Get('exports/:code')
+  exportDetail(@Param('code', EXPORT_CODE) code: string): Promise<AccountingExportDetail> {
+    return this.exports.detail(code);
+  }
+
+  @RequirePermission('finance:documents_read')
+  @Get('exports/:code/content')
+  @Header('Cache-Control', 'private, no-store')
+  @Header('X-Content-Type-Options', 'nosniff')
+  async exportContent(@Param('code', EXPORT_CODE) code: string): Promise<StreamableFile> {
+    const { bytes, filename } = await this.exports.content(code);
+    return new StreamableFile(bytes, {
+      type: 'application/zip',
+      disposition: `attachment; filename="${filename}"`,
+    });
+  }
+
+  // --- N1: received documents ----------------------------------------------------------------
 
   /** Active suppliers to choose from (managed in Sklad → Dodavatelé). */
   @RequirePermission('finance:documents_manage')

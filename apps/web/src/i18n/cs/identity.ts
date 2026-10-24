@@ -89,6 +89,7 @@ export const identityCs = {
       'Pracovat s vlastními zájemci o spolupráci — zakládat, upravovat, kontakty, aktivity a úkoly',
     'sales:manage': 'Vidět všechny zájemce a úkoly obchodu a přidělovat je obchodníkům',
     'finance:documents_read': 'Vidět přijaté doklady, jejich historii a stahovat originály',
+    'finance:exports_manage': 'Vytvářet exporty dokladů pro účetní (ZIP s přehledem a originály)',
     'finance:documents_manage':
       'Přijímat doklady (nahrát originál), opravovat jejich údaje s důvodem a rušit je',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
