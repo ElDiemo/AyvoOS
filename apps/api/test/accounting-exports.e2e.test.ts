@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { EXPORT_LIMITS } from '../src/finance/accounting-exports.service.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
 
@@ -260,6 +261,29 @@ describe.skipIf(!hasDatabase)('finance accountant export', () => {
     await expect(
       t.prisma.$executeRawUnsafe(`DELETE FROM accounting_export_items`),
     ).rejects.toThrow();
+  });
+
+  it('refuses an export over its bounds (documents or bytes) and the preview says so', async () => {
+    await receive('2012-05-15', pdf(`l ${randomUUID()}`));
+    const limits = EXPORT_LIMITS as { documents: number; bytes: number };
+    const saved = { ...limits };
+    try {
+      limits.documents = 1; // the period now has more than one document
+      const preview = await http()
+        .get('/api/admin/finance/exports/preview')
+        .query({ periodFrom: FROM, periodTo: TO, mode: 'FULL' })
+        .expect(200);
+      expect(preview.body.tooLarge).toBe(true);
+      expect(preview.body.limits.documents).toBe(1);
+      expect((await exportOf('FULL').expect(422)).body.code).toBe('EXPORT_TOO_LARGE');
+      limits.documents = saved.documents;
+      limits.bytes = 10; // any original is larger
+      expect((await exportOf('FULL').expect(422)).body.code).toBe('EXPORT_TOO_LARGE');
+    } finally {
+      Object.assign(limits, saved);
+    }
+    const before = await t.prisma.accountingExport.count();
+    expect(before).toBeGreaterThan(0);
   });
 
   it('only ADMIN may create exports; reading needs finance:documents_read', async () => {
