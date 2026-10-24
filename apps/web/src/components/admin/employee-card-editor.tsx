@@ -46,7 +46,6 @@ export function EmployeeCardEditor({
   const [status, setStatus] = useState('');
   const [stale, setStale] = useState(false);
   const [serverDraft, setServerDraft] = useState<EmployeeCardFields | null>(null);
-  const [showPublished, setShowPublished] = useState(false);
   const [pending, setPending] = useState<{ json: string; requestId: string } | null>(null);
   const dirty =
     JSON.stringify(fields) !== JSON.stringify(card?.draft ?? emptyFields(displayName)) ||
@@ -159,7 +158,10 @@ export function EmployeeCardEditor({
     }
   }
 
-  const preview = showPublished && card?.published ? card.published : fields;
+  // The server's publication, never the form: an edit or a saved draft leaves a valid
+  // publication public. Deactivation removes the publication in the database.
+  const isPublic = active && !!card?.published;
+  const draftDiffers = isPublic && JSON.stringify(card!.draft) !== JSON.stringify(card!.published);
   return (
     <Card title={t.title} id="vizitka" testId="employee-card-editor">
       <p className="mb-4 text-sm text-stone-600">{t.description}</p>
@@ -178,9 +180,20 @@ export function EmployeeCardEditor({
       ) : (
         <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
           <div className="min-w-0 space-y-5">
-            <p className="text-sm font-medium" role="status">
-              {!active ? t.inactive : card?.published ? t.published : card ? t.hidden : t.draft}
-            </p>
+            <div role="status" data-testid="employee-card-publication">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <span
+                  aria-hidden="true"
+                  className={`inline-block size-2.5 shrink-0 rounded-full ${isPublic ? 'bg-emerald-600' : 'bg-red-600'}`}
+                />
+                {isPublic ? t.statusPublished : t.statusUnpublished}
+              </p>
+              {(!active || draftDiffers) && (
+                <p className="mt-1 text-sm text-stone-600">
+                  {!active ? t.inactive : t.draftDiffers}
+                </p>
+              )}
+            </div>
             <fieldset disabled={busy} className="grid min-w-0 gap-4 sm:grid-cols-2">
               <label className="sm:col-span-2">
                 <span className="mb-1 block text-sm font-medium">{t.slug}</span>
@@ -358,29 +371,10 @@ export function EmployeeCardEditor({
             <p className="text-xs text-stone-500">{t.publicationNotice}</p>
           </div>
           <div className="min-w-0 border-t border-stone-200 pt-5 xl:sticky xl:top-6 xl:border-t-0 xl:pt-0">
-            <div className="mb-5 flex flex-wrap gap-2">
-              <button
-                type="button"
-                aria-pressed={!showPublished}
-                className={buttonClass.secondary}
-                onClick={() => setShowPublished(false)}
-              >
-                {t.preview}
-              </button>
-              {card?.published && (
-                <button
-                  type="button"
-                  aria-pressed={showPublished}
-                  className={buttonClass.secondary}
-                  onClick={() => setShowPublished(true)}
-                >
-                  {t.publishedPreview}
-                </button>
-              )}
-            </div>
+            <h3 className="mb-3 text-sm font-medium text-stone-600">{t.preview}</h3>
             <EmployeeCard
-              fields={preview}
-              photoUrl={preview.photoId ? `/api/${base}/photos/${preview.photoId}` : undefined}
+              fields={fields}
+              photoUrl={fields.photoId ? `/api/${base}/photos/${fields.photoId}` : undefined}
               preview
               contactUrl="#"
             />
