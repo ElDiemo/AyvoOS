@@ -13,6 +13,10 @@
 #                                                         (no build, no migration; doc 036 §7)
 #   scripts/deploy-prod.sh --bootstrap-admin --email <e-mail> --name "<name>"
 #                                                         the one-time first administrator (doc 021 §8)
+#   scripts/deploy-prod.sh --activate-bootstrap --email <e-mail>
+#                                                         e-mail the native activation link to that
+#                                                         existing, not yet activated bootstrap ADMIN
+#                                                         (doc 038 §4; nobody else, nothing created)
 #
 # <commit> is a full 40-character commit that is already on origin/main (merged = approved). The
 # images are built from a clean `git archive` of exactly that commit — never from a working copy.
@@ -58,14 +62,11 @@ readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLI
 # The physically validated QR label settings are optional (ADR 0034): both or neither.
 readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY"
-readonly KEYS_WORKOS="WORKOS_API_KEY"
-# Client ID and issuer may be in the file too; compose.yml's fixed values take precedence.
-readonly ALLOW_WORKOS="$KEYS_WORKOS WORKOS_CLIENT_ID WORKOS_JWT_ISSUER"
+readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
+readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 # Region, bucket and owner may be in the file too; compose.yml's fixed values take precedence.
 readonly ALLOW_S3="$KEYS_S3 AWS_REGION S3_BUCKET S3_EXPECTED_BUCKET_OWNER"
-# The only endpoint trusted for the WorkOS discovery document (doc 021 §9); never configurable.
-readonly WORKOS_API_ORIGIN="https://api.workos.com"
 
 MODE=deploy
 RELEASE=""
@@ -186,6 +187,30 @@ check_host_guard() {
 
 # Keys of a KEY=VALUE file, without ever evaluating or printing a value.
 env_keys() { grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$1" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/'; }
+# Authentication mail (doc 038): exactly one explicit mode, the same rules as the API. Values are
+# never printed. google-relay = the approved Google Workspace relay (fixed host, TLS, IPv4
+# allowlist, no credentials); smtp = authenticated submission with user AND password.
+check_auth_mail() {
+  local driver=$1 host=$2 user=$3 pass=$4 port=$5
+  case $driver in
+    google-relay)
+      [[ -z $host && -z $user && -z $pass ]] ||
+        die "AUTH_MAIL_DRIVER=google-relay uses no SMTP host or credentials: remove AUTH_SMTP_HOST/USER/PASSWORD" ;;
+    smtp)
+      [[ -n $host && -n $user && -n $pass ]] ||
+        die "AUTH_MAIL_DRIVER=smtp needs AUTH_SMTP_HOST, AUTH_SMTP_USER and AUTH_SMTP_PASSWORD"
+      [[ ${port:-465} == 465 || ${port:-465} == 587 ]] || die "AUTH_SMTP_PORT must be 465 or 587 (TLS required)" ;;
+    *) die "AUTH_MAIL_DRIVER must be smtp or google-relay" ;;
+  esac
+}
+
+# A generated key has ~16 distinct hex digits; a test key or a typed pattern has few.
+check_auth_key() {
+  [[ $1 =~ ^[a-fA-F0-9]{64}$ ]] || die "$2: AUTH_ENCRYPTION_KEY must be a separately generated 32-byte hex key"
+  (( $(fold -w1 <<<"${1,,}" | sort -u | wc -l) >= 10 )) ||
+    die "$2: AUTH_ENCRYPTION_KEY is not random; generate it with: openssl rand -hex 32"
+}
+
 # One key's value (unquoted), for comparisons only — never printed, never evaluated.
 env_value() {
   grep -E "^[[:space:]]*(export[[:space:]]+)?$2=" "$1" | tail -n1 |
@@ -257,7 +282,12 @@ check_env_files() {
   log "$STEP"
   check_env_file "$SECRETS/prod.env" "$KEYS_PROD" "$ALLOW_PROD"
   check_qr_label_settings "$SECRETS/prod.env"
-  check_env_file "$SECRETS/prod-workos.env" "$KEYS_WORKOS" "$ALLOW_WORKOS"
+  check_env_file "$SECRETS/prod-auth.env" "$KEYS_AUTH" "$ALLOW_AUTH"
+  local auth="$SECRETS/prod-auth.env"
+  check_auth_key "$(env_value "$auth" AUTH_ENCRYPTION_KEY)" prod-auth.env
+  check_auth_mail "$(env_value "$auth" AUTH_MAIL_DRIVER)" "$(env_value "$auth" AUTH_SMTP_HOST)" \
+    "$(env_value "$auth" AUTH_SMTP_USER)" "$(env_value "$auth" AUTH_SMTP_PASSWORD)" \
+    "$(env_value "$auth" AUTH_SMTP_PORT)"
   check_env_file "$SECRETS/prod-s3.env" "$KEYS_S3" "$ALLOW_S3"
   # The backup identity is never given to the application (doc 035).
   if [[ -r $SECRETS/prod-s3-backup.env ]] &&
@@ -283,24 +313,6 @@ check_release() {
   repo_git show "$RELEASE:apps/api/src/config/env.ts" | grep -q "'s3'" ||
     die "$RELEASE has no S3 file storage (ADR 0032, #47): production cannot start on local storage"
   ok "$RELEASE is on origin/main ($(repo_git log -1 --format='%cs %s' "$RELEASE"))"
-}
-
-# The issuer fixed in the release's compose.yml must be exactly the `issuer` of the WorkOS
-# client's discovery document (as DEV, doc 021 §9). Nothing secret is involved.
-check_workos_issuer() {
-  STEP="check the WorkOS issuer against the client's discovery document"
-  local file client issuer doc found
-  file="$(release_dir "$RELEASE")/deploy/prod/compose.yml"
-  client="$(sed -nE 's/^ +WORKOS_CLIENT_ID: ([A-Za-z0-9_]+)$/\1/p' "$file" | head -n1)"
-  issuer="$(sed -nE 's/^ +WORKOS_JWT_ISSUER: (https:[^ ]+)$/\1/p' "$file" | head -n1)"
-  [[ -n $client && -n $issuer ]] || die "compose.yml has no fixed WorkOS client ID and issuer"
-  doc="$(printf 'url = "%s/user_management/%s/.well-known/openid-configuration"\n' "$WORKOS_API_ORIGIN" "$client" |
-    curl -fsS --proto =https --max-redirs 0 --max-time 15 --max-filesize 65536 --config - 2>/dev/null)" ||
-    die "the WorkOS discovery document of $client could not be fetched"
-  found="$(jq -er 'if type == "object" and (.issuer | type) == "string" then .issuer else empty end' <<<"$doc" 2>/dev/null)" ||
-    die "the WorkOS discovery document has no issuer"
-  [[ $found == "$issuer" ]] || die "WORKOS_JWT_ISSUER in compose.yml ($issuer) is not the discovery issuer ($found)"
-  ok "WorkOS issuer matches the discovery document of $client"
 }
 
 check_resources() {
@@ -579,6 +591,7 @@ while (($#)); do
       shift
       ;;
     --bootstrap-admin) MODE=bootstrap ;;
+    --activate-bootstrap) MODE=activate ;;
     --email)
       ADMIN_EMAIL=${2:-}
       shift
@@ -622,7 +635,7 @@ case $MODE in
     check_release
     check_resources
     export_release
-    check_workos_issuer
+    ok "native authentication: no external identity-provider discovery"
     check_qr_dns
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
@@ -635,7 +648,7 @@ case $MODE in
     check_release
     check_resources
     export_release
-    check_workos_issuer
+    ok "native authentication: no external identity-provider discovery"
     check_qr_dns
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
@@ -675,9 +688,20 @@ case $MODE in
     [[ -n $ADMIN_EMAIL && -n $ADMIN_NAME ]] || die "--bootstrap-admin needs --email and --name"
     [[ -n $PREVIOUS ]] || die "production is not running: deploy a release first"
     AYVO_RELEASE=$PREVIOUS
-    log "$STEP: $ADMIN_EMAIL (one time only; the person then signs in with WorkOS and MFA)"
+    log "$STEP: $ADMIN_EMAIL (one time only; then --activate-bootstrap sends the activation link)"
     compose run --rm --no-deps api node dist/identity/bootstrap-admin.js --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" ||
       die "the bootstrap was refused (see the message above)"
     ok "first administrator created; further users only by invitation"
+    ;;
+  activate)
+    STEP="send the native activation link to the bootstrap administrator"
+    [[ -n $ADMIN_EMAIL ]] || die "--activate-bootstrap needs --email"
+    [[ -n $PREVIOUS ]] || die "production is not running: deploy a release first"
+    AYVO_RELEASE=$PREVIOUS
+    log "$STEP: $ADMIN_EMAIL (no link, password or MFA secret is printed)"
+    # Exit 1 = queued but not accepted by the mail server yet; the running API retries.
+    compose run --rm --no-deps api node dist/identity/native-invite-bootstrap.js --email "$ADMIN_EMAIL" ||
+      die "the activation e-mail was refused or not delivered (see the message above)"
+    ok "activation e-mail accepted by the mail server; delivery to the mailbox is confirmed by the person"
     ;;
 esac

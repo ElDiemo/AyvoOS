@@ -218,6 +218,11 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/public/employee-cards/:slug/photo',
       // Only "an internal AYVO mark" (doc 026).
       'GET /api/public/workstations/:token',
+      'POST /api/auth/native/activate',
+      'POST /api/auth/native/forgot-password',
+      'POST /api/auth/native/mfa',
+      'POST /api/auth/native/password',
+      'POST /api/auth/native/reset-password',
     ]);
     // Machine routes (ADR 0028): only the print agent's API, only under /api/agent/.
     expect(
@@ -952,8 +957,14 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
           login_hint: 'owner@ayvo.test',
         })
         .expect(404);
+      // Outside tests sign-in is native only: the old entry leads to the AYVO sign-in page and
+      // no external callback is accepted (ADR 0037).
       const login = await request(dev.app.getHttpServer()).get('/api/auth/login').expect(302);
-      expect(new URL(login.headers.location!).hostname).toBe('api.workos.com');
+      expect(login.headers.location).toBe('/login?next=%2F');
+      await request(dev.app.getHttpServer())
+        .get('/api/auth/callback')
+        .query({ code: 'x', state: 'y' })
+        .expect(404);
     } finally {
       await dev.close();
     }

@@ -997,6 +997,10 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
+  nativeCredential     NativeCredential?
+  nativeTokens         NativeAuthToken[]
+  nativeChallenges     NativeAuthChallenge[]
+  nativeRecoveryCodes  NativeRecoveryCode[]
   employeeCard         EmployeeCard?
   employeeCardPhotos   EmployeeCardPhoto[]
   itemWeights          ItemReferenceWeight[]
@@ -1147,6 +1151,84 @@ model UserIdentity {
 
   @@index([userId])
   @@map("user_identities")
+}
+
+/// Native password + TOTP. Only created after successful second-factor enrollment.
+model NativeCredential {
+  userId         String   @id @map("user_id") @db.Uuid
+  passwordHash   String   @map("password_hash")
+  totpCiphertext String   @map("totp_ciphertext")
+  revision       Int      @default(1)
+  mfaRevision    Int      @default(1) @map("mfa_revision")
+  lastTotpStep   BigInt   @map("last_totp_step")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("native_credentials")
+}
+
+/// One-use enrollment/password-reset tokens. Raw delivery material is authenticated ciphertext.
+model NativeAuthToken {
+  id                 String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId             String                @map("user_id") @db.Uuid
+  purpose            String
+  tokenSha256        String                @unique @map("token_sha256") @db.Char(64)
+  deliveryCiphertext String?               @map("delivery_ciphertext")
+  revision           Int                   @default(1)
+  credentialRevision Int                   @map("credential_revision")
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt          DateTime              @map("expires_at") @db.Timestamptz(3)
+  claimedAt          DateTime?             @map("claimed_at") @db.Timestamptz(3)
+  usedAt             DateTime?             @map("used_at") @db.Timestamptz(3)
+  revokedAt          DateTime?             @map("revoked_at") @db.Timestamptz(3)
+  sentAt             DateTime?             @map("sent_at") @db.Timestamptz(3)
+  deliveryAttempts   Int                   @default(0) @map("delivery_attempts")
+  nextDeliveryAt     DateTime              @default(now()) @map("next_delivery_at") @db.Timestamptz(3)
+  deliveryLeaseUntil DateTime?             @map("delivery_lease_until") @db.Timestamptz(3)
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  challenges         NativeAuthChallenge[]
+
+  @@index([userId, purpose])
+  @@index([nextDeliveryAt])
+  @@map("native_auth_tokens")
+}
+
+/// HttpOnly preauthentication cookie references this short-lived, one-use, limited challenge.
+model NativeAuthChallenge {
+  id                 String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId             String           @map("user_id") @db.Uuid
+  tokenSha256        String           @unique @map("token_sha256") @db.Char(64)
+  kind               String
+  credentialRevision Int              @map("credential_revision")
+  actionId           String?          @map("action_id") @db.Uuid
+  actionRevision     Int?             @map("action_revision")
+  passwordHash       String?          @map("password_hash")
+  totpCiphertext     String?          @map("totp_ciphertext")
+  nextPath           String           @default("/") @map("next_path")
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt          DateTime         @map("expires_at") @db.Timestamptz(3)
+  attempts           Int              @default(0)
+  usedAt             DateTime?        @map("used_at") @db.Timestamptz(3)
+  user               User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  action             NativeAuthToken? @relation(fields: [actionId], references: [id], onDelete: Restrict)
+
+  @@index([userId, expiresAt])
+  @@map("native_auth_challenges")
+}
+
+/// High-entropy, user-bound recovery code hashes; consumption/retirement is retained.
+model NativeRecoveryCode {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  codeSha256  String    @unique @map("code_sha256") @db.Char(64)
+  mfaRevision Int       @map("mfa_revision")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(3)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, mfaRevision])
+  @@map("native_recovery_codes")
 }
 
 /// Roles. System roles (is_system) are seeded and change only by migration; custom roles are

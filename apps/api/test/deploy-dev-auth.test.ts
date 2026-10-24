@@ -5,17 +5,16 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * `scripts/deploy-dev.sh --check` verifies WORKOS_JWT_ISSUER against the client's WorkOS discovery
- * document (doc 021 §9) and fails closed without the tailnet or the host guard (ADR 0026). The real
- * WorkOS endpoint is never contacted: `curl`, `docker`, `tailscale`, `ip`, `systemctl` and `sysctl`
- * are replaced by stubs on PATH; the curl stub only answers the fixed, trusted discovery URL. All
- * values below are fictional fixtures.
+ * `scripts/deploy-dev.sh --check` validates the native authentication settings (one explicit mail
+ * mode, a random key; doc 038) and fails closed without the tailnet or the host guard (ADR 0026).
+ * Nothing is contacted: `curl`, `docker`, `tailscale`, `ip`, `systemctl` and `sysctl` are stubs on
+ * PATH and curl refuses every call (no identity-provider discovery any more). All values are
+ * fictional fixtures.
  */
 const script = resolve(import.meta.dirname, '../../../scripts/deploy-dev.sh');
-const CLIENT_ID = 'client_FIXTURE0000000000000000';
-const API_KEY = 'sk_test_FIXTURE_not_a_real_key_000';
-const ISSUER = `https://api.workos.com/user_management/${CLIENT_ID}`;
-const DISCOVERY_URL = `${ISSUER}/.well-known/openid-configuration`;
+const KEY = '5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28';
+const SMTP_PASSWORD = 'fictional-smtp-password-FIXTURE';
+const RELAY = ['AUTH_MAIL_DRIVER=google-relay', 'AUTH_MAIL_FROM=system@ayvo.test'];
 
 let dir: string;
 
@@ -28,23 +27,8 @@ beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'ayvo-deploy-check-'));
   const bin = join(dir, 'bin');
   spawnSync('mkdir', [bin]);
-  // curl stub: reads the curl config from stdin, refuses any URL except the trusted one and
-  // answers according to FIXTURE (ok | foreign | invalid | missing | query | network).
-  write(
-    join(bin, 'curl'),
-    `#!/usr/bin/env bash
-config="$(cat)"
-[[ $config == 'url = "${DISCOVERY_URL}"' ]] || { echo "unexpected url" >&2; exit 90; }
-case "$FIXTURE" in
-  ok) printf '{"issuer":"%s","jwks_uri":"x"}' "${ISSUER}" ;;
-  foreign) printf '{"issuer":"https://api.workos.com/"}' ;;
-  invalid) printf '<html>not json' ;;
-  missing) printf '{"jwks_uri":"x"}' ;;
-  query) printf '{"issuer":"%s?x=1"}' "${ISSUER}" ;;
-  network) echo "curl: (6) Could not resolve host" >&2; exit 6 ;;
-esac
-`,
-  );
+  // The check itself contacts nothing; any curl call is a failure of this test.
+  write(join(bin, 'curl'), '#!/usr/bin/env bash\necho "unexpected curl" >&2; exit 90\n');
   write(join(bin, 'docker'), '#!/usr/bin/env bash\nexit 0\n');
   // Tailnet and host guard stubs: TS_IP (the Tailscale IPv4, empty = not logged in),
   // NOSNAT (Tailscale's NoSNAT pref), GUARD (active | inactive), NONLOCAL (the sysctl value).
@@ -66,11 +50,10 @@ if [[ $1 == debug && $2 == prefs ]]; then printf '{"NoSNAT":%s,"AdvertiseRoutes"
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 function check(
-  fixture: string,
-  issuer = ISSUER,
+  auth: string[] = RELAY,
   host: { TS_IP?: string; NOSNAT?: string; GUARD?: string; NONLOCAL?: string; extra?: string } = {},
 ) {
-  const env = join(dir, `dev-preview-${fixture}.env`);
+  const env = join(dir, `dev-preview-${Math.random().toString(36).slice(2)}.env`);
   write(
     env,
     [
@@ -80,9 +63,8 @@ function check(
       'POSTGRES_USER=ayvo',
       `POSTGRES_PASSWORD=${'p'.repeat(32)}`,
       'POSTGRES_DB=ayvo',
-      `WORKOS_API_KEY=${API_KEY}`,
-      `WORKOS_CLIENT_ID=${CLIENT_ID}`,
-      `WORKOS_JWT_ISSUER=${issuer}`,
+      `AUTH_ENCRYPTION_KEY=${KEY}`,
+      ...auth,
       ...(host.extra ? [host.extra] : []),
       '',
     ].join('\n'),
@@ -93,7 +75,6 @@ function check(
       ...process.env,
       PATH: `${join(dir, 'bin')}:${process.env.PATH}`,
       AYVO_DEV_ENV_FILE: env,
-      FIXTURE: fixture,
       TS_IP: host.TS_IP ?? '100.100.100.1',
       NOSNAT: host.NOSNAT ?? 'true',
       GUARD: host.GUARD ?? 'active',
@@ -102,46 +83,96 @@ function check(
     encoding: 'utf8',
   });
   const output = `${result.stdout}${result.stderr}`;
-  // Nothing identifying is ever printed, whatever the outcome.
-  for (const secret of [CLIENT_ID, API_KEY, ISSUER, 'https://api.workos.com/"'])
-    expect(output).not.toContain(secret);
+  // No secret value is ever printed, whatever the outcome.
+  for (const secret of [KEY, SMTP_PASSWORD, '1'.repeat(64)]) expect(output).not.toContain(secret);
+  expect(output).not.toContain('unexpected curl');
   return { status: result.status, output };
 }
 
-describe('deploy-dev.sh --check: WorkOS issuer against the discovery document', () => {
-  it('passes without Basic Auth variables when WORKOS_JWT_ISSUER equals the discovery issuer exactly', () => {
-    const { status, output } = check('ok');
-    expect(output).toContain("WORKOS_JWT_ISSUER matches the client's WorkOS discovery document");
+describe('deploy-dev.sh --check: native authentication settings and the tailnet', () => {
+  it('passes with the explicit Google IPv4 relay and no SMTP credentials, without contacting anything', () => {
+    const { status, output } = check();
+    expect(output).toContain('native authentication configuration present');
     expect(output).toContain('Check passed');
     expect(status).toBe(0);
   });
 
-  it('fails on a generic WorkOS issuer that differs from the discovery document', () => {
-    const { status, output } = check('ok', 'https://api.workos.com/');
-    expect(status).not.toBe(0);
-    expect(output).toContain('WORKOS_JWT_ISSUER does not exactly match');
+  it('passes with authenticated SMTP when host, user and password are all set', () => {
+    const { status } = check([
+      'AUTH_MAIL_DRIVER=smtp',
+      'AUTH_MAIL_FROM=system@ayvo.test',
+      'AUTH_SMTP_HOST=smtp.example.test',
+      'AUTH_SMTP_PORT=587',
+      'AUTH_SMTP_USER=system@ayvo.test',
+      `AUTH_SMTP_PASSWORD=${SMTP_PASSWORD}`,
+    ]);
+    expect(status).toBe(0);
   });
 
-  it('fails when the discovery document declares a different issuer', () => {
-    const { status, output } = check('foreign');
+  it.each([
+    ['no mail mode', ['AUTH_MAIL_FROM=system@ayvo.test'], 'AUTH_MAIL_DRIVER'],
+    [
+      'an unknown mode',
+      ['AUTH_MAIL_DRIVER=anonymous', 'AUTH_MAIL_FROM=system@ayvo.test'],
+      'must be smtp or google-relay',
+    ],
+    [
+      'the memory test driver',
+      ['AUTH_MAIL_DRIVER=memory', 'AUTH_MAIL_FROM=system@ayvo.test'],
+      'must be smtp or google-relay',
+    ],
+    ['no sender', ['AUTH_MAIL_DRIVER=google-relay'], 'AUTH_MAIL_FROM'],
+    [
+      'relay with a password',
+      [...RELAY, `AUTH_SMTP_PASSWORD=${SMTP_PASSWORD}`],
+      'remove AUTH_SMTP_HOST/USER/PASSWORD',
+    ],
+    [
+      'relay with another host',
+      [...RELAY, 'AUTH_SMTP_HOST=smtp.example.test'],
+      'remove AUTH_SMTP_HOST/USER/PASSWORD',
+    ],
+    [
+      'smtp without a password',
+      [
+        'AUTH_MAIL_DRIVER=smtp',
+        'AUTH_MAIL_FROM=system@ayvo.test',
+        'AUTH_SMTP_HOST=smtp.example.test',
+        'AUTH_SMTP_USER=u',
+      ],
+      'needs AUTH_SMTP_HOST, AUTH_SMTP_USER and AUTH_SMTP_PASSWORD',
+    ],
+    [
+      'smtp on port 25',
+      [
+        'AUTH_MAIL_DRIVER=smtp',
+        'AUTH_MAIL_FROM=system@ayvo.test',
+        'AUTH_SMTP_HOST=smtp.example.test',
+        'AUTH_SMTP_USER=u',
+        `AUTH_SMTP_PASSWORD=${SMTP_PASSWORD}`,
+        'AUTH_SMTP_PORT=25',
+      ],
+      '465 or 587',
+    ],
+  ])('refuses %s', (_, auth, message) => {
+    const { status, output } = check(auth);
     expect(status).not.toBe(0);
-    expect(output).toContain('WORKOS_JWT_ISSUER does not exactly match');
+    expect(output).toContain(message);
+    expect(output).not.toContain('Check passed');
   });
 
-  it.each(['invalid', 'missing'])('fails on a discovery document that is %s', (fixture) => {
-    const { status, output } = check(fixture);
+  it.each([
+    ['the automated-test key', '1'.repeat(64), 'is not random'],
+    ['a typed pattern', '0123'.repeat(16), 'is not random'],
+    ['a short key', 'abc123', '32-byte hex key'],
+  ])('refuses %s as AUTH_ENCRYPTION_KEY', (_, key, message) => {
+    const { status, output } = check(RELAY, { extra: `AUTH_ENCRYPTION_KEY=${key}` });
     expect(status).not.toBe(0);
-    expect(output).toContain('not valid JSON or has no issuer');
-  });
-
-  it('fails when the discovery issuer has a query string', () => {
-    const { status, output } = check('query');
-    expect(status).not.toBe(0);
-    expect(output).toContain('not an https URL without query or fragment');
+    expect(output).toContain(message);
   });
 
   it('passes the tailnet and host guard checks (ADR 0026)', () => {
-    const { status, output } = check('ok');
+    const { status, output } = check();
     expect(output).toContain('Tailscale IPv4 100.100.100.1 on tailscale0');
     expect(output).toContain('ayvo-dev-docker-guard.service active and enabled');
     expect(output).toContain('Tailscale SNAT off');
@@ -167,16 +198,9 @@ describe('deploy-dev.sh --check: WorkOS issuer against the discovery document', 
       'remove DEV_TAILNET_IPV4',
     ],
   ])('fails closed %s', (_, host, message) => {
-    const { status, output } = check('ok', ISSUER, host);
+    const { status, output } = check(RELAY, host);
     expect(status).not.toBe(0);
     expect(output).toContain(message);
     expect(output).not.toContain('Check passed');
-  });
-
-  it('fails closed when the discovery document cannot be fetched', () => {
-    const { status, output } = check('network');
-    expect(status).not.toBe(0);
-    expect(output).toContain('could not be fetched');
-    expect(output).not.toContain('Could not resolve host');
   });
 });

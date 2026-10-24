@@ -3,8 +3,8 @@
  * Business code references AYVO users only, so the provider can be replaced without touching it.
  */
 export interface ExternalIdentity {
-  /** "WORKOS" or "TEST" — stored with the identity link. */
-  provider: 'WORKOS' | 'TEST';
+  /** Local invitation administration or automated-test fixture; old links remain historical. */
+  provider: 'TEST' | 'LOCAL';
   /** The provider's stable user id (verified by the provider adapter). */
   subject: string;
   email: string;

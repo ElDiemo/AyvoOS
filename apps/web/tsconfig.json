@@ -3,6 +3,6 @@
   "compilerOptions": {
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["next-env.d.ts", "src", "e2e", ".next/types/**/*.ts", "*.ts"],
+  "include": ["next-env.d.ts", "src", "e2e", "native-e2e", ".next/types/**/*.ts", "*.ts"],
   "exclude": ["node_modules"]
 }

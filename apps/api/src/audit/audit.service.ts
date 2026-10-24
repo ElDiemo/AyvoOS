@@ -5,6 +5,13 @@ import { PrismaService } from '../database/prisma.service.js';
 
 /** Security and administration audit events (append-only, enforced by the database). */
 export type AuditType =
+  | 'NATIVE_ACTIVATION_STARTED'
+  | 'NATIVE_ACTIVATION_COMPLETED'
+  | 'PASSWORD_RESET_REQUESTED'
+  | 'PASSWORD_RESET_STARTED'
+  | 'PASSWORD_RESET_COMPLETED'
+  | 'MFA_REPLACED'
+  | 'RECOVERY_CODE_USED'
   | 'EMPLOYEE_CARD_SAVED'
   | 'EMPLOYEE_CARD_PUBLISHED'
   | 'EMPLOYEE_CARD_HIDDEN'

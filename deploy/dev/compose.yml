@@ -137,12 +137,18 @@ services:
     environment:
       APP_ENV: development
       API_PORT: 4000
-      # Identity and access (ADR 0022, doc 021): WorkOS AuthKit; values only in the server env file.
+      # Native authentication; environment-specific key and approved SMTP credentials only.
       APP_PUBLIC_ORIGIN: https://${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
-      AUTH_PROVIDER: workos
-      WORKOS_API_KEY: ${WORKOS_API_KEY:?set WORKOS_API_KEY in the server env file (doc 021)}
-      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:?set WORKOS_CLIENT_ID in the server env file (doc 021)}
-      WORKOS_JWT_ISSUER: ${WORKOS_JWT_ISSUER:?set WORKOS_JWT_ISSUER in the server env file (doc 021)}
+      AUTH_PROVIDER: local
+      AUTH_ENCRYPTION_KEY: ${AUTH_ENCRYPTION_KEY:?set a separate 32-byte hex authentication key}
+      # smtp (user + password) or google-relay (approved IPv4 relay, no credentials); the API
+      # and scripts/deploy-dev.sh refuse incomplete or mixed settings.
+      AUTH_MAIL_DRIVER: ${AUTH_MAIL_DRIVER:?set AUTH_MAIL_DRIVER (smtp or google-relay)}
+      AUTH_SMTP_HOST: ${AUTH_SMTP_HOST:-}
+      AUTH_SMTP_PORT: ${AUTH_SMTP_PORT:-465}
+      AUTH_SMTP_USER: ${AUTH_SMTP_USER:-}
+      AUTH_SMTP_PASSWORD: ${AUTH_SMTP_PASSWORD:-}
+      AUTH_MAIL_FROM: ${AUTH_MAIL_FROM:?set approved sender}
       # Sign-in rate limits use the client IP. The API publishes no port: only Caddy and the web
       # container (Docker address pools) reach it, and Caddy replaces X-Forwarded-For with the
       # real client address (it trusts no incoming value). Thresholds: AUTH_RATE_LIMIT_* (doc 021).

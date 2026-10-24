@@ -32,6 +32,7 @@ import { toAccessibleSite } from './access.service.js';
 import type { Principal } from './principal.js';
 import { SessionsService } from './sessions.service.js';
 import { TestIdentityProvider } from './test.provider.js';
+import { safeNextPath } from './safe-path.js';
 
 function redirect(res: ServerResponse, location: string, cookies: string[] = []): void {
   res.statusCode = 302;
@@ -130,6 +131,10 @@ export class AuthController {
     @Req() req: IncomingMessage,
     @Res() res: ServerResponse,
   ): Promise<void> {
+    if (this.env.AUTH_PROVIDER === 'local') {
+      redirect(res, `/login?next=${encodeURIComponent(safeNextPath(next))}`);
+      return;
+    }
     const decision = await this.limits.hit('login', this.limits.clientIp(req));
     if (!decision.allowed) return tooManyRequests(req, res, decision);
     const attempt = await this.auth.startLogin(
@@ -149,6 +154,7 @@ export class AuthController {
     @Req() req: IncomingMessage,
     @Res() res: ServerResponse,
   ): Promise<void> {
+    if (this.env.AUTH_PROVIDER !== 'test') throw new NotFoundException();
     // Every callback counts; failed ones count separately and block sooner. The limit is checked
     // before the one-time state is touched, so it never weakens the state/PKCE validation.
     const ip = this.limits.clientIp(req);

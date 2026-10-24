@@ -128,21 +128,26 @@ export const envSchema = z
       .url({ protocol: /^https?$/ })
       .refine((url) => new URL(url).pathname === '/' && !url.endsWith('/'), 'origin without path')
       .optional(),
-    // `workos` everywhere except automated tests; `test` (a fake provider) only with APP_ENV=test.
-    AUTH_PROVIDER: z.enum(['workos', 'test']).optional(),
-    WORKOS_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(10).optional()),
-    WORKOS_CLIENT_ID: z.preprocess(
-      (v) => (v === '' ? undefined : v),
-      z.string().min(10).optional(),
+    // Local authentication everywhere; the legacy fixture provider exists only in tests.
+    AUTH_PROVIDER: z.enum(['local', 'test']).optional(),
+    AUTH_ENCRYPTION_KEY: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^[a-fA-F0-9]{64}$/)
+        .optional(),
     ),
-    WORKOS_API_BASE_URL: z.url({ protocol: /^https$/ }).default('https://api.workos.com'),
-    // Exact expected `iss` of WorkOS access tokens (copied from the WorkOS dashboard / a decoded
-    // token; custom auth domains change it). Required whenever AUTH_PROVIDER=workos; never derived
-    // from a token.
-    WORKOS_JWT_ISSUER: z.preprocess(
-      (value) => (value === '' ? undefined : value),
-      z.url({ protocol: /^https$/ }).optional(),
-    ),
+    // `smtp` = authenticated submission; `google-relay` = the approved Google Workspace relay that
+    // authorises AYVO's public IPv4 addresses (no credentials, fixed host, TLS required).
+    AUTH_MAIL_DRIVER: z.enum(['smtp', 'google-relay', 'memory']).optional(),
+    AUTH_SMTP_HOST: z.preprocess(blankAsUnset, z.string().min(1).max(253).optional()),
+    AUTH_SMTP_PORT: z.coerce
+      .number()
+      .pipe(z.union([z.literal(465), z.literal(587)]))
+      .default(465),
+    AUTH_SMTP_USER: z.preprocess(blankAsUnset, z.string().min(1).max(254).optional()),
+    AUTH_SMTP_PASSWORD: z.preprocess(blankAsUnset, z.string().min(1).max(1024).optional()),
+    AUTH_MAIL_FROM: z.preprocess(blankAsUnset, z.email().optional()),
     // Rate limiting of the sign-in routes (Redis, per client IP, fixed window; doc 021 §5b).
     AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(86_400).default(600),
     AUTH_RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().min(1).max(100_000).default(30),
@@ -252,19 +257,37 @@ export const envSchema = z
     };
 
     // Identity first: a misconfigured authentication must never be masked by another error.
-    const authProvider = env.AUTH_PROVIDER ?? (env.APP_ENV === 'test' ? 'test' : 'workos');
+    const authProvider = env.AUTH_PROVIDER ?? (env.APP_ENV === 'test' ? 'test' : 'local');
     if (authProvider === 'test' && env.APP_ENV !== 'test') {
       // Never a bypass on DEV or production: the fake provider exists for automated tests only.
       return fail('AUTH_PROVIDER', 'AUTH_PROVIDER=test is allowed only with APP_ENV=test');
     }
-    if (
-      authProvider === 'workos' &&
-      (!env.WORKOS_API_KEY || !env.WORKOS_CLIENT_ID || !env.WORKOS_JWT_ISSUER)
-    ) {
+    const mailDriver = env.AUTH_MAIL_DRIVER ?? (env.APP_ENV === 'test' ? 'memory' : 'smtp');
+    if (mailDriver === 'memory' && env.APP_ENV !== 'test')
+      return fail('AUTH_MAIL_DRIVER', 'Memory mail delivery is allowed only in automated tests');
+    if (env.APP_ENV !== 'test' && !env.AUTH_ENCRYPTION_KEY)
       return fail(
-        'AUTH_PROVIDER',
-        'WORKOS_API_KEY, WORKOS_CLIENT_ID and WORKOS_JWT_ISSUER are required for AUTH_PROVIDER=workos',
+        'AUTH_ENCRYPTION_KEY',
+        'A separate 32-byte native authentication key is required',
       );
+    // A generated key (openssl rand -hex 32) has ~16 distinct hex digits; test keys like `11…`
+    // or a typed pattern have few. Only the value's shape is judged, never echoed.
+    if (env.APP_ENV !== 'test' && new Set(env.AUTH_ENCRYPTION_KEY!.toLowerCase()).size < 10)
+      return fail('AUTH_ENCRYPTION_KEY', 'Generate the key randomly (openssl rand -hex 32)');
+    if (
+      mailDriver === 'smtp' &&
+      (!env.AUTH_SMTP_HOST || !env.AUTH_SMTP_USER || !env.AUTH_SMTP_PASSWORD || !env.AUTH_MAIL_FROM)
+    )
+      return fail('AUTH_MAIL_DRIVER', 'Configure approved SMTP host, credentials and sender');
+    if (mailDriver === 'google-relay') {
+      // Explicit only: credentials or another host next to it would make the mode ambiguous.
+      if (env.AUTH_SMTP_HOST || env.AUTH_SMTP_USER || env.AUTH_SMTP_PASSWORD)
+        return fail(
+          'AUTH_MAIL_DRIVER',
+          'google-relay uses the fixed Google relay without credentials; remove AUTH_SMTP_HOST/USER/PASSWORD',
+        );
+      if (!env.AUTH_MAIL_FROM)
+        return fail('AUTH_MAIL_FROM', 'google-relay needs the approved sender address');
     }
     if (env.CARRIER_PROVIDER === 'test' && env.APP_ENV !== 'test') {
       // Never a pretended carrier on DEV or production: no fake labels, numbers or answers.
@@ -343,6 +366,9 @@ export const envSchema = z
     return {
       ...env,
       AUTH_PROVIDER: authProvider,
+      AUTH_ENCRYPTION_KEY: env.AUTH_ENCRYPTION_KEY ?? '11'.repeat(32), // APP_ENV=test only above.
+      AUTH_MAIL_DRIVER: mailDriver,
+      AUTH_MAIL_FROM: env.AUTH_MAIL_FROM ?? 'noreply@ayvo.test',
       APP_PUBLIC_ORIGIN: env.APP_PUBLIC_ORIGIN ?? 'http://localhost:3000',
       PUBLIC_QR_BASE_URL: publicQrBaseUrl,
       ...labelQrSettings(env.APP_ENV, env.LABEL_QR_MIN_SIZE_MM, env.LABEL_QR_ERROR_CORRECTION),
