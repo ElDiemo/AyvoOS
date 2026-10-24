@@ -50,8 +50,8 @@ readonly IMAGE_PREFIX="ayvo-dev-preview"
 readonly PROJECT="ayvo-dev-preview"
 readonly GUARD_UNIT="ayvo-dev-docker-guard.service"
 readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL
-  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB AUTH_ENCRYPTION_KEY AUTH_SMTP_HOST
-  AUTH_SMTP_USER AUTH_SMTP_PASSWORD AUTH_MAIL_FROM)
+  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER
+  AUTH_MAIL_FROM)
 
 MODE=deploy
 TAG=""
@@ -68,6 +68,30 @@ warn() { printf '\033[1;33mwarn\033[0m %s\n' "$*" >&2; }
 die() {
   printf '\033[1;31mERROR\033[0m %s\n' "$*" >&2
   exit 1
+}
+
+# Authentication mail (doc 038): exactly one explicit mode, the same rules as the API. Values are
+# never printed. google-relay = the approved Google Workspace relay (fixed host, TLS, IPv4
+# allowlist, no credentials); smtp = authenticated submission with user AND password.
+check_auth_mail() {
+  local driver=$1 host=$2 user=$3 pass=$4 port=$5
+  case $driver in
+    google-relay)
+      [[ -z $host && -z $user && -z $pass ]] ||
+        die "AUTH_MAIL_DRIVER=google-relay uses no SMTP host or credentials: remove AUTH_SMTP_HOST/USER/PASSWORD" ;;
+    smtp)
+      [[ -n $host && -n $user && -n $pass ]] ||
+        die "AUTH_MAIL_DRIVER=smtp needs AUTH_SMTP_HOST, AUTH_SMTP_USER and AUTH_SMTP_PASSWORD"
+      [[ ${port:-465} == 465 || ${port:-465} == 587 ]] || die "AUTH_SMTP_PORT must be 465 or 587 (TLS required)" ;;
+    *) die "AUTH_MAIL_DRIVER must be smtp or google-relay" ;;
+  esac
+}
+
+# A generated key has ~16 distinct hex digits; a test key or a typed pattern has few.
+check_auth_key() {
+  [[ $1 =~ ^[a-fA-F0-9]{64}$ ]] || die "$2: AUTH_ENCRYPTION_KEY must be a separately generated 32-byte hex key"
+  (( $(fold -w1 <<<"${1,,}" | sort -u | wc -l) >= 10 )) ||
+    die "$2: AUTH_ENCRYPTION_KEY is not random; generate it with: openssl rand -hex 32"
 }
 
 usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
@@ -185,9 +209,10 @@ validate_env() {
     die "ACME_EMAIL is not a valid email address"
   [[ ! ${CFG[ACME_EMAIL]} =~ @example\.(com|org|net)$ ]] || die "ACME_EMAIL is still the placeholder"
   [[ ${CFG[POSTGRES_USER]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_USER must match [a-z_][a-z0-9_]*"
-  [[ ${CFG[AUTH_ENCRYPTION_KEY]} =~ ^[a-fA-F0-9]{64}$ ]] || die "AUTH_ENCRYPTION_KEY must be a separately generated 32-byte hex key"
+  check_auth_key "${CFG[AUTH_ENCRYPTION_KEY]}" "$ENV_FILE"
   [[ ${CFG[AUTH_MAIL_FROM]} =~ ^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$ ]] || die "AUTH_MAIL_FROM must be an approved sender address"
-  [[ ${CFG[AUTH_SMTP_PORT]:-465} == 465 || ${CFG[AUTH_SMTP_PORT]:-465} == 587 ]] || die "AUTH_SMTP_PORT must be 465 or 587 (TLS required)"
+  check_auth_mail "${CFG[AUTH_MAIL_DRIVER]}" "${CFG[AUTH_SMTP_HOST]:-}" "${CFG[AUTH_SMTP_USER]:-}" \
+    "${CFG[AUTH_SMTP_PASSWORD]:-}" "${CFG[AUTH_SMTP_PORT]:-}"
   [[ ${CFG[POSTGRES_DB]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_DB must match [a-z_][a-z0-9_]*"
   # Embedded in DATABASE_URL, so restricted to URL-safe characters (e.g. `openssl rand -hex 32`).
   [[ ${CFG[POSTGRES_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,}$ ]] ||

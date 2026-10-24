@@ -137,7 +137,9 @@ export const envSchema = z
         .regex(/^[a-fA-F0-9]{64}$/)
         .optional(),
     ),
-    AUTH_MAIL_DRIVER: z.enum(['smtp', 'memory']).optional(),
+    // `smtp` = authenticated submission; `google-relay` = the approved Google Workspace relay that
+    // authorises AYVO's public IPv4 addresses (no credentials, fixed host, TLS required).
+    AUTH_MAIL_DRIVER: z.enum(['smtp', 'google-relay', 'memory']).optional(),
     AUTH_SMTP_HOST: z.preprocess(blankAsUnset, z.string().min(1).max(253).optional()),
     AUTH_SMTP_PORT: z.coerce
       .number()
@@ -277,6 +279,16 @@ export const envSchema = z
       (!env.AUTH_SMTP_HOST || !env.AUTH_SMTP_USER || !env.AUTH_SMTP_PASSWORD || !env.AUTH_MAIL_FROM)
     )
       return fail('AUTH_MAIL_DRIVER', 'Configure approved SMTP host, credentials and sender');
+    if (mailDriver === 'google-relay') {
+      // Explicit only: credentials or another host next to it would make the mode ambiguous.
+      if (env.AUTH_SMTP_HOST || env.AUTH_SMTP_USER || env.AUTH_SMTP_PASSWORD)
+        return fail(
+          'AUTH_MAIL_DRIVER',
+          'google-relay uses the fixed Google relay without credentials; remove AUTH_SMTP_HOST/USER/PASSWORD',
+        );
+      if (!env.AUTH_MAIL_FROM)
+        return fail('AUTH_MAIL_FROM', 'google-relay needs the approved sender address');
+    }
     if (env.CARRIER_PROVIDER === 'test' && env.APP_ENV !== 'test') {
       // Never a pretended carrier on DEV or production: no fake labels, numbers or answers.
       return fail('CARRIER_PROVIDER', 'CARRIER_PROVIDER=test is allowed only with APP_ENV=test');

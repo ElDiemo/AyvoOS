@@ -258,6 +258,24 @@ describe('loadEnv', () => {
       }
     });
 
+    it('google-relay is explicit, credential-free, needs the sender and refuses mixed settings', () => {
+      const relay: Record<string, string> = {
+        ...valid,
+        AUTH_MAIL_DRIVER: 'google-relay',
+        AUTH_SMTP_HOST: '',
+        AUTH_SMTP_USER: '',
+        AUTH_SMTP_PASSWORD: '',
+      };
+      // The same rules on DEV and production: nothing in the mail mode depends on APP_ENV.
+      expect(loadEnv(relay).AUTH_MAIL_DRIVER).toBe('google-relay');
+      expect(() => loadEnv({ ...relay, AUTH_MAIL_FROM: '' })).toThrow(/AUTH_MAIL_FROM/);
+      for (const extra of ['AUTH_SMTP_HOST', 'AUTH_SMTP_USER', 'AUTH_SMTP_PASSWORD'])
+        expect(() => loadEnv({ ...relay, [extra]: 'x' })).toThrow(/without credentials/);
+      // Never implied: without the explicit driver, missing credentials stay an error.
+      const { AUTH_MAIL_DRIVER: _driver, ...implicit } = relay;
+      expect(() => loadEnv(implicit)).toThrow(/SMTP host, credentials/);
+    });
+
     it('requires APP_PUBLIC_ORIGIN in production and a sane session lifetime', () => {
       const noOrigin: Record<string, string> = { ...production };
       delete noOrigin.APP_PUBLIC_ORIGIN;

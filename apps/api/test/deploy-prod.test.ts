@@ -60,9 +60,7 @@ describe('production Compose project', () => {
     expect(serviceEnv('api').APP_ENV).toBe('production');
     expect(serviceEnv('web').APP_ENV).toBe('production');
     expect(serviceEnv('api')).toMatchObject({
-      AUTH_PROVIDER: 'workos',
-      WORKOS_CLIENT_ID: 'client_01M4R7SYY9BSQQCT0RHV4E468Q',
-      WORKOS_JWT_ISSUER: 'https://api.workos.com/user_management/client_01M4R7SYY9BSQQCT0RHV4E468Q',
+      AUTH_PROVIDER: 'local',
       APP_PUBLIC_ORIGIN: 'https://${PROD_DOMAIN:?set by scripts/deploy-prod.sh}',
       FILE_STORAGE_DRIVER: 's3',
       AWS_REGION: 'eu-north-1',
@@ -79,6 +77,9 @@ describe('production Compose project', () => {
       /AUTH_PROVIDER: test|CARRIER_PROVIDER|PPL_TEST|APP_ENV: development/,
     );
     expect(compose).not.toMatch(/basic_?auth/i);
+    // Native authentication: key and mail mode only from the private prod-auth.env, no WorkOS.
+    expect(serviceBlock('api')).toContain('/prod-auth.env');
+    expect(code(compose)).not.toMatch(/WORKOS|AUTH_MAIL_DRIVER:|AUTH_ENCRYPTION_KEY:|memory/);
     // ADR 0014: the production QR host is never a value or default outside the QR policy.
     expect(compose).not.toContain('qr.ayvo.co');
     // The application gets its own S3 identity, never the backup identity.
@@ -137,7 +138,11 @@ describe('production Compose project', () => {
       'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
         'PUBLIC_QR_BASE_URL=https://qr.example.test\nLABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n',
     );
-    writeFileSync(join(secrets, 'prod-workos.env'), 'WORKOS_API_KEY=sk_test_fictional\n');
+    writeFileSync(
+      join(secrets, 'prod-auth.env'),
+      `AUTH_ENCRYPTION_KEY=${'5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28'}\n` +
+        'AUTH_MAIL_DRIVER=google-relay\nAUTH_MAIL_FROM=system@example.test\n',
+    );
     writeFileSync(
       join(secrets, 'prod-s3.env'),
       'AWS_ACCESS_KEY_ID=AKIAFICTIONAL0000000\nAWS_SECRET_ACCESS_KEY=fictional\n',
@@ -159,7 +164,8 @@ describe('production Compose project', () => {
     );
     expect(rendered.services.api.environment).toMatchObject({
       APP_ENV: 'production',
-      WORKOS_API_KEY: 'sk_test_fictional',
+      AUTH_MAIL_DRIVER: 'google-relay',
+      AUTH_MAIL_FROM: 'system@example.test',
       AWS_ACCESS_KEY_ID: 'AKIAFICTIONAL0000000',
       LABEL_QR_MIN_SIZE_MM: '15',
     });
@@ -515,7 +521,9 @@ describe('production deploy script', () => {
       'PUBLIC_QR_BASE_URL=https://qr.example.test\nLABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n';
     const good = {
       'prod.env': prod,
-      'prod-workos.env': '# WorkOS\nexport WORKOS_API_KEY="sk_test_fictional"\n',
+      'prod-auth.env':
+        '# native authentication\nAUTH_ENCRYPTION_KEY=5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28\n' +
+        'AUTH_MAIL_DRIVER=google-relay\nAUTH_MAIL_FROM=system@example.test\n',
       'prod-s3.env':
         'AWS_ACCESS_KEY_ID=AKIAAPPFICTIONAL0000\nAWS_SECRET_ACCESS_KEY=x\nAWS_REGION=eu-north-1\n',
       'prod-s3-backup.env': 'AWS_ACCESS_KEY_ID=AKIABACKUPFICTIONAL0\nAWS_SECRET_ACCESS_KEY=y\n',
@@ -552,8 +560,42 @@ describe('production deploy script', () => {
       ],
       [
         'a bare key (filled from the environment)',
-        { 'prod-workos.env': 'WORKOS_API_KEY\n' },
+        { 'prod-auth.env': 'AUTH_ENCRYPTION_KEY\n' },
         /not KEY=VALUE/,
+      ],
+      [
+        'the relay together with SMTP credentials',
+        { 'prod-auth.env': `${good['prod-auth.env']}AUTH_SMTP_PASSWORD=fictional\n` },
+        /google-relay uses no SMTP host or credentials/,
+      ],
+      [
+        'password SMTP without its password',
+        {
+          'prod-auth.env': good['prod-auth.env']
+            .replace('google-relay', 'smtp')
+            .concat('AUTH_SMTP_HOST=smtp.example.test\nAUTH_SMTP_USER=u\n'),
+        },
+        /needs AUTH_SMTP_HOST, AUTH_SMTP_USER and AUTH_SMTP_PASSWORD/,
+      ],
+      [
+        'the memory test mail driver',
+        { 'prod-auth.env': good['prod-auth.env'].replace('google-relay', 'memory') },
+        /must be smtp or google-relay/,
+      ],
+      [
+        'a test encryption key',
+        {
+          'prod-auth.env': good['prod-auth.env'].replace(
+            /AUTH_ENCRYPTION_KEY=\w+/,
+            `AUTH_ENCRYPTION_KEY=${'1'.repeat(64)}`,
+          ),
+        },
+        /is not random/,
+      ],
+      [
+        'an old WorkOS key in the authentication file',
+        { 'prod-auth.env': `${good['prod-auth.env']}WORKOS_API_KEY=fictional\n` },
+        /must not set WORKOS_API_KEY/,
       ],
       [
         'an empty required value',

@@ -321,7 +321,9 @@ describe.skipIf(!hasDatabase)('native authentication through HTTP, PostgreSQL an
       (await t.prisma.nativeAuthToken.findUniqueOrThrow({ where: { id: waiting.id } }))
         .deliveryCiphertext,
     ).toBeNull();
-    const closed = await t.prisma.nativeAuthChallenge.findUniqueOrThrow({ where: { id: stage.id } });
+    const closed = await t.prisma.nativeAuthChallenge.findUniqueOrThrow({
+      where: { id: stage.id },
+    });
     expect(closed).toMatchObject({ passwordHash: null, totpCiphertext: null });
     expect(closed.usedAt).not.toBeNull();
     await post('mfa')

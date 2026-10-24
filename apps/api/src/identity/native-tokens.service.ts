@@ -6,6 +6,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import nodemailer, { type Transporter } from 'nodemailer';
+import type SMTPTransport from 'nodemailer/lib/smtp-transport/index.js';
 import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -15,6 +16,48 @@ import {
   nativeTokenHash,
   type NativeActionPurpose,
 } from './native-credentials.js';
+
+/** The approved Google Workspace relay (owner 2026-10-24): fixed, never taken from config. */
+export const GOOGLE_SMTP_RELAY = { host: 'smtp-relay.gmail.com', port: 587 } as const;
+
+/**
+ * SMTP transport for authentication mail; null only for the in-memory test driver.
+ * - `smtp`: authenticated submission, user AND password required (env validation).
+ * - `google-relay`: Google's relay authorises AYVO's public IPv4 addresses, so the connection
+ *   carries no credentials. It is never a fallback: it exists only when chosen explicitly, uses
+ *   STARTTLS with certificate/hostname verification, and binds an IPv4 socket (the allowlist
+ *   is IPv4 only); without an IPv4 route it fails instead of trying IPv6.
+ */
+export function smtpTransportOptions(env: Env): SMTPTransport.Options | null {
+  const common = {
+    requireTLS: true,
+    tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' as const },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
+    disableFileAccess: true,
+    disableUrlAccess: true,
+    logger: false,
+    debug: false,
+  };
+  if (env.AUTH_MAIL_DRIVER === 'google-relay')
+    return {
+      ...common,
+      host: GOOGLE_SMTP_RELAY.host,
+      port: GOOGLE_SMTP_RELAY.port,
+      secure: false,
+      localAddress: '0.0.0.0',
+    };
+  if (env.AUTH_MAIL_DRIVER === 'smtp')
+    return {
+      ...common,
+      host: env.AUTH_SMTP_HOST,
+      port: env.AUTH_SMTP_PORT,
+      secure: env.AUTH_SMTP_PORT === 465,
+      auth: { user: env.AUTH_SMTP_USER!, pass: env.AUTH_SMTP_PASSWORD! },
+    };
+  return null;
+}
 
 export const NATIVE_SECRET_BOX = Symbol('NATIVE_SECRET_BOX');
 export const NATIVE_PASSWORDS = Symbol('NATIVE_PASSWORDS');
@@ -33,24 +76,8 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
     @Inject(ENV) private readonly env: Env,
     @Inject(NATIVE_SECRET_BOX) private readonly box: NativeSecretBox,
   ) {
-    this.smtp =
-      env.AUTH_MAIL_DRIVER === 'smtp'
-        ? nodemailer.createTransport({
-            host: env.AUTH_SMTP_HOST,
-            port: env.AUTH_SMTP_PORT,
-            secure: env.AUTH_SMTP_PORT === 465,
-            requireTLS: true,
-            auth: { user: env.AUTH_SMTP_USER!, pass: env.AUTH_SMTP_PASSWORD! },
-            tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
-            connectionTimeout: 10_000,
-            greetingTimeout: 10_000,
-            socketTimeout: 10_000,
-            disableFileAccess: true,
-            disableUrlAccess: true,
-            logger: false,
-            debug: false,
-          })
-        : null;
+    const transport = smtpTransportOptions(env);
+    this.smtp = transport ? nodemailer.createTransport(transport) : null;
   }
 
   onModuleInit(): void {

@@ -58,8 +58,8 @@ readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLI
 # The physically validated QR label settings are optional (ADR 0034): both or neither.
 readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY"
-readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_SMTP_HOST AUTH_SMTP_USER AUTH_SMTP_PASSWORD AUTH_MAIL_FROM"
-readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_PORT"
+readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
+readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 # Region, bucket and owner may be in the file too; compose.yml's fixed values take precedence.
 readonly ALLOW_S3="$KEYS_S3 AWS_REGION S3_BUCKET S3_EXPECTED_BUCKET_OWNER"
@@ -183,6 +183,30 @@ check_host_guard() {
 
 # Keys of a KEY=VALUE file, without ever evaluating or printing a value.
 env_keys() { grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$1" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/'; }
+# Authentication mail (doc 038): exactly one explicit mode, the same rules as the API. Values are
+# never printed. google-relay = the approved Google Workspace relay (fixed host, TLS, IPv4
+# allowlist, no credentials); smtp = authenticated submission with user AND password.
+check_auth_mail() {
+  local driver=$1 host=$2 user=$3 pass=$4 port=$5
+  case $driver in
+    google-relay)
+      [[ -z $host && -z $user && -z $pass ]] ||
+        die "AUTH_MAIL_DRIVER=google-relay uses no SMTP host or credentials: remove AUTH_SMTP_HOST/USER/PASSWORD" ;;
+    smtp)
+      [[ -n $host && -n $user && -n $pass ]] ||
+        die "AUTH_MAIL_DRIVER=smtp needs AUTH_SMTP_HOST, AUTH_SMTP_USER and AUTH_SMTP_PASSWORD"
+      [[ ${port:-465} == 465 || ${port:-465} == 587 ]] || die "AUTH_SMTP_PORT must be 465 or 587 (TLS required)" ;;
+    *) die "AUTH_MAIL_DRIVER must be smtp or google-relay" ;;
+  esac
+}
+
+# A generated key has ~16 distinct hex digits; a test key or a typed pattern has few.
+check_auth_key() {
+  [[ $1 =~ ^[a-fA-F0-9]{64}$ ]] || die "$2: AUTH_ENCRYPTION_KEY must be a separately generated 32-byte hex key"
+  (( $(fold -w1 <<<"${1,,}" | sort -u | wc -l) >= 10 )) ||
+    die "$2: AUTH_ENCRYPTION_KEY is not random; generate it with: openssl rand -hex 32"
+}
+
 # One key's value (unquoted), for comparisons only — never printed, never evaluated.
 env_value() {
   grep -E "^[[:space:]]*(export[[:space:]]+)?$2=" "$1" | tail -n1 |
@@ -255,7 +279,11 @@ check_env_files() {
   check_env_file "$SECRETS/prod.env" "$KEYS_PROD" "$ALLOW_PROD"
   check_qr_label_settings "$SECRETS/prod.env"
   check_env_file "$SECRETS/prod-auth.env" "$KEYS_AUTH" "$ALLOW_AUTH"
-  [[ $(env_value "$SECRETS/prod-auth.env" AUTH_ENCRYPTION_KEY) =~ ^[a-fA-F0-9]{64}$ ]] || die "prod-auth.env: AUTH_ENCRYPTION_KEY must be 32 bytes as hex"
+  local auth="$SECRETS/prod-auth.env"
+  check_auth_key "$(env_value "$auth" AUTH_ENCRYPTION_KEY)" prod-auth.env
+  check_auth_mail "$(env_value "$auth" AUTH_MAIL_DRIVER)" "$(env_value "$auth" AUTH_SMTP_HOST)" \
+    "$(env_value "$auth" AUTH_SMTP_USER)" "$(env_value "$auth" AUTH_SMTP_PASSWORD)" \
+    "$(env_value "$auth" AUTH_SMTP_PORT)"
   check_env_file "$SECRETS/prod-s3.env" "$KEYS_S3" "$ALLOW_S3"
   # The backup identity is never given to the application (doc 035).
   if [[ -r $SECRETS/prod-s3-backup.env ]] &&

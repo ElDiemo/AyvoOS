@@ -148,9 +148,9 @@ beforeAll(() => {
       'POSTGRES_USER=ayvo',
       `POSTGRES_PASSWORD=${'p'.repeat(32)}`,
       'POSTGRES_DB=ayvo',
-      'WORKOS_API_KEY=sk_test_FIXTURE_not_a_real_key_000',
-      'WORKOS_CLIENT_ID=client_FIXTURE0000000000000000',
-      'WORKOS_JWT_ISSUER=https://api.workos.com/user_management/client_FIXTURE0000000000000000',
+      'AUTH_ENCRYPTION_KEY=5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28',
+      'AUTH_MAIL_DRIVER=google-relay',
+      'AUTH_MAIL_FROM=system@ayvo.test',
       '',
     ].join('\n'),
   );
@@ -408,8 +408,7 @@ describe('deploy-dev.sh --edge switches nothing when the edge backup fails (TS33
       writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
       chmodSync(join(bin, name), 0o755);
     };
-    const issuer = 'https://api.workos.com/user_management/client_FIXTURE0000000000000000';
-    stub('curl', `cat >/dev/null; printf '{"issuer":"%s"}' "${issuer}"`);
+    stub('curl', 'exit 90');
     // A running caddy whose labels name no Compose file: the backup helper must fail.
     stub(
       'docker',
