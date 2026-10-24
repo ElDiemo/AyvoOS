@@ -90,7 +90,11 @@ export class FinanceDocumentsService {
     });
     if (previous) {
       if (previous.sha256 !== sha256 || previous.createdBy !== actorId)
-        throw domainError(409, 'IDEMPOTENCY_CONFLICT', 'Request id already used for another upload');
+        throw domainError(
+          409,
+          'IDEMPOTENCY_CONFLICT',
+          'Request id already used for another upload',
+        );
       return this.detail(previous.code);
     }
     const duplicate = await this.prisma.financeDocument.findFirst({
@@ -98,7 +102,11 @@ export class FinanceDocumentsService {
       select: { code: true },
     });
     if (duplicate)
-      throw domainError(409, 'DUPLICATE_DOCUMENT', `Tento soubor už je přijatý jako ${duplicate.code}.`);
+      throw domainError(
+        409,
+        'DUPLICATE_DOCUMENT',
+        `Tento soubor už je přijatý jako ${duplicate.code}.`,
+      );
 
     // File first, then the record: a failure in between leaves an unreferenced file (logged),
     // never a record without its file (ADR 0016).
@@ -186,7 +194,10 @@ export class FinanceDocumentsService {
       where: { code },
       include: {
         ...include,
-        events: { orderBy: { version: 'asc' }, include: { actor: { select: { displayName: true } } } },
+        events: {
+          orderBy: { version: 'asc' },
+          include: { actor: { select: { displayName: true } } },
+        },
       },
     });
     if (!doc) throw new NotFoundException('Doklad nenalezen');
@@ -195,7 +206,8 @@ export class FinanceDocumentsService {
       const snap = e.snapshot as Record<string, unknown>;
       const changes: Record<string, [unknown, unknown]> = {};
       if (before)
-        for (const k of SNAPSHOT_FIELDS) if (before[k] !== snap[k]) changes[k] = [before[k], snap[k]];
+        for (const k of SNAPSHOT_FIELDS)
+          if (before[k] !== snap[k]) changes[k] = [before[k], snap[k]];
       before = snap;
       return {
         version: e.version,
@@ -285,7 +297,11 @@ export class FinanceDocumentsService {
     if (doc.status === 'VOIDED')
       throw domainError(409, 'DOCUMENT_VOIDED', 'Zrušený doklad už nelze měnit.');
     if (doc.version !== expectedVersion)
-      throw domainError(409, 'STALE_VERSION', 'Doklad mezitím změnil někdo jiný. Načtěte ho znovu.');
+      throw domainError(
+        409,
+        'STALE_VERSION',
+        'Doklad mezitím změnil někdo jiný. Načtěte ho znovu.',
+      );
     return doc;
   }
 
