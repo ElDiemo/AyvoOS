@@ -100,6 +100,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   (result only — the file is never stored), `import_id` / `import_row` on prospects; preview
   writes nothing, confirmation re-checks everything in one transaction; export in the list's
   scope with CSV-injection protection.
+  Finance — received documents (night package N1, started by the owner 2026-10-24, doc 039; table
+  design subject to review): `finance_documents` (immutable original, versioned metadata, voided
+  never deleted) and append-only `finance_document_events`; `finance:documents_read|manage` for
+  ADMIN only; suppliers only through ProcurementService. No VAT logic, posting or payments.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
