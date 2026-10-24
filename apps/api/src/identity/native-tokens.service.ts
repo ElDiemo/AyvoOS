@@ -11,6 +11,7 @@ import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { randomToken } from './crypto.js';
+import { ayvoLogoAttachment, renderAuthMail } from './mail/auth-mail.js';
 import {
   NativeSecretBox,
   nativeTokenHash,
@@ -217,14 +218,20 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
         try {
           const url = this.box.open(row.userId, 'MAIL', row.deliveryCiphertext);
           if (this.smtp) {
+            const mail = renderAuthMail({
+              purpose: row.purpose as NativeActionPurpose,
+              url,
+              expiresAt: row.expiresAt,
+              appEnv: this.env.APP_ENV,
+            });
             await this.smtp.sendMail({
-              from: this.env.AUTH_MAIL_FROM,
+              // The display name only; the address stays the validated AUTH_MAIL_FROM.
+              from: { name: 'AYVO OS', address: this.env.AUTH_MAIL_FROM },
               to: { name: '', address: row.user.email },
-              subject:
-                row.purpose === 'ENROLL'
-                  ? 'Nastavení přístupu do AYVO OS'
-                  : 'Obnova hesla do AYVO OS',
-              text: `Dobrý den,\n\n${row.purpose === 'ENROLL' ? 'Nastavte si heslo a ověřovací aplikaci' : 'Nastavte si nové heslo; druhý faktor zůstává vyžadovaný'} přes tento jednorázový odkaz:\n\n${url}\n\nPokud jste tento požadavek nečekali, kontaktujte správce AYVO a odkaz nikomu nepředávejte.\n`,
+              subject: mail.subject,
+              text: mail.text,
+              html: mail.html,
+              attachments: [ayvoLogoAttachment()],
               disableFileAccess: true,
               disableUrlAccess: true,
             });

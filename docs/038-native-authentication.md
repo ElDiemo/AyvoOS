@@ -68,6 +68,13 @@ TLS required, SMTP authentication off. In `google-relay` mode the application:
 - announces the host of `APP_PUBLIC_ORIGIN` (e.g. `dev.ayvo.co`) in EHLO — Google refuses the
   container's random host name with `421 4.7.0 … (EHLO)` (seen on DEV 2026-10-24).
 
+The messages (`apps/api/src/identity/mail/auth-mail.ts`, versioned in code, no editor): from
+`AYVO OS <AUTH_MAIL_FROM>`, HTML (table layout, inline styles in the colours of the sign-in page,
+one button „Nastavit přístup“ / „Obnovit heslo“) plus a text part with the full one-time link,
+the validity in Prague time, the link's host, and on DEV a visible test-environment notice. The
+logo is the existing wordmark rendered once to PNG (`scripts/render-mail-logo.mjs`), compiled
+into the API and attached inline by CID — no image is fetched from a VPN-only host.
+
 Delivery is asynchronous (outbox in `native_auth_tokens`, retried with backoff, 5 attempts while
 the link is valid). „Accepted by the mail server“ is recorded as `sent_at`; it is **not** proof of
 delivery to the mailbox — the recipient confirms that. SMTP errors are logged without details
