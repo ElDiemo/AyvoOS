@@ -46,7 +46,8 @@ export default async function FinanceDocumentPage({
     if (v === null || v === undefined || v === '') return t.detail.empty;
     if (k === 'kind') return t.kinds[v as keyof typeof t.kinds] ?? String(v);
     if (k === 'status') return t.status[v as keyof typeof t.status] ?? String(v);
-    if (k === 'supplierId') return v === doc.supplier.id ? doc.supplier.name : String(v);
+    if (k === 'supplierId') return String(v); // the API gives the names
+    if (k === 'totalAmount') return financeAmount(String(v), doc.currency ?? '');
     if (/On$/.test(k)) return financeDate(String(v));
     return String(v);
   };

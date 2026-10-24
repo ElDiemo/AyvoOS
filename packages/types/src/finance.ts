@@ -117,7 +117,10 @@ export const financeDocumentEventSchema = z.object({
   reason: z.string().nullable(),
   actor: z.string(),
   occurredAt: z.iso.datetime(),
-  /** What changed against the previous version (field → [before, after]); empty for RECEIVED. */
+  /**
+   * What changed against the previous version (field → [before, after]); empty for RECEIVED.
+   * `supplierId` changes carry the supplier names.
+   */
   changes: z.record(z.string(), z.tuple([z.unknown(), z.unknown()])),
 });
 export type FinanceDocumentEvent = z.infer<typeof financeDocumentEventSchema>;

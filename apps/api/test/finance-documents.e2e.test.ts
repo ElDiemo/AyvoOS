@@ -201,6 +201,29 @@ describe.skipIf(!hasDatabase)('finance received documents', () => {
       (await correct({ ...fields, expectedVersion: 2, reason: 'beze změny' }).expect(422)).body
         .code,
     ).toBe('NOTHING_CHANGED');
+    // A supplier change is shown by name in the history.
+    const other = await http()
+      .post('/api/admin/suppliers')
+      .set('Origin', TEST_APP_ORIGIN)
+      .send({
+        requestId: randomUUID(),
+        name: `Jiný dodavatel ${randomUUID().slice(0, 6)}`,
+        companyId: null,
+        vatId: null,
+      })
+      .expect(201);
+    const moved = await correct({
+      ...fields,
+      supplierId: other.body.id,
+      expectedVersion: 2,
+      reason: 'Jiný dodavatel',
+    }).expect(200);
+    const supplierName = (await http().get('/api/admin/finance/suppliers').expect(200)).body.find(
+      (s: { id: string }) => s.id === supplierId,
+    ).name;
+    expect(moved.body.history.at(-1).changes).toEqual({
+      supplierId: [supplierName, other.body.name],
+    });
     // The file never changes.
     const row = await t.prisma.financeDocument.findUniqueOrThrow({ where: { code: doc.code } });
     expect(row.sha256).toBe(doc.sha256);
