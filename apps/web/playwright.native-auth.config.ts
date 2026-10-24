@@ -5,11 +5,20 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   timeout: 120_000,
-  use: { baseURL: 'http://localhost:3210', ...devices['Desktop Chrome'] },
+  // No screenshots, traces or videos: the pages show an MFA seed and recovery codes.
+  use: {
+    baseURL: 'http://localhost:3210',
+    ...devices['Desktop Chrome'],
+    screenshot: 'off',
+    trace: 'off',
+    video: 'off',
+  },
   webServer: [
     {
       command: 'node ../api/scripts/start-native-auth-e2e.mjs',
       url: 'http://localhost:4210/api/health',
+      // SIGTERM (not Playwright's default SIGKILL) lets the runner drop its own test database.
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
       reuseExistingServer: false,
       timeout: 300_000,
     },
