@@ -185,6 +185,12 @@ e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism
   current database** (`/opt/ayvo/prod/backups/predeploy-…dump`, checked with `pg_restore --list`)
   and, with the backup tool installed, a verified S3 backup → `migrate deploy` → api/web, then
   caddy/dns → verify → record (`/opt/ayvo/prod/state`). Log: `/opt/ayvo/prod/deploy.log`.
+- The S3 backup of that step runs as the approved owner in the context of the scheduled one
+  (`runuser`: user and group `ayvo`, the `docker` group for that process only, umask 077, systemd's
+  default PATH) — never as root: the credentials stay `ayvo:600` and the timer keeps owning
+  `/var/lib/ayvo-backup`. An entry there that `ayvo` does not own stops the deployment before the
+  backup (inspect it and restore its owner; never delete results blindly). A busy timer (exit 75)
+  is waited for, then our own fresh backup is taken; without it nothing is migrated.
 - Any failure stops at that step and reports it, the dump, whether migrations ran and the previous
   release. Nothing is undone silently, and **a database is never restored automatically** — an
   older backup is never written over newer data without the owner deciding (doc 035 §4).
