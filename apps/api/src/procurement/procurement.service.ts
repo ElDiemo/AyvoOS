@@ -127,6 +127,18 @@ export class ProcurementService {
     return supplier;
   }
 
+  /**
+   * For other modules (finance): the supplier exists and is not archived, checked inside the
+   * caller's transaction (row lock: an archive cannot slip in before its commit).
+   */
+  async assertActiveSupplier(tx: Prisma.TransactionClient, id: string): Promise<void> {
+    const rows = await tx.$queryRaw<{ archived_at: Date | null }[]>`
+      SELECT "archived_at" FROM "suppliers" WHERE "id" = ${id}::uuid FOR SHARE`;
+    if (rows.length === 0 || rows[0]!.archived_at !== null) {
+      throw domainError(422, 'SUPPLIER_INACTIVE', 'The supplier does not exist or is archived');
+    }
+  }
+
   /** Names of suppliers by id (for read models of other modules). */
   async supplierNames(ids: readonly string[]): Promise<Map<string, string>> {
     const rows = await this.prisma.supplier.findMany({

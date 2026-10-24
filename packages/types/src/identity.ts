@@ -91,6 +91,8 @@ export const PERMISSION_CODES = [
   'printing:manage',
   'sales:work',
   'sales:manage',
+  'finance:documents_read',
+  'finance:documents_manage',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
