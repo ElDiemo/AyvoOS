@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { crateUrl, labelingSetup, lotId, openStation, releaseOwnStation } from './labeling-setup';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { signInWithForm } from './test-sign-in';
 
 /**
  * Milestone 2A flow in Czech (doc 018, doc 019): Sklad: supplier → goods receipt with a delivery
@@ -356,13 +357,6 @@ test('long supplier and lot names wrap; the labelling station stays within the s
 const SIGNED_OUT = { cookies: [], origins: [] };
 
 /** Sign-in of a newly created user through the fake identity provider (APP_ENV=test). */
-async function signInWithForm(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByTestId('sign-in').click();
-  await page.getByLabel('E-mail').fill(email);
-  await page.getByRole('button', { name: 'Continue' }).click();
-}
-
 // Last in this file: it adds a supplier and stock that the flows above do not expect.
 test('purchase prices and supplier documents never reach roles without the permission', async ({
   browser,

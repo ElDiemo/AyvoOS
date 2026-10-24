@@ -3,30 +3,17 @@
 Status: implementation in progress on `codex/native-auth`; not reviewed, merged or deployed.
 Baseline: `db8640a46b22dfdd05f66e922f0e03308c1f8d0b`.
 
-Handoff status, 2026-10-24: uncommitted work in progress, NOT a reviewed release. The branch now
-contains local password/TOTP primitives, additive schema/migration, API enrollment/login/reset/
-MFA replacement, local invitation and SMTP outbox services, a restricted existing-bootstrap
-activation CLI, Czech web forms, and preliminary deployment/configuration changes. WorkOS runtime
-adapter files are removed in this branch, not in the deployed application. Historical identity
-records are retained. The same application is intended for DEV and PROD.
+Handoff status, 2026-10-24 (Codex WIP): source snapshot `native-auth-20261024-MmsVGw`, applied
+unchanged as commit `82f6cd3`. Claude's independent review of that snapshot (findings N1–N8),
+the integration with main (employee cards #55, #57), the fixes with regression tests, the
+explicit Google Workspace relay mode, the browser spec, the deployment tests, ADR 0037 and
+doc 038 followed as separate commits on `codex/native-auth`. Verification and remaining steps
+are reported per exact head in the PR, not here. Not merged, not deployed; SMTP relay delivery
+is unproven until a real message reaches a mailbox after an approved DEV deployment.
 
-Actual verification so far: the first isolated database/API run passed 12 of 13 integration
-tests plus 10 primitive unit tests. The remaining test used an invalid expiry fixture; its
-fixture was corrected but a successful rerun has NOT been established. A later wider run lost
-its SSH database tunnel and must not be counted as a valid green run. API build and earlier
-API/web type checks passed; final lint, builds, complete tests and independent review remain.
-The migration ran ONLY on the dedicated disposable test PostgreSQL, never on preview or PROD.
-
-The native browser runner/configuration exist, but their actual browser spec is still missing.
-Legacy browser fixture helpers still expect the old login page and require adaptation without
-weakening authorization assertions. Deployment script tests still need migration to native
-configuration. Outbox expiry cleanup and bootstrap delivery reporting need review. Documentation
-and an ADR must be completed, as must integration with current main (including employee cards).
-
-The owner identified existing Google Workspace (G Suite) as the email provider. This authorizes
-no new service or Google identity integration. Actual SMTP configuration/credentials are NOT
-prepared. Never use memory mail, test encryption keys, fake users or MFA bypass on DEV/PROD.
-No native-auth PR, CI result, independent review, merge or deployment exists yet.
+The owner identified the existing Google Workspace as the mail provider (outgoing relay only, no
+Google sign-in, no new service; doc 038 §3). Never use memory mail, test encryption keys, fake
+users or an MFA bypass on DEV/PROD.
 
 ## Agreed outcome
 

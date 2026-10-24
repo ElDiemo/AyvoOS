@@ -332,6 +332,43 @@ describe.skipIf(!hasDatabase)('native authentication through HTTP, PostgreSQL an
       .expect(401);
   });
 
+  it('N9: queued mail of deactivated accounts never blocks an active recipient behind them', async () => {
+    const send = (userId: string) =>
+      t.app.get(InvitationsService).send(null, userId, randomUUID(), 'Synthetic queue order');
+    const inactive: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const user = await t.prisma.user.create({
+        data: { email: `native-off-${randomUUID()}@ayvo.test`, displayName: 'Native Off' },
+      });
+      await send(user.id);
+      await t.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          status: 'DEACTIVATED',
+          deactivatedAt: new Date(),
+          deactivatedBy: user.id,
+          deactivationReason: 'Synthetic deactivation',
+        },
+      });
+      inactive.push(user.email);
+    }
+    const active = await t.prisma.user.create({
+      data: { email: `native-on-${randomUUID()}@ayvo.test`, displayName: 'Native On' },
+    });
+    await send(active.id);
+    const tokens = t.app.get(NativeTokensService);
+    await tokens.deliverPending();
+    const sent = tokens.deliveriesForTest().map((mail) => mail.to);
+    expect(sent).toContain(active.email);
+    expect(sent.filter((to) => inactive.includes(to))).toEqual([]);
+    // The deactivated accounts' links stay queued untouched (a reactivation may still use them).
+    expect(
+      await t.prisma.nativeAuthToken.count({
+        where: { user: { email: { in: inactive } }, sentAt: null, deliveryAttempts: 0 },
+      }),
+    ).toBe(10);
+  });
+
   it('does not count an unknown or missing challenge against a shared account bucket', async () => {
     const hit = vi.spyOn(t.app.get(AuthRateLimitService), 'hit');
     await post('mfa').send({ code: '123456' }).expect(401);

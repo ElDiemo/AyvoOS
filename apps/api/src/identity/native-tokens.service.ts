@@ -185,6 +185,10 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
           deliveryAttempts: { lt: 5 },
           nextDeliveryAt: { lte: now },
           OR: [{ deliveryLeaseUntil: null }, { deliveryLeaseUntil: { lt: now } }],
+          // Eligibility before the batch limit: mail of deactivated accounts stays queued
+          // (untouched, a reactivation may still use it) and never fills the batch (N9).
+          deliveryCiphertext: { not: null },
+          user: { status: 'ACTIVE' },
         },
         take: 10,
         orderBy: { createdAt: 'asc' },

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { PDFDocument } from 'pdf-lib';
+import { signInWithForm } from './test-sign-in';
 
 /**
  * Milestone 1 happy path, as an AYVO administrator does it: create the "mydlo1" label template
@@ -371,9 +372,7 @@ test('another site never sees this site’s series, bottles or print jobs', asyn
   const other = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await other.newPage();
   await page.goto('/login');
-  await page.getByTestId('sign-in').click();
-  await page.getByLabel('E-mail').fill('e2e-de-production@ayvo.test');
-  await page.getByRole('button', { name: 'Continue' }).click();
+  await signInWithForm(page, 'e2e-de-production@ayvo.test');
   await expect(page.getByTestId('active-site')).toHaveText('E2E-DE');
   await page.goto('/bottles');
   await expect(page).toHaveURL(/\/bottles$/);

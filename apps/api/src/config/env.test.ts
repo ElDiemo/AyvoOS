@@ -272,7 +272,8 @@ describe('loadEnv', () => {
       for (const extra of ['AUTH_SMTP_HOST', 'AUTH_SMTP_USER', 'AUTH_SMTP_PASSWORD'])
         expect(() => loadEnv({ ...relay, [extra]: 'x' })).toThrow(/without credentials/);
       // Never implied: without the explicit driver, missing credentials stay an error.
-      const { AUTH_MAIL_DRIVER: _driver, ...implicit } = relay;
+      const implicit = { ...relay };
+      delete implicit.AUTH_MAIL_DRIVER;
       expect(() => loadEnv(implicit)).toThrow(/SMTP host, credentials/);
     });
 

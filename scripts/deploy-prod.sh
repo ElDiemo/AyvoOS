@@ -13,6 +13,10 @@
 #                                                         (no build, no migration; doc 036 §7)
 #   scripts/deploy-prod.sh --bootstrap-admin --email <e-mail> --name "<name>"
 #                                                         the one-time first administrator (doc 021 §8)
+#   scripts/deploy-prod.sh --activate-bootstrap --email <e-mail>
+#                                                         e-mail the native activation link to that
+#                                                         existing, not yet activated bootstrap ADMIN
+#                                                         (doc 038 §4; nobody else, nothing created)
 #
 # <commit> is a full 40-character commit that is already on origin/main (merged = approved). The
 # images are built from a clean `git archive` of exactly that commit — never from a working copy.
@@ -587,6 +591,7 @@ while (($#)); do
       shift
       ;;
     --bootstrap-admin) MODE=bootstrap ;;
+    --activate-bootstrap) MODE=activate ;;
     --email)
       ADMIN_EMAIL=${2:-}
       shift
@@ -683,9 +688,20 @@ case $MODE in
     [[ -n $ADMIN_EMAIL && -n $ADMIN_NAME ]] || die "--bootstrap-admin needs --email and --name"
     [[ -n $PREVIOUS ]] || die "production is not running: deploy a release first"
     AYVO_RELEASE=$PREVIOUS
-    log "$STEP: $ADMIN_EMAIL (one time only; the person then signs in with WorkOS and MFA)"
+    log "$STEP: $ADMIN_EMAIL (one time only; then --activate-bootstrap sends the activation link)"
     compose run --rm --no-deps api node dist/identity/bootstrap-admin.js --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" ||
       die "the bootstrap was refused (see the message above)"
     ok "first administrator created; further users only by invitation"
+    ;;
+  activate)
+    STEP="send the native activation link to the bootstrap administrator"
+    [[ -n $ADMIN_EMAIL ]] || die "--activate-bootstrap needs --email"
+    [[ -n $PREVIOUS ]] || die "production is not running: deploy a release first"
+    AYVO_RELEASE=$PREVIOUS
+    log "$STEP: $ADMIN_EMAIL (no link, password or MFA secret is printed)"
+    # Exit 1 = queued but not accepted by the mail server yet; the running API retries.
+    compose run --rm --no-deps api node dist/identity/native-invite-bootstrap.js --email "$ADMIN_EMAIL" ||
+      die "the activation e-mail was refused or not delivered (see the message above)"
+    ok "activation e-mail accepted by the mail server; delivery to the mailbox is confirmed by the person"
     ;;
 esac

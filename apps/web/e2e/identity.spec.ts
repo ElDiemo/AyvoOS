@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { signInWithForm } from './test-sign-in';
 
 /**
  * Identity and access in the browser (Milestone 2C, ADR 0022): sign-in through the identity
@@ -9,12 +10,6 @@ test.describe.configure({ mode: 'serial' });
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const ADMIN = 'e2e/.auth/admin.json';
-
-async function signInWithForm(page: Page, email: string) {
-  await page.getByTestId('sign-in').click();
-  await page.getByLabel('E-mail').fill(email);
-  await page.getByRole('button', { name: 'Continue' }).click();
-}
 
 async function noOverflow(page: Page, what: string) {
   await expect
@@ -39,7 +34,11 @@ test('without a session every page leads to the sign-in page and back to where i
       new RegExp(`/login\\?next=${encodeURIComponent(path).replace(/\//g, '%2F')}$`),
     );
   }
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přihlášení do AYVO OS');
+  // The native sign-in form only: e-mail + password, no external provider and no test button.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přihlášení');
+  await expect(page.getByLabel('E-mail')).toBeVisible();
+  await expect(page.getByLabel('Heslo', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('sign-in')).toHaveCount(0);
   await page.goto('/login?next=%2Fwarehouse%2Fstock');
   await signInWithForm(page, 'e2e-operator@ayvo.test');
   await expect(page).toHaveURL(/\/warehouse\/stock$/);

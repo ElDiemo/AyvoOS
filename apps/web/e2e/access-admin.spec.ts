@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { signInWithForm } from './test-sign-in';
 
 /**
  * Access administration and the multi-site foundation in the browser (doc 021 §7a, doc 022):
@@ -13,13 +14,6 @@ test.use({ storageState: { cookies: [], origins: [] } });
 const ADMIN = 'e2e/.auth/admin.json';
 const ROLE_CODE = 'E2E_RECEIVER';
 const USER_EMAIL = 'e2e-receiver@ayvo.test';
-
-async function signInWithForm(page: Page, email: string) {
-  await page.goto('/login');
-  await page.getByTestId('sign-in').click();
-  await page.getByLabel('E-mail').fill(email);
-  await page.getByRole('button', { name: 'Continue' }).click();
-}
 
 async function noOverflow(page: Page, what: string) {
   await expect
