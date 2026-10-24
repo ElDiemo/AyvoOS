@@ -25,7 +25,7 @@ CREATE TABLE "accounting_exports" (
   CHECK ("period_to" >= "period_from"),
   CHECK ("period_to" - "period_from" <= 366)
 );
-CREATE INDEX "accounting_exports_period_idx" ON "accounting_exports" ("period_from", "period_to");
+CREATE INDEX "accounting_exports_period_from_period_to_idx" ON "accounting_exports" ("period_from", "period_to");
 
 CREATE TABLE "accounting_export_items" (
   "export_id" uuid NOT NULL REFERENCES "accounting_exports"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -36,9 +36,10 @@ CREATE TABLE "accounting_export_items" (
   -- since an earlier export (listed, without the file); INCLUDED: part of a FULL export again.
   "change" text NOT NULL CHECK ("change" IN ('NEW', 'CHANGED', 'VOIDED', 'INCLUDED')),
   PRIMARY KEY ("export_id", "document_id"),
-  FOREIGN KEY ("document_id", "document_version") REFERENCES "finance_document_events"("document_id", "version") ON DELETE RESTRICT
+  CONSTRAINT "accounting_export_items_document_id_document_version_fkey" FOREIGN KEY ("document_id", "document_version")
+    REFERENCES "finance_document_events"("document_id", "version") ON DELETE RESTRICT ON UPDATE CASCADE
 );
-CREATE INDEX "accounting_export_items_document_idx" ON "accounting_export_items" ("document_id", "document_version");
+CREATE INDEX "accounting_export_items_document_id_document_version_idx" ON "accounting_export_items" ("document_id", "document_version");
 
 CREATE TRIGGER "accounting_exports_append_only" BEFORE UPDATE OR DELETE ON "accounting_exports"
   FOR EACH ROW EXECUTE FUNCTION ayvo_reject_modification();
