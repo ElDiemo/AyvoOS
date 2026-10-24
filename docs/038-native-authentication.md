@@ -65,6 +65,8 @@ TLS required, SMTP authentication off. In `google-relay` mode the application:
 - binds an IPv4 socket — the allowlist is IPv4 only; without an IPv4 route it fails, it never
   tries IPv6 and never sends without TLS;
 - sends no credentials, and is used only when configured explicitly (no fallback from `smtp`).
+- announces the host of `APP_PUBLIC_ORIGIN` (e.g. `dev.ayvo.co`) in EHLO — Google refuses the
+  container's random host name with `421 4.7.0 … (EHLO)` (seen on DEV 2026-10-24).
 
 Delivery is asynchronous (outbox in `native_auth_tokens`, retried with backoff, 5 attempts while
 the link is valid). „Accepted by the mail server“ is recorded as `sent_at`; it is **not** proof of

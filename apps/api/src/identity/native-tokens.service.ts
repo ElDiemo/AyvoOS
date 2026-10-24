@@ -30,6 +30,9 @@ export const GOOGLE_SMTP_RELAY = { host: 'smtp-relay.gmail.com', port: 587 } as 
  */
 export function smtpTransportOptions(env: Env): SMTPTransport.Options | null {
   const common = {
+    // EHLO with the application's own host name. Without it the container's random host name
+    // is announced, which Google's relay refuses ("421 4.7.0 Try again later ... (EHLO)").
+    name: new URL(env.APP_PUBLIC_ORIGIN).hostname,
     requireTLS: true,
     tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' as const },
     connectionTimeout: 10_000,

@@ -10,11 +10,17 @@ const base = {
   AUTH_ENCRYPTION_KEY: '5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28', // synthetic test value
   AUTH_MAIL_FROM: 'system@ayvo.test',
 };
-const relayEnv = () => loadEnv({ ...base, AUTH_MAIL_DRIVER: 'google-relay' });
+const relayEnv = () =>
+  loadEnv({
+    ...base,
+    AUTH_MAIL_DRIVER: 'google-relay',
+    APP_PUBLIC_ORIGIN: 'https://app.example.test',
+  });
 
 /** A local SMTP stub that offers no STARTTLS and accepts anything: what a relay must refuse. */
 let server: Server | null = null;
 const seen: string[] = [];
+const ehlo: string[] = [];
 async function plaintextSmtp(host: string): Promise<number> {
   server = createServer((socket: Socket) => {
     seen.push('connect');
@@ -22,6 +28,7 @@ async function plaintextSmtp(host: string): Promise<number> {
     socket.on('data', (chunk) => {
       const line = chunk.toString('utf8');
       seen.push(line.trim().split(/\s/)[0]!.toUpperCase());
+      if (/^EHLO /i.test(line)) ehlo.push(line.trim().slice(5));
       if (/^(EHLO|HELO)/i.test(line)) socket.write('250-stub\r\n250 AUTH PLAIN\r\n');
       else if (/^QUIT/i.test(line)) socket.end('221 bye\r\n');
       else socket.write('250 ok\r\n');
@@ -32,6 +39,7 @@ async function plaintextSmtp(host: string): Promise<number> {
 }
 afterEach(async () => {
   seen.length = 0;
+  ehlo.length = 0;
   await new Promise<void>((done) => (server ? server.close(() => done()) : done()));
   server = null;
 });
@@ -45,6 +53,7 @@ describe('authentication mail transport (no external connection)', () => {
       secure: false,
       requireTLS: true,
       localAddress: '0.0.0.0',
+      name: 'app.example.test',
       tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
     });
     expect(GOOGLE_SMTP_RELAY).toEqual({ host: 'smtp-relay.gmail.com', port: 587 });
@@ -85,6 +94,8 @@ describe('authentication mail transport (no external connection)', () => {
     transport.close();
     expect(seen).not.toContain('MAIL');
     expect(seen).not.toContain('DATA');
+    // EHLO announces the application's host name, never the container's random one.
+    expect(ehlo).toEqual(['app.example.test']);
   });
 
   it('the relay settings do not connect over IPv6 (the Google allowlist is IPv4 only)', async () => {
