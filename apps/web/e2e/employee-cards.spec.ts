@@ -2,9 +2,18 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 
 test.use({ storageState: 'e2e/.auth/admin.json' });
+
+/** The one publication status: the server's state as text, the dot only decorative. */
+async function expectPublication(editor: Locator, state: 'Zveřejněno' | 'Nezveřejněno') {
+  const status = editor.getByTestId('employee-card-publication');
+  await expect(status.locator('p').first()).toHaveText(state);
+  await expect(status.locator('[aria-hidden="true"]')).toHaveClass(
+    state === 'Zveřejněno' ? /bg-emerald-600/ : /bg-red-600/,
+  );
+}
 
 test('concurrent first save keeps edited fields but adopts the permanent address from the server', async ({
   page,
@@ -86,6 +95,11 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   const editor = page.getByTestId('employee-card-editor');
   await editor.getByRole('button', { name: 'Otevřít nastavení vizitky' }).click();
   await expect(editor.getByLabel('Veřejný e-mail', { exact: true })).toHaveValue('');
+  await expectPublication(editor, 'Nezveřejněno');
+  // The preview is labelled by a heading; the former preview toggles are gone.
+  await expect(editor.getByRole('heading', { name: 'Náhled rozepsaných údajů' })).toBeVisible();
+  for (const name of ['Náhled konceptu', 'Nyní zveřejněno', 'Náhled rozepsaných údajů'])
+    await expect(editor.getByRole('button', { name })).toHaveCount(0);
   await editor.getByLabel('Adresa na vizitce').fill(slug);
   await editor.getByLabel('Pracovní pozice', { exact: true }).fill('Obchodní zástupkyně');
   await editor
@@ -118,11 +132,14 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   await editor.getByRole('button', { name: 'Uložit koncept', exact: true }).click();
   await expect(editor.getByText('Koncept uložen. Veřejná vizitka se nezměnila.')).toBeVisible();
   expect((await page.request.get(`/api/public/employee-cards/${slug}`)).status()).toBe(404);
+  await expectPublication(editor, 'Nezveřejněno');
   await editor
     .getByLabel('Důvod změny', { exact: true })
     .fill('Výslovné zveřejnění testovací vizitky');
   await editor.getByRole('button', { name: 'Zveřejnit uložený koncept' }).click();
   await expect(editor.getByText('Uložený koncept byl zveřejněn.')).toBeVisible();
+  await expectPublication(editor, 'Zveřejněno');
+  await expect(editor.getByText('obsahuje změny, které zatím nejsou zveřejněné')).toHaveCount(0);
   const publishedLink = editor.getByRole('link', { name: 'Otevřít zveřejněnou vizitku' });
   await expect(publishedLink).toHaveAttribute('href', `/id/${slug}`);
   await expect(publishedLink).toHaveAttribute('target', '_blank');
@@ -198,10 +215,14 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   await editor.getByLabel('Důvod změny', { exact: true }).fill('Pouze koncept změny jména');
   await editor.getByRole('button', { name: 'Uložit koncept', exact: true }).click();
   await expect(editor.getByText('Koncept uložen. Veřejná vizitka se nezměnila.')).toBeVisible();
+  // A saved, different draft leaves the valid publication public — still green.
+  await expectPublication(editor, 'Zveřejněno');
+  await expect(editor.getByText('obsahuje změny, které zatím nejsou zveřejněné')).toBeVisible();
   await publicPage.reload();
   await expect(publicPage.getByRole('heading', { name: 'Jana Vizitková' })).toBeVisible();
   await page.reload();
   await editor.getByRole('button', { name: 'Otevřít nastavení vizitky' }).click();
+  await expectPublication(editor, 'Zveřejněno');
   await expect(editor.getByLabel('Veřejné jméno')).toHaveValue('Jana – rozepsaná neveřejná změna');
   await expect(editor.getByLabel('Adresa na vizitce')).toHaveAttribute('readonly', '');
   const previewPhoto = editor.getByRole('img', {
@@ -289,6 +310,7 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   await editor.getByLabel('Důvod změny', { exact: true }).fill('Skrytí testovací vizitky');
   await editor.getByRole('button', { name: 'Skrýt vizitku', exact: true }).click();
   await expect(editor.getByText('Vizitka byla skryta.')).toBeVisible();
+  await expectPublication(editor, 'Nezveřejněno');
   await expect(publishedLink).toHaveCount(0);
   await expect(editor.getByLabel('Veřejné jméno')).toHaveValue('Nesmí se ztratit při skrytí');
   expect((await anonymous.request.get(`/id/${slug}`)).status()).toBe(404);
@@ -297,4 +319,71 @@ test('admin prepares and publishes a card; draft and hidden data never appear pu
   await expect(publicPage.getByRole('heading', { name: 'Contact unavailable' })).toBeVisible();
   await expect(publicPage.getByRole('link')).toHaveCount(0);
   await anonymous.close();
+});
+
+test('deactivation unpublishes the card; reactivation does not publish it again', async ({
+  page,
+}) => {
+  const slug = `petr-${randomUUID()}`;
+  const created = await page.request.post('/api/admin/identity/users', {
+    data: {
+      email: `employee-${randomUUID()}@ayvo.test`,
+      displayName: 'Petr Syntetický',
+      roles: ['SALES'],
+      siteIds: [],
+      warehouseCodes: [],
+      reason: 'synthetic business-card status test',
+    },
+  });
+  expect(created.status()).toBe(201);
+  const user = (await created.json()) as { id: string };
+  const base = `/api/admin/identity/users/${user.id}/business-card`;
+  const fields = {
+    name: 'Petr Syntetický',
+    role: 'Test',
+    company: '',
+    tagline: '',
+    phone: '',
+    email: '',
+    website: '',
+    linkedin: '',
+    photoId: null,
+  };
+  const saved = await page.request.post(base, {
+    data: { requestId: randomUUID(), expectedVersion: 0, reason: 'synthetic', slug, fields },
+  });
+  expect(saved.status()).toBe(200);
+  const version = ((await saved.json()) as { card: { version: number } }).card.version;
+  expect(
+    (
+      await page.request.post(`${base}/publish`, {
+        data: { requestId: randomUUID(), expectedVersion: version, reason: 'synthetic' },
+      })
+    ).status(),
+  ).toBe(200);
+  const editor = page.getByTestId('employee-card-editor');
+  const open = async () => {
+    await page.goto(`/admin/users/${user.id}`);
+    await editor.getByRole('button', { name: 'Otevřít nastavení vizitky' }).click();
+  };
+  await open();
+  await expectPublication(editor, 'Zveřejněno');
+
+  const status = (action: 'deactivate' | 'reactivate') =>
+    page.request.post(`/api/admin/identity/users/${user.id}/${action}`, {
+      data: { reason: `synthetic ${action}` },
+    });
+  expect((await status('deactivate')).ok()).toBe(true);
+  await open();
+  await expectPublication(editor, 'Nezveřejněno');
+  await expect(editor.getByText('Účet je deaktivovaný.', { exact: false })).toBeVisible();
+  await expect(editor.getByRole('link', { name: 'Otevřít zveřejněnou vizitku' })).toHaveCount(0);
+  expect((await page.request.get(`/api/public/employee-cards/${slug}`)).status()).toBe(404);
+
+  expect((await status('reactivate')).ok()).toBe(true);
+  await open();
+  await expectPublication(editor, 'Nezveřejněno');
+  await expect(editor.getByText('Účet je deaktivovaný.', { exact: false })).toHaveCount(0);
+  await expect(editor.getByRole('button', { name: 'Zveřejnit uložený koncept' })).toBeEnabled();
+  expect((await page.request.get(`/api/public/employee-cards/${slug}`)).status()).toBe(404);
 });
