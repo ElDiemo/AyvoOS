@@ -14,6 +14,9 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: resolve(import.meta.dirname, '../..'),
   // @ayvo/ui ships TypeScript source; Next compiles it.
   transpilePackages: ['@ayvo/ui'],
+  // The application build type-checks the application only. Browser tests may use tools from
+  // other workspace packages (absent from the pruned web image); `pnpm typecheck` covers them.
+  typescript: { tsconfigPath: 'tsconfig.build.json' },
   // Legacy URLs: real HTTP redirects (no page render, no client JavaScript needed). Next.js
   // passes the query string through (e.g. ?page=2). 307, not 308: these aliases may still change
   // while AYVO OS is DEV-only.
