@@ -1,0 +1,31 @@
+# AYVO OS — the public ID edge (employee business cards, https://<ID host>/<slug>). Added to
+# compose.yml by scripts/deploy-prod.sh ONLY when ID_DOMAIN is set in prod.env; without it nothing
+# here exists: no listener, no network, no change to the OS or QR edges.
+#
+#   internet ─:443─▶ qr-edge ─▶ web            (QR and ID: exact public routes only, no API)
+#   CA ─:80─▶ caddy ─(acme network, challenge path only)─▶ qr-edge:80   (ID certificate)
+#
+# The `acme` network connects caddy and qr-edge only. It is a normal (two-way) bridge: qr-edge can
+# reach caddy's ports there too, where os.ayvo.co still refuses every peer outside the tailnet
+# (remote_ip guard in Caddyfile, unchanged). qr-edge's :80 is not published on the host.
+services:
+  caddy:
+    environment:
+      ID_DOMAIN: ${ID_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+    volumes:
+      - ./Caddyfile.acme:/etc/caddy/Caddyfile.acme:ro
+    command: ['caddy', 'run', '--config', '/etc/caddy/Caddyfile.acme', '--adapter', 'caddyfile']
+    networks:
+      - acme
+
+  qr-edge:
+    environment:
+      ID_DOMAIN: ${ID_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+    volumes:
+      - ./Caddyfile.id:/etc/caddy/Caddyfile.id:ro
+    command: ['caddy', 'run', '--config', '/etc/caddy/Caddyfile.id', '--adapter', 'caddyfile']
+    networks:
+      - acme
+
+networks:
+  acme:

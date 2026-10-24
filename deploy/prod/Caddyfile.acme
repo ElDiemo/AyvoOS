@@ -1,0 +1,23 @@
+# AYVO OS — internal Caddy WITH the public ID edge enabled (compose.id.yml, only when ID_DOMAIN is
+# set). Imports the unchanged internal configuration first (os.ayvo.co, tailnet-only, its own ACME
+# on public IPv4 :80), then adds ONE narrow route on plain HTTP: ACME HTTP-01 challenges for the ID
+# host go to qr-edge's :80 over the small `acme` network, so qr-edge can obtain the ID certificate
+# (also while DNS still points to the old server and that server forwards only this path).
+# Everything else for the ID host on :80 is aborted. This Caddy holds no ID certificate or key.
+import /etc/caddy/Caddyfile
+
+http://{$ID_DOMAIN} {
+	@challenge {
+		method GET
+		path_regexp ^/\.well-known/acme-challenge/[A-Za-z0-9_-]+$
+	}
+	handle @challenge {
+		reverse_proxy qr-edge:80 {
+			header_up -Cookie
+			header_up -Authorization
+		}
+	}
+	handle {
+		abort
+	}
+}
