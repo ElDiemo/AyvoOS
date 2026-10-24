@@ -154,16 +154,15 @@ services:
     # Server-only secrets, read by Docker into the container — never through this file, a
     # process argument or a log. Key names: doc 036 §4 (checked by `deploy-prod.sh --check`).
     env_file:
-      - ${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}/prod-workos.env
+      - path: ${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}/prod-auth.env
+        format: raw
       - ${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}/prod-s3.env
     environment:
       APP_ENV: production
       API_PORT: 4000
       APP_PUBLIC_ORIGIN: https://${PROD_DOMAIN:?set by scripts/deploy-prod.sh}
-      AUTH_PROVIDER: workos
-      # WorkOS Production (not secret; the API key comes from prod-workos.env).
-      WORKOS_CLIENT_ID: client_01M4R7SYY9BSQQCT0RHV4E468Q
-      WORKOS_JWT_ISSUER: https://api.workos.com/user_management/client_01M4R7SYY9BSQQCT0RHV4E468Q
+      AUTH_PROVIDER: local
+      AUTH_MAIL_DRIVER: smtp
       TRUSTED_PROXY_CIDRS: 172.16.0.0/12,192.168.0.0/16
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
       REDIS_URL: redis://redis:6379

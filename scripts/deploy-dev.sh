@@ -49,11 +49,9 @@ readonly DEPLOY_LOG="$STATE_DIR/deployments-dev-preview.log"
 readonly IMAGE_PREFIX="ayvo-dev-preview"
 readonly PROJECT="ayvo-dev-preview"
 readonly GUARD_UNIT="ayvo-dev-docker-guard.service"
-# The only endpoint trusted for the WorkOS discovery document (doc 021 §9); never configurable.
-readonly WORKOS_API_ORIGIN="https://api.workos.com"
 readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL
-  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB WORKOS_API_KEY WORKOS_CLIENT_ID
-  WORKOS_JWT_ISSUER)
+  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB AUTH_ENCRYPTION_KEY AUTH_SMTP_HOST
+  AUTH_SMTP_USER AUTH_SMTP_PASSWORD AUTH_MAIL_FROM)
 
 MODE=deploy
 TAG=""
@@ -187,37 +185,14 @@ validate_env() {
     die "ACME_EMAIL is not a valid email address"
   [[ ! ${CFG[ACME_EMAIL]} =~ @example\.(com|org|net)$ ]] || die "ACME_EMAIL is still the placeholder"
   [[ ${CFG[POSTGRES_USER]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_USER must match [a-z_][a-z0-9_]*"
-  # Identity provider (ADR 0022, doc 021). Values are never printed.
-  [[ ${CFG[WORKOS_API_KEY]} =~ ^sk_[A-Za-z0-9_]{10,}$ ]] ||
-    die "WORKOS_API_KEY must be a WorkOS API key (sk_…) from the WorkOS dashboard (doc 021)"
-  [[ ${CFG[WORKOS_CLIENT_ID]} =~ ^client_[A-Za-z0-9]{10,}$ ]] ||
-    die "WORKOS_CLIENT_ID must be a WorkOS client id (client_…) from the WorkOS dashboard (doc 021)"
-  [[ ${CFG[WORKOS_JWT_ISSUER]} =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] ||
-    die "WORKOS_JWT_ISSUER must be the exact https issuer of WorkOS access tokens (doc 021)"
+  [[ ${CFG[AUTH_ENCRYPTION_KEY]} =~ ^[a-fA-F0-9]{64}$ ]] || die "AUTH_ENCRYPTION_KEY must be a separately generated 32-byte hex key"
+  [[ ${CFG[AUTH_MAIL_FROM]} =~ ^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$ ]] || die "AUTH_MAIL_FROM must be an approved sender address"
+  [[ ${CFG[AUTH_SMTP_PORT]:-465} == 465 || ${CFG[AUTH_SMTP_PORT]:-465} == 587 ]] || die "AUTH_SMTP_PORT must be 465 or 587 (TLS required)"
   [[ ${CFG[POSTGRES_DB]} =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "POSTGRES_DB must match [a-z_][a-z0-9_]*"
   # Embedded in DATABASE_URL, so restricted to URL-safe characters (e.g. `openssl rand -hex 32`).
   [[ ${CFG[POSTGRES_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,}$ ]] ||
     die "POSTGRES_PASSWORD must be at least 24 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
   [[ ${CFG[POSTGRES_PASSWORD]} != *change-me* ]] || die "POSTGRES_PASSWORD is still the placeholder"
-}
-
-# WORKOS_JWT_ISSUER must be exactly the `issuer` of the client's OIDC discovery document — the `iss`
-# of the access tokens the API verifies (doc 021 §9). A generic WorkOS address passes the format
-# check but makes every sign-in fail. The client id is already validated (no quoting issues); the
-# URL goes to curl on stdin, and neither the client id, the issuer nor the document is printed.
-check_workos_issuer() {
-  local doc issuer
-  doc="$(printf 'url = "%s/user_management/%s/.well-known/openid-configuration"\n' \
-    "$WORKOS_API_ORIGIN" "${CFG[WORKOS_CLIENT_ID]}" |
-    curl -fsS --proto =https --max-redirs 0 --max-time 15 --max-filesize 65536 --config - 2>/dev/null)" ||
-    die "WORKOS_JWT_ISSUER cannot be verified: the WorkOS discovery document for WORKOS_CLIENT_ID could not be fetched (network or HTTP error; doc 021 §9)"
-  issuer="$(jq -er 'if type == "object" and (.issuer | type) == "string" then .issuer else empty end' \
-    <<<"$doc" 2>/dev/null)" ||
-    die "WORKOS_JWT_ISSUER cannot be verified: the WorkOS discovery document is not valid JSON or has no issuer (doc 021 §9)"
-  [[ $issuer =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$ ]] ||
-    die "WORKOS_JWT_ISSUER cannot be verified: the discovery issuer is not an https URL without query or fragment (doc 021 §9)"
-  [[ ${CFG[WORKOS_JWT_ISSUER]} == "$issuer" ]] ||
-    die "WORKOS_JWT_ISSUER does not exactly match the issuer of the client's WorkOS discovery document; copy the 'issuer' value from https://api.workos.com/user_management/<WORKOS_CLIENT_ID>/.well-known/openid-configuration (doc 021 §9)"
 }
 
 # --- verification ------------------------------------------------------------------------------
@@ -481,8 +456,7 @@ validate_env
 ok "required variables present and valid"
 [[ -z ${CFG[DEV_TAILNET_IPV4]:-} ]] ||
   die "remove DEV_TAILNET_IPV4 from $ENV_FILE: it is read from tailscale on every run (ADR 0026)"
-check_workos_issuer
-ok "WORKOS_JWT_ISSUER matches the client's WorkOS discovery document"
+ok "native authentication configuration present; no external identity-provider discovery"
 
 STEP="validate tailnet and host guard"
 tailnet_address

@@ -214,6 +214,11 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/public/crates/:token',
       // Only "an internal AYVO mark" (doc 026).
       'GET /api/public/workstations/:token',
+      'POST /api/auth/native/activate',
+      'POST /api/auth/native/forgot-password',
+      'POST /api/auth/native/mfa',
+      'POST /api/auth/native/password',
+      'POST /api/auth/native/reset-password',
     ]);
     // Machine routes (ADR 0028): only the print agent's API, only under /api/agent/.
     expect(

@@ -1,5 +1,9 @@
 # ADR 0022: Authentication through an external OIDC provider; authorization in AYVO OS
 
+> Owner decision 2026-10-23: replace the external provider with native AYVO password/TOTP
+> authentication. See [implementation scope and status](../native-authentication-work.md).
+> This ADR records the historical/deployed design; the native replacement is not deployed yet.
+
 - **Status:** Accepted — confirmed by owner 2026-10-11; implemented in Milestone 2C
   ([doc 021](../021-identity-and-access.md)); DEV activation pending the owner's WorkOS setup;
   still a production blocker until verified in production (doc 016)

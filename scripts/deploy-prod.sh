@@ -58,14 +58,11 @@ readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLI
 # The physically validated QR label settings are optional (ADR 0034): both or neither.
 readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY"
-readonly KEYS_WORKOS="WORKOS_API_KEY"
-# Client ID and issuer may be in the file too; compose.yml's fixed values take precedence.
-readonly ALLOW_WORKOS="$KEYS_WORKOS WORKOS_CLIENT_ID WORKOS_JWT_ISSUER"
+readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_SMTP_HOST AUTH_SMTP_USER AUTH_SMTP_PASSWORD AUTH_MAIL_FROM"
+readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_PORT"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 # Region, bucket and owner may be in the file too; compose.yml's fixed values take precedence.
 readonly ALLOW_S3="$KEYS_S3 AWS_REGION S3_BUCKET S3_EXPECTED_BUCKET_OWNER"
-# The only endpoint trusted for the WorkOS discovery document (doc 021 §9); never configurable.
-readonly WORKOS_API_ORIGIN="https://api.workos.com"
 
 MODE=deploy
 RELEASE=""
@@ -257,7 +254,8 @@ check_env_files() {
   log "$STEP"
   check_env_file "$SECRETS/prod.env" "$KEYS_PROD" "$ALLOW_PROD"
   check_qr_label_settings "$SECRETS/prod.env"
-  check_env_file "$SECRETS/prod-workos.env" "$KEYS_WORKOS" "$ALLOW_WORKOS"
+  check_env_file "$SECRETS/prod-auth.env" "$KEYS_AUTH" "$ALLOW_AUTH"
+  [[ $(env_value "$SECRETS/prod-auth.env" AUTH_ENCRYPTION_KEY) =~ ^[a-fA-F0-9]{64}$ ]] || die "prod-auth.env: AUTH_ENCRYPTION_KEY must be 32 bytes as hex"
   check_env_file "$SECRETS/prod-s3.env" "$KEYS_S3" "$ALLOW_S3"
   # The backup identity is never given to the application (doc 035).
   if [[ -r $SECRETS/prod-s3-backup.env ]] &&
@@ -283,24 +281,6 @@ check_release() {
   repo_git show "$RELEASE:apps/api/src/config/env.ts" | grep -q "'s3'" ||
     die "$RELEASE has no S3 file storage (ADR 0032, #47): production cannot start on local storage"
   ok "$RELEASE is on origin/main ($(repo_git log -1 --format='%cs %s' "$RELEASE"))"
-}
-
-# The issuer fixed in the release's compose.yml must be exactly the `issuer` of the WorkOS
-# client's discovery document (as DEV, doc 021 §9). Nothing secret is involved.
-check_workos_issuer() {
-  STEP="check the WorkOS issuer against the client's discovery document"
-  local file client issuer doc found
-  file="$(release_dir "$RELEASE")/deploy/prod/compose.yml"
-  client="$(sed -nE 's/^ +WORKOS_CLIENT_ID: ([A-Za-z0-9_]+)$/\1/p' "$file" | head -n1)"
-  issuer="$(sed -nE 's/^ +WORKOS_JWT_ISSUER: (https:[^ ]+)$/\1/p' "$file" | head -n1)"
-  [[ -n $client && -n $issuer ]] || die "compose.yml has no fixed WorkOS client ID and issuer"
-  doc="$(printf 'url = "%s/user_management/%s/.well-known/openid-configuration"\n' "$WORKOS_API_ORIGIN" "$client" |
-    curl -fsS --proto =https --max-redirs 0 --max-time 15 --max-filesize 65536 --config - 2>/dev/null)" ||
-    die "the WorkOS discovery document of $client could not be fetched"
-  found="$(jq -er 'if type == "object" and (.issuer | type) == "string" then .issuer else empty end' <<<"$doc" 2>/dev/null)" ||
-    die "the WorkOS discovery document has no issuer"
-  [[ $found == "$issuer" ]] || die "WORKOS_JWT_ISSUER in compose.yml ($issuer) is not the discovery issuer ($found)"
-  ok "WorkOS issuer matches the discovery document of $client"
 }
 
 check_resources() {
@@ -622,7 +602,7 @@ case $MODE in
     check_release
     check_resources
     export_release
-    check_workos_issuer
+    ok "native authentication: no external identity-provider discovery"
     check_qr_dns
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
@@ -635,7 +615,7 @@ case $MODE in
     check_release
     check_resources
     export_release
-    check_workos_issuer
+    ok "native authentication: no external identity-provider discovery"
     check_qr_dns
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose

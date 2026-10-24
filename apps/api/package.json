@@ -14,7 +14,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
-    "identity:bootstrap-admin": "node dist/identity/bootstrap-admin.js"
+    "identity:bootstrap-admin": "node dist/identity/bootstrap-admin.js",
+    "identity:activate-bootstrap": "node dist/identity/native-invite-bootstrap.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1152.0",
@@ -22,11 +23,13 @@
     "@nestjs/common": "^12.1.2",
     "@nestjs/core": "^12.1.2",
     "@nestjs/platform-express": "^12.1.2",
+    "@node-rs/argon2": "2.2.2",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@smithy/node-http-handler": "4.12.1",
     "ioredis": "^6.0.0",
-    "jose": "6.2.12",
+    "nodemailer": "10.1.2",
+    "otpauth": "9.5.2",
     "pdf-lib": "1.17.1",
     "pdfkit": "0.20.2",
     "qrcode": "1.5.4",
@@ -43,6 +46,7 @@
     "@nestjs/testing": "^12.1.2",
     "@swc/core": "^1.16.13",
     "@types/node": "^24.0.0",
+    "@types/nodemailer": "8.0.2",
     "@types/pdfkit": "0.17.6",
     "@types/qrcode": "1.5.6",
     "@types/supertest": "^7.2.1",

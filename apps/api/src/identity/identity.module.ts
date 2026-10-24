@@ -17,7 +17,15 @@ import { SessionsService } from './sessions.service.js';
 import { TestIdentityProvider } from './test.provider.js';
 import { UsersController } from './users.controller.js';
 import { UsersService } from './users.service.js';
-import { WorkOsIdentityProvider } from './workos.provider.js';
+import { LocalInvitationsProvider } from './local-invitations.provider.js';
+import { NativeAuthController } from './native-auth.controller.js';
+import { NativeAuthService } from './native-auth.service.js';
+import { NativePasswords, NativeSecretBox } from './native-credentials.js';
+import {
+  NATIVE_PASSWORDS,
+  NATIVE_SECRET_BOX,
+  NativeTokensService,
+} from './native-tokens.service.js';
 
 /**
  * identity module (Milestone 2C, ADR 0022, doc 021): external OIDC sign-in behind a provider
@@ -26,7 +34,7 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
  */
 @Module({
   imports: [InventoryModule, SitesModule],
-  controllers: [AuthController, UsersController, RolesController],
+  controllers: [AuthController, NativeAuthController, UsersController, RolesController],
   providers: [
     AccessService,
     RolesService,
@@ -36,18 +44,20 @@ import { WorkOsIdentityProvider } from './workos.provider.js';
     AuthService,
     AuthRateLimitService,
     UsersService,
+    NativeAuthService,
+    NativeTokensService,
+    LocalInvitationsProvider,
+    { provide: NATIVE_PASSWORDS, useFactory: () => new NativePasswords() },
+    {
+      provide: NATIVE_SECRET_BOX,
+      inject: [ENV],
+      useFactory: (env: Env) => new NativeSecretBox(env.AUTH_ENCRYPTION_KEY),
+    },
     {
       provide: IDENTITY_PROVIDER,
-      inject: [ENV],
-      useFactory: (env: Env): IdentityProvider =>
-        env.AUTH_PROVIDER === 'test'
-          ? new TestIdentityProvider(env.APP_PUBLIC_ORIGIN)
-          : new WorkOsIdentityProvider({
-              apiKey: env.WORKOS_API_KEY!,
-              clientId: env.WORKOS_CLIENT_ID!,
-              apiBaseUrl: env.WORKOS_API_BASE_URL,
-              issuer: env.WORKOS_JWT_ISSUER!,
-            }),
+      inject: [ENV, LocalInvitationsProvider],
+      useFactory: (env: Env, local: LocalInvitationsProvider): IdentityProvider =>
+        env.AUTH_PROVIDER === 'test' ? new TestIdentityProvider(env.APP_PUBLIC_ORIGIN) : local,
     },
     { provide: APP_GUARD, useClass: AccessGuard },
   ],
