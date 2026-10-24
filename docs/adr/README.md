@@ -58,6 +58,9 @@ Number 0031 is reserved by the pending sales-function change.
 Native authentication for review: [0037 — Native password + TOTP authentication](0037-native-authentication.md)
 (supersedes the provider part of 0022).
 
+Proposed, for review only (owner requirement 2026-10-24): [0038 — Runtime units and fault isolation](0038-runtime-units-and-fault-isolation.md)
+(would amend 0001; nothing implemented).
+
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
 0005, 0006 and 0008 were updated on 2026-10-10 to reflect the owner's
