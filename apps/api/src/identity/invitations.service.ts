@@ -78,7 +78,7 @@ export class InvitationsService {
 
   latest(userId: string) {
     return this.prisma.userInvitation.findFirst({
-      where: { userId },
+      where: { userId, provider: this.provider.name },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   }
@@ -108,7 +108,12 @@ export class InvitationsService {
    * Sends the open invitation's e-mail again; an expired, failed or revoked one is replaced by a
    * new invitation; an invitation still being sent is reconciled with the provider.
    */
-  async resend(actorId: string, userId: string, requestId: string, reason: string): Promise<void> {
+  async resend(
+    actorId: string | null,
+    userId: string,
+    requestId: string,
+    reason: string,
+  ): Promise<void> {
     if (await this.resume(actorId, userId, requestId, 'RESEND', reason)) return;
     let mode: 'new' | 'existing' = 'new';
     const invitationId = await this.start(
@@ -279,7 +284,9 @@ export class InvitationsService {
         if (user.status !== 'ACTIVE') {
           throw domainError(409, 'USER_INACTIVE', 'A deactivated user cannot be invited');
         }
-        const linked = await tx.userIdentity.count({ where: { userId, unlinkedAt: null } });
+        const linked = await tx.userIdentity.count({
+          where: { userId, provider: this.provider.name, unlinkedAt: null },
+        });
         if (linked > 0 && !options.allowLinked) {
           throw domainError(409, 'ALREADY_LINKED', 'The user already signs in');
         }
@@ -288,8 +295,30 @@ export class InvitationsService {
           where: { userId, state: 'PENDING', expiresAt: { lte: new Date() } },
           data: { state: 'EXPIRED' },
         });
+        const retired = await tx.userInvitation.findMany({
+          where: {
+            userId,
+            provider: { not: this.provider.name },
+            state: { in: ['SENDING', 'PENDING'] },
+          },
+        });
+        for (const old of retired) {
+          await tx.userInvitation.update({
+            where: { id: old.id },
+            data: { state: 'REVOKED', revokedAt: new Date(), revokedBy: actorId },
+          });
+          await this.audit.record(
+            {
+              type: 'INVITATION_REVOKED',
+              actorUserId: actorId,
+              targetUserId: userId,
+              reason: 'Authentication provider replaced; old local invitation retired',
+            },
+            tx,
+          );
+        }
         const latest = await tx.userInvitation.findFirst({
-          where: { userId },
+          where: { userId, provider: this.provider.name },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         });
         const decision = decide(latest);
@@ -380,7 +409,7 @@ export class InvitationsService {
     const outcome = await this.prisma.$transaction(async (tx) => {
       const current = await this.lockInvitation(tx, invitationId);
       const linked = await tx.userIdentity.count({
-        where: { userId: invitation.userId, unlinkedAt: null },
+        where: { userId: invitation.userId, provider: this.provider.name, unlinkedAt: null },
       });
       if (current.state === 'ACCEPTED' || linked > 0) {
         return this.finish(
@@ -484,7 +513,7 @@ export class InvitationsService {
     const outcome = await this.prisma.$transaction(async (tx) => {
       const current = await this.lockInvitation(tx, invitationId);
       const linked = await tx.userIdentity.count({
-        where: { userId: invitation.userId, unlinkedAt: null },
+        where: { userId: invitation.userId, provider: this.provider.name, unlinkedAt: null },
       });
       if (current.state === 'ACCEPTED' || linked > 0) {
         return this.finish(

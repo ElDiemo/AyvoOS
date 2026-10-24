@@ -4,10 +4,11 @@ import { labelQrSettings, loadEnv } from './env.js';
 const valid = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/ayvo_test',
   REDIS_URL: 'redis://localhost:6379',
-  // Obviously fake identity-provider settings (development requires the real provider).
-  WORKOS_API_KEY: 'sk_test_not_a_real_key',
-  WORKOS_CLIENT_ID: 'client_not_a_real_id',
-  WORKOS_JWT_ISSUER: 'https://auth.workos.example',
+  AUTH_ENCRYPTION_KEY: '5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28', // synthetic test value
+  AUTH_SMTP_HOST: 'smtp.example.test',
+  AUTH_SMTP_USER: 'synthetic-smtp-user',
+  AUTH_SMTP_PASSWORD: 'synthetic-smtp-password',
+  AUTH_MAIL_FROM: 'noreply@ayvo.test',
 };
 
 /** A production configuration that is complete except for what a test leaves out. */
@@ -188,9 +189,9 @@ describe('loadEnv', () => {
   });
 
   describe('identity and access (ADR 0022)', () => {
-    it('uses the real provider outside tests and the fake provider only in tests', () => {
+    it('uses native authentication outside tests and a fixture provider only in tests', () => {
       expect(loadEnv(valid)).toMatchObject({
-        AUTH_PROVIDER: 'workos',
+        AUTH_PROVIDER: 'local',
         APP_PUBLIC_ORIGIN: 'http://localhost:3000',
       });
       expect(
@@ -228,16 +229,19 @@ describe('loadEnv', () => {
       expect(() => loadEnv({ ...production, AUTH_PROVIDER: 'test' })).toThrow(/AUTH_PROVIDER=test/);
     });
 
-    it('refuses to start without WorkOS credentials, and never echoes secret values', () => {
+    it('refuses to start without a native key, and never echoes secret values', () => {
       const withoutKey: Record<string, string> = { ...valid };
-      delete withoutKey.WORKOS_API_KEY;
-      expect(() => loadEnv(withoutKey)).toThrow(
-        /WORKOS_API_KEY, WORKOS_CLIENT_ID and WORKOS_JWT_ISSUER/,
-      );
+      delete withoutKey.AUTH_ENCRYPTION_KEY;
+      expect(() => loadEnv(withoutKey)).toThrow(/AUTH_ENCRYPTION_KEY/);
+      // The automated-test default and typed patterns are refused outside tests.
+      for (const weak of ['11'.repeat(32), '22'.repeat(32), '0123'.repeat(16), 'ab'.repeat(32)]) {
+        expect(() => loadEnv({ ...valid, AUTH_ENCRYPTION_KEY: weak })).toThrow(/randomly/);
+        expect(() => loadEnv({ ...production, AUTH_ENCRYPTION_KEY: weak })).toThrow(/randomly/);
+      }
       const secret = 'fake_secret_value_must_never_be_printed';
       let message = '';
       try {
-        loadEnv({ ...valid, WORKOS_API_KEY: secret, SESSION_IDLE_MINUTES: '1' });
+        loadEnv({ ...valid, AUTH_SMTP_PASSWORD: secret, SESSION_IDLE_MINUTES: '1' });
       } catch (error) {
         message = (error as Error).message;
       }
@@ -245,16 +249,32 @@ describe('loadEnv', () => {
       expect(message).not.toContain(secret);
     });
 
-    it('refuses development and production without the exact WorkOS token issuer', () => {
+    it('requires approved SMTP configuration and refuses memory delivery outside tests', () => {
       for (const base of [valid, production]) {
-        const withoutIssuer: Record<string, string> = { ...base };
-        delete withoutIssuer.WORKOS_JWT_ISSUER;
-        expect(() => loadEnv(withoutIssuer)).toThrow(/WORKOS_JWT_ISSUER/);
-        expect(() => loadEnv({ ...base, WORKOS_JWT_ISSUER: '' })).toThrow(/WORKOS_JWT_ISSUER/);
-        expect(() => loadEnv({ ...base, WORKOS_JWT_ISSUER: 'http://auth.example' })).toThrow(
-          /WORKOS_JWT_ISSUER/,
-        );
+        expect(() => loadEnv({ ...base, AUTH_SMTP_HOST: '' })).toThrow(/SMTP/);
+        expect(() => loadEnv({ ...base, AUTH_MAIL_DRIVER: 'memory' })).toThrow(/Memory mail/);
+        expect(() => loadEnv({ ...base, AUTH_SMTP_PORT: '25' })).toThrow(/AUTH_SMTP_PORT/);
+        expect(() => loadEnv({ ...base, AUTH_PROVIDER: 'workos' })).toThrow(/AUTH_PROVIDER/);
       }
+    });
+
+    it('google-relay is explicit, credential-free, needs the sender and refuses mixed settings', () => {
+      const relay: Record<string, string> = {
+        ...valid,
+        AUTH_MAIL_DRIVER: 'google-relay',
+        AUTH_SMTP_HOST: '',
+        AUTH_SMTP_USER: '',
+        AUTH_SMTP_PASSWORD: '',
+      };
+      // The same rules on DEV and production: nothing in the mail mode depends on APP_ENV.
+      expect(loadEnv(relay).AUTH_MAIL_DRIVER).toBe('google-relay');
+      expect(() => loadEnv({ ...relay, AUTH_MAIL_FROM: '' })).toThrow(/AUTH_MAIL_FROM/);
+      for (const extra of ['AUTH_SMTP_HOST', 'AUTH_SMTP_USER', 'AUTH_SMTP_PASSWORD'])
+        expect(() => loadEnv({ ...relay, [extra]: 'x' })).toThrow(/without credentials/);
+      // Never implied: without the explicit driver, missing credentials stay an error.
+      const implicit = { ...relay };
+      delete implicit.AUTH_MAIL_DRIVER;
+      expect(() => loadEnv(implicit)).toThrow(/SMTP host, credentials/);
     });
 
     it('requires APP_PUBLIC_ORIGIN in production and a sane session lifetime', () => {
@@ -263,9 +283,11 @@ describe('loadEnv', () => {
       expect(() =>
         loadEnv({
           ...noOrigin,
-          WORKOS_API_KEY: valid.WORKOS_API_KEY,
-          WORKOS_CLIENT_ID: valid.WORKOS_CLIENT_ID,
-          WORKOS_JWT_ISSUER: valid.WORKOS_JWT_ISSUER,
+          AUTH_ENCRYPTION_KEY: valid.AUTH_ENCRYPTION_KEY,
+          AUTH_SMTP_HOST: valid.AUTH_SMTP_HOST,
+          AUTH_SMTP_USER: valid.AUTH_SMTP_USER,
+          AUTH_SMTP_PASSWORD: valid.AUTH_SMTP_PASSWORD,
+          AUTH_MAIL_FROM: valid.AUTH_MAIL_FROM,
         }),
       ).toThrow(/APP_PUBLIC_ORIGIN/);
       expect(() =>

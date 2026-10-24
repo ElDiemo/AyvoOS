@@ -8,7 +8,8 @@ import {
   type RoleCode,
   type UpdateUserAccessRequest,
 } from '@ayvo/types';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ENV, type Env } from '../config/env.js';
 import { AuditService } from '../audit/audit.service.js';
 import { domainError, idempotencyConflict } from '../common/domain-error.js';
 import { canonicalJson } from '../database/operation-requests.service.js';
@@ -46,6 +47,7 @@ export class UsersService {
     private readonly sites: SitesService,
     private readonly access: AccessService,
     private readonly invitations: InvitationsService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async warehouses() {
@@ -76,8 +78,18 @@ export class UsersService {
           select: { role: { select: { code: true, name: true } } },
           orderBy: { roleCode: 'asc' },
         },
-        identities: { where: { unlinkedAt: null }, select: { id: true } },
-        invitations: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 },
+        identities: {
+          where: {
+            provider: this.env.AUTH_PROVIDER === 'test' ? 'TEST' : 'LOCAL',
+            unlinkedAt: null,
+          },
+          select: { id: true },
+        },
+        invitations: {
+          where: { provider: this.env.AUTH_PROVIDER === 'test' ? 'TEST' : 'LOCAL' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+        },
       },
       orderBy: [{ status: 'asc' }, { email: 'asc' }],
     });
@@ -96,8 +108,18 @@ export class UsersService {
           },
           orderBy: { roleCode: 'asc' },
         },
-        identities: { where: { unlinkedAt: null }, select: { id: true } },
-        invitations: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 },
+        identities: {
+          where: {
+            provider: this.env.AUTH_PROVIDER === 'test' ? 'TEST' : 'LOCAL',
+            unlinkedAt: null,
+          },
+          select: { id: true },
+        },
+        invitations: {
+          where: { provider: this.env.AUTH_PROVIDER === 'test' ? 'TEST' : 'LOCAL' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+        },
       },
     });
     if (!user) throw notFound();

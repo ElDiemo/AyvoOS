@@ -55,6 +55,9 @@ Status values: `Proposed`, `Accepted`, `Rejected`, `Deprecated`,
 Production storage implementation for review: [0032 — Private AWS S3 file storage](0032-production-private-s3-storage.md).
 Number 0031 is reserved by the pending sales-function change.
 
+Native authentication for review: [0037 — Native password + TOTP authentication](0037-native-authentication.md)
+(supersedes the provider part of 0022).
+
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
 0005, 0006 and 0008 were updated on 2026-10-10 to reflect the owner's

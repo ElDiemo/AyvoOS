@@ -117,12 +117,14 @@ export function AppShell({
           </nav>
           <SiteSwitcher user={user} className="shrink-0" />
           <EnvironmentBadge environment={environment} withLabel />
-          <span
+          <Link
+            href="/account/security"
+            title="Zabezpečení účtu"
             className="hidden max-w-48 truncate text-sm text-stone-600 md:inline"
             data-testid="current-user"
           >
             {user.user.displayName}
-          </span>
+          </Link>
           <LogoutButton className="hidden md:inline-flex" />
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -200,6 +202,9 @@ function SidebarContent({
         <p className="mt-1 truncate text-sm text-white">{user.user.displayName}</p>
         <p className="truncate text-xs text-stone-400">{user.user.email}</p>
         <p className="mt-1 text-xs text-stone-400">{user.roles.map((r) => r.name).join(', ')}</p>
+        <Link href="/account/security" className="mt-3 block text-xs text-stone-300 underline">
+          Zabezpečení účtu
+        </Link>
         <LogoutButton className="mt-3 w-full border-white/20 bg-transparent text-stone-200 hover:bg-white/10" />
       </div>
     </>

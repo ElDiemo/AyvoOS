@@ -162,6 +162,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   operational records belong to a site; codes stay globally unique; timestamps UTC, shown in the
   site's time zone. Hotel fulfilment site and per-site carriers: rules in doc 022 §7–§8 (not
   implemented).
+  **Native authentication (owner 2026-10-23/24, ADR 0037, doc 038 — in review, replaces the
+  WorkOS provider only):** e-mail + password (Argon2id) then TOTP, always both; invitations and
+  resets by one-time e-mailed links; recovery codes; `AUTH_ENCRYPTION_KEY` per environment, never
+  copied; mail only through an explicitly chosen transport (`google-relay` = the approved Google
+  Workspace IPv4 relay without credentials, or `smtp` with user + password; `memory` tests only).
   `AUTH_PROVIDER=test` exists only with `APP_ENV=test`; never add another bypass. The first
   ADMIN is bootstrapped once (`node dist/identity/bootstrap-admin.js`).
 - Bottle **internal ID ≠ public QR identity**. The public QR identity is opaque, practically
