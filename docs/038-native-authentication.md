@@ -24,7 +24,8 @@ Status 2026-10-24: in review, not deployed. Nothing here has been run on DEV or 
 Limits: link tokens 256 bit, links valid as issued (invitation: its expiry; reset: 15 min); a
 setup stage 15 min, a sign-in challenge 5 min, 5 code attempts each; Redis rate limits per IP and
 account fail closed (503). An abandoned activation leaves the invitation used up — the
-administrator sends it again (Správa systému → Uživatelé → user → „Poslat pozvánku znovu“).
+administrator sends it again (Správa systému → Uživatelé → user → „Poslat pozvánku znovu“); for
+the bootstrap administrator, who has no administrator yet, the operator uses §4 with `--resend`.
 
 ## 2. Configuration (per environment, never copied between DEV and PROD)
 
@@ -75,14 +76,25 @@ delivery to the mailbox — the recipient confirms that. SMTP errors are logged 
 The bootstrap ADMIN (doc 021 §8) exists already on DEV and PROD. After the release with native
 authentication runs and mail is configured:
 
-- DEV: `docker exec ayvo-dev-preview-api-1 node dist/identity/native-invite-bootstrap.js --email <bootstrap e-mail>`
-- PROD: `sudo scripts/deploy-prod.sh --activate-bootstrap --email <bootstrap e-mail>`
+- DEV: `docker exec ayvo-dev-preview-api-1 node dist/identity/native-invite-bootstrap.js --email <bootstrap e-mail> [--resend]`
+- PROD: `sudo scripts/deploy-prod.sh --activate-bootstrap --email <bootstrap e-mail> [--resend]`
 
 The command refuses every other address, an inactive user, a user without an active ADMIN grant
-and an already activated user; it creates nothing and changes no role. Exit 0 = accepted by the
-mail server, exit 1 = still queued (the running API retries). The administrator then invites
-everyone else through the normal user administration. Existing users activate natively once;
-nothing is exported from WorkOS.
+and an already activated user; it creates no user, changes no role, resets no MFA and never
+prints a link. It reports the real state:
+
+| Exit | Meaning                                                                                                                            | Next                                    |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 0    | accepted by the mail server now (not yet proof of delivery to the mailbox)                                                         | the person opens the e-mail             |
+| 0    | nothing sent: an earlier link was accepted and is still unused and valid                                                           | wait, or `--resend` if it never arrived |
+| 1    | refused (message says why), or queued and not accepted yet (the running API retries)                                               | fix mail / input                        |
+| 2    | the link was already opened and the setup not finished (abandoned, expired stage, lost browser), or all 5 delivery attempts failed | `--resend`                              |
+
+`--resend` sends a NEW link by e-mail through the ordinary invitation resend: the token is
+rotated, so the old link and any setup started with it stop working; the person starts the
+activation again (password, new authenticator). A plain repeat without `--resend` never changes
+anything. The administrator then invites everyone else through the normal user administration.
+Existing users activate natively once; nothing is exported from WorkOS.
 
 ## 5. Order of switching
 
@@ -91,6 +103,12 @@ nothing is exported from WorkOS.
 2. Owner on DEV: activation, sign-in, sign-out, recovery code, password reset.
 3. The same commit on PROD (own key, own mail sender check), then §4 on PROD.
 4. Only after PROD acceptance: remove WorkOS secrets/configuration (do not revoke earlier).
+
+**Sessions during the switch.** Deploying native authentication does not end existing AYVO
+sessions: a session created earlier through WorkOS stays valid until its idle (120 min) or
+absolute (12 h) limit, or until the user is deactivated; a native activation ends only the
+activating user's own sessions. Nobody can start a new WorkOS sign-in after the switch. This is
+intended (no forced sign-out); deactivate a user to end their access at once.
 
 ## 6. Rollback (application only — never a database restore)
 

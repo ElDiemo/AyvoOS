@@ -13,10 +13,11 @@
 #                                                         (no build, no migration; doc 036 §7)
 #   scripts/deploy-prod.sh --bootstrap-admin --email <e-mail> --name "<name>"
 #                                                         the one-time first administrator (doc 021 §8)
-#   scripts/deploy-prod.sh --activate-bootstrap --email <e-mail>
+#   scripts/deploy-prod.sh --activate-bootstrap --email <e-mail> [--resend]
 #                                                         e-mail the native activation link to that
 #                                                         existing, not yet activated bootstrap ADMIN
-#                                                         (doc 038 §4; nobody else, nothing created)
+#                                                         (doc 038 §4; nobody else, nothing created);
+#                                                         --resend: a new link, the old one stops
 #
 # <commit> is a full 40-character commit that is already on origin/main (merged = approved). The
 # images are built from a clean `git archive` of exactly that commit — never from a working copy.
@@ -73,6 +74,7 @@ RELEASE=""
 ROLLBACK=""
 ADMIN_EMAIL=""
 ADMIN_NAME=""
+RESEND=""
 STEP="start"
 BACKUP_FILE=""
 MIGRATED=false
@@ -592,6 +594,7 @@ while (($#)); do
       ;;
     --bootstrap-admin) MODE=bootstrap ;;
     --activate-bootstrap) MODE=activate ;;
+    --resend) RESEND=--resend ;;
     --email)
       ADMIN_EMAIL=${2:-}
       shift
@@ -699,9 +702,10 @@ case $MODE in
     [[ -n $PREVIOUS ]] || die "production is not running: deploy a release first"
     AYVO_RELEASE=$PREVIOUS
     log "$STEP: $ADMIN_EMAIL (no link, password or MFA secret is printed)"
-    # Exit 1 = queued but not accepted by the mail server yet; the running API retries.
-    compose run --rm --no-deps api node dist/identity/native-invite-bootstrap.js --email "$ADMIN_EMAIL" ||
-      die "the activation e-mail was refused or not delivered (see the message above)"
-    ok "activation e-mail accepted by the mail server; delivery to the mailbox is confirmed by the person"
+    # Exit 1 = refused or still queued; 2 = the link was opened or its delivery is exhausted
+    # (then --resend). The command's own message says which; nothing secret is printed.
+    compose run --rm --no-deps api node dist/identity/native-invite-bootstrap.js --email "$ADMIN_EMAIL" ${RESEND:+"$RESEND"} ||
+      die "no new activation e-mail was accepted (see the message above)"
+    ok "see the message above; delivery to the mailbox is confirmed by the person"
     ;;
 esac

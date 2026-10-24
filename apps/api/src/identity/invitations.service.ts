@@ -108,7 +108,12 @@ export class InvitationsService {
    * Sends the open invitation's e-mail again; an expired, failed or revoked one is replaced by a
    * new invitation; an invitation still being sent is reconciled with the provider.
    */
-  async resend(actorId: string, userId: string, requestId: string, reason: string): Promise<void> {
+  async resend(
+    actorId: string | null,
+    userId: string,
+    requestId: string,
+    reason: string,
+  ): Promise<void> {
     if (await this.resume(actorId, userId, requestId, 'RESEND', reason)) return;
     let mode: 'new' | 'existing' = 'new';
     const invitationId = await this.start(
