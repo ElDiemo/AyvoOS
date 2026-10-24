@@ -534,7 +534,7 @@ describe('production deploy script', () => {
     expect(Object.keys(on.services.caddy.networks).sort()).toEqual(['acme', 'edge']);
     // No new published port: qr-edge keeps only public :443, caddy its tailnet/ACME ports.
     const ports = (cfg: { services: Record<string, { ports?: unknown[] }> }, s: string) =>
-      JSON.stringify(cfg.services[s].ports ?? []);
+      JSON.stringify(cfg.services[s]?.ports ?? []);
     expect(ports(on, 'qr-edge')).toBe(ports(off, 'qr-edge'));
     expect(ports(on, 'caddy')).toBe(ports(off, 'caddy'));
     expect(on.services['qr-edge'].command).toEqual([
