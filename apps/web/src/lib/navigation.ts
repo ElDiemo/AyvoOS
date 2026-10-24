@@ -103,6 +103,12 @@ export const MODULES: readonly NavModule[] = [
         label: f.pages.documents,
         permission: 'finance:documents_read',
       },
+      {
+        id: 'exports',
+        href: '/finance/exports',
+        label: f.pages.exports,
+        permission: 'finance:documents_read',
+      },
     ],
   },
   {

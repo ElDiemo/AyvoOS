@@ -63,10 +63,34 @@ Finance → Přijaté doklady (`/finance/documents`): receive (file + metadata),
 table (desktop) / cards (phone); detail with the original's download, history, correction and
 voiding with a reason. Screenshots: `docs/screenshots/finance/`.
 
+## 7. Export for the accountant (N2) — `accounting_exports`, `accounting_export_items`
+
+A fixed package for a period of **issue dates** (≤ 366 days): ZIP with `manifest.csv` (UTF-8 with
+BOM, `;`, CRLF; CSV-injection protected), `README.txt` and `doklady/<code>-<name>` — the unchanged
+originals (SHA-256 re-checked while packing). Built without a new dependency (`finance/zip.ts`,
+STORE). Stored in `FileStorage` (`accounting-exports`) and downloadable again unchanged.
+
+- **FULL** — every valid document of the period; each line says `NEW` (first handed over),
+  `CHANGED` (metadata changed since handed over), `INCLUDED` (already handed over, unchanged);
+  voided documents that were handed over before are listed once as `VOIDED` (without the file).
+- **SUPPLEMENT** — only `NEW`, `CHANGED` and `VOIDED` since the earlier exports.
+- Each export records the exact **document version** handed over (FK to that version's event);
+  the export shows its lines with the metadata of that version, and separately what in its period
+  changed afterwards ("Změněno po exportu"). Records are append-only (DB triggers).
+- Bounds: ≤ 1000 documents and ≤ 200 MiB per export (else 422; preview says so). Creation is
+  serialised (advisory lock) and idempotent per `requestId`. Preview writes nothing.
+- Permission `finance:exports_manage` (create, ADMIN only); history and downloads need
+  `finance:documents_read`.
+
+API: `GET /finance/exports`, `GET /finance/exports/preview?periodFrom&periodTo&mode`,
+`POST /finance/exports`, `GET /finance/exports/:code`, `GET /finance/exports/:code/content` (ZIP).
+UI: Finance → Export pro účetní.
+
 ## 6. Open questions for the owner (not assumed)
 
 1. Should FINANCE (planned role) get these permissions when it becomes assignable, and who else?
-2. Which date decides the accounting period — issue date (implemented for N2) or DUZP?
+2. Which date decides the accounting period — issue date (implemented for N2) or DUZP? Should an
+   export be marked as received by the accountant, or sent to them (it is only downloaded now)?
 3. Other file types (ISDOC/XML, e-mails)? Only PDF/JPEG/PNG now.
 4. May Finance create suppliers itself (landlord, accountant)? Now only via Sklad → Dodavatelé.
 5. ADR 0038 (runtime units, proposed): Finance is implemented as its own module with its own

@@ -27,7 +27,7 @@ export const shellCs = {
     finance: {
       label: 'Finance',
       description: 'Přijaté doklady: originály, údaje pro účetní a jejich historie.',
-      pages: { documents: 'Přijaté doklady' },
+      pages: { documents: 'Přijaté doklady', exports: 'Export pro účetní' },
     },
     sales: {
       label: 'Obchod',

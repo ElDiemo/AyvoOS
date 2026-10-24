@@ -104,6 +104,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   design subject to review): `finance_documents` (immutable original, versioned metadata, voided
   never deleted) and append-only `finance_document_events`; `finance:documents_read|manage` for
   ADMIN only; suppliers only through ProcurementService. No VAT logic, posting or payments.
+  Accountant export (N2, doc 039 §7): append-only `accounting_exports` + `accounting_export_items`
+  (exact document version handed over), ZIP + CSV manifest, FULL / SUPPLEMENT;
+  `finance:exports_manage` for ADMIN only.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;

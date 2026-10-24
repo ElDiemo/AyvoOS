@@ -292,7 +292,7 @@ describe.skipIf(!hasDatabase)('finance received documents', () => {
 
   it('ADMIN holds both permissions; a user without them gets 403 on every route', async () => {
     const grants = await t.prisma.rolePermission.findMany({
-      where: { permissionCode: { startsWith: 'finance:' } },
+      where: { permissionCode: { startsWith: 'finance:documents' } },
       select: { roleCode: true, permissionCode: true },
       orderBy: { permissionCode: 'asc' },
     });
