@@ -128,6 +128,7 @@ export const PERMISSION_MODULES = [
   'carriers',
   'printing',
   'sales',
+  'finance',
 ] as const;
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 export const permissionModule = (code: PermissionCode): PermissionModule =>
