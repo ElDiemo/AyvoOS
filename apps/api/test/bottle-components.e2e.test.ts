@@ -89,9 +89,13 @@ describe.skipIf(!hasDatabase)('bottle components (database invariants)', () => {
     const event = await t.prisma.bottleEvent.findFirstOrThrow({
       where: { bottleId: applied.id, type: 'LABEL_APPLIED' },
     });
+    // A label application also consumes components without lot tracking (lot NULL): pick one
+    // movement deterministically and write its lot as SQL NULL, never the string 'null'.
     const movement = await t.prisma.inventoryMovement.findFirstOrThrow({
       where: { bottleEventId: event.id },
+      orderBy: { id: 'asc' },
     });
+    const lot = movement.lotId === null ? 'NULL' : `'${movement.lotId}'`;
     await expect(
       inTransaction([
         `INSERT INTO bom_versions (id, code, version, stage, valid_from)
@@ -101,7 +105,7 @@ describe.skipIf(!hasDatabase)('bottle components (database invariants)', () => {
                    '${movement.itemId}', '${movement.unitId}', 1)`,
         `INSERT INTO inventory_movements
            (item_id, unit_id, location_id, lot_id, quantity_delta, type, bottle_event_id, bom_line_id, occurred_at)
-           VALUES ('${movement.itemId}', '${movement.unitId}', '${movement.locationId}', '${movement.lotId}', -1,
+           VALUES ('${movement.itemId}', '${movement.unitId}', '${movement.locationId}', ${lot}, -1,
                    'LABEL_APPLICATION', '${event.id}', '00000000-0000-4000-8000-00000000b003', now())`,
       ]),
     ).rejects.toThrow(/consume exactly one complete label-application BOM/);

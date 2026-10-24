@@ -26,6 +26,12 @@ import {
   NATIVE_SECRET_BOX,
   NativeTokensService,
 } from './native-tokens.service.js';
+import {
+  EmployeeCardsController,
+  PublicEmployeeCardsController,
+} from './employee-cards.controller.js';
+import { EmployeeCardsService } from './employee-cards.service.js';
+import { EmployeeCardRateLimit } from './employee-card-rate-limit.service.js';
 
 /**
  * identity module (Milestone 2C, ADR 0022, doc 021): external OIDC sign-in behind a provider
@@ -34,7 +40,14 @@ import {
  */
 @Module({
   imports: [InventoryModule, SitesModule],
-  controllers: [AuthController, NativeAuthController, UsersController, RolesController],
+  controllers: [
+    AuthController,
+    NativeAuthController,
+    UsersController,
+    RolesController,
+    EmployeeCardsController,
+    PublicEmployeeCardsController,
+  ],
   providers: [
     AccessService,
     RolesService,
@@ -53,6 +66,8 @@ import {
       inject: [ENV],
       useFactory: (env: Env) => new NativeSecretBox(env.AUTH_ENCRYPTION_KEY),
     },
+    EmployeeCardsService,
+    EmployeeCardRateLimit,
     {
       provide: IDENTITY_PROVIDER,
       inject: [ENV, LocalInvitationsProvider],

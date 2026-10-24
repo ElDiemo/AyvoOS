@@ -172,7 +172,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
   });
   afterAll(() => t?.close());
 
-  it('every route declares its access rule; only the passport, health and sign-in are public', async () => {
+  it('every route declares its access rule; only passports, published cards, health and sign-in are public', async () => {
     const routes: { route: string; method: string; rule?: AccessRule }[] = [];
     for (const module of t.app.get(ModulesContainer).values()) {
       for (const wrapper of module.controllers.values()) {
@@ -212,6 +212,10 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/public/bottles/:token',
       // Only "an AYVO returnable crate" (doc 020 §3.4, doc 025 A1).
       'GET /api/public/crates/:token',
+      // Only deliberately published employee data, photo and contact (ADR 0036).
+      'GET /api/public/employee-cards/:slug',
+      'GET /api/public/employee-cards/:slug/contact.vcf',
+      'GET /api/public/employee-cards/:slug/photo',
       // Only "an internal AYVO mark" (doc 026).
       'GET /api/public/workstations/:token',
       'POST /api/auth/native/activate',
