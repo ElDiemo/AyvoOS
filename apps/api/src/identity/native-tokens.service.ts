@@ -56,9 +56,9 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     if (this.env.APP_ENV !== 'test') {
       this.timer = setInterval(() => {
-        void this.deliverPending().catch(() =>
-          this.logger.warn('Authentication mail queue unavailable'),
-        );
+        void this.deliverPending()
+          .then(() => this.purgeExpired())
+          .catch(() => this.logger.warn('Authentication mail queue unavailable'));
       }, 5000);
       this.timer.unref();
     }
@@ -125,6 +125,25 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
     return this.testMail;
   }
 
+  /**
+   * Encrypted one-time material never outlives its purpose: a finished, revoked or expired link
+   * loses its mail copy, and an expired setup stage is closed together with its password hash and
+   * new MFA seed (the database keeps that material only on open stages).
+   */
+  async purgeExpired(now = new Date()): Promise<void> {
+    await this.prisma.nativeAuthToken.updateMany({
+      where: {
+        deliveryCiphertext: { not: null },
+        OR: [{ expiresAt: { lte: now } }, { usedAt: { not: null } }, { revokedAt: { not: null } }],
+      },
+      data: { deliveryCiphertext: null },
+    });
+    await this.prisma.nativeAuthChallenge.updateMany({
+      where: { usedAt: null, expiresAt: { lte: now } },
+      data: { usedAt: now, passwordHash: null, totpCiphertext: null },
+    });
+  }
+
   async deliverPending(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -181,7 +200,8 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
           }
           await this.prisma.nativeAuthToken.updateMany({
             where: { id: row.id, revision: row.revision },
-            data: { sentAt: new Date(), deliveryLeaseUntil: null },
+            // The sent link exists only in the mailbox now; a resend issues a new one.
+            data: { sentAt: new Date(), deliveryLeaseUntil: null, deliveryCiphertext: null },
           });
         } catch {
           // Do not log SMTP errors: a provider may echo addresses, authentication or message body.

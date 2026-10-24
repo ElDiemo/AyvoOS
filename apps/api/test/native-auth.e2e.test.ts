@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import request, { type Response } from 'supertest';
 import { Secret, TOTP } from 'otpauth';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AuthRateLimitService } from '../src/identity/auth-rate-limit.service.js';
 import { InvitationsService } from '../src/identity/invitations.service.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
 import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
@@ -276,6 +277,67 @@ describe.skipIf(!hasDatabase)('native authentication through HTTP, PostgreSQL an
       (await t.prisma.nativeCredential.findUniqueOrThrow({ where: { userId: item.user.id } }))
         .mfaRevision,
     ).toBe(1);
+    // One request, one entry of the new password: the audit does not report a second request.
+    const audit = await t.prisma.auditEvent.findMany({
+      where: { targetUserId: item.user.id, type: { startsWith: 'PASSWORD_RESET' } },
+      select: { type: true },
+    });
+    expect(audit.map((a) => a.type).sort()).toEqual([
+      'PASSWORD_RESET_COMPLETED',
+      'PASSWORD_RESET_REQUESTED',
+      'PASSWORD_RESET_STARTED',
+    ]);
+  });
+
+  it('keeps no encrypted link after delivery and purges expired one-time material', async () => {
+    const item = await prepared();
+    const sent = await t.prisma.nativeAuthToken.findFirstOrThrow({
+      where: { userId: item.user.id, purpose: 'ENROLL' },
+    });
+    expect(sent.sentAt).not.toBeNull();
+    expect(sent.deliveryCiphertext).toBeNull();
+    // The open setup stage holds the chosen password hash and new MFA seed until it expires.
+    const stage = await t.prisma.nativeAuthChallenge.findFirstOrThrow({
+      where: { userId: item.user.id, kind: 'ENROLL' },
+    });
+    expect(stage.passwordHash).not.toBeNull();
+    expect(stage.totpCiphertext).not.toBeNull();
+    // An undelivered link that expires loses its mail copy; the expired stage is closed.
+    const queued = await t.prisma.user.create({
+      data: { email: `native-${randomUUID()}@ayvo.test`, displayName: 'Native Queued' },
+    });
+    await t.app.get(InvitationsService).send(null, queued.id, randomUUID(), 'Synthetic queued');
+    const waiting = await t.prisma.nativeAuthToken.findFirstOrThrow({
+      where: { userId: queued.id, purpose: 'ENROLL' },
+    });
+    expect(waiting.deliveryCiphertext).not.toBeNull();
+    const tokens = t.app.get(NativeTokensService);
+    await tokens.purgeExpired(new Date(Date.now() + 60_000));
+    expect(
+      (await t.prisma.nativeAuthChallenge.findUniqueOrThrow({ where: { id: stage.id } })).usedAt,
+    ).toBeNull();
+    await tokens.purgeExpired(new Date(waiting.expiresAt.getTime() + 1));
+    expect(
+      (await t.prisma.nativeAuthToken.findUniqueOrThrow({ where: { id: waiting.id } }))
+        .deliveryCiphertext,
+    ).toBeNull();
+    const closed = await t.prisma.nativeAuthChallenge.findUniqueOrThrow({ where: { id: stage.id } });
+    expect(closed).toMatchObject({ passwordHash: null, totpCiphertext: null });
+    expect(closed.usedAt).not.toBeNull();
+    await post('mfa')
+      .set('Cookie', item.pending)
+      .send({ code: otp(item.secret) })
+      .expect(401);
+  });
+
+  it('does not count an unknown or missing challenge against a shared account bucket', async () => {
+    const hit = vi.spyOn(t.app.get(AuthRateLimitService), 'hit');
+    await post('mfa').send({ code: '123456' }).expect(401);
+    await post('mfa')
+      .set('Cookie', `ayvo_auth=${'A'.repeat(43)}`)
+      .send({ code: '123456' })
+      .expect(401);
+    expect(hit.mock.calls.map(([bucket]) => bucket)).toEqual(['login', 'login']);
   });
 
   it('atomically consumes a recovery code even across independent concurrent login challenges', async () => {

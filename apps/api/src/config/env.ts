@@ -268,6 +268,10 @@ export const envSchema = z
         'AUTH_ENCRYPTION_KEY',
         'A separate 32-byte native authentication key is required',
       );
+    // A generated key (openssl rand -hex 32) has ~16 distinct hex digits; test keys like `11…`
+    // or a typed pattern have few. Only the value's shape is judged, never echoed.
+    if (env.APP_ENV !== 'test' && new Set(env.AUTH_ENCRYPTION_KEY!.toLowerCase()).size < 10)
+      return fail('AUTH_ENCRYPTION_KEY', 'Generate the key randomly (openssl rand -hex 32)');
     if (
       mailDriver === 'smtp' &&
       (!env.AUTH_SMTP_HOST || !env.AUTH_SMTP_USER || !env.AUTH_SMTP_PASSWORD || !env.AUTH_MAIL_FROM)

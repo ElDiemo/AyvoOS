@@ -4,7 +4,7 @@ import { labelQrSettings, loadEnv } from './env.js';
 const valid = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/ayvo_test',
   REDIS_URL: 'redis://localhost:6379',
-  AUTH_ENCRYPTION_KEY: '22'.repeat(32),
+  AUTH_ENCRYPTION_KEY: '5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28', // synthetic test value
   AUTH_SMTP_HOST: 'smtp.example.test',
   AUTH_SMTP_USER: 'synthetic-smtp-user',
   AUTH_SMTP_PASSWORD: 'synthetic-smtp-password',
@@ -233,6 +233,11 @@ describe('loadEnv', () => {
       const withoutKey: Record<string, string> = { ...valid };
       delete withoutKey.AUTH_ENCRYPTION_KEY;
       expect(() => loadEnv(withoutKey)).toThrow(/AUTH_ENCRYPTION_KEY/);
+      // The automated-test default and typed patterns are refused outside tests.
+      for (const weak of ['11'.repeat(32), '22'.repeat(32), '0123'.repeat(16), 'ab'.repeat(32)]) {
+        expect(() => loadEnv({ ...valid, AUTH_ENCRYPTION_KEY: weak })).toThrow(/randomly/);
+        expect(() => loadEnv({ ...production, AUTH_ENCRYPTION_KEY: weak })).toThrow(/randomly/);
+      }
       const secret = 'fake_secret_value_must_never_be_printed';
       let message = '';
       try {

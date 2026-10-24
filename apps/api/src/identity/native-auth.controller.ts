@@ -129,7 +129,7 @@ export class NativeAuthController {
   ) {
     res.setHeader('Cache-Control', 'no-store');
     const token = readCookie(req, CHALLENGE_COOKIE);
-    await this.limit(req, res, await this.auth.challengeAccount(token));
+    await this.limit(req, res, (await this.auth.challengeAccount(token)) ?? undefined);
     const result = await this.auth.complete(token, body.code.trim());
     if (result.kind === 'denied')
       throw domainError(

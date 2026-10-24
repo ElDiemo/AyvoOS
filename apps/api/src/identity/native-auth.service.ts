@@ -207,7 +207,7 @@ export class NativeAuthService implements OnModuleInit {
       });
       await this.audit.record(
         {
-          type: purpose === 'ENROLL' ? 'NATIVE_ACTIVATION_STARTED' : 'PASSWORD_RESET_REQUESTED',
+          type: purpose === 'ENROLL' ? 'NATIVE_ACTIVATION_STARTED' : 'PASSWORD_RESET_STARTED',
           targetUserId: user.id,
         },
         tx,
@@ -217,7 +217,7 @@ export class NativeAuthService implements OnModuleInit {
   }
 
   /** Used only for per-account rate limiting; never sends an identifier to the browser. */
-  async challengeAccount(rawToken: string | null): Promise<string> {
+  async challengeAccount(rawToken: string | null): Promise<string | null> {
     const hash = rawToken && nativeTokenHash('CHALLENGE', rawToken);
     const challenge = hash
       ? await this.prisma.nativeAuthChallenge.findUnique({
@@ -225,7 +225,8 @@ export class NativeAuthService implements OnModuleInit {
           select: { userId: true },
         })
       : null;
-    return challenge?.userId ?? 'unknown';
+    // No shared bucket for unknown challenges: they cannot reach an account, the IP limit applies.
+    return challenge?.userId ?? null;
   }
 
   async complete(rawToken: string | null, code: string): Promise<NativeLoginResult> {

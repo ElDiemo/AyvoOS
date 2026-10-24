@@ -42,9 +42,21 @@ try {
       'Native activation of existing bootstrap administrator',
     );
   await mail.deliverPending();
-  console.log(
-    'Native activation email queued/delivered. No password, MFA secret or activation link is printed. Existing user, ADMIN grant and business data are unchanged.',
-  );
+  // Queued is not delivered: report what the outbox actually recorded, never the link itself.
+  const invitation = await invitations.latest(bootstrap.userId);
+  const token = invitation?.providerInvitationId
+    ? await prisma.nativeAuthToken.findUnique({ where: { id: invitation.providerInvitationId } })
+    : null;
+  if (token?.sentAt) {
+    console.log(
+      `Activation email accepted by the mail server at ${token.sentAt.toISOString()}. No password, MFA secret or link is printed; the user, ADMIN grant and business data are unchanged.`,
+    );
+  } else {
+    console.error(
+      `Activation email NOT delivered yet (attempts: ${token?.deliveryAttempts ?? 0}). It stays queued and the running API retries it; check the SMTP configuration. Nothing else was changed.`,
+    );
+    process.exitCode = 1;
+  }
 } finally {
   mail.onModuleDestroy();
   await prisma.$disconnect();
