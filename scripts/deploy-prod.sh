@@ -400,6 +400,42 @@ wait_healthy() {
   return 1
 }
 
+# The S3 backup tool's state (lock, results, tmp) — owned by the approved owner, like the timer's
+# StateDirectory=ayvo-backup (ops/prod-backup/systemd/ayvo-prod-backup@.service).
+readonly BACKUP_STATE_DIR=/var/lib/ayvo-backup # = ayvo_backup STATE_DIR
+
+# Entries of the backup state that the owner does not own (names only, never contents).
+foreign_backup_state() { find "$BACKUP_STATE_DIR" ! -user "$(owner_uid)" -printf '%P\n' 2>/dev/null | head -n 5; }
+
+# The pre-deploy S3 backup in the context of the scheduled one (User=ayvo, its primary group,
+# SupplementaryGroups=docker, UMask=0077): its credentials stay ayvo:600 and everything it writes
+# stays usable by the timer. A root run was refused by those credentials and left a root-owned
+# result that broke `status` for ayvo (PROD 2026-10-24). docker is given to this one process
+# only (runuser -G), never permanently. Returns the tool's exit code (75 = busy).
+s3_backup_as_owner() {
+  local reason=$1 owner group home rc=0 foreign
+  owner=$DEPLOY_OWNER
+  group="$(id -gn "$owner")" || die "the approved owner $owner has no group"
+  home="$(getent passwd "$owner" | cut -d: -f6)"
+  if [[ ! -d $BACKUP_STATE_DIR ]]; then
+    install -d -o "$owner" -g "$group" -m 0750 "$BACKUP_STATE_DIR" || die "cannot create $BACKUP_STATE_DIR"
+  fi
+  foreign="$(foreign_backup_state)"
+  [[ -z $foreign ]] || die "$BACKUP_STATE_DIR has entries not owned by $owner (${foreign//$'\n'/, }): the backup timer could not use them — inspect and restore their owner, never delete results blindly"
+  # systemd's default PATH, as the timer's service gets it. The reason is an argument of sh, not code.
+  # shellcheck disable=SC2016
+  local cmd=(env -i "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "HOME=$home" "PYTHONPATH=/usr/local/lib/ayvo-backup"
+    PYTHONDONTWRITEBYTECODE=1 sh -c 'umask 077 && exec python3 -m ayvo_backup run --kind daily --reason "$1"' sh "$reason")
+  if [[ $(id -u) == 0 ]]; then
+    runuser -u "$owner" -g "$group" -G docker -- "${cmd[@]}" || rc=$?
+  else
+    "${cmd[@]}" || rc=$? # check_runner: the approved owner itself
+  fi
+  foreign="$(foreign_backup_state)"
+  [[ -z $foreign ]] || die "the backup left entries not owned by $owner in $BACKUP_STATE_DIR (${foreign//$'\n'/, })"
+  return "$rc"
+}
+
 backup_before_migration() {
   STEP="stop the application writers (api, web) for a consistent backup"
   # Nothing may be written after the dump, and the old code must not run against the new schema:
@@ -433,8 +469,7 @@ backup_before_migration() {
     local attempt rc
     for attempt in 1 2 3 4 5; do
       rc=0
-      PYTHONPATH=/usr/local/lib/ayvo-backup PYTHONDONTWRITEBYTECODE=1 \
-        python3 -m ayvo_backup run --kind daily --reason "pre-deploy ${AYVO_RELEASE}" || rc=$?
+      s3_backup_as_owner "pre-deploy ${AYVO_RELEASE}" || rc=$?
       # 75: a scheduled backup is running right now — wait for it, then take our own.
       ((rc == 75)) || break
       warn "a scheduled backup is running; retrying in 60 s ($attempt/5)"
