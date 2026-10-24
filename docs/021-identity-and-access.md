@@ -298,6 +298,11 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | GET    | `/api/admin/finance/documents/:code/content`                      | `finance:documents_read`                    | global                      |
 | POST   | `/api/admin/finance/documents/:code/correct`                      | `finance:documents_manage`                  | global                      |
 | POST   | `/api/admin/finance/documents/:code/void`                         | `finance:documents_manage`                  | global                      |
+| GET    | `/api/admin/finance/exports`                                      | `finance:documents_read`                    | global                      |
+| POST   | `/api/admin/finance/exports`                                      | `finance:exports_manage`                    | global                      |
+| GET    | `/api/admin/finance/exports/:code`                                | `finance:documents_read`                    | global                      |
+| GET    | `/api/admin/finance/exports/:code/content`                        | `finance:documents_read`                    | global                      |
+| GET    | `/api/admin/finance/exports/preview`                              | `finance:exports_manage`                    | global                      |
 | GET    | `/api/admin/finance/suppliers`                                    | `finance:documents_manage`                  | global                      |
 | GET    | `/api/admin/goods-receipts`                                       | `inventory:read`                            | active site + its warehouse |
 | POST   | `/api/admin/goods-receipts`                                       | `inventory:receive`                         | active site + its warehouse |
