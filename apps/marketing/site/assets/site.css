@@ -1,7 +1,7 @@
 /*
  * AYVO marketing site — taken over from the WordPress page's own "ayvo-*" styles (2026-10-25),
  * inline styles turned into classes (strict CSP, no inline styles). No external fonts: system
- * fonts replace Google Fonts (Inter, Montserrat) and the "Fiona" logo face (licence unknown).
+ * fonts replace Google Fonts (Inter, Montserrat); the logo is the owner's wordmark SVG.
  */
 
 :root {
@@ -15,7 +15,6 @@
   --soft: #f6f6f6;
   --sans:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --serif: 'Didot', 'Bodoni 72', 'Bodoni MT', 'Times New Roman', Georgia, serif;
 }
 
 *,
@@ -81,12 +80,19 @@ a {
 /* =========================
    Brand
 ========================= */
-.ayvo-logo {
-  font-family: var(--serif);
-  font-size: 35px;
-  letter-spacing: 0.08em;
-  color: var(--ink);
-  font-weight: 400;
+/* The owner's AYVO wordmark (apps/web/public/brand/ayvo-wordmark.svg), never a font imitation. */
+.ayvo-wordmark {
+  display: block;
+  height: 30px;
+  width: auto;
+}
+
+.ayvo-wordmark-footer {
+  display: inline-block;
+  height: 13px;
+  margin-left: 4px;
+  vertical-align: -1px;
+  opacity: 0.85;
 }
 
 .ayvo-tagline {
@@ -95,21 +101,6 @@ a {
   margin-left: 6px;
   letter-spacing: 0.01em;
   color: var(--muted);
-}
-
-.ayvo-reg {
-  font-size: 20px;
-  position: relative;
-  top: -6px;
-  margin-left: 2px;
-  opacity: 0.6;
-  color: var(--ink);
-}
-
-.ayvo-logo-footer {
-  font-size: 18px;
-  letter-spacing: 0.05em;
-  opacity: 0.85;
 }
 
 /* =========================
@@ -146,7 +137,7 @@ main section[id] {
 .ayvo-brand {
   display: flex;
   gap: 5px;
-  align-items: baseline;
+  align-items: center;
   text-decoration: none;
   min-width: 0;
 }
@@ -478,8 +469,8 @@ main section[id] {
   .ayvo-wrap {
     padding: 0 16px;
   }
-  .ayvo-logo {
-    font-size: 28px;
+  .ayvo-wordmark {
+    height: 24px;
   }
   .ayvo-tagline {
     display: none;

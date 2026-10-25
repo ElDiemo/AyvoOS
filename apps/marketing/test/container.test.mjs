@@ -179,13 +179,42 @@ describe(
       assert.match(body(names.site, '/no-such-page'), /Page not found/);
     });
 
-    it('only GET and HEAD', () => {
-      for (const method of ['POST', 'PUT', 'DELETE']) {
-        const r = ask(names.site, '/', ['-X', method]);
-        assert.equal(r.status, 405, method);
-        assert.equal(r.headers.allow, 'GET, HEAD');
-      }
+    it('only GET and HEAD — also for the health check and the redirects', () => {
+      const paths = [
+        '/',
+        '/healthz',
+        '/en',
+        '/cz',
+        '/wp-content/uploads/2026/01/logoy.png',
+        '/nope',
+      ];
+      for (const path of paths)
+        for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+          const r = ask(names.site, path, ['-X', method]);
+          assert.equal(r.status, 405, `${method} ${path}`);
+          assert.equal(r.headers.allow, 'GET, HEAD');
+        }
       assert.equal(ask(names.site, '/', ['-I']).status, 200);
+      assert.equal(ask(names.site, '/healthz', ['-I']).status, 200);
+      assert.equal(ask(names.site, '/en', ['-I']).status, 301);
+    });
+
+    it('pages and assets are revalidated (no-cache + ETag → 304), never served stale', () => {
+      const paths = [
+        '/',
+        '/cz/',
+        '/assets/site.css',
+        '/assets/site.js',
+        '/assets/img/ayvo-wordmark.svg',
+      ];
+      for (const path of paths) {
+        const r = ask(names.site, path);
+        assert.equal(r.headers['cache-control'], 'no-cache', path);
+        assert.ok(r.headers.etag, path);
+        const again = ask(names.site, path, ['-H', `If-None-Match: ${r.headers.etag}`]);
+        assert.equal(again.status, 304, path);
+      }
+      assert.equal(ask(names.site, '/healthz').headers['cache-control'], 'no-store');
     });
 
     it('security headers on pages and errors; no Server header', () => {

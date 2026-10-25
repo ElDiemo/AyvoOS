@@ -1,7 +1,8 @@
 // Playwright's stop signal does not reliably reach `docker run`: remove the preview container
-// this run started (by its fixed name), whatever happened to the tests.
-import { spawnSync } from 'node:child_process';
+// this run created — and nothing else (e2e/preview-container.mjs checks the owner label).
+import { removeOwn } from './preview-container.mjs';
 
 export default function teardown() {
-  spawnSync('docker', ['rm', '-f', 'ayvo-marketing-e2e'], { stdio: 'ignore' });
+  const run = process.env.AYVO_MARKETING_E2E_RUN;
+  if (run) removeOwn(JSON.parse(run));
 }

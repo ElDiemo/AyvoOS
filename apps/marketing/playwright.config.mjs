@@ -1,9 +1,14 @@
 import { defineConfig, devices } from '@playwright/test';
+import { freePort, newRun, startCommand } from './e2e/preview-container.mjs';
 
-// The real image (Dockerfile + Caddyfile + site/), published on loopback only, as a DEV preview
-// would run it (not indexed). Nothing else is started: the site needs nothing else.
-const PORT = 3300;
-const IMAGE = 'ayvo-marketing-e2e:local';
+// The real image (Dockerfile + Caddyfile + site/), published on a free loopback port only, as a
+// DEV preview would run it (not indexed). Nothing else is started: the site needs nothing else.
+// The container belongs to this run alone (e2e/preview-container.mjs); the run is handed to the
+// workers and the teardown through the environment.
+const run = process.env.AYVO_MARKETING_E2E_RUN
+  ? JSON.parse(process.env.AYVO_MARKETING_E2E_RUN)
+  : newRun(await freePort());
+process.env.AYVO_MARKETING_E2E_RUN = JSON.stringify(run);
 
 export default defineConfig({
   testDir: './e2e',
@@ -12,16 +17,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: 'list',
   timeout: 60_000,
-  use: { baseURL: `http://127.0.0.1:${PORT}` },
+  use: { baseURL: `http://127.0.0.1:${run.port}` },
   globalTeardown: './e2e/teardown.mjs',
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command:
-      `docker build -q -t ${IMAGE} . >/dev/null && exec docker run --rm --name ayvo-marketing-e2e ` +
-      `-p 127.0.0.1:${PORT}:8080 --read-only --tmpfs /tmp:size=8m,mode=1777 --cap-drop ALL ` +
-      `--security-opt no-new-privileges --memory 64m --cpus 0.25 ` +
-      `-e 'AYVO_MARKETING_ROBOTS=noindex, nofollow' ${IMAGE}`,
-    url: `http://127.0.0.1:${PORT}/healthz`,
+    command: startCommand(run, '.'),
+    url: `http://127.0.0.1:${run.port}/healthz`,
     reuseExistingServer: false,
     timeout: 120_000,
   },

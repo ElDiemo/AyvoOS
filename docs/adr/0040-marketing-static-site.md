@@ -22,13 +22,19 @@
    `cap_net_bind_service` file capability is removed — port 8080 needs none),
    `no-new-privileges`, memory 64 MiB / 0.25 CPU / 64 pids in tests (the same limits are
    proposed for DEV/PROD), no mounts, no Docker socket, Caddy admin API off.
-4. **Public contract.** GET/HEAD only (others 405); strict CSP without inline styles or scripts,
+4. **Public contract.** GET/HEAD only — on every path, including `/healthz` and the redirects
+   (the method rule is the first step of one ordered route); others 405. Strict CSP without inline styles or scripts,
    `nosniff`, `DENY` framing, no `Server` header; real 404 page (never the home page with 200);
    exact 301s for the old WordPress addresses (`/en`, `/cz`, `/de`, `/sitemap.html` and the five
    public media files); every other WordPress path is a 404. `X-Robots-Tag` from
    `AYVO_MARKETING_ROBOTS` (DEV preview: `noindex, nofollow`). `/healthz` for the health check.
-5. **No third parties.** No Google tag, CookieYes, Google Fonts or the "Fiona" logo face
-   (licence unverified): system fonts. With no cookies and no tracking there is no consent
+   Caching: the asset URLs are not content-addressed, so pages **and** assets are served with
+   `Cache-Control: no-cache` and revalidated (ETag → 304): after a release or a rollback a
+   browser never combines new HTML with old CSS/JS. (Fingerprinted asset names would allow long
+   caching; not needed for a site of this size.)
+5. **No third parties.** No Google tag, CookieYes, Google Fonts or the "Fiona" font file
+   (licence unverified): system fonts for text; the logo is the owner's AYVO wordmark SVG that
+   the OS already uses (`apps/web/public/brand/ayvo-wordmark.svg`), not a font imitation. With no cookies and no tracking there is no consent
    banner. Tests fail on any external request.
 6. **Edge and TLS are not part of this unit.** Public names (ayvo.co, www.ayvo.co), certificates
    and the route from the existing public edge to this container are a second, separate PR
@@ -57,5 +63,5 @@ database restore is involved. (Wiring into the deploy scripts: the second PR.)
    (the old ones were "CZ – AYVO" / "DE – AYVO"); no new claims.
 3. The header is sticky so the language switch (which keeps the section being read) is at
    hand; otherwise the layout and texts are the WordPress page's own.
-4. Logo typeface: the licensed "Fiona" font may be added as a local file once its licence for
-   web use is confirmed; until then a system serif.
+4. Logo: the owner's wordmark SVG (also used by the OS) replaces the WordPress text set in the
+   "Fiona" font; the band image (`logoy.png`) is the WordPress one.

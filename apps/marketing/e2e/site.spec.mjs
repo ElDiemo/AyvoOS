@@ -5,6 +5,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { withoutExpected } from './console-errors.mjs';
 
 const PAGES = [
   { path: '/', lang: 'en', code: 'en' },
@@ -13,6 +14,11 @@ const PAGES = [
 ];
 const WIDTHS = [1440, 390, 320];
 const SHOTS = resolve(import.meta.dirname, '../../../docs/screenshots/marketing');
+const run = JSON.parse(process.env.AYVO_MARKETING_E2E_RUN);
+const SELF = `127.0.0.1:${run.port}`;
+/** Chrome's console line for a document that answers 404. */
+const DOCUMENT_404 =
+  'Failed to load resource: the server responded with a status of 404 (Not Found)';
 
 /** Opens a page and records every request and every console/page error. */
 async function open(page, path) {
@@ -21,11 +27,14 @@ async function open(page, path) {
   const errors = [];
   page.on('request', (r) => {
     const url = new URL(r.url());
-    if (!['127.0.0.1:3300'].includes(url.host) && url.protocol !== 'data:') foreign.push(r.url());
+    if (url.host !== SELF && url.protocol !== 'data:') foreign.push(r.url());
   });
   page.on('requestfailed', (r) => failed.push(r.url()));
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
-  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on(
+    'console',
+    (m) => m.type() === 'error' && errors.push({ text: m.text(), url: m.location().url }),
+  );
+  page.on('pageerror', (e) => errors.push({ text: String(e), url: null }));
   const res = await page.goto(path, { waitUntil: 'networkidle' });
   return { res, foreign, failed, errors };
 }
@@ -127,20 +136,16 @@ test('an unknown address is a real 404 page with the way back; old addresses red
 }) => {
   const { res, errors } = await open(page, '/no-such-page');
   expect(res.status()).toBe(404);
-  // Chrome reports the 404 of the document itself; nothing else may fail.
-  errors.splice(
-    errors.indexOf(
-      'Failed to load resource: the server responded with a status of 404 (Not Found)',
-    ),
-    1,
-  );
   await expect(page.locator('h1')).toHaveText('Page not found');
+  // Chrome reports the 404 of the document itself — only that line, at that URL, is expected.
+  const rest = withoutExpected(errors, { text: DOCUMENT_404, url: `http://${SELF}/no-such-page` });
+  expect(errors.length - rest.length).toBe(1);
+  expect(rest).toEqual([]);
   await page.locator('a[href="/de/"]').click();
   await expect(page).toHaveURL(/\/de\/$/);
-  expect(errors).toEqual([]);
 
   const en = await page.goto('/en/');
-  expect(en.url()).toMatch(/127\.0\.0\.1:3300\/$/);
+  expect(en.url()).toBe(`http://${SELF}/`);
   const img = await page.request.get('/wp-content/uploads/2026/02/Navrh-bez-nazvu-6.png');
   expect(img.status()).toBe(200);
   expect(img.headers()['content-type']).toBe('image/png');

@@ -113,9 +113,15 @@ describe('links and assets', () => {
         const [, w] = m[0].match(/\swidth="(\d+)"/) ?? [];
         const [, h] = m[0].match(/\sheight="(\d+)"/) ?? [];
         const [, src] = m[0].match(/\ssrc="([^"]+)"/);
-        const png = readFileSync(fileOf(src));
-        assert.equal(png.readUInt32BE(16), Number(w), src);
-        assert.equal(png.readUInt32BE(20), Number(h), src);
+        const file = readFileSync(fileOf(src));
+        if (src.endsWith('.svg')) {
+          const svg = file.toString('utf8');
+          assert.equal(svg.match(/<svg[^>]*\swidth="(\d+)"/)?.[1], w, src);
+          assert.equal(svg.match(/<svg[^>]*\sheight="(\d+)"/)?.[1], h, src);
+        } else {
+          assert.equal(file.readUInt32BE(16), Number(w), src);
+          assert.equal(file.readUInt32BE(20), Number(h), src);
+        }
       }
     }
   });
@@ -170,6 +176,13 @@ describe('robots, sitemap, Caddy', () => {
       assert.ok(!shadowed, `${from} shadows a file`);
       assert.ok(existsSync(fileOf(to)), `${from} → ${to}`);
     }
+  });
+
+  it('relative links of the README resolve (from apps/marketing/)', () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const links = [...readme.matchAll(/\]\((\.{1,2}\/[^)#]+)\)/g)].map((m) => m[1]);
+    assert.ok(links.length > 0);
+    for (const l of links) assert.ok(existsSync(resolve(root, l)), l);
   });
 
   it('the 404 page links back to every language', () => {
