@@ -74,7 +74,12 @@ interface Plan {
 export class AccountingExportsService {
   private readonly logger = new Logger(AccountingExportsService.name);
   /** The export being built in this process (one at a time — ADR 0039 §5). */
-  private building: { requestId: string; done: Promise<AccountingExportDetail> } | null = null;
+  private building: {
+    requestId: string;
+    /** The complete request being built (payload hash incl. the author) — review FIN68-R1. */
+    hash: string;
+    done: Promise<AccountingExportDetail>;
+  } | null = null;
 
   constructor(
     private readonly prisma: FinancePrismaService,
@@ -104,8 +109,9 @@ export class AccountingExportsService {
   /**
    * Creates the export the person confirmed. Idempotent per requestId over the complete request
    * (month, mode, fingerprint, note, author): a replay returns the same export; anything else
-   * under the id is a conflict; the same request arriving while it is being built waits for that
-   * build. Another export while one is being built: 409 EXPORT_BUSY (no queue).
+   * under the id is a conflict — also while the first request is still being built; the very same
+   * request arriving meanwhile waits for that build. Another export while one is being built: 409
+   * EXPORT_BUSY (no queue).
    */
   async create(
     input: CreateAccountingExportRequest,
@@ -118,17 +124,31 @@ export class AccountingExportsService {
       note: input.note ?? null,
       actorId: caller.principal.userId,
     };
+    const hash = payloadHash('ACCOUNTING_EXPORT_CREATE', payload);
+    // Before and after the replay lookup: a build of this request may be in flight.
+    const inFlight = this.inFlight(input.requestId, hash);
+    if (inFlight) return inFlight;
     const replay = await this.replayed('ACCOUNTING_EXPORT_CREATE', input.requestId, payload);
     if (replay) return this.detail(replay);
-    if (this.building) {
-      if (this.building.requestId === input.requestId) return this.building.done;
+    const started = this.inFlight(input.requestId, hash);
+    if (started) return started;
+    if (this.building)
       throw domainError(409, 'EXPORT_BUSY', 'Právě se vytváří jiný export. Zkuste to za chvíli.');
-    }
     const done = this.build(input, payload, caller).finally(() => {
       this.building = null;
     });
-    this.building = { requestId: input.requestId, done };
+    this.building = { requestId: input.requestId, hash, done };
     return done;
+  }
+
+  /**
+   * The build of this requestId in progress: shared only with the very same request (payload and
+   * author — review FIN68-R1); the same id with anything else is IDEMPOTENCY_CONFLICT.
+   */
+  private inFlight(requestId: string, hash: string): Promise<AccountingExportDetail> | null {
+    if (!this.building || this.building.requestId !== requestId) return null;
+    if (this.building.hash !== hash) throw idempotencyConflict();
+    return this.building.done;
   }
 
   private async build(
