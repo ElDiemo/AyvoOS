@@ -310,6 +310,7 @@ verify_published_ports() {
   local id line bad=()
   local -A allowed=(
     ["caddy $TAILNET_IPV4:443->443/tcp"]=1 ["caddy $TAILNET_IPV4:443->443/udp"]=1
+    ["caddy $TAILNET_IPV4:8443->8443/tcp"]=1
     ["caddy 0.0.0.0:80->80/tcp"]=1
     ["dns $TAILNET_IPV4:53->1053/tcp"]=1 ["dns $TAILNET_IPV4:53->1053/udp"]=1)
   for id in $(docker ps -q --filter "label=com.docker.compose.project=$PROJECT"); do
@@ -320,7 +321,7 @@ verify_published_ports() {
       | .value[] | "\($s) \(.HostIp):\(.HostPort)->\($t)"')
   done
   ((${#bad[@]} == 0)) || die "published ports outside the tailnet rule (ADR 0026): ${bad[*]}"
-  ok "published ports: only $TAILNET_IPV4 (443 tcp/udp, 53) and public IPv4 :80 (ACME)"
+  ok "published ports: only $TAILNET_IPV4 (443 tcp/udp, 8443 marketing preview, 53) and public IPv4 :80 (ACME)"
 }
 
 # Local checks of the public side (from this server, so NOT a proof from the internet — the

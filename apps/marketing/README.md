@@ -33,3 +33,13 @@ Dockerfile             the image (read-only, unprivileged)
 - `pnpm test:e2e` — Chromium against the real image on 127.0.0.1:3300: every language at
   1440 / 390 / 320 px, no external requests, no CSP errors, images, favicon, language switch,
   CTAs, 404; screenshots to `docs/screenshots/marketing/`.
+
+## Release (DEV preview → PROD, the same artifact)
+
+1. Merge → `scripts/deploy-dev.sh` (once: Caddy gets :8443 and the `marketing` network), then
+   `scripts/deploy-marketing-dev.sh`: only the marketing container; preview at
+   `https://<DEV_DOMAIN>:8443` (tailnet). It prints the content digest.
+2. After acceptance on PROD (`MARKETING_DOMAIN` in prod.env, an OS release with
+   `compose.marketing.yml` deployed): `scripts/deploy-prod.sh --marketing --release <commit>
+--expect-digest <digest>`. Rollback: `--marketing-rollback <release>`.
+3. The digest of a checkout: `sh apps/marketing/site-digest.sh apps/marketing/Caddyfile apps/marketing/site`.

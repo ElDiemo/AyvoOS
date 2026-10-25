@@ -52,6 +52,8 @@ services:
       # would proxy it in userland and Caddy would no longer see the real client address.
       - '${DEV_TAILNET_IPV4:?set by scripts/deploy-dev.sh from tailscale ip -4}:443:443'
       - '${DEV_TAILNET_IPV4}:443:443/udp'
+      # The marketing site's DEV preview (ADR 0040): HTTPS on the same name, tailnet address only.
+      - '${DEV_TAILNET_IPV4}:8443:8443'
       # IPv4 :80 on every address: the narrow public ACME HTTP-01 exception (Caddy answers only
       # /.well-known/acme-challenge/ and aborts everything else) and the redirect for the tailnet.
       - '0.0.0.0:80:80'
@@ -68,6 +70,7 @@ services:
       - acme-webroot:/srv/acme:ro
     networks:
       - edge
+      - marketing
     depends_on:
       web:
         condition: service_healthy
@@ -201,6 +204,32 @@ services:
       postgres:
         condition: service_healthy
 
+  # The public marketing site's DEV preview (ADR 0040): the same image as on PROD, deployed and rolled
+  # back on its own by scripts/deploy-marketing-dev.sh (profile "marketing"); scripts/deploy-dev.sh
+  # never builds, starts or stops it. Reachable only from Caddy (https://<DEV_DOMAIN>:8443, tailnet).
+  marketing:
+    image: ayvo-dev-preview/marketing:${MARKETING_IMAGE_TAG:-none}
+    build:
+      context: ../../apps/marketing
+    profiles:
+      - marketing
+    restart: unless-stopped
+    logging: *logging
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    environment:
+      AYVO_MARKETING_ROBOTS: noindex, nofollow
+    networks:
+      - marketing
+
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
@@ -245,6 +274,9 @@ networks:
   edge:
   # api/migrate ↔ postgres/redis. No route to the outside world.
   backend:
+    internal: true
+  # Caddy ↔ the marketing preview only. No route to the outside world.
+  marketing:
     internal: true
   # The private DNS server alone (no other service, no upstream resolver).
   dns:

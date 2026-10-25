@@ -3,6 +3,8 @@
 FROM caddy:2-alpine
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY site /srv
+# The content digest of this release, computed the same way as from the repository.
+COPY site-digest.sh /usr/local/bin/site-digest
 # Port 8080 needs no capability: drop the binary's file capability (cap_net_bind_service), so it
 # runs with every capability dropped and no-new-privileges.
 RUN setcap -r /usr/bin/caddy \

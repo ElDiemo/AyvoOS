@@ -18,6 +18,12 @@
 #                                                         existing, not yet activated bootstrap ADMIN
 #                                                         (doc 038 §4; nobody else, nothing created);
 #                                                         --resend: a new link, the old one stops
+#   scripts/deploy-prod.sh --marketing --release <commit> --expect-digest <sha256>
+#                                                         the public marketing site alone (ADR 0040):
+#                                                         build its image from <commit>, require the
+#                                                         content digest accepted on DEV, replace only
+#                                                         the `marketing` container (no OS restart)
+#   scripts/deploy-prod.sh --marketing-rollback <release> start an earlier marketing image again
 #
 # <commit> is a full 40-character commit that is already on origin/main (merged = approved). The
 # images are built from a clean `git archive` of exactly that commit — never from a working copy.
@@ -63,7 +69,9 @@ readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLI
 # The physically validated QR label settings are optional (ADR 0034): both or neither.
 readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 # ID_DOMAIN (optional): the public employee-card host; unset = no ID edge at all (compose.id.yml).
-readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN"
+# MARKETING_DOMAIN (optional): the public marketing site's apex (served with www.<apex>); unset = no
+# marketing site at all (compose.marketing.yml, ADR 0040).
+readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN"
 readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
 readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
@@ -80,6 +88,10 @@ STEP="start"
 BACKUP_FILE=""
 MIGRATED=false
 PREVIOUS=""
+EXPECT_DIGEST=""
+MARKETING_ROLLBACK=""
+MARKETING_RELEASE=""
+MARKETING_RELEASE_DIR=""
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m ok\033[0m %s\n' "$*"; }
@@ -88,7 +100,7 @@ die() {
   printf '\033[1;31mFAILED\033[0m at "%s": %s\n' "$STEP" "$*" >&2
   exit 1
 }
-usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 on_exit() {
   local code=$?
@@ -178,6 +190,23 @@ id_domain() {
     die "ID_DOMAIN must be a plain host name (e.g. id.ayvo.co)"
   [[ $ID_DOMAIN != "$DOMAIN" && $ID_DOMAIN != "$QR_DOMAIN" ]] ||
     die "ID_DOMAIN must differ from $DOMAIN and the QR host"
+}
+
+# The optional public marketing site (ADR 0040): MARKETING_DOMAIN is its apex; www.<apex> is served
+# too (redirected to the apex). Unset or empty: nothing of the marketing site is created. Its DNS
+# may still point to the old server (certificates through the challenge-only forward, as for ID).
+marketing_domain() {
+  MARKETING_DOMAIN="$(env_value "$SECRETS/prod.env" MARKETING_DOMAIN || true)"
+  [[ -z $MARKETING_DOMAIN ]] && return
+  [[ $MARKETING_DOMAIN =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ||
+    die "MARKETING_DOMAIN must be a plain host name (the apex, e.g. ayvo.co)"
+  [[ $MARKETING_DOMAIN != www.* ]] || die "MARKETING_DOMAIN is the apex; www.<apex> is served by itself"
+  local other
+  for other in "$DOMAIN" "$QR_DOMAIN" "${ID_DOMAIN:-}"; do
+    [[ -z $other ]] && continue
+    [[ $other != "$MARKETING_DOMAIN" && $other != "www.$MARKETING_DOMAIN" ]] ||
+      die "MARKETING_DOMAIN (and www.) must differ from $other"
+  done
 }
 
 # Information only: where the ID host points now (before the DNS change it is the old server).
@@ -368,6 +397,10 @@ compose_files() {
   if [[ -n ${ID_DOMAIN:-} && -f $dir/deploy/prod/compose.id.yml ]]; then
     printf '%s\n' -f "$dir/deploy/prod/compose.id.yml"
   fi
+  # The marketing site (ADR 0040) only when MARKETING_DOMAIN is set and the release has it.
+  if [[ -n ${MARKETING_DOMAIN:-} && -f $dir/deploy/prod/compose.marketing.yml ]]; then
+    printf '%s\n' -f "$dir/deploy/prod/compose.marketing.yml"
+  fi
 }
 
 compose() {
@@ -376,6 +409,8 @@ compose() {
   mapfile -t files < <(compose_files "$dir")
   PROD_DOMAIN=$DOMAIN PROD_TAILNET_IPV4=$PROD_TAILNET_IPV4 AYVO_RELEASE=$AYVO_RELEASE \
     PROD_PUBLIC_IPV4=$PROD_PUBLIC_IPV4 QR_DOMAIN=$QR_DOMAIN ID_DOMAIN=${ID_DOMAIN:-} \
+    MARKETING_DOMAIN=${MARKETING_DOMAIN:-} MARKETING_RELEASE=${MARKETING_RELEASE:-none} \
+    MARKETING_RELEASE_DIR=${MARKETING_RELEASE_DIR:-/nonexistent} \
     AYVO_RELEASE_DIR=$dir AYVO_PROD_SECRETS_DIR=$SECRETS \
     docker compose -p "$PROJECT" --project-directory "$dir/deploy/prod" \
     "${files[@]}" --env-file "$SECRETS/prod.env" "$@"
@@ -412,6 +447,58 @@ validate_compose() {
 }
 
 current_release() { docker inspect --format '{{.Config.Image}}' "$PROJECT-api-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/api:||p"; }
+current_marketing() { docker inspect --format '{{.Config.Image}}' "$PROJECT-marketing-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/marketing:||p"; }
+
+# --- the marketing site (ADR 0040) -------------------------------------------------------------
+
+marketing_dir() { printf '%s/marketing/%s' "$PROD_DIR" "${1:0:12}"; }
+
+# apps/marketing of exactly that commit, in its own directory (never touched by remove_old_images).
+export_marketing() {
+  STEP="export the marketing site of $RELEASE"
+  local dir
+  dir="$(marketing_dir "$RELEASE")"
+  if [[ -f $dir/.ayvo-release ]] && [[ $(<"$dir/.ayvo-release") == "$RELEASE" ]]; then
+    ok "marketing release already exported: $dir"
+    return
+  fi
+  rm -rf "$dir.partial"
+  (
+    umask 022
+    mkdir -p "$dir.partial"
+    repo_git archive --format=tar "$RELEASE" apps/marketing | tar -x --no-same-owner -C "$dir.partial"
+    printf '%s\n' "$RELEASE" >"$dir.partial/.ayvo-release"
+  )
+  chmod -R a+rX,go-w "$dir.partial"
+  [[ ! -e $dir ]] || die "$dir exists but is not a complete export of $RELEASE: inspect and remove it by hand"
+  mv "$dir.partial" "$dir"
+  ok "exported apps/marketing of $RELEASE"
+}
+
+# The content digest of a release directory and of the running container (apps/marketing/site-digest.sh).
+marketing_digest() { (cd "$1/apps/marketing" && sh ./site-digest.sh Caddyfile site); }
+running_marketing_digest() { docker exec "$PROJECT-marketing-1" site-digest /etc/caddy/Caddyfile /srv; }
+
+record_marketing() {
+  mkdir -p "$PROD_DIR/state"
+  printf '%s %s digest=%s\n' "$MARKETING_RELEASE" "$(date -u +%FT%TZ)" "$1" >>"$PROD_DIR/state/marketing.log"
+}
+recorded_marketing_digest() {
+  [[ -f $PROD_DIR/state/marketing.log ]] || return 0
+  awk -v t="$1" '$1 == t { for (i = 3; i <= NF; i++) if ($i ~ /^digest=/) d = substr($i, 8) } END { if (d) print d }' \
+    "$PROD_DIR/state/marketing.log"
+}
+
+start_marketing() {
+  STEP="start only the marketing container ($MARKETING_RELEASE)"
+  log "$STEP"
+  compose up -d --no-build --no-deps marketing || die "the marketing container did not start"
+  wait_healthy marketing || die "the marketing container did not become healthy"
+  local digest
+  digest="$(running_marketing_digest)" || die "cannot read the digest of the running marketing site"
+  [[ $digest == "$1" ]] || die "the running marketing site has digest $digest, not $1"
+  ok "marketing $MARKETING_RELEASE running, digest $digest"
+}
 
 # --- deploy steps -----------------------------------------------------------------------------
 
@@ -610,6 +697,7 @@ verify() {
   [[ $code == 52 ]] || die "http via the public IPv4 must be aborted without an answer (curl exit $code)"
   ok "public $pub4: only GET /<token> of $QR_DOMAIN; $DOMAIN and other paths refused (local hint; the external test is doc 037 §5)"
   verify_id_edge "$pub4"
+  verify_marketing_edge "$pub4"
 }
 
 # The public ID edge (only when enabled). Its certificate may not exist yet (DNS still on the old
@@ -640,6 +728,46 @@ verify_id_edge() {
   [[ $(id_status -H "Host: $DOMAIN" "https://$ID_DOMAIN/") == 421 ]] ||
     die "a request for $DOMAIN through the ID name must be refused (421)"
   ok "public $pub4: $ID_DOMAIN serves only the card routes (valid certificate; local hint)"
+}
+
+# The public marketing site (only when enabled). Before the DNS change and the challenge forward its
+# certificates may not exist, and before the first `--marketing` deployment its container may not
+# run: both are reported, never a reason to fail an OS deployment.
+verify_marketing_edge() {
+  [[ -n ${MARKETING_DOMAIN:-} && -f $(release_dir "$AYVO_RELEASE")/deploy/prod/compose.marketing.yml ]] || return 0
+  local pub4=$1 code host path
+  STEP="verify (local hint only): the public marketing site"
+  for host in "$MARKETING_DOMAIN" "www.$MARKETING_DOMAIN"; do
+    # :80 — the challenge path reaches qr-edge (an HTTP answer); everything else → https, same name.
+    code="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 5 --resolve "$host:80:$pub4" "http://$host/cz/" || true)"
+    [[ $code == "301 https://$host/cz/" ]] || die "http://$host/cz/ via the public IPv4 must redirect to https://$host/cz/ (got '$code')"
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$host:80:$pub4" \
+      "http://$host/.well-known/acme-challenge/ayvo-deploy-check" || true)"
+    [[ $code =~ ^[1-5][0-9][0-9]$ ]] || die "the ACME challenge path of $host does not reach the public edge (got '$code')"
+  done
+  mk_status() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$1:443:$pub4" "${@:2}"; }
+  code="$(mk_status "$MARKETING_DOMAIN" "https://$MARKETING_DOMAIN/" || true)"
+  if [[ $code == 000 ]]; then
+    warn "https://$MARKETING_DOMAIN has no valid certificate yet (expected before the challenge forward / DNS change)"
+    return 0
+  fi
+  if [[ $code == 503 ]]; then
+    warn "https://$MARKETING_DOMAIN: the marketing container is not running yet (deploy it with --marketing)"
+    return 0
+  fi
+  [[ $code == 200 ]] || die "https://$MARKETING_DOMAIN/ answered '$code'"
+  [[ $(mk_status "$MARKETING_DOMAIN" -X POST "https://$MARKETING_DOMAIN/") == 405 ]] ||
+    die "https://$MARKETING_DOMAIN must refuse POST (405)"
+  for path in /api/health /login /q/x /wp-admin/; do
+    [[ $(mk_status "$MARKETING_DOMAIN" "https://$MARKETING_DOMAIN$path") == 404 ]] ||
+      die "https://$MARKETING_DOMAIN$path must be a plain 404"
+  done
+  [[ $(mk_status "$MARKETING_DOMAIN" -H "Host: $DOMAIN" "https://$MARKETING_DOMAIN/") == 421 ]] ||
+    die "a request for $DOMAIN through the marketing name must be refused (421)"
+  code="$(mk_status "www.$MARKETING_DOMAIN" "https://www.$MARKETING_DOMAIN/cz/" || true)"
+  [[ $code == 301 || $code == 000 ]] || die "https://www.$MARKETING_DOMAIN must redirect to the apex (got '$code')"
+  [[ $code == 301 ]] || warn "https://www.$MARKETING_DOMAIN has no valid certificate yet"
+  ok "public $pub4: $MARKETING_DOMAIN serves the marketing site only (local hint)"
 }
 
 record_release() {
@@ -696,6 +824,16 @@ while (($#)); do
       shift
       ;;
     --bootstrap-admin) MODE=bootstrap ;;
+    --marketing) MODE=marketing ;;
+    --expect-digest)
+      EXPECT_DIGEST=${2:-}
+      shift
+      ;;
+    --marketing-rollback)
+      MODE=marketing-rollback
+      MARKETING_ROLLBACK=${2:-}
+      shift
+      ;;
     --activate-bootstrap) MODE=activate ;;
     --resend) RESEND=--resend ;;
     --email)
@@ -721,7 +859,7 @@ require_commands
 not_dev_server
 not_dev_preview
 check_runner
-if [[ $MODE == deploy || $MODE == rollback ]]; then
+if [[ $MODE == deploy || $MODE == rollback || $MODE == marketing || $MODE == marketing-rollback ]]; then
   mkdir -p "$PROD_DIR"
   exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
 fi
@@ -731,10 +869,13 @@ check_host_guard
 check_env_files
 qr_domain
 id_domain
+marketing_domain
 mkdir -p "$PROD_DIR"
 exec 9>"$PROD_DIR/.deploy.lock"
 flock -n 9 || die "another production deployment is running"
 PREVIOUS="$(current_release || true)"
+# An OS deployment keeps whatever marketing image runs (it never builds, starts or stops it).
+MARKETING_RELEASE="$(current_marketing || true)"
 
 case $MODE in
   check)
@@ -791,6 +932,49 @@ case $MODE in
     verify
     record_release
     ok "production runs $RELEASE again"
+    ;;
+  marketing)
+    [[ -n $RELEASE ]] || die "--marketing needs --release <commit>"
+    [[ $EXPECT_DIGEST =~ ^[0-9a-f]{64}$ ]] ||
+      die "--marketing needs --expect-digest <sha256> (the digest of the release accepted on DEV)"
+    [[ -n ${MARKETING_DOMAIN:-} ]] || die "MARKETING_DOMAIN is not set in prod.env"
+    [[ -n $PREVIOUS ]] || die "production is not running: deploy the OS release first"
+    AYVO_RELEASE=$PREVIOUS
+    [[ -f $(release_dir "$AYVO_RELEASE")/deploy/prod/compose.marketing.yml ]] ||
+      die "the running OS release $AYVO_RELEASE has no compose.marketing.yml: deploy an OS release with it first"
+    log "marketing site of $RELEASE at $(date -u +%FT%TZ) (OS stays $AYVO_RELEASE; marketing now: ${MARKETING_RELEASE:-nothing})"
+    check_release
+    repo_git cat-file -e "$RELEASE:apps/marketing/site-digest.sh" 2>/dev/null || die "$RELEASE has no apps/marketing"
+    export_marketing
+    MARKETING_RELEASE=${RELEASE:0:12}
+    MARKETING_RELEASE_DIR="$(marketing_dir "$RELEASE")"
+    STEP="check the marketing digest"
+    digest="$(marketing_digest "$MARKETING_RELEASE_DIR")" || die "cannot compute the marketing digest"
+    [[ $digest == "$EXPECT_DIGEST" ]] || die "the marketing site of $RELEASE has digest $digest, not the accepted $EXPECT_DIGEST"
+    ok "the content of $RELEASE is the accepted artifact ($digest)"
+    validate_compose
+    STEP="build the marketing image"
+    compose build marketing || die "building the marketing image failed"
+    start_marketing "$digest"
+    verify_marketing_edge "$PROD_PUBLIC_IPV4"
+    record_marketing "$digest"
+    ok "the marketing site runs $RELEASE; the OS was not restarted"
+    ;;
+  marketing-rollback)
+    [[ $MARKETING_ROLLBACK =~ ^[0-9a-f]{12}$ ]] || die "--marketing-rollback needs the 12-character release of an earlier marketing deployment"
+    [[ -n $PREVIOUS ]] || die "production is not running"
+    AYVO_RELEASE=$PREVIOUS
+    docker image inspect "$IMAGE_PREFIX/marketing:$MARKETING_ROLLBACK" >/dev/null 2>&1 ||
+      die "image $IMAGE_PREFIX/marketing:$MARKETING_ROLLBACK is gone"
+    digest="$(recorded_marketing_digest "$MARKETING_ROLLBACK")"
+    [[ -n $digest ]] || die "no recorded digest for marketing $MARKETING_ROLLBACK"
+    MARKETING_RELEASE=$MARKETING_ROLLBACK
+    log "marketing rollback to $MARKETING_ROLLBACK (OS stays $AYVO_RELEASE)"
+    validate_compose
+    start_marketing "$digest"
+    verify_marketing_edge "$PROD_PUBLIC_IPV4"
+    record_marketing "$digest"
+    ok "the marketing site runs $MARKETING_ROLLBACK again"
     ;;
   bootstrap)
     STEP="bootstrap the first administrator"

@@ -36,10 +36,37 @@
    (licence unverified): system fonts for text; the logo is the owner's AYVO wordmark SVG that
    the OS already uses (`apps/web/public/brand/ayvo-wordmark.svg`), not a font imitation. With no cookies and no tracking there is no consent
    banner. Tests fail on any external request.
-6. **Edge and TLS are not part of this unit.** Public names (ayvo.co, www.ayvo.co), certificates
-   and the route from the existing public edge to this container are a second, separate PR
-   (ADR amendment if needed): it must keep the QR/ID/VPN guards, add no path from the public
-   edge to the OS API/DB/Redis, and prove certificates for both names before any DNS change.
+6. **Edge and TLS (PR 2).** The unit sits behind the existing edges without replacing any of
+   their configuration:
+   - **PROD:** with `MARKETING_DOMAIN=<apex>` in prod.env, `deploy/prod/compose.marketing.yml` is
+     added. It mounts one site file into qr-edge (`sites/marketing.caddy`: apex + www, TLS, HSTS,
+     www → apex 301, only GET/HEAD to `marketing:8080`) and one into the internal Caddy
+     (`acme.d/marketing.caddy`: on public :80 the ACME challenges of apex and www go to qr-edge, all
+     else → https). `Caddyfile.qr` and `Caddyfile` only gained an `import` of those directories —
+     with no file there, QR and ID behave exactly as before (their tests run unchanged). The
+     marketing container is on its own internal network with qr-edge only (no web, API, DB, Redis,
+     egress). Certificates for apex and www can be obtained before the DNS change through the old
+     server's challenge-only forward (tested with Pebble), exactly like the ID host.
+   - **DEV:** `https://<DEV_DOMAIN>:8443` (the same certificate, published on the tailnet address
+     only, the same real-peer check), `noindex`; the container on its own internal network with
+     Caddy only.
+
+## Release, the same artifact, rollback
+
+- The content digest (`apps/marketing/site-digest.sh`: SHA-256 over the Caddyfile and every served
+  file) is the identity of a release; the image carries the script, so the digest is also read from
+  the running container.
+- DEV: `scripts/deploy-marketing-dev.sh` builds the image from a clean checkout, replaces only the
+  `marketing` container, verifies the running digest and the route through the edge, and prints
+  the digest to accept.
+- PROD: `scripts/deploy-prod.sh --marketing --release <commit on origin/main> --expect-digest
+<accepted digest>` exports `apps/marketing` of that commit into its own directory, refuses any
+  other digest, builds, replaces only the `marketing` container, checks the running digest and the
+  public routes (local hint). `--marketing-rollback <release>` starts an earlier image again (its
+  recorded digest is checked). An OS deployment never builds, starts or stops the marketing site;
+  rolling the OS back to a release without `compose.marketing.yml` takes the site off the edge.
+- No registry and no vendor: the image is rebuilt from the same commit on each server and proven
+  identical by the digest.
 
 ## Failure domains (honest)
 
@@ -48,12 +75,9 @@
 - Shared and named: the host/VPS and the public edge in front of it (once connected) — a host or
   edge outage takes the site down with everything else on that host.
 
-## Release and rollback
-
-An image per commit; a release replaces the container with the new image only after its health
-check passes, so a failed or interrupted publication leaves the previous complete version
-running — never a half-copied directory. Rollback = start the previous image tag; no OS
-database restore is involved. (Wiring into the deploy scripts: the second PR.)
+A failed or interrupted publication leaves the previous complete version running (the container
+is replaced only by a complete image) — never a half-copied directory; no OS database restore is
+involved in a rollback.
 
 ## Open points for the owner
 

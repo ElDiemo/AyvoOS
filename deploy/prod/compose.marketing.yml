@@ -1,0 +1,57 @@
+# AYVO OS — the public marketing site (ADR 0040). Added to compose.yml (and compose.id.yml) by
+# scripts/deploy-prod.sh ONLY when MARKETING_DOMAIN is set in prod.env; without it nothing here
+# exists. It replaces no configuration: qr-edge and the internal Caddy keep their commands and
+# files and only get one more mounted site file each (sites/, acme.d/), so the QR and ID edges
+# behave exactly as before.
+#
+#   internet ─:443─▶ qr-edge ─(marketing network)─▶ marketing:8080   (static files, no API/DB)
+#   CA ─:80─▶ caddy ─(acme network, challenge path only)─▶ qr-edge:80  (apex + www certificates)
+#
+# The `marketing` container is deployed and rolled back on its own (deploy-prod.sh --marketing);
+# the OS deployment never builds, starts or stops it.
+services:
+  marketing:
+    image: ayvo-prod/marketing:${MARKETING_RELEASE:-none}
+    build:
+      context: ${MARKETING_RELEASE_DIR:-/nonexistent}/apps/marketing
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    networks:
+      - marketing
+
+  qr-edge:
+    environment:
+      MARKETING_DOMAIN: ${MARKETING_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+    volumes:
+      - ./sites/marketing.caddy:/etc/caddy/sites/marketing.caddy:ro
+    networks:
+      - marketing
+      - acme
+
+  caddy:
+    environment:
+      MARKETING_DOMAIN: ${MARKETING_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+    volumes:
+      - ./acme.d/marketing.caddy:/etc/caddy/acme.d/marketing.caddy:ro
+    networks:
+      - acme
+
+networks:
+  # qr-edge ↔ marketing only; no egress.
+  marketing:
+    internal: true
+  acme:

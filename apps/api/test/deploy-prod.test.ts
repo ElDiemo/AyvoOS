@@ -473,6 +473,37 @@ describe('production deploy script', () => {
     expect(body).toContain('repo_git archive');
   });
 
+  it('the OS deployment never builds, starts or stops the marketing site; --marketing touches only it', () => {
+    const fn = (name: string) => {
+      const i = script.indexOf(`${name}() {`);
+      return script.slice(i, script.indexOf('\n}\n', i));
+    };
+    expect(fn('start_services')).not.toContain('marketing');
+    expect(fn('build_images')).not.toContain('marketing');
+    const marketing = script.slice(
+      script.indexOf('  marketing)\n'),
+      script.indexOf('  marketing-rollback)\n'),
+    );
+    // The accepted DEV digest is required and checked before anything is built or started.
+    expect(marketing).toContain('--expect-digest');
+    const order = [
+      'check_release',
+      'export_marketing',
+      'marketing_digest',
+      'compose build marketing',
+      'start_marketing',
+    ];
+    const at = order.map((step) => marketing.indexOf(step));
+    expect(at.every((i) => i > 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(marketing).not.toMatch(/build_images|migrate|start_services|backup_before_migration/);
+    expect(fn('start_marketing')).toContain('compose up -d --no-build --no-deps marketing');
+    expect(fn('start_marketing')).toContain('running_marketing_digest');
+    // Its export lives apart from the OS releases (never removed by remove_old_images).
+    expect(fn('marketing_dir')).toContain('/marketing/');
+    expect(fn('remove_old_images')).toContain('(api|api-migrate|web)');
+  });
+
   it('backs up before migrating, and starts the new release only after migrating', () => {
     const main = script.slice(script.indexOf('  deploy)\n'));
     const order = [
@@ -650,6 +681,52 @@ describe('production deploy script', () => {
       expect(files('')).toBe(`-f ${rel}/deploy/prod/compose.yml`);
       expect(files('id.example.test')).toBe(
         `-f ${rel}/deploy/prod/compose.yml -f ${rel}/deploy/prod/compose.id.yml`,
+      );
+    });
+    it('marketing_domain: unset = no marketing site; the apex, never www or another host', () => {
+      const call = (value: string | null, id = '') =>
+        check(
+          { ...good, 'prod.env': value === null ? prod : `${prod}MARKETING_DOMAIN=${value}\n` },
+          0o600,
+          {
+            call: `DOMAIN=os.example.test; QR_DOMAIN=qr.example.test; ID_DOMAIN=${id}; marketing_domain; echo "M=[$MARKETING_DOMAIN]"`,
+          },
+        );
+      expect(call(null).stdout).toContain('M=[]');
+      expect(call('ayvo.example.test', 'id.example.test').stdout).toContain(
+        'M=[ayvo.example.test]',
+      );
+      for (const [bad, id] of [
+        ['https://ayvo.example.test', ''],
+        ['www.ayvo.example.test', ''],
+        ['ayvo', ''],
+        ['qr.example.test', ''],
+        ['os.example.test', ''],
+        ['id.example.test', 'id.example.test'],
+        ['example.test', 'www.example.test'],
+      ] as const) {
+        const res = call(bad, id);
+        expect([bad, res.status]).toEqual([bad, 1]);
+      }
+    });
+    it('compose_files: the marketing override only with MARKETING_DOMAIN and only if the release has it', () => {
+      const rel = mkdtempSync(join(tmp, 'release-m-'));
+      run('mkdir', ['-p', join(rel, 'deploy/prod')]);
+      writeFileSync(join(rel, 'deploy/prod/compose.yml'), '');
+      writeFileSync(join(rel, 'deploy/prod/compose.id.yml'), '');
+      const lines = script.split('\n');
+      const start = lines.findIndex((l) => l.startsWith('compose_files() {'));
+      const fn = lines.slice(start, lines.indexOf('}', start) + 1).join('\n');
+      const files = (m: string) =>
+        check(good, 0o600, {
+          call: `${fn}\nID_DOMAIN=id.example.test; MARKETING_DOMAIN=${m}; compose_files ${rel} | tr '\\n' ' '`,
+        }).stdout.trim();
+      const base = `-f ${rel}/deploy/prod/compose.yml -f ${rel}/deploy/prod/compose.id.yml`;
+      expect(files('ayvo.example.test')).toBe(base); // older release without the override
+      writeFileSync(join(rel, 'deploy/prod/compose.marketing.yml'), '');
+      expect(files('')).toBe(base);
+      expect(files('ayvo.example.test')).toBe(
+        `${base} -f ${rel}/deploy/prod/compose.marketing.yml`,
       );
     });
     it('accepts complete private files and prints no value', () => {
