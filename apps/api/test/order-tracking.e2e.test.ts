@@ -10,7 +10,7 @@ import {
 } from '../src/orders/shipment-tracking.service.js';
 import { correctCrate } from './support/labeling-fixtures.js';
 import { crateFactory, createHotel, createOrder, scanCrate } from './support/order-fixtures.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 
 /**
  * Order states and automatic carrier tracking (doc 031) against the real database and the FAKE
@@ -502,13 +502,14 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
   /**
    * What would block deactivating a site holding only this order: the registered checks and the
    * database's own refusal. Test files share one database (MAIN serves other files' hotels), so the
-   * order is moved to a fresh site inside a transaction that is always rolled back.
+   * order is moved to a fresh site inside a transaction that is always rolled back. Privileged:
+   * the move switches the order rules off, which the running core cannot do.
    */
   async function siteBlockers(order: string) {
     const rollback = new Error('rollback');
     let result: { codes: string[]; refused: string | null } | null = null;
-    await t.prisma
-      .$transaction(async (tx) => {
+    await withPrivileged((db) =>
+      db.$transaction(async (tx) => {
         const [site] = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO "sites" ("code", "name", "country_code", "time_zone", "default_locale",
                                "default_currency", "capabilities")
@@ -532,10 +533,10 @@ describe.skipIf(!hasDatabase)('order states and carrier tracking (doc 031)', () 
         }
         result = { codes, refused };
         throw rollback;
-      })
-      .catch((e: unknown) => {
-        if (e !== rollback) throw e;
-      });
+      }),
+    ).catch((e: unknown) => {
+      if (e !== rollback) throw e;
+    });
     return result!;
   }
 

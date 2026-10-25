@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { InventoryService } from '../src/inventory/inventory.service.js';
 import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 
 /**
  * Product catalogue and recipes v0.1 (doc 023) through the real guard, sessions and database:
@@ -985,9 +985,9 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
         t.prisma.$executeRaw`DELETE FROM products WHERE code = ${p.code}`,
         /never deleted/,
       );
-      await rejects(
-        t.prisma.$executeRaw`TRUNCATE recipe_versions CASCADE`,
-        /immutable|not allowed/,
+      // Even the privileged account (the running core has no TRUNCATE right at all).
+      await withPrivileged((db) =>
+        rejects(db.$executeRaw`TRUNCATE recipe_versions CASCADE`, /immutable|not allowed/),
       );
     });
 

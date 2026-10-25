@@ -19,7 +19,13 @@ import request, { type Response } from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ACCESS_METADATA, type AccessRule } from '../src/identity/access.decorators.js';
 import { bootstrapFirstAdmin } from '../src/identity/bootstrap.js';
-import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
+import {
+  createTestApp,
+  hasDatabase,
+  TEST_APP_ORIGIN,
+  type TestApp,
+  withPrivileged,
+} from './support/test-app.js';
 import { INITIAL_SITE_ID } from './support/sign-in.js';
 import { newBottleItemId, PDF_BYTES } from './support/warehouse-fixtures.js';
 
@@ -895,9 +901,12 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect(
       await t.prisma.userRole.count({ where: { roleCode: 'ADMIN', revokedAt: null } }),
     ).toBeGreaterThan(0);
-    for (const table of ['roles', 'permissions', 'role_permissions']) {
-      await expect(t.prisma.$executeRawUnsafe(`TRUNCATE "${table}" CASCADE`)).rejects.toThrow();
-    }
+    // Even the privileged account (the running core has no TRUNCATE right at all).
+    await withPrivileged(async (db) => {
+      for (const table of ['roles', 'permissions', 'role_permissions']) {
+        await expect(db.$executeRawUnsafe(`TRUNCATE "${table}" CASCADE`)).rejects.toThrow();
+      }
+    });
 
     // With a second administrator the first may step down.
     const second = await createUser(['ADMIN'], []);

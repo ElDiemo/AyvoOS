@@ -156,7 +156,9 @@ services:
       # container (Docker address pools) reach it, and Caddy replaces X-Forwarded-For with the
       # real client address (it trusts no incoming value). Thresholds: AUTH_RATE_LIMIT_* (doc 021).
       TRUSTED_PROXY_CIDRS: 172.16.0.0/12,192.168.0.0/16
-      DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+      # The running core connects as its own non-superuser role (ADR 0041), never as the
+      # privileged account (that stays with migrations, setups and backups).
+      DATABASE_URL: postgresql://ayvo_core:${CORE_DB_PASSWORD:?set CORE_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       # The QR URL printed on labels from this environment (DEV labels must never go on real
       # bottles; the production QR host is refused here, ADR 0014).
@@ -191,6 +193,9 @@ services:
     profiles:
       - tools
     restart: 'no'
+    # Committed migrations, then the core runtime role (ADR 0041) — both as the privileged account.
+    command:
+      ['sh', '-c', 'node_modules/.bin/prisma migrate deploy && node dist/database/core-db-setup.js']
     logging: *logging
     security_opt:
       - no-new-privileges:true
@@ -198,6 +203,8 @@ services:
       - ALL
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+      # Set on every migration run: the core runtime role's password (rotation = change + deploy).
+      CORE_DB_PASSWORD: ${CORE_DB_PASSWORD:?set CORE_DB_PASSWORD}
     networks:
       - backend
     depends_on:

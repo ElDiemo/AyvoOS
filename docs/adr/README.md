@@ -58,6 +58,8 @@ Number 0031 is reserved by the pending sales-function change.
 Native authentication for review: [0037 — Native password + TOTP authentication](0037-native-authentication.md)
 (supersedes the provider part of 0022).
 
+Core runtime DB role for review: [0041 — The running core connects as its own non-superuser DB role](0041-core-db-runtime-role.md).
+
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
 0005, 0006 and 0008 were updated on 2026-10-10 to reflect the owner's

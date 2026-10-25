@@ -8,7 +8,7 @@ import type {
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTemplate, registerBottles } from './support/fixtures.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 
 describe.skipIf(!hasDatabase)('bottle registration (assets module)', () => {
   let t: TestApp;
@@ -115,13 +115,16 @@ describe.skipIf(!hasDatabase)('bottle registration (assets module)', () => {
     };
     const failingSerial = before.counters.find((c) => c.name === 'bottle')!.lastValue + 37n;
 
-    // Simulated failure inside the transaction: the database rejects the 37th bottle.
-    await t.prisma.$executeRawUnsafe(`
-      CREATE FUNCTION test_fail_bottle() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF NEW.serial = ${failingSerial} THEN RAISE EXCEPTION 'simulated failure'; END IF; RETURN NEW; END $$`);
-    await t.prisma.$executeRawUnsafe(
-      'CREATE TRIGGER test_fail_bottle BEFORE INSERT ON bottles FOR EACH ROW EXECUTE FUNCTION test_fail_bottle()',
-    );
+    // Simulated failure inside the transaction: the database rejects the 37th bottle (a test
+    // trigger, created by the privileged account — the running core has no DDL rights).
+    await withPrivileged(async (db) => {
+      await db.$executeRawUnsafe(`
+        CREATE FUNCTION test_fail_bottle() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.serial = ${failingSerial} THEN RAISE EXCEPTION 'simulated failure'; END IF; RETURN NEW; END $$`);
+      await db.$executeRawUnsafe(
+        'CREATE TRIGGER test_fail_bottle BEFORE INSERT ON bottles FOR EACH ROW EXECUTE FUNCTION test_fail_bottle()',
+      );
+    });
     try {
       const res = await http()
         .post('/api/admin/bottle-registrations')
@@ -130,8 +133,10 @@ describe.skipIf(!hasDatabase)('bottle registration (assets module)', () => {
       // No database or filesystem details leak to the client.
       expect(JSON.stringify(res.body)).not.toMatch(/simulated|bottles|serial|prisma/i);
     } finally {
-      await t.prisma.$executeRawUnsafe('DROP TRIGGER test_fail_bottle ON bottles');
-      await t.prisma.$executeRawUnsafe('DROP FUNCTION test_fail_bottle()');
+      await withPrivileged(async (db) => {
+        await db.$executeRawUnsafe('DROP TRIGGER test_fail_bottle ON bottles');
+        await db.$executeRawUnsafe('DROP FUNCTION test_fail_bottle()');
+      });
     }
 
     // 0 new bottles, events or batches — and the code counters were rolled back (no gaps).
@@ -312,6 +317,9 @@ describe.skipIf(!hasDatabase)('bottle registration (assets module)', () => {
     await expect(
       t.prisma.bottleCreationBatch.delete({ where: { id: bottle.creationBatchId } }),
     ).rejects.toThrow();
-    await expect(t.prisma.$executeRawUnsafe('TRUNCATE bottle_events')).rejects.toThrow();
+    // Even the privileged account (the running core has no TRUNCATE right at all).
+    await withPrivileged((db) =>
+      expect(db.$executeRawUnsafe('TRUNCATE bottle_events')).rejects.toThrow(),
+    );
   });
 });

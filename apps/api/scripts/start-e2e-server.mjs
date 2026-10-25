@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Starts the BUILT API for the web app's Playwright tests (apps/web/playwright.config.ts):
 //   1. recreates the dedicated database `ayvo_e2e` on the dev PostgreSQL server (never the dev DB),
-//   2. applies the committed migrations (`prisma migrate deploy`),
+//   2. applies the committed migrations (`prisma migrate deploy`) and, like a deployment, creates
+//      the core runtime role (dist/database/core-db-setup.js, ADR 0041): the API and the bootstrap
+//      command run as that non-superuser role; only the fixtures below use the privileged account,
 //   3. bootstraps the first administrator (e2e-admin@ayvo.test) with the one-time command,
 //   4. adds a second, clearly fictional test site with its own warehouse (multi-site browser
 //      tests; warehouses are created by migrations in v0.1, so the test database gets one here),
@@ -42,6 +44,21 @@ execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy']
   stdio: 'inherit',
 });
 
+// The core runtime role of this run (a fresh password each run; the role is cluster-wide).
+const { setupCoreDatabase } = await import(resolve(apiRoot, 'dist/database/core-db-setup.js'));
+const core = {
+  role: 'ayvo_core_e2e',
+  password: randomBytes(24).toString('base64url'),
+  connections: 50,
+};
+const setup = new PrismaClient({ adapter: new PrismaPg({ connectionString: e2eUrl }) });
+await setupCoreDatabase(setup, core);
+await setup.$disconnect();
+const coreUrl = Object.assign(new URL(e2eUrl), {
+  username: core.role,
+  password: core.password,
+}).toString();
+
 // A SIMULATED PPL CPL API (test/support/fake-ppl.ts, loaded with Node's type stripping) for the
 // browser tests of the site's PPL settings: "Ověřit připojení" talks to it, never to PPL. Obviously
 // fake credentials; the test-only base URL is refused by the API unless APP_ENV=test.
@@ -62,7 +79,7 @@ const testEnv = {
   PPL_TEST_API_BASE_URL_FOR_TESTS: fakePpl.base,
   // A fresh random key per run: credentials entered in the browser tests are encrypted with it.
   CARRIER_CREDENTIALS_KEY: randomBytes(32).toString('base64'),
-  DATABASE_URL: e2eUrl,
+  DATABASE_URL: coreUrl,
   APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
   // The browser tests sign in many times from one address.
   AUTH_RATE_LIMIT_LOGIN_MAX: '100000',

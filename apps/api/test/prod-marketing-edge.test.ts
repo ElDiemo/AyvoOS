@@ -70,6 +70,7 @@ export function renderProd(): Rendered {
     AYVO_PROD_SECRETS_DIR: secrets,
     POSTGRES_USER: 'fixture',
     POSTGRES_PASSWORD: 'fixture',
+    CORE_DB_PASSWORD: 'fixture-core',
     POSTGRES_DB: 'fixture',
     PUBLIC_QR_BASE_URL: `https://${QR}`,
   };

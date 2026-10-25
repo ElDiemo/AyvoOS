@@ -13,6 +13,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - **Modular monolith** (ADR 0001). No microservices. Modules talk through exported services, never
   through another module's tables.
 - **PostgreSQL is the source of truth** (ADR 0002). Redis is non-authoritative (ADR 0010).
+- **The running core is not the DB superuser** (ADR 0041, in review): `api` connects as `ayvo_core`
+  (rows of `public` only — no TRUNCATE, DDL, trigger switching or other schemas); migrations, role
+  setups and backups keep the privileged account. Tests run the app as such a role; fixtures that
+  need more use `withPrivileged` — never broaden the runtime role.
 - **History is append-only** (ADR 0006). Never UPDATE/DELETE lifecycle events; corrections are
   new compensating events. Current-state tables are allowed, but must change in the same
   transaction as the event that justifies them.
