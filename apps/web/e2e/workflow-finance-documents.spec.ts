@@ -32,7 +32,7 @@ test.describe('Přijaté doklady', () => {
         .getByRole('link', { name: 'Finance' }),
     ).toBeVisible();
     const form = page.getByTestId('receive-document');
-    await form.getByLabel('Originál (PDF, JPEG nebo PNG)').setInputFiles({
+    await form.getByLabel('Originál (PDF)').setInputFiles({
       name: 'Najem rijen.pdf',
       mimeType: 'application/pdf',
       buffer: original,
@@ -43,6 +43,7 @@ test.describe('Přijaté doklady', () => {
     await form.getByLabel('DUZP').fill('2026-10-01');
     await form.getByLabel('Splatnost').fill('2026-10-15');
     await form.getByLabel('Částka celkem').fill('25000.00');
+    await form.getByLabel('Předávací měsíc').fill('2026-10');
     await form.getByLabel('Popis').fill('Nájem skladu – říjen (syntetický)');
     await form.getByRole('button', { name: 'Přijmout doklad' }).click();
 
@@ -53,6 +54,8 @@ test.describe('Přijaté doklady', () => {
     await expect(detail).toContainText(supplier);
     await expect(detail).toContainText('25 000,00 CZK');
     await expect(detail).toContainText('15. 10. 2026');
+    await expect(detail).toContainText('10/2026');
+    await expect(detail).toContainText('Nahráno ve Financích');
     await expect(page.getByTestId('finance-history')).toContainText('Přijat');
 
     // The original, byte for byte, as a download.
@@ -111,6 +114,70 @@ test.describe('Přijaté doklady', () => {
     await expect(page.getByRole('button', { name: 'Opravit údaje' })).toHaveCount(0);
     await expect(history).toContainText('Zrušen');
     await expect(page.getByTestId('finance-download')).toBeVisible();
+  });
+});
+
+test.describe('Rozpracovaný doklad a převzetí ze skladu', () => {
+  test.use({ storageState: ADMIN_STATE });
+
+  test('a draft is "K doplnění" until completed; a supplier document is taken over without a copy', async ({
+    page,
+  }) => {
+    // A draft: only the original and the kind.
+    await page.goto('/finance/documents');
+    const form = page.getByTestId('receive-document');
+    await form.getByLabel('Originál (PDF)').setInputFiles({
+      name: 'uctenka.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(`%PDF-1.4\n% koncept ${randomUUID()}\n%%EOF\n`),
+    });
+    await form.getByRole('button', { name: 'Přijmout doklad' }).click();
+    await expect(page).toHaveURL(/\/finance\/documents\/FD-\d{6}$/);
+    const draft = page.url().split('/').pop()!;
+    await expect(
+      page.getByText('Pro export pro účetní chybí: dodavatel, číslo dokladu'),
+    ).toBeVisible();
+    await page.goto('/finance/documents?incomplete=true');
+    const list = page.getByTestId('finance-documents');
+    await expect(list.getByRole('link', { name: draft })).toBeVisible();
+    await expect(list.getByTestId('finance-missing').first()).toBeVisible();
+
+    // A supplier document of Sklad, taken over into Finance.
+    const supplier = `Dodavatel skladu ${randomUUID().slice(0, 6)}`;
+    const created = await page.request.post('/api/admin/suppliers', {
+      data: { requestId: randomUUID(), name: supplier, companyId: null, vatId: null },
+    });
+    expect(created.status()).toBe(201);
+    const number = `SKL-${randomUUID().slice(0, 6)}`;
+    const original = Buffer.from(`%PDF-1.4\n% sklad ${number}\n%%EOF\n`);
+    const uploaded = await page.request.post('/api/admin/supplier-documents', {
+      multipart: {
+        requestId: randomUUID(),
+        supplierId: (await created.json()).id,
+        kind: 'INVOICE',
+        documentNumber: number,
+        issuedOn: '2026-10-07',
+        file: { name: 'sklad.pdf', mimeType: 'application/pdf', buffer: original },
+      },
+    });
+    expect(uploaded.status()).toBe(201);
+    await page.goto('/finance/documents');
+    const takeOver = page.getByTestId('finance-take-over');
+    await takeOver.getByLabel('Předávací měsíc').fill('2026-10');
+    const row = takeOver.getByRole('listitem').filter({ hasText: number });
+    await row.getByRole('button', { name: 'Převzít' }).click();
+    await expect(page).toHaveURL(/\/finance\/documents\/FD-\d{6}$/);
+    const detail = page.getByTestId('finance-document');
+    await expect(detail).toContainText('Doklad ze skladu');
+    await expect(detail).toContainText(supplier);
+    await expect(detail).toContainText('10/2026');
+    const download = page.waitForEvent('download');
+    await page.getByTestId('finance-download').click();
+    expect(Buffer.compare(await readFile((await (await download).path())!), original)).toBe(0);
+    await page.goto('/finance/documents');
+    await expect(
+      page.getByTestId('finance-take-over').getByRole('listitem').filter({ hasText: number }),
+    ).toContainText('Převzato jako FD-');
   });
 });
 

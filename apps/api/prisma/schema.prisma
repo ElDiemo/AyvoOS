@@ -685,7 +685,6 @@ model Supplier {
   receipts         GoodsReceipt[]
   lots             InventoryLot[]
   preferredForItem InventoryItemSetting[]
-  financeDocuments FinanceDocument[]
 
   @@map("suppliers")
 }
@@ -998,46 +997,43 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
-  financeDocuments      FinanceDocument[]        @relation("FinanceDocumentCreatedBy")
-  financeDocumentEvents FinanceDocumentEvent[]   @relation("FinanceDocumentEventActor")
-  accountingExports     AccountingExport[]       @relation("AccountingExportCreatedBy")
-  nativeCredential      NativeCredential?
-  nativeTokens          NativeAuthToken[]
-  nativeChallenges      NativeAuthChallenge[]
-  nativeRecoveryCodes   NativeRecoveryCode[]
-  employeeCard          EmployeeCard?
-  employeeCardPhotos    EmployeeCardPhoto[]
-  itemWeights           ItemReferenceWeight[]
-  productWeights        ProductReferenceWeight[]
-  tareWeights           CrateTypeTareWeight[]
-  crateDimensions       CrateTypeDimension[]
-  hotelsCreated         Hotel[]                  @relation("HotelCreatedBy")
-  ordersCreated         Order[]                  @relation("OrderCreatedBy")
-  supplyPlansCreated    SupplyPlan[]             @relation("SupplyPlanCreatedBy")
-  supplyPlansUpdated    SupplyPlan[]             @relation("SupplyPlanUpdatedBy")
-  supplyPlansActivated  SupplyPlan[]             @relation("SupplyPlanActivatedBy")
-  ordersCompleted       Order[]                  @relation("OrderCompletedBy")
-  ordersCancelled       Order[]                  @relation("OrderCancelledBy")
-  allocationsMade       OrderCrateAllocation[]   @relation("AllocatedBy")
-  allocationsRelease    OrderCrateAllocation[]   @relation("AllocationReleasedBy")
-  orderEvents           OrderEvent[]
-  labelApprovals        ProductLabelApproval[]   @relation("ApprovalBy")
-  labelRevocations      ProductLabelApproval[]   @relation("ApprovalRevokedBy")
-  cyclesOpened          CrateCycle[]             @relation("CycleOpenedBy")
-  cyclesAborted         CrateCycle[]             @relation("CycleAbortedBy")
-  assignmentsMade       CrateAssignment[]        @relation("AssignedBy")
-  assignmentsReleased   CrateAssignment[]        @relation("ReleasedBy")
-  id                    String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  email                 String                   @unique
-  displayName           String                   @map("display_name")
-  status                UserStatus               @default(ACTIVE)
-  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  nativeCredential     NativeCredential?
+  nativeTokens         NativeAuthToken[]
+  nativeChallenges     NativeAuthChallenge[]
+  nativeRecoveryCodes  NativeRecoveryCode[]
+  employeeCard         EmployeeCard?
+  employeeCardPhotos   EmployeeCardPhoto[]
+  itemWeights          ItemReferenceWeight[]
+  productWeights       ProductReferenceWeight[]
+  tareWeights          CrateTypeTareWeight[]
+  crateDimensions      CrateTypeDimension[]
+  hotelsCreated        Hotel[]                  @relation("HotelCreatedBy")
+  ordersCreated        Order[]                  @relation("OrderCreatedBy")
+  supplyPlansCreated   SupplyPlan[]             @relation("SupplyPlanCreatedBy")
+  supplyPlansUpdated   SupplyPlan[]             @relation("SupplyPlanUpdatedBy")
+  supplyPlansActivated SupplyPlan[]             @relation("SupplyPlanActivatedBy")
+  ordersCompleted      Order[]                  @relation("OrderCompletedBy")
+  ordersCancelled      Order[]                  @relation("OrderCancelledBy")
+  allocationsMade      OrderCrateAllocation[]   @relation("AllocatedBy")
+  allocationsRelease   OrderCrateAllocation[]   @relation("AllocationReleasedBy")
+  orderEvents          OrderEvent[]
+  labelApprovals       ProductLabelApproval[]   @relation("ApprovalBy")
+  labelRevocations     ProductLabelApproval[]   @relation("ApprovalRevokedBy")
+  cyclesOpened         CrateCycle[]             @relation("CycleOpenedBy")
+  cyclesAborted        CrateCycle[]             @relation("CycleAbortedBy")
+  assignmentsMade      CrateAssignment[]        @relation("AssignedBy")
+  assignmentsReleased  CrateAssignment[]        @relation("ReleasedBy")
+  id                   String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email                String                   @unique
+  displayName          String                   @map("display_name")
+  status               UserStatus               @default(ACTIVE)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   /// NULL only for the bootstrap administrator.
-  createdBy             String?                  @map("created_by") @db.Uuid
-  deactivatedAt         DateTime?                @map("deactivated_at") @db.Timestamptz(3)
-  deactivatedBy         String?                  @map("deactivated_by") @db.Uuid
-  deactivationReason    String?                  @map("deactivation_reason")
-  lastLoginAt           DateTime?                @map("last_login_at") @db.Timestamptz(3)
+  createdBy            String?                  @map("created_by") @db.Uuid
+  deactivatedAt        DateTime?                @map("deactivated_at") @db.Timestamptz(3)
+  deactivatedBy        String?                  @map("deactivated_by") @db.Uuid
+  deactivationReason   String?                  @map("deactivation_reason")
+  lastLoginAt          DateTime?                @map("last_login_at") @db.Timestamptz(3)
 
   createdByUser             User?                     @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   createdUsers              User[]                    @relation("UserCreatedBy")
@@ -3545,103 +3541,4 @@ model SalesEvent {
   @@index([prospectId, occurredAt])
   @@index([taskId])
   @@map("sales_events")
-}
-
-/// Finance — a received document (doc 039, N1): rent, accounting, services, material invoices…
-/// The original file is immutable; metadata changes only with the next `version` and its event;
-/// voided, never deleted (DB triggers). `totalAmount` + `currency` as written (both or neither).
-model FinanceDocument {
-  id               String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial           BigInt    @unique
-  code             String    @unique
-  supplierId       String    @map("supplier_id") @db.Uuid
-  kind             String
-  documentNumber   String    @map("document_number")
-  issuedOn         DateTime  @map("issued_on") @db.Date
-  taxPointOn       DateTime? @map("tax_point_on") @db.Date
-  dueOn            DateTime? @map("due_on") @db.Date
-  totalAmount      Decimal?  @map("total_amount") @db.Decimal(19, 2)
-  currency         String?   @db.Char(3)
-  description      String?
-  status           String    @default("ACTIVE")
-  version          Int       @default(1)
-  storageKey       String    @unique @map("storage_key")
-  sha256           String    @db.Char(64)
-  byteSize         Int       @map("byte_size")
-  contentType      String    @map("content_type")
-  originalFilename String    @map("original_filename")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy        String    @map("created_by") @db.Uuid
-  requestId        String    @unique @map("request_id") @db.Uuid
-  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
-
-  supplier    Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  creator     User                   @relation("FinanceDocumentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  events      FinanceDocumentEvent[]
-  exportItems AccountingExportItem[]
-
-  @@index([issuedOn])
-  @@index([supplierId])
-  @@map("finance_documents")
-}
-
-/// Finance — append-only history of a received document: RECEIVED, CORRECTED (full snapshot,
-/// reason), VOIDED (reason). One event per version.
-model FinanceDocumentEvent {
-  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  documentId String   @map("document_id") @db.Uuid
-  version    Int
-  type       String
-  snapshot   Json
-  reason     String?
-  actorId    String   @map("actor_id") @db.Uuid
-  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
-
-  document    FinanceDocument        @relation(fields: [documentId], references: [id], onDelete: Restrict)
-  actor       User                   @relation("FinanceDocumentEventActor", fields: [actorId], references: [id], onDelete: Restrict)
-  exportItems AccountingExportItem[]
-
-  @@unique([documentId, version])
-  @@map("finance_document_events")
-}
-
-/// Finance — a fixed export for the accountant (doc 039 §7, N2): ZIP (CSV manifest + originals)
-/// of a period of issue dates. Append-only.
-model AccountingExport {
-  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial        BigInt   @unique
-  code          String   @unique
-  periodFrom    DateTime @map("period_from") @db.Date
-  periodTo      DateTime @map("period_to") @db.Date
-  mode          String
-  note          String?
-  documentCount Int      @map("document_count")
-  storageKey    String   @unique @map("storage_key")
-  sha256        String   @db.Char(64)
-  byteSize      Int      @map("byte_size")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy     String   @map("created_by") @db.Uuid
-  requestId     String   @unique @map("request_id") @db.Uuid
-
-  creator User                   @relation("AccountingExportCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  items   AccountingExportItem[]
-
-  @@index([periodFrom, periodTo])
-  @@map("accounting_exports")
-}
-
-/// What an export handed over: the document version and why (NEW, CHANGED, VOIDED, INCLUDED).
-model AccountingExportItem {
-  exportId        String @map("export_id") @db.Uuid
-  documentId      String @map("document_id") @db.Uuid
-  documentVersion Int    @map("document_version")
-  change          String
-
-  export   AccountingExport     @relation(fields: [exportId], references: [id], onDelete: Restrict)
-  document FinanceDocument      @relation(fields: [documentId], references: [id], onDelete: Restrict)
-  event    FinanceDocumentEvent @relation(fields: [documentId, documentVersion], references: [documentId, version], onDelete: Restrict)
-
-  @@id([exportId, documentId])
-  @@index([documentId, documentVersion])
-  @@map("accounting_export_items")
 }

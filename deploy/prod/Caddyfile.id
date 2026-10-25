@@ -1,0 +1,78 @@
+# AYVO OS — the PUBLIC ID edge (https://<ID host>/<slug>, employee business cards; ADR 0036 and the
+# public-ID proposal rev. 3). Loaded by qr-edge INSTEAD of Caddyfile.qr only when ID_DOMAIN is set
+# (compose.id.yml); it imports the unchanged QR configuration first, so QR behaves exactly as before.
+#
+# It serves exactly: GET/HEAD /<slug>, /<slug>/photo, /<slug>/contact.vcf, the old PHP vCard link
+# /?slug=<slug>&vcard=1, the page's Next.js static files and the four pinned card assets
+# (apps/web/public/employee-card/README.md). Everything else is a plain 404 — no API, no sign-in,
+# no administration, no listing. Like the QR edge it reaches only `web`.
+#
+# Certificates: HTTP-01 (also while DNS still points to the old server, through its
+# challenge-only forward and the internal Caddy's :80 → this edge's :80 on the `acme` network) and
+# TLS-ALPN-01 once DNS points here. The certificate and its key exist only in this edge.
+import /etc/caddy/Caddyfile
+
+{$ID_DOMAIN} {
+	tls {
+		issuer acme
+	}
+	encode zstd gzip
+	import headers
+
+	# A slug exactly as the API accepts it: a-z0-9 groups joined by single dashes, 2–80 characters.
+	@card {
+		method GET HEAD
+		path_regexp card ^/([a-z0-9]+(?:-[a-z0-9]+)*)$
+		expression {path}.matches('^/[a-z0-9-]{2,80}$')
+	}
+	handle @card {
+		# The query is kept: ?vcard is the page's own link to the contact file.
+		rewrite * /id/{re.card.1}?{query}
+		import to_web
+	}
+
+	@photo {
+		method GET HEAD
+		path_regexp photo ^/([a-z0-9]+(?:-[a-z0-9]+)*)/photo$
+		expression {path}.matches('^/[a-z0-9-]{2,80}/photo$')
+	}
+	handle @photo {
+		# ?version=<publication> selects the current photo; nothing else is used.
+		rewrite * /id/{re.photo.1}/photo?{query}
+		import to_web
+	}
+
+	@vcard {
+		method GET HEAD
+		path_regexp vcard ^/([a-z0-9]+(?:-[a-z0-9]+)*)/contact\.vcf$
+		expression {path}.matches('^/[a-z0-9-]{2,80}/contact\\.vcf$')
+	}
+	handle @vcard {
+		rewrite * /id/{re.vcard.1}/contact.vcf?
+		import to_web
+	}
+
+	# The old PHP Save-contact link. The whole raw query must be exactly this (no other, repeated
+	# or encoded parameters), so `slug` is that one validated value.
+	@legacy {
+		method GET HEAD
+		path /
+		expression {http.request.uri.query}.matches('^slug=[a-z0-9]+(?:-[a-z0-9]+)*&vcard=1$') && {http.request.uri.query}.matches('^slug=[a-z0-9-]{2,80}&vcard=1$')
+	}
+	handle @legacy {
+		rewrite * /id/{query.slug}/contact.vcf?
+		import to_web
+	}
+
+	@static {
+		method GET HEAD
+		path /_next/static/* /employee-card/favicon.ico /employee-card/legacy-logo.svg /employee-card/fa-solid-900.woff2 /employee-card/fa-brands-400.woff2
+	}
+	handle @static {
+		import to_web
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

@@ -7,7 +7,12 @@ import {
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
 import { DocumentActions } from '@/components/finance/document-actions';
-import { fileSize, financeAmount, financeDate } from '@/components/finance/finance-format';
+import {
+  fileSize,
+  financeAmount,
+  financeDate,
+  financeMonth,
+} from '@/components/finance/finance-format';
 import { buttonClass, Card, Field, FieldList, Notice, PageHeader } from '@/components/ui';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { ApiError, apiGet } from '@/lib/api';
@@ -48,6 +53,7 @@ export default async function FinanceDocumentPage({
     if (k === 'status') return t.status[v as keyof typeof t.status] ?? String(v);
     if (k === 'supplierId') return String(v); // the API gives the names
     if (k === 'totalAmount') return financeAmount(String(v), doc.currency ?? '');
+    if (k === 'handoverMonth') return financeMonth(String(v));
     if (/On$/.test(k)) return financeDate(String(v));
     return String(v);
   };
@@ -56,8 +62,8 @@ export default async function FinanceDocumentPage({
     <>
       <PageHeader
         back={{ href: '/finance/documents', label: t.detail.back }}
-        title={`${doc.code} · ${t.kinds[doc.kind]} ${doc.documentNumber}`}
-        subtitle={doc.supplier.name}
+        title={`${doc.code} · ${t.kinds[doc.kind]} ${doc.documentNumber ?? ''}`.trim()}
+        subtitle={doc.supplier?.name ?? t.missing.label}
         actions={
           <a
             href={`${API_BASE_PATH}/admin/finance/documents/${doc.code}/content`}
@@ -70,17 +76,25 @@ export default async function FinanceDocumentPage({
       />
       <div className="flex flex-col gap-6">
         {doc.status === 'VOIDED' && <Notice>{t.detail.voided}</Notice>}
+        {doc.status === 'ACTIVE' && doc.missing.length > 0 && (
+          <Notice>{t.missing.note(doc.missing.map((m) => t.missing.fields[m]).join(', '))}</Notice>
+        )}
         <Card testId="finance-document">
           <FieldList>
             <Field label={t.fields.status}>{t.status[doc.status]}</Field>
-            <Field label={t.fields.supplier}>{doc.supplier.name}</Field>
+            <Field label={t.fields.supplier}>{doc.supplier?.name ?? t.detail.empty}</Field>
             <Field label={t.fields.kind}>{t.kinds[doc.kind]}</Field>
-            <Field label={t.fields.documentNumber}>{doc.documentNumber}</Field>
+            <Field label={t.fields.documentNumber}>{doc.documentNumber ?? t.detail.empty}</Field>
+            <Field label={t.fields.handoverMonth}>{financeMonth(doc.handoverMonth)}</Field>
             <Field label={t.fields.issuedOn}>{financeDate(doc.issuedOn)}</Field>
             <Field label={t.fields.taxPointOn}>{financeDate(doc.taxPointOn)}</Field>
             <Field label={t.fields.dueOn}>{financeDate(doc.dueOn)}</Field>
             <Field label={t.fields.amount}>{financeAmount(doc.totalAmount, doc.currency)}</Field>
             <Field label={t.fields.description}>{doc.description ?? t.detail.empty}</Field>
+            <Field label={t.fields.source}>
+              {t.sources[doc.source]}
+              {doc.supplierDocument && ` · ${doc.supplierDocument.siteCode}`}
+            </Field>
             <Field label={t.fields.file}>
               {doc.originalFilename} · {fileSize(doc.byteSize)} ·{' '}
               <span className="font-mono text-xs">SHA-256 {doc.sha256.slice(0, 16)}…</span>

@@ -39,17 +39,38 @@ const optionalText = (max: number) =>
     .nullable()
     .optional();
 
-/** The editable metadata (upload and correction). Amount and currency: both or neither. */
+/** A handover month "YYYY-MM": which month's export for the accountant the document belongs to. */
+export const handoverMonthSchema = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Měsíc ve tvaru RRRR-MM.');
+
+/**
+ * What a document needs before it can be exported (doc 039 §3). Until then it is "k doplnění":
+ * saved and visible, never silently left out of the list.
+ */
+export const FINANCE_EXPORT_REQUIRED = [
+  'supplierId',
+  'documentNumber',
+  'issuedOn',
+  'handoverMonth',
+] as const;
+export type FinanceExportRequiredField = (typeof FINANCE_EXPORT_REQUIRED)[number];
+
+/**
+ * The editable metadata (upload, takeover and correction). Only the kind is required to save;
+ * amount and currency: both or neither. A correction always sends the complete new state.
+ */
 const financeDocumentFieldsBase = z.object({
-  supplierId: z.uuid(),
+  supplierId: z.uuid().nullable().optional(),
   kind: financeDocumentKindSchema,
-  documentNumber: z.string().trim().min(1).max(100),
-  issuedOn: isoDateSchema,
+  documentNumber: optionalText(100),
+  issuedOn: optionalDate,
   taxPointOn: optionalDate,
   dueOn: optionalDate,
   totalAmount: financeAmountSchema.nullable().optional(),
   currency: currencySchema.nullable().optional(),
   description: optionalText(500),
+  handoverMonth: handoverMonthSchema.nullable().optional(),
 });
 const bothOrNeither = (f: { totalAmount?: string | null; currency?: string | null }) =>
   !f.totalAmount === !f.currency;
@@ -61,11 +82,26 @@ export const financeDocumentFieldsSchema = financeDocumentFieldsBase.refine(
 );
 export type FinanceDocumentFields = z.infer<typeof financeDocumentFieldsSchema>;
 
-/** Multipart fields of POST /api/admin/finance/documents (plus the `file` part). */
+/** Multipart fields of POST /api/admin/finance/documents (plus the `file` part, PDF only). */
 export const uploadFinanceDocumentFieldsSchema = financeDocumentFieldsBase
   .extend({ requestId: z.uuid() })
   .refine(bothOrNeither, amountMessage);
 export type UploadFinanceDocumentFields = z.infer<typeof uploadFinanceDocumentFieldsSchema>;
+
+/**
+ * POST /api/admin/finance/documents/take-over: an existing supplier document of Sklad becomes a
+ * finance document without a second copy of its file. Supplier, number and issue date are taken
+ * from it (correctable later); the kind (default from the supplier document's kind) and the
+ * handover month are chosen here.
+ */
+export const takeOverSupplierDocumentSchema = z.object({
+  requestId: z.uuid(),
+  supplierDocumentId: z.uuid(),
+  kind: financeDocumentKindSchema.optional(),
+  handoverMonth: handoverMonthSchema.nullable().optional(),
+  description: optionalText(500),
+});
+export type TakeOverSupplierDocumentRequest = z.infer<typeof takeOverSupplierDocumentSchema>;
 
 export const correctFinanceDocumentSchema = financeDocumentFieldsBase
   .extend({ expectedVersion: z.number().int().positive(), reason: reasonSchema })
@@ -82,26 +118,38 @@ export const financeDocumentListQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
   supplierId: z.uuid().optional(),
   status: financeDocumentStatusSchema.optional(),
+  handoverMonth: handoverMonthSchema.optional(),
+  /** "true": only documents still missing something needed for the export. */
+  incomplete: z.enum(['true']).optional(),
   issuedFrom: isoDateSchema.optional(),
   issuedTo: isoDateSchema.optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
 });
 export type FinanceDocumentListQuery = z.infer<typeof financeDocumentListQuerySchema>;
 
+export const financeDocumentSourceSchema = z.enum(['UPLOAD', 'SUPPLIER_DOCUMENT']);
+export type FinanceDocumentSource = z.infer<typeof financeDocumentSourceSchema>;
+
 export const financeDocumentSchema = z.object({
   id: z.uuid(),
   code: z.string(),
-  supplier: z.object({ id: z.uuid(), name: z.string() }),
+  supplier: z.object({ id: z.uuid(), name: z.string() }).nullable(),
   kind: financeDocumentKindSchema,
-  documentNumber: z.string(),
-  issuedOn: isoDateSchema,
+  documentNumber: z.string().nullable(),
+  issuedOn: isoDateSchema.nullable(),
   taxPointOn: isoDateSchema.nullable(),
   dueOn: isoDateSchema.nullable(),
   totalAmount: z.string().nullable(),
   currency: z.string().nullable(),
   description: z.string().nullable(),
+  handoverMonth: handoverMonthSchema.nullable(),
+  /** What is still needed for the export (empty: complete). */
+  missing: z.array(z.enum(FINANCE_EXPORT_REQUIRED)),
   status: financeDocumentStatusSchema,
   version: z.number().int(),
+  source: financeDocumentSourceSchema,
+  /** The referenced supplier document of Sklad (source SUPPLIER_DOCUMENT) and its site. */
+  supplierDocument: z.object({ id: z.uuid(), siteCode: z.string() }).nullable(),
   originalFilename: z.string(),
   contentType: z.string(),
   byteSize: z.number().int(),
@@ -139,96 +187,73 @@ export const financeDocumentPageSchema = z.object({
 });
 export type FinanceDocumentPage = z.infer<typeof financeDocumentPageSchema>;
 
+/** A supplier document of Sklad that may be taken over (the user may read its site's paperwork). */
+export const takeOverCandidateSchema = z.object({
+  id: z.uuid(),
+  supplier: z.object({ id: z.uuid(), name: z.string() }),
+  kind: z.string(),
+  documentNumber: z.string(),
+  issuedOn: isoDateSchema,
+  originalFilename: z.string(),
+  byteSize: z.number().int(),
+  siteCode: z.string(),
+  /** A newer supplier document supersedes this one. */
+  superseded: z.boolean(),
+  /** The valid finance document that already took it over. */
+  takenOverBy: z.string().nullable(),
+});
+export type TakeOverCandidate = z.infer<typeof takeOverCandidateSchema>;
+
 /** Suppliers offered when receiving a document (names only; managed in Sklad). */
 export const financeSupplierSchema = z.object({ id: z.uuid(), name: z.string() });
 export type FinanceSupplier = z.infer<typeof financeSupplierSchema>;
 
-/** N2 — the export for the accountant (doc 039 §7). */
-export const ACCOUNTING_EXPORT_MODES = ['FULL', 'SUPPLEMENT'] as const;
-export const accountingExportModeSchema = z.enum(ACCOUNTING_EXPORT_MODES);
-export type AccountingExportMode = z.infer<typeof accountingExportModeSchema>;
-export const accountingExportChangeSchema = z.enum(['NEW', 'CHANGED', 'VOIDED', 'INCLUDED']);
-export type AccountingExportChange = z.infer<typeof accountingExportChangeSchema>;
+// --- Internal contract core ⇄ Finance unit (ADR 0039 §4) ------------------------------------
+// Called only by the Finance container with its service token and the user's session token.
 
-/** A period of issue dates, at most 366 days. */
-export const accountingExportPeriodSchema = z
-  .object({
-    periodFrom: isoDateSchema,
-    periodTo: isoDateSchema,
-    mode: accountingExportModeSchema,
-  })
-  .refine((p) => p.periodTo >= p.periodFrom, {
-    message: 'Konec období nesmí být před začátkem.',
-    path: ['periodTo'],
-  })
-  .refine((p) => (Date.parse(p.periodTo) - Date.parse(p.periodFrom)) / 86_400_000 <= 366, {
-    message: 'Období může mít nejvýše 366 dní.',
-    path: ['periodTo'],
-  });
-export type AccountingExportPeriod = z.infer<typeof accountingExportPeriodSchema>;
+/** The browser request Finance is answering, for the core's CSRF rule. */
+export const financePrincipalRequestSchema = z.object({
+  method: z.string().min(1).max(10),
+  origin: z.string().max(200).nullable(),
+  secFetchSite: z.string().max(40).nullable(),
+});
+export type FinancePrincipalRequest = z.infer<typeof financePrincipalRequestSchema>;
 
-export const createAccountingExportSchema = z
-  .object({
-    requestId: z.uuid(),
-    periodFrom: isoDateSchema,
-    periodTo: isoDateSchema,
-    mode: accountingExportModeSchema,
-    note: z.string().trim().max(500).optional(),
-  })
-  .refine((p) => p.periodTo >= p.periodFrom, {
-    message: 'Konec období nesmí být před začátkem.',
-    path: ['periodTo'],
-  })
-  .refine((p) => (Date.parse(p.periodTo) - Date.parse(p.periodFrom)) / 86_400_000 <= 366, {
-    message: 'Období může mít nejvýše 366 dní.',
-    path: ['periodTo'],
-  });
-export type CreateAccountingExportRequest = z.infer<typeof createAccountingExportSchema>;
+/** The current user as the core evaluates it now (no cache). */
+export const financePrincipalSchema = z.object({
+  userId: z.uuid(),
+  displayName: z.string(),
+  permissions: z.array(z.string()),
+  globalSiteAccess: z.boolean(),
+  siteIds: z.array(z.uuid()),
+});
+export type FinancePrincipal = z.infer<typeof financePrincipalSchema>;
 
-export const accountingExportLineSchema = z.object({
-  code: z.string(),
-  supplier: z.string(),
-  kind: financeDocumentKindSchema,
+/** A supplier as Finance needs it (identity snapshot for the export manifest). */
+export const financeContractSupplierSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  companyId: z.string().nullable(),
+  vatId: z.string().nullable(),
+  active: z.boolean(),
+});
+export type FinanceContractSupplier = z.infer<typeof financeContractSupplierSchema>;
+
+export const financeSupplierLookupSchema = z.object({ ids: z.array(z.uuid()).max(1000) });
+
+/** A supplier document of Sklad (immutable): metadata; its bytes come from …/content. */
+export const financeContractSupplierDocumentSchema = z.object({
+  id: z.uuid(),
+  supplier: z.object({ id: z.uuid(), name: z.string() }),
+  kind: z.string(),
   documentNumber: z.string(),
   issuedOn: isoDateSchema,
-  totalAmount: z.string().nullable(),
-  currency: z.string().nullable(),
-  version: z.number().int(),
-  change: accountingExportChangeSchema,
-  byteSize: z.number().int(),
-});
-export type AccountingExportLine = z.infer<typeof accountingExportLineSchema>;
-
-/** What an export would contain now (nothing is written). */
-export const accountingExportPreviewSchema = z.object({
-  periodFrom: isoDateSchema,
-  periodTo: isoDateSchema,
-  mode: accountingExportModeSchema,
-  lines: z.array(accountingExportLineSchema),
-  totalBytes: z.number().int(),
-  /** Over the limits (count or size): the export would be refused. */
-  tooLarge: z.boolean(),
-  limits: z.object({ documents: z.number().int(), bytes: z.number().int() }),
-});
-export type AccountingExportPreview = z.infer<typeof accountingExportPreviewSchema>;
-
-export const accountingExportSchema = z.object({
-  code: z.string(),
-  periodFrom: isoDateSchema,
-  periodTo: isoDateSchema,
-  mode: accountingExportModeSchema,
-  note: z.string().nullable(),
-  documentCount: z.number().int(),
-  byteSize: z.number().int(),
   sha256: z.string(),
-  createdAt: z.iso.datetime(),
-  createdBy: z.string(),
+  byteSize: z.number().int(),
+  contentType: z.string(),
+  originalFilename: z.string(),
+  siteId: z.uuid(),
+  siteCode: z.string(),
+  superseded: z.boolean(),
 });
-export type AccountingExport = z.infer<typeof accountingExportSchema>;
-
-export const accountingExportDetailSchema = accountingExportSchema.extend({
-  lines: z.array(accountingExportLineSchema),
-  /** Documents of the period added, changed or voided after this export (to hand over later). */
-  laterChanges: z.array(accountingExportLineSchema),
-});
-export type AccountingExportDetail = z.infer<typeof accountingExportDetailSchema>;
+export type FinanceContractSupplierDocument = z.infer<typeof financeContractSupplierDocumentSchema>;

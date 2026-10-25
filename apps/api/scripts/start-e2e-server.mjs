@@ -7,11 +7,13 @@
 //      tests; warehouses are created by migrations in v0.1, so the test database gets one here),
 //   5. starts a simulated PPL API (test/support/fake-ppl.ts) for the PPL settings page,
 //   6. runs dist/main.js with a fresh temporary file store (scripts/e2e-storage.mjs) and the fake
-//      identity provider (APP_ENV=test).
+//      identity provider (APP_ENV=test),
+//   7. sets up the Finance unit's roles/schema/migrations and runs dist/finance/main.js next to it
+//      (ADR 0039; its own DB role, the core reached only through the internal contract).
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -42,6 +44,35 @@ execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy']
   stdio: 'inherit',
 });
 
+// Finance unit (ADR 0039), exactly as deployed: its roles and schema (as the superuser), its
+// migrations as the schema owner. Fixed e2e role names; new passwords every run.
+const finance = {
+  ownerRole: 'ayvo_fin_e2e_owner',
+  ownerPassword: randomBytes(24).toString('hex'),
+  runtimeRole: 'ayvo_fin_e2e',
+  runtimePassword: randomBytes(24).toString('hex'),
+  runtimeConnections: 10,
+};
+const { setupFinanceDatabase } = await import(resolve(apiRoot, 'dist/finance/db-setup.js'));
+const setupDb = new PrismaClient({ adapter: new PrismaPg({ connectionString: e2eUrl }) });
+await setupFinanceDatabase(setupDb, finance);
+await setupDb.$disconnect();
+const asRole = (role, password) =>
+  Object.assign(new URL(e2eUrl), { username: role, password }).toString();
+execFileSync(
+  resolve(apiRoot, 'node_modules/.bin/prisma'),
+  ['migrate', 'deploy', '--config', 'prisma-finance.config.ts'],
+  {
+    cwd: apiRoot,
+    env: {
+      ...process.env,
+      FINANCE_MIGRATE_DATABASE_URL: `${asRole(finance.ownerRole, finance.ownerPassword)}?schema=finance`,
+    },
+    stdio: 'inherit',
+  },
+);
+const serviceToken = randomBytes(32).toString('base64url');
+
 // A SIMULATED PPL CPL API (test/support/fake-ppl.ts, loaded with Node's type stripping) for the
 // browser tests of the site's PPL settings: "Ověřit připojení" talks to it, never to PPL. Obviously
 // fake credentials; the test-only base URL is refused by the API unless APP_ENV=test.
@@ -63,6 +94,7 @@ const testEnv = {
   // A fresh random key per run: credentials entered in the browser tests are encrypted with it.
   CARRIER_CREDENTIALS_KEY: randomBytes(32).toString('base64'),
   DATABASE_URL: e2eUrl,
+  FINANCE_SERVICE_TOKEN_SHA256: createHash('sha256').update(serviceToken).digest('hex'),
   APP_PUBLIC_ORIGIN: process.env.E2E_APP_ORIGIN ?? 'http://localhost:3100',
   // The browser tests sign in many times from one address.
   AUTH_RATE_LIMIT_LOGIN_MAX: '100000',
@@ -99,5 +131,31 @@ const child = spawn(process.execPath, ['dist/main.js'], {
     PUBLIC_QR_BASE_URL: process.env.E2E_PUBLIC_QR_BASE_URL ?? 'http://localhost:3100/q',
   },
 });
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
-child.on('exit', (code) => process.exit(code ?? 0));
+// The Finance unit: its own process, DB role (schema finance only) and storage directory; it
+// reaches the core only through the internal contract with the service token.
+const financeChild = spawn(process.execPath, ['dist/finance/main.js'], {
+  cwd: apiRoot,
+  stdio: 'inherit',
+  env: {
+    PATH: process.env.PATH,
+    APP_ENV: 'test',
+    FINANCE_PORT: process.env.E2E_FINANCE_PORT ?? '4110',
+    FINANCE_DATABASE_URL: asRole(finance.runtimeRole, finance.runtimePassword),
+    CORE_INTERNAL_URL: `http://localhost:${port}`,
+    FINANCE_SERVICE_TOKEN: serviceToken,
+    FILE_STORAGE_DIR: storageDir,
+  },
+});
+for (const signal of ['SIGINT', 'SIGTERM'])
+  process.on(signal, () => {
+    child.kill(signal);
+    financeChild.kill(signal);
+  });
+child.on('exit', (code) => {
+  financeChild.kill('SIGTERM');
+  process.exit(code ?? 0);
+});
+financeChild.on('exit', (code) => {
+  child.kill('SIGTERM');
+  process.exit(code ?? 1);
+});

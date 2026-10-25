@@ -75,3 +75,26 @@ nc -vz -w 5 2.29.17.36 5432; nc -vz -w 5 2.29.17.36 6379; nc -vz -w 5 2.29.17.36
 ```
 
 Then scan the QR of a real production bottle with a phone without VPN: its passport appears.
+
+## ID — public employee-card host (optional, `ID_DOMAIN`)
+
+The same public edge (qr-edge) can also serve `https://<ID host>/<slug>` (cards, ADR 0036):
+`deploy/prod/Caddyfile.id` (exact routes `/<slug>`, `/<slug>/photo`, `/<slug>/contact.vcf`, the old
+`/?slug=<slug>&vcard=1`, `/_next/static/*` and the four pinned card assets; everything else 404) and
+`deploy/prod/Caddyfile.acme` (the internal Caddy forwards only ACME HTTP-01 challenges for the ID
+host from public :80 to qr-edge over the small `acme` network). Both exist only through
+`compose.id.yml`, which `scripts/deploy-prod.sh` adds only when `ID_DOMAIN` is set in prod.env —
+without it the configuration is the same as before. The `acme` network is a normal two-way bridge;
+the internal application still refuses every peer outside the tailnet (`remote_ip` guard).
+
+Order (each infrastructure step needs the owner's approval): release with ID support → set
+`ID_DOMAIN`, deploy (DNS may still point to the old server; the certificate is not required for
+the deployment) → the old server forwards only `/.well-known/acme-challenge/` with its Host to this
+server's :80 → qr-edge obtains the certificate → verify with `curl --resolve <ID host>:443:<public
+IPv4>` **with** certificate verification → DNS change → remove the old server's forward. Rollback:
+DNS back to the old server; `ID_DOMAIN` empty and redeploy removes the edge.
+
+Tests: `apps/api/test/prod-id-edge.test.ts` (real Caddy: routes, 404s, headers, host names, the
+`acme` network refusals, and the HTTP-01 chain through an "old server" with Pebble, the Let's
+Encrypt test CA), `apps/web/e2e/public-id-edge.spec.ts` (real browser through the edge to the real
+web), `apps/api/test/deploy-prod.test.ts` (rendered Compose with/without ID, script functions).

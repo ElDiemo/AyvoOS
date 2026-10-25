@@ -118,6 +118,8 @@ services:
       APP_ENV: development
       # Server-side calls from Next.js go straight to the API over the internal network.
       API_URL: http://api:4000
+      # The Finance unit (ADR 0039); while it is not running only the Finance pages are unavailable.
+      FINANCE_API_URL: http://finance:4010
     networks:
       - edge
     depends_on:
@@ -165,6 +167,8 @@ services:
       PPL_TEST_CLIENT_SECRET: ${PPL_TEST_CLIENT_SECRET:-}
       # Key for carrier credentials entered in the administration (ADR 0027; encrypted at rest).
       CARRIER_CREDENTIALS_KEY: ${CARRIER_CREDENTIALS_KEY:-}
+      # SHA-256 of the Finance unit's service token (ADR 0039); empty = its contract is closed.
+      FINANCE_SERVICE_TOKEN_SHA256: ${FINANCE_SERVICE_TOKEN_SHA256:-}
     volumes:
       # Label artwork and generated print PDFs (doc 016). The root filesystem stays read-only.
       - files-data:/var/lib/ayvo/files
@@ -197,9 +201,90 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
     networks:
       - backend
+      # The Finance unit reaches only PostgreSQL (as its own role), never Redis or the API DB role.
+      - finance-db
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Finance as its own unit (ADR 0039): same image, own entry point, own DB role (schema finance
+  # only), own files, own release tag. Started only by scripts/deploy-finance-dev.sh (profile
+  # "finance"); scripts/deploy-dev.sh never starts, stops or rebuilds it.
+  finance:
+    image: ayvo-dev-preview/api:${FINANCE_IMAGE_TAG:-none}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    profiles:
+      - finance
+    command: ['node', 'dist/finance/main.js']
+    restart: unless-stopped
+    logging: *logging
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Proposals to measure (ADR 0039 §7), not evidence.
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 128
+    environment:
+      APP_ENV: development
+      FINANCE_PORT: 4010
+      FINANCE_DATABASE_URL: postgresql://ayvo_finance:${FINANCE_DB_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}
+      CORE_INTERNAL_URL: http://api:4000
+      FINANCE_SERVICE_TOKEN: ${FINANCE_SERVICE_TOKEN:-}
+      FILE_STORAGE_DIR: /var/lib/ayvo/files
+    volumes:
+      - finance-files:/var/lib/ayvo/files
+    networks:
+      - edge
+      - finance-db
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4010/api/admin/finance/health/live').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # Finance DB setup (roles + schema, as the superuser) and its migrations (as the schema owner).
+  finance-migrate:
+    image: ayvo-dev-preview/api-migrate:${FINANCE_IMAGE_TAG:-none}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    profiles:
+      - finance-tools
+    restart: 'no'
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      [
+        'sh',
+        '-c',
+        'node dist/finance/db-setup.js && node_modules/.bin/prisma migrate deploy --config prisma-finance.config.ts',
+      ]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-}:${POSTGRES_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}
+      FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-}
+      FINANCE_DB_OWNER_PASSWORD: ${FINANCE_DB_OWNER_PASSWORD:-}
+      FINANCE_MIGRATE_DATABASE_URL: postgresql://ayvo_finance_owner:${FINANCE_DB_OWNER_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}?schema=finance
+    networks:
+      - finance-db
 
   postgres:
     image: postgres:18-alpine
@@ -246,6 +331,9 @@ networks:
   # api/migrate ↔ postgres/redis. No route to the outside world.
   backend:
     internal: true
+  # Finance (ADR 0039) ↔ postgres only. No route to the outside world, no Redis.
+  finance-db:
+    internal: true
   # The private DNS server alone (no other service, no upstream resolver).
   dns:
 
@@ -263,4 +351,6 @@ volumes:
   acme-webroot:
     name: ayvo-dev-preview-acme-webroot
   files-data:
+  # The Finance unit's own originals and exports (ADR 0039; never the core's files).
+  finance-files:
     name: ayvo-dev-preview-files-data

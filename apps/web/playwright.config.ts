@@ -6,6 +6,8 @@ const WEB_PORT = 3100;
 /** Session of the e2e operator (all operational roles, MAIN warehouse) — see e2e/auth.setup.ts. */
 export const OPERATOR_STATE = 'e2e/.auth/operator.json';
 const API_PORT = 4100;
+/** The Finance unit (ADR 0039), started by the same e2e server script next to the API. */
+const FINANCE_PORT = 4110;
 /**
  * Pointer file to the e2e API's file storage: the API creates a fresh temporary directory per run
  * and writes its path here (apps/api/scripts/e2e-storage.mjs); crates.spec.ts reads it to make the
@@ -41,6 +43,7 @@ export default defineConfig({
       url: `http://localhost:${API_PORT}/api/health`,
       env: {
         E2E_API_PORT: String(API_PORT),
+        E2E_FINANCE_PORT: String(FINANCE_PORT),
         E2E_PUBLIC_QR_BASE_URL: `http://localhost:${WEB_PORT}/q`,
         E2E_FILE_STORAGE_POINTER,
       },
@@ -50,7 +53,10 @@ export default defineConfig({
     {
       command: `next start --port ${WEB_PORT}`,
       port: WEB_PORT,
-      env: { API_URL: `http://localhost:${API_PORT}` },
+      env: {
+        API_URL: `http://localhost:${API_PORT}`,
+        FINANCE_API_URL: `http://localhost:${FINANCE_PORT}`,
+      },
       reuseExistingServer: false,
     },
   ],

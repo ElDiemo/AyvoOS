@@ -62,7 +62,8 @@ readonly KEEP_RELEASES=3
 readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLIC_QR_BASE_URL"
 # The physically validated QR label settings are optional (ADR 0034): both or neither.
 readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
-readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY"
+# ID_DOMAIN (optional): the public employee-card host; unset = no ID edge at all (compose.id.yml).
+readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN"
 readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
 readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
@@ -164,6 +165,31 @@ qr_domain() {
     die "PUBLIC_QR_BASE_URL must be https://<host> without a path (doc 037)"
   QR_DOMAIN=${BASH_REMATCH[1]}
   [[ $QR_DOMAIN != "$DOMAIN" ]] || die "the QR host must not be $DOMAIN (the internal application)"
+}
+
+# The optional public ID host (employee business cards). Unset or empty: nothing of the ID edge is
+# created. Its DNS is NOT required to point here: the certificate can be obtained before the DNS
+# change through the old server's challenge-only forward (HTTP-01 via public :80).
+id_domain() {
+  # Absent key = no ID edge (env_value fails when grep finds nothing).
+  ID_DOMAIN="$(env_value "$SECRETS/prod.env" ID_DOMAIN || true)"
+  [[ -z $ID_DOMAIN ]] && return
+  [[ $ID_DOMAIN =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ||
+    die "ID_DOMAIN must be a plain host name (e.g. id.ayvo.co)"
+  [[ $ID_DOMAIN != "$DOMAIN" && $ID_DOMAIN != "$QR_DOMAIN" ]] ||
+    die "ID_DOMAIN must differ from $DOMAIN and the QR host"
+}
+
+# Information only: where the ID host points now (before the DNS change it is the old server).
+id_dns_info() {
+  [[ -n $ID_DOMAIN ]] || return 0
+  local a
+  a="$(getent ahostsv4 "$ID_DOMAIN" 2>/dev/null | awk '{ print $1 }' | sort -u | tr '\n' ' ')" || true
+  if [[ $a == "$PROD_PUBLIC_IPV4 " ]]; then
+    ok "$ID_DOMAIN -> $PROD_PUBLIC_IPV4"
+  else
+    warn "$ID_DOMAIN points to ${a:-nothing} (not this server): its certificate needs the old server's challenge-only forward until the DNS change"
+  fi
 }
 
 # DNS of the QR host must point at this server (certificate issuance needs it; no AAAA yet).
@@ -334,14 +360,25 @@ check_resources() {
 
 release_dir() { printf '%s/releases/%s' "$PROD_DIR" "${1:0:12}"; }
 
+# The compose files of a release: compose.yml, plus compose.id.yml only when ID_DOMAIN is set and
+# that release has it (an older release rolled back to simply runs without the ID edge).
+compose_files() {
+  local dir=$1
+  printf '%s\n' -f "$dir/deploy/prod/compose.yml"
+  if [[ -n ${ID_DOMAIN:-} && -f $dir/deploy/prod/compose.id.yml ]]; then
+    printf '%s\n' -f "$dir/deploy/prod/compose.id.yml"
+  fi
+}
+
 compose() {
-  local dir
+  local dir files
   dir="$(release_dir "$AYVO_RELEASE")"
+  mapfile -t files < <(compose_files "$dir")
   PROD_DOMAIN=$DOMAIN PROD_TAILNET_IPV4=$PROD_TAILNET_IPV4 AYVO_RELEASE=$AYVO_RELEASE \
-    PROD_PUBLIC_IPV4=$PROD_PUBLIC_IPV4 QR_DOMAIN=$QR_DOMAIN \
+    PROD_PUBLIC_IPV4=$PROD_PUBLIC_IPV4 QR_DOMAIN=$QR_DOMAIN ID_DOMAIN=${ID_DOMAIN:-} \
     AYVO_RELEASE_DIR=$dir AYVO_PROD_SECRETS_DIR=$SECRETS \
     docker compose -p "$PROJECT" --project-directory "$dir/deploy/prod" \
-    -f "$dir/deploy/prod/compose.yml" --env-file "$SECRETS/prod.env" "$@"
+    "${files[@]}" --env-file "$SECRETS/prod.env" "$@"
 }
 
 export_release() {
@@ -572,6 +609,37 @@ verify() {
   curl -s -o /dev/null --max-time 5 --resolve "$DOMAIN:80:$pub4" "http://$DOMAIN/" || code=$?
   [[ $code == 52 ]] || die "http via the public IPv4 must be aborted without an answer (curl exit $code)"
   ok "public $pub4: only GET /<token> of $QR_DOMAIN; $DOMAIN and other paths refused (local hint; the external test is doc 037 §5)"
+  verify_id_edge "$pub4"
+}
+
+# The public ID edge (only when enabled). Its certificate may not exist yet (DNS still on the old
+# server, forward not in place): that is reported, never a reason to fail the deployment.
+verify_id_edge() {
+  [[ -n ${ID_DOMAIN:-} && -f $(release_dir "$AYVO_RELEASE")/deploy/prod/compose.id.yml ]] || return 0
+  local pub4=$1 code unknown
+  STEP="verify (local hint only): the public ID edge"
+  # :80 for the ID host: only the challenge path reaches qr-edge (an HTTP answer); all else aborted.
+  code=0
+  curl -s -o /dev/null --max-time 5 --resolve "$ID_DOMAIN:80:$pub4" "http://$ID_DOMAIN/admin" || code=$?
+  [[ $code == 52 ]] || die "http://$ID_DOMAIN/admin via the public IPv4 must be aborted (curl exit $code)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$ID_DOMAIN:80:$pub4" \
+    "http://$ID_DOMAIN/.well-known/acme-challenge/ayvo-deploy-check" || true)"
+  [[ $code =~ ^[1-5][0-9][0-9]$ ]] || die "the ACME challenge path of $ID_DOMAIN does not reach the ID edge (got '$code')"
+  unknown="zz-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  id_status() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$ID_DOMAIN:443:$pub4" "$@"; }
+  code="$(id_status "https://$ID_DOMAIN/$unknown" || true)"
+  if [[ $code == 000 ]]; then
+    warn "https://$ID_DOMAIN has no valid certificate yet (expected before the challenge forward / DNS change)"
+    return 0
+  fi
+  [[ $code == 404 ]] || die "https://$ID_DOMAIN/<unknown slug> answered '$code'"
+  local path
+  for path in /admin /login /api/health /q/$unknown /employee-card/README.md "/$unknown/x"; do
+    [[ $(id_status "https://$ID_DOMAIN$path") == 404 ]] || die "https://$ID_DOMAIN$path must be a plain 404"
+  done
+  [[ $(id_status -H "Host: $DOMAIN" "https://$ID_DOMAIN/") == 421 ]] ||
+    die "a request for $DOMAIN through the ID name must be refused (421)"
+  ok "public $pub4: $ID_DOMAIN serves only the card routes (valid certificate; local hint)"
 }
 
 record_release() {
@@ -662,6 +730,7 @@ public_address
 check_host_guard
 check_env_files
 qr_domain
+id_domain
 mkdir -p "$PROD_DIR"
 exec 9>"$PROD_DIR/.deploy.lock"
 flock -n 9 || die "another production deployment is running"
@@ -675,6 +744,7 @@ case $MODE in
     export_release
     ok "native authentication: no external identity-provider discovery"
     check_qr_dns
+    id_dns_info
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
     backup_status
@@ -688,6 +758,7 @@ case $MODE in
     export_release
     ok "native authentication: no external identity-provider discovery"
     check_qr_dns
+    id_dns_info
     AYVO_RELEASE=${RELEASE:0:12}
     validate_compose
     backup_status

@@ -13,9 +13,7 @@ export type CodeCounterName =
   | 'shipment'
   | 'print_job'
   | 'sales_prospect'
-  | 'sales_import'
-  | 'finance_document'
-  | 'accounting_export';
+  | 'sales_import';
 
 /**
  * Allocates `count` consecutive serials from a gapless counter. Must run inside the business

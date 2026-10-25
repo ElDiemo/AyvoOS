@@ -1,5 +1,10 @@
 /** Czech strings of Finance (doc 039): received documents. */
 export const financeCs = {
+  unavailable: {
+    title: 'Finance jsou dočasně nedostupné',
+    text: 'Ostatní části AYVO OS fungují. Zkuste to prosím za chvíli znovu.',
+    retry: 'Zkusit znovu',
+  },
   title: 'Přijaté doklady',
   subtitle:
     'Originály faktur, účtenek a dalších dokladů (nájem, účetní, služby…) s údaji pro účetní. Originál se nikdy nemění; údaje se opravují s důvodem a historií.',
@@ -28,6 +33,20 @@ export const financeCs = {
     file: 'Originál',
     created: 'Přijato',
     version: 'Verze',
+    handoverMonth: 'Předávací měsíc',
+    source: 'Originál z',
+  },
+  sources: { UPLOAD: 'Nahráno ve Financích', SUPPLIER_DOCUMENT: 'Doklad ze skladu' },
+  missing: {
+    label: 'K doplnění',
+    complete: 'Úplný',
+    fields: {
+      supplierId: 'dodavatel',
+      documentNumber: 'číslo dokladu',
+      issuedOn: 'datum vystavení',
+      handoverMonth: 'předávací měsíc',
+    },
+    note: (list: string) => `Pro export pro účetní chybí: ${list}.`,
   },
   list: {
     search: 'Hledat',
@@ -37,6 +56,8 @@ export const financeCs = {
     to: 'Vystaveno do',
     filter: 'Filtrovat',
     reset: 'Zrušit filtry',
+    month: 'Předávací měsíc',
+    onlyIncomplete: 'Jen k doplnění',
     empty: 'Zatím žádné přijaté doklady.',
     emptyFiltered: 'Filtru neodpovídá žádný doklad.',
     total: (n: number) => `${n} ${n === 1 ? 'doklad' : n >= 2 && n <= 4 ? 'doklady' : 'dokladů'}`,
@@ -46,14 +67,27 @@ export const financeCs = {
   },
   receive: {
     title: 'Přijmout doklad',
-    file: 'Originál (PDF, JPEG nebo PNG)',
+    file: 'Originál (PDF)',
     submit: 'Přijmout doklad',
     busy: 'Nahrávám…',
     noSupplier:
       'Dodavatel chybí? Založte ho v Sklad → Dodavatelé (stejný seznam dodavatelů pro celou firmu).',
     amountHelp: 'Jak je uvedeno na dokladu, tečka jako desetinná čárka (např. 25000.00).',
     chooseSupplier: 'Vyberte dodavatele',
+    monthHelp: 'Do exportu kterého měsíce doklad patří (rozhodnutí pro účetní, ne daňové datum).',
+    draftHelp:
+      'Povinný je jen originál a druh. Chybějící údaje lze doplnit později — doklad je do té doby „K doplnění“ a do exportu se nedostane.',
     done: (code: string) => `Doklad přijat jako ${code}.`,
+  },
+  takeOver: {
+    title: 'Převzít doklad ze skladu',
+    help: 'Faktury a dodací listy už nahrané ve Skladu (jen provozovny, k jejichž dokladům máte přístup). Převzetím vznikne doklad Financí bez druhé kopie souboru; skladový doklad se nemění.',
+    empty: 'Ve skladu nejsou žádné doklady k převzetí.',
+    submit: 'Převzít',
+    busy: 'Přebírám…',
+    superseded: 'nahrazen novějším',
+    taken: (code: string) => `Převzato jako ${code}`,
+    allTaken: 'Všechny uvedené doklady už jsou převzaté.',
   },
   detail: {
     back: 'Přijaté doklady',

@@ -14,13 +14,6 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
-  accountingExportPeriodSchema,
-  createAccountingExportSchema,
-  type AccountingExport,
-  type AccountingExportDetail,
-  type AccountingExportPeriod,
-  type AccountingExportPreview,
-  type CreateAccountingExportRequest,
   correctFinanceDocumentSchema,
   financeDocumentListQuerySchema,
   uploadFinanceDocumentFieldsSchema,
@@ -30,19 +23,19 @@ import {
   type FinanceDocumentListQuery,
   type FinanceDocumentPage,
   type FinanceSupplier,
+  type TakeOverCandidate,
+  type TakeOverSupplierDocumentRequest,
+  takeOverSupplierDocumentSchema,
   type VoidFinanceDocumentRequest,
 } from '@ayvo/types';
 import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
-import { CurrentPrincipal } from '../identity/access.guard.js';
-import type { Principal } from '../identity/principal.js';
-import { AccountingExportsService } from './accounting-exports.service.js';
+import { Caller, type FinanceCaller } from './finance-access.guard.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
 
 const CODE = new ZodValidationPipe(z.string().regex(/^FD-\d{6,}$/));
-const EXPORT_CODE = new ZodValidationPipe(z.string().regex(/^AE-\d{6,}$/));
 /** Multipart sends empty optional fields as "": they mean "not given". */
 const uploadFields = z.preprocess(
   (v) =>
@@ -58,62 +51,37 @@ const uploadFields = z.preprocess(
  */
 @Controller(`${ADMIN_PREFIX}/finance`)
 export class FinanceController {
-  constructor(
-    private readonly documents: FinanceDocumentsService,
-    private readonly exports: AccountingExportsService,
-  ) {}
-
-  // --- N2: export for the accountant (doc 039 §7) -------------------------------------------
-
-  @RequirePermission('finance:documents_read')
-  @Get('exports')
-  listExports(): Promise<AccountingExport[]> {
-    return this.exports.list();
-  }
-
-  /** What an export of the period would contain now; writes nothing. */
-  @RequirePermission('finance:exports_manage')
-  @Get('exports/preview')
-  previewExport(
-    @Query(new ZodValidationPipe(accountingExportPeriodSchema)) period: AccountingExportPeriod,
-  ): Promise<AccountingExportPreview> {
-    return this.exports.preview(period);
-  }
-
-  @RequirePermission('finance:exports_manage')
-  @Post('exports')
-  createExport(
-    @Body(new ZodValidationPipe(createAccountingExportSchema)) body: CreateAccountingExportRequest,
-    @CurrentPrincipal() principal: Principal,
-  ): Promise<AccountingExportDetail> {
-    return this.exports.create(body, principal.userId);
-  }
-
-  @RequirePermission('finance:documents_read')
-  @Get('exports/:code')
-  exportDetail(@Param('code', EXPORT_CODE) code: string): Promise<AccountingExportDetail> {
-    return this.exports.detail(code);
-  }
-
-  @RequirePermission('finance:documents_read')
-  @Get('exports/:code/content')
-  @Header('Cache-Control', 'private, no-store')
-  @Header('X-Content-Type-Options', 'nosniff')
-  async exportContent(@Param('code', EXPORT_CODE) code: string): Promise<StreamableFile> {
-    const { bytes, filename } = await this.exports.content(code);
-    return new StreamableFile(bytes, {
-      type: 'application/zip',
-      disposition: `attachment; filename="${filename}"`,
-    });
-  }
-
-  // --- N1: received documents ----------------------------------------------------------------
+  constructor(private readonly documents: FinanceDocumentsService) {}
 
   /** Active suppliers to choose from (managed in Sklad → Dodavatelé). */
   @RequirePermission('finance:documents_manage')
   @Get('suppliers')
-  suppliers(): Promise<FinanceSupplier[]> {
-    return this.documents.suppliers();
+  suppliers(@Caller() caller: FinanceCaller): Promise<FinanceSupplier[]> {
+    return this.documents.suppliers(caller);
+  }
+
+  /**
+   * Supplier documents of Sklad that may be taken over — only sites whose paperwork the user may
+   * read (procurement:documents_read there; checked in the service, not only here).
+   */
+  @RequirePermission('finance:documents_manage')
+  @Get('supplier-documents')
+  takeOverCandidates(
+    @Query(new ZodValidationPipe(z.object({ supplierId: z.uuid().optional() })))
+    query: { supplierId?: string },
+    @Caller() caller: FinanceCaller,
+  ): Promise<TakeOverCandidate[]> {
+    return this.documents.takeOverCandidates(caller, query.supplierId);
+  }
+
+  @RequirePermission('finance:documents_manage')
+  @Post('documents/take-over')
+  takeOver(
+    @Body(new ZodValidationPipe(takeOverSupplierDocumentSchema))
+    body: TakeOverSupplierDocumentRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<FinanceDocumentDetail> {
+    return this.documents.takeOver(body, caller);
   }
 
   @RequirePermission('finance:documents_read')
@@ -124,17 +92,17 @@ export class FinanceController {
     return this.documents.list(query);
   }
 
-  /** multipart/form-data: uploadFinanceDocumentFieldsSchema fields + one `file` (PDF/JPEG/PNG). */
+  /** multipart/form-data: uploadFinanceDocumentFieldsSchema fields + one `file` (PDF). */
   @RequirePermission('finance:documents_manage')
   @Post('documents')
   @UseInterceptors(FileInterceptor('file'))
   receive(
     @Body(new ZodValidationPipe(uploadFields)) fields: z.infer<typeof uploadFields>,
     @UploadedFile() file: { buffer: Buffer; originalname: string } | undefined,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
     if (!file) throw new BadRequestException('Přiložte originál dokladu jako pole "file".');
-    return this.documents.receive(fields, file, principal.userId);
+    return this.documents.receive(fields, file, caller);
   }
 
   @RequirePermission('finance:documents_read')
@@ -149,8 +117,11 @@ export class FinanceController {
   @Header('Cache-Control', 'private, no-store')
   @Header('Content-Security-Policy', "default-src 'none'; sandbox")
   @Header('X-Content-Type-Options', 'nosniff')
-  async content(@Param('code', CODE) code: string): Promise<StreamableFile> {
-    const { bytes, contentType, filename } = await this.documents.content(code);
+  async content(
+    @Param('code', CODE) code: string,
+    @Caller() caller: FinanceCaller,
+  ): Promise<StreamableFile> {
+    const { bytes, contentType, filename } = await this.documents.content(code, caller);
     return new StreamableFile(bytes, {
       type: contentType,
       disposition: `attachment; filename="${filename.replace(/"/g, '')}"`,
@@ -163,9 +134,9 @@ export class FinanceController {
   correct(
     @Param('code', CODE) code: string,
     @Body(new ZodValidationPipe(correctFinanceDocumentSchema)) body: CorrectFinanceDocumentRequest,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
-    return this.documents.correct(code, body, principal.userId);
+    return this.documents.correct(code, body, caller);
   }
 
   @RequirePermission('finance:documents_manage')
@@ -174,8 +145,8 @@ export class FinanceController {
   void(
     @Param('code', CODE) code: string,
     @Body(new ZodValidationPipe(voidFinanceDocumentSchema)) body: VoidFinanceDocumentRequest,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
-    return this.documents.void(code, body, principal.userId);
+    return this.documents.void(code, body, caller);
   }
 }

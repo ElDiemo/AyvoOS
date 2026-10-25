@@ -153,7 +153,19 @@ export class S3FileStorage implements FileStorage {
 }
 
 /** No endpoint override, ambient profile or instance-metadata credential lookup. */
-export async function createS3FileStorage(env: Env): Promise<S3FileStorage> {
+/** What S3 storage needs from an environment (the core's or the Finance unit's). */
+export type S3StorageEnv = Pick<
+  Env,
+  | 'APP_ENV'
+  | 'FILE_STORAGE_DRIVER'
+  | 'AWS_REGION'
+  | 'AWS_ACCESS_KEY_ID'
+  | 'AWS_SECRET_ACCESS_KEY'
+  | 'S3_BUCKET'
+  | 'S3_EXPECTED_BUCKET_OWNER'
+>;
+
+export async function createS3FileStorage(env: S3StorageEnv): Promise<S3FileStorage> {
   if (
     env.APP_ENV !== 'production' ||
     env.FILE_STORAGE_DRIVER !== 's3' ||

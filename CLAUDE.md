@@ -101,12 +101,16 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   writes nothing, confirmation re-checks everything in one transaction; export in the list's
   scope with CSV-injection protection.
   Finance — received documents (night package N1, started by the owner 2026-10-24, doc 039; table
-  design subject to review): `finance_documents` (immutable original, versioned metadata, voided
-  never deleted) and append-only `finance_document_events`; `finance:documents_read|manage` for
-  ADMIN only; suppliers only through ProcurementService. No VAT logic, posting or payments.
-  Accountant export (N2, doc 039 §7): append-only `accounting_exports` + `accounting_export_items`
-  (exact document version handed over), ZIP + CSV manifest, FULL / SUPPLEMENT;
-  `finance:exports_manage` for ADMIN only.
+  design subject to review). **Its own runtime unit (owner 2026-10-25, ADR 0039 limited variant
+  A):** container `finance` (`node dist/finance/main.js`), schema `finance` with its own Prisma
+  schema/migrations (`apps/api/prisma-finance`), roles `ayvo_finance_owner` (migrations) and
+  `ayvo_finance` (runtime: SELECT/INSERT/UPDATE on Finance tables only), no FKs to the core; it
+  never imports core modules or reads core tables. Suppliers, supplier documents and the current
+  user come only from the core contract `/api/internal/v1/finance/*` (service token + forwarded
+  session, evaluated per request; Caddy aborts /api/internal/*); core down = Finance 503, never
+  access. Documents: own PDF or a referenced supplier document (no copy), drafts "k doplnění",
+  handover month, versioned metadata, voided never deleted; `finance:documents_read|manage` for
+  ADMIN only. Deployed only by `scripts/deploy-finance-dev.sh`. No VAT logic, posting or payments.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;

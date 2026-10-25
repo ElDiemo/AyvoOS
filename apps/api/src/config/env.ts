@@ -121,6 +121,17 @@ export const envSchema = z
       .max(50 * 1024 * 1024)
       .default(10 * 1024 * 1024),
 
+    // --- Finance runtime unit (ADR 0039) ------------------------------------------------------
+    // SHA-256 (hex) of the service token the Finance container presents on /api/internal/v1/finance.
+    // Unset: the internal contract refuses every call (Finance is then unavailable, nothing else).
+    FINANCE_SERVICE_TOKEN_SHA256: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
+    ),
+
     // --- Identity and access (ADR 0022, doc 021) ---------------------------------------------
     // Origin of the web application as the browser sees it (redirect URIs, Origin checks of
     // state-changing requests). DEV preview: https://dev.ayvo.co. Required in production.
