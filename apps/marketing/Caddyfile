@@ -1,0 +1,74 @@
+# AYVO marketing site (ADR 0040): one static, read-only site on :8080, plain HTTP. TLS, public
+# names and certificates belong to the edge in front of it (a separate PR). No admin API, no
+# state, no calls to anything else.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+# The same headers on pages and on error responses (an error response starts without them).
+(security_headers) {
+	header {
+		Content-Security-Policy "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+		# DEV preview sets "noindex, nofollow"; production leaves the default.
+		X-Robots-Tag "{$AYVO_MARKETING_ROBOTS:all}"
+		-Server
+	}
+}
+
+:8080 {
+	root * /srv
+
+	import security_headers
+
+	# One route, evaluated in the written order: the method rule comes first, so it holds for
+	# the health check and the redirects too (only GET and HEAD, everything else 405).
+	route {
+		@unsafe not method GET HEAD
+		handle @unsafe {
+			header Allow "GET, HEAD"
+			respond 405
+		}
+
+		@health path /healthz
+		handle @health {
+			header Cache-Control no-store
+			respond "ok" 200
+		}
+
+		# The old WordPress addresses (inventory 2026-10-24): languages, the HTML sitemap and the
+		# public media, each to its exact new address. Everything else of WordPress is a real 404.
+		redir /en / 301
+		redir /en/ / 301
+		redir /cz /cz/ 301
+		redir /de /de/ 301
+		redir /sitemap.html / 301
+		redir /wp-content/uploads/2026/02/Navrh-bez-nazvu-6.png /assets/img/ayvo-bottles.png 301
+		redir /wp-content/uploads/2026/01/logoy.png /assets/img/ayvo-logo-light.png 301
+		redir /wp-content/uploads/2025/10/cropped-ayvo_circle_dot_topright-32x32.png /assets/icons/ayvo-32.png 301
+		redir /wp-content/uploads/2025/10/cropped-ayvo_circle_dot_topright-180x180.png /assets/icons/ayvo-180.png 301
+		redir /wp-content/uploads/2025/10/cropped-ayvo_circle_dot_topright-192x192.png /assets/icons/ayvo-192.png 301
+
+		# Asset URLs are not content-addressed: every response is revalidated (ETag /
+		# Last-Modified → 304), so a new release never mixes new HTML with old CSS/JS.
+		header Cache-Control "no-cache"
+		file_server {
+			hide .*
+		}
+	}
+
+	handle_errors {
+		import security_headers
+		@missing expression {err.status_code} == 404
+		handle @missing {
+			rewrite * /404.html
+			file_server
+		}
+		respond "{err.status_code}" {err.status_code}
+	}
+}

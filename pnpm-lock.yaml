@@ -309,6 +309,12 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@24.19.1)(vite@8.3.4(@types/node@24.19.1)(jiti@2.7.0))
 
+  apps/marketing:
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.64.0
+        version: 1.64.0
+
   apps/web:
     dependencies:
       '@ayvo/types':
