@@ -487,6 +487,83 @@ describe('production deploy script', () => {
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
 
+  it.skipIf(!hasCompose)('the public ID edge exists only with compose.id.yml and ID_DOMAIN', () => {
+    const secrets = join(tmp, 'secrets-id');
+    run('mkdir', ['-p', secrets]);
+    writeFileSync(
+      join(secrets, 'prod.env'),
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+        'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
+    );
+    for (const f of ['prod-auth.env', 'prod-s3.env']) writeFileSync(join(secrets, f), 'X=1\n');
+    const env = {
+      PROD_DOMAIN: 'os.example.test',
+      PROD_TAILNET_IPV4: '100.100.100.100',
+      PROD_PUBLIC_IPV4: '198.51.100.7',
+      QR_DOMAIN: 'qr.example.test',
+      AYVO_RELEASE: 'abcdef012345',
+      AYVO_RELEASE_DIR: root,
+      AYVO_PROD_SECRETS_DIR: secrets,
+    };
+    const base = ['compose', '-p', 'ayvo-prod-test', '--env-file', join(secrets, 'prod.env')];
+    const render = (files: string[], extra: Record<string, string> = {}) =>
+      run(
+        'docker',
+        [...base, ...files.flatMap((f) => ['-f', join(prodDir, f)]), 'config', '--format', 'json'],
+        {
+          ...env,
+          ...extra,
+        },
+      );
+    const off = JSON.parse(render(['compose.yml']).stdout);
+    // Disabled = today: no acme network, default commands, no ID_DOMAIN, the same ports.
+    expect(Object.keys(off.networks)).not.toContain('acme');
+    for (const s of ['caddy', 'qr-edge']) {
+      expect(off.services[s].command ?? null, s).toBeNull();
+      expect(off.services[s].environment.ID_DOMAIN, s).toBeUndefined();
+    }
+    const on = JSON.parse(
+      render(['compose.yml', 'compose.id.yml'], { ID_DOMAIN: 'id.example.test' }).stdout,
+    );
+    const withAcme = Object.entries(on.services as Record<string, { networks?: object }>)
+      .filter(([, svc]) => Object.keys(svc.networks ?? {}).includes('acme'))
+      .map(([name]) => name)
+      .sort();
+    expect(withAcme).toEqual(['caddy', 'qr-edge']);
+    expect(Object.keys(on.services['qr-edge'].networks).sort()).toEqual(['acme', 'public']);
+    expect(Object.keys(on.services.caddy.networks).sort()).toEqual(['acme', 'edge']);
+    // No new published port: qr-edge keeps only public :443, caddy its tailnet/ACME ports.
+    const ports = (cfg: { services: Record<string, { ports?: unknown[] }> }, s: string) =>
+      JSON.stringify(cfg.services[s]?.ports ?? []);
+    expect(ports(on, 'qr-edge')).toBe(ports(off, 'qr-edge'));
+    expect(ports(on, 'caddy')).toBe(ports(off, 'caddy'));
+    expect(on.services['qr-edge'].command).toEqual([
+      'caddy',
+      'run',
+      '--config',
+      '/etc/caddy/Caddyfile.id',
+      '--adapter',
+      'caddyfile',
+    ]);
+    expect(on.services.caddy.command).toEqual([
+      'caddy',
+      'run',
+      '--config',
+      '/etc/caddy/Caddyfile.acme',
+      '--adapter',
+      'caddyfile',
+    ]);
+    expect(on.services['qr-edge'].environment.ID_DOMAIN).toBe('id.example.test');
+    // The API, web and databases are untouched by the ID edge.
+    for (const s of ['api', 'web', 'postgres', 'redis']) {
+      expect(JSON.stringify(on.services[s]), s).toBe(JSON.stringify(off.services[s]));
+    }
+    // The override never renders without ID_DOMAIN.
+    const missing = render(['compose.yml', 'compose.id.yml']);
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toMatch(/ID_DOMAIN/);
+  });
+
   describe('env file checks (names only, an explicit list per file)', () => {
     /** Runs check_env_files of the real script on fictional files (its functions only). */
     /**
@@ -529,6 +606,52 @@ describe('production deploy script', () => {
       'prod-s3-backup.env': 'AWS_ACCESS_KEY_ID=AKIABACKUPFICTIONAL0\nAWS_SECRET_ACCESS_KEY=y\n',
     };
 
+    it('accepts an optional ID_DOMAIN in prod.env', () => {
+      const res = check({ ...good, 'prod.env': `${prod}ID_DOMAIN=id.example.test\n` });
+      expect(res.status, res.stderr).toBe(0);
+    });
+    it('id_domain: unset = no ID edge; a plain other host name only', () => {
+      const call = (value: string | null) =>
+        check(
+          { ...good, 'prod.env': value === null ? prod : `${prod}ID_DOMAIN=${value}\n` },
+          0o600,
+          {
+            call: 'DOMAIN=os.example.test; QR_DOMAIN=qr.example.test; id_domain; echo "ID=[$ID_DOMAIN]"',
+          },
+        );
+      expect(call(null).stdout).toContain('ID=[]');
+      expect(call('id.example.test').stdout).toContain('ID=[id.example.test]');
+      for (const bad of [
+        'https://id.example.test',
+        'id',
+        'ID.example.test',
+        'qr.example.test',
+        'os.example.test',
+        'id.example.test/x',
+      ]) {
+        const res = call(bad);
+        expect([bad, res.status]).toEqual([bad, 1]);
+      }
+    });
+    it('compose_files: the ID override only with ID_DOMAIN and only if the release has it', () => {
+      const rel = mkdtempSync(join(tmp, 'release-'));
+      run('mkdir', ['-p', join(rel, 'deploy/prod')]);
+      writeFileSync(join(rel, 'deploy/prod/compose.yml'), '');
+      const lines = script.split('\n');
+      const start = lines.findIndex((l) => l.startsWith('compose_files() {'));
+      const fn = lines.slice(start, lines.indexOf('}', start) + 1).join('\n');
+      const files = (id: string) =>
+        check(good, 0o600, {
+          call: `${fn}\nID_DOMAIN=${id}; compose_files ${rel} | tr '\\n' ' '`,
+        }).stdout.trim();
+      expect(files('')).toBe(`-f ${rel}/deploy/prod/compose.yml`);
+      expect(files('id.example.test')).toBe(`-f ${rel}/deploy/prod/compose.yml`); // older release
+      writeFileSync(join(rel, 'deploy/prod/compose.id.yml'), '');
+      expect(files('')).toBe(`-f ${rel}/deploy/prod/compose.yml`);
+      expect(files('id.example.test')).toBe(
+        `-f ${rel}/deploy/prod/compose.yml -f ${rel}/deploy/prod/compose.id.yml`,
+      );
+    });
     it('accepts complete private files and prints no value', () => {
       const res = check(good);
       expect(res.status, res.stderr).toBe(0);
