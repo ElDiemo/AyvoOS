@@ -17,5 +17,5 @@ export function csvCell(value: string | number | null | undefined): string {
 /** The file: UTF-8 with BOM (Excel shows the accents), ";" and CRLF (Czech Excel). */
 export function csvFile(header: string[], rows: (string | number | null)[][]): string {
   const lines = [header, ...rows].map((r) => r.map(csvCell).join(';'));
-  return `﻿${lines.join('\r\n')}\r\n`;
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
 }
