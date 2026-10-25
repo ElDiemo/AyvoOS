@@ -237,6 +237,21 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'POST /api/agent/v1/jobs/:id/start',
       'POST /api/agent/v1/jobs/claim',
     ]);
+    // The core's internal contract for the Finance unit (ADR 0039): only under /api/internal/,
+    // only with the Finance service token (and then the user's forwarded session).
+    expect(
+      routes
+        .filter((r) => r.rule!.kind === 'service')
+        .map((r) => `${r.method} ${r.route}`)
+        .sort(),
+    ).toEqual([
+      'GET /api/internal/v1/finance/supplier-documents',
+      'GET /api/internal/v1/finance/supplier-documents/:id',
+      'GET /api/internal/v1/finance/supplier-documents/:id/content',
+      'GET /api/internal/v1/finance/suppliers',
+      'POST /api/internal/v1/finance/principal',
+      'POST /api/internal/v1/finance/suppliers/lookup',
+    ]);
     // Without a session every other route answers 401 — guards run before any parameter parsing;
     // an agent route without the agent's token too (a session never counts there).
     for (const r of routes.filter((x) => x.rule!.kind !== 'public')) {
@@ -244,7 +259,11 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       const res = await (r.method === 'POST' ? http().post(path).send({}) : http().get(path));
       expect(res.status, `${r.method} ${r.route}`).toBe(401);
       expect(res.body.code, `${r.method} ${r.route}`).toBe(
-        r.rule!.kind === 'agent' ? 'AGENT_UNAUTHORIZED' : 'UNAUTHENTICATED',
+        r.rule!.kind === 'agent'
+          ? 'AGENT_UNAUTHORIZED'
+          : r.rule!.kind === 'service'
+            ? 'SERVICE_UNAUTHENTICATED'
+            : 'UNAUTHENTICATED',
       );
     }
   });

@@ -22,13 +22,13 @@
 
 ## 2. Runtime
 
-| Part              | Decision                                                                                                                                                                                                                                                                                                  |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Process           | Service `finance` in Compose (DEV and PROD the same), entry point `node dist/finance/main.js`: a Nest app with **only** the Finance module, its own Prisma client, the core client of §4 and FileStorage. It does not load the core modules, the workers or identity.                                       |
-| Image and version | The API image (same build), but its **own release tag** (`FINANCE_RELEASE`): `deploy-*.sh --finance` builds, migrates the `finance` schema and replaces only the `finance` container; rollback starts the previous tag. A Finance release never rebuilds or restarts `api`/`web`/workers.                   |
-| Routing           | The internal Caddy sends `/api/admin/finance/*` to `finance:4010`, everything else unchanged. No public route (tailnet only, like the rest of the OS).                                                                                                                                                      |
-| Health            | `/api/admin/finance/health/live` = the process answers (Compose healthcheck); `/api/admin/finance/health/ready` = its DB and the core contract answer. A live but not ready Finance answers `503 FINANCE_DEPENDENCY_UNAVAILABLE` to operations needing the core.                                           |
-| Limits            | _To measure on DEV before PROD_: memory 512 MiB, 0.5 CPU, pool 4 / role `CONNECTION LIMIT 5`. PROD has 4 GiB in total; the current services' real use is measured first and the budget is set against it (§7).                                                                                            |
+| Part              | Decision                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Process           | Service `finance` in Compose (DEV and PROD the same), entry point `node dist/finance/main.js`: a Nest app with **only** the Finance module, its own Prisma client, the core client of §4 and FileStorage. It does not load the core modules, the workers or identity.                                                                                                                                      |
+| Image and version | The API image (same build), but its **own release tag** (`FINANCE_IMAGE_TAG`): `scripts/deploy-finance-dev.sh` builds, backs up, sets up the roles, migrates the `finance` schema as its owner and replaces only the `finance` container; `--rollback` starts a previous tag. PROD gets the same step in its own PR before any PROD use. A Finance release never rebuilds or restarts `api`/`web`/workers. |
+| Routing           | The internal Caddy sends `/api/admin/finance/*` to `finance:4010`, everything else unchanged. No public route (tailnet only, like the rest of the OS).                                                                                                                                                                                                                                                     |
+| Health            | `/api/admin/finance/health/live` = the process answers (Compose healthcheck); `/api/admin/finance/health/ready` = its DB and the core contract answer. A live but not ready Finance answers `503 FINANCE_DEPENDENCY_UNAVAILABLE` to operations needing the core.                                                                                                                                           |
+| Limits            | _To measure on DEV before PROD_: memory 512 MiB, 0.5 CPU, pool 4 / role `CONNECTION LIMIT 5`. PROD has 4 GiB in total; the current services' real use is measured first and the budget is set against it (§7).                                                                                                                                                                                             |
 
 ## 3. Data — what is really enforced, and what is not yet
 
@@ -37,11 +37,11 @@ the official PostgreSQL image creates as a **superuser**. A superuser ignores `G
 the core can read and write any schema. A Finance role alone therefore gives **one-sided**
 isolation.
 
-| Direction          | What this ADR implements                                                                                                                                                                                                                                                          | Enforced by                     |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| Finance → core     | Login role `ayvo_finance`: `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`, owner of schema `finance` only, no grant on any `public` object (`REVOKE ALL ON ALL TABLES IN SCHEMA public`, default privileges unchanged). Its own migration history (`finance._prisma_migrations`). | PostgreSQL (tested as the role) |
-| Core → Finance     | No core code references `finance.*` (test on the core sources).                                                                                                                                                                                                                   | **Convention only** — see below |
-| Cross-unit links   | No foreign keys between `finance` and `public`: supplier, supplier document, site and user are plain ids + the snapshot Finance needs (names as of the event).                                                                                                                       | Schema                          |
+| Direction        | What this ADR implements                                                                                                                                                                                                                                                             | Enforced by                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| Finance → core   | Login role `ayvo_finance`: `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`, owner of schema `finance` only, no grant on any `public` object (`REVOKE ALL ON ALL TABLES IN SCHEMA public`, default privileges unchanged). Its own migration history (`finance._prisma_migrations`). | PostgreSQL (tested as the role) |
+| Core → Finance   | No core code references `finance.*` (test on the core sources).                                                                                                                                                                                                                      | **Convention only** — see below |
+| Cross-unit links | No foreign keys between `finance` and `public`: supplier, supplier document, site and user are plain ids + the snapshot Finance needs (names as of the event).                                                                                                                       | Schema                          |
 
 **Blocker for two-sided isolation (decision):** the core must stop connecting as the superuser:
 a new `ayvo_core` login role (non-superuser) with grants on `public`, `api`/`web` switched to it,
@@ -66,14 +66,14 @@ bind a superuser. So:
    NOCREATEDB) with `USAGE` on `public`, the DML the core needs on its tables and sequences,
    `EXECUTE` on its functions, and `ALTER DEFAULT PRIVILEGES FOR ROLE ayvo IN SCHEMA public` so
    future core migrations (still run as `ayvo`) grant the same; `REVOKE ALL ON SCHEMA finance
-   FROM ayvo_core`. `api`/`web` switch their `DATABASE_URL` to `ayvo_core` (new server secret);
+FROM ayvo_core`. `api`/`web` switch their `DATABASE_URL` to `ayvo_core` (new server secret);
    `migrate` and the backups keep `ayvo`. Proven first in CI by running the full API and e2e
    suites as a non-superuser. Return: switch `DATABASE_URL` back to `ayvo` (no data change).
    Only after step 2 is the isolation two-sided.
 
 Migrations: `finance` has its own Prisma schema and migrations folder, applied by
-`deploy-*.sh --finance` (as the superuser, only `migrate deploy` of that folder; creates the role
-if missing — its password comes from the server env `FINANCE_DB_PASSWORD`, never Git).
+`scripts/deploy-finance-dev.sh` (role setup as the superuser, `migrate deploy` of that folder as the
+schema owner; passwords from the server env, never Git).
 
 ## 4. Contracts with the core (the only way Finance gets OS data)
 
@@ -100,11 +100,11 @@ is impossible without a valid session **and** the service token.
 **Data calls** (each with the service token **and** the session token; the core re-checks the
 user's permissions/site for that call):
 
-| Call                                              | Core checks                                                    |
-| ------------------------------------------------- | -------------------------------------------------------------- |
-| `GET  /internal/v1/finance/suppliers`             | `finance:documents_manage`                                     |
-| `GET  /internal/v1/finance/suppliers/:id`         | `finance:documents_read`; returns active + identity snapshot   |
-| `GET  /internal/v1/finance/supplier-documents`    | `procurement:documents_read` on each listed site               |
+| Call                                                         | Core checks                                                     |
+| ------------------------------------------------------------ | --------------------------------------------------------------- |
+| `GET  /internal/v1/finance/suppliers`                        | `finance:documents_manage`                                      |
+| `GET  /internal/v1/finance/suppliers/:id`                    | `finance:documents_read`; returns active + identity snapshot    |
+| `GET  /internal/v1/finance/supplier-documents`               | `procurement:documents_read` on each listed site                |
 | `GET  /internal/v1/finance/supplier-documents/:id[/content]` | the same, for that document's site — every call, also on replay |
 
 Timeouts: 2 s (content 30 s), at most one retry for GETs; no retries for anything else.
@@ -126,13 +126,13 @@ The Finance pages stay in the existing Next app (`apps/web`, same origin), calli
 
 ## 6. Failure behaviour (to be proven in an isolated test topology, never on live DEV/PROD)
 
-| Failure                    | OS                    | Finance                                                                 |
-| -------------------------- | --------------------- | ----------------------------------------------------------------------- |
-| Finance crashes / OOM      | unaffected            | restarts alone; uploads/exports idempotent per request id               |
-| Core API down              | down                  | live, not ready: every request 503 (no principal = fail closed)          |
-| Identity data says revoked | —                     | the very next request refused                                           |
-| Export too large / busy    | unaffected            | refused before loading files; one export build at a time per process   |
-| PostgreSQL / host down     | down                  | down (shared, named)                                                    |
+| Failure                    | OS         | Finance                                                              |
+| -------------------------- | ---------- | -------------------------------------------------------------------- |
+| Finance crashes / OOM      | unaffected | restarts alone; uploads/exports idempotent per request id            |
+| Core API down              | down       | live, not ready: every request 503 (no principal = fail closed)      |
+| Identity data says revoked | —          | the very next request refused                                        |
+| Export too large / busy    | unaffected | refused before loading files; one export build at a time per process |
+| PostgreSQL / host down     | down       | down (shared, named)                                                 |
 
 ## 7. Budgets — proposals to measure, not evidence
 
