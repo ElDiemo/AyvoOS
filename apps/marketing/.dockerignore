@@ -1,0 +1,4 @@
+# Only the Caddyfile and site/ go into the image.
+*
+!Caddyfile
+!site/
