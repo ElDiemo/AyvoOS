@@ -14,6 +14,7 @@ export interface DocumentFieldValues {
   totalAmount: string;
   currency: string;
   description: string;
+  handoverMonth: string;
 }
 
 export const emptyFields: DocumentFieldValues = {
@@ -26,9 +27,13 @@ export const emptyFields: DocumentFieldValues = {
   totalAmount: '',
   currency: 'CZK',
   description: '',
+  handoverMonth: '',
 };
 
-/** The metadata inputs, shared by receiving and correcting a document. */
+/**
+ * The metadata inputs, shared by receiving and correcting a document. Only the kind is needed to
+ * save; what the export needs (supplier, number, issue date, handover month) may be completed later.
+ */
 export function DocumentFields({
   values,
   onChange,
@@ -45,12 +50,7 @@ export function DocumentFields({
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <label className={label}>
         {t.fields.supplier}
-        <select
-          required
-          className={inputClass}
-          value={values.supplierId}
-          onChange={set('supplierId')}
-        >
+        <select className={inputClass} value={values.supplierId} onChange={set('supplierId')}>
           <option value="">{t.receive.chooseSupplier}</option>
           {suppliers.map((s) => (
             <option key={s.id} value={s.id}>
@@ -72,7 +72,6 @@ export function DocumentFields({
       <label className={label}>
         {t.fields.documentNumber}
         <input
-          required
           maxLength={100}
           className={inputClass}
           value={values.documentNumber}
@@ -82,7 +81,6 @@ export function DocumentFields({
       <label className={label}>
         {t.fields.issuedOn}
         <input
-          required
           type="date"
           className={inputClass}
           value={values.issuedOn}
@@ -124,7 +122,20 @@ export function DocumentFields({
           onChange={set('currency')}
         />
       </label>
-      <label className={`${label} sm:col-span-2`}>
+      <label className={label}>
+        {t.fields.handoverMonth}
+        <input
+          type="month"
+          className={inputClass}
+          value={values.handoverMonth}
+          onChange={set('handoverMonth')}
+          aria-describedby="finance-month-help"
+        />
+        <span id="finance-month-help" className="text-xs font-normal text-stone-500">
+          {t.receive.monthHelp}
+        </span>
+      </label>
+      <label className={label}>
         {t.fields.description}
         <input
           maxLength={500}
@@ -141,14 +152,15 @@ export function DocumentFields({
 export function toPayload(v: DocumentFieldValues) {
   const amount = v.totalAmount.trim().replace(',', '.');
   return {
-    supplierId: v.supplierId,
+    supplierId: v.supplierId || null,
     kind: v.kind,
-    documentNumber: v.documentNumber.trim(),
-    issuedOn: v.issuedOn,
+    documentNumber: v.documentNumber.trim() || null,
+    issuedOn: v.issuedOn || null,
     taxPointOn: v.taxPointOn || null,
     dueOn: v.dueOn || null,
     totalAmount: amount || null,
     currency: amount ? v.currency.trim().toUpperCase() || null : null,
     description: v.description.trim() || null,
+    handoverMonth: v.handoverMonth || null,
   };
 }

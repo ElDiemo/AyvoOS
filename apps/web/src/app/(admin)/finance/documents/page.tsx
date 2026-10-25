@@ -2,13 +2,21 @@ import {
   financeDocumentListQuerySchema,
   financeDocumentPageSchema,
   financeSupplierSchema,
+  takeOverCandidateSchema,
   type FinanceDocument,
 } from '@ayvo/types';
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { z } from 'zod';
-import { fileSize, financeAmount, financeDate } from '@/components/finance/finance-format';
+import {
+  fileSize,
+  financeAmount,
+  financeDate,
+  financeMonth,
+} from '@/components/finance/finance-format';
+import { MissingBadge } from '@/components/finance/missing-badge';
 import { ReceiveDocumentForm } from '@/components/finance/receive-document-form';
+import { TakeOverList } from '@/components/finance/take-over-list';
 import { buttonClass, Card, EmptyState, inputClass, PageHeader } from '@/components/ui';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
@@ -20,7 +28,9 @@ type Params = Record<string, string | undefined>;
 
 /**
  * Přijaté doklady (doc 039, N1): search and filters as a plain GET form (the URL keeps them),
- * pages of 50, newest issue date first; receiving a document for finance:documents_manage.
+ * pages of 50, newest first; "K doplnění" marks what the export still needs. Receiving a PDF and
+ * taking over a supplier document of Sklad for finance:documents_manage (the takeover list only
+ * shows the paperwork of the user's sites; the core decides).
  */
 export default async function FinanceDocumentsPage({
   searchParams,
@@ -37,19 +47,31 @@ export default async function FinanceDocumentsPage({
   }
   const me = await currentUser();
   const canManage = hasPermission(me, 'finance:documents_manage');
-  const [page, suppliers] = await Promise.all([
+  const canTakeOver = canManage && hasPermission(me, 'procurement:documents_read');
+  const [page, suppliers, candidates] = await Promise.all([
     apiGet('admin/finance/documents', financeDocumentPageSchema, {
       q: q.q,
       supplierId: q.supplierId,
       status: q.status,
       issuedFrom: q.issuedFrom,
       issuedTo: q.issuedTo,
+      handoverMonth: q.handoverMonth,
+      incomplete: q.incomplete,
       page: q.page,
     }),
     canManage ? apiGet('admin/finance/suppliers', z.array(financeSupplierSchema)) : [],
+    canTakeOver ? apiGet('admin/finance/supplier-documents', z.array(takeOverCandidateSchema)) : [],
   ]);
   const pages = Math.max(1, Math.ceil(page.total / page.pageSize));
-  const filtered = !!(q.q || q.supplierId || q.status || q.issuedFrom || q.issuedTo);
+  const filtered = !!(
+    q.q ||
+    q.supplierId ||
+    q.status ||
+    q.issuedFrom ||
+    q.issuedTo ||
+    q.handoverMonth ||
+    q.incomplete
+  );
   const link = (p: number) =>
     `/finance/documents?${new URLSearchParams(
       Object.entries({ ...raw, page: String(p) }).filter((e): e is [string, string] => !!e[1]),
@@ -66,6 +88,11 @@ export default async function FinanceDocumentsPage({
             <ReceiveDocumentForm suppliers={suppliers} />
           </Card>
         )}
+        {canTakeOver && (
+          <Card title={t.takeOver.title} testId="finance-take-over">
+            <TakeOverList candidates={candidates} />
+          </Card>
+        )}
         <Card>
           <form method="get" className="flex flex-col gap-4" data-testid="finance-filters">
             <label className={filterLabel}>
@@ -79,7 +106,7 @@ export default async function FinanceDocumentsPage({
                 className={cn(inputClass, 'normal-case tracking-normal')}
               />
             </label>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
               <label className={filterLabel}>
                 {t.fields.status}
                 <select
@@ -91,6 +118,15 @@ export default async function FinanceDocumentsPage({
                   <option value="ACTIVE">{t.status.ACTIVE}</option>
                   <option value="VOIDED">{t.status.VOIDED}</option>
                 </select>
+              </label>
+              <label className={filterLabel}>
+                {t.list.month}
+                <input
+                  type="month"
+                  name="handoverMonth"
+                  defaultValue={q.handoverMonth ?? ''}
+                  className={cn(inputClass, 'normal-case tracking-normal')}
+                />
               </label>
               <label className={filterLabel}>
                 {t.list.from}
@@ -111,6 +147,15 @@ export default async function FinanceDocumentsPage({
                 />
               </label>
             </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="incomplete"
+                value="true"
+                defaultChecked={q.incomplete === 'true'}
+              />
+              {t.list.onlyIncomplete}
+            </label>
             <div className="flex flex-wrap gap-2">
               <button type="submit" className={buttonClass.primary}>
                 {t.list.filter}
@@ -136,6 +181,7 @@ export default async function FinanceDocumentsPage({
                     <th className="py-2 pr-3 font-medium">{t.fields.supplier}</th>
                     <th className="py-2 pr-3 font-medium">{t.fields.documentNumber}</th>
                     <th className="py-2 pr-3 font-medium">{t.fields.issuedOn}</th>
+                    <th className="py-2 pr-3 font-medium">{t.fields.handoverMonth}</th>
                     <th className="py-2 pr-3 text-right font-medium">{t.fields.amount}</th>
                     <th className="py-2 font-medium">{t.fields.status}</th>
                   </tr>
@@ -148,15 +194,18 @@ export default async function FinanceDocumentsPage({
                           {d.code}
                         </Link>
                       </td>
-                      <td className="py-2 pr-3">{d.supplier.name}</td>
+                      <td className="py-2 pr-3">{d.supplier?.name ?? t.detail.empty}</td>
                       <td className="py-2 pr-3">
-                        {t.kinds[d.kind]} {d.documentNumber}
+                        {t.kinds[d.kind]} {d.documentNumber ?? ''}
                       </td>
                       <td className="py-2 pr-3">{financeDate(d.issuedOn)}</td>
+                      <td className="py-2 pr-3">{financeMonth(d.handoverMonth)}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">
                         {financeAmount(d.totalAmount, d.currency)}
                       </td>
-                      <td className="py-2">{t.status[d.status]}</td>
+                      <td className="py-2">
+                        {t.status[d.status]} <MissingBadge missing={d.missing} />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -187,11 +236,14 @@ function MobileItem({ d }: { d: FinanceDocument }) {
       <Link href={`/finance/documents/${d.code}`} className="flex flex-col gap-1">
         <span className="flex justify-between gap-2">
           <span className="font-mono text-sm underline">{d.code}</span>
-          <span className="text-xs text-stone-500">{t.status[d.status]}</span>
+          <span className="text-xs text-stone-500">
+            {t.status[d.status]} <MissingBadge missing={d.missing} />
+          </span>
         </span>
-        <span className="text-sm font-medium">{d.supplier.name}</span>
+        <span className="text-sm font-medium">{d.supplier?.name ?? t.detail.empty}</span>
         <span className="text-sm text-stone-600">
-          {t.kinds[d.kind]} {d.documentNumber} · {financeDate(d.issuedOn)}
+          {t.kinds[d.kind]} {d.documentNumber ?? ''} · {financeDate(d.issuedOn)} ·{' '}
+          {financeMonth(d.handoverMonth)}
         </span>
         <span className="text-sm tabular-nums">
           {financeAmount(d.totalAmount, d.currency)} · {fileSize(d.byteSize)}

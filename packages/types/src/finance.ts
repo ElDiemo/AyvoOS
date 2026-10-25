@@ -256,6 +256,4 @@ export const financeContractSupplierDocumentSchema = z.object({
   siteCode: z.string(),
   superseded: z.boolean(),
 });
-export type FinanceContractSupplierDocument = z.infer<
-  typeof financeContractSupplierDocumentSchema
->;
+export type FinanceContractSupplierDocument = z.infer<typeof financeContractSupplierDocumentSchema>;

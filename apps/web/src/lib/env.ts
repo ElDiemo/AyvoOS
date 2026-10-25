@@ -8,6 +8,12 @@ const serverEnvSchema = z.object({
     .url({ protocol: /^https?$/ })
     .refine((url) => new URL(url).pathname === '/', 'API_URL must be an origin without a path')
     .default('http://localhost:4000'),
+  // Origin of the Finance unit (ADR 0039), reached the same way; it serves /api/admin/finance/*.
+  // Unset: the Finance pages report Finance as unavailable (nothing else is affected).
+  FINANCE_API_URL: z
+    .url({ protocol: /^https?$/ })
+    .refine((url) => new URL(url).pathname === '/', 'FINANCE_API_URL must be an origin')
+    .optional(),
   // Shown as the environment badge of the shell (ADR 0008). Unset counts as development, so a
   // misconfigured server never looks like production.
   APP_ENV: z.enum(['development', 'test', 'production']).default('development'),

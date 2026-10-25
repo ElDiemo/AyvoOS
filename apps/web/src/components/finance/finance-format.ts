@@ -16,6 +16,13 @@ export function financeAmount(amount: string | null, currency: string | null): s
   return `${negative ? '−' : ''}${grouped},${fraction.padEnd(2, '0')} ${currency}`;
 }
 
+/** "2026-10" → "10/2026" (the handover month). */
+export function financeMonth(month: string | null): string {
+  if (!month) return '—';
+  const [y, m] = month.split('-');
+  return `${Number(m)}/${y}`;
+}
+
 export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} kB`;

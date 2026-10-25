@@ -14,15 +14,16 @@ import { apiSend, ClientApiError } from '@/lib/client-api';
 import { DocumentFields, toPayload, type DocumentFieldValues } from './document-fields';
 
 const valuesOf = (d: FinanceDocumentDetail): DocumentFieldValues => ({
-  supplierId: d.supplier.id,
+  supplierId: d.supplier?.id ?? '',
   kind: d.kind,
-  documentNumber: d.documentNumber,
-  issuedOn: d.issuedOn,
+  documentNumber: d.documentNumber ?? '',
+  issuedOn: d.issuedOn ?? '',
   taxPointOn: d.taxPointOn ?? '',
   dueOn: d.dueOn ?? '',
   totalAmount: d.totalAmount ?? '',
   currency: d.currency ?? 'CZK',
   description: d.description ?? '',
+  handoverMonth: d.handoverMonth ?? '',
 });
 
 /** Correct the metadata or void the document — each with a reason and the version it saw. */
@@ -42,9 +43,9 @@ export function DocumentActions({
   const dirty =
     mode !== 'none' && (reason !== '' || JSON.stringify(values) !== JSON.stringify(valuesOf(doc)));
   // A supplier archived since stays selectable for this document.
-  const options = suppliers.some((s) => s.id === doc.supplier.id)
-    ? suppliers
-    : [doc.supplier, ...suppliers];
+  const current = doc.supplier;
+  const options =
+    !current || suppliers.some((s) => s.id === current.id) ? suppliers : [current, ...suppliers];
 
   async function send(path: 'correct' | 'void', body: object) {
     setBusy(true);

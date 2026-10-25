@@ -60,7 +60,7 @@ export function ReceiveDocumentForm({ suppliers }: { suppliers: readonly Finance
         <input
           required
           type="file"
-          accept="application/pdf,image/jpeg,image/png"
+          accept="application/pdf"
           className="block w-full min-w-0 text-sm"
           onChange={(e) => {
             setFile(e.target.files?.[0] ?? null);
@@ -76,6 +76,7 @@ export function ReceiveDocumentForm({ suppliers }: { suppliers: readonly Finance
         }}
         suppliers={suppliers}
       />
+      <p className="text-xs text-stone-500">{t.receive.draftHelp}</p>
       <p className="text-xs text-stone-500">{t.receive.noSupplier}</p>
       {error && <ErrorNote>{error}</ErrorNote>}
       <div>
