@@ -16,8 +16,9 @@
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { createE2eStorage } from './e2e-storage.mjs';
 
@@ -149,29 +150,53 @@ const child = spawn(process.execPath, ['dist/main.js'], {
 });
 // The Finance unit: its own process, DB role (schema finance only) and storage directory; it
 // reaches the core only through the internal contract with the service token.
-const financeChild = spawn(process.execPath, ['dist/finance/main.js'], {
-  cwd: apiRoot,
-  stdio: 'inherit',
-  env: {
-    PATH: process.env.PATH,
-    APP_ENV: 'test',
-    FINANCE_PORT: process.env.E2E_FINANCE_PORT ?? '4110',
-    FINANCE_DATABASE_URL: asRole(finance.runtimeRole, finance.runtimePassword),
-    CORE_INTERNAL_URL: `http://localhost:${port}`,
-    FINANCE_SERVICE_TOKEN: serviceToken,
-    FILE_STORAGE_DIR: storageDir,
-  },
+const startFinance = () =>
+  spawn(process.execPath, ['dist/finance/main.js'], {
+    cwd: apiRoot,
+    stdio: 'inherit',
+    env: {
+      PATH: process.env.PATH,
+      APP_ENV: 'test',
+      FINANCE_PORT: process.env.E2E_FINANCE_PORT ?? '4110',
+      FINANCE_DATABASE_URL: asRole(finance.runtimeRole, finance.runtimePassword),
+      CORE_INTERNAL_URL: `http://localhost:${port}`,
+      FINANCE_SERVICE_TOKEN: serviceToken,
+      FILE_STORAGE_DIR: storageDir,
+    },
+  });
+let financeChild = startFinance();
+// Test-only outage control (e2e/workflow-finance-outage.spec.ts): SIGUSR2 stops the Finance process
+// on purpose, SIGUSR1 starts it again; the core keeps running. The pid file names this server.
+let financeStopped = false;
+const pidFile = join(tmpdir(), `ayvo-e2e-server-${port}.pid`);
+writeFileSync(pidFile, String(process.pid), { mode: 0o600 });
+process.on('SIGUSR2', () => {
+  financeStopped = true;
+  financeChild.kill('SIGTERM');
+});
+process.on('SIGUSR1', () => {
+  if (financeChild.exitCode === null && financeChild.signalCode === null) return;
+  financeStopped = false;
+  financeChild = startFinance();
+  financeChild.on('exit', onFinanceExit);
 });
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.on(signal, () => {
     child.kill(signal);
     financeChild.kill(signal);
   });
+const shutdown = (code) => {
+  rmSync(pidFile, { force: true });
+  process.exit(code);
+};
 child.on('exit', (code) => {
   financeChild.kill('SIGTERM');
-  process.exit(code ?? 0);
+  shutdown(code ?? 0);
 });
-financeChild.on('exit', (code) => {
+// An unexpected Finance exit ends the run (a broken unit must fail the tests); a requested stop does not.
+function onFinanceExit(code) {
+  if (financeStopped) return;
   child.kill('SIGTERM');
-  process.exit(code ?? 1);
-});
+  shutdown(code ?? 1);
+}
+financeChild.on('exit', onFinanceExit);
