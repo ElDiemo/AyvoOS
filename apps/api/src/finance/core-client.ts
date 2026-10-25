@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  financeContractHotelSchema,
   financeContractSupplierDocumentSchema,
   financeContractSupplierSchema,
   financePrincipalSchema,
+  type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
   type FinancePrincipal,
@@ -52,6 +54,28 @@ export class CoreClient {
       'suppliers/lookup',
       sessionToken,
       z.array(financeContractSupplierSchema),
+      { ids: unique },
+    );
+    return new Map(rows.map((r) => [r.id, r]));
+  }
+
+  /** Hotels to bill (doc 040): identity and address only. */
+  hotels(sessionToken: string): Promise<FinanceContractHotel[]> {
+    return this.json('GET', 'hotels', sessionToken, z.array(financeContractHotelSchema));
+  }
+
+  /** Hotels by id; an unknown id is simply absent. */
+  async lookupHotels(
+    sessionToken: string,
+    ids: readonly string[],
+  ): Promise<Map<string, FinanceContractHotel>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = await this.json(
+      'POST',
+      'hotels/lookup',
+      sessionToken,
+      z.array(financeContractHotelSchema),
       { ids: unique },
     );
     return new Map(rows.map((r) => [r.id, r]));

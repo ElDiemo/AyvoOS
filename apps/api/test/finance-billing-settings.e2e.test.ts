@@ -1,0 +1,541 @@
+import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { PrismaPg } from '@prisma/adapter-pg';
+import request from 'supertest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type {
+  BillingAgreementDetail,
+  BillingCustomerDetail,
+  EffectiveTermsPage,
+} from '@ayvo/types';
+import { PrismaClient } from '../src/generated/finance-prisma/client.js';
+import { PrismaClient as CorePrismaClient } from '../src/generated/prisma/client.js';
+import {
+  createFinanceTestApp,
+  financeDatabaseUrl,
+  financeOwnerDatabaseUrl,
+  type FinanceTestApp,
+} from './support/finance-app.js';
+import { createHotel } from './support/order-fixtures.js';
+import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
+import { databaseUrl, hasDatabase } from './support/test-app.js';
+
+/**
+ * Hotel billing settings (doc 040, N3A-1) in the Finance unit, against a real core and real DB
+ * roles: customers with versions, one agreement per hotel with versioned (bitemporal) terms, the
+ * default price list, the terms effective for a month — also as known at an earlier moment —,
+ * exact decimal prices, idempotency and concurrency, the append-only rules, the permissions and
+ * the core being down. Synthetic companies and hotels only. No amounts or invoices exist yet.
+ */
+const B = '/api/admin/finance/billing';
+const apiRoot = resolve(import.meta.dirname, '..');
+
+describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
+  let f: FinanceTestApp;
+  const customerBody = (over: Record<string, unknown> = {}) => ({
+    legalName: `Hotelová společnost ${randomUUID().slice(0, 6)} s.r.o.`,
+    companyId: '12345678',
+    vatId: 'CZ12345678',
+    addressLine1: 'Testovací 1',
+    addressLine2: null,
+    postalCode: '110 00',
+    city: 'Praha',
+    countryCode: 'CZ',
+    billingEmail: 'fakturace@hotel.test',
+    ...over,
+  });
+  const newCustomer = async (over: Record<string, unknown> = {}) =>
+    (
+      await f
+        .post(`${B}/customers`)
+        .send({ requestId: randomUUID(), customer: customerBody(over) })
+        .expect(201)
+    ).body as BillingCustomerDetail;
+  const terms = (customerId: string, over: Record<string, unknown> = {}) => ({
+    effectiveFrom: '2026-01',
+    customerId,
+    contractNumber: 'SML-TEST-1',
+    billedRooms: 40,
+    ownPricePerRoomMonth: null,
+    currency: 'CZK',
+    paymentTermsDays: 14,
+    billingTiming: 'ARREARS',
+    validFrom: '2026-01-01',
+    validTo: null,
+    reason: 'Smlouva podepsána (syntetická)',
+    ...over,
+  });
+  /** A synthetic core hotel; its id is read from the core (the admin API exposes the code). */
+  const newHotel = async () => {
+    const h = await createHotel(f.core);
+    const { id } = await f.core.prisma.hotel.findUniqueOrThrow({
+      where: { code: h.code },
+      select: { id: true },
+    });
+    return { id, code: h.code, name: h.name };
+  };
+  const newAgreement = async (hotelId: string, t: Record<string, unknown>) =>
+    (
+      await f
+        .post(`${B}/agreements`)
+        .send({ requestId: randomUUID(), hotelId, terms: t })
+        .expect(201)
+    ).body as BillingAgreementDetail;
+  const addVersion = async (code: string, t: Record<string, unknown>) =>
+    (
+      await f
+        .post(`${B}/agreements/${code}/versions`)
+        .send({ requestId: randomUUID(), terms: t })
+        .expect(201)
+    ).body as BillingAgreementDetail;
+  const effective = async (month: string, code: string, asOf?: string) => {
+    const page = (
+      await f
+        .get(`${B}/agreements/effective?month=${month}${asOf ? `&asOf=${asOf}` : ''}`)
+        .expect(200)
+    ).body as EffectiveTermsPage;
+    return page.items.find((i) => i.agreement.code === code);
+  };
+  const price = (currency: string, pricePerRoomMonth: string, effectiveFrom: string) =>
+    f.post(`${B}/price-list`).send({
+      requestId: randomUUID(),
+      currency,
+      pricePerRoomMonth,
+      effectiveFrom,
+      reason: 'test',
+    });
+
+  beforeAll(async () => {
+    f = await createFinanceTestApp();
+  });
+  afterAll(() => f?.close());
+
+  it('customers: created, versioned with a reason, the newest is current, history kept; bad data refused', async () => {
+    const c = await newCustomer();
+    expect(c.code).toMatch(/^CU-\d{6}$/);
+    expect(c.current.version).toBe(1);
+    expect(c.current.reason).toBeNull();
+    const v2 = (
+      await f
+        .post(`${B}/customers/${c.code}/versions`)
+        .send({
+          requestId: randomUUID(),
+          customer: customerBody({ city: 'Brno', postalCode: '602 00' }),
+          reason: 'Změna sídla',
+        })
+        .expect(201)
+    ).body as BillingCustomerDetail;
+    expect(v2.current).toMatchObject({ version: 2, reason: 'Změna sídla' });
+    expect(v2.current.customer.city).toBe('Brno');
+    expect(v2.versions.map((v) => v.version)).toEqual([2, 1]);
+    // A new version needs a reason; invalid e-mail, country and Czech IČO are refused.
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({ requestId: randomUUID(), customer: customerBody(), reason: '' })
+      .expect(400);
+    for (const bad of [{ billingEmail: 'neni-email' }, { countryCode: 'cz' }, { companyId: '123' }])
+      await f
+        .post(`${B}/customers`)
+        .send({ requestId: randomUUID(), customer: customerBody(bad) })
+        .expect(400);
+    // A foreign company: its id is free text.
+    await newCustomer({ countryCode: 'DE', companyId: 'HRB 12345', vatId: 'DE123456789' });
+  });
+
+  it('agreements: one per hotel, the hotel must exist in the core, the customer must exist', async () => {
+    const c = await newCustomer();
+    const hotel = await newHotel();
+    const a = await newAgreement(hotel.id, terms(c.id));
+    expect(a.code).toMatch(/^BA-\d{6}$/);
+    expect(a.hotel).toEqual({ id: hotel.id, code: hotel.code, name: hotel.name });
+    expect(a.versions).toHaveLength(1);
+    expect(a.versions[0]).toMatchObject({ billedRooms: 40, ownPricePerRoomMonth: null });
+    const second = await f
+      .post(`${B}/agreements`)
+      .send({ requestId: randomUUID(), hotelId: hotel.id, terms: terms(c.id) })
+      .expect(409);
+    expect(second.body.code).toBe('AGREEMENT_EXISTS');
+    const noHotel = await f
+      .post(`${B}/agreements`)
+      .send({ requestId: randomUUID(), hotelId: randomUUID(), terms: terms(c.id) })
+      .expect(422);
+    expect(noHotel.body.code).toBe('HOTEL_NOT_FOUND');
+    const other = await newHotel();
+    const noCustomer = await f
+      .post(`${B}/agreements`)
+      .send({ requestId: randomUUID(), hotelId: other.id, terms: terms(randomUUID()) })
+      .expect(422);
+    expect(noCustomer.body.code).toBe('CUSTOMER_NOT_FOUND');
+    // The hotels to choose from come from the core contract (identity and address only).
+    const hotels = (await f.get(`${B}/hotels`).expect(200)).body as Record<string, unknown>[];
+    const listed = hotels.find((h) => h.id === hotel.id)!;
+    expect(Object.keys(listed).sort()).toEqual([
+      'addressLine1',
+      'addressLine2',
+      'city',
+      'code',
+      'countryCode',
+      'id',
+      'name',
+      'postalCode',
+    ]);
+  });
+
+  it('terms: first day of a month only; rooms ≥ 1; an explicit 0.00 differs from the default; exact decimals', async () => {
+    const c = await newCustomer();
+    for (const bad of [
+      { effectiveFrom: '2026-1' },
+      { billedRooms: 0 },
+      { billedRooms: -3 },
+      { ownPricePerRoomMonth: '-1.00' },
+      { ownPricePerRoomMonth: '1.005' },
+      { ownPricePerRoomMonth: 320 },
+      { billingTiming: 'MONTHLY' },
+      { validTo: '2025-12-31' },
+      { paymentTermsDays: 400 },
+    ])
+      expect(
+        (
+          await f.post(`${B}/agreements`).send({
+            requestId: randomUUID(),
+            hotelId: (await newHotel()).id,
+            terms: terms(c.id, bad),
+          })
+        ).status,
+        JSON.stringify(bad),
+      ).toBe(400);
+    const zero = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, { ownPricePerRoomMonth: '0' }),
+    );
+    expect(zero.versions[0]!.ownPricePerRoomMonth).toBe('0.00');
+    const big = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, { ownPricePerRoomMonth: '12345678901234567.89' }),
+    );
+    expect(big.versions[0]!.ownPricePerRoomMonth).toBe('12345678901234567.89');
+    // The database refuses a mid-month effective date on its own (not only the API).
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    try {
+      await expect(
+        owner.$executeRawUnsafe(
+          `INSERT INTO finance.agreement_versions (agreement_id, effective_from, customer_id, billed_rooms,
+             currency, payment_terms_days, billing_timing, valid_from, reason, recorded_by, recorded_by_name, request_id)
+           VALUES ('${zero.id}', '2026-03-15', '${c.id}', 5, 'CZK', 14, 'ARREARS', '2026-01-01', 'x',
+             '${randomUUID()}', 'x', '${randomUUID()}')`,
+        ),
+      ).rejects.toThrow(/check constraint/);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('effective terms per month: the newest effective version applies; before it nothing is in effect', async () => {
+    const c = await newCustomer();
+    const a = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, { ownPricePerRoomMonth: '320.00' }),
+    );
+    await addVersion(
+      a.code,
+      terms(c.id, {
+        effectiveFrom: '2026-03',
+        billedRooms: 45,
+        ownPricePerRoomMonth: '320.00',
+        reason: 'Rozšíření o křídlo B',
+      }),
+    );
+    expect((await effective('2026-02', a.code))!.version!.billedRooms).toBe(40);
+    const march = (await effective('2026-03', a.code))!;
+    expect(march.version!.billedRooms).toBe(45);
+    expect(march.price).toMatchObject({ source: 'OWN', perRoomMonth: '320.00' });
+    expect(march.status).toBe('IN_EFFECT');
+    expect(march.gaps).toEqual([]);
+    expect(march.customer).toMatchObject({ id: c.id, code: c.code });
+    expect(await effective('2025-12', a.code)).toMatchObject({
+      status: 'NOT_IN_EFFECT',
+      version: null,
+      gaps: [],
+    });
+  });
+
+  it('a correction recorded later wins; the state as known before it is reconstructed exactly', async () => {
+    const c = await newCustomer();
+    const a = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, { ownPricePerRoomMonth: '300.00' }),
+    );
+    await new Promise((r) => setTimeout(r, 15));
+    const beforeCorrection = new Date().toISOString();
+    await new Promise((r) => setTimeout(r, 15));
+    await addVersion(
+      a.code,
+      terms(c.id, { ownPricePerRoomMonth: '310.00', reason: 'Oprava překlepu v ceně' }),
+    );
+    expect((await effective('2026-01', a.code))!.price.perRoomMonth).toBe('310.00');
+    expect((await effective('2026-01', a.code, beforeCorrection))!.price.perRoomMonth).toBe(
+      '300.00',
+    );
+    // Before the agreement existed: it is not listed at all.
+    expect(await effective('2026-01', a.code, '2020-01-01T00:00:00.000Z')).toBeUndefined();
+    // Every version stays in the history, newest recorded first.
+    const detail = (await f.get(`${B}/agreements/${a.code}`).expect(200))
+      .body as BillingAgreementDetail;
+    expect(detail.versions.map((v) => v.ownPricePerRoomMonth)).toEqual(['310.00', '300.00']);
+  });
+
+  it('the default price list: by currency and month; another currency or no list is a gap, never 0', async () => {
+    const currency = `X${randomUUID()
+      .replace(/[^A-Z]/gi, '')
+      .slice(0, 2)
+      .toUpperCase()
+      .padEnd(2, 'Q')}`;
+    const c = await newCustomer();
+    const a = await newAgreement((await newHotel()).id, terms(c.id, { currency }));
+    expect(await effective('2026-01', a.code)).toMatchObject({
+      price: { source: 'MISSING', perRoomMonth: null },
+      gaps: ['PRICE_MISSING'],
+    });
+    await price(currency, '320.00', '2026-01').expect(201);
+    await price(currency, '330.50', '2026-04').expect(201);
+    expect((await effective('2026-03', a.code))!.price).toMatchObject({
+      source: 'DEFAULT',
+      perRoomMonth: '320.00',
+    });
+    expect((await effective('2026-04', a.code))!.price.perRoomMonth).toBe('330.50');
+    // An explicit own 0.00 is a price, not a gap.
+    await addVersion(
+      a.code,
+      terms(c.id, { currency, effectiveFrom: '2026-05', ownPricePerRoomMonth: '0.00' }),
+    );
+    expect(await effective('2026-05', a.code)).toMatchObject({
+      price: { source: 'OWN', perRoomMonth: '0.00' },
+      gaps: [],
+    });
+    await price(currency, '1.005', '2026-01').expect(400);
+    await price(currency, '1', '2026-01-15').expect(400);
+  });
+
+  it('a month the agreement covers only partly is listed as "rule missing", never prorated or skipped', async () => {
+    const c = await newCustomer();
+    const a = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, {
+        ownPricePerRoomMonth: '300.00',
+        effectiveFrom: '2026-03',
+        validFrom: '2026-03-15',
+        validTo: '2026-06-10',
+      }),
+    );
+    expect((await effective('2026-03', a.code))!.gaps).toEqual(['PARTIAL_PERIOD_RULE_MISSING']);
+    expect((await effective('2026-04', a.code))!.gaps).toEqual([]);
+    expect((await effective('2026-06', a.code))!.gaps).toEqual(['PARTIAL_PERIOD_RULE_MISSING']);
+    expect((await effective('2026-07', a.code))!.status).toBe('NOT_IN_EFFECT');
+    // Valid from mid-January but terms only from February: January's terms are missing.
+    const b = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, {
+        ownPricePerRoomMonth: '300.00',
+        effectiveFrom: '2026-02',
+        validFrom: '2026-01-20',
+      }),
+    );
+    expect(await effective('2026-01', b.code)).toMatchObject({
+      status: 'IN_EFFECT',
+      gaps: ['NO_EFFECTIVE_VERSION'],
+    });
+  });
+
+  it('idempotency: the same request replays; another payload under the same id is refused', async () => {
+    const requestId = randomUUID();
+    const body = { requestId, customer: customerBody({ legalName: 'Opakovaný s.r.o.' }) };
+    const first = (await f.post(`${B}/customers`).send(body).expect(201)).body;
+    const again = (await f.post(`${B}/customers`).send(body).expect(201)).body;
+    expect(again.code).toBe(first.code);
+    const other = await f
+      .post(`${B}/customers`)
+      .send({ requestId, customer: customerBody({ legalName: 'Jiný s.r.o.' }) })
+      .expect(409);
+    expect(other.body.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+
+  it('concurrency: two agreements for the same hotel at once — exactly one is created', async () => {
+    const c = await newCustomer();
+    const hotel = await newHotel();
+    const results = await Promise.all(
+      [0, 1, 2].map(() =>
+        f
+          .post(`${B}/agreements`)
+          .send({ requestId: randomUUID(), hotelId: hotel.id, terms: terms(c.id) }),
+      ),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409, 409]);
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    try {
+      expect(await owner.billingAgreement.count({ where: { hotelId: hotel.id } })).toBe(1);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('append-only and roles: no UPDATE/DELETE/TRUNCATE even for the owner; the runtime role cannot change rows; the core cannot read them', async () => {
+    const c = await newCustomer();
+    const a = await newAgreement((await newHotel()).id, terms(c.id));
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    const runtime = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeDatabaseUrl! }),
+    });
+    const core = new CorePrismaClient({
+      adapter: new PrismaPg({ connectionString: databaseUrl! }),
+    });
+    try {
+      for (const sql of [
+        `UPDATE finance.agreement_versions SET billed_rooms = 1 WHERE agreement_id = '${a.id}'`,
+        `DELETE FROM finance.agreement_versions WHERE agreement_id = '${a.id}'`,
+        `UPDATE finance.customer_versions SET city = 'x' WHERE customer_id = '${c.id}'`,
+        `DELETE FROM finance.billing_agreements WHERE id = '${a.id}'`,
+        'TRUNCATE finance.price_list_versions',
+        'TRUNCATE finance.customers CASCADE',
+      ])
+        await expect(owner.$executeRawUnsafe(sql), sql).rejects.toThrow(/not allowed/);
+      for (const sql of [
+        `UPDATE finance.agreement_versions SET billed_rooms = 1 WHERE agreement_id = '${a.id}'`,
+        `DELETE FROM finance.customer_versions WHERE customer_id = '${c.id}'`,
+        'TRUNCATE finance.billing_agreements',
+      ])
+        await expect(runtime.$executeRawUnsafe(sql), sql).rejects.toThrow(/permission denied/);
+      for (const sql of [
+        'SELECT 1 FROM finance.customers LIMIT 1',
+        'SELECT 1 FROM finance.agreement_versions LIMIT 1',
+        'SELECT 1 FROM finance.price_list_versions LIMIT 1',
+      ])
+        await expect(core.$executeRawUnsafe(sql), sql).rejects.toThrow(/permission denied/);
+    } finally {
+      await Promise.all([owner.$disconnect(), runtime.$disconnect(), core.$disconnect()]);
+    }
+  });
+
+  it('the core unavailable: creating an agreement answers 503 and writes nothing', async () => {
+    const c = await newCustomer();
+    const down = await createFinanceTestApp({ coreUrl: 'http://127.0.0.1:9' });
+    try {
+      // The guard asks the core who the caller is: unavailable → 503, nothing written.
+      const before = await f.prisma.billingAgreement.count();
+      const res = await down
+        .post(`${B}/agreements`)
+        .send({ requestId: randomUUID(), hotelId: randomUUID(), terms: terms(c.id) });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('FINANCE_DEPENDENCY_UNAVAILABLE');
+      expect(await f.prisma.billingAgreement.count()).toBe(before);
+    } finally {
+      await down.close();
+    }
+  });
+
+  it('permissions with real sessions: billing_read reads only; without it everything is refused; ADMIN has both', async () => {
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      const grants = await real.core.prisma.rolePermission.findMany({
+        where: { permissionCode: { startsWith: 'finance:billing' }, roleCode: 'ADMIN' },
+        select: { permissionCode: true },
+        orderBy: { permissionCode: 'asc' },
+      });
+      expect(grants.map((g) => g.permissionCode)).toEqual([
+        'finance:billing_manage',
+        'finance:billing_read',
+      ]);
+      const roleCode = `FINR_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Finance read (test)', description: 'test' },
+      });
+      await real.core.prisma.rolePermission.create({
+        data: { roleCode, permissionCode: 'finance:billing_read' },
+      });
+      const reader = await prepareInvitedUser(real.core, {
+        email: `fin-read-${randomUUID()}@ayvo.test`,
+        displayName: 'Jen čtení',
+      });
+      await real.core.prisma.userRole.create({
+        data: { userId: reader.id, roleCode, grantReason: 'test: billing read' },
+      });
+      const readCookie = await sessionCookie(real.core, reader.email);
+      for (const path of [`${B}/customers`, `${B}/agreements`, `${B}/price-list`, `${B}/hotels`])
+        expect([path, (await real.get(path, readCookie)).status]).toEqual([path, 200]);
+      for (const [path, body] of [
+        [`${B}/customers`, { requestId: randomUUID(), customer: customerBody() }],
+        [
+          `${B}/price-list`,
+          {
+            requestId: randomUUID(),
+            currency: 'CZK',
+            pricePerRoomMonth: '1.00',
+            effectiveFrom: '2026-01',
+            reason: 'x',
+          },
+        ],
+      ] as const)
+        expect([path, (await real.post(path, readCookie).send(body)).status]).toEqual([path, 403]);
+
+      const outsider = await prepareInvitedUser(real.core, {
+        email: `fin-none-${randomUUID()}@ayvo.test`,
+        displayName: 'Bez fakturace',
+      });
+      await real.core.prisma.userRole.create({
+        data: {
+          userId: outsider.id,
+          roleCode: 'SALES',
+          grantReason: 'test: no billing permission',
+        },
+      });
+      const outCookie = await sessionCookie(real.core, outsider.email);
+      for (const path of [
+        `${B}/customers`,
+        `${B}/agreements`,
+        `${B}/hotels`,
+        `${B}/agreements/effective?month=2026-01`,
+      ])
+        expect([path, (await real.get(path, outCookie)).status]).toEqual([path, 403]);
+      await request(real.app.getHttpServer()).get(`${B}/customers`).expect(401);
+    } finally {
+      await real.close();
+    }
+  });
+
+  it('the core contract of hotels needs the service token and finance:billing_read', async () => {
+    const core = request(f.core.app.getHttpServer());
+    const res = await core.get('/api/internal/v1/finance/hotels').expect(401);
+    expect(res.body.code).toBe('SERVICE_UNAUTHENTICATED');
+  });
+
+  it('the Finance schema of the test database has no drift from its Prisma schema', () => {
+    const res = spawnSync(
+      resolve(apiRoot, 'node_modules/.bin/prisma'),
+      [
+        'migrate',
+        'diff',
+        '--config',
+        'prisma-finance.config.ts',
+        '--from-config-datasource',
+        '--to-schema',
+        'prisma-finance/schema.prisma',
+        '--exit-code',
+      ],
+      {
+        cwd: apiRoot,
+        env: {
+          ...process.env,
+          FINANCE_MIGRATE_DATABASE_URL: `${financeOwnerDatabaseUrl}?schema=finance`,
+        },
+        encoding: 'utf8',
+      },
+    );
+    expect(res.status, `${res.stdout}\n${res.stderr}`).toBe(0); // 0 = empty diff, 2 = drift
+  });
+});

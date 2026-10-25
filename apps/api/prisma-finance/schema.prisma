@@ -170,3 +170,115 @@ model ExportEvent {
   @@map("export_events")
   @@schema("finance")
 }
+
+/// The billed company of hotel billing (doc 040, N3A-1) — not the hotel (a company may run several).
+/// Its details are versions; the newest is current. DB: append-only.
+model Customer {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial        BigInt   @unique
+  code          String   @unique
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy     String   @map("created_by") @db.Uuid
+  createdByName String   @map("created_by_name")
+  requestId     String   @unique @map("request_id") @db.Uuid
+
+  versions          CustomerVersion[]
+  agreementVersions AgreementVersion[]
+
+  @@map("customers")
+  @@schema("finance")
+}
+
+/// One version of a customer's details (version 1 = creation; later ones carry a reason).
+model CustomerVersion {
+  customerId     String   @map("customer_id") @db.Uuid
+  version        Int
+  legalName      String   @map("legal_name")
+  companyId      String?  @map("company_id")
+  vatId          String?  @map("vat_id")
+  addressLine1   String   @map("address_line1")
+  addressLine2   String?  @map("address_line2")
+  postalCode     String   @map("postal_code")
+  city           String
+  countryCode    String   @map("country_code") @db.Char(2)
+  billingEmail   String   @map("billing_email")
+  reason         String?
+  recordedAt     DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@id([customerId, version])
+  @@map("customer_versions")
+  @@schema("finance")
+}
+
+/// The default price per room and month of a currency, effective from the first day of a month.
+/// A correction is a new row with the same effective_from (the newest recorded wins). DB: append-only.
+model PriceListVersion {
+  id                String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  currency          String   @db.Char(3)
+  pricePerRoomMonth Decimal  @map("price_per_room_month") @db.Decimal(19, 2)
+  effectiveFrom     DateTime @map("effective_from") @db.Date
+  reason            String
+  recordedAt        DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy        String   @map("recorded_by") @db.Uuid
+  recordedByName    String   @map("recorded_by_name")
+  requestId         String   @unique @map("request_id") @db.Uuid
+
+  @@index([currency, effectiveFrom, recordedAt], map: "price_list_versions_lookup_idx")
+  @@map("price_list_versions")
+  @@schema("finance")
+}
+
+/// One billing agreement per hotel (core hotel id + code/name as of the creation). DB: append-only.
+model BillingAgreement {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial        BigInt   @unique
+  code          String   @unique
+  hotelId       String   @unique @map("hotel_id") @db.Uuid
+  hotelCode     String   @map("hotel_code")
+  hotelName     String   @map("hotel_name")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy     String   @map("created_by") @db.Uuid
+  createdByName String   @map("created_by_name")
+  requestId     String   @unique @map("request_id") @db.Uuid
+
+  versions AgreementVersion[]
+
+  @@map("billing_agreements")
+  @@schema("finance")
+}
+
+/// The terms of an agreement from a month on (bitemporal: effective_from + recorded_at). The only
+/// place of billed rooms and the hotel's own price. DB: append-only.
+model AgreementVersion {
+  id                   String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  agreementId          String    @map("agreement_id") @db.Uuid
+  effectiveFrom        DateTime  @map("effective_from") @db.Date
+  customerId           String    @map("customer_id") @db.Uuid
+  contractNumber       String?   @map("contract_number")
+  billedRooms          Int       @map("billed_rooms")
+  /// NULL = the default price list of the currency; 0.00 is an explicit price.
+  ownPricePerRoomMonth Decimal?  @map("own_price_per_room_month") @db.Decimal(19, 2)
+  currency             String    @db.Char(3)
+  paymentTermsDays     Int       @map("payment_terms_days")
+  billingTiming        String    @map("billing_timing")
+  validFrom            DateTime  @map("valid_from") @db.Date
+  validTo              DateTime? @map("valid_to") @db.Date
+  reason               String
+  recordedAt           DateTime  @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy           String    @map("recorded_by") @db.Uuid
+  recordedByName       String    @map("recorded_by_name")
+  requestId            String    @unique @map("request_id") @db.Uuid
+
+  agreement BillingAgreement @relation(fields: [agreementId], references: [id], onDelete: Restrict)
+  customer  Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([agreementId, effectiveFrom, recordedAt], map: "agreement_versions_lookup_idx")
+  @@index([customerId], map: "agreement_versions_customer_idx")
+  @@map("agreement_versions")
+  @@schema("finance")
+}

@@ -8,7 +8,12 @@ export type FinanceOperationKind =
   | 'FINANCE_DOCUMENT_RECEIVE'
   | 'FINANCE_DOCUMENT_TAKEOVER'
   | 'ACCOUNTING_EXPORT_CREATE'
-  | 'ACCOUNTING_EXPORT_HANDOVER';
+  | 'ACCOUNTING_EXPORT_HANDOVER'
+  | 'BILLING_CUSTOMER_CREATE'
+  | 'BILLING_CUSTOMER_VERSION'
+  | 'BILLING_PRICE_VERSION'
+  | 'BILLING_AGREEMENT_CREATE'
+  | 'BILLING_AGREEMENT_VERSION';
 
 /**
  * The core's idempotency pattern (doc 018 §8) in Finance's own schema: one transaction inserts
@@ -51,7 +56,7 @@ export class FinanceOperations {
 /** Gapless serials from finance.code_counters (inside the business transaction). */
 export async function allocateFinanceSerial(
   tx: Prisma.TransactionClient,
-  name: 'finance_document' | 'accounting_export',
+  name: 'finance_document' | 'accounting_export' | 'customer' | 'billing_agreement',
 ): Promise<bigint> {
   const rows = await tx.$queryRaw<{ last_value: bigint }[]>`
     UPDATE "finance"."code_counters" SET "last_value" = "last_value" + 1
