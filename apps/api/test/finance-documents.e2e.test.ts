@@ -425,6 +425,7 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
       try {
         for (const sql of [
           'SELECT 1 FROM finance.documents LIMIT 1',
+          'SELECT 1 FROM finance.exports LIMIT 1',
           `UPDATE finance.documents SET description = 'x' WHERE code = '${doc.code}'`,
           'CREATE TABLE finance.x (id int)',
         ])
