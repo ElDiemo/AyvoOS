@@ -36,24 +36,56 @@
    (licence unverified): system fonts for text; the logo is the owner's AYVO wordmark SVG that
    the OS already uses (`apps/web/public/brand/ayvo-wordmark.svg`), not a font imitation. With no cookies and no tracking there is no consent
    banner. Tests fail on any external request.
-6. **Edge and TLS are not part of this unit.** Public names (ayvo.co, www.ayvo.co), certificates
-   and the route from the existing public edge to this container are a second, separate PR
-   (ADR amendment if needed): it must keep the QR/ID/VPN guards, add no path from the public
-   edge to the OS API/DB/Redis, and prove certificates for both names before any DNS change.
+6. **Edge and TLS (PR 2).** The unit sits behind the existing edges without replacing any of
+   their configuration:
+   - **PROD:** with `MARKETING_DOMAIN=<apex>` in prod.env, `deploy/prod/compose.marketing.yml` is
+     added. It mounts one site file into qr-edge (`sites/marketing.caddy`: apex + www, TLS, HSTS,
+     www → apex 301, only GET/HEAD to `marketing:8080`) and one into the internal Caddy
+     (`acme.d/marketing.caddy`: on public :80 the ACME challenges of apex and www go to qr-edge, all
+     else → https). `Caddyfile.qr` and `Caddyfile` only gained an `import` of those directories —
+     with no file there, QR and ID behave exactly as before (their tests run unchanged). The
+     marketing container is on its own internal network with qr-edge only (no web, API, DB, Redis,
+     egress). Certificates for apex and www can be obtained before the DNS change through the old
+     server's challenge-only forward (tested with Pebble), exactly like the ID host.
+   - **DEV:** `https://<DEV_DOMAIN>:8443` (the same certificate, published on the tailnet address
+     only, the same real-peer check), `noindex`; the container on its own internal network with
+     Caddy only.
 
-## Failure domains (honest)
+## Release, the same artifact, rollback
 
-- Down: OS API, web, PostgreSQL, Redis, identity → **the site keeps answering** (it has no
-  dependency on them; proven by the `--network none` container test).
-- Shared and named: the host/VPS and the public edge in front of it (once connected) — a host or
-  edge outage takes the site down with everything else on that host.
-
-## Release and rollback
-
-An image per commit; a release replaces the container with the new image only after its health
-check passes, so a failed or interrupted publication leaves the previous complete version
-running — never a half-copied directory. Rollback = start the previous image tag; no OS
-database restore is involved. (Wiring into the deploy scripts: the second PR.)
+- **Identity = the image ID of the tested build** (review MKT70-R1). The base image is pinned by
+  digest (`caddy:2.11.7-alpine@sha256:…`); DEV builds the image once from a clean checkout with its
+  source revision as a label, tests it, and saves THAT image as an archive (`docker save`, a file —
+  no registry, no vendor). PROD never builds the marketing site: `deploy-prod.sh --marketing
+--image-archive <file> --expect-image <sha256:id> --expect-digest <sha256>` loads the archive and
+  refuses any other image ID (a changed Dockerfile or base with the same content has another ID —
+  tested), requires the revision to be on origin/main, and checks the served files' content digest
+  (`apps/marketing/site-digest.sh`, also computed in the running container) as an additional check.
+  The PROD tag is `<revision12>-<image12>` (review MKT70-R3): another build of the same revision
+  gets its own tag and never takes over an existing one; an existing tag naming another image is
+  refused before anything is loaded under it.
+- **A failed switch:** Compose removes the running container before the new one is healthy (no
+  blue/green). If the new container does not become healthy with the expected image and content,
+  the deploy step starts the previous image again — by the running container's image ID, captured
+  before anything is loaded or tagged (MKT70-R3) — checks it and fails. The site is unavailable
+  from the switch until the previous one is healthy: the failed start can take up to the health
+  wait (`wait_healthy`, up to 180 s on PROD), then the previous image's own start. If the previous
+  one does not come back either, the step says so. Tested with a wrong artifact, a container that
+  never becomes healthy, and a second build of the same revision.
+- **Failure domains (named, shared):** the host/VPS and the public edge in front of the site
+  (qr-edge, the internal Caddy, Docker on that host) are shared with QR/ID/OS — their outage takes
+  the site down with everything else on that host. The OS API, web, PostgreSQL, Redis and identity
+  are not dependencies (the site keeps answering without them).
+- **Prepared ≠ released** (review MKT70-R2). An OS deployment with `MARKETING_DOMAIN` only
+  PREPARES the edge: its :80 answers are required, HTTPS is reported as the named state
+  "PREPARED, NOT LIVE" (certificates pending or site not deployed) — never success. `--marketing`
+  and `--marketing-rollback` record SUCCESS only after the strict check: valid HTTPS (certificate
+  verified) on the apex and www, the site on the apex, www → apex (GET/HEAD), 405 for other methods
+  on both names, 404 for OS/API/old paths, 421 for another host; otherwise the release is recorded
+  UNVERIFIED and the command fails.
+- DEV: `scripts/deploy-marketing-dev.sh` (the same restore behaviour) prints the image ID, content
+  digest and archive for PROD. Order: OS deploy (edge prepared) → certificates (challenge forward
+  on the old server) → `--marketing` (strict, before DNS, via the server's address) → DNS.
 
 ## Open points for the owner
 

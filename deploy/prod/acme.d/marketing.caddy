@@ -1,0 +1,20 @@
+# AYVO OS — plain HTTP of the marketing site's names on the internal Caddy (public IPv4 :80 belongs
+# to it; ADR 0040). Mounted only by compose.marketing.yml; imported by the internal Caddyfile.
+# ACME HTTP-01 challenges of apex and www go to qr-edge's :80 over the small `acme` network (so
+# qr-edge obtains the certificates, also while DNS still points to the old server); every other
+# request is redirected to HTTPS on the same name. This Caddy holds no marketing certificate.
+http://{$MARKETING_DOMAIN}, http://www.{$MARKETING_DOMAIN} {
+	@challenge {
+		method GET
+		path_regexp ^/\.well-known/acme-challenge/[A-Za-z0-9_-]+$
+	}
+	handle @challenge {
+		reverse_proxy qr-edge:80 {
+			header_up -Cookie
+			header_up -Authorization
+		}
+	}
+	handle {
+		redir https://{host}{uri} 301
+	}
+}

@@ -96,3 +96,7 @@
 		respond "Not found" 404
 	}
 }
+
+# Further public sites on this same edge (ADR 0040: the marketing site), each one file mounted into
+# /etc/caddy/sites/ by its own Compose override. No file there = exactly the QR edge above.
+import /etc/caddy/sites/*.caddy

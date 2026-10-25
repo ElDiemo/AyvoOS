@@ -233,6 +233,19 @@ describe(
       }
     });
 
+    it('the running content has the digest of this checkout (the same artifact on DEV and PROD)', () => {
+      const local = spawnSync('sh', ['./site-digest.sh', 'Caddyfile', 'site'], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+      assert.equal(local.status, 0, local.stderr);
+      const inside = ok(
+        docker(['exec', names.site, 'site-digest', '/etc/caddy/Caddyfile', '/srv']),
+      );
+      assert.match(local.stdout.trim(), /^[0-9a-f]{64}$/);
+      assert.equal(inside, local.stdout.trim());
+    });
+
     it('a DEV preview is not indexed (AYVO_MARKETING_ROBOTS)', () => {
       assert.equal(ask(names.noindex, '/').headers['x-robots-tag'], 'noindex, nofollow');
     });

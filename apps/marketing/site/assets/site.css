@@ -43,6 +43,11 @@ img {
   height: auto;
 }
 
+/* The original page's paragraph reset (its theme): no top margin, 0.9rem below. */
+p {
+  margin: 0 0 0.9rem;
+}
+
 a {
   color: inherit;
 }
@@ -80,10 +85,12 @@ a {
 /* =========================
    Brand
 ========================= */
-/* The owner's AYVO wordmark (apps/web/public/brand/ayvo-wordmark.svg), never a font imitation. */
+/* The owner's AYVO wordmark (apps/web/public/brand/ayvo-wordmark.svg), never a font imitation.
+   Sized to the original logo's visible letters (cap height ≈ 19.5px at 35px type); its bottom edge
+   is the letters' baseline, aligned with the tagline's baseline as on the original page. */
 .ayvo-wordmark {
   display: block;
-  height: 30px;
+  height: 21.5px;
   width: auto;
 }
 
@@ -112,13 +119,30 @@ a {
   padding: 0 24px;
 }
 
-/* Sticky, so the language switch is at hand while reading (it keeps the section). */
+/* As the original: 20px above, a 1140px box with its 1px line below (full width on phones).
+   Sticky, so the language switch is at hand while reading (it keeps the section). */
 .ayvo-header {
   position: sticky;
   top: 0;
   z-index: 5;
+  max-width: 1140px;
+  margin: 20px auto 0;
   background: #fff;
   border-bottom: 1px solid var(--line);
+}
+
+/* The original's outer spacing: 10px below the header and above the footer, 20px between the
+   sections; sections are 1140px boxes, inset 10px from the screen edge. */
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 10px;
+}
+main > section {
+  width: 100%;
+  max-width: 1140px;
+  margin: 0 auto;
 }
 
 main section[id] {
@@ -128,6 +152,7 @@ main section[id] {
 .ayvo-header-row {
   padding-top: 5px;
   padding-bottom: 5px;
+  min-height: 62.5px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -137,7 +162,10 @@ main section[id] {
 .ayvo-brand {
   display: flex;
   gap: 5px;
-  align-items: center;
+  align-items: baseline;
+  /* The original logo's 52.5px line box: the letters' baseline 36px from its top. */
+  min-height: 52.5px;
+  padding-top: 14.5px;
   text-decoration: none;
   min-width: 0;
 }
@@ -180,7 +208,8 @@ main section[id] {
   letter-spacing: -0.6px;
 }
 
-.ayvo-h1-sm {
+/* The original's inline 34px: it holds on phones too (beats the 36px phone size). */
+.ayvo-h1.ayvo-h1-sm {
   font-size: 34px;
 }
 
@@ -259,7 +288,7 @@ main section[id] {
   text-decoration: none;
   font-weight: 650;
   font-size: 15px;
-  line-height: 1.2;
+  line-height: 1;
   text-align: center;
   color: var(--ink);
   background: #fff;
@@ -393,6 +422,15 @@ main section[id] {
   font-weight: 700;
 }
 
+/* In the header the original shows every language in ink (the footer keeps them muted). */
+.ayvo-header .ayvo-lang {
+  color: var(--ink);
+  font-weight: 400;
+}
+.ayvo-header .ayvo-lang[aria-current='page'] {
+  font-weight: 700;
+}
+
 .ayvo-lang-sep {
   opacity: 0.35;
   margin: 0 8px;
@@ -444,9 +482,6 @@ main section[id] {
   .ayvo-h1 {
     font-size: 36px;
   }
-  .ayvo-h1-sm {
-    font-size: 30px;
-  }
   .ayvo-section {
     padding: 56px 0;
   }
@@ -460,28 +495,14 @@ main section[id] {
 }
 
 @media (max-width: 420px) {
-  /* Long Czech/German words must not overflow a phone screen. */
-  h1,
-  h2,
-  h3 {
+  /* Long German words must not overflow a phone screen (the original's DE page does). */
+  :lang(de) h1,
+  :lang(de) h2,
+  :lang(de) h3 {
     hyphens: auto;
   }
-  .ayvo-wrap {
-    padding: 0 16px;
-  }
-  .ayvo-wordmark {
-    height: 24px;
-  }
-  .ayvo-tagline {
-    display: none;
-  }
-  .ayvo-h1 {
-    font-size: 30px;
-  }
-  .ayvo-h1-sm {
-    font-size: 26px;
-  }
-  .ayvo-card {
-    padding: 22px;
+  :lang(de) .ayvo-grid2,
+  :lang(de) .ayvo-grid3 {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -73,3 +73,8 @@ http://{$PROD_DOMAIN} {
 http:// {
 	abort
 }
+
+# Plain-HTTP routes of further public sites (ADR 0040), each one file mounted into
+# /etc/caddy/acme.d/ by its own Compose override: their ACME challenges to qr-edge and a redirect to
+# HTTPS. No file there = exactly the configuration above.
+import /etc/caddy/acme.d/*.caddy
