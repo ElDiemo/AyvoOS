@@ -207,3 +207,55 @@ export type TakeOverCandidate = z.infer<typeof takeOverCandidateSchema>;
 /** Suppliers offered when receiving a document (names only; managed in Sklad). */
 export const financeSupplierSchema = z.object({ id: z.uuid(), name: z.string() });
 export type FinanceSupplier = z.infer<typeof financeSupplierSchema>;
+
+// --- Internal contract core ⇄ Finance unit (ADR 0039 §4) ------------------------------------
+// Called only by the Finance container with its service token and the user's session token.
+
+/** The browser request Finance is answering, for the core's CSRF rule. */
+export const financePrincipalRequestSchema = z.object({
+  method: z.string().min(1).max(10),
+  origin: z.string().max(200).nullable(),
+  secFetchSite: z.string().max(40).nullable(),
+});
+export type FinancePrincipalRequest = z.infer<typeof financePrincipalRequestSchema>;
+
+/** The current user as the core evaluates it now (no cache). */
+export const financePrincipalSchema = z.object({
+  userId: z.uuid(),
+  displayName: z.string(),
+  permissions: z.array(z.string()),
+  globalSiteAccess: z.boolean(),
+  siteIds: z.array(z.uuid()),
+});
+export type FinancePrincipal = z.infer<typeof financePrincipalSchema>;
+
+/** A supplier as Finance needs it (identity snapshot for the export manifest). */
+export const financeContractSupplierSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  companyId: z.string().nullable(),
+  vatId: z.string().nullable(),
+  active: z.boolean(),
+});
+export type FinanceContractSupplier = z.infer<typeof financeContractSupplierSchema>;
+
+export const financeSupplierLookupSchema = z.object({ ids: z.array(z.uuid()).max(1000) });
+
+/** A supplier document of Sklad (immutable): metadata; its bytes come from …/content. */
+export const financeContractSupplierDocumentSchema = z.object({
+  id: z.uuid(),
+  supplier: z.object({ id: z.uuid(), name: z.string() }),
+  kind: z.string(),
+  documentNumber: z.string(),
+  issuedOn: isoDateSchema,
+  sha256: z.string(),
+  byteSize: z.number().int(),
+  contentType: z.string(),
+  originalFilename: z.string(),
+  siteId: z.uuid(),
+  siteCode: z.string(),
+  superseded: z.boolean(),
+});
+export type FinanceContractSupplierDocument = z.infer<
+  typeof financeContractSupplierDocumentSchema
+>;

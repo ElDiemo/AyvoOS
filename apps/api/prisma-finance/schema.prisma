@@ -1,0 +1,107 @@
+// AYVO Finance — its own runtime unit (ADR 0039): schema "finance" only, its own migration
+// history (finance._prisma_migrations), no foreign keys to the core ("public"). Suppliers,
+// supplier documents, sites and users are plain ids plus the snapshot Finance needs; their
+// current state comes from the core contract (/api/internal/v1/finance/*), never from its tables.
+// Invariants Prisma cannot express are raw SQL in the migrations ("DB:").
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/finance-prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["finance"]
+}
+
+/// Gapless code counters of Finance (FD-…, AE-…).
+model CodeCounter {
+  name      String @id
+  lastValue BigInt @default(0) @map("last_value")
+
+  @@map("code_counters")
+  @@schema("finance")
+}
+
+/// Idempotency of Finance writes per client request id (the core pattern, in Finance's schema).
+model OperationRequest {
+  requestId     String   @id @map("request_id") @db.Uuid
+  kind          String
+  payloadSha256 String   @map("payload_sha256") @db.Char(64)
+  result        Json?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("operation_requests")
+  @@schema("finance")
+}
+
+/// A received document (doc 039, N1): Finance's own PDF (UPLOAD) or a reference to a supplier
+/// document of Sklad (SUPPLIER_DOCUMENT, no copy). Metadata may be incomplete ("k doplnění").
+/// DB: file/source/identity immutable; changes only with the next version and its event; voided
+/// = frozen; never deleted; one active record per file and per supplier document.
+model Document {
+  id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt    @unique
+  code               String    @unique
+  /// Core supplier id + its name as of the current version.
+  supplierId         String?   @map("supplier_id") @db.Uuid
+  supplierName       String?   @map("supplier_name")
+  kind               String
+  documentNumber     String?   @map("document_number")
+  issuedOn           DateTime? @map("issued_on") @db.Date
+  taxPointOn         DateTime? @map("tax_point_on") @db.Date
+  dueOn              DateTime? @map("due_on") @db.Date
+  totalAmount        Decimal?  @map("total_amount") @db.Decimal(19, 2)
+  currency           String?   @db.Char(3)
+  description        String?
+  /// First day of the month whose export the document belongs to (organisational, not a tax date).
+  handoverMonth      DateTime? @map("handover_month") @db.Date
+  status             String    @default("ACTIVE")
+  version            Int       @default(1)
+  source             String
+  /// Core supplier document id and its site (code as of the takeover).
+  supplierDocumentId String?   @map("supplier_document_id") @db.Uuid
+  sourceSiteId       String?   @map("source_site_id") @db.Uuid
+  sourceSiteCode     String?   @map("source_site_code")
+  storageKey         String?   @unique @map("storage_key")
+  sha256             String    @db.Char(64)
+  byteSize           Int       @map("byte_size")
+  contentType        String    @map("content_type")
+  originalFilename   String    @map("original_filename")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Core user id + display name as of the creation.
+  createdBy          String    @map("created_by") @db.Uuid
+  createdByName      String    @map("created_by_name")
+  requestId          String    @unique @map("request_id") @db.Uuid
+  updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  events DocumentEvent[]
+
+  @@index([issuedOn])
+  @@index([supplierId])
+  @@index([handoverMonth])
+  @@index([supplierDocumentId])
+  @@map("documents")
+  @@schema("finance")
+}
+
+/// Append-only history of a document: RECEIVED, CORRECTED (full snapshot, reason), VOIDED.
+model DocumentEvent {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  version    Int
+  type       String
+  snapshot   Json
+  reason     String?
+  actorId    String   @map("actor_id") @db.Uuid
+  actorName  String   @map("actor_name")
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([documentId, version])
+  @@map("document_events")
+  @@schema("finance")
+}
