@@ -27,18 +27,15 @@ const ROLE = /^[a-z][a-z0-9_]{2,62}$/;
 const PASSWORD = /^[A-Za-z0-9_-]{24,128}$/;
 export const FINANCE_GROUP_ROLE = 'ayvo_finance_rw';
 
-export async function setupFinanceDatabase(
-  prisma: PrismaClient,
-  roles: FinanceDbRoles,
-): Promise<void> {
+/** The setup statements for one database (validated names and passwords; idempotent). */
+export function financeSetupStatements(roles: FinanceDbRoles, database: string): string[] {
   for (const role of [roles.ownerRole, roles.runtimeRole])
     if (!ROLE.test(role)) throw new Error(`Invalid Finance role name: ${role}`);
   for (const pw of [roles.ownerPassword, roles.runtimePassword])
     if (!PASSWORD.test(pw)) throw new Error('Finance DB passwords: 24–128 chars of [A-Za-z0-9_-]');
   if (!Number.isInteger(roles.runtimeConnections) || roles.runtimeConnections < 1)
     throw new Error('Invalid Finance connection limit');
-  const database = (await prisma.$queryRaw<{ db: string }[]>`SELECT current_database() AS db`)[0]!
-    .db;
+  if (!/^[A-Za-z0-9_-]{1,63}$/.test(database)) throw new Error('Invalid database name');
 
   // Names and passwords are validated above (no quoting needed); DDL cannot take parameters.
   const ensureRole = (name: string, attributes: string) => `
@@ -47,7 +44,7 @@ export async function setupFinanceDatabase(
         CREATE ROLE "${name}" ${attributes};
       END IF;
     END $$`;
-  const statements = [
+  return [
     ensureRole(FINANCE_GROUP_ROLE, 'NOLOGIN'),
     `ALTER ROLE "${FINANCE_GROUP_ROLE}" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`,
     ensureRole(roles.ownerRole, 'LOGIN'),
@@ -59,13 +56,21 @@ export async function setupFinanceDatabase(
     `ALTER SCHEMA "finance" OWNER TO "${roles.ownerRole}"`,
     `REVOKE ALL ON SCHEMA "finance" FROM PUBLIC`,
     // Nothing of the core: no CREATE in public (PostgreSQL ≥ 15 default, stated explicitly), no
-    // temporary tables, and no right on any existing core table, sequence or function grant.
+    // temporary tables, and no right on any existing core table or sequence.
     `REVOKE CREATE ON SCHEMA public FROM "${roles.ownerRole}", "${roles.runtimeRole}", "${FINANCE_GROUP_ROLE}"`,
     `REVOKE TEMPORARY ON DATABASE "${database}" FROM "${roles.ownerRole}", "${roles.runtimeRole}"`,
     `REVOKE ALL ON ALL TABLES IN SCHEMA public FROM "${roles.ownerRole}", "${roles.runtimeRole}", "${FINANCE_GROUP_ROLE}"`,
     `REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM "${roles.ownerRole}", "${roles.runtimeRole}", "${FINANCE_GROUP_ROLE}"`,
   ];
-  for (const sql of statements) await prisma.$executeRawUnsafe(sql);
+}
+
+export async function setupFinanceDatabase(
+  prisma: PrismaClient,
+  roles: FinanceDbRoles,
+): Promise<void> {
+  const database = (await prisma.$queryRaw<{ db: string }[]>`SELECT current_database() AS db`)[0]!
+    .db;
+  for (const sql of financeSetupStatements(roles, database)) await prisma.$executeRawUnsafe(sql);
 }
 
 /** `node dist/finance/db-setup.js` — in the migrate container, as the superuser (DATABASE_URL). */
