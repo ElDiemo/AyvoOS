@@ -69,6 +69,8 @@ function render(): Rendered {
       'DEV_TAILNET_IPV4=100.64.0.1',
       'POSTGRES_USER=fixture',
       `POSTGRES_PASSWORD=${hex(24)}`,
+      // The core's own runtime role (ADR 0041), required by the rendered api/migrate services.
+      `CORE_DB_PASSWORD=${hex(24)}`,
       'POSTGRES_DB=fixture_db',
       `AUTH_ENCRYPTION_KEY=${hex(32)}`,
       'AUTH_MAIL_DRIVER=smtp',
