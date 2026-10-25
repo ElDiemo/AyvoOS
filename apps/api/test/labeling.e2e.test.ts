@@ -12,7 +12,13 @@ import {
   setContext,
   type LabelingKit,
 } from './support/labeling-fixtures.js';
-import { createTestApp, hasDatabase, TEST_QR_BASE_URL, type TestApp } from './support/test-app.js';
+import {
+  createTestApp,
+  hasDatabase,
+  TEST_QR_BASE_URL,
+  type TestApp,
+  withPrivileged,
+} from './support/test-app.js';
 import { drift, printedBottles, receiveBottles } from './support/warehouse-fixtures.js';
 
 type Printed = Awaited<ReturnType<typeof printedBottles>>[number];
@@ -249,11 +255,14 @@ describe.skipIf(!hasDatabase)('labelling into crates (A3)', () => {
     expect(await t.prisma.crateAssignment.count({ where: { bottleId: bottles[0]!.id } })).toBe(1);
 
     // A bottle labelled before this change: LABELED_EMPTY without crate or binding (owner B3).
-    await t.prisma.$transaction(async (tx) => {
-      // Simulates historical data (written before the A3 rules existed).
-      await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
-      await tx.$executeRaw`UPDATE "bottles" SET "status" = 'LABELED_EMPTY' WHERE "id" = ${bottles[1]!.id}::uuid`;
-    });
+    // Simulates historical data (written before the A3 rules existed; privileged — the running
+    // core cannot switch the rules off).
+    await withPrivileged((db) =>
+      db.$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
+        await tx.$executeRaw`UPDATE "bottles" SET "status" = 'LABELED_EMPTY' WHERE "id" = ${bottles[1]!.id}::uuid`;
+      }),
+    );
     const legacy = await labelScan(t, sessionId, bottles[1]!.url);
     expect([legacy.status, legacy.body.code]).toEqual([409, 'ALREADY_LABELED']);
     expect(await t.prisma.bottleProductBinding.count({ where: { bottleId: bottles[1]!.id } })).toBe(

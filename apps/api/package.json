@@ -11,11 +11,14 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:generate": "prisma generate",
+    "db:generate": "prisma generate && prisma generate --config prisma-finance.config.ts",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "identity:bootstrap-admin": "node dist/identity/bootstrap-admin.js",
-    "identity:activate-bootstrap": "node dist/identity/native-invite-bootstrap.js"
+    "identity:activate-bootstrap": "node dist/identity/native-invite-bootstrap.js",
+    "start:finance": "node dist/finance/main.js",
+    "finance:db-setup": "node dist/finance/db-setup.js",
+    "finance:migrate:deploy": "prisma migrate deploy --config prisma-finance.config.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1152.0",

@@ -23,7 +23,15 @@ export class PrincipalResolver {
   ) {}
 
   async resolve(req: IncomingMessage): Promise<Resolution> {
-    const lookup = await this.sessions.lookup(readCookie(req, SESSION_COOKIE));
+    return this.resolveToken(readCookie(req, SESSION_COOKIE));
+  }
+
+  /**
+   * The same resolution for a session token forwarded by another AYVO unit (ADR 0039) — only on
+   * internal routes whose service token was verified first (AccessGuard).
+   */
+  async resolveToken(token: string | null): Promise<Resolution> {
+    const lookup = await this.sessions.lookup(token);
     if (lookup.kind === 'none') return { kind: 'anonymous' };
     if (lookup.kind === 'expired') return { kind: 'expired' };
     if (lookup.kind === 'inactive') return { kind: 'inactive' };

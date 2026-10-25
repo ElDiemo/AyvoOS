@@ -50,7 +50,7 @@ readonly IMAGE_PREFIX="ayvo-dev-preview"
 readonly PROJECT="ayvo-dev-preview"
 readonly GUARD_UNIT="ayvo-dev-docker-guard.service"
 readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL
-  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER
+  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB CORE_DB_PASSWORD AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER
   AUTH_MAIL_FROM)
 
 MODE=deploy
@@ -218,6 +218,11 @@ validate_env() {
   [[ ${CFG[POSTGRES_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,}$ ]] ||
     die "POSTGRES_PASSWORD must be at least 24 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
   [[ ${CFG[POSTGRES_PASSWORD]} != *change-me* ]] || die "POSTGRES_PASSWORD is still the placeholder"
+  # The running core's own non-superuser role (ADR 0041): never the privileged account's password.
+  [[ ${CFG[CORE_DB_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,128}$ ]] ||
+    die "CORE_DB_PASSWORD must be 24-128 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
+  [[ ${CFG[CORE_DB_PASSWORD]} != "${CFG[POSTGRES_PASSWORD]}" ]] ||
+    die "CORE_DB_PASSWORD must differ from POSTGRES_PASSWORD (ADR 0041)"
 }
 
 # --- verification ------------------------------------------------------------------------------

@@ -54,8 +54,16 @@ export async function redirectForAuth(status: number, code: string | undefined):
   redirect('/forbidden');
 }
 
+/** Finance routes are served by the Finance unit (ADR 0039); everything else by the core API. */
+export function apiOrigin(path: string): string {
+  const finance = /^\/?admin\/finance(\/|$)/.test(path);
+  if (!finance) return serverEnv.API_URL;
+  if (!serverEnv.FINANCE_API_URL) throw new ApiError(503, 'Finance je dočasně nedostupné.');
+  return serverEnv.FINANCE_API_URL;
+}
+
 async function call(path: string, query?: Record<string, string | number | undefined>) {
-  const url = new URL(`${API_BASE_PATH}/${path.replace(/^\//, '')}`, serverEnv.API_URL);
+  const url = new URL(`${API_BASE_PATH}/${path.replace(/^\//, '')}`, apiOrigin(path));
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
   }

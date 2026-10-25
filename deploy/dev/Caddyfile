@@ -46,6 +46,22 @@
 		# on their protected application routes; no extra shared Basic Auth password (ADR 0030).
 		# Same-origin API: /api and /api/* go to NestJS with the path forwarded UNCHANGED (no
 		# handle_path, no rewrite). NestJS serves all routes under the /api global prefix.
+		# The core's internal contract for the Finance unit (ADR 0039) is never reachable from a
+		# browser: only the Finance container calls it, inside the Compose network.
+		@internal path /api/internal /api/internal/*
+		handle @internal {
+			abort
+		}
+
+		# Finance runs as its own unit (ADR 0039): its routes go to its container. While it is not
+		# deployed or down, only these routes fail (502); nothing else is affected.
+		@finance path /api/admin/finance /api/admin/finance/*
+		handle @finance {
+			reverse_proxy finance:4010 {
+				header_down -X-Powered-By
+			}
+		}
+
 		@api path /api /api/*
 		handle @api {
 			reverse_proxy api:4000 {

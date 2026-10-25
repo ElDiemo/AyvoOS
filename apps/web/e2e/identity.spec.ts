@@ -70,6 +70,7 @@ test('administration: create a user, grant and revoke, deactivate — with reaso
   await expect(nav.getByRole('link')).toHaveText([
     'Přehled',
     'Obchod',
+    'Finance',
     'Sklad',
     'Výroba',
     'Hotely',

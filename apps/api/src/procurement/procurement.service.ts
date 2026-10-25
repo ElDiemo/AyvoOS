@@ -127,6 +127,66 @@ export class ProcurementService {
     return supplier;
   }
 
+  // --- for the Finance unit's contract (ADR 0039 §4); metadata only, never a storage key -------
+
+  /** Suppliers by id with their identity (name, IČO, DIČ) and whether they are active. */
+  async suppliersByIds(ids: readonly string[]) {
+    const rows = await this.prisma.supplier.findMany({
+      where: { id: { in: [...new Set(ids)] } },
+      select: { id: true, name: true, companyId: true, vatId: true, archivedAt: true },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      companyId: r.companyId,
+      vatId: r.vatId,
+      active: r.archivedAt === null,
+    }));
+  }
+
+  /** Supplier documents of the given sites (null: every site), newest first. */
+  async supplierDocumentsOfSites(siteIds: readonly string[] | null, supplierId?: string) {
+    const rows = await this.prisma.supplierDocument.findMany({
+      where: {
+        ...(siteIds ? { siteId: { in: [...siteIds] } } : {}),
+        ...(supplierId ? { supplierId } : {}),
+      },
+      include: documentContractInclude,
+      orderBy: [{ issuedOn: 'desc' }, { createdAt: 'desc' }],
+      take: 200,
+    });
+    return rows.map(toDocumentContract);
+  }
+
+  /** One supplier document (immutable) or null. */
+  async supplierDocumentById(id: string) {
+    const d = await this.prisma.supplierDocument.findUnique({
+      where: { id },
+      include: documentContractInclude,
+    });
+    return d ? toDocumentContract(d) : null;
+  }
+
+  /** The unchanged bytes of a supplier document (the caller checked access to its site). */
+  async supplierDocumentBytes(id: string): Promise<Buffer> {
+    const doc = await this.prisma.supplierDocument.findUnique({ where: { id } });
+    if (!doc) throw new NotFoundException('Supplier document not found');
+    return this.storage.get(doc.storageKey);
+  }
+
+  /** Name and registration ids of suppliers by id (for other modules' exports). */
+  async supplierIdentities(
+    ids: readonly string[],
+  ): Promise<Map<string, { name: string; companyId: string | null; vatId: string | null }>> {
+    const rows = await this.prisma.supplier.findMany({
+      where: { id: { in: [...new Set(ids)] } },
+      select: { id: true, name: true, companyId: true, vatId: true },
+    });
+    return new Map(
+      rows.map((r) => [r.id, { name: r.name, companyId: r.companyId, vatId: r.vatId }]),
+    );
+  }
+
   /** Names of suppliers by id (for read models of other modules). */
   async supplierNames(ids: readonly string[]): Promise<Map<string, string>> {
     const rows = await this.prisma.supplier.findMany({
@@ -777,5 +837,30 @@ function currentCost(line: ReceiptRecord['lines'][number]) {
     currency: source.currency,
     vatRate: source.vatRate ? formatQuantity(source.vatRate) : null,
     costUpdatedAt: latest ? latest.recordedAt.toISOString() : null,
+  };
+}
+
+const documentContractInclude = {
+  supplier: { select: { id: true, name: true } },
+  site: { select: { code: true } },
+  _count: { select: { supersededBy: true } },
+} satisfies Prisma.SupplierDocumentInclude;
+
+function toDocumentContract(
+  d: Prisma.SupplierDocumentGetPayload<{ include: typeof documentContractInclude }>,
+) {
+  return {
+    id: d.id,
+    supplier: d.supplier,
+    kind: d.kind as string,
+    documentNumber: d.documentNumber,
+    issuedOn: d.issuedOn.toISOString().slice(0, 10),
+    sha256: d.sha256,
+    byteSize: d.byteSize,
+    contentType: d.contentType,
+    originalFilename: d.originalFilename,
+    siteId: d.siteId,
+    siteCode: d.site.code,
+    superseded: d._count.supersededBy > 0,
   };
 }

@@ -5,7 +5,10 @@
 #
 # Targets:
 #   runtime  the API server (default, last stage): compiled dist + production node_modules only
-#   migrate  one-off `prisma migrate deploy` runner used by scripts/deploy-dev.sh
+#   migrate  one-off `prisma migrate deploy` runner used by the deploy scripts, followed by the
+#            core runtime role setup (dist/database/core-db-setup.js, ADR 0041); with the Finance
+#            config, by scripts/deploy-finance-dev.sh (ADR 0039)
+#   runtime  also the Finance unit: same image, entry point `node dist/finance/main.js`
 #
 # No secrets are used at build time. Configuration (DATABASE_URL, REDIS_URL, ...) is injected
 # at runtime as environment variables and validated by src/config/env.ts.
@@ -46,8 +49,12 @@ FROM node:${NODE_VERSION}-alpine AS migrate
 RUN apk add --no-cache openssl
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=build /out/migrate/package.json /out/migrate/prisma.config.ts ./
+COPY --from=build /out/migrate/package.json /out/migrate/prisma.config.ts /out/migrate/prisma-finance.config.ts ./
 COPY --from=build /out/migrate/prisma ./prisma
+# Finance unit (ADR 0039): its migrations and the role/schema setup (dist/finance/db-setup.js).
+COPY --from=build /out/migrate/prisma-finance ./prisma-finance
+# The core runtime role setup (ADR 0041) and its compiled Prisma client.
+COPY --from=build /out/migrate/dist ./dist
 COPY --from=build /out/migrate/node_modules ./node_modules
 USER node
 # Applies committed migrations only. Never `migrate dev`, `migrate reset` or `db push` (ADR 0008).

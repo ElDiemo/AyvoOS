@@ -13,6 +13,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - **Modular monolith** (ADR 0001). No microservices. Modules talk through exported services, never
   through another module's tables.
 - **PostgreSQL is the source of truth** (ADR 0002). Redis is non-authoritative (ADR 0010).
+- **The running core is not the DB superuser** (ADR 0041, in review): `api` connects as `ayvo_core`
+  (rows of `public` only — no TRUNCATE, DDL, trigger switching or other schemas); migrations, role
+  setups and backups keep the privileged account. Tests run the app as such a role; fixtures that
+  need more use `withPrivileged` — never broaden the runtime role.
 - **History is append-only** (ADR 0006). Never UPDATE/DELETE lifecycle events; corrections are
   new compensating events. Current-state tables are allowed, but must change in the same
   transaction as the event that justifies them.
@@ -100,6 +104,22 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   (result only — the file is never stored), `import_id` / `import_row` on prospects; preview
   writes nothing, confirmation re-checks everything in one transaction; export in the list's
   scope with CSV-injection protection.
+  Finance — received documents (night package N1, started by the owner 2026-10-24, doc 039; table
+  design subject to review). **Its own runtime unit (owner 2026-10-25, ADR 0039 limited variant
+  A):** container `finance` (`node dist/finance/main.js`), schema `finance` with its own Prisma
+  schema/migrations (`apps/api/prisma-finance`), roles `ayvo_finance_owner` (migrations) and
+  `ayvo_finance` (runtime: SELECT/INSERT/UPDATE on Finance tables only), no FKs to the core; it
+  never imports core modules or reads core tables. Suppliers, supplier documents and the current
+  user come only from the core contract `/api/internal/v1/finance/*` (service token + forwarded
+  session, evaluated per request; Caddy aborts /api/internal/*); core down = Finance 503, never
+  access. Documents: own PDF or a referenced supplier document (no copy), drafts "k doplnění",
+  handover month, versioned metadata, voided never deleted; `finance:documents_read|manage` for
+  ADMIN only. Export for the accountant (N2, doc 039 §7): one handover month, FULL/SUPPLEMENT, the
+  confirmation bound to the preview fingerprint (else PREVIEW_STALE), incomplete documents block it,
+  built outside DB transactions within fixed bounds, one build per process; append-only exports,
+  items (version + file hash) and events GENERATED / DOWNLOADED / HANDED_OVER (manual, once);
+  `finance:exports_manage` for ADMIN only. Deployed only by `scripts/deploy-finance-dev.sh`. No
+  VAT logic, posting, payments or automatic sending to the accountant.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;

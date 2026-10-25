@@ -24,6 +24,11 @@ export const shellCs = {
     test: { badge: 'TEST', label: 'Testovací prostředí – neslouží pro skutečný provoz' },
   },
   modules: {
+    finance: {
+      label: 'Finance',
+      description: 'Přijaté doklady: originály, údaje pro účetní a jejich historie.',
+      pages: { documents: 'Přijaté doklady', exports: 'Export pro účetní' },
+    },
     sales: {
       label: 'Obchod',
       description: 'Akvizice hotelů: zájemci, kontakty, co proběhlo a co je potřeba udělat dál.',

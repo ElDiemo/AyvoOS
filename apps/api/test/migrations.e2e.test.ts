@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '../src/generated/prisma/client.js';
-import { databaseUrl, hasDatabase } from './support/test-app.js';
+import { adminDatabaseUrl, hasDatabase } from './support/test-app.js';
 
 const apiRoot = resolve(import.meta.dirname, '..');
 const prismaBin = resolve(apiRoot, 'node_modules/.bin/prisma');
@@ -48,11 +48,13 @@ describe.skipIf(!hasDatabase)('migrations', () => {
     const name = `ayvo_mig_${Math.random().toString(16).slice(2, 10)}`;
     await admin.$executeRawUnsafe(`CREATE DATABASE "${name}"`);
     created.push(name);
-    return Object.assign(new URL(databaseUrl!), { pathname: `/${name}` }).toString();
+    return Object.assign(new URL(adminDatabaseUrl!), { pathname: `/${name}` }).toString();
   };
 
   beforeAll(async () => {
-    const adminUrl = Object.assign(new URL(databaseUrl!), { pathname: '/postgres' }).toString();
+    const adminUrl = Object.assign(new URL(adminDatabaseUrl!), {
+      pathname: '/postgres',
+    }).toString();
     admin = new PrismaClient({ adapter: new PrismaPg({ connectionString: adminUrl }) });
     scratch = await mkdtemp(join(tmpdir(), 'ayvo-mig-'));
   });
@@ -73,7 +75,7 @@ describe.skipIf(!hasDatabase)('migrations', () => {
         'prisma/schema.prisma',
         '--exit-code',
       ],
-      databaseUrl!,
+      adminDatabaseUrl!,
     );
     expect(code).toBe(0); // 0 = empty diff, 2 = drift
   });

@@ -294,7 +294,7 @@ compose() {
   PROD_DOMAIN=os.example.test PROD_TAILNET_IPV4=100.64.0.2 PROD_PUBLIC_IPV4=192.0.2.10 \\
   QR_DOMAIN=qr.example.test MARKETING_DOMAIN=ayvo.example.test ACME_EMAIL=ops@example.test \\
   AYVO_RELEASE=x AYVO_RELEASE_DIR=${dir} AYVO_PROD_SECRETS_DIR=${dir}/secrets \\
-  POSTGRES_USER=x POSTGRES_PASSWORD=x POSTGRES_DB=x PUBLIC_QR_BASE_URL=https://qr.example.test \\
+  POSTGRES_USER=x POSTGRES_PASSWORD=x CORE_DB_PASSWORD=x POSTGRES_DB=x PUBLIC_QR_BASE_URL=https://qr.example.test \\
   MARKETING_RELEASE=$MARKETING_RELEASE \\
   docker compose -p ${project} -f ${root}/deploy/prod/compose.yml -f ${root}/deploy/prod/compose.marketing.yml \\
     --env-file ${dir}/secrets/prod.env "$@" 2>/dev/null

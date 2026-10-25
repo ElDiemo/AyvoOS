@@ -12,12 +12,15 @@ import { ENV, type Env } from '../config/env.js';
 import { domainError } from '../common/domain-error.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import type { SiteContext, WarehouseContext } from '../inventory/warehouse-context.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { ACCESS_METADATA, type AccessRule } from './access.decorators.js';
 import { AccessService } from './access.service.js';
 import type { Principal, RequestWithPrincipal } from './principal.js';
 import { PrincipalResolver } from './principal-resolver.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+/** The user's session token forwarded by another AYVO unit on internal routes (ADR 0039). */
+export const SERVICE_SESSION_HEADER = 'x-ayvo-session';
 
 export const unauthenticated = () => domainError(401, 'UNAUTHENTICATED', 'Sign-in is required');
 export const sessionExpired = () =>
@@ -84,13 +87,24 @@ export class AccessGuard implements CanActivate {
       return true;
     }
 
-    const resolution = await this.resolver.resolve(req);
+    let resolution;
+    if (rule.kind === 'service') {
+      // Internal contract (ADR 0039): only under /api/internal/, only with the audience's
+      // service token; the user comes from the forwarded session token, never from a user id.
+      if (!(req.url ?? '').startsWith(`${API_BASE_PATH}/internal/`)) throw forbidden();
+      if (!this.serviceTokenValid(req, rule.audience))
+        throw domainError(401, 'SERVICE_UNAUTHENTICATED', 'Unknown service');
+      const forwarded = req.headers[SERVICE_SESSION_HEADER];
+      resolution = await this.resolver.resolveToken(
+        typeof forwarded === 'string' && forwarded.length > 0 ? forwarded : null,
+      );
+    } else resolution = await this.resolver.resolve(req);
     if (resolution.kind === 'anonymous') throw unauthenticated();
     if (resolution.kind === 'expired') throw sessionExpired();
     if (resolution.kind === 'inactive') throw accountInactive();
     const principal = resolution.principal;
     req.ayvoPrincipal = principal;
-    if (rule.kind === 'authenticated') return true;
+    if (rule.kind === 'authenticated' || rule.kind === 'service') return true;
 
     if (!rule.permissions.every((p) => principal.permissions.has(p))) throw forbidden();
     const scopes = await this.access.permissionScopes();
@@ -121,14 +135,38 @@ export class AccessGuard implements CanActivate {
     return true;
   }
 
+  /** `Authorization: Bearer <token>` whose SHA-256 is the configured one (constant time). */
+  private serviceTokenValid(req: RequestWithPrincipal, audience: 'finance'): boolean {
+    const expected = audience === 'finance' ? this.env.FINANCE_SERVICE_TOKEN_SHA256 : undefined;
+    const header = req.headers.authorization;
+    if (!expected || typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+    const given = createHash('sha256').update(header.slice('Bearer '.length)).digest();
+    return timingSafeEqual(given, Buffer.from(expected, 'hex'));
+  }
+
   /** Browsers send Origin / Sec-Fetch-Site on state-changing requests; other clients send none. */
   private sameOrigin(req: RequestWithPrincipal): boolean {
-    const site = req.headers['sec-fetch-site'];
-    if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false;
-    const origin = req.headers.origin;
-    if (typeof origin === 'string' && origin !== this.env.APP_PUBLIC_ORIGIN) return false;
-    return true;
+    return sameOriginRequest(
+      req.headers['sec-fetch-site'],
+      req.headers.origin,
+      this.env.APP_PUBLIC_ORIGIN,
+    );
   }
+}
+
+/**
+ * The CSRF rule of state-changing requests, also applied to the method/origin another AYVO unit
+ * forwards from its browser request (ADR 0039).
+ */
+export function sameOriginRequest(
+  secFetchSite: unknown,
+  origin: unknown,
+  appOrigin: string | undefined,
+): boolean {
+  if (typeof secFetchSite === 'string' && secFetchSite !== 'same-origin' && secFetchSite !== 'none')
+    return false;
+  if (typeof origin === 'string' && origin !== appOrigin) return false;
+  return true;
 }
 
 /** The principal of the current request (only on @Authenticated / @RequirePermission routes). */

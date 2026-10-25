@@ -62,6 +62,7 @@ function check(
       'ACME_EMAIL=ops@ayvo.test',
       'POSTGRES_USER=ayvo',
       `POSTGRES_PASSWORD=${'p'.repeat(32)}`,
+      `CORE_DB_PASSWORD=${'c'.repeat(32)}`,
       'POSTGRES_DB=ayvo',
       `AUTH_ENCRYPTION_KEY=${KEY}`,
       ...auth,

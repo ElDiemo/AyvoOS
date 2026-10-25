@@ -41,12 +41,12 @@ export interface NavPage {
 }
 
 export interface NavModule {
-  id: 'sales' | 'warehouse' | 'production' | 'hotels' | 'dispatch' | 'admin';
+  id: 'sales' | 'finance' | 'warehouse' | 'production' | 'hotels' | 'dispatch' | 'admin';
   /**
    * Obchod (doc 034: before a hotel is a customer, apart from operations), the operational
    * modules ("Provoz") or the administration section ("Správa").
    */
-  section: 'sales' | 'operations' | 'administration';
+  section: 'sales' | 'finance' | 'operations' | 'administration';
   label: string;
   href: string;
   description: string;
@@ -60,6 +60,7 @@ const p = shellCs.modules.production;
 const h = shellCs.modules.hotels;
 const d = shellCs.modules.dispatch;
 const s = shellCs.modules.sales;
+const f = shellCs.modules.finance;
 
 export const MODULES: readonly NavModule[] = [
   {
@@ -85,6 +86,29 @@ export const MODULES: readonly NavModule[] = [
         permission: 'sales:work',
       },
       { id: 'tasks', href: '/sales/tasks', label: s.pages.tasks, permission: 'sales:work' },
+    ],
+  },
+  {
+    // Finance (doc 039): company-wide, no site; received documents first (N1).
+    id: 'finance',
+    section: 'finance',
+    permissions: ['finance:documents_read'],
+    label: f.label,
+    href: '/finance/documents',
+    description: f.description,
+    pages: [
+      {
+        id: 'documents',
+        href: '/finance/documents',
+        label: f.pages.documents,
+        permission: 'finance:documents_read',
+      },
+      {
+        id: 'exports',
+        href: '/finance/exports',
+        label: f.pages.exports,
+        permission: 'finance:documents_read',
+      },
     ],
   },
   {

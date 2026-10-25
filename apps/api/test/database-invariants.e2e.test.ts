@@ -2,7 +2,7 @@ import type { LabelTemplateVersion } from '@ayvo/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PRODUCTION_QR_BASE_URL } from '../src/common/qr-policy.js';
 import { createTemplate, registerBottles } from './support/fixtures.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 import { INITIAL_SITE_ID } from './support/sign-in.js';
 
 /**
@@ -147,7 +147,10 @@ describe.skipIf(!hasDatabase)('database invariants', () => {
     await expect(
       sql(`DELETE FROM label_templates WHERE id = '${version.templateId}'`),
     ).rejects.toThrow();
-    await expect(sql('TRUNCATE label_template_versions CASCADE')).rejects.toThrow();
+    // Even the privileged account (the running core has no TRUNCATE right at all).
+    await withPrivileged((db) =>
+      expect(db.$executeRawUnsafe('TRUNCATE label_template_versions CASCADE')).rejects.toThrow(),
+    );
   });
 
   it('enforces the DEV/production QR host rule by parsed host, like the application policy', async () => {

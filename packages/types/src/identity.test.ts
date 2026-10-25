@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isPlannedRole, PLANNED_SYSTEM_ROLE_CODES, SYSTEM_ROLE_CODES } from './identity.js';
+import {
+  isPlannedRole,
+  PERMISSION_CODES,
+  PERMISSION_MODULES,
+  PLANNED_SYSTEM_ROLE_CODES,
+  SYSTEM_ROLE_CODES,
+} from './identity.js';
 
 describe('planned system roles (doc 021 §4c)', () => {
   it('are exactly FINANCE and HOTEL_USER (SALES is assignable since Obchod, doc 034)', () => {
@@ -20,5 +26,12 @@ describe('planned system roles (doc 021 §4c)', () => {
     ])
       expect(isPlannedRole(code), code).toBe(false);
     for (const code of PLANNED_SYSTEM_ROLE_CODES) expect(isPlannedRole(code)).toBe(true);
+  });
+});
+
+describe('permission modules', () => {
+  it('every permission belongs to a known module (the role pages group by it)', () => {
+    for (const code of PERMISSION_CODES)
+      expect(PERMISSION_MODULES, code).toContain(code.split(':')[0]);
   });
 });
