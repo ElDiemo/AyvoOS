@@ -4,7 +4,11 @@ import { payloadHash } from '../database/operation-requests.service.js';
 import type { Prisma } from '../generated/finance-prisma/client.js';
 import { FinancePrismaService } from './finance-prisma.service.js';
 
-export type FinanceOperationKind = 'FINANCE_DOCUMENT_RECEIVE' | 'FINANCE_DOCUMENT_TAKEOVER';
+export type FinanceOperationKind =
+  | 'FINANCE_DOCUMENT_RECEIVE'
+  | 'FINANCE_DOCUMENT_TAKEOVER'
+  | 'ACCOUNTING_EXPORT_CREATE'
+  | 'ACCOUNTING_EXPORT_HANDOVER';
 
 /**
  * The core's idempotency pattern (doc 018 §8) in Finance's own schema: one transaction inserts

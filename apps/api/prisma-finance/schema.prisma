@@ -77,7 +77,8 @@ model Document {
   requestId          String    @unique @map("request_id") @db.Uuid
   updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
 
-  events DocumentEvent[]
+  events      DocumentEvent[]
+  exportItems ExportItem[]
 
   @@index([issuedOn])
   @@index([supplierId])
@@ -99,9 +100,73 @@ model DocumentEvent {
   actorName  String   @map("actor_name")
   occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
 
-  document Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  document    Document     @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  exportItems ExportItem[]
 
   @@unique([documentId, version])
   @@map("document_events")
+  @@schema("finance")
+}
+
+/// An export for the accountant (doc 039 §7, N2): one handover month, a fixed ZIP (CSV manifest +
+/// originals), bound to the confirmed preview. DB: append-only; has its GENERATED event.
+model Export {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt   @unique
+  code               String   @unique
+  handoverMonth      DateTime @map("handover_month") @db.Date
+  mode               String
+  note               String?
+  previewFingerprint String   @map("preview_fingerprint") @db.Char(64)
+  documentCount      Int      @map("document_count")
+  storageKey         String   @unique @map("storage_key")
+  sha256             String   @db.Char(64)
+  byteSize           Int      @map("byte_size")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String   @map("created_by") @db.Uuid
+  createdByName      String   @map("created_by_name")
+  requestId          String   @unique @map("request_id") @db.Uuid
+
+  items  ExportItem[]
+  events ExportEvent[]
+
+  @@index([handoverMonth])
+  @@map("exports")
+  @@schema("finance")
+}
+
+/// One document version in an export, with its change and file hash. DB: append-only.
+model ExportItem {
+  exportId        String @map("export_id") @db.Uuid
+  documentId      String @map("document_id") @db.Uuid
+  documentVersion Int    @map("document_version")
+  change          String
+  sha256          String @db.Char(64)
+
+  export   Export        @relation(fields: [exportId], references: [id], onDelete: Restrict)
+  document Document      @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  event    DocumentEvent @relation(fields: [documentId, documentVersion], references: [documentId, version], onDelete: Restrict)
+
+  @@id([exportId, documentId])
+  @@index([documentId, documentVersion])
+  @@map("export_items")
+  @@schema("finance")
+}
+
+/// GENERATED, DOWNLOADED, HANDED_OVER (once, with the day and a note). DB: append-only.
+model ExportEvent {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  exportId     String    @map("export_id") @db.Uuid
+  type         String
+  handedOverOn DateTime? @map("handed_over_on") @db.Date
+  note         String?
+  actorId      String    @map("actor_id") @db.Uuid
+  actorName    String    @map("actor_name")
+  occurredAt   DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(3)
+
+  export Export @relation(fields: [exportId], references: [id], onDelete: Restrict)
+
+  @@index([exportId])
+  @@map("export_events")
   @@schema("finance")
 }

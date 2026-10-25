@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MulterModule } from '@nestjs/platform-express';
+import { AccountingExportsService } from './accounting-exports.service.js';
 import { FinanceController } from './finance.controller.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
 import { FINANCE_ENV, type FinanceEnv } from './finance-env.js';
@@ -8,7 +9,7 @@ import { FinanceOperations } from './finance-operations.js';
 import { FinancePrismaService } from './finance-prisma.service.js';
 
 /**
- * The Finance feature (doc 039): received documents (N1). Runs only in the Finance unit
+ * The Finance feature (doc 039): received documents (N1) and the export for the accountant (N2). Runs only in the Finance unit
  * (FinanceAppModule, ADR 0039) — never inside the core API. Owns schema `finance`; everything
  * of the core comes through CoreClient. Company-wide (no site); FINANCE stays a planned role.
  */
@@ -23,6 +24,11 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     }),
   ],
   controllers: [FinanceController, FinanceHealthController],
-  providers: [FinanceDocumentsService, FinancePrismaService, FinanceOperations],
+  providers: [
+    FinanceDocumentsService,
+    AccountingExportsService,
+    FinancePrismaService,
+    FinanceOperations,
+  ],
 })
 export class FinanceModule {}

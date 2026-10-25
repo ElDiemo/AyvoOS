@@ -2,7 +2,7 @@ import { accountingExportSchema } from '@ayvo/types';
 import Link from 'next/link';
 import { z } from 'zod';
 import { CreateExportForm } from '@/components/finance/create-export-form';
-import { financeDate } from '@/components/finance/finance-format';
+import { financeDate, financeMonth } from '@/components/finance/finance-format';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
@@ -11,26 +11,37 @@ import { currentUser, hasPermission } from '@/lib/session';
 export const dynamic = 'force-dynamic';
 const t = financeCs.exports;
 
-/** The previous calendar month (a sensible default period; any period up to 366 days). */
-function previousMonth(now = new Date()): [string, string] {
-  const first = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-  const last = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
-  return [first.toISOString().slice(0, 10), last.toISOString().slice(0, 10)];
+/** The previous and the current calendar month ("YYYY-MM", Prague). */
+function months(now = new Date()): [string, string] {
+  const [y, m] = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Prague',
+    year: 'numeric',
+    month: '2-digit',
+  })
+    .format(now)
+    .split('-')
+    .map(Number) as [number, number];
+  const prev = m === 1 ? [y - 1, 12] : [y, m - 1];
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return [`${prev[0]}-${pad(prev[1]!)}`, `${y}-${pad(m)}`];
 }
 
-/** Export pro účetní (doc 039 §7, N2): create (finance:exports_manage) and the history. */
+/**
+ * Export pro účetní (doc 039 §7, N2): create one handover month (finance:exports_manage) and the
+ * history with what was handed over to the accountant (recorded by hand) and downloads.
+ */
 export default async function AccountingExportsPage() {
   const me = await currentUser();
   const canCreate = hasPermission(me, 'finance:exports_manage');
   const exports = await apiGet('admin/finance/exports', z.array(accountingExportSchema));
-  const [from, to] = previousMonth();
+  const [lastMonth, thisMonth] = months();
   return (
     <>
       <PageHeader title={t.title} subtitle={t.subtitle} />
       <div className="flex flex-col gap-6">
         {canCreate && (
           <Card title={t.create}>
-            <CreateExportForm defaultFrom={from} defaultTo={to} />
+            <CreateExportForm lastMonth={lastMonth} thisMonth={thisMonth} />
           </Card>
         )}
         <Card title={t.history} testId="export-history">
@@ -44,10 +55,12 @@ export default async function AccountingExportsPage() {
                     {e.code}
                   </Link>
                   <span className="min-w-0 flex-1">
-                    {financeDate(e.periodFrom)} – {financeDate(e.periodTo)} · {t.modesShort[e.mode]}
+                    {financeMonth(e.handoverMonth)} · {t.modesShort[e.mode]} ·{' '}
+                    {t.count(e.documentCount)}
                   </span>
                   <span className="text-xs text-stone-500">
-                    {t.count(e.documentCount)} · {e.createdBy}
+                    {e.handedOverOn ? t.handedOver(financeDate(e.handedOverOn)) : t.notHandedOver}{' '}
+                    · {t.downloads(e.downloads)} · {e.createdBy}
                   </span>
                 </li>
               ))}

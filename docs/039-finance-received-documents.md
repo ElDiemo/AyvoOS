@@ -93,3 +93,40 @@ unavailable, its pages say so; the rest of the app is unaffected.
 4. May Finance create suppliers itself (landlord, accountant)? Now only via Sklad → Dodavatelé.
 5. ADR 0039 §9: the core's own non-superuser DB role (two-sided isolation), a separate Finance
    web app, and the measured budgets.
+
+## 7. Export for the accountant (N2) — `finance.exports`, `export_items`, `export_events`
+
+One export = one **handover month** (the month chosen on the documents, not a tax date) and a mode:
+`FULL` (every complete valid document of the month) or `SUPPLEMENT` (only what is new, changed or
+voided since the earlier exports of that month). A ZIP with `manifest.csv` (UTF-8 BOM, `;`, CRLF,
+formula-safe), `README.txt` and the unchanged originals `doklady/<code>-<name>`; each document
+version is recorded with its file hash. Exports, their items and events are append-only.
+
+| Method | Path                                                                                     | Permission               |
+| ------ | ---------------------------------------------------------------------------------------- | ------------------------ |
+| GET    | `/api/admin/finance/exports/preview?handoverMonth&mode`                                  | `finance:exports_manage` |
+| POST   | `/api/admin/finance/exports` (`requestId`, `handoverMonth`, `mode`, `previewFingerprint`, `note?`) | `finance:exports_manage` |
+| GET    | `/api/admin/finance/exports`, `/exports/:code`                                           | `finance:documents_read` |
+| GET    | `/api/admin/finance/exports/:code/content` (records a download)                          | `finance:documents_read` |
+| POST   | `/api/admin/finance/exports/:code/handover` (`requestId`, `handedOverOn`, `note?`)       | `finance:exports_manage` |
+
+- **Confirmation = the preview** (review F-R2): the preview returns a fingerprint of every line
+  (document, version, change, file hash) and of what blocks the month; the confirmation must
+  present it, and it is checked again inside the final transaction with the month's documents
+  share-locked. Any change in between → 409 `PREVIEW_STALE`, a new preview is needed.
+- **Incomplete documents of the month block the export** (422 `INCOMPLETE_DOCUMENTS`) until they
+  are completed or moved to another month; documents without a month are shown as "unassigned".
+- **Bounds and memory** (F-R4): at most 1000 documents and 100 MiB of originals, checked on the
+  declared sizes before anything is loaded and on the real bytes while loading; the archive is
+  built outside any database transaction (the final transaction only re-checks and records); at
+  most one export is built per Finance process at a time (another one: 409 `EXPORT_BUSY`).
+  Peak memory ≈ originals + one archive copy (≈ 2 × 100 MiB) inside the 512 MiB container.
+- **Idempotency** (F-R5): per `requestId` over the complete request (month, mode, fingerprint,
+  note, author); the same request arriving while it is built waits for that build; a replay
+  returns the export; anything else under the id is a conflict.
+- **"Změněno po tomto exportu"** (F-R6) is computed against that export: documents of its month
+  added later, its documents in a newer version (also moved to another month) or voided since —
+  regardless of later exports.
+- **Generated ≠ downloaded ≠ handed over ≠ posted**: `GENERATED` with the export, `DOWNLOADED` on
+  every download, `HANDED_OVER` only by the manual "Předáno účetní" (once, with the day and a
+  note). Nothing is sent automatically; there is no claim of UOL compatibility.

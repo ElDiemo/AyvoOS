@@ -5,9 +5,10 @@ import { resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 
 /**
- * Finance — export for the accountant (doc 039 §7, N2) in the browser: preview, create, download
- * the ZIP (read by Python's zipfile, CRC checked), then a later correction shows on the export as
- * "changed after the export". Synthetic data in its own period (2011-03).
+ * Finance — export for the accountant (doc 039 §7, N2) in the browser: preview a handover month,
+ * confirm exactly that preview, download the ZIP (read by Python's zipfile, CRC checked), record
+ * "Předáno účetní" by hand; a later correction shows on the export as "changed after this
+ * export". Synthetic data in its own handover month (2011-03).
  */
 const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/finance');
 test.use({ storageState: 'e2e/.auth/admin.json' });
@@ -35,6 +36,7 @@ test('preview, create and download an export; later changes are shown on it', as
         kind: 'INVOICE',
         documentNumber: `UC-${randomUUID().slice(0, 6)}`,
         issuedOn: day,
+        handoverMonth: '2011-03',
         totalAmount: amount,
         currency: 'CZK',
         file: {
@@ -51,13 +53,13 @@ test('preview, create and download an export; later changes are shown on it', as
   await page.goto('/finance/exports');
   await expect(page.getByRole('heading', { level: 1, name: 'Export pro účetní' })).toBeVisible();
   const form = page.getByTestId('create-export');
-  await form.getByLabel('Období od').fill('2011-03-01');
-  await form.getByLabel('Období do').fill('2011-03-31');
+  await form.getByLabel('Předávací měsíc').fill('2011-03');
   await form.getByLabel('Druh exportu').selectOption('FULL');
   await form.getByLabel('Poznámka (nepovinná)').fill('Březen 2011 (test)');
   await form.getByRole('button', { name: 'Zobrazit náhled' }).click();
   const preview = page.getByTestId('export-preview');
   await expect(preview).toContainText('2 doklady');
+  await expect(preview).toContainText('5 700,50 CZK');
   for (const code of codes) await expect(preview).toContainText(code);
   await preview.getByRole('button', { name: 'Vytvořit export' }).click();
 
@@ -86,7 +88,19 @@ test('preview, create and download an export; later changes are shown on it', as
     `doklady/${codes[1]}-faktura.pdf`,
   ]);
 
-  // A later correction appears on the export as "changed after the export".
+  // The download is recorded, but only the manual record says it was handed over.
+  await page.reload();
+  await expect(page.getByTestId('export-events')).toContainText('Stažen');
+  await expect(page.getByTestId('export-detail')).toContainText('Nepředáno');
+  const handover = page.getByTestId('export-handover');
+  await handover.getByLabel('Datum předání').fill('2011-04-03');
+  await handover.getByLabel('Poznámka (např. jak, komu)').fill('e-mailem (test)');
+  await handover.getByRole('button', { name: 'Zapsat předání' }).click();
+  await expect(page.getByTestId('export-detail')).toContainText('Předáno účetní 3. 4. 2011');
+  await expect(page.getByTestId('export-events')).toContainText('Předán účetní');
+  await expect(page.getByTestId('export-handover')).toHaveCount(0);
+
+  // A later correction appears on the export as "changed after this export".
   const exportUrl = page.url();
   const doc = (await (
     await page.request.get(`/api/admin/finance/documents/${codes[1]}`)
@@ -100,6 +114,7 @@ test('preview, create and download an export; later changes are shown on it', as
       kind: 'INVOICE',
       documentNumber: doc.documentNumber,
       issuedOn: '2011-03-28',
+      handoverMonth: '2011-03',
       totalAmount: '1452.61',
       currency: 'CZK',
       expectedVersion: doc.version,

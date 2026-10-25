@@ -16,7 +16,8 @@ export function ExportLines({ lines }: { lines: readonly AccountingExportLine[] 
             {l.code}
           </Link>
           <span className="min-w-0 flex-1">
-            {l.supplier} · {t.kinds[l.kind]} {l.documentNumber} · {financeDate(l.issuedOn)}
+            {l.supplier ?? t.detail.empty} · {t.kinds[l.kind]} {l.documentNumber ?? ''} ·{' '}
+            {financeDate(l.issuedOn)}
           </span>
           <span className="tabular-nums">{financeAmount(l.totalAmount, l.currency)}</span>
           <span className="text-xs text-stone-500">

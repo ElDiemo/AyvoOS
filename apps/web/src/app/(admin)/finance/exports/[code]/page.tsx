@@ -1,16 +1,20 @@
 import { API_BASE_PATH, accountingExportDetailSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { ExportLines } from '@/components/finance/export-lines';
-import { fileSize, financeDate } from '@/components/finance/finance-format';
+import { fileSize, financeDate, financeMonth } from '@/components/finance/finance-format';
+import { HandOverForm } from '@/components/finance/hand-over-form';
 import { buttonClass, Card, Field, FieldList, Notice, PageHeader } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { ApiError, apiGet } from '@/lib/api';
-import { siteTimeZone } from '@/lib/session';
+import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const t = financeCs.exports;
 
-/** One export: what was handed over (per document version) and what changed afterwards. */
+/**
+ * One export: its content per document version, its history (generated, downloaded, handed over
+ * to the accountant — recorded by hand), and what changed against it afterwards.
+ */
 export default async function AccountingExportPage({
   params,
 }: {
@@ -24,17 +28,20 @@ export default async function AccountingExportPage({
       throw e;
     },
   );
-  const zone = await siteTimeZone();
-  const when = new Intl.DateTimeFormat('cs-CZ', {
+  const [zone, me] = await Promise.all([siteTimeZone(), currentUser()]);
+  const canHandOver = hasPermission(me, 'finance:exports_manage') && !doc.handedOverOn;
+  const format = new Intl.DateTimeFormat('cs-CZ', {
     timeZone: zone,
     dateStyle: 'short',
     timeStyle: 'short',
-  }).format(new Date(doc.createdAt));
+  });
+  const when = format.format(new Date(doc.createdAt));
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(new Date());
   return (
     <>
       <PageHeader
         back={{ href: '/finance/exports', label: t.back }}
-        title={`${doc.code} · ${financeDate(doc.periodFrom)} – ${financeDate(doc.periodTo)}`}
+        title={`${doc.code} · ${financeMonth(doc.handoverMonth)}`}
         subtitle={t.modes[doc.mode]}
         actions={
           <a
@@ -54,11 +61,31 @@ export default async function AccountingExportPage({
               {when} · {doc.createdBy}
             </Field>
             {doc.note && <Field label={t.note}>{doc.note}</Field>}
+            <Field label={t.handOver.title}>
+              {doc.handedOverOn ? t.handedOver(financeDate(doc.handedOverOn)) : t.notHandedOver}
+            </Field>
             <Field label="ZIP">
               {fileSize(doc.byteSize)} ·{' '}
               <span className="font-mono text-xs">SHA-256 {doc.sha256.slice(0, 16)}…</span>
             </Field>
           </FieldList>
+        </Card>
+        {canHandOver && (
+          <Card title={t.handOver.title}>
+            <HandOverForm code={doc.code} today={today} />
+          </Card>
+        )}
+        <Card title={t.events.title} testId="export-events">
+          <ol className="flex flex-col gap-2 text-sm">
+            {doc.events.map((e, i) => (
+              <li key={i}>
+                <span className="font-medium">{t.events[e.type]}</span> ·{' '}
+                {format.format(new Date(e.occurredAt))} · {e.actor}
+                {e.handedOverOn && ` · ${financeDate(e.handedOverOn)}`}
+                {e.note && <span className="text-stone-600"> — {e.note}</span>}
+              </li>
+            ))}
+          </ol>
         </Card>
         <Card title={t.later} testId="export-later">
           {doc.laterChanges.length === 0 ? (

@@ -208,6 +208,112 @@ export type TakeOverCandidate = z.infer<typeof takeOverCandidateSchema>;
 export const financeSupplierSchema = z.object({ id: z.uuid(), name: z.string() });
 export type FinanceSupplier = z.infer<typeof financeSupplierSchema>;
 
+// --- N2: the monthly export for the accountant (doc 039 §7) ---------------------------------
+
+export const ACCOUNTING_EXPORT_MODES = ['FULL', 'SUPPLEMENT'] as const;
+export const accountingExportModeSchema = z.enum(ACCOUNTING_EXPORT_MODES);
+export type AccountingExportMode = z.infer<typeof accountingExportModeSchema>;
+export const accountingExportChangeSchema = z.enum(['NEW', 'CHANGED', 'VOIDED', 'INCLUDED']);
+export type AccountingExportChange = z.infer<typeof accountingExportChangeSchema>;
+
+/** GET /api/admin/finance/exports/preview: what an export of the handover month would contain. */
+export const accountingExportPreviewQuerySchema = z.object({
+  handoverMonth: handoverMonthSchema,
+  mode: accountingExportModeSchema,
+});
+export type AccountingExportPreviewQuery = z.infer<typeof accountingExportPreviewQuerySchema>;
+
+export const accountingExportLineSchema = z.object({
+  code: z.string(),
+  supplier: z.string().nullable(),
+  kind: financeDocumentKindSchema,
+  documentNumber: z.string().nullable(),
+  issuedOn: isoDateSchema.nullable(),
+  totalAmount: z.string().nullable(),
+  currency: z.string().nullable(),
+  version: z.number().int(),
+  change: accountingExportChangeSchema,
+  byteSize: z.number().int(),
+  source: financeDocumentSourceSchema,
+});
+export type AccountingExportLine = z.infer<typeof accountingExportLineSchema>;
+
+/** Sums per currency, never mixed (no conversion). */
+export const currencyTotalSchema = z.object({ currency: z.string(), amount: z.string() });
+
+export const accountingExportPreviewSchema = z.object({
+  handoverMonth: handoverMonthSchema,
+  mode: accountingExportModeSchema,
+  lines: z.array(accountingExportLineSchema),
+  totals: z.array(currencyTotalSchema),
+  /** Documents of this month that still miss something: the export waits for them. */
+  incomplete: z.array(
+    z.object({ code: z.string(), missing: z.array(z.enum(FINANCE_EXPORT_REQUIRED)) }),
+  ),
+  /** Valid documents without a handover month (in no export until one is chosen). */
+  unassigned: z.number().int(),
+  totalBytes: z.number().int(),
+  /** Over the limits: the export would be refused. */
+  tooLarge: z.boolean(),
+  limits: z.object({ documents: z.number().int(), bytes: z.number().int() }),
+  /** Binds the confirmation to exactly this content (ids, versions, changes, file hashes). */
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type AccountingExportPreview = z.infer<typeof accountingExportPreviewSchema>;
+
+export const createAccountingExportSchema = z.object({
+  requestId: z.uuid(),
+  handoverMonth: handoverMonthSchema,
+  mode: accountingExportModeSchema,
+  previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  note: optionalText(500),
+});
+export type CreateAccountingExportRequest = z.infer<typeof createAccountingExportSchema>;
+
+/** "Předáno účetní": a separate, manual, audited record — never implied by a download. */
+export const handOverAccountingExportSchema = z.object({
+  requestId: z.uuid(),
+  handedOverOn: isoDateSchema,
+  note: optionalText(500),
+});
+export type HandOverAccountingExportRequest = z.infer<typeof handOverAccountingExportSchema>;
+
+export const accountingExportEventSchema = z.object({
+  type: z.enum(['GENERATED', 'DOWNLOADED', 'HANDED_OVER']),
+  handedOverOn: isoDateSchema.nullable(),
+  note: z.string().nullable(),
+  actor: z.string(),
+  occurredAt: z.iso.datetime(),
+});
+export type AccountingExportEvent = z.infer<typeof accountingExportEventSchema>;
+
+export const accountingExportSchema = z.object({
+  code: z.string(),
+  handoverMonth: handoverMonthSchema,
+  mode: accountingExportModeSchema,
+  note: z.string().nullable(),
+  documentCount: z.number().int(),
+  byteSize: z.number().int(),
+  sha256: z.string(),
+  createdAt: z.iso.datetime(),
+  createdBy: z.string(),
+  /** Recorded manually; null = not yet handed over (downloads do not count). */
+  handedOverOn: isoDateSchema.nullable(),
+  downloads: z.number().int(),
+});
+export type AccountingExport = z.infer<typeof accountingExportSchema>;
+
+export const accountingExportDetailSchema = accountingExportSchema.extend({
+  lines: z.array(accountingExportLineSchema),
+  events: z.array(accountingExportEventSchema),
+  /**
+   * Documents of the month that differ from THIS export now: added later, changed or voided
+   * since (relative to this export, whatever other exports came after).
+   */
+  laterChanges: z.array(accountingExportLineSchema),
+});
+export type AccountingExportDetail = z.infer<typeof accountingExportDetailSchema>;
+
 // --- Internal contract core ⇄ Finance unit (ADR 0039 §4) ------------------------------------
 // Called only by the Finance container with its service token and the user's session token.
 

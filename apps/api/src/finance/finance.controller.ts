@@ -14,6 +14,15 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
+  accountingExportPreviewQuerySchema,
+  createAccountingExportSchema,
+  handOverAccountingExportSchema,
+  type AccountingExport,
+  type AccountingExportDetail,
+  type AccountingExportPreview,
+  type AccountingExportPreviewQuery,
+  type CreateAccountingExportRequest,
+  type HandOverAccountingExportRequest,
   correctFinanceDocumentSchema,
   financeDocumentListQuerySchema,
   uploadFinanceDocumentFieldsSchema,
@@ -33,9 +42,11 @@ import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
 import { Caller, type FinanceCaller } from './finance-access.guard.js';
+import { AccountingExportsService } from './accounting-exports.service.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
 
 const CODE = new ZodValidationPipe(z.string().regex(/^FD-\d{6,}$/));
+const EXPORT_CODE = new ZodValidationPipe(z.string().regex(/^AE-\d{6,}$/));
 /** Multipart sends empty optional fields as "": they mean "not given". */
 const uploadFields = z.preprocess(
   (v) =>
@@ -46,12 +57,82 @@ const uploadFields = z.preprocess(
 );
 
 /**
- * Admin API — Finance: received documents (doc 039, N1). Company-wide (no site). Reading needs
- * finance:documents_read; receiving, correcting and voiding finance:documents_manage.
+ * Admin API of the Finance unit (doc 039, ADR 0039): received documents (N1) and the export for
+ * the accountant (N2). Company-wide (no site). Reading needs finance:documents_read; receiving,
+ * correcting and voiding finance:documents_manage; exports and their handover
+ * finance:exports_manage.
  */
 @Controller(`${ADMIN_PREFIX}/finance`)
 export class FinanceController {
-  constructor(private readonly documents: FinanceDocumentsService) {}
+  constructor(
+    private readonly documents: FinanceDocumentsService,
+    private readonly exports: AccountingExportsService,
+  ) {}
+
+  // --- N2: the monthly export for the accountant (doc 039 §7) -------------------------------
+
+  @RequirePermission('finance:documents_read')
+  @Get('exports')
+  listExports(): Promise<AccountingExport[]> {
+    return this.exports.list();
+  }
+
+  /** What an export of the handover month would contain now, with its fingerprint; writes nothing. */
+  @RequirePermission('finance:exports_manage')
+  @Get('exports/preview')
+  previewExport(
+    @Query(new ZodValidationPipe(accountingExportPreviewQuerySchema))
+    query: AccountingExportPreviewQuery,
+  ): Promise<AccountingExportPreview> {
+    return this.exports.preview(query);
+  }
+
+  /** Creates exactly the previewed content (fingerprint), or 409 PREVIEW_STALE. */
+  @RequirePermission('finance:exports_manage')
+  @Post('exports')
+  createExport(
+    @Body(new ZodValidationPipe(createAccountingExportSchema)) body: CreateAccountingExportRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<AccountingExportDetail> {
+    return this.exports.create(body, caller);
+  }
+
+  @RequirePermission('finance:documents_read')
+  @Get('exports/:code')
+  exportDetail(@Param('code', EXPORT_CODE) code: string): Promise<AccountingExportDetail> {
+    return this.exports.detail(code);
+  }
+
+  /** The stored package; the download is recorded (it is not a handover). */
+  @RequirePermission('finance:documents_read')
+  @Get('exports/:code/content')
+  @Header('Cache-Control', 'private, no-store')
+  @Header('X-Content-Type-Options', 'nosniff')
+  async exportContent(
+    @Param('code', EXPORT_CODE) code: string,
+    @Caller() caller: FinanceCaller,
+  ): Promise<StreamableFile> {
+    const { bytes, filename } = await this.exports.content(code, caller);
+    return new StreamableFile(bytes, {
+      type: 'application/zip',
+      disposition: `attachment; filename="${filename}"`,
+    });
+  }
+
+  /** "Předáno účetní" — recorded by hand, once. */
+  @RequirePermission('finance:exports_manage')
+  @Post('exports/:code/handover')
+  @HttpCode(200)
+  handOver(
+    @Param('code', EXPORT_CODE) code: string,
+    @Body(new ZodValidationPipe(handOverAccountingExportSchema))
+    body: HandOverAccountingExportRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<AccountingExportDetail> {
+    return this.exports.handOver(code, body, caller);
+  }
+
+  // --- N1: received documents ----------------------------------------------------------------
 
   /** Active suppliers to choose from (managed in Sklad → Dodavatelé). */
   @RequirePermission('finance:documents_manage')

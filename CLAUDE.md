@@ -110,7 +110,12 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   session, evaluated per request; Caddy aborts /api/internal/*); core down = Finance 503, never
   access. Documents: own PDF or a referenced supplier document (no copy), drafts "k doplnění",
   handover month, versioned metadata, voided never deleted; `finance:documents_read|manage` for
-  ADMIN only. Deployed only by `scripts/deploy-finance-dev.sh`. No VAT logic, posting or payments.
+  ADMIN only. Export for the accountant (N2, doc 039 §7): one handover month, FULL/SUPPLEMENT, the
+  confirmation bound to the preview fingerprint (else PREVIEW_STALE), incomplete documents block it,
+  built outside DB transactions within fixed bounds, one build per process; append-only exports,
+  items (version + file hash) and events GENERATED / DOWNLOADED / HANDED_OVER (manual, once);
+  `finance:exports_manage` for ADMIN only. Deployed only by `scripts/deploy-finance-dev.sh`. No
+  VAT logic, posting, payments or automatic sending to the accountant.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
