@@ -722,6 +722,7 @@ model SupplierDocument {
   supersedes   SupplierDocument?      @relation("SupplierDocumentSupersedes", fields: [supersedesId], references: [id], onDelete: Restrict)
   supersededBy SupplierDocument[]     @relation("SupplierDocumentSupersedes")
   receiptLinks GoodsReceiptDocument[]
+  financeDocuments FinanceDocument[]
 
   @@index([supplierId])
   @@index([siteId, supplierId])
@@ -937,6 +938,8 @@ enum OperationKind {
   SALES_TASK_SAVE
   SALES_PROSPECT_ARCHIVE
   SALES_IMPORT
+  FINANCE_DOCUMENT_RECEIVE
+  FINANCE_DOCUMENT_TAKEOVER
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1465,6 +1468,7 @@ model Site {
   bottles             Bottle[]
   printJobs           LabelPrintJob[]
   documents           SupplierDocument[]
+  financeDocuments    FinanceDocument[]
   receiptCosts        GoodsReceiptLineCost[]
   userScopes          UserScope[]
   activeSessions      UserSession[]
@@ -3546,40 +3550,52 @@ model SalesEvent {
   @@map("sales_events")
 }
 
-/// Finance — a received document (doc 039, N1): rent, accounting, services, material invoices…
-/// The original file is immutable; metadata changes only with the next `version` and its event;
-/// voided, never deleted (DB triggers). `totalAmount` + `currency` as written (both or neither).
+/// Finance — a received document (doc 039, N1): its own original (UPLOAD, PDF) or a reference to
+/// an existing supplier document of Sklad (SUPPLIER_DOCUMENT, no second copy). Metadata may be
+/// incomplete ("k doplnění"); the handover month says which month's export it belongs to.
+/// DB: file/source/identity immutable; changes only with the next version and its event; a
+/// voided document is frozen; never deleted; one active record per file and per supplier document.
 model FinanceDocument {
-  id               String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial           BigInt    @unique
-  code             String    @unique
-  supplierId       String    @map("supplier_id") @db.Uuid
-  kind             String
-  documentNumber   String    @map("document_number")
-  issuedOn         DateTime  @map("issued_on") @db.Date
-  taxPointOn       DateTime? @map("tax_point_on") @db.Date
-  dueOn            DateTime? @map("due_on") @db.Date
-  totalAmount      Decimal?  @map("total_amount") @db.Decimal(19, 2)
-  currency         String?   @db.Char(3)
-  description      String?
-  status           String    @default("ACTIVE")
-  version          Int       @default(1)
-  storageKey       String    @unique @map("storage_key")
-  sha256           String    @db.Char(64)
-  byteSize         Int       @map("byte_size")
-  contentType      String    @map("content_type")
-  originalFilename String    @map("original_filename")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy        String    @map("created_by") @db.Uuid
-  requestId        String    @unique @map("request_id") @db.Uuid
-  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt    @unique
+  code               String    @unique
+  supplierId         String?   @map("supplier_id") @db.Uuid
+  kind               String
+  documentNumber     String?   @map("document_number")
+  issuedOn           DateTime? @map("issued_on") @db.Date
+  taxPointOn         DateTime? @map("tax_point_on") @db.Date
+  dueOn              DateTime? @map("due_on") @db.Date
+  totalAmount        Decimal?  @map("total_amount") @db.Decimal(19, 2)
+  currency           String?   @db.Char(3)
+  description        String?
+  /// First day of the month whose export this document belongs to (organisational, not a tax date).
+  handoverMonth      DateTime? @map("handover_month") @db.Date
+  status             String    @default("ACTIVE")
+  version            Int       @default(1)
+  source             String
+  supplierDocumentId String?   @map("supplier_document_id") @db.Uuid
+  /// The site of the referenced supplier document (its paperwork stays site-scoped).
+  sourceSiteId       String?   @map("source_site_id") @db.Uuid
+  storageKey         String?   @unique @map("storage_key")
+  sha256             String    @db.Char(64)
+  byteSize           Int       @map("byte_size")
+  contentType        String    @map("content_type")
+  originalFilename   String    @map("original_filename")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy          String    @map("created_by") @db.Uuid
+  requestId          String    @unique @map("request_id") @db.Uuid
+  updatedAt          DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
 
-  supplier Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  creator  User                   @relation("FinanceDocumentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  events   FinanceDocumentEvent[]
+  supplier         Supplier?              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplierDocument SupplierDocument?      @relation(fields: [supplierDocumentId], references: [id], onDelete: Restrict)
+  sourceSite       Site?                  @relation(fields: [sourceSiteId], references: [id], onDelete: Restrict)
+  creator          User                   @relation("FinanceDocumentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  events           FinanceDocumentEvent[]
 
   @@index([issuedOn])
   @@index([supplierId])
+  @@index([handoverMonth])
+  @@index([supplierDocumentId])
   @@map("finance_documents")
 }
 

@@ -23,6 +23,9 @@ import {
   type FinanceDocumentListQuery,
   type FinanceDocumentPage,
   type FinanceSupplier,
+  type TakeOverCandidate,
+  type TakeOverSupplierDocumentRequest,
+  takeOverSupplierDocumentSchema,
   type VoidFinanceDocumentRequest,
 } from '@ayvo/types';
 import { z } from 'zod';
@@ -58,6 +61,30 @@ export class FinanceController {
     return this.documents.suppliers();
   }
 
+  /**
+   * Supplier documents of Sklad that may be taken over — only sites whose paperwork the user may
+   * read (procurement:documents_read there; checked in the service, not only here).
+   */
+  @RequirePermission('finance:documents_manage')
+  @Get('supplier-documents')
+  takeOverCandidates(
+    @Query(new ZodValidationPipe(z.object({ supplierId: z.uuid().optional() })))
+    query: { supplierId?: string },
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<TakeOverCandidate[]> {
+    return this.documents.takeOverCandidates(principal, query.supplierId);
+  }
+
+  @RequirePermission('finance:documents_manage')
+  @Post('documents/take-over')
+  takeOver(
+    @Body(new ZodValidationPipe(takeOverSupplierDocumentSchema))
+    body: TakeOverSupplierDocumentRequest,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<FinanceDocumentDetail> {
+    return this.documents.takeOver(body, principal);
+  }
+
   @RequirePermission('finance:documents_read')
   @Get('documents')
   list(
@@ -66,7 +93,7 @@ export class FinanceController {
     return this.documents.list(query);
   }
 
-  /** multipart/form-data: uploadFinanceDocumentFieldsSchema fields + one `file` (PDF/JPEG/PNG). */
+  /** multipart/form-data: uploadFinanceDocumentFieldsSchema fields + one `file` (PDF). */
   @RequirePermission('finance:documents_manage')
   @Post('documents')
   @UseInterceptors(FileInterceptor('file'))
@@ -91,8 +118,11 @@ export class FinanceController {
   @Header('Cache-Control', 'private, no-store')
   @Header('Content-Security-Policy', "default-src 'none'; sandbox")
   @Header('X-Content-Type-Options', 'nosniff')
-  async content(@Param('code', CODE) code: string): Promise<StreamableFile> {
-    const { bytes, contentType, filename } = await this.documents.content(code);
+  async content(
+    @Param('code', CODE) code: string,
+    @CurrentPrincipal() principal: Principal,
+  ): Promise<StreamableFile> {
+    const { bytes, contentType, filename } = await this.documents.content(code, principal);
     return new StreamableFile(bytes, {
       type: contentType,
       disposition: `attachment; filename="${filename.replace(/"/g, '')}"`,

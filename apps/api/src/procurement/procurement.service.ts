@@ -139,6 +139,72 @@ export class ProcurementService {
     }
   }
 
+  /**
+   * For finance (doc 039 §3b): supplier documents of the given sites (null: every site), newest
+   * first, with whether a newer document supersedes them. Metadata only; never the storage key.
+   */
+  async supplierDocumentsOfSites(siteIds: readonly string[] | null, supplierId?: string) {
+    const rows = await this.prisma.supplierDocument.findMany({
+      where: {
+        ...(siteIds ? { siteId: { in: [...siteIds] } } : {}),
+        ...(supplierId ? { supplierId } : {}),
+      },
+      include: {
+        supplier: { select: { id: true, name: true } },
+        site: { select: { code: true } },
+        _count: { select: { supersededBy: true } },
+      },
+      orderBy: [{ issuedOn: 'desc' }, { createdAt: 'desc' }],
+      take: 200,
+    });
+    return rows.map((d) => ({
+      id: d.id,
+      supplier: d.supplier,
+      kind: d.kind as string,
+      documentNumber: d.documentNumber,
+      issuedOn: d.issuedOn.toISOString().slice(0, 10),
+      originalFilename: d.originalFilename,
+      byteSize: d.byteSize,
+      siteId: d.siteId,
+      siteCode: d.site.code,
+      superseded: d._count.supersededBy > 0,
+    }));
+  }
+
+  /**
+   * For finance: one supplier document (immutable) inside the caller's transaction, row-locked
+   * so it cannot disappear before the caller's commit. Null when it does not exist.
+   */
+  async supplierDocumentForTakeover(tx: Prisma.TransactionClient, id: string) {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "supplier_documents" WHERE "id" = ${id}::uuid FOR SHARE`;
+    if (rows.length === 0) return null;
+    const d = await tx.supplierDocument.findUniqueOrThrow({
+      where: { id },
+      include: { site: { select: { code: true } } },
+    });
+    return {
+      id: d.id,
+      supplierId: d.supplierId,
+      kind: d.kind as string,
+      documentNumber: d.documentNumber,
+      issuedOn: d.issuedOn,
+      sha256: d.sha256,
+      byteSize: d.byteSize,
+      contentType: d.contentType,
+      originalFilename: d.originalFilename,
+      siteId: d.siteId,
+      siteCode: d.site.code,
+    };
+  }
+
+  /** For finance: the unchanged bytes of a supplier document (the caller checked access). */
+  async supplierDocumentBytes(id: string): Promise<Buffer> {
+    const doc = await this.prisma.supplierDocument.findUnique({ where: { id } });
+    if (!doc) throw new NotFoundException('Supplier document not found');
+    return this.storage.get(doc.storageKey);
+  }
+
   /** Names of suppliers by id (for read models of other modules). */
   async supplierNames(ids: readonly string[]): Promise<Map<string, string>> {
     const rows = await this.prisma.supplier.findMany({
