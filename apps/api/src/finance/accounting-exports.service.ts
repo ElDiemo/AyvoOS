@@ -254,15 +254,13 @@ export class AccountingExportsService {
     return {
       ...toDto(record),
       lines,
-      events: record.events.map(
-        (e): AccountingExportEvent => ({
-          type: e.type as AccountingExportEvent['type'],
-          handedOverOn: day(e.handedOverOn),
-          note: e.note,
-          actor: e.actorName,
-          occurredAt: e.occurredAt.toISOString(),
-        }),
-      ),
+      events: record.events.map((e): AccountingExportEvent => ({
+        type: e.type as AccountingExportEvent['type'],
+        handedOverOn: day(e.handedOverOn),
+        note: e.note,
+        actor: e.actorName,
+        occurredAt: e.occurredAt.toISOString(),
+      })),
       laterChanges: await this.laterChanges(record),
     };
   }

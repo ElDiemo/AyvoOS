@@ -27,7 +27,11 @@ export function HandOverForm({ code, today }: { code: string; today: string }) {
         'POST',
         `admin/finance/exports/${code}/handover`,
         accountingExportDetailSchema,
-        { requestId: requestId.current, handedOverOn: day, ...(note.trim() ? { note: note.trim() } : {}) },
+        {
+          requestId: requestId.current,
+          handedOverOn: day,
+          ...(note.trim() ? { note: note.trim() } : {}),
+        },
       );
       router.refresh();
     } catch (err) {

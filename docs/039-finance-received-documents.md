@@ -102,13 +102,13 @@ voided since the earlier exports of that month). A ZIP with `manifest.csv` (UTF-
 formula-safe), `README.txt` and the unchanged originals `doklady/<code>-<name>`; each document
 version is recorded with its file hash. Exports, their items and events are append-only.
 
-| Method | Path                                                                                     | Permission               |
-| ------ | ---------------------------------------------------------------------------------------- | ------------------------ |
-| GET    | `/api/admin/finance/exports/preview?handoverMonth&mode`                                  | `finance:exports_manage` |
+| Method | Path                                                                                               | Permission               |
+| ------ | -------------------------------------------------------------------------------------------------- | ------------------------ |
+| GET    | `/api/admin/finance/exports/preview?handoverMonth&mode`                                            | `finance:exports_manage` |
 | POST   | `/api/admin/finance/exports` (`requestId`, `handoverMonth`, `mode`, `previewFingerprint`, `note?`) | `finance:exports_manage` |
-| GET    | `/api/admin/finance/exports`, `/exports/:code`                                           | `finance:documents_read` |
-| GET    | `/api/admin/finance/exports/:code/content` (records a download)                          | `finance:documents_read` |
-| POST   | `/api/admin/finance/exports/:code/handover` (`requestId`, `handedOverOn`, `note?`)       | `finance:exports_manage` |
+| GET    | `/api/admin/finance/exports`, `/exports/:code`                                                     | `finance:documents_read` |
+| GET    | `/api/admin/finance/exports/:code/content` (records a download)                                    | `finance:documents_read` |
+| POST   | `/api/admin/finance/exports/:code/handover` (`requestId`, `handedOverOn`, `note?`)                 | `finance:exports_manage` |
 
 - **Confirmation = the preview** (review F-R2): the preview returns a fingerprint of every line
   (document, version, change, file hash) and of what blocks the month; the confirmation must

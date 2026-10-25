@@ -59,8 +59,8 @@ export default async function AccountingExportsPage() {
                     {t.count(e.documentCount)}
                   </span>
                   <span className="text-xs text-stone-500">
-                    {e.handedOverOn ? t.handedOver(financeDate(e.handedOverOn)) : t.notHandedOver}{' '}
-                    · {t.downloads(e.downloads)} · {e.createdBy}
+                    {e.handedOverOn ? t.handedOver(financeDate(e.handedOverOn)) : t.notHandedOver} ·{' '}
+                    {t.downloads(e.downloads)} · {e.createdBy}
                   </span>
                 </li>
               ))}

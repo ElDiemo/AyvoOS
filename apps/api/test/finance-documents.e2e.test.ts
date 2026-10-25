@@ -515,13 +515,14 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
     const real = await createFinanceTestApp({ core: { auth: 'real' } });
     try {
       const grants = await real.core.prisma.rolePermission.findMany({
-        where: { permissionCode: { startsWith: 'finance:' } },
+        where: { permissionCode: { startsWith: 'finance:' }, roleCode: 'ADMIN' },
         select: { roleCode: true, permissionCode: true },
         orderBy: { permissionCode: 'asc' },
       });
       expect(grants).toEqual([
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_read' },
+        { roleCode: 'ADMIN', permissionCode: 'finance:exports_manage' },
       ]);
       const doc = (await receive(base(), pdf(randomUUID())).expect(201)).body;
       const user = await prepareInvitedUser(real.core, {

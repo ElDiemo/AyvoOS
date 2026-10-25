@@ -89,16 +89,18 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
       .query({ handoverMonth, mode })
       .expect(200)
       .then((r) => r.body);
-  /** Preview, then confirm exactly that preview. */
+  /** Preview, then confirm exactly that preview; expects the given status. */
   const exportOf = async (
     handoverMonth: string,
     mode: 'FULL' | 'SUPPLEMENT',
+    status: number,
     requestId = randomUUID(),
   ) => {
     const p = await preview(handoverMonth, mode);
     return f
       .post('/api/admin/finance/exports')
-      .send({ requestId, handoverMonth, mode, previewFingerprint: p.fingerprint });
+      .send({ requestId, handoverMonth, mode, previewFingerprint: p.fingerprint })
+      .expect(status);
   };
   const zipOf = (code: string) =>
     f
@@ -170,7 +172,7 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
     expect(p.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(await f.prisma.export.count()).toBe(before); // a preview writes nothing
 
-    const full = (await exportOf(M, 'FULL').expect(201)).body;
+    const full = (await exportOf(M, 'FULL', 201)).body;
     expect(full).toMatchObject({
       mode: 'FULL',
       documentCount: 2,
@@ -220,7 +222,7 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
     ];
     expect(pairs(after.laterChanges)).toEqual(later);
 
-    const supplement = (await exportOf(M, 'SUPPLEMENT').expect(201)).body;
+    const supplement = (await exportOf(M, 'SUPPLEMENT', 201)).body;
     expect(supplement.documentCount).toBe(3);
     const sZip = readZip((await zipOf(supplement.code)).body as Buffer);
     expect(sZip.names.filter((n) => n.startsWith('doklady/')).sort()).toEqual(
@@ -231,8 +233,8 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
     expect(pairs(firstAgain.laterChanges)).toEqual(later);
     const sDetail = (await f.get(`/api/admin/finance/exports/${supplement.code}`)).body;
     expect(sDetail.laterChanges).toEqual([]);
-    expect((await exportOf(M, 'SUPPLEMENT').expect(422)).body.code).toBe('NOTHING_TO_EXPORT');
-    const again = (await exportOf(M, 'FULL').expect(201)).body;
+    expect((await exportOf(M, 'SUPPLEMENT', 422)).body.code).toBe('NOTHING_TO_EXPORT');
+    const again = (await exportOf(M, 'FULL', 201)).body;
     expect(pairs(again.lines)).toEqual([
       [a.code, 'INCLUDED'],
       [c.code, 'INCLUDED'],
@@ -282,7 +284,7 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
       { code: draft.code, missing: ['supplierId', 'documentNumber', 'issuedOn'] },
     ]);
     expect(p.lines.map((l: { code: string }) => l.code)).toEqual([ok.code]);
-    expect((await exportOf(M, 'FULL').expect(422)).body.code).toBe('INCOMPLETE_DOCUMENTS');
+    expect((await exportOf(M, 'FULL', 422)).body.code).toBe('INCOMPLETE_DOCUMENTS');
     await f
       .post(`/api/admin/finance/documents/${draft.code}/correct`)
       .send({
@@ -295,7 +297,7 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
         reason: 'doplněno',
       })
       .expect(200);
-    expect((await exportOf(M, 'FULL').expect(201)).body.documentCount).toBe(2);
+    expect((await exportOf(M, 'FULL', 201)).body.documentCount).toBe(2);
     await f
       .get('/api/admin/finance/exports/preview')
       .query({ handoverMonth: '2012-13', mode: 'FULL' })
@@ -366,10 +368,10 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
       const p = await preview(M, 'FULL');
       expect(p.tooLarge).toBe(true);
       expect(p.limits.documents).toBe(1);
-      expect((await exportOf(M, 'FULL').expect(422)).body.code).toBe('EXPORT_TOO_LARGE');
+      expect((await exportOf(M, 'FULL', 422)).body.code).toBe('EXPORT_TOO_LARGE');
       EXPORT_LIMITS.documents = saved.documents;
       EXPORT_LIMITS.bytes = 10; // any original is larger
-      expect((await exportOf(M, 'FULL').expect(422)).body.code).toBe('EXPORT_TOO_LARGE');
+      expect((await exportOf(M, 'FULL', 422)).body.code).toBe('EXPORT_TOO_LARGE');
       expect(reads).toBe(0); // refused before loading anything
     } finally {
       Object.assign(EXPORT_LIMITS, saved);
@@ -380,7 +382,7 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
     // Changed behind the application's back (put() never overwrites; the file itself is edited).
     chmodSync(join(f.storage.directory, doc.storageKey!), 0o640);
     writeFileSync(join(f.storage.directory, doc.storageKey!), pdf('tampered'));
-    const res = await exportOf(M, 'FULL');
+    const res = await exportOf(M, 'FULL', 500);
     expect([res.status, res.body.code]).toEqual([500, 'STORED_FILE_CHANGED']);
     expect(await f.prisma.export.count({ where: { handoverMonth: month } })).toBe(0);
   });
@@ -388,7 +390,7 @@ describe.skipIf(!hasDatabase)('finance accountant export (Finance unit)', () => 
   it('"Předáno účetní" is a separate, manual, single record; records are append-only', async () => {
     const M = '2013-02';
     await receive(M, pdf(randomUUID()));
-    const e = (await exportOf(M, 'FULL').expect(201)).body;
+    const e = (await exportOf(M, 'FULL', 201)).body;
     const hand = (requestId: string, handedOverOn = '2013-03-05') =>
       f
         .post(`/api/admin/finance/exports/${e.code}/handover`)
