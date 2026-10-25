@@ -228,7 +228,6 @@ describe.skipIf(!WANT_DOCKER)(
   () => {
     const id = randomBytes(4).toString('hex');
     const project = `ayvo-mk-swap-${id}`;
-    const prefix = `ayvo-mk-swap-${id}`;
     const dir = mkdtempSync(join(tmpdir(), 'ayvo-mk-swap-'));
     // The production image name (compose.marketing.yml), with tags unique to this run.
     const tagOf = (name: string) => `swap${id}${name}`;
