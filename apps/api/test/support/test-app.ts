@@ -3,12 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { inject } from 'vitest';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { ENV, loadEnv, type Env } from '../../src/config/env.js';
 import { PERMISSION_CODES, SYSTEM_ROLE_CODES } from '@ayvo/types';
 import { PrismaService } from '../../src/database/prisma.service.js';
+import { PrismaClient } from '../../src/generated/prisma/client.js';
 import type { Principal } from '../../src/identity/principal.js';
 import { evaluateSites } from '../../src/identity/access.service.js';
 import { PrincipalResolver } from '../../src/identity/principal-resolver.js';
@@ -130,7 +132,25 @@ class SuperuserResolver {
   }
 }
 
+/** The application's connection: the core runtime role (non-superuser, ADR 0041). */
 export const databaseUrl = inject('testDatabaseUrl');
+/**
+ * The privileged account of the test database — for fixtures the running core may not do
+ * (historical data with triggers off, other databases) and for invariants that must hold even
+ * for it (TRUNCATE of append-only tables). Never given to the application under test.
+ */
+export const adminDatabaseUrl = inject('testAdminDatabaseUrl');
+
+/** Runs `fn` with a privileged client of the test database and closes it afterwards. */
+export async function withPrivileged<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> {
+  if (!adminDatabaseUrl) throw new Error('No test database');
+  const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: adminDatabaseUrl }) });
+  try {
+    return await fn(db);
+  } finally {
+    await db.$disconnect();
+  }
+}
 /** `describe.skipIf(!hasDatabase)` — only when AYVO_SKIP_DB_TESTS=1 was set explicitly. */
 export const hasDatabase = databaseUrl !== null;
 

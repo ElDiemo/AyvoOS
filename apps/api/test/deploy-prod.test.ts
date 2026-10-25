@@ -135,7 +135,7 @@ describe('production Compose project', () => {
     // Fictional values only.
     writeFileSync(
       join(secrets, 'prod.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
         'PUBLIC_QR_BASE_URL=https://qr.example.test\nLABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n',
     );
     writeFileSync(
@@ -169,10 +169,39 @@ describe('production Compose project', () => {
       AWS_ACCESS_KEY_ID: 'AKIAFICTIONAL0000000',
       LABEL_QR_MIN_SIZE_MM: '15',
     });
+    // ADR 0041: the running core connects as `ayvo_core` and never receives the privileged
+    // account's password; the migrate step (privileged) creates the role after the migrations.
+    // (Values may come from the caller's environment, which Compose prefers — compared by parts.)
+    const apiDb = new URL(rendered.services.api.environment.DATABASE_URL);
+    const tools = JSON.parse(
+      run('docker', [...withEnv, '--profile', 'tools', 'config', '--format', 'json'], env).stdout,
+    );
+    const migrateDb = new URL(tools.services.migrate.environment.DATABASE_URL);
+    expect([apiDb.username, apiDb.password]).toEqual(['ayvo_core', 'c'.repeat(32)]);
+    expect(migrateDb.username).not.toBe('ayvo_core');
+    expect(migrateDb.password).not.toBe(apiDb.password);
+    expect(JSON.stringify(rendered.services.api)).not.toContain(`:${migrateDb.password}@`);
+    expect(tools.services.migrate.environment.CORE_DB_PASSWORD).toBe('c'.repeat(32));
+    expect(tools.services.migrate.command.join(' ')).toMatch(
+      /prisma migrate deploy && node dist\/database\/core-db-setup\.js$/,
+    );
+    // Without the core role's password the configuration does not render.
+    writeFileSync(
+      join(secrets, 'no-core.env'),
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+        'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
+    );
+    const noCore = run(
+      'docker',
+      [...args, '--env-file', join(secrets, 'no-core.env'), 'config', '--quiet'],
+      env,
+    );
+    expect(noCore.status).not.toBe(0);
+    expect(noCore.stderr).toMatch(/CORE_DB_PASSWORD/);
     // Without the physically validated QR values it renders them empty (not set, ADR 0034).
     writeFileSync(
       join(secrets, 'no-qr-settings.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
         'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
     );
     const noQr = JSON.parse(
@@ -189,7 +218,7 @@ describe('production Compose project', () => {
     // The QR base URL stays required: without it the configuration does not render.
     writeFileSync(
       join(secrets, 'incomplete.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n',
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n',
     );
     const res = run(
       'docker',
@@ -473,6 +502,39 @@ describe('production deploy script', () => {
     expect(body).toContain('repo_git archive');
   });
 
+  it('the OS deployment never builds, starts or stops the marketing site; --marketing touches only it', () => {
+    const fn = (name: string) => {
+      const i = script.indexOf(`${name}() {`);
+      return script.slice(i, script.indexOf('\n}\n', i));
+    };
+    expect(fn('start_services')).not.toContain('marketing');
+    expect(fn('build_images')).not.toContain('marketing');
+    const marketing = script.slice(
+      script.indexOf('  marketing)\n'),
+      script.indexOf('  marketing-rollback)\n'),
+    );
+    // The image accepted on DEV is loaded and its identity checked before anything starts; the
+    // marketing site is never built on production.
+    for (const flag of ['--expect-image', '--expect-digest', '--image-archive'])
+      expect(marketing).toContain(flag);
+    const order = [
+      'load_marketing_image',
+      'check_release',
+      'start_marketing',
+      'verify_marketing_release',
+    ];
+    const at = order.map((step) => marketing.indexOf(step));
+    expect(at.every((i) => i > 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(marketing).not.toMatch(
+      /build_images|compose build|migrate|start_services|backup_before_migration/,
+    );
+    expect(fn('start_marketing')).toContain('compose up -d --no-build --no-deps marketing');
+    expect(fn('start_marketing')).toContain('running_marketing_digest');
+    // Marketing images are not removed with old OS releases.
+    expect(fn('remove_old_images')).toContain('(api|api-migrate|web)');
+  });
+
   it('backs up before migrating, and starts the new release only after migrating', () => {
     const main = script.slice(script.indexOf('  deploy)\n'));
     const order = [
@@ -492,7 +554,7 @@ describe('production deploy script', () => {
     run('mkdir', ['-p', secrets]);
     writeFileSync(
       join(secrets, 'prod.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
         'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
     );
     for (const f of ['prod-auth.env', 'prod-s3.env']) writeFileSync(join(secrets, f), 'X=1\n');
@@ -594,7 +656,7 @@ describe('production deploy script', () => {
       });
     }
     const prod =
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
       'PUBLIC_QR_BASE_URL=https://qr.example.test\nLABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n';
     const good = {
       'prod.env': prod,
@@ -650,6 +712,52 @@ describe('production deploy script', () => {
       expect(files('')).toBe(`-f ${rel}/deploy/prod/compose.yml`);
       expect(files('id.example.test')).toBe(
         `-f ${rel}/deploy/prod/compose.yml -f ${rel}/deploy/prod/compose.id.yml`,
+      );
+    });
+    it('marketing_domain: unset = no marketing site; the apex, never www or another host', () => {
+      const call = (value: string | null, id = '') =>
+        check(
+          { ...good, 'prod.env': value === null ? prod : `${prod}MARKETING_DOMAIN=${value}\n` },
+          0o600,
+          {
+            call: `DOMAIN=os.example.test; QR_DOMAIN=qr.example.test; ID_DOMAIN=${id}; marketing_domain; echo "M=[$MARKETING_DOMAIN]"`,
+          },
+        );
+      expect(call(null).stdout).toContain('M=[]');
+      expect(call('ayvo.example.test', 'id.example.test').stdout).toContain(
+        'M=[ayvo.example.test]',
+      );
+      for (const [bad, id] of [
+        ['https://ayvo.example.test', ''],
+        ['www.ayvo.example.test', ''],
+        ['ayvo', ''],
+        ['qr.example.test', ''],
+        ['os.example.test', ''],
+        ['id.example.test', 'id.example.test'],
+        ['example.test', 'www.example.test'],
+      ] as const) {
+        const res = call(bad, id);
+        expect([bad, res.status]).toEqual([bad, 1]);
+      }
+    });
+    it('compose_files: the marketing override only with MARKETING_DOMAIN and only if the release has it', () => {
+      const rel = mkdtempSync(join(tmp, 'release-m-'));
+      run('mkdir', ['-p', join(rel, 'deploy/prod')]);
+      writeFileSync(join(rel, 'deploy/prod/compose.yml'), '');
+      writeFileSync(join(rel, 'deploy/prod/compose.id.yml'), '');
+      const lines = script.split('\n');
+      const start = lines.findIndex((l) => l.startsWith('compose_files() {'));
+      const fn = lines.slice(start, lines.indexOf('}', start) + 1).join('\n');
+      const files = (m: string) =>
+        check(good, 0o600, {
+          call: `${fn}\nID_DOMAIN=id.example.test; MARKETING_DOMAIN=${m}; compose_files ${rel} | tr '\\n' ' '`,
+        }).stdout.trim();
+      const base = `-f ${rel}/deploy/prod/compose.yml -f ${rel}/deploy/prod/compose.id.yml`;
+      expect(files('ayvo.example.test')).toBe(base); // older release without the override
+      writeFileSync(join(rel, 'deploy/prod/compose.marketing.yml'), '');
+      expect(files('')).toBe(base);
+      expect(files('ayvo.example.test')).toBe(
+        `${base} -f ${rel}/deploy/prod/compose.marketing.yml`,
       );
     });
     it('accepts complete private files and prints no value', () => {

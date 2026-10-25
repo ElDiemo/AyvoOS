@@ -50,7 +50,7 @@ readonly IMAGE_PREFIX="ayvo-dev-preview"
 readonly PROJECT="ayvo-dev-preview"
 readonly GUARD_UNIT="ayvo-dev-docker-guard.service"
 readonly REQUIRED_VARS=(APP_ENV DEV_DOMAIN ACME_EMAIL
-  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER
+  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB CORE_DB_PASSWORD AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER
   AUTH_MAIL_FROM)
 
 MODE=deploy
@@ -218,6 +218,11 @@ validate_env() {
   [[ ${CFG[POSTGRES_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,}$ ]] ||
     die "POSTGRES_PASSWORD must be at least 24 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
   [[ ${CFG[POSTGRES_PASSWORD]} != *change-me* ]] || die "POSTGRES_PASSWORD is still the placeholder"
+  # The running core's own non-superuser role (ADR 0041): never the privileged account's password.
+  [[ ${CFG[CORE_DB_PASSWORD]} =~ ^[A-Za-z0-9_-]{24,128}$ ]] ||
+    die "CORE_DB_PASSWORD must be 24-128 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
+  [[ ${CFG[CORE_DB_PASSWORD]} != "${CFG[POSTGRES_PASSWORD]}" ]] ||
+    die "CORE_DB_PASSWORD must differ from POSTGRES_PASSWORD (ADR 0041)"
 }
 
 # --- verification ------------------------------------------------------------------------------
@@ -310,6 +315,7 @@ verify_published_ports() {
   local id line bad=()
   local -A allowed=(
     ["caddy $TAILNET_IPV4:443->443/tcp"]=1 ["caddy $TAILNET_IPV4:443->443/udp"]=1
+    ["caddy $TAILNET_IPV4:8443->8443/tcp"]=1
     ["caddy 0.0.0.0:80->80/tcp"]=1
     ["dns $TAILNET_IPV4:53->1053/tcp"]=1 ["dns $TAILNET_IPV4:53->1053/udp"]=1)
   for id in $(docker ps -q --filter "label=com.docker.compose.project=$PROJECT"); do
@@ -320,7 +326,7 @@ verify_published_ports() {
       | .value[] | "\($s) \(.HostIp):\(.HostPort)->\($t)"')
   done
   ((${#bad[@]} == 0)) || die "published ports outside the tailnet rule (ADR 0026): ${bad[*]}"
-  ok "published ports: only $TAILNET_IPV4 (443 tcp/udp, 53) and public IPv4 :80 (ACME)"
+  ok "published ports: only $TAILNET_IPV4 (443 tcp/udp, 8443 marketing preview, 53) and public IPv4 :80 (ACME)"
 }
 
 # Local checks of the public side (from this server, so NOT a proof from the internet — the

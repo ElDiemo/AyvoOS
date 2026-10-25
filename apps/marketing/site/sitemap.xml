@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://ayvo.co/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://ayvo.co/" />
+    <xhtml:link rel="alternate" hreflang="cs" href="https://ayvo.co/cz/" />
+    <xhtml:link rel="alternate" hreflang="de" href="https://ayvo.co/de/" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://ayvo.co/" />
+  </url>
+  <url>
+    <loc>https://ayvo.co/cz/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://ayvo.co/" />
+    <xhtml:link rel="alternate" hreflang="cs" href="https://ayvo.co/cz/" />
+    <xhtml:link rel="alternate" hreflang="de" href="https://ayvo.co/de/" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://ayvo.co/" />
+  </url>
+  <url>
+    <loc>https://ayvo.co/de/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://ayvo.co/" />
+    <xhtml:link rel="alternate" hreflang="cs" href="https://ayvo.co/cz/" />
+    <xhtml:link rel="alternate" hreflang="de" href="https://ayvo.co/de/" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://ayvo.co/" />
+  </url>
+</urlset>

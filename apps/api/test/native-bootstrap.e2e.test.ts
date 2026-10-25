@@ -13,7 +13,14 @@ import {
   BootstrapActivationRefused,
 } from '../src/identity/native-bootstrap-activation.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
-import { createTestApp, databaseUrl, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
+import { setupCoreDatabase } from '../src/database/core-db-setup.js';
+import {
+  adminDatabaseUrl,
+  createTestApp,
+  databaseUrl,
+  TEST_APP_ORIGIN,
+  type TestApp,
+} from './support/test-app.js';
 
 /**
  * NATIVE59-R1: the first administrator's activation can be repeated by the operator (doc 038
@@ -58,17 +65,29 @@ describe.skipIf(!databaseUrl)('bootstrap administrator activation (operator comm
     new URLSearchParams(new URL(mails().at(-1)!.url).hash.slice(1)).get('token')!;
 
   beforeAll(async () => {
-    const server = new URL(databaseUrl!);
+    // Like a deployment: created and migrated by the privileged account, the application (and the
+    // operator command, which runs in the api container) as the core runtime role.
+    const server = new URL(adminDatabaseUrl!);
+    const ownAdmin = new URL(adminDatabaseUrl!);
+    ownAdmin.pathname = `/${name}`;
+    server.pathname = '/postgres';
     const own = new URL(databaseUrl!);
     own.pathname = `/${name}`;
-    server.pathname = '/postgres';
     admin = new PrismaClient({ adapter: new PrismaPg({ connectionString: server.toString() }) });
     await admin.$executeRawUnsafe(`CREATE DATABASE "${name}"`);
     execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy'], {
       cwd: apiRoot,
-      env: { ...process.env, DATABASE_URL: own.toString() },
+      env: { ...process.env, DATABASE_URL: ownAdmin.toString() },
       stdio: 'pipe',
     });
+    const setup = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: ownAdmin.toString() }),
+    });
+    await setupCoreDatabase(setup, {
+      role: decodeURIComponent(own.username),
+      password: decodeURIComponent(own.password),
+      connections: 50,
+    }).finally(() => setup.$disconnect());
     t = await createTestApp(
       { DATABASE_URL: own.toString(), AUTH_PROVIDER: 'local', AUTH_MAIL_DRIVER: 'memory' },
       {},

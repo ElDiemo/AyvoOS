@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import type { TestProject } from 'vitest/node';
 import { setupFinanceDatabase } from '../../src/finance/db-setup.js';
+import { setupCoreDatabase } from '../../src/database/core-db-setup.js';
 import { PrismaClient } from '../../src/generated/prisma/client.js';
 
 /**
@@ -14,6 +15,11 @@ import { PrismaClient } from '../../src/generated/prisma/client.js';
  * Server: AYVO_TEST_DATABASE_URL, else DATABASE_URL (repository .env; `pnpm infra:up`). Only the
  * server/credentials are used; the database itself is always a new `ayvo_test_<random>` one.
  * Set AYVO_SKIP_DB_TESTS=1 to skip database tests explicitly (they are never skipped silently).
+ *
+ * The application under test connects like the deployed core (ADR 0041): as its own non-superuser
+ * runtime role, created for this run by the same setup a deployment runs (`testDatabaseUrl`).
+ * Migrations and test fixtures that need more (switching triggers off, other databases) use the
+ * privileged account (`testAdminDatabaseUrl`) — never the application's connection.
  */
 declare module 'vitest' {
   export interface ProvidedContext {
@@ -21,6 +27,7 @@ declare module 'vitest' {
     /** Finance unit (ADR 0039): its runtime role and its schema owner, per run. */
     financeDatabaseUrl: string | null;
     financeOwnerDatabaseUrl: string | null;
+    testAdminDatabaseUrl: string | null;
   }
 }
 
@@ -32,6 +39,7 @@ export default async function setup(project: TestProject): Promise<(() => Promis
     project.provide('testDatabaseUrl', null);
     project.provide('financeDatabaseUrl', null);
     project.provide('financeOwnerDatabaseUrl', null);
+    project.provide('testAdminDatabaseUrl', null);
     return;
   }
   const envFile = resolve(apiRoot, '../../.env');
@@ -44,7 +52,11 @@ export default async function setup(project: TestProject): Promise<(() => Promis
     );
   }
 
-  const dbName = `ayvo_test_${randomBytes(6).toString('hex')}`;
+  const suffix = randomBytes(6).toString('hex');
+  const dbName = `ayvo_test_${suffix}`;
+  // Roles are cluster-wide: one per run, removed with the database.
+  const coreRole = `ayvo_core_test_${suffix}`;
+  const corePassword = randomBytes(24).toString('base64url');
   const adminUrl = withDatabase(serverUrl, 'postgres');
   const testUrl = withDatabase(serverUrl, dbName);
 
@@ -64,11 +76,21 @@ export default async function setup(project: TestProject): Promise<(() => Promis
     env: { ...process.env, DATABASE_URL: testUrl },
     stdio: 'pipe',
   });
-  project.provide('testDatabaseUrl', testUrl);
+  const privileged = new PrismaClient({ adapter: new PrismaPg({ connectionString: testUrl }) });
+  try {
+    await setupCoreDatabase(privileged, {
+      role: coreRole,
+      password: corePassword,
+      connections: 50,
+    });
+  } finally {
+    await privileged.$disconnect();
+  }
+  project.provide('testDatabaseUrl', withRole(testUrl, coreRole, corePassword));
+  project.provide('testAdminDatabaseUrl', testUrl);
 
   // Finance (ADR 0039): its roles for this run only, its schema and migrations — exactly as the
   // deployment does it (db-setup as the superuser, migrations as the schema owner).
-  const suffix = randomBytes(5).toString('hex');
   const roles = {
     ownerRole: `ayvo_fin_${suffix}_owner`,
     ownerPassword: randomBytes(24).toString('hex'),
@@ -82,7 +104,7 @@ export default async function setup(project: TestProject): Promise<(() => Promis
   } finally {
     await testDb.$disconnect();
   }
-  const ownerUrl = withUser(testUrl, roles.ownerRole, roles.ownerPassword);
+  const ownerUrl = withRole(testUrl, roles.ownerRole, roles.ownerPassword);
   execFileSync(
     resolve(apiRoot, 'node_modules/.bin/prisma'),
     ['migrate', 'deploy', '--config', 'prisma-finance.config.ts'],
@@ -95,7 +117,7 @@ export default async function setup(project: TestProject): Promise<(() => Promis
   project.provide('financeOwnerDatabaseUrl', ownerUrl);
   project.provide(
     'financeDatabaseUrl',
-    withUser(testUrl, roles.runtimeRole, roles.runtimePassword),
+    withRole(testUrl, roles.runtimeRole, roles.runtimePassword),
   );
 
   return async () => {
@@ -103,13 +125,14 @@ export default async function setup(project: TestProject): Promise<(() => Promis
     // This run's Finance login roles only (the shared NOLOGIN group stays).
     for (const role of [roles.runtimeRole, roles.ownerRole])
       await admin.$executeRawUnsafe(`DROP ROLE IF EXISTS "${role}"`);
+    await admin.$executeRawUnsafe(`DROP ROLE IF EXISTS "${coreRole}"`);
     await admin.$disconnect();
   };
 }
 
-function withUser(url: string, user: string, password: string): string {
+function withRole(url: string, role: string, password: string): string {
   const parsed = new URL(url);
-  parsed.username = user;
+  parsed.username = role;
   parsed.password = password;
   return parsed.toString();
 }

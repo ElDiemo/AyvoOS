@@ -78,6 +78,38 @@
 	}
 }
 
+# The marketing site's DEV preview (ADR 0040): the same name and certificate on :8443, published
+# only on the tailnet address, the same real-peer check. Only GET/HEAD reach the static container.
+https://{$DEV_DOMAIN}:8443 {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	encode zstd gzip
+	import tailnet
+
+	handle @outside {
+		abort
+	}
+
+	@read method GET HEAD
+	handle @read {
+		reverse_proxy marketing:8080 {
+			header_up -Cookie
+			header_up -Authorization
+			@unavailable status 5xx
+			handle_response @unavailable {
+				respond "Marketing preview is not deployed (scripts/deploy-marketing-dev.sh)." 503
+			}
+		}
+	}
+	handle {
+		header Allow "GET, HEAD"
+		respond 405
+	}
+}
+
 # Plain HTTP (public IPv4 :80, tailnet :80). Caddy answers its own ACME HTTP-01 challenges before
 # these routes. Besides that, the public sees only the (normally empty) challenge directory used by
 # scripts/verify-dev-acme.sh; the tailnet is redirected to HTTPS; everything else is aborted.

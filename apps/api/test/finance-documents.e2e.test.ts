@@ -11,7 +11,7 @@ import {
   type FinanceTestApp,
 } from './support/finance-app.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
-import { hasDatabase, TEST_APP_ORIGIN } from './support/test-app.js';
+import { databaseUrl, hasDatabase, TEST_APP_ORIGIN } from './support/test-app.js';
 
 /**
  * Finance — received documents (doc 039, N1) in the Finance unit (ADR 0039): its own Nest app,
@@ -420,6 +420,18 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
         );
       for (const sql of ['SELECT 1 FROM public.users LIMIT 1', 'CREATE TABLE public.x (id int)'])
         await expect(owner.$executeRawUnsafe(sql), sql).rejects.toThrow(/permission denied/);
+      // The other direction (ADR 0041): the core's own runtime role cannot read or write Finance.
+      const core = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl! }) });
+      try {
+        for (const sql of [
+          'SELECT 1 FROM finance.documents LIMIT 1',
+          `UPDATE finance.documents SET description = 'x' WHERE code = '${doc.code}'`,
+          'CREATE TABLE finance.x (id int)',
+        ])
+          await expect(core.$executeRawUnsafe(sql), sql).rejects.toThrow(/permission denied/);
+      } finally {
+        await core.$disconnect();
+      }
       const attrs = await owner.$queryRaw<
         { rolsuper: boolean; rolcreaterole: boolean; rolcreatedb: boolean }[]
       >`
