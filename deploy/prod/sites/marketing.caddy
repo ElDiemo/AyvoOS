@@ -1,0 +1,47 @@
+# AYVO OS — the public marketing site on the public edge (ADR 0040), https://<apex> and
+# https://www.<apex>. Mounted into qr-edge only by compose.marketing.yml (MARKETING_DOMAIN set);
+# imported by Caddyfile.qr. The site itself is the `marketing` container (read-only static files,
+# its own security headers); this edge adds TLS, HSTS and the www → apex redirect, and lets only
+# GET/HEAD through. It reaches only `marketing` on its own network — never web, the API or a DB.
+#
+# Certificates (apex and www, separately): HTTP-01 — also while DNS still points to the old server,
+# through its challenge-only forward and the internal Caddy's :80 (acme.d/marketing.caddy) — and
+# TLS-ALPN-01 once DNS points here. The certificates and keys exist only in this edge.
+{$MARKETING_DOMAIN}, www.{$MARKETING_DOMAIN} {
+	tls {
+		issuer acme
+	}
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	# Only GET/HEAD on both names: www redirects them to the apex; anything else is 405 below.
+	@www_read {
+		host www.{$MARKETING_DOMAIN}
+		method GET HEAD
+	}
+	redir @www_read https://{$MARKETING_DOMAIN}{uri} 301
+
+	@read {
+		host {$MARKETING_DOMAIN}
+		method GET HEAD
+	}
+	handle @read {
+		reverse_proxy marketing:8080 {
+			header_up -Cookie
+			header_up -Authorization
+			header_down -Server
+			@unavailable status 5xx
+			handle_response @unavailable {
+				respond "This AYVO page is temporarily unavailable." 503
+			}
+		}
+	}
+
+	handle {
+		header Allow "GET, HEAD"
+		respond 405
+	}
+}

@@ -270,6 +270,16 @@ Tailwind 4 · Vitest · Playwright.
   `pnpm test`). The live copy in `/opt/ayvo/night-shift` changes only by the owner's installation.
 - `ops/prod-backup` — production database backups to S3 and their restore check (doc 035; Python
   standard library). Installed and its timers enabled only on AyvoOS-PROD by the owner.
+- `apps/marketing` — the public marketing site ayvo.co (ADR 0040, proposed): static EN/CZ/DE HTML
+  in Git, its own Caddy image (no DB/Redis/API/secrets, read-only, unprivileged). No CMS: content
+  changes are HTML edits through a PR; no inline styles/scripts (strict CSP), no tracking or
+  external fonts — `pnpm --filter @ayvo/marketing test` enforces it. Edge: PROD qr-edge and the
+  internal Caddy only get mounted site files (`deploy/prod/sites/`, `acme.d/`) via
+  `compose.marketing.yml` (MARKETING_DOMAIN); DEV preview `https://<DEV_DOMAIN>:8443` (tailnet).
+  Deployed on its own: DEV builds and tests the image (pinned base) and saves it as an archive;
+  PROD loads exactly that image ID (`deploy-prod.sh --marketing --image-archive … --expect-image …`),
+  never builds it, and records SUCCESS only with valid HTTPS on apex and www; the OS deployment
+  never builds, starts or stops it (it only prepares the edge).
 - `deploy/dev/` — DEV preview Compose stack + Caddyfile; `apps/*/Dockerfile` — app images (build
   context = repo root, `.dockerignore` keeps `.env*` out); `scripts/deploy-dev.sh` — manual deploy.
 - `deploy/prod/` + `scripts/deploy-prod.sh` — the separate PRODUCTION installation on AyvoOS-PROD
