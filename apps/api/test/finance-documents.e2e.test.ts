@@ -511,7 +511,7 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
     }
   });
 
-  it('permissions with real sessions: ADMIN only; another role, no session and a revoked session are refused', async () => {
+  it('permissions with real sessions: granted only to ADMIN; another role and no session are refused; a revoked role is refused on the next request', async () => {
     const real = await createFinanceTestApp({ core: { auth: 'real' } });
     try {
       const grants = await real.core.prisma.rolePermission.findMany({
@@ -550,18 +550,29 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
       ).toBe(403);
       await request(real.app.getHttpServer()).get('/api/admin/finance/documents').expect(401);
 
+      // A custom role with only the Finance permissions (never a second ADMIN in the shared DB).
+      const roleCode = `FIN_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Finance (test)', description: 'test' },
+      });
+      await real.core.prisma.rolePermission.createMany({
+        data: ['finance:documents_read', 'finance:documents_manage'].map((permissionCode) => ({
+          roleCode,
+          permissionCode,
+        })),
+      });
       const admin = await prepareInvitedUser(real.core, {
-        email: `fin-admin-${randomUUID()}@ayvo.test`,
-        displayName: 'Finance admin',
+        email: `fin-role-${randomUUID()}@ayvo.test`,
+        displayName: 'Finance role',
       });
       await real.core.prisma.userRole.create({
-        data: { userId: admin.id, roleCode: 'ADMIN', grantReason: 'test: finance' },
+        data: { userId: admin.id, roleCode, grantReason: 'test: finance' },
       });
       const adminCookie = await sessionCookie(real.core, admin.email);
       await real.get('/api/admin/finance/documents', adminCookie).expect(200);
       // Revoking the role takes effect on the very next request (no cache in Finance).
       await real.core.prisma.userRole.updateMany({
-        where: { userId: admin.id, roleCode: 'ADMIN' },
+        where: { userId: admin.id, roleCode },
         data: { revokedAt: new Date(), revokeReason: 'test' },
       });
       await real.get('/api/admin/finance/documents', adminCookie).expect(403);
