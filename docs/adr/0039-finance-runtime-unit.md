@@ -49,6 +49,28 @@ the superuser kept only for migrations and backups. This touches every core depl
 secrets of DEV and PROD, so it is **not** done hidden inside the Finance PR. Proposed as its own
 small PR after this one, or accepted as a named residual risk.
 
+**Plan for the existing databases (DEV, PROD) — no new `initdb`, no new volume.** Confirmed on
+DEV by a metadata SELECT (Codex review, 2026-10-25): the bootstrap role `ayvo` has
+`rolsuper`, `rolcreaterole` and `rolcreatedb`. Changing `POSTGRES_USER` in the env does **not**
+rename or restrict an existing role (the image reads it only at `initdb`), and `REVOKE` does not
+bind a superuser. So:
+
+1. _Finance PR (this one):_ `node dist/finance/db-setup.js` (as `ayvo`, idempotent) creates
+   `ayvo_finance_rw` (NOLOGIN), `ayvo_finance_owner` and `ayvo_finance` (LOGIN, non-superuser,
+   connection limits) and schema `finance` owned by `ayvo_finance_owner`; Finance migrations run
+   as that owner; the Finance container connects as `ayvo_finance`. Proven by tests as those
+   roles: no access to any `public` table, no DELETE/TRUNCATE/DDL on Finance tables at runtime.
+   Nothing about `ayvo` changes. Return: stop the `finance` container; the schema and roles stay
+   (data is never dropped).
+2. _Separate core PR (decision §9.1):_ role `ayvo_core` (LOGIN, NOSUPERUSER, NOCREATEROLE,
+   NOCREATEDB) with `USAGE` on `public`, the DML the core needs on its tables and sequences,
+   `EXECUTE` on its functions, and `ALTER DEFAULT PRIVILEGES FOR ROLE ayvo IN SCHEMA public` so
+   future core migrations (still run as `ayvo`) grant the same; `REVOKE ALL ON SCHEMA finance
+   FROM ayvo_core`. `api`/`web` switch their `DATABASE_URL` to `ayvo_core` (new server secret);
+   `migrate` and the backups keep `ayvo`. Proven first in CI by running the full API and e2e
+   suites as a non-superuser. Return: switch `DATABASE_URL` back to `ayvo` (no data change).
+   Only after step 2 is the isolation two-sided.
+
 Migrations: `finance` has its own Prisma schema and migrations folder, applied by
 `deploy-*.sh --finance` (as the superuser, only `migrate deploy` of that folder; creates the role
 if missing — its password comes from the server env `FINANCE_DB_PASSWORD`, never Git).
