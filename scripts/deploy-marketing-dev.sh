@@ -2,10 +2,13 @@
 # AYVO OS — deploy the public marketing site's DEV preview (ADR 0040), on its own.
 #
 # DEV ONLY. Manual; only when the owner asks. Changes nothing but the `marketing` container:
-#   scripts/deploy-marketing-dev.sh                 build the image from this clean checkout, start
-#                                                   ONLY the marketing container, verify it through
-#                                                   https://<DEV_DOMAIN>:8443 (tailnet) and print the
-#                                                   content digest to accept for PROD
+#   scripts/deploy-marketing-dev.sh                 build the image from this clean checkout (pinned
+#                                                   base, source revision label), start ONLY the
+#                                                   marketing container (the previous one restored if
+#                                                   the new one fails), verify it through
+#                                                   https://<DEV_DOMAIN>:8443 (tailnet), save the TESTED
+#                                                   image as an archive and print its image ID and
+#                                                   content digest — what PROD loads after acceptance
 #   scripts/deploy-marketing-dev.sh --check         validate the env file and Compose; change nothing
 #   scripts/deploy-marketing-dev.sh --rollback TAG  start a previously built marketing image again
 #   scripts/deploy-marketing-dev.sh --help
@@ -24,6 +27,7 @@ readonly COMPOSE_FILE="$DEPLOY_DIR/compose.yml"
 readonly ENV_FILE="${AYVO_DEV_ENV_FILE:-/opt/ayvo/secrets/dev-preview.env}"
 readonly STATE_DIR="${AYVO_DEV_STATE_DIR:-/opt/ayvo/logs}"
 readonly DEPLOY_LOG="$STATE_DIR/deployments-dev-marketing.log"
+readonly ARTIFACT_DIR="${AYVO_MARKETING_ARTIFACT_DIR:-/opt/ayvo/artifacts/marketing}"
 readonly IMAGE="ayvo-dev-preview/marketing"
 readonly PROJECT="ayvo-dev-preview"
 
@@ -58,13 +62,27 @@ env_value() {
   grep -E "^$1=" "$ENV_FILE" | tail -n1 | sed -E "s/^$1=//; s/^\"(.*)\"\$/\\1/; s/^'(.*)'\$/\\1/"
 }
 
-verify() {
-  STEP="verify: the running content is the built artifact"
-  local digest
-  digest="$(docker exec "$PROJECT-marketing-1" site-digest /etc/caddy/Caddyfile /srv)"
-  [[ $digest == "$1" ]] || die "the running site has digest $digest, expected $1"
-  ok "running digest $digest"
+# Replace only the marketing container; Compose removes the running one before the new one is
+# healthy, so a failed start restores the previous tag (the outage lasts until it is healthy again).
+start_marketing() {
+  local tag=$1 image=$2 digest=$3 previous=$4
+  export MARKETING_IMAGE_TAG="$tag"
+  if compose --profile marketing up --detach --wait --wait-timeout 60 --no-build --no-deps marketing &&
+    [[ $(docker inspect --format '{{.Image}}' "$PROJECT-marketing-1" 2>/dev/null) == "$image" ]] &&
+    [[ $(docker exec "$PROJECT-marketing-1" site-digest /etc/caddy/Caddyfile /srv 2>/dev/null) == "$digest" ]]; then
+    ok "marketing $tag running: image $image, content $digest"
+    return 0
+  fi
+  if [[ -n $previous && $previous != "$tag" ]]; then
+    export MARKETING_IMAGE_TAG="$previous"
+    compose --profile marketing up --detach --wait --wait-timeout 60 --no-build --no-deps marketing &&
+      die "the new marketing container failed; the previous $previous runs again"
+    die "the new marketing container failed AND $previous did not come back: the preview is unavailable"
+  fi
+  die "the new marketing container failed (nothing to restore): the preview is unavailable"
+}
 
+verify() {
   STEP="verify: through the edge (tailnet)"
   local domain base via code robots
   domain="$(env_value DEV_DOMAIN)"
@@ -87,7 +105,7 @@ while (($#)); do
     --rollback)
       MODE=rollback
       TAG=${2:-}
-      [[ $TAG =~ ^[0-9a-f]{12}(-dirty)?-[0-9]{8}T[0-9]{6}Z$ ]] || die "--rollback needs a marketing image tag"
+      [[ $TAG =~ ^[0-9a-f]{12}-[0-9]{8}T[0-9]{6}Z$ ]] || die "--rollback needs a marketing image tag"
       shift
       ;;
     -h | --help)
@@ -123,30 +141,42 @@ STEP="check the edge"
 docker inspect --format '{{range $p, $_ := .NetworkSettings.Ports}}{{$p}} {{end}}' "$PROJECT-caddy-1" |
   grep -q '8443/tcp' || die "Caddy does not publish :8443 yet: deploy the core with this commit first (scripts/deploy-dev.sh)"
 
+previous="$(docker inspect --format '{{.Config.Image}}' "$PROJECT-marketing-1" 2>/dev/null | sed -n "s|^$IMAGE:||p")" || true
 if [[ $MODE == rollback ]]; then
   STEP="rollback: check image"
-  docker image inspect "$IMAGE:$TAG" >/dev/null 2>&1 || die "image $IMAGE:$TAG not found"
-  expected="$(awk -v t="$TAG" '$3 == "tag="t { for (i = 4; i <= NF; i++) if ($i ~ /^digest=/) d = substr($i, 8) } END { print d }' "$DEPLOY_LOG")"
-  [[ -n $expected ]] || die "no recorded digest for $TAG"
+  read -r image expected <<<"$(awk -v t="tag=$TAG" '$2 == "SUCCESS" && $3 == t { for (i = 4; i <= NF; i++) { if ($i ~ /^image=/) m = substr($i, 7); if ($i ~ /^digest=/) d = substr($i, 8) } } END { print m, d }' "$DEPLOY_LOG")" || true
+  [[ -n ${image:-} && -n ${expected:-} ]] || die "no successful deployment of $TAG is recorded"
+  [[ $(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG" 2>/dev/null) == "$image" ]] ||
+    die "image $IMAGE:$TAG is gone or is not the recorded $image"
 else
   STEP="build the marketing image"
   [[ -z "$(git -C "$REPO_ROOT" status --porcelain)" ]] || die "the working tree is not clean"
-  TAG="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+  revision="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  TAG="${revision:0:12}-$(date -u +%Y%m%dT%H%M%SZ)"
   expected="$(cd "$REPO_ROOT/apps/marketing" && sh ./site-digest.sh Caddyfile site)"
-  export MARKETING_IMAGE_TAG="$TAG"
-  log "Building $IMAGE:$TAG (content digest $expected)"
-  compose --profile marketing build --pull marketing
-  ok "image built"
+  log "Building $IMAGE:$TAG (pinned base; revision $revision; content $expected)"
+  docker build --quiet --label "org.opencontainers.image.revision=$revision" -t "$IMAGE:$TAG" \
+    "$REPO_ROOT/apps/marketing" >/dev/null
+  image="$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")"
+  ok "image $image built"
 fi
-export MARKETING_IMAGE_TAG="$TAG"
 
 STEP="start the marketing container"
 log "$STEP (tag $TAG) — only the marketing container"
-compose --profile marketing up --detach --wait --wait-timeout 60 --no-build --no-deps marketing
-ok "marketing running and healthy"
+start_marketing "$TAG" "$image" "$expected" "$previous"
 
-verify "$expected"
-printf '%s SUCCESS tag=%s git=%s digest=%s mode=%s\n' "$(date -u +%FT%TZ)" "$TAG" \
-  "$(git -C "$REPO_ROOT" rev-parse HEAD)" "$expected" "$MODE" >>"$DEPLOY_LOG"
-log "Marketing preview deployed (tag $TAG). For PROD after acceptance:"
-log "  scripts/deploy-prod.sh --marketing --release $(git -C "$REPO_ROOT" rev-parse HEAD) --expect-digest $expected"
+verify
+printf '%s SUCCESS tag=%s image=%s digest=%s git=%s mode=%s\n' "$(date -u +%FT%TZ)" "$TAG" "$image" \
+  "$expected" "$(git -C "$REPO_ROOT" rev-parse HEAD)" "$MODE" >>"$DEPLOY_LOG"
+
+if [[ $MODE == deploy ]]; then
+  STEP="save the tested image for PROD"
+  mkdir -p "$ARTIFACT_DIR"
+  archive="$ARTIFACT_DIR/marketing-$TAG.tar.gz"
+  docker save "$IMAGE:$TAG" | gzip -n >"$archive.partial"
+  mv "$archive.partial" "$archive"
+  chmod 0644 "$archive"
+  ok "saved $archive ($(du -h "$archive" | cut -f1), sha256 $(sha256sum "$archive" | cut -d' ' -f1))"
+  log "Marketing preview deployed (tag $TAG). After acceptance copy the archive to PROD and run:"
+  log "  scripts/deploy-prod.sh --marketing --image-archive <file> --expect-image $image --expect-digest $expected"
+fi

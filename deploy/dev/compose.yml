@@ -208,9 +208,8 @@ services:
   # back on its own by scripts/deploy-marketing-dev.sh (profile "marketing"); scripts/deploy-dev.sh
   # never builds, starts or stops it. Reachable only from Caddy (https://<DEV_DOMAIN>:8443, tailnet).
   marketing:
+    # Built by scripts/deploy-marketing-dev.sh (with its source revision label), never by Compose.
     image: ayvo-dev-preview/marketing:${MARKETING_IMAGE_TAG:-none}
-    build:
-      context: ../../apps/marketing
     profiles:
       - marketing
     restart: unless-stopped

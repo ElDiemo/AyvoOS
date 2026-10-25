@@ -17,15 +17,21 @@
 		-Server
 	}
 
-	@www host www.{$MARKETING_DOMAIN}
-	redir @www https://{$MARKETING_DOMAIN}{uri} 301
+	# Only GET/HEAD on both names: www redirects them to the apex; anything else is 405 below.
+	@www_read {
+		host www.{$MARKETING_DOMAIN}
+		method GET HEAD
+	}
+	redir @www_read https://{$MARKETING_DOMAIN}{uri} 301
 
-	@read method GET HEAD
+	@read {
+		host {$MARKETING_DOMAIN}
+		method GET HEAD
+	}
 	handle @read {
 		reverse_proxy marketing:8080 {
 			header_up -Cookie
 			header_up -Authorization
-			header_up X-Forwarded-For {remote_host}
 			header_down -Server
 			@unavailable status 5xx
 			handle_response @unavailable {

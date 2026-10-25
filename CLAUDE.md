@@ -265,8 +265,10 @@ Tailwind 4 · Vitest · Playwright.
   external fonts — `pnpm --filter @ayvo/marketing test` enforces it. Edge: PROD qr-edge and the
   internal Caddy only get mounted site files (`deploy/prod/sites/`, `acme.d/`) via
   `compose.marketing.yml` (MARKETING_DOMAIN); DEV preview `https://<DEV_DOMAIN>:8443` (tailnet).
-  Deployed on its own (`scripts/deploy-marketing-dev.sh`, `deploy-prod.sh --marketing` with the
-  content digest accepted on DEV); the OS deployment never builds, starts or stops it.
+  Deployed on its own: DEV builds and tests the image (pinned base) and saves it as an archive;
+  PROD loads exactly that image ID (`deploy-prod.sh --marketing --image-archive … --expect-image …`),
+  never builds it, and records SUCCESS only with valid HTTPS on apex and www; the OS deployment
+  never builds, starts or stops it (it only prepares the edge).
 - `deploy/dev/` — DEV preview Compose stack + Caddyfile; `apps/*/Dockerfile` — app images (build
   context = repo root, `.dockerignore` keeps `.env*` out); `scripts/deploy-dev.sh` — manual deploy.
 - `deploy/prod/` + `scripts/deploy-prod.sh` — the separate PRODUCTION installation on AyvoOS-PROD

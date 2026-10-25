@@ -42,6 +42,8 @@ interface Service {
   cap_add?: string[];
   mem_limit?: string | number;
   pids_limit?: number;
+  cpus?: number | string;
+  security_opt?: string[];
 }
 interface Rendered {
   services: Record<string, Service>;
@@ -143,7 +145,7 @@ class Topology {
 
   /**
    * A container exactly as rendered: image (unless given), command, environment, read-only,
-   * tmpfs, capabilities, limits, bind mounts at their targets (Caddyfiles copied with only the
+   * tmpfs, capabilities, security options, memory/CPU/PID limits, bind mounts at their targets (Caddyfiles copied with only the
    * issuer replaced), every rendered network with the service name as alias. Named data volumes
    * become tmpfs at their targets (throwaway). Not started.
    */
@@ -175,6 +177,8 @@ class Topology {
     for (const c of s.cap_add ?? []) args.push('--cap-add', c);
     if (s.mem_limit) args.push('--memory', String(s.mem_limit));
     if (s.pids_limit) args.push('--pids-limit', String(s.pids_limit));
+    if (s.cpus) args.push('--cpus', String(s.cpus));
+    for (const o of s.security_opt ?? []) args.push('--security-opt', o);
     for (const v of s.volumes ?? []) {
       // Named data volumes (certificates, ACME state) become throwaway tmpfs at the same target.
       if (v.type === 'volume') {
@@ -354,6 +358,8 @@ describe.skipIf(!WANT_DOCKER)('the marketing site on the public edge (rendered t
     expect(Object.keys(r.services.api!.networks!).sort()).not.toContain('marketing');
     expect(r.services.marketing!.read_only).toBe(true);
     expect(r.services.marketing!.cap_drop).toEqual(['ALL']);
+    expect(r.services.marketing!.security_opt).toEqual(['no-new-privileges:true']);
+    expect(String(r.services.marketing!.cpus)).toBe('0.25');
   });
 
   it('serves the static site on the apex with its own strict headers and HSTS; no cookie reaches it', async () => {
@@ -371,8 +377,16 @@ describe.skipIf(!WANT_DOCKER)('the marketing site on the public edge (rendered t
   it('www redirects to the apex; only GET/HEAD; the OS, API and old WordPress paths are not here', async () => {
     const www = await ask('/cz/?x=1', { host: WWW, servername: WWW });
     expect([www.status, www.headers.location]).toEqual([301, `https://${APEX}/cz/?x=1`]);
-    for (const method of ['POST', 'PUT', 'DELETE'])
-      expect((await ask('/', { method })).status).toBe(405);
+    for (const host of [APEX, WWW])
+      for (const method of ['POST', 'PUT', 'DELETE']) {
+        const res = await ask('/', { method, host, servername: host });
+        expect([host, method, res.status, res.headers.location]).toEqual([
+          host,
+          method,
+          405,
+          undefined,
+        ]);
+      }
     for (const path of [
       '/api/health',
       '/login',
@@ -393,6 +407,16 @@ describe.skipIf(!WANT_DOCKER)('the marketing site on the public edge (rendered t
     const id = await ask('/jana-novakova', { host: ID, servername: ID });
     expect(id.body).toContain('uri=/id/jana-novakova');
     expect((await ask('/cz/', { host: ID, servername: ID })).status).toBe(404);
+  });
+
+  it('the test container really runs with the rendered limits and options', () => {
+    const c = JSON.parse(run(['inspect', t.name('marketing')]).stdout)[0].HostConfig;
+    expect(c.ReadonlyRootfs).toBe(true);
+    expect(c.CapDrop).toEqual(['ALL']);
+    expect(c.SecurityOpt).toEqual(['no-new-privileges:true']);
+    expect(c.NanoCpus).toBe(250_000_000);
+    expect(c.Memory).toBe(64 * 1024 * 1024);
+    expect(c.PidsLimit).toBe(64);
   });
 
   it('the marketing container reaches nothing: not web, not the API, not the internet', () => {

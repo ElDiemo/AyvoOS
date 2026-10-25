@@ -34,12 +34,16 @@ Dockerfile             the image (read-only, unprivileged)
   1440 / 390 / 320 px, no external requests, no CSP errors, images, favicon, language switch,
   CTAs, 404; screenshots to `docs/screenshots/marketing/`.
 
-## Release (DEV preview → PROD, the same artifact)
+## Release (DEV preview → PROD, the same image)
 
 1. Merge → `scripts/deploy-dev.sh` (once: Caddy gets :8443 and the `marketing` network), then
-   `scripts/deploy-marketing-dev.sh`: only the marketing container; preview at
-   `https://<DEV_DOMAIN>:8443` (tailnet). It prints the content digest.
-2. After acceptance on PROD (`MARKETING_DOMAIN` in prod.env, an OS release with
-   `compose.marketing.yml` deployed): `scripts/deploy-prod.sh --marketing --release <commit>
---expect-digest <digest>`. Rollback: `--marketing-rollback <release>`.
-3. The digest of a checkout: `sh apps/marketing/site-digest.sh apps/marketing/Caddyfile apps/marketing/site`.
+   `scripts/deploy-marketing-dev.sh`: builds the image (pinned base, revision label), replaces only
+   the marketing container (restores the previous one if it fails), verifies
+   `https://<DEV_DOMAIN>:8443` (tailnet), saves the tested image as an archive and prints its image
+   ID and content digest.
+2. PROD (after acceptance): `MARKETING_DOMAIN` in prod.env and an OS release with
+   `compose.marketing.yml` → the edge is PREPARED; the certificates of apex and www are obtained
+   (challenge-only forward on the old server); copy the archive to the server, then
+   `scripts/deploy-prod.sh --marketing --image-archive <file> --expect-image <id> --expect-digest
+<digest>` — SUCCESS only with valid HTTPS on both names. Rollback: `--marketing-rollback <release>`.
+3. The content digest of a checkout: `sh apps/marketing/site-digest.sh apps/marketing/Caddyfile apps/marketing/site`.

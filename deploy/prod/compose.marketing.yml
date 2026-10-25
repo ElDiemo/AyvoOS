@@ -7,13 +7,13 @@
 #   internet ─:443─▶ qr-edge ─(marketing network)─▶ marketing:8080   (static files, no API/DB)
 #   CA ─:80─▶ caddy ─(acme network, challenge path only)─▶ qr-edge:80  (apex + www certificates)
 #
-# The `marketing` container is deployed and rolled back on its own (deploy-prod.sh --marketing);
+# The `marketing` container is deployed and rolled back on its own (deploy-prod.sh --marketing, with
+# the exact image tested on DEV);
 # the OS deployment never builds, starts or stops it.
 services:
   marketing:
+    # The image accepted on DEV, loaded from its archive (deploy-prod.sh --marketing); never built here.
     image: ayvo-prod/marketing:${MARKETING_RELEASE:-none}
-    build:
-      context: ${MARKETING_RELEASE_DIR:-/nonexistent}/apps/marketing
     restart: unless-stopped
     logging:
       driver: json-file

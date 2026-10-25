@@ -53,31 +53,30 @@
 
 ## Release, the same artifact, rollback
 
-- The content digest (`apps/marketing/site-digest.sh`: SHA-256 over the Caddyfile and every served
-  file) is the identity of a release; the image carries the script, so the digest is also read from
-  the running container.
-- DEV: `scripts/deploy-marketing-dev.sh` builds the image from a clean checkout, replaces only the
-  `marketing` container, verifies the running digest and the route through the edge, and prints
-  the digest to accept.
-- PROD: `scripts/deploy-prod.sh --marketing --release <commit on origin/main> --expect-digest
-<accepted digest>` exports `apps/marketing` of that commit into its own directory, refuses any
-  other digest, builds, replaces only the `marketing` container, checks the running digest and the
-  public routes (local hint). `--marketing-rollback <release>` starts an earlier image again (its
-  recorded digest is checked). An OS deployment never builds, starts or stops the marketing site;
-  rolling the OS back to a release without `compose.marketing.yml` takes the site off the edge.
-- No registry and no vendor: the image is rebuilt from the same commit on each server and proven
-  identical by the digest.
-
-## Failure domains (honest)
-
-- Down: OS API, web, PostgreSQL, Redis, identity → **the site keeps answering** (it has no
-  dependency on them; proven by the `--network none` container test).
-- Shared and named: the host/VPS and the public edge in front of it (once connected) — a host or
-  edge outage takes the site down with everything else on that host.
-
-A failed or interrupted publication leaves the previous complete version running (the container
-is replaced only by a complete image) — never a half-copied directory; no OS database restore is
-involved in a rollback.
+- **Identity = the image ID of the tested build** (review MKT70-R1). The base image is pinned by
+  digest (`caddy:2.11.7-alpine@sha256:…`); DEV builds the image once from a clean checkout with its
+  source revision as a label, tests it, and saves THAT image as an archive (`docker save`, a file —
+  no registry, no vendor). PROD never builds the marketing site: `deploy-prod.sh --marketing
+--image-archive <file> --expect-image <sha256:id> --expect-digest <sha256>` loads the archive and
+  refuses any other image ID (a changed Dockerfile or base with the same content has another ID —
+  tested), requires the revision to be on origin/main, and checks the served files' content digest
+  (`apps/marketing/site-digest.sh`, also computed in the running container) as an additional check.
+- **A failed switch:** Compose removes the running container before the new one is healthy (no
+  blue/green). If the new container does not become healthy with the expected image and content,
+  the deploy step starts the previous image again, checks it and fails; the site is unavailable
+  from the switch until the previous one is healthy (seconds: the health check probes every second
+  while starting). If the previous one does not come back either, the step says so. Tested with a
+  wrong artifact and a container that never becomes healthy.
+- **Prepared ≠ released** (review MKT70-R2). An OS deployment with `MARKETING_DOMAIN` only
+  PREPARES the edge: its :80 answers are required, HTTPS is reported as the named state
+  "PREPARED, NOT LIVE" (certificates pending or site not deployed) — never success. `--marketing`
+  and `--marketing-rollback` record SUCCESS only after the strict check: valid HTTPS (certificate
+  verified) on the apex and www, the site on the apex, www → apex (GET/HEAD), 405 for other methods
+  on both names, 404 for OS/API/old paths, 421 for another host; otherwise the release is recorded
+  UNVERIFIED and the command fails.
+- DEV: `scripts/deploy-marketing-dev.sh` (the same restore behaviour) prints the image ID, content
+  digest and archive for PROD. Order: OS deploy (edge prepared) → certificates (challenge forward
+  on the old server) → `--marketing` (strict, before DNS, via the server's address) → DNS.
 
 ## Open points for the owner
 

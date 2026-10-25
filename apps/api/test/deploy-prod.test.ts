@@ -484,23 +484,25 @@ describe('production deploy script', () => {
       script.indexOf('  marketing)\n'),
       script.indexOf('  marketing-rollback)\n'),
     );
-    // The accepted DEV digest is required and checked before anything is built or started.
-    expect(marketing).toContain('--expect-digest');
+    // The image accepted on DEV is loaded and its identity checked before anything starts; the
+    // marketing site is never built on production.
+    for (const flag of ['--expect-image', '--expect-digest', '--image-archive'])
+      expect(marketing).toContain(flag);
     const order = [
+      'load_marketing_image',
       'check_release',
-      'export_marketing',
-      'marketing_digest',
-      'compose build marketing',
       'start_marketing',
+      'verify_marketing_release',
     ];
     const at = order.map((step) => marketing.indexOf(step));
     expect(at.every((i) => i > 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
-    expect(marketing).not.toMatch(/build_images|migrate|start_services|backup_before_migration/);
+    expect(marketing).not.toMatch(
+      /build_images|compose build|migrate|start_services|backup_before_migration/,
+    );
     expect(fn('start_marketing')).toContain('compose up -d --no-build --no-deps marketing');
     expect(fn('start_marketing')).toContain('running_marketing_digest');
-    // Its export lives apart from the OS releases (never removed by remove_old_images).
-    expect(fn('marketing_dir')).toContain('/marketing/');
+    // Marketing images are not removed with old OS releases.
     expect(fn('remove_old_images')).toContain('(api|api-migrate|web)');
   });
 
