@@ -201,8 +201,6 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
     networks:
       - backend
-      # The Finance unit reaches only PostgreSQL (as its own role), never Redis or the API DB role.
-      - finance-db
     depends_on:
       postgres:
         condition: service_healthy
@@ -301,6 +299,8 @@ services:
       - postgres-data:/var/lib/postgresql
     networks:
       - backend
+      # The Finance unit reaches only PostgreSQL (as its own role), never Redis.
+      - finance-db
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s
@@ -351,6 +351,7 @@ volumes:
   acme-webroot:
     name: ayvo-dev-preview-acme-webroot
   files-data:
+    name: ayvo-dev-preview-files-data
   # The Finance unit's own originals and exports (ADR 0039; never the core's files).
   finance-files:
-    name: ayvo-dev-preview-files-data
+    name: ayvo-dev-preview-finance-files
