@@ -135,7 +135,7 @@ describe('production Compose project', () => {
     // Fictional values only.
     writeFileSync(
       join(secrets, 'prod.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
         'PUBLIC_QR_BASE_URL=https://qr.example.test\nLABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n',
     );
     writeFileSync(
@@ -169,10 +169,39 @@ describe('production Compose project', () => {
       AWS_ACCESS_KEY_ID: 'AKIAFICTIONAL0000000',
       LABEL_QR_MIN_SIZE_MM: '15',
     });
+    // ADR 0041: the running core connects as `ayvo_core` and never receives the privileged
+    // account's password; the migrate step (privileged) creates the role after the migrations.
+    // (Values may come from the caller's environment, which Compose prefers — compared by parts.)
+    const apiDb = new URL(rendered.services.api.environment.DATABASE_URL);
+    const tools = JSON.parse(
+      run('docker', [...withEnv, '--profile', 'tools', 'config', '--format', 'json'], env).stdout,
+    );
+    const migrateDb = new URL(tools.services.migrate.environment.DATABASE_URL);
+    expect([apiDb.username, apiDb.password]).toEqual(['ayvo_core', 'c'.repeat(32)]);
+    expect(migrateDb.username).not.toBe('ayvo_core');
+    expect(migrateDb.password).not.toBe(apiDb.password);
+    expect(JSON.stringify(rendered.services.api)).not.toContain(`:${migrateDb.password}@`);
+    expect(tools.services.migrate.environment.CORE_DB_PASSWORD).toBe('c'.repeat(32));
+    expect(tools.services.migrate.command.join(' ')).toMatch(
+      /prisma migrate deploy && node dist\/database\/core-db-setup\.js$/,
+    );
+    // Without the core role's password the configuration does not render.
+    writeFileSync(
+      join(secrets, 'no-core.env'),
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+        'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
+    );
+    const noCore = run(
+      'docker',
+      [...args, '--env-file', join(secrets, 'no-core.env'), 'config', '--quiet'],
+      env,
+    );
+    expect(noCore.status).not.toBe(0);
+    expect(noCore.stderr).toMatch(/CORE_DB_PASSWORD/);
     // Without the physically validated QR values it renders them empty (not set, ADR 0034).
     writeFileSync(
       join(secrets, 'no-qr-settings.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
         'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
     );
     const noQr = JSON.parse(
@@ -189,7 +218,7 @@ describe('production Compose project', () => {
     // The QR base URL stays required: without it the configuration does not render.
     writeFileSync(
       join(secrets, 'incomplete.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n',
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n',
     );
     const res = run(
       'docker',
@@ -525,7 +554,7 @@ describe('production deploy script', () => {
     run('mkdir', ['-p', secrets]);
     writeFileSync(
       join(secrets, 'prod.env'),
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
         'PUBLIC_QR_BASE_URL=https://qr.example.test\n',
     );
     for (const f of ['prod-auth.env', 'prod-s3.env']) writeFileSync(join(secrets, f), 'X=1\n');
@@ -627,7 +656,7 @@ describe('production deploy script', () => {
       });
     }
     const prod =
-      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+      'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
       'PUBLIC_QR_BASE_URL=https://qr.example.test\nLABEL_QR_MIN_SIZE_MM=15\nLABEL_QR_ERROR_CORRECTION=Q\n';
     const good = {
       'prod.env': prod,

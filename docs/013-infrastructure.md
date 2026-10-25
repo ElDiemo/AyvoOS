@@ -93,16 +93,19 @@ removes them. `ts:` = the server's Tailscale IPv4 address, read by the deploy sc
 Stored outside the repository in `/opt/ayvo/secrets/dev-preview.env` (mode 600, owned by `ayvo`;
 path overridable with `AYVO_DEV_ENV_FILE`). Placeholders are documented in `.env.example`.
 
-| Variable            | Value                                                          |
-| ------------------- | -------------------------------------------------------------- |
-| `APP_ENV`           | `development` (the script refuses anything else)               |
-| `DEV_DOMAIN`        | `dev.ayvo.co`                                                  |
-| `ACME_EMAIL`        | contact address for the Let's Encrypt account                  |
-| `POSTGRES_USER`     | e.g. `ayvo`                                                    |
-| `POSTGRES_DB`       | e.g. `ayvo_dev_preview`                                        |
-| `POSTGRES_PASSWORD` | 24+ characters of `[A-Za-z0-9_-]`, e.g. `openssl rand -hex 32` |
+| Variable            | Value                                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `APP_ENV`           | `development` (the script refuses anything else)                                                                             |
+| `DEV_DOMAIN`        | `dev.ayvo.co`                                                                                                                |
+| `ACME_EMAIL`        | contact address for the Let's Encrypt account                                                                                |
+| `POSTGRES_USER`     | e.g. `ayvo`                                                                                                                  |
+| `POSTGRES_DB`       | e.g. `ayvo_dev_preview`                                                                                                      |
+| `POSTGRES_PASSWORD` | 24+ characters of `[A-Za-z0-9_-]`, e.g. `openssl rand -hex 32`                                                               |
+| `CORE_DB_PASSWORD`  | the running core's own role `ayvo_core` (ADR 0041): 24–128 characters of `[A-Za-z0-9_-]`, different from `POSTGRES_PASSWORD` |
 
-`DATABASE_URL`, `REDIS_URL` and `API_URL` are derived inside `deploy/dev/compose.yml`, as are
+`DATABASE_URL`, `REDIS_URL` and `API_URL` are derived inside `deploy/dev/compose.yml` (the API
+connects as `ayvo_core`, created and granted by the migrate step; migrations and backups keep
+`POSTGRES_USER` — ADR 0041), as are
 `PUBLIC_QR_BASE_URL` (`https://$DEV_DOMAIN/q`) and `FILE_STORAGE_DIR` (`/var/lib/ayvo/files`).
 
 **Persistent files** (Milestone 1): the API mounts the named volume `ayvo-dev-preview-files-data`
@@ -158,6 +161,7 @@ ACME HTTP-01); inbound IPv4 TCP 80 reachable; Tailscale logged in; the host guar
 install -d -m 700 /opt/ayvo/secrets
 install -m 600 /dev/null /opt/ayvo/secrets/dev-preview.env
 openssl rand -hex 32                                   # -> POSTGRES_PASSWORD
+openssl rand -hex 32                                   # -> CORE_DB_PASSWORD (another one)
 $EDITOR /opt/ayvo/secrets/dev-preview.env              # fill in the variables above
 
 # 2. Validate (changes nothing)

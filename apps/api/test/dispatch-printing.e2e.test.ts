@@ -13,7 +13,7 @@ import { ShipmentCarrierFlow } from '../src/orders/shipment-carrier-flow.service
 import { PrintQueueService } from '../src/printing/print-queue.service.js';
 import { crateFactory, createHotel, createOrder, scanCrate } from './support/order-fixtures.js';
 import { INITIAL_SITE_ID } from './support/sign-in.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 
 /**
  * Direct printing (doc 030, ADR 0028) against the real database, the FAKE test carrier and a
@@ -730,16 +730,18 @@ describe.skipIf(!hasDatabase)('direct printing: labels, print queue, print agent
     testCarrierControl.variant = ['FAIL'];
     await completeAndPrint(order, null).expect(200);
     // The legacy state: labelled with PDF, no ZPL and no fetch at all (test-only removal).
-    await t.prisma.$transaction([
-      t.prisma.$executeRawUnsafe(
-        'ALTER TABLE "shipment_label_fetches" DISABLE TRIGGER "shipment_label_fetches_no_delete"',
-      ),
-      t.prisma
-        .$executeRaw`DELETE FROM "shipment_label_fetches" WHERE "shipment_id" IN (SELECT s."id" FROM "shipments" s JOIN "orders" o ON o."id" = s."order_id" WHERE o."code" = ${order})`,
-      t.prisma.$executeRawUnsafe(
-        'ALTER TABLE "shipment_label_fetches" ENABLE TRIGGER "shipment_label_fetches_no_delete"',
-      ),
-    ]);
+    // (Privileged: the running core can neither switch triggers off nor delete fetches.)
+    await withPrivileged((db) =>
+      db.$transaction([
+        db.$executeRawUnsafe(
+          'ALTER TABLE "shipment_label_fetches" DISABLE TRIGGER "shipment_label_fetches_no_delete"',
+        ),
+        db.$executeRaw`DELETE FROM "shipment_label_fetches" WHERE "shipment_id" IN (SELECT s."id" FROM "shipments" s JOIN "orders" o ON o."id" = s."order_id" WHERE o."code" = ${order})`,
+        db.$executeRawUnsafe(
+          'ALTER TABLE "shipment_label_fetches" ENABLE TRIGGER "shipment_label_fetches_no_delete"',
+        ),
+      ]),
+    );
     const legacy = (await view(order)).shipment!;
     expect([legacy.status, legacy.zpl]).toEqual(['LABELED', null]);
     expect(legacy.parcels.every((p) => p.labels.map((l) => l.format).join() === 'PDF')).toBe(true);

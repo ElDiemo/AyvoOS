@@ -147,6 +147,7 @@ beforeAll(() => {
       'ACME_EMAIL=ops@ayvo.test',
       'POSTGRES_USER=ayvo',
       `POSTGRES_PASSWORD=${'p'.repeat(32)}`,
+      `CORE_DB_PASSWORD=${'c'.repeat(32)}`,
       'POSTGRES_DB=ayvo',
       'AUTH_ENCRYPTION_KEY=5f0c9a3e7b2d48e1a6c4f9073d8b2e51c7a09f6e3b4d2c8a1f7e605b9d3c4a28',
       'AUTH_MAIL_DRIVER=google-relay',

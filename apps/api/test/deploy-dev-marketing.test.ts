@@ -47,6 +47,7 @@ describe.skipIf(!hasDocker)('the marketing DEV preview in the rendered DEV Compo
         `DEV_TAILNET_IPV4=${TAILNET}`,
         'POSTGRES_USER=fixture',
         `POSTGRES_PASSWORD=${randomBytes(24).toString('hex')}`,
+        `CORE_DB_PASSWORD=${randomBytes(24).toString('hex')}`,
         'POSTGRES_DB=fixture_db',
         `AUTH_ENCRYPTION_KEY=${randomBytes(32).toString('hex')}`,
         'AUTH_MAIL_DRIVER=smtp',

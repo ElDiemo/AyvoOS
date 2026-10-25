@@ -70,7 +70,8 @@ readonly KEEP_RELEASES=3
 # Required and allowed keys per env file (doc 036 §4). Anything else is refused: a file given to a
 # container through `env_file` must not inject e.g. NODE_OPTIONS, AWS_ENDPOINT_URL or a test
 # switch. Values are never printed.
-readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB ACME_EMAIL PUBLIC_QR_BASE_URL"
+# CORE_DB_PASSWORD: the running core's own non-superuser role (ADR 0041), never POSTGRES_PASSWORD.
+readonly KEYS_PROD="POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB CORE_DB_PASSWORD ACME_EMAIL PUBLIC_QR_BASE_URL"
 # The physically validated QR label settings are optional (ADR 0034): both or neither.
 readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 # ID_DOMAIN (optional): the public employee-card host; unset = no ID edge at all (compose.id.yml).
@@ -328,6 +329,15 @@ check_env_file() {
   ok "$file: mode $mode, required keys present, no other keys"
 }
 
+# The core runtime role's password (ADR 0041): URL-safe (it is part of DATABASE_URL), the length
+# the setup accepts, and never the privileged account's. Values are never printed.
+check_core_db_password() {
+  [[ $1 =~ ^[A-Za-z0-9_-]{24,128}$ ]] ||
+    die "CORE_DB_PASSWORD must be 24-128 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
+  [[ $1 != "$2" ]] || die "CORE_DB_PASSWORD must differ from POSTGRES_PASSWORD (ADR 0041)"
+  ok "CORE_DB_PASSWORD set (the running core's own role)"
+}
+
 # Both QR label settings, or neither (then only our QR label operations are refused, ADR 0034).
 # Never a default, never a value from DEV: only the recorded physical validation (doc 036 §8).
 check_qr_label_settings() {
@@ -344,6 +354,8 @@ check_env_files() {
   STEP="check the server-only env files"
   log "$STEP"
   check_env_file "$SECRETS/prod.env" "$KEYS_PROD" "$ALLOW_PROD"
+  check_core_db_password "$(env_value "$SECRETS/prod.env" CORE_DB_PASSWORD)" \
+    "$(env_value "$SECRETS/prod.env" POSTGRES_PASSWORD)"
   check_qr_label_settings "$SECRETS/prod.env"
   check_env_file "$SECRETS/prod-auth.env" "$KEYS_AUTH" "$ALLOW_AUTH"
   local auth="$SECRETS/prod-auth.env"
