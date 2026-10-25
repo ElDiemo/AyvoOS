@@ -123,6 +123,11 @@ class SuperuserResolver {
     })();
     return this.principal.then((principal) => ({ kind: 'principal' as const, principal }));
   }
+
+  /** A session forwarded by the Finance unit (ADR 0039): any token is the superuser here. */
+  resolveToken(token: string | null) {
+    return token ? this.resolve() : Promise.resolve({ kind: 'anonymous' as const });
+  }
 }
 
 export const databaseUrl = inject('testDatabaseUrl');

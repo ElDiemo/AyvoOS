@@ -32,8 +32,7 @@ import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
-import { CurrentPrincipal } from '../identity/access.guard.js';
-import type { Principal } from '../identity/principal.js';
+import { Caller, type FinanceCaller } from './finance-access.guard.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
 
 const CODE = new ZodValidationPipe(z.string().regex(/^FD-\d{6,}$/));
@@ -57,8 +56,8 @@ export class FinanceController {
   /** Active suppliers to choose from (managed in Sklad → Dodavatelé). */
   @RequirePermission('finance:documents_manage')
   @Get('suppliers')
-  suppliers(): Promise<FinanceSupplier[]> {
-    return this.documents.suppliers();
+  suppliers(@Caller() caller: FinanceCaller): Promise<FinanceSupplier[]> {
+    return this.documents.suppliers(caller);
   }
 
   /**
@@ -70,9 +69,9 @@ export class FinanceController {
   takeOverCandidates(
     @Query(new ZodValidationPipe(z.object({ supplierId: z.uuid().optional() })))
     query: { supplierId?: string },
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<TakeOverCandidate[]> {
-    return this.documents.takeOverCandidates(principal, query.supplierId);
+    return this.documents.takeOverCandidates(caller, query.supplierId);
   }
 
   @RequirePermission('finance:documents_manage')
@@ -80,9 +79,9 @@ export class FinanceController {
   takeOver(
     @Body(new ZodValidationPipe(takeOverSupplierDocumentSchema))
     body: TakeOverSupplierDocumentRequest,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
-    return this.documents.takeOver(body, principal);
+    return this.documents.takeOver(body, caller);
   }
 
   @RequirePermission('finance:documents_read')
@@ -100,10 +99,10 @@ export class FinanceController {
   receive(
     @Body(new ZodValidationPipe(uploadFields)) fields: z.infer<typeof uploadFields>,
     @UploadedFile() file: { buffer: Buffer; originalname: string } | undefined,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
     if (!file) throw new BadRequestException('Přiložte originál dokladu jako pole "file".');
-    return this.documents.receive(fields, file, principal.userId);
+    return this.documents.receive(fields, file, caller);
   }
 
   @RequirePermission('finance:documents_read')
@@ -120,9 +119,9 @@ export class FinanceController {
   @Header('X-Content-Type-Options', 'nosniff')
   async content(
     @Param('code', CODE) code: string,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<StreamableFile> {
-    const { bytes, contentType, filename } = await this.documents.content(code, principal);
+    const { bytes, contentType, filename } = await this.documents.content(code, caller);
     return new StreamableFile(bytes, {
       type: contentType,
       disposition: `attachment; filename="${filename.replace(/"/g, '')}"`,
@@ -135,9 +134,9 @@ export class FinanceController {
   correct(
     @Param('code', CODE) code: string,
     @Body(new ZodValidationPipe(correctFinanceDocumentSchema)) body: CorrectFinanceDocumentRequest,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
-    return this.documents.correct(code, body, principal.userId);
+    return this.documents.correct(code, body, caller);
   }
 
   @RequirePermission('finance:documents_manage')
@@ -146,8 +145,8 @@ export class FinanceController {
   void(
     @Param('code', CODE) code: string,
     @Body(new ZodValidationPipe(voidFinanceDocumentSchema)) body: VoidFinanceDocumentRequest,
-    @CurrentPrincipal() principal: Principal,
+    @Caller() caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
-    return this.documents.void(code, body, principal.userId);
+    return this.documents.void(code, body, caller);
   }
 }

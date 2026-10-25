@@ -115,7 +115,8 @@ export class FinanceContractController {
   ): Promise<FinanceContractSupplierDocument> {
     require(p, 'finance:documents_read');
     const doc = await this.procurement.supplierDocumentById(id);
-    if (!doc || !readsSite(p, doc.siteId)) throw new NotFoundException('Supplier document not found');
+    if (!doc || !readsSite(p, doc.siteId))
+      throw new NotFoundException('Supplier document not found');
     return doc;
   }
 
@@ -128,7 +129,8 @@ export class FinanceContractController {
   ): Promise<StreamableFile> {
     require(p, 'finance:documents_read');
     const doc = await this.procurement.supplierDocumentById(id);
-    if (!doc || !readsSite(p, doc.siteId)) throw new NotFoundException('Supplier document not found');
+    if (!doc || !readsSite(p, doc.siteId))
+      throw new NotFoundException('Supplier document not found');
     return new StreamableFile(await this.procurement.supplierDocumentBytes(id), {
       type: 'application/octet-stream',
     });

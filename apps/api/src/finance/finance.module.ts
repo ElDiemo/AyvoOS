@@ -1,27 +1,28 @@
 import { Module } from '@nestjs/common';
 import { MulterModule } from '@nestjs/platform-express';
-import { ENV, type Env } from '../config/env.js';
-import { ProcurementModule } from '../procurement/procurement.module.js';
 import { FinanceController } from './finance.controller.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
+import { FINANCE_ENV, type FinanceEnv } from './finance-env.js';
+import { FinanceHealthController } from './finance-health.controller.js';
+import { FinanceOperations } from './finance-operations.js';
+import { FinancePrismaService } from './finance-prisma.service.js';
 
 /**
- * finance module (doc 039): received documents (N1). Owns finance_* tables only; suppliers come
- * from ProcurementService. Company-wide (no site); FINANCE stays a planned role (doc 021 §4c).
+ * The Finance feature (doc 039): received documents (N1). Runs only in the Finance unit
+ * (FinanceAppModule, ADR 0039) — never inside the core API. Owns schema `finance`; everything
+ * of the core comes through CoreClient. Company-wide (no site); FINANCE stays a planned role.
  */
 @Module({
   imports: [
-    ProcurementModule,
     MulterModule.registerAsync({
-      inject: [ENV],
-      useFactory: (env: Env) => ({
-        // In memory (bounded, the same limit as supplier documents); validated by content.
-        limits: { fileSize: env.SUPPLIER_DOCUMENT_MAX_BYTES, files: 1, fields: 20, parts: 21 },
+      inject: [FINANCE_ENV],
+      useFactory: (env: FinanceEnv) => ({
+        // In memory (bounded); validated by content.
+        limits: { fileSize: env.FINANCE_DOCUMENT_MAX_BYTES, files: 1, fields: 20, parts: 21 },
       }),
     }),
   ],
-  controllers: [FinanceController],
-  providers: [FinanceDocumentsService],
-  exports: [FinanceDocumentsService],
+  controllers: [FinanceController, FinanceHealthController],
+  providers: [FinanceDocumentsService, FinancePrismaService, FinanceOperations],
 })
 export class FinanceModule {}

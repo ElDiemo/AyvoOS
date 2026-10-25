@@ -92,7 +92,8 @@ export class AccessGuard implements CanActivate {
       // Internal contract (ADR 0039): only under /api/internal/, only with the audience's
       // service token; the user comes from the forwarded session token, never from a user id.
       if (!(req.url ?? '').startsWith(`${API_BASE_PATH}/internal/`)) throw forbidden();
-      if (!this.serviceTokenValid(req, rule.audience)) throw unauthenticated();
+      if (!this.serviceTokenValid(req, rule.audience))
+        throw domainError(401, 'SERVICE_UNAUTHENTICATED', 'Unknown service');
       const forwarded = req.headers[SERVICE_SESSION_HEADER];
       resolution = await this.resolver.resolveToken(
         typeof forwarded === 'string' && forwarded.length > 0 ? forwarded : null,

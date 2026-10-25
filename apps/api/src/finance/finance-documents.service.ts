@@ -20,24 +20,15 @@ import {
   type VoidFinanceDocumentRequest,
 } from '@ayvo/types';
 import { domainError } from '../common/domain-error.js';
-import { allocateSerials } from '../database/code-counters.js';
-import { OperationRequestsService } from '../database/operation-requests.service.js';
-import { PrismaService } from '../database/prisma.service.js';
-import { Prisma } from '../generated/prisma/client.js';
-import type { Principal } from '../identity/principal.js';
-import { ProcurementService } from '../procurement/procurement.service.js';
+import { Prisma } from '../generated/finance-prisma/client.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
+import { CoreClient } from './core-client.js';
+import type { FinanceCaller } from './finance-access.guard.js';
+import { allocateFinanceSerial, FinanceOperations } from './finance-operations.js';
+import { FinancePrismaService } from './finance-prisma.service.js';
 
 /** Finance's own uploads are PDF only (doc 039 §3), recognised by content, never by name/type. */
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // %PDF-
-
-/** A supplier document of Sklad may be read by whoever reads its site's paperwork (doc 021). */
-export function canReadSupplierDocuments(principal: Principal, siteId: string): boolean {
-  return (
-    principal.permissions.has('procurement:documents_read') &&
-    (principal.globalSiteAccess || principal.sites.some((s) => s.id === siteId))
-  );
-}
 
 /** Kinds of supplier documents as finance kinds (the user may correct it afterwards). */
 const TAKEOVER_KIND: Record<string, FinanceDocumentKind> = {
@@ -49,6 +40,7 @@ const TAKEOVER_KIND: Record<string, FinanceDocumentKind> = {
 /** The metadata kept in every event snapshot (the history shows what changed). */
 const SNAPSHOT_FIELDS = [
   'supplierId',
+  'supplierName',
   'kind',
   'documentNumber',
   'issuedOn',
@@ -61,13 +53,7 @@ const SNAPSHOT_FIELDS = [
   'status',
 ] as const;
 type Snapshot = Record<(typeof SNAPSHOT_FIELDS)[number], string | null>;
-
-const include = {
-  supplier: { select: { id: true, name: true } },
-  sourceSite: { select: { code: true } },
-  creator: { select: { displayName: true } },
-} satisfies Prisma.FinanceDocumentInclude;
-type DocumentRecord = Prisma.FinanceDocumentGetPayload<{ include: typeof include }>;
+type DocumentRow = Prisma.DocumentGetPayload<object>;
 
 const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
 const month = (d: Date | null) => (d ? d.toISOString().slice(0, 7) : null);
@@ -75,25 +61,29 @@ const dateOrNull = (s: string | null | undefined) => (s ? new Date(`${s}T00:00:0
 const monthOrNull = (s: string | null | undefined) => (s ? new Date(`${s}-01T00:00:00Z`) : null);
 
 /**
- * Finance — received documents (doc 039, N1). Owns finance_documents and their events; reads
- * suppliers and supplier documents only through ProcurementService. An original is either
- * Finance's own PDF (stored once, never changed) or a referenced supplier document (no copy).
- * Metadata may be incomplete ("k doplnění") and changes only through a new version with its
- * event; nothing is deleted. Writes are idempotent per request id (operation_requests).
+ * Finance — received documents (doc 039, N1) in the Finance unit (ADR 0039). Owns schema
+ * `finance`; suppliers, supplier documents and the user come only from the core contract
+ * (CoreClient) for the current caller. An original is either Finance's own PDF (stored once,
+ * never changed) or a referenced supplier document (no copy; its bytes come through the core,
+ * which checks the user's access to its site on every read). Metadata may be incomplete
+ * ("k doplnění") and changes only through a new version with its event; nothing is deleted.
  */
 @Injectable()
 export class FinanceDocumentsService {
   private readonly logger = new Logger(FinanceDocumentsService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly procurement: ProcurementService,
-    private readonly operations: OperationRequestsService,
+    private readonly prisma: FinancePrismaService,
+    private readonly operations: FinanceOperations,
+    private readonly core: CoreClient,
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
   ) {}
 
-  async suppliers(): Promise<FinanceSupplier[]> {
-    return (await this.procurement.listSuppliers(false)).map((s) => ({ id: s.id, name: s.name }));
+  async suppliers(caller: FinanceCaller): Promise<FinanceSupplier[]> {
+    return (await this.core.suppliers(caller.sessionToken)).map((s) => ({
+      id: s.id,
+      name: s.name,
+    }));
   }
 
   /**
@@ -105,34 +95,38 @@ export class FinanceDocumentsService {
   async receive(
     fields: UploadFinanceDocumentFields,
     file: { buffer: Buffer; originalname: string },
-    actorId: string,
+    caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
     if (!PDF_MAGIC.every((b, i) => file.buffer[i] === b))
       throw domainError(422, 'UNSUPPORTED_DOCUMENT', 'Nahrajte originál dokladu jako PDF.');
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
-    const metadata = this.metadata(fields);
+    const supplierName = fields.supplierId
+      ? await this.activeSupplierName(caller, fields.supplierId)
+      : null;
+    const { userId, displayName } = caller.principal;
     const { result } = await this.operations.run(
       'FINANCE_DOCUMENT_RECEIVE',
       fields.requestId,
-      { ...this.canonical(fields), sha256, actorId },
+      { ...canonical(fields), sha256, actorId: userId },
       async (tx) => {
-        await this.assertNotReceived(tx, sha256);
-        if (metadata.supplierId) await this.procurement.assertActiveSupplier(tx, metadata.supplierId);
+        await assertNotReceived(tx, sha256);
         // File first, then the record: a failure in between leaves an unreferenced file
         // (logged), never a record without its file (ADR 0016).
         const storageKey = newStorageKey('finance-documents', 'pdf');
         await this.storage.put(storageKey, file.buffer);
         try {
           return {
-            code: await this.insert(tx, {
-              ...metadata,
+            code: await insert(tx, {
+              ...metadata(fields),
+              supplierName,
               source: 'UPLOAD',
               storageKey,
               sha256,
               byteSize: file.buffer.length,
               contentType: 'application/pdf',
               originalFilename: safeFilename(file.originalname, 'pdf'),
-              createdBy: actorId,
+              createdBy: userId,
+              createdByName: displayName,
               requestId: fields.requestId,
             }),
           };
@@ -146,39 +140,46 @@ export class FinanceDocumentsService {
   }
 
   /**
-   * Supplier documents of Sklad the user may take over: only sites whose paperwork they may read
-   * (procurement:documents_read there), marked when superseded or already taken over.
+   * Supplier documents of Sklad the user may take over (the core lists only the sites whose
+   * paperwork the user may read), marked when superseded or already taken over.
    */
-  async takeOverCandidates(principal: Principal, supplierId?: string): Promise<TakeOverCandidate[]> {
-    if (!principal.permissions.has('procurement:documents_read')) return [];
-    const docs = await this.procurement.supplierDocumentsOfSites(
-      principal.globalSiteAccess ? null : principal.sites.map((s) => s.id),
-      supplierId,
-    );
-    const taken = await this.prisma.financeDocument.findMany({
+  async takeOverCandidates(
+    caller: FinanceCaller,
+    supplierId?: string,
+  ): Promise<TakeOverCandidate[]> {
+    if (!caller.principal.permissions.includes('procurement:documents_read')) return [];
+    const docs = await this.core.supplierDocuments(caller.sessionToken, supplierId);
+    const taken = await this.prisma.document.findMany({
       where: { supplierDocumentId: { in: docs.map((d) => d.id) }, status: 'ACTIVE' },
       select: { code: true, supplierDocumentId: true },
     });
     const by = new Map(taken.map((t) => [t.supplierDocumentId, t.code]));
-    return docs.map(({ siteId: _site, ...d }) => ({ ...d, takenOverBy: by.get(d.id) ?? null }));
+    return docs.map((d) => ({
+      id: d.id,
+      supplier: d.supplier,
+      kind: d.kind,
+      documentNumber: d.documentNumber,
+      issuedOn: d.issuedOn,
+      originalFilename: d.originalFilename,
+      byteSize: d.byteSize,
+      siteCode: d.siteCode,
+      superseded: d.superseded,
+      takenOverBy: by.get(d.id) ?? null,
+    }));
   }
 
   /**
    * Takes over an existing supplier document: one finance document referencing it — no second
-   * copy of the file, no receipt, stock movement or price. Access to its site's paperwork is
-   * checked now and on every replay; another site's document is "not found". One valid finance
-   * document per supplier document (DB).
+   * copy of the file, no receipt, stock movement or price. The core checks the user's access to
+   * its site now — also on a replay of the same request; another site's document is "not found".
+   * One valid finance document per supplier document (DB).
    */
   async takeOver(
     input: TakeOverSupplierDocumentRequest,
-    principal: Principal,
+    caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
-    const visible = await this.procurement.supplierDocumentForTakeover(
-      this.prisma,
-      input.supplierDocumentId,
-    );
-    if (!visible || !canReadSupplierDocuments(principal, visible.siteId))
-      throw new NotFoundException('Doklad skladu nenalezen');
+    const src = await this.core.supplierDocument(caller.sessionToken, input.supplierDocumentId);
+    const { userId, displayName } = caller.principal;
     const { result } = await this.operations.run(
       'FINANCE_DOCUMENT_TAKEOVER',
       input.requestId,
@@ -187,12 +188,10 @@ export class FinanceDocumentsService {
         kind: input.kind ?? null,
         handoverMonth: input.handoverMonth ?? null,
         description: input.description ?? null,
-        actorId: principal.userId,
+        actorId: userId,
       },
       async (tx) => {
-        const src = await this.procurement.supplierDocumentForTakeover(tx, input.supplierDocumentId);
-        if (!src) throw new NotFoundException('Doklad skladu nenalezen');
-        const taken = await tx.financeDocument.findFirst({
+        const taken = await tx.document.findFirst({
           where: { supplierDocumentId: src.id, status: 'ACTIVE' },
           select: { code: true },
         });
@@ -202,14 +201,15 @@ export class FinanceDocumentsService {
             'ALREADY_TAKEN_OVER',
             `Tento doklad skladu už je ve Financích jako ${taken.code}.`,
           );
-        await this.assertNotReceived(tx, src.sha256);
+        await assertNotReceived(tx, src.sha256);
         try {
           return {
-            code: await this.insert(tx, {
-              supplierId: src.supplierId,
+            code: await insert(tx, {
+              supplierId: src.supplier.id,
+              supplierName: src.supplier.name,
               kind: input.kind ?? TAKEOVER_KIND[src.kind] ?? 'OTHER',
               documentNumber: src.documentNumber,
-              issuedOn: src.issuedOn,
+              issuedOn: dateOrNull(src.issuedOn),
               taxPointOn: null,
               dueOn: null,
               totalAmount: null,
@@ -219,12 +219,14 @@ export class FinanceDocumentsService {
               source: 'SUPPLIER_DOCUMENT',
               supplierDocumentId: src.id,
               sourceSiteId: src.siteId,
+              sourceSiteCode: src.siteCode,
               storageKey: null,
               sha256: src.sha256,
               byteSize: src.byteSize,
               contentType: src.contentType,
-              originalFilename: src.originalFilename,
-              createdBy: principal.userId,
+              originalFilename: safeFilename(src.originalFilename, 'pdf'),
+              createdBy: userId,
+              createdByName: displayName,
               requestId: input.requestId,
             }),
           };
@@ -236,41 +238,9 @@ export class FinanceDocumentsService {
     return this.detail(result.code);
   }
 
-  private async assertNotReceived(tx: Prisma.TransactionClient, sha256: string) {
-    const duplicate = await tx.financeDocument.findFirst({
-      where: { sha256, status: 'ACTIVE' },
-      select: { code: true },
-    });
-    if (duplicate)
-      throw domainError(
-        409,
-        'DUPLICATE_DOCUMENT',
-        `Tento soubor už je přijatý jako ${duplicate.code}.`,
-      );
-  }
-
-  private async insert(
-    tx: Prisma.TransactionClient,
-    data: Omit<Prisma.FinanceDocumentUncheckedCreateInput, 'serial' | 'code'>,
-  ): Promise<string> {
-    const { first } = await allocateSerials(tx, 'finance_document', 1);
-    const code = `FD-${String(first).padStart(6, '0')}`;
-    const doc = await tx.financeDocument.create({ data: { ...data, serial: first, code } });
-    await tx.financeDocumentEvent.create({
-      data: {
-        documentId: doc.id,
-        version: 1,
-        type: 'RECEIVED',
-        snapshot: snapshotOf(doc),
-        actorId: data.createdBy,
-      },
-    });
-    return code;
-  }
-
   async list(query: FinanceDocumentListQuery): Promise<FinanceDocumentPage> {
     const q = query.q?.trim();
-    const where: Prisma.FinanceDocumentWhereInput = {
+    const where: Prisma.DocumentWhereInput = {
       ...(query.supplierId ? { supplierId: query.supplierId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.handoverMonth ? { handoverMonth: monthOrNull(query.handoverMonth)! } : {}),
@@ -296,20 +266,19 @@ export class FinanceDocumentsService {
         ? {
             AND: {
               OR: [
-              { code: { contains: q, mode: 'insensitive' } },
-              { documentNumber: { contains: q, mode: 'insensitive' } },
-              { description: { contains: q, mode: 'insensitive' } },
-              { supplier: { name: { contains: q, mode: 'insensitive' } } },
+                { code: { contains: q, mode: 'insensitive' } },
+                { documentNumber: { contains: q, mode: 'insensitive' } },
+                { description: { contains: q, mode: 'insensitive' } },
+                { supplierName: { contains: q, mode: 'insensitive' } },
               ],
             },
           }
         : {}),
     };
     const [total, rows] = await Promise.all([
-      this.prisma.financeDocument.count({ where }),
-      this.prisma.financeDocument.findMany({
+      this.prisma.document.count({ where }),
+      this.prisma.document.findMany({
         where,
-        include,
         orderBy: { serial: 'desc' },
         skip: (query.page - 1) * FINANCE_PAGE_SIZE,
         take: FINANCE_PAGE_SIZE,
@@ -319,39 +288,30 @@ export class FinanceDocumentsService {
   }
 
   async detail(code: string): Promise<FinanceDocumentDetail> {
-    const doc = await this.prisma.financeDocument.findUnique({
+    const doc = await this.prisma.document.findUnique({
       where: { code },
-      include: {
-        ...include,
-        events: {
-          orderBy: { version: 'asc' },
-          include: { actor: { select: { displayName: true } } },
-        },
-      },
+      include: { events: { orderBy: { version: 'asc' } } },
     });
     if (!doc) throw new NotFoundException('Doklad nenalezen');
-    // A supplier change is shown by name (the snapshot keeps the id).
-    const supplierIds = doc.events.map((e) => (e.snapshot as Record<string, unknown>).supplierId);
-    const names = await this.procurement.supplierNames(
-      supplierIds.filter((v): v is string => typeof v === 'string'),
-    );
     let before: Record<string, unknown> | null = null;
     const history: FinanceDocumentEvent[] = doc.events.map((e) => {
       const snap = e.snapshot as Record<string, unknown>;
       const changes: Record<string, [unknown, unknown]> = {};
       if (before)
-        for (const k of SNAPSHOT_FIELDS)
+        for (const k of SNAPSHOT_FIELDS) {
+          if (k === 'supplierName') continue; // shown as the supplier change
           if (before[k] !== snap[k])
             changes[k] =
               k === 'supplierId'
-                ? [names.get(String(before[k])) ?? before[k], names.get(String(snap[k])) ?? snap[k]]
+                ? [before.supplierName ?? null, snap.supplierName ?? null]
                 : [before[k], snap[k]];
+        }
       before = snap;
       return {
         version: e.version,
         type: e.type as FinanceDocumentEvent['type'],
         reason: e.reason,
-        actor: e.actor.displayName,
+        actor: e.actorName,
         occurredAt: e.occurredAt.toISOString(),
         changes,
       };
@@ -360,11 +320,11 @@ export class FinanceDocumentsService {
   }
 
   /** The original file for an authorised download (bytes exactly as received). */
-  async content(code: string, principal: Principal) {
-    const doc = await this.prisma.financeDocument.findUnique({ where: { code } });
+  async content(code: string, caller: FinanceCaller) {
+    const doc = await this.prisma.document.findUnique({ where: { code } });
     if (!doc) throw new NotFoundException('Doklad nenalezen');
     return {
-      bytes: await this.original(doc, principal),
+      bytes: await this.original(doc, caller),
       contentType: doc.contentType,
       filename: `${doc.code}-${doc.originalFilename}`,
       sha256: doc.sha256,
@@ -373,22 +333,17 @@ export class FinanceDocumentsService {
 
   /**
    * The unchanged bytes of a document's original, checked against its recorded hash. A
-   * referenced supplier document needs read access to its site's paperwork (checked again on
-   * every read); otherwise it is "not found".
+   * referenced supplier document comes through the core, which re-checks the caller's access
+   * to its site on every read ("not found" otherwise).
    */
   async original(
-    doc: Pick<
-      DocumentRow,
-      'code' | 'source' | 'storageKey' | 'supplierDocumentId' | 'sourceSiteId' | 'sha256'
-    >,
-    principal: Principal,
+    doc: Pick<DocumentRow, 'code' | 'source' | 'storageKey' | 'supplierDocumentId' | 'sha256'>,
+    caller: FinanceCaller,
   ): Promise<Buffer> {
-    let bytes: Buffer;
-    if (doc.source === 'SUPPLIER_DOCUMENT') {
-      if (!canReadSupplierDocuments(principal, doc.sourceSiteId!))
-        throw new NotFoundException('Doklad nenalezen');
-      bytes = await this.procurement.supplierDocumentBytes(doc.supplierDocumentId!);
-    } else bytes = await this.storage.get(doc.storageKey!);
+    const bytes =
+      doc.source === 'SUPPLIER_DOCUMENT'
+        ? await this.core.supplierDocumentContent(caller.sessionToken, doc.supplierDocumentId!)
+        : await this.storage.get(doc.storageKey!);
     if (createHash('sha256').update(bytes).digest('hex') !== doc.sha256)
       throw domainError(500, 'STORED_FILE_CHANGED', `Uložený originál ${doc.code} nesouhlasí.`);
     return bytes;
@@ -398,26 +353,39 @@ export class FinanceDocumentsService {
   async correct(
     code: string,
     input: CorrectFinanceDocumentRequest,
-    actorId: string,
+    caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
+    const current = await this.prisma.document.findUnique({ where: { code } });
+    if (!current) throw new NotFoundException('Doklad nenalezen');
+    // A new supplier must be active now (the core decides); an unchanged one keeps its name.
+    const supplierName =
+      input.supplierId && input.supplierId !== current.supplierId
+        ? await this.activeSupplierName(caller, input.supplierId)
+        : input.supplierId
+          ? current.supplierName
+          : null;
     await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lock(tx, code, input.expectedVersion);
-      if (input.supplierId && input.supplierId !== doc.supplierId)
-        await this.procurement.assertActiveSupplier(tx, input.supplierId);
-      const updated = await tx.financeDocument.update({
+      const doc = await lock(tx, code, input.expectedVersion);
+      const updated = await tx.document.update({
         where: { id: doc.id },
-        data: { ...this.metadata(input), version: doc.version + 1, updatedAt: new Date() },
+        data: {
+          ...metadata(input),
+          supplierName,
+          version: doc.version + 1,
+          updatedAt: new Date(),
+        },
       });
       if (JSON.stringify(snapshotOf(updated)) === JSON.stringify(snapshotOf(doc)))
         throw domainError(422, 'NOTHING_CHANGED', 'Údaje se nezměnily.');
-      await tx.financeDocumentEvent.create({
+      await tx.documentEvent.create({
         data: {
           documentId: doc.id,
           version: updated.version,
           type: 'CORRECTED',
           snapshot: snapshotOf(updated),
           reason: input.reason,
-          actorId,
+          actorId: caller.principal.userId,
+          actorName: caller.principal.displayName,
         },
       });
     });
@@ -428,74 +396,115 @@ export class FinanceDocumentsService {
   async void(
     code: string,
     input: VoidFinanceDocumentRequest,
-    actorId: string,
+    caller: FinanceCaller,
   ): Promise<FinanceDocumentDetail> {
     await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lock(tx, code, input.expectedVersion);
-      const updated = await tx.financeDocument.update({
+      const doc = await lock(tx, code, input.expectedVersion);
+      const updated = await tx.document.update({
         where: { id: doc.id },
         data: { status: 'VOIDED', version: doc.version + 1, updatedAt: new Date() },
       });
-      await tx.financeDocumentEvent.create({
+      await tx.documentEvent.create({
         data: {
           documentId: doc.id,
           version: updated.version,
           type: 'VOIDED',
           snapshot: snapshotOf(updated),
           reason: input.reason,
-          actorId,
+          actorId: caller.principal.userId,
+          actorName: caller.principal.displayName,
         },
       });
     });
     return this.detail(code);
   }
 
-  private async lock(tx: Prisma.TransactionClient, code: string, expectedVersion: number) {
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT "id" FROM "finance_documents" WHERE "code" = ${code} FOR UPDATE`;
-    if (rows.length === 0) throw new NotFoundException('Doklad nenalezen');
-    const doc = await tx.financeDocument.findUniqueOrThrow({ where: { id: rows[0]!.id } });
-    if (doc.status === 'VOIDED')
-      throw domainError(409, 'DOCUMENT_VOIDED', 'Zrušený doklad už nelze měnit.');
-    if (doc.version !== expectedVersion)
-      throw domainError(
-        409,
-        'STALE_VERSION',
-        'Doklad mezitím změnil někdo jiný. Načtěte ho znovu.',
-      );
-    return doc;
+  /**
+   * The supplier exists and is active now (the core decides). Check-then-write: an archive in
+   * between is accepted (ADR 0039 §4 — archiving concerns new receipts, not paperwork).
+   */
+  private async activeSupplierName(caller: FinanceCaller, id: string): Promise<string> {
+    const supplier = (await this.core.lookupSuppliers(caller.sessionToken, [id])).get(id);
+    if (!supplier || !supplier.active)
+      throw domainError(422, 'SUPPLIER_INACTIVE', 'Dodavatel neexistuje nebo je archivovaný.');
+    return supplier.name;
   }
+}
 
-  private metadata(f: UploadFinanceDocumentFields | CorrectFinanceDocumentRequest) {
-    return {
-      supplierId: f.supplierId ?? null,
-      kind: f.kind,
-      documentNumber: f.documentNumber ?? null,
-      issuedOn: dateOrNull(f.issuedOn),
-      taxPointOn: dateOrNull(f.taxPointOn),
-      dueOn: dateOrNull(f.dueOn),
-      totalAmount: f.totalAmount ?? null,
-      currency: f.currency ?? null,
-      description: f.description ?? null,
-      handoverMonth: monthOrNull(f.handoverMonth),
-    };
-  }
+async function assertNotReceived(tx: Prisma.TransactionClient, sha256: string) {
+  const duplicate = await tx.document.findFirst({
+    where: { sha256, status: 'ACTIVE' },
+    select: { code: true },
+  });
+  if (duplicate)
+    throw domainError(
+      409,
+      'DUPLICATE_DOCUMENT',
+      `Tento soubor už je přijatý jako ${duplicate.code}.`,
+    );
+}
 
-  /** The original request as given (absent = null), so a replay compares like with like. */
-  private canonical(f: UploadFinanceDocumentFields) {
-    return {
-      supplierId: f.supplierId ?? null,
-      kind: f.kind,
-      documentNumber: f.documentNumber ?? null,
-      issuedOn: f.issuedOn ?? null,
-      taxPointOn: f.taxPointOn ?? null,
-      dueOn: f.dueOn ?? null,
-      totalAmount: f.totalAmount ?? null,
-      currency: f.currency ?? null,
-      description: f.description ?? null,
-      handoverMonth: f.handoverMonth ?? null,
-    };
-  }
+async function insert(
+  tx: Prisma.TransactionClient,
+  data: Omit<Prisma.DocumentUncheckedCreateInput, 'serial' | 'code'>,
+): Promise<string> {
+  const serial = await allocateFinanceSerial(tx, 'finance_document');
+  const code = `FD-${String(serial).padStart(6, '0')}`;
+  const doc = await tx.document.create({ data: { ...data, serial, code } });
+  await tx.documentEvent.create({
+    data: {
+      documentId: doc.id,
+      version: 1,
+      type: 'RECEIVED',
+      snapshot: snapshotOf(doc),
+      actorId: data.createdBy,
+      actorName: data.createdByName,
+    },
+  });
+  return code;
+}
+
+async function lock(tx: Prisma.TransactionClient, code: string, expectedVersion: number) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "finance"."documents" WHERE "code" = ${code} FOR UPDATE`;
+  if (rows.length === 0) throw new NotFoundException('Doklad nenalezen');
+  const doc = await tx.document.findUniqueOrThrow({ where: { id: rows[0]!.id } });
+  if (doc.status === 'VOIDED')
+    throw domainError(409, 'DOCUMENT_VOIDED', 'Zrušený doklad už nelze měnit.');
+  if (doc.version !== expectedVersion)
+    throw domainError(409, 'STALE_VERSION', 'Doklad mezitím změnil někdo jiný. Načtěte ho znovu.');
+  return doc;
+}
+
+function metadata(f: UploadFinanceDocumentFields | CorrectFinanceDocumentRequest) {
+  return {
+    supplierId: f.supplierId ?? null,
+    kind: f.kind,
+    documentNumber: f.documentNumber ?? null,
+    issuedOn: dateOrNull(f.issuedOn),
+    taxPointOn: dateOrNull(f.taxPointOn),
+    dueOn: dateOrNull(f.dueOn),
+    totalAmount: f.totalAmount ?? null,
+    currency: f.currency ?? null,
+    description: f.description ?? null,
+    handoverMonth: monthOrNull(f.handoverMonth),
+  };
+}
+
+/** The original request as given (absent = null), so a replay compares like with like. */
+function canonical(f: UploadFinanceDocumentFields) {
+  return {
+    supplierId: f.supplierId ?? null,
+    kind: f.kind,
+    documentNumber: f.documentNumber ?? null,
+    issuedOn: f.issuedOn ?? null,
+    taxPointOn: f.taxPointOn ?? null,
+    dueOn: f.dueOn ?? null,
+    totalAmount: f.totalAmount ?? null,
+    currency: f.currency ?? null,
+    description: f.description ?? null,
+    handoverMonth: f.handoverMonth ?? null,
+  };
 }
 
 /** A unique violation while inserting means the file or supplier document is already received. */
@@ -505,23 +514,10 @@ function duplicateOr(error: unknown): unknown {
   return error;
 }
 
-type DocumentRow = Prisma.FinanceDocumentGetPayload<object>;
-
-function snapshotOf(d: {
-  supplierId: string | null;
-  kind: string;
-  documentNumber: string | null;
-  issuedOn: Date | null;
-  taxPointOn: Date | null;
-  dueOn: Date | null;
-  totalAmount: Prisma.Decimal | null;
-  currency: string | null;
-  description: string | null;
-  handoverMonth: Date | null;
-  status: string;
-}): Snapshot {
+function snapshotOf(d: DocumentRow): Snapshot {
   return {
     supplierId: d.supplierId,
+    supplierName: d.supplierName,
     kind: d.kind,
     documentNumber: d.documentNumber,
     issuedOn: day(d.issuedOn),
@@ -545,11 +541,11 @@ export function missingForExport(d: {
   return FINANCE_EXPORT_REQUIRED.filter((k) => d[k] === null);
 }
 
-function toDto(d: DocumentRecord): FinanceDocument {
+function toDto(d: DocumentRow): FinanceDocument {
   return {
     id: d.id,
     code: d.code,
-    supplier: d.supplier,
+    supplier: d.supplierId && d.supplierName ? { id: d.supplierId, name: d.supplierName } : null,
     kind: d.kind as FinanceDocumentKind,
     documentNumber: d.documentNumber,
     issuedOn: day(d.issuedOn),
@@ -564,15 +560,15 @@ function toDto(d: DocumentRecord): FinanceDocument {
     version: d.version,
     source: d.source as FinanceDocumentSource,
     supplierDocument:
-      d.supplierDocumentId && d.sourceSite
-        ? { id: d.supplierDocumentId, siteCode: d.sourceSite.code }
+      d.supplierDocumentId && d.sourceSiteCode
+        ? { id: d.supplierDocumentId, siteCode: d.sourceSiteCode }
         : null,
     originalFilename: d.originalFilename,
     contentType: d.contentType,
     byteSize: d.byteSize,
     sha256: d.sha256,
     createdAt: d.createdAt.toISOString(),
-    createdBy: d.creator.displayName,
+    createdBy: d.createdByName,
   };
 }
 

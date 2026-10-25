@@ -16,7 +16,7 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function payloadHash(kind: OperationKind, payload: unknown): string {
+export function payloadHash(kind: string, payload: unknown): string {
   return createHash('sha256').update(canonicalJson({ kind, payload })).digest('hex');
 }
 
