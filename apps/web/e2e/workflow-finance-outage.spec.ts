@@ -49,7 +49,7 @@ test.describe('Výpadek Financí', () => {
     await expect(page.getByText('Finance jsou dočasně nedostupné')).toHaveCount(0);
     const health = await request.get('/api/health');
     expect(health.status()).toBe(200);
-    expect(await health.json()).toMatchObject({ status: 'ok', database: 'up' });
+    expect(await health.json()).toMatchObject({ status: 'ok', checks: { database: 'up' } });
     expect((await request.get('/api/auth/me')).status()).toBe(200);
     const login = await browser.newContext({ baseURL });
     const loginPage = await login.newPage();
