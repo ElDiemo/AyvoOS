@@ -27,7 +27,8 @@
 #                                                         restored if the new one fails), then require
 #                                                         the released site over valid HTTPS (apex+www)
 #   scripts/deploy-prod.sh --marketing-rollback <release> start an earlier marketing image again (the
-#                                                         same strict checks)
+#                                                         same strict checks); <release> =
+#                                                         <revision12>-<image12> from marketing.log
 #
 # <commit> is a full 40-character commit that is already on origin/main (merged = approved). The
 # images are built from a clean `git archive` of exactly that commit — never from a working copy.
@@ -105,7 +106,7 @@ die() {
   printf '\033[1;31mFAILED\033[0m at "%s": %s\n' "$STEP" "$*" >&2
   exit 1
 }
-usage() { sed -n '2,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 on_exit() {
   local code=$?
@@ -474,7 +475,13 @@ load_marketing_image() {
   revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$loaded")"
   [[ $revision =~ ^[0-9a-f]{40}$ ]] || die "the image carries no source revision label"
   MARKETING_IMAGE_REVISION=$revision
-  MARKETING_RELEASE=${revision:0:12}
+  # The tag names the revision AND the image (review MKT70-R3): another build of the same revision
+  # never takes over an existing tag; an existing tag of another image is refused before any change.
+  MARKETING_RELEASE="${revision:0:12}-${id:7:12}"
+  local existing
+  existing="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/marketing:$MARKETING_RELEASE" 2>/dev/null || true)"
+  [[ -z $existing || $existing == "$id" ]] ||
+    die "$IMAGE_PREFIX/marketing:$MARKETING_RELEASE already names image $existing: refused"
   docker tag "$id" "$IMAGE_PREFIX/marketing:$MARKETING_RELEASE" || die "cannot tag the accepted image"
   ok "image $id (revision $revision) loaded as $IMAGE_PREFIX/marketing:$MARKETING_RELEASE"
 }
@@ -499,7 +506,7 @@ recorded_marketing() {
 # previous image is started again and checked, and the step fails — the outage lasts from the
 # switch to the restore.
 start_marketing() {
-  local image=$1 digest=$2 previous=${MARKETING_PREVIOUS:-}
+  local image=$1 digest=$2 previous_image=${MARKETING_PREVIOUS_IMAGE:-} restore
   STEP="start only the marketing container ($MARKETING_RELEASE)"
   log "$STEP"
   if compose up -d --no-build --no-deps marketing && wait_healthy marketing &&
@@ -508,15 +515,21 @@ start_marketing() {
     ok "marketing $MARKETING_RELEASE running: image $image, content $digest"
     return 0
   fi
-  if [[ -n $previous && $previous != "$MARKETING_RELEASE" ]]; then
-    warn "the new marketing container failed: restoring $previous"
-    MARKETING_RELEASE=$previous
-    if compose up -d --no-build --no-deps marketing && wait_healthy marketing; then
-      die "the marketing release did not start; the previous release $previous runs again"
+  # Restore by the previous container's image ID (captured before anything was loaded or tagged),
+  # under a tag made from that ID — never by a tag that could name another image by now.
+  if [[ -n $previous_image && $previous_image != "$image" ]]; then
+    restore="restore-${previous_image:7:12}"
+    docker tag "$previous_image" "$IMAGE_PREFIX/marketing:$restore" ||
+      die "the marketing release did not start AND the previous image $previous_image is gone: the site is unavailable"
+    warn "the new marketing container failed: restoring image $previous_image"
+    MARKETING_RELEASE=$restore
+    if compose up -d --no-build --no-deps marketing && wait_healthy marketing &&
+      [[ $(docker inspect --format '{{.Image}}' "$PROJECT-marketing-1" 2>/dev/null) == "$previous_image" ]]; then
+      die "the marketing release did not start; the previous image $previous_image runs again"
     fi
-    die "the marketing release did not start AND the previous release $previous did not come back: the site is unavailable"
+    die "the marketing release did not start AND the previous image $previous_image did not come back: the site is unavailable"
   fi
-  die "the marketing release did not start (no previous release to restore): the site is unavailable"
+  die "the marketing release did not start (no other previous image to restore): the site is unavailable"
 }
 
 # --- deploy steps -----------------------------------------------------------------------------
@@ -986,6 +999,8 @@ case $MODE in
     AYVO_RELEASE=$PREVIOUS
     [[ -f $(release_dir "$AYVO_RELEASE")/deploy/prod/compose.marketing.yml ]] ||
       die "the running OS release $AYVO_RELEASE has no compose.marketing.yml: deploy an OS release with it first"
+    # The running image's ID before anything is loaded or tagged (the restore point).
+    MARKETING_PREVIOUS_IMAGE="$(docker inspect --format '{{.Image}}' "$PROJECT-marketing-1" 2>/dev/null || true)"
     MARKETING_PREVIOUS=$MARKETING_RELEASE
     log "marketing image $EXPECT_IMAGE at $(date -u +%FT%TZ) (OS stays $AYVO_RELEASE; marketing now: ${MARKETING_PREVIOUS:-nothing})"
     load_marketing_image "$IMAGE_ARCHIVE" "$EXPECT_IMAGE"
@@ -1002,13 +1017,14 @@ case $MODE in
     ok "the marketing site runs $MARKETING_RELEASE ($EXPECT_IMAGE); the OS was not restarted"
     ;;
   marketing-rollback)
-    [[ $MARKETING_ROLLBACK =~ ^[0-9a-f]{12}$ ]] || die "--marketing-rollback needs the 12-character release of an earlier marketing deployment"
+    [[ $MARKETING_ROLLBACK =~ ^[0-9a-f]{12}-[0-9a-f]{12}$ ]] || die "--marketing-rollback needs the release <revision12>-<image12> of an earlier marketing deployment"
     [[ -n $PREVIOUS ]] || die "production is not running"
     AYVO_RELEASE=$PREVIOUS
     read -r image digest <<<"$(recorded_marketing "$MARKETING_ROLLBACK")" || true
     [[ -n ${image:-} && -n ${digest:-} ]] || die "no successful release $MARKETING_ROLLBACK is recorded"
     [[ $(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/marketing:$MARKETING_ROLLBACK" 2>/dev/null) == "$image" ]] ||
       die "image $IMAGE_PREFIX/marketing:$MARKETING_ROLLBACK is gone or is not the recorded $image"
+    MARKETING_PREVIOUS_IMAGE="$(docker inspect --format '{{.Image}}' "$PROJECT-marketing-1" 2>/dev/null || true)"
     MARKETING_PREVIOUS=$MARKETING_RELEASE
     MARKETING_RELEASE=$MARKETING_ROLLBACK
     log "marketing rollback to $MARKETING_ROLLBACK (OS stays $AYVO_RELEASE)"

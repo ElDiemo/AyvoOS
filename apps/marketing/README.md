@@ -45,5 +45,5 @@ Dockerfile             the image (read-only, unprivileged)
    `compose.marketing.yml` → the edge is PREPARED; the certificates of apex and www are obtained
    (challenge-only forward on the old server); copy the archive to the server, then
    `scripts/deploy-prod.sh --marketing --image-archive <file> --expect-image <id> --expect-digest
-<digest>` — SUCCESS only with valid HTTPS on both names. Rollback: `--marketing-rollback <release>`.
+<digest>` — SUCCESS only with valid HTTPS on both names. Rollback: `--marketing-rollback <revision12>-<image12>` (the release recorded as SUCCESS).
 3. The content digest of a checkout: `sh apps/marketing/site-digest.sh apps/marketing/Caddyfile apps/marketing/site`.

@@ -61,12 +61,21 @@
   refuses any other image ID (a changed Dockerfile or base with the same content has another ID —
   tested), requires the revision to be on origin/main, and checks the served files' content digest
   (`apps/marketing/site-digest.sh`, also computed in the running container) as an additional check.
+  The PROD tag is `<revision12>-<image12>` (review MKT70-R3): another build of the same revision
+  gets its own tag and never takes over an existing one; an existing tag naming another image is
+  refused before anything is loaded under it.
 - **A failed switch:** Compose removes the running container before the new one is healthy (no
   blue/green). If the new container does not become healthy with the expected image and content,
-  the deploy step starts the previous image again, checks it and fails; the site is unavailable
-  from the switch until the previous one is healthy (seconds: the health check probes every second
-  while starting). If the previous one does not come back either, the step says so. Tested with a
-  wrong artifact and a container that never becomes healthy.
+  the deploy step starts the previous image again — by the running container's image ID, captured
+  before anything is loaded or tagged (MKT70-R3) — checks it and fails. The site is unavailable
+  from the switch until the previous one is healthy: the failed start can take up to the health
+  wait (`wait_healthy`, up to 180 s on PROD), then the previous image's own start. If the previous
+  one does not come back either, the step says so. Tested with a wrong artifact, a container that
+  never becomes healthy, and a second build of the same revision.
+- **Failure domains (named, shared):** the host/VPS and the public edge in front of the site
+  (qr-edge, the internal Caddy, Docker on that host) are shared with QR/ID/OS — their outage takes
+  the site down with everything else on that host. The OS API, web, PostgreSQL, Redis and identity
+  are not dependencies (the site keeps answering without them).
 - **Prepared ≠ released** (review MKT70-R2). An OS deployment with `MARKETING_DOMAIN` only
   PREPARES the edge: its :80 answers are required, HTTPS is reported as the named state
   "PREPARED, NOT LIVE" (certificates pending or site not deployed) — never success. `--marketing`

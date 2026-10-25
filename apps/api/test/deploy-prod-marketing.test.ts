@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * The marketing release steps of scripts/deploy-prod.sh (ADR 0040; review MKT70-R1/R2), run as
+ * The marketing release steps of scripts/deploy-prod.sh (ADR 0040; review MKT70-R1/R2/R3), run as
  * the real functions taken from the script (only `curl`/`docker compose` are given test doubles
  * where the network or a production project would be needed):
  * - verify_marketing_release refuses no TLS, a TLS error, 503 and a wrong www answer — nothing
@@ -15,7 +15,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * - load_marketing_image accepts exactly the accepted image ID: the same content built with a
  *   changed Dockerfile is refused (Docker, CI or AYVO_DOCKER_TESTS=1);
  * - start_marketing: a wrong artifact or a container that never becomes healthy restores the
- *   previous image (real Compose on a throwaway project; Docker as above).
+ *   previous image by its image ID — also when the new build has the same source revision
+ *   (real Compose on a throwaway project; Docker as above).
  */
 const root = resolve(import.meta.dirname, '../../..');
 const script = readFileSync(join(root, 'scripts/deploy-prod.sh'), 'utf8');
@@ -194,13 +195,15 @@ describe.skipIf(!WANT_DOCKER)('load_marketing_image: exactly the accepted image 
   afterAll(() => {
     spawnSync('bash', [
       '-c',
-      `docker image rm -f ${images.a} ${images.b} ayvo-mk-test-${id}/marketing:${revision.slice(0, 12)} >/dev/null 2>&1`,
+      `docker image rm -f ${images.a} ${images.b} ayvo-mk-test-${id}/marketing:${revision.slice(0, 12)}-${a ? imageId(images.a).slice(7, 19) : 'none'} >/dev/null 2>&1`,
     ]);
   });
 
   it('the accepted archive loads and is tagged with its revision', () => {
     const res = load(a, imageId(images.a));
-    expect(res.stdout, res.stdout).toContain(`LOADED ${revision.slice(0, 12)}`);
+    expect(res.stdout, res.stdout).toContain(
+      `LOADED ${revision.slice(0, 12)}-${imageId(images.a).slice(7, 19)}`,
+    );
   });
 
   it('the same content with a changed Dockerfile is refused under the accepted identity', () => {
@@ -236,6 +239,8 @@ describe.skipIf(!WANT_DOCKER)(
       }).stdout.trim();
     let good = '';
     let goodDigest = '';
+    /** Further tags the tests create, removed after the container. */
+    const extra: string[] = [];
 
     beforeAll(() => {
       expect(
@@ -276,7 +281,8 @@ describe.skipIf(!WANT_DOCKER)(
       spawnSync('bash', [
         '-c',
         `docker rm -f ${project}-marketing-1 >/dev/null 2>&1; ` +
-          `docker network rm ${project}_marketing >/dev/null 2>&1; docker image rm -f ${image('good')} ${image('wrong')} ${image('broken')} >/dev/null 2>&1`,
+          `docker network rm ${project}_marketing >/dev/null 2>&1; docker image rm -f ${image('good')} ${image('wrong')} ${image('broken')} >/dev/null 2>&1; ` +
+          `docker image rm -f ayvo-prod/marketing:restore-${good.slice(7, 19)} ${extra.join(' ')} >/dev/null 2>&1`,
       ]);
     });
 
@@ -298,9 +304,9 @@ compose() {
 wait_healthy() { local i s; for ((i = 0; i < 20; i++)); do s=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q "$1")" 2>/dev/null || true); [[ $s == healthy ]] && return 0; sleep 1; done; return 1; }
 running_marketing_digest() { docker exec "$PROJECT-marketing-1" site-digest /etc/caddy/Caddyfile /srv; }
 sed() { command sed "$@"; }
-MARKETING_RELEASE=${tagOf(tag)}; MARKETING_PREVIOUS=${previous ? tagOf(previous) : ''}
-IMAGE_PREFIX=${prefix}
-${fn('start_marketing').replace(/\$IMAGE_PREFIX/g, prefix)}
+MARKETING_RELEASE=${tagOf(tag)}; MARKETING_PREVIOUS_IMAGE=${previous}
+IMAGE_PREFIX=ayvo-prod
+${fn('start_marketing')}
 start_marketing ${expected} ${goodDigest}; echo "EXIT $?"`,
       );
     const running = () =>
@@ -315,19 +321,118 @@ start_marketing ${expected} ${goodDigest}; echo "EXIT $?"`,
     }, 120_000);
 
     it('a wrong artifact (other content) is replaced by the previous image again; the step fails', () => {
-      const res = start('wrong', idOf(image('wrong')), 'good');
+      const res = start('wrong', idOf(image('wrong')), good);
       expect(res.status).toBe(1);
       expect(res.stdout).toContain(
-        `DIE the marketing release did not start; the previous release ${tagOf('good')} runs again`,
+        `DIE the marketing release did not start; the previous image ${good} runs again`,
       );
       expect(running()).toBe(good);
     }, 120_000);
 
     it('a container that never becomes healthy: the previous image runs again; the step fails', () => {
-      const res = start('broken', idOf(image('broken')), 'good');
+      const res = start('broken', idOf(image('broken')), good);
       expect(res.status).toBe(1);
       expect(res.stdout).toContain('runs again');
       expect(running()).toBe(good);
     }, 120_000);
+
+    it('the same source revision with another image ID never takes over the running one; a failed switch restores it (MKT70-R3)', () => {
+      // The running image and a second (broken) build of the SAME revision, loaded from its
+      // archive with the script's own load_marketing_image, then switched to and failing.
+      const revision = 'b'.repeat(40);
+      const labelled = (name: string, from: string) => {
+        writeFileSync(
+          join(dir, `Dockerfile.${name}`),
+          `FROM ${from}\nLABEL org.opencontainers.image.revision=${revision}\n`,
+        );
+        expect(
+          spawnSync('docker', [
+            'build',
+            '-q',
+            '-t',
+            image(name),
+            '-f',
+            join(dir, `Dockerfile.${name}`),
+            dir,
+          ]).status,
+        ).toBe(0);
+        return idOf(image(name));
+      };
+      const first = labelled('rev1', image('good'));
+      const second = labelled('rev2', image('broken'));
+      expect(second).not.toBe(first);
+      // The first build is what an earlier --marketing started (its tag from load_marketing_image).
+      const firstTag = `${revision.slice(0, 12)}-${first.slice(7, 19)}`;
+      extra.push(
+        `ayvo-prod/marketing:${firstTag}`,
+        `ayvo-prod/marketing:${revision.slice(0, 12)}-${second.slice(7, 19)}`,
+        `ayvo-prod/marketing:restore-${first.slice(7, 19)}`,
+        image('rev1'),
+        image('rev2'),
+      );
+      expect(spawnSync('docker', ['tag', first, `ayvo-prod/marketing:${firstTag}`]).status).toBe(0);
+      expect(start('rev1', first, '').stdout).toContain('EXIT 0');
+      const archive = join(dir, 'rev2.tar.gz');
+      expect(
+        spawnSync('bash', ['-c', `docker save ${image('rev2')} | gzip -n > ${archive}`]).status,
+      ).toBe(0);
+      chmodSync(archive, 0o644);
+      const res = bash(
+        `${HELPERS}
+PROJECT=${project}
+IMAGE_PREFIX=ayvo-prod
+${fn('load_marketing_image')}
+MARKETING_PREVIOUS_IMAGE="$(docker inspect --format '{{.Image}}' "$PROJECT-marketing-1")"
+load_marketing_image ${archive} ${second}
+echo "TAG $MARKETING_RELEASE"`,
+      );
+      expect(res.stdout, res.stdout).toContain(
+        `TAG ${revision.slice(0, 12)}-${second.slice(7, 19)}`,
+      );
+      // The earlier tag still names the first image: nothing was overwritten before the start.
+      expect(idOf(`ayvo-prod/marketing:${firstTag}`)).toBe(first);
+      spawnSync('docker', ['tag', second, image('rev2')]);
+      const swap = start('rev2', second, first);
+      expect(swap.status).toBe(1);
+      expect(swap.stdout).toContain(`the previous image ${first} runs again`);
+      expect(running()).toBe(first);
+    }, 240_000);
+
+    it('an existing tag naming another image is refused before anything is changed (MKT70-R3)', () => {
+      // A labelled build whose tag (revision + image ID) is already taken by another image.
+      const archive = join(dir, 'revc.tar.gz');
+      const revision = 'c'.repeat(40);
+      writeFileSync(
+        join(dir, 'Dockerfile.revc'),
+        `FROM ${image('good')}\nLABEL org.opencontainers.image.revision=${revision}\n`,
+      );
+      expect(
+        spawnSync('docker', [
+          'build',
+          '-q',
+          '-t',
+          image('revc'),
+          '-f',
+          join(dir, 'Dockerfile.revc'),
+          dir,
+        ]).status,
+      ).toBe(0);
+      const revc = idOf(image('revc'));
+      const tag = `ayvo-prod/marketing:${revision.slice(0, 12)}-${revc.slice(7, 19)}`;
+      extra.push(tag, image('revc'));
+      expect(spawnSync('docker', ['tag', image('wrong'), tag]).status).toBe(0);
+      expect(
+        spawnSync('bash', ['-c', `docker save ${image('revc')} | gzip -n > ${archive}`]).status,
+      ).toBe(0);
+      chmodSync(archive, 0o644);
+      const res = bash(
+        `${HELPERS}\nIMAGE_PREFIX=ayvo-prod\n${fn('load_marketing_image')}\nload_marketing_image ${archive} ${revc}; echo LOADED`,
+      );
+      expect(res.status).toBe(1);
+      expect(res.stdout).toContain(
+        `DIE ${tag} already names image ${idOf(image('wrong'))}: refused`,
+      );
+      expect(idOf(tag)).toBe(idOf(image('wrong')));
+    }, 240_000);
   },
 );
