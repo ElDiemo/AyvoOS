@@ -47,7 +47,8 @@ export interface RbPremiumConfig {
   caFile: string | null;
   accounts: RbAccount[];
   timeoutMs: number;
-  /** One run's in-memory bounds (review N3B75-R1). */
+  /** One run's deadline and in-memory bounds (review N3B75-R1/R2). */
+  runDeadlineMs: number;
   maxWindowBytes: number;
   maxWindowEntries: number;
   /** Pause before retry n (1-based), in ms. */
@@ -70,6 +71,7 @@ export function rbPremiumConfig(env: FinanceEnv): RbPremiumConfig | null {
       return { accountNumber, currency };
     }),
     timeoutMs: env.RB_PREMIUM_TIMEOUT_MS,
+    runDeadlineMs: env.RB_PREMIUM_RUN_DEADLINE_MS,
     maxWindowBytes: env.RB_PREMIUM_MAX_WINDOW_BYTES,
     maxWindowEntries: env.RB_PREMIUM_MAX_WINDOW_ENTRIES,
     retryDelayMs: (n) => env.RB_PREMIUM_RETRY_BASE_MS * 2 ** (n - 1),
@@ -117,11 +119,15 @@ export function certificateState(cfg: RbPremiumConfig | null): {
 
 type Answer = { status: number; body: string; bytes: number };
 
-/** What one request may still use of its run: bytes of the window left. */
+/** What one request may still use of its run: bytes of the window left, and the run's deadline. */
 export interface RequestBudget {
   maxBytes: number;
+  /** Epoch ms. */
+  deadline: number;
 }
 
+const runTimeout = () =>
+  new BankFailure('RUN_TIMEOUT', 'Načtení nestihlo skončit v časovém limitu; nic nebylo uloženo.');
 const tooMuchData = () =>
   new BankFailure(
     'TOO_MUCH_DATA',
@@ -134,7 +140,7 @@ export class RbPremiumClient {
   /**
    * One page of posted transactions (including intraday) of the account × currency between two
    * days (the bank's own day boundaries, CET). 204 = no such page / nothing. Never reads more than
-   * the budget's bytes.
+   * the budget's bytes and never waits past its deadline (pauses before retries included).
    */
   async transactions(
     account: RbAccount,
@@ -160,12 +166,15 @@ export class RbPremiumClient {
 
   private async getWithRetry(url: URL, budget: RequestBudget): Promise<Answer> {
     for (let attempt = 0; ; attempt++) {
+      const left = budget.deadline - Date.now();
+      if (left <= 0) throw runTimeout();
       let answer: Answer | null = null;
       let networkFailure: string | null = null;
       try {
-        answer = await this.get(url, this.cfg.timeoutMs, budget.maxBytes);
+        answer = await this.get(url, Math.min(this.cfg.timeoutMs, left), budget.maxBytes);
       } catch (e) {
         if (e instanceof BankFailure) throw e;
+        if (Date.now() >= budget.deadline) throw runTimeout();
         networkFailure = e instanceof Error && e.message === 'timeout' ? 'timeout' : 'network';
       }
       const retryable = answer === null || answer.status === 429 || answer.status >= 500;
@@ -182,7 +191,9 @@ export class RbPremiumClient {
               : 'Spojení s bankou selhalo.',
         );
       }
-      await new Promise((r) => setTimeout(r, this.cfg.retryDelayMs(attempt + 1)));
+      const pause = this.cfg.retryDelayMs(attempt + 1);
+      if (Date.now() + pause >= budget.deadline) throw runTimeout();
+      await new Promise((r) => setTimeout(r, pause));
     }
   }
 

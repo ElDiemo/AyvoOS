@@ -369,6 +369,83 @@ describe.skipIf(!hasDatabase)('finance bank transactions (N3B-1, simulated RB Pr
     });
   });
 
+  it('one deadline per run (review N3B75-R2): a bank that never answers ends the run in time, and nothing is asked afterwards', async () => {
+    const acc = accountNo();
+    bank.accounts.set(`${acc}/CZK`, [entry()]);
+    const f = await appWith(
+      bank.env(`${acc}:CZK`, { RB_PREMIUM_RUN_DEADLINE_MS: '1500', RB_PREMIUM_TIMEOUT_MS: '1000' }),
+    );
+    bank.faults.push('hang', 'hang', 'hang', 'hang');
+    const at = bank.requests.length;
+    const t0 = Date.now();
+    const [r] = (await sync(f)).runs;
+    expect([r!.status, r!.errorCode]).toEqual(['FAILED', 'RUN_TIMEOUT']);
+    expect(Date.now() - t0).toBeLessThan(4_000);
+    const asked = bank.requests.length - at;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(bank.requests.length - at).toBe(asked);
+    bank.faults.splice(0);
+  });
+
+  it('a live, paused run taken over after the lease (review N3B75-R2) reads no further page and writes nothing', async () => {
+    const acc = accountNo();
+    const key = { environment: 'TEST', accountNumber: acc, currency: 'CZK' };
+    bank.accounts.set(`${acc}/CZK`, [entry(), entry(), entry()]);
+    const f = await appWith(bank.env(`${acc}:CZK`, { RB_PREMIUM_TIMEOUT_MS: '8000' }));
+    const db = owner();
+    try {
+      // A asks for page 1 and is paused there by the bank.
+      const hold = bank.holdNext();
+      const at = bank.requests.length;
+      const first = f
+        .post(`${B}/sync`)
+        .send({})
+        .then((r) => r);
+      await hold.arrived;
+      // Controlled time: A's claim is now older than the lease; B takes the slot over.
+      await db.bankSyncSlot.update({
+        where: { environment_accountNumber_currency: key },
+        data: { claimedAt: new Date(Date.now() - 11 * 60_000) },
+      });
+      const second = await sync(f);
+      expect(second.runs[0]).toMatchObject({ status: 'SUCCEEDED', newCount: 3 });
+      const afterB = bank.requests.length;
+      // A is answered now (page 1 of 2): it must stop instead of asking for page 2 or storing.
+      hold.release();
+      const a = ((await first).body as BankSyncResult).runs[0]!;
+      expect([a.status, a.errorCode]).toEqual(['FAILED', 'ABANDONED']);
+      expect(bank.requests.length).toBe(afterB);
+      expect(bank.requests.length - at).toBe(1 + 2);
+      expect((await list(f, `?account=${acc}/CZK`)).total).toBe(3);
+
+      // Stale at the very end: A's paused page is the last one, the bank's content changed
+      // meanwhile — A's store is fenced, so no version 2 appears.
+      const one = accountNo();
+      const e = entry({ message: 'původní' });
+      bank.accounts.set(`${one}/CZK`, [e]);
+      const g = await appWith(bank.env(`${one}:CZK`, { RB_PREMIUM_TIMEOUT_MS: '8000' }));
+      const hold2 = bank.holdNext();
+      const firstG = g
+        .post(`${B}/sync`)
+        .send({})
+        .then((r) => r);
+      await hold2.arrived;
+      await db.bankSyncSlot.update({
+        where: { environment_accountNumber_currency: { ...key, accountNumber: one } },
+        data: { claimedAt: new Date(Date.now() - 11 * 60_000) },
+      });
+      expect((await sync(g)).runs[0]).toMatchObject({ status: 'SUCCEEDED', newCount: 1 });
+      bank.accounts.set(`${one}/CZK`, [{ ...e, message: 'změněno po převzetí' }]);
+      hold2.release();
+      const a2 = ((await firstG).body as BankSyncResult).runs[0]!;
+      expect([a2.status, a2.errorCode]).toEqual(['FAILED', 'ABANDONED']);
+      const [t] = (await list(g, `?account=${one}/CZK`)).items;
+      expect(t).toMatchObject({ version: 1, message: 'původní' });
+    } finally {
+      await db.$disconnect();
+    }
+  });
+
   it('append-only: transactions and versions never change; a finished run never changes; the runtime role cannot delete', async () => {
     const acc = accountNo();
     bank.accounts.set(`${acc}/CZK`, [entry()]);
@@ -474,6 +551,11 @@ describe.skipIf(!hasDatabase)('finance bank transactions (N3B-1, simulated RB Pr
       'RB_PREMIUM_BASE_URL_FOR_TESTS',
     );
     fails({ APP_ENV: 'development', RB_PREMIUM_ENVIRONMENT: 'sandbox' }, 'RB_PREMIUM_P12_FILE');
+    // A run's deadline stays well inside the 10-minute lease.
+    fails(
+      { APP_ENV: 'development', RB_PREMIUM_RUN_DEADLINE_MS: '600000' },
+      'RB_PREMIUM_RUN_DEADLINE_MS',
+    );
     fails(
       {
         APP_ENV: 'development',

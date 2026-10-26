@@ -65,6 +65,12 @@ export const financeEnvSchema = z
     /** One request to the bank (connect + answer). */
     RB_PREMIUM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
     /**
+     * One run (one account × currency): all its requests, pauses and retries end by this deadline
+     * — well inside the slot lease (10 min) together with storing (≤ 2 min), so a live run is
+     * never taken over (review N3B75-R2).
+     */
+    RB_PREMIUM_RUN_DEADLINE_MS: z.coerce.number().int().min(1_000).max(360_000).default(300_000),
+    /**
      * What one run may hold in memory before storing (review N3B75-R1): the answers' bytes
      * together and the number of entries. Exceeded → FAILED TOO_MUCH_DATA, nothing stored.
      */

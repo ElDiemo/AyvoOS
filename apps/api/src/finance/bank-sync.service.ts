@@ -31,8 +31,16 @@ const MAX_DAYS_BACK = 89;
 const OVERLAP_DAYS = 7;
 /** At most this many pages per run (the bank's own maximum page is 99999). */
 const MAX_PAGES = 200;
-/** A run holding its slot longer than this is treated as abandoned (process ended mid-run). */
+/**
+ * A run holding its slot longer than this is treated as abandoned (process ended mid-run). A live
+ * run ends its reading by RB_PREMIUM_RUN_DEADLINE_MS (≤ 6 min) and stores within 2 min, so it is
+ * never taken over while alive; should it be anyway, fencing stops it (review N3B75-R2).
+ */
 const LEASE_MS = 10 * 60_000;
+const STORE_TIMEOUT_MS = 120_000;
+
+/** This run no longer holds its slot (taken over after the lease): it reads and writes nothing more. */
+class StaleRun extends Error {}
 const PAGE_SIZE = 50;
 
 const day = (d: Date) => d.toISOString().slice(0, 10);
@@ -122,7 +130,8 @@ export class BankSyncService {
   ): Promise<BankSyncRun> {
     const started = await this.claim(cfg, account, caller);
     // Everything this run reads is bounded before it is kept: bytes and entries of the whole
-    // window (N3B75-R1).
+    // window (N3B75-R1) and one deadline for all requests and pauses (N3B75-R2).
+    const deadline = Date.now() + cfg.runDeadlineMs;
     try {
       const entries: BankEntry[] = [];
       let pages = 0;
@@ -134,12 +143,13 @@ export class BankSyncService {
             'TOO_MANY_PAGES',
             `Více než ${MAX_PAGES} stran pohybů v jednom načtení; nic nebylo uloženo.`,
           );
+        await this.assertHolding(started.id);
         const res = await client.transactions(
           account,
           day(started.fromDate),
           day(started.toDate),
           page,
-          { maxBytes: cfg.maxWindowBytes - bytes },
+          { maxBytes: cfg.maxWindowBytes - bytes, deadline },
         );
         bytes += res.bytes;
         if (entries.length + res.entries.length > cfg.maxWindowEntries)
@@ -153,18 +163,32 @@ export class BankSyncService {
       }
       return run(await this.store(cfg, started, entries, pages));
     } catch (e) {
+      // Taken over: the run that took the slot already finished this one as ABANDONED.
+      if (e instanceof StaleRun)
+        return run(await this.prisma.bankSyncRun.findUniqueOrThrow({ where: { id: started.id } }));
       const failure =
         e instanceof BankFailure
           ? e
           : new BankFailure('UNEXPECTED_RESPONSE', 'Načtení selhalo neočekávanou chybou.');
       if (!(e instanceof BankFailure)) this.logger.error(`Bank run ${started.id} failed`, e);
-      return run(
-        await this.finish(started.id, 'FAILED', {
-          errorCode: failure.code,
-          errorDetail: failure.detail,
-        }),
-      );
+      try {
+        return run(
+          await this.finish(started.id, 'FAILED', {
+            errorCode: failure.code,
+            errorDetail: failure.detail,
+          }),
+        );
+      } catch (f) {
+        if (!(f instanceof StaleRun)) throw f;
+        return run(await this.prisma.bankSyncRun.findUniqueOrThrow({ where: { id: started.id } }));
+      }
     }
+  }
+
+  /** Between pages: stop at once if the slot was taken over (no further request to the bank). */
+  private async assertHolding(runId: string): Promise<void> {
+    const held = await this.prisma.bankSyncSlot.count({ where: { runningRunId: runId } });
+    if (held === 0) throw new StaleRun();
   }
 
   /**
@@ -255,6 +279,7 @@ export class BankSyncService {
     };
     return this.prisma.$transaction(
       async (tx) => {
+        await lockHeldSlot(tx, started.id);
         let created = 0;
         let changed = 0;
         for (const [entryReference, versions] of byRef) {
@@ -285,7 +310,7 @@ export class BankSyncService {
           changedCount: changed,
         });
       },
-      { maxWait: 20_000, timeout: 120_000 },
+      { maxWait: 20_000, timeout: STORE_TIMEOUT_MS },
     );
   }
 
@@ -294,7 +319,10 @@ export class BankSyncService {
     status: 'SUCCEEDED' | 'FAILED',
     data: Prisma.BankSyncRunUpdateInput,
   ): Promise<RunRow> {
-    return this.prisma.$transaction((tx) => this.finishIn(tx, id, status, data));
+    return this.prisma.$transaction(async (tx) => {
+      await lockHeldSlot(tx, id);
+      return this.finishIn(tx, id, status, data);
+    });
   }
 
   private async finishIn(
@@ -353,6 +381,18 @@ export class BankSyncService {
       total: count?.total ?? 0,
     };
   }
+}
+
+/**
+ * Fencing (review N3B75-R2): inside the storing / finishing transaction the slot must still name
+ * this run; it is locked until commit, so a takeover cannot slip in between. Otherwise nothing of
+ * this run is written (the transaction rolls back).
+ */
+async function lockHeldSlot(tx: Prisma.TransactionClient, runId: string): Promise<void> {
+  const held = await tx.$queryRaw<{ n: number }[]>`
+    SELECT 1 AS n FROM "finance"."bank_sync_slots" WHERE "running_run_id" = ${runId}::uuid
+    FOR UPDATE`;
+  if (held.length === 0) throw new StaleRun();
 }
 
 interface ListRow {

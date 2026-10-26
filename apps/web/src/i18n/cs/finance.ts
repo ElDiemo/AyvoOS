@@ -222,6 +222,7 @@ export const financeCs = {
       TOO_MANY_PAGES: 'Příliš mnoho pohybů najednou. Nic nebylo uloženo.',
       TOO_MUCH_DATA:
         'Odpovědi banky překročily povolený objem jednoho načtení. Nic nebylo uloženo.',
+      RUN_TIMEOUT: 'Načtení nestihlo skončit v časovém limitu. Nic nebylo uloženo.',
       ABANDONED: 'Načítání bylo přerušeno (např. restart). Nic z něj nebylo uloženo.',
     },
     list: {

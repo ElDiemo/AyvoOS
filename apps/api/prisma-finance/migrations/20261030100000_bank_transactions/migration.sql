@@ -29,7 +29,7 @@ CREATE TABLE "finance"."bank_sync_runs" (
   "error_code" text CHECK ("error_code" IS NULL OR "error_code" IN (
     'NOT_CONFIGURED', 'CERTIFICATE_UNUSABLE', 'CERTIFICATE_REJECTED', 'INSUFFICIENT_RIGHTS',
     'ACCOUNT_NOT_FOUND', 'REQUEST_REJECTED', 'RATE_LIMITED', 'BANK_UNAVAILABLE',
-    'UNEXPECTED_RESPONSE', 'TOO_MANY_PAGES', 'TOO_MUCH_DATA', 'ABANDONED')),
+    'UNEXPECTED_RESPONSE', 'TOO_MANY_PAGES', 'TOO_MUCH_DATA', 'RUN_TIMEOUT', 'ABANDONED')),
   -- A short, secret-free explanation (never a certificate, password, client id or raw body).
   "error_detail" text CHECK ("error_detail" IS NULL OR length("error_detail") <= 500),
   CHECK (("status" = 'RUNNING') = ("finished_at" IS NULL)),

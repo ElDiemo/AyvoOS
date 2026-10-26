@@ -68,9 +68,11 @@ Source: the Swagger definitions embedded in developers.rb.cz (Production and San
    `BANK_UNAVAILABLE`, `UNEXPECTED_RESPONSE`, `TOO_MANY_PAGES`, `ABANDONED`. A connection reset is
    reported as unavailable — never guessed to be the certificate.
 
-Bounds of one run (review N3B75-R1):
+Bounds of one run (reviews N3B75-R1/R2):
 
 - **Memory:** the answers of a window together may hold at most `RB_PREMIUM_MAX_WINDOW_BYTES` (32 MiB) and `RB_PREMIUM_MAX_WINDOW_ENTRIES` (20 000). Each answer is read only up to what is left of the window budget. Exceeded → FAILED `TOO_MUCH_DATA`, nothing stored.
+- **Time:** all requests, pauses and retries of a run end by `RB_PREMIUM_RUN_DEADLINE_MS` (5 min, at most 6). Exceeded → FAILED `RUN_TIMEOUT`. Together with storing (≤ 2 min) this stays inside the 10-minute lease, so a live run is not taken over.
+- **Fencing:** should a run be taken over anyway, it checks its slot before every page and locks it in the storing and finishing transaction. A stale run asks the bank nothing more and writes nothing; it stays ABANDONED.
 
 Reads are started by a person (`finance:bank_sync`); a schedule is a later, separate decision.
 

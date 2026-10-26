@@ -63,6 +63,7 @@ export class FakeRb {
   readonly requests: { path: string; query: URLSearchParams; clientId: string | undefined }[] = [];
   /** Bytes of every body sent (to show that each page alone was within a limit). */
   readonly responseBytes: number[] = [];
+  private pendingHold: { arrived: () => void; released: Promise<void> } | null = null;
   /** A raw body for the next 200 answer (malformed answers). */
   rawNext: string | null = null;
   private server: Server | null = null;
@@ -148,6 +149,19 @@ export class FakeRb {
     return join(this.dir, name);
   }
 
+  /**
+   * The next request waits (a live, paused run) until `release()`; it is then answered from the
+   * data as they are at that moment.
+   */
+  holdNext(): { arrived: Promise<void>; release: () => void } {
+    let arrived!: () => void;
+    let release!: () => void;
+    const arrivedP = new Promise<void>((r) => (arrived = r));
+    const released = new Promise<void>((r) => (release = r));
+    this.pendingHold = { arrived, released };
+    return { arrived: arrivedP, release };
+  }
+
   get base() {
     const { port } = this.server!.address() as AddressInfo;
     return `https://localhost:${port}${BASE_PATH}`;
@@ -180,7 +194,7 @@ export class FakeRb {
         requestCert: true,
         rejectUnauthorized: false,
       },
-      (req, res) => this.handle(req, res),
+      (req, res) => void this.handle(req, res),
     );
     await new Promise<void>((r) => this.server!.listen(0, '127.0.0.1', r));
   }
@@ -201,10 +215,16 @@ export class FakeRb {
     res.end(text);
   }
 
-  private handle(req: IncomingMessage, res: ServerResponse) {
+  private async handle(req: IncomingMessage, res: ServerResponse) {
     const url = new URL(req.url ?? '/', 'https://localhost');
     const clientId = req.headers['x-ibm-client-id'] as string | undefined;
     this.requests.push({ path: url.pathname, query: url.searchParams, clientId });
+    const hold = this.pendingHold;
+    if (hold) {
+      this.pendingHold = null;
+      hold.arrived();
+      await hold.released;
+    }
     if (!(req.socket as TLSSocket).authorized)
       return this.send(res, 401, { error: 'UNAUTHORISED' });
     const fault = this.faults.shift();

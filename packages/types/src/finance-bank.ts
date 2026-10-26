@@ -25,6 +25,7 @@ export const BANK_SYNC_ERRORS = [
   'UNEXPECTED_RESPONSE',
   'TOO_MANY_PAGES',
   'TOO_MUCH_DATA',
+  'RUN_TIMEOUT',
   'ABANDONED',
 ] as const;
 export const bankSyncErrorSchema = z.enum(BANK_SYNC_ERRORS);
