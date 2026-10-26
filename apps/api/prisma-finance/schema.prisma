@@ -372,3 +372,106 @@ model IssuerDefaultAccount {
   @@map("issuer_default_accounts")
   @@schema("finance")
 }
+
+/// One read of one account × currency from the bank (N3B-1, doc 041). DB: RUNNING → finished
+/// exactly once (trigger); never deleted.
+model BankSyncRun {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  provider      String
+  environment   String
+  accountNumber String    @map("account_number")
+  currency      String    @db.Char(3)
+  fromDate      DateTime  @map("from_date") @db.Date
+  toDate        DateTime  @map("to_date") @db.Date
+  status        String    @default("RUNNING")
+  startedAt     DateTime  @default(dbgenerated("clock_timestamp()")) @map("started_at") @db.Timestamptz(3)
+  startedBy     String    @map("started_by") @db.Uuid
+  startedByName String    @map("started_by_name")
+  finishedAt    DateTime? @map("finished_at") @db.Timestamptz(3)
+  pages         Int?
+  received      Int?
+  newCount      Int?      @map("new_count")
+  changedCount  Int?      @map("changed_count")
+  errorCode     String?   @map("error_code")
+  errorDetail   String?   @map("error_detail")
+
+  slots        BankSyncSlot[]
+  transactions BankTransaction[]
+  versions     BankTransactionVersion[]
+
+  @@index([environment, accountNumber, currency, startedAt], map: "bank_sync_runs_account_idx")
+  @@map("bank_sync_runs")
+  @@schema("finance")
+}
+
+/// Which run currently reads an account × currency (no overlapping runs). DB: never deleted.
+model BankSyncSlot {
+  environment   String
+  accountNumber String    @map("account_number")
+  currency      String    @db.Char(3)
+  runningRunId  String?   @map("running_run_id") @db.Uuid
+  claimedAt     DateTime? @map("claimed_at") @db.Timestamptz(3)
+
+  runningRun BankSyncRun? @relation(fields: [runningRunId], references: [id], onDelete: Restrict)
+
+  @@id([environment, accountNumber, currency])
+  @@map("bank_sync_slots")
+  @@schema("finance")
+}
+
+/// A bank entry, once per (environment, account, currency, entryReference). DB: append-only.
+model BankTransaction {
+  id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  environment    String
+  accountNumber  String   @map("account_number")
+  currency       String   @db.Char(3)
+  entryReference String   @map("entry_reference")
+  firstRunId     String   @map("first_run_id") @db.Uuid
+  firstSeenAt    DateTime @default(dbgenerated("clock_timestamp()")) @map("first_seen_at") @db.Timestamptz(3)
+
+  firstRun BankSyncRun              @relation(fields: [firstRunId], references: [id], onDelete: Restrict)
+  versions BankTransactionVersion[]
+
+  @@unique([environment, accountNumber, currency, entryReference])
+  @@map("bank_transactions")
+  @@schema("finance")
+}
+
+/// The content of a bank entry as the bank sent it; a different later answer is a new version.
+/// DB: append-only.
+model BankTransactionVersion {
+  transactionId             String    @map("transaction_id") @db.Uuid
+  version                   Int
+  runId                     String    @map("run_id") @db.Uuid
+  recordedAt                DateTime  @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  contentSha256             String    @map("content_sha256") @db.Char(64)
+  amount                    Decimal   @db.Decimal(19, 2)
+  amountCurrency            String    @map("amount_currency") @db.Char(3)
+  creditDebit               String    @map("credit_debit")
+  bookingDate               DateTime? @map("booking_date") @db.Timestamptz(3)
+  valueDate                 DateTime? @map("value_date") @db.Timestamptz(3)
+  bankTransactionCode       String    @map("bank_transaction_code")
+  endToEndId                String?   @map("end_to_end_id")
+  counterpartyName          String?   @map("counterparty_name")
+  counterpartyAccountPrefix String?   @map("counterparty_account_prefix")
+  counterpartyAccountNumber String?   @map("counterparty_account_number")
+  counterpartyBankCode      String?   @map("counterparty_bank_code")
+  counterpartyIban          String?   @map("counterparty_iban")
+  variableSymbol            String?   @map("variable_symbol")
+  constantSymbol            String?   @map("constant_symbol")
+  specificSymbol            String?   @map("specific_symbol")
+  message                   String?
+  originatorMessage         String?   @map("originator_message")
+  instructedAmount          Decimal?  @map("instructed_amount") @db.Decimal(19, 2)
+  instructedCurrency        String?   @map("instructed_currency") @db.Char(3)
+  /// Canonical JSON text as received (numbers exactly as sent).
+  raw                       String
+
+  transaction BankTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  run         BankSyncRun     @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@id([transactionId, version])
+  @@index([runId], map: "bank_transaction_versions_run_idx")
+  @@map("bank_transaction_versions")
+  @@schema("finance")
+}

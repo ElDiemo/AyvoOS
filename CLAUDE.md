@@ -133,6 +133,15 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   deleted) with one default per currency; every form names its version; `finance:issuer_manage`
   (ADMIN only, also for reading). Not the bank connection (doc 041). Issued invoices keep their
   own snapshot (N3A-2b).
+  Bank transactions (N3B-1, doc 041, owner 2026-10-26; table design subject to review): read only
+  from Raiffeisenbank Premium API (direct, mTLS P12 + `X-IBM-Client-Id`, URLs fixed in code; no
+  payment, batch or statement call), append-only entries once per (environment, account,
+  currency, `entryReference`) with versions when the bank changes one, sync runs finished exactly
+  once, one run per account (slot); amounts exact from the answer's text (never a float, >2
+  decimals refused). `RB_PREMIUM_ENVIRONMENT=production` only with APP_ENV=production, `test` (a
+  local simulation) only with APP_ENV=test; secrets only as mounted files, never in the env, DB,
+  web, logs or git. `finance:bank_read|bank_sync` ADMIN only. No pairing with invoices until the
+  issued-invoice model exists — never a substitute invoice list.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;

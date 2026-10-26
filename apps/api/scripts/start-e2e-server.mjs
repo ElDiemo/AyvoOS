@@ -11,7 +11,8 @@
 //   6. runs dist/main.js with a fresh temporary file store (scripts/e2e-storage.mjs) and the fake
 //      identity provider (APP_ENV=test),
 //   7. sets up the Finance unit's roles/schema/migrations and runs dist/finance/main.js next to it
-//      (ADR 0039; its own DB role, the core reached only through the internal contract).
+//      (ADR 0039; its own DB role, the core reached only through the internal contract) with a
+//      simulated RB Premium API for the bank transactions (test/support/fake-rb.ts).
 // Needs `pnpm build` and `pnpm infra:up`. Server credentials: AYVO_TEST_DATABASE_URL or the
 // repository .env DATABASE_URL.
 import { execFileSync, spawn } from 'node:child_process';
@@ -97,6 +98,58 @@ const { FakePpl } = await import(resolve(apiRoot, 'test/support/fake-ppl.ts'));
 const fakePpl = new FakePpl('e2e-fake-ppl-client', 'e2e-fake-ppl-secret-never-shown');
 await fakePpl.start();
 
+// A SIMULATED Raiffeisenbank Premium API (test/support/fake-rb.ts) for the browser tests of
+// Finance → Bankovní pohyby: its own CA and certificates per run, synthetic entries that live only
+// in the simulation (nothing is inserted into any database); the test-only URL and CA are refused
+// by Finance unless APP_ENV=test.
+const { FakeRb } = await import(resolve(apiRoot, 'test/support/fake-rb.ts'));
+const fakeRb = new FakeRb();
+await fakeRb.start();
+const e2eBankAccount = '1234567890';
+const bookedDaysAgo = (n) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - n);
+  return `${d.toISOString().slice(0, 10)}T09:30:00.000Z`;
+};
+fakeRb.accounts.set(`${e2eBankAccount}/CZK`, [
+  {
+    entryReference: 'E2E-RB-0001',
+    amount: '15000.50',
+    creditDebitIndication: 'CRDT',
+    bookingDate: bookedDaysAgo(1),
+    variable: '0012345',
+    message: 'TEST platba faktury (syntetická)',
+    counterParty: {
+      name: 'Testovací hotel s.r.o.',
+      accountNumberPrefix: '000019',
+      accountNumber: '2000145399',
+      bankCode: '0800',
+    },
+  },
+  {
+    entryReference: 'E2E-RB-0002',
+    amount: '-1668.59',
+    creditDebitIndication: 'DBIT',
+    bookingDate: bookedDaysAgo(2),
+    message: 'TEST odchozí platba (syntetická)',
+    counterParty: {
+      name: 'Testovací dodavatel a.s.',
+      accountNumber: '123456789',
+      bankCode: '0100',
+    },
+  },
+  {
+    entryReference: 'E2E-RB-0003',
+    amount: '320.00',
+    creditDebitIndication: 'CRDT',
+    bookingDate: bookedDaysAgo(5),
+    variable: '2026001',
+    constant: '0308',
+    message: 'TEST částečná úhrada (syntetická)',
+    counterParty: { name: 'Druhý testovací hotel', iban: 'CZ6508000000192000145399' },
+  },
+]);
+
 const testEnv = {
   ...process.env,
   APP_ENV: 'test',
@@ -162,6 +215,7 @@ const startFinance = () =>
       CORE_INTERNAL_URL: `http://localhost:${port}`,
       FINANCE_SERVICE_TOKEN: serviceToken,
       FILE_STORAGE_DIR: storageDir,
+      ...fakeRb.env(`${e2eBankAccount}:CZK`),
     },
   });
 let financeChild = startFinance();

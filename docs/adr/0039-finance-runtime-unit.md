@@ -172,3 +172,18 @@ Owner, 2026-10-25: hotel billing extends this unit; there is no new application 
    as a named risk until then.
 2. §5: Finance UI inside the shared web app (proposed) vs. a separate Finance web app.
 3. §7 budgets after measurement.
+
+## 10. Bank transactions in the Finance unit (N3B-1, 2026-10-26)
+
+The owner prioritised payments: the company's bank transactions are read by the Finance unit
+directly from Raiffeisenbank Premium API (no aggregator), read only. Details in doc 041.
+
+- **Inside the boundary:** schema `finance` (`bank_sync_runs`, `bank_sync_slots`,
+  `bank_transactions`, `bank_transaction_versions`), the runtime role appends entries and only
+  finishes its own runs (DB trigger); no core table is read, no core module imported.
+- **Outbound:** the Finance process is the only one that calls the bank — mTLS with the client
+  certificate (PKCS#12 + password) read from mounted files per use; production URL only with
+  APP_ENV=production. The bank being down is a FAILED run with its reason, never a hidden gap
+  and never a failure of the core.
+- **Not here:** pairing with invoices (comes on the issued-invoice model, N3A-2), payment
+  orders, statements, scheduled reads (manual first), uploading certificates through the web.
