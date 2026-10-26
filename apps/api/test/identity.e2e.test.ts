@@ -16,7 +16,7 @@ import {
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { ModulesContainer } from '@nestjs/core';
 import request, { type Response } from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ACCESS_METADATA, type AccessRule } from '../src/identity/access.decorators.js';
 import { bootstrapFirstAdmin } from '../src/identity/bootstrap.js';
 import {
@@ -855,6 +855,58 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     const after = await http().get('/api/admin/inventory/stock').set('Cookie', cookie);
     expect(after.status).toBe(401);
     expect(after.body.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('a session lasts a working day (owner 2026-10-26): 12 h idle slides with use, never past 24 h; the cookie says 24 h; revocation still acts at once', async () => {
+    const user = await createUser(['WAREHOUSE_OPERATOR']);
+    const stock = (cookie: string) =>
+      http().get('/api/admin/inventory/stock').set('Cookie', cookie);
+    const t0 = Date.now();
+    // Only the clock is moved (no fake timers): the server sees the time of day it would.
+    vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+    const at = (hours: number) => vi.setSystemTime(t0 + hours * 3_600_000);
+    try {
+      const res = await signIn(user.email);
+      const raw = ([] as string[])
+        .concat(res.headers['set-cookie'] ?? [])
+        .find((c) => c.startsWith('ayvo_session='))!;
+      expect(raw).toMatch(/Max-Age=86400(;|$)/);
+      const cookie = `ayvo_session=${cookieFrom(res, 'ayvo_session')}`;
+      // Used after almost 12 h of nothing, and again 11.5 h later: still signed in.
+      at(11.9);
+      expect((await stock(cookie)).status).toBe(200);
+      at(23.4);
+      expect((await stock(cookie)).status).toBe(200);
+      // 24 h after sign-in it ends, although it was used 40 minutes ago.
+      at(24.05);
+      const absolute = await stock(cookie);
+      expect([absolute.status, absolute.body.code]).toEqual([401, 'SESSION_EXPIRED']);
+
+      // Idle: signed in and left alone for more than 12 h.
+      at(30);
+      const idle = await session(user.email);
+      at(30 + 12.1);
+      const left = await stock(idle);
+      expect([left.status, left.body.code]).toEqual([401, 'SESSION_EXPIRED']);
+
+      // Inside the 24 h nothing is weakened: logout and deactivation act on the next request.
+      at(50);
+      const out = await session(user.email);
+      at(51);
+      await http().post('/api/auth/logout').set('Cookie', out).expect(200);
+      expect((await stock(out)).status).toBe(401);
+      const live = await session(user.email);
+      at(52);
+      expect((await stock(live)).status).toBe(200);
+      await t.prisma.user.update({
+        where: { id: user.id },
+        data: { status: 'DEACTIVATED', deactivatedAt: new Date(), deactivationReason: 'test' },
+      });
+      const gone = await stock(live);
+      expect([gone.status, gone.body.code]).toEqual([403, 'ACCOUNT_INACTIVE']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('state-changing requests from another origin are refused', async () => {

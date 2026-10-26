@@ -192,8 +192,9 @@ Intended scope when their modules are approved (not implemented):
 4. Success creates an AYVO session: 256 random bits in the `ayvo_session` cookie
    (`HttpOnly; Secure; SameSite=Lax; Path=/`), only its SHA-256 in the database; redirect to the
    safe `next` path (same-site paths only).
-5. Every request: session lookup → expiry (idle `SESSION_IDLE_MINUTES`, default 120; absolute
-   `SESSION_ABSOLUTE_HOURS`, default 12) → user status → roles, permissions and scopes **from the
+5. Every request: session lookup → expiry (idle `SESSION_IDLE_MINUTES`, default 720 = 12 h;
+   absolute `SESSION_ABSOLUTE_HOURS`, default 24 — owner 2026-10-26: a session lasts a working
+   day; before that 120 min / 12 h) → user status → roles, permissions and scopes **from the
    database**. A role change applies to the next request; a deactivation revokes all sessions in
    the same transaction.
 6. `POST /api/auth/logout` revokes the session, clears the cookie and returns the WorkOS logout URL
@@ -631,7 +632,7 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
   and database), identity mismatch refused, simultaneous first sign-ins link once, deactivated
   invited user refused, ADMIN-only endpoints, no enumeration; WorkOS adapter: bearer key
   server-side, token and link never kept, refused vs. ambiguous failures, no secrets in errors;
-  session defaults 120 min / 12 h. **Last administrator**: also refused by the
+  session defaults 12 h idle / 24 h absolute (owner 2026-10-26; originally 120 min / 12 h). **Last administrator**: also refused by the
   database at commit (single statement or transaction), catalogue TRUNCATE refused.
 - Playwright: sign-in redirects back to the requested page; anonymous API 401; unknown identity;
   administration (create, grant, revoke, deactivate with reasons and audit) and its immediate
@@ -669,7 +670,8 @@ environment values in the production secret store; `APP_PUBLIC_ORIGIN` of produc
   can record the outcome twice and answer the later caller with a wrong 409; and at first sign-in
   the invitation is marked `ACCEPTED` before the "identity already linked" check, so a refused
   link can leave an accepted invitation without a linked identity. Neither grants access.
-- Session lifetimes (120 minutes idle, 12 hours absolute) are configurable defaults.
+- Session lifetimes (12 hours idle, 24 hours absolute since 2026-10-26; 120 minutes / 12 hours
+  before) are configurable defaults.
 
 ## 12. Independent security review (2026-10-12)
 

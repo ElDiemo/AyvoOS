@@ -191,19 +191,22 @@ export const envSchema = z
         ),
       ),
 
-    // Application session lifetime: idle timeout and absolute maximum.
+    // Application session lifetime (owner 2026-10-26): a signed-in session lasts a working day —
+    // at most 24 h from sign-in (absolute), ended earlier only after 12 h without any request
+    // (idle). Sign-in itself stays password + TOTP; the MFA challenge, activation and reset links
+    // keep their own short lifetimes. Revocation, logout and deactivation still act at once.
     SESSION_IDLE_MINUTES: z.coerce
       .number()
       .int()
       .min(5)
       .max(24 * 60)
-      .default(120),
+      .default(12 * 60),
     SESSION_ABSOLUTE_HOURS: z.coerce
       .number()
       .int()
       .min(1)
       .max(7 * 24)
-      .default(12),
+      .default(24),
 
     // Carrier for shipping labels (doc 029). `none` until a real carrier adapter is configured
     // (PPL needs owner-provided test access); `test` — a fake carrier — only with APP_ENV=test.
