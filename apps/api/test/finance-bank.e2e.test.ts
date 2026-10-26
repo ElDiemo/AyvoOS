@@ -340,6 +340,35 @@ describe.skipIf(!hasDatabase)('finance bank transactions (N3B-1, simulated RB Pr
     }
   });
 
+  it('memory bound (review N3B75-R1): pages each within limits but together over the window budget fail the run, nothing stored', async () => {
+    const acc = accountNo();
+    const long = 'Syntetická zpráva '.repeat(20);
+    bank.accounts.set(
+      `${acc}/CZK`,
+      Array.from({ length: 6 }, () => entry({ message: long })),
+    );
+    const at = bank.responseBytes.length;
+    const f = await appWith(bank.env(`${acc}:CZK`, { RB_PREMIUM_MAX_WINDOW_BYTES: '2048' }));
+    const [r] = (await sync(f)).runs;
+    expect([r!.status, r!.errorCode]).toEqual(['FAILED', 'TOO_MUCH_DATA']);
+    const sent = bank.responseBytes.slice(at);
+    // Several pages were each acceptable alone; their sum was not — refused before keeping it.
+    expect(sent.length).toBeGreaterThanOrEqual(2);
+    expect(sent.every((b) => b < 2048)).toBe(true);
+    expect(sent.reduce((a, b) => a + b, 0)).toBeGreaterThan(2048);
+    expect((await list(f, `?account=${acc}/CZK`)).total).toBe(0);
+
+    // The number of entries is bounded the same way.
+    const g = await appWith(bank.env(`${acc}:CZK`, { RB_PREMIUM_MAX_WINDOW_ENTRIES: '3' }));
+    expect((await sync(g)).runs[0]).toMatchObject({ status: 'FAILED', errorCode: 'TOO_MUCH_DATA' });
+    expect((await list(g, `?account=${acc}/CZK`)).total).toBe(0);
+    // Within the bounds the same window is read and stored normally.
+    expect((await sync(await appWith(bank.env(`${acc}:CZK`)))).runs[0]).toMatchObject({
+      status: 'SUCCEEDED',
+      newCount: 6,
+    });
+  });
+
   it('append-only: transactions and versions never change; a finished run never changes; the runtime role cannot delete', async () => {
     const acc = accountNo();
     bank.accounts.set(`${acc}/CZK`, [entry()]);

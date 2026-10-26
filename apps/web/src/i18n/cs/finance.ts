@@ -220,6 +220,8 @@ export const financeCs = {
       BANK_UNAVAILABLE: 'Banka je teď nedostupná. Nic nebylo uloženo; zkuste to později.',
       UNEXPECTED_RESPONSE: 'Banka odpověděla nečekaně. Nic nebylo uloženo.',
       TOO_MANY_PAGES: 'Příliš mnoho pohybů najednou. Nic nebylo uloženo.',
+      TOO_MUCH_DATA:
+        'Odpovědi banky překročily povolený objem jednoho načtení. Nic nebylo uloženo.',
       ABANDONED: 'Načítání bylo přerušeno (např. restart). Nic z něj nebylo uloženo.',
     },
     list: {

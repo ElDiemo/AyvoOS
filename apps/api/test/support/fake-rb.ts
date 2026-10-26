@@ -61,6 +61,8 @@ export class FakeRb {
   readonly faults: Fault[] = [];
   /** Every request that reached the API (after the TLS handshake). */
   readonly requests: { path: string; query: URLSearchParams; clientId: string | undefined }[] = [];
+  /** Bytes of every body sent (to show that each page alone was within a limit). */
+  readonly responseBytes: number[] = [];
   /** A raw body for the next 200 answer (malformed answers). */
   rawNext: string | null = null;
   private server: Server | null = null;
@@ -193,8 +195,10 @@ export class FakeRb {
       res.writeHead(status).end();
       return;
     }
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    this.responseBytes.push(Buffer.byteLength(text));
     res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(typeof body === 'string' ? body : JSON.stringify(body));
+    res.end(text);
   }
 
   private handle(req: IncomingMessage, res: ServerResponse) {

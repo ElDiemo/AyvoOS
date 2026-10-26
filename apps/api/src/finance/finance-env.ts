@@ -64,6 +64,17 @@ export const financeEnvSchema = z
     ),
     /** One request to the bank (connect + answer). */
     RB_PREMIUM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
+    /**
+     * What one run may hold in memory before storing (review N3B75-R1): the answers' bytes
+     * together and the number of entries. Exceeded → FAILED TOO_MUCH_DATA, nothing stored.
+     */
+    RB_PREMIUM_MAX_WINDOW_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(64 * 1024 * 1024)
+      .default(32 * 1024 * 1024),
+    RB_PREMIUM_MAX_WINDOW_ENTRIES: z.coerce.number().int().min(1).max(50_000).default(20_000),
     /** Pause before the first retry (429 / 5xx / network); the second waits twice as long. */
     RB_PREMIUM_RETRY_BASE_MS: z.coerce.number().int().min(100).max(10_000).default(1_000),
     // Only for automated tests (a simulated bank with its own CA); refused unless APP_ENV=test.

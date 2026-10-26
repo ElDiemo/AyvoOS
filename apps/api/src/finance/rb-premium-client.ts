@@ -47,6 +47,9 @@ export interface RbPremiumConfig {
   caFile: string | null;
   accounts: RbAccount[];
   timeoutMs: number;
+  /** One run's in-memory bounds (review N3B75-R1). */
+  maxWindowBytes: number;
+  maxWindowEntries: number;
   /** Pause before retry n (1-based), in ms. */
   retryDelayMs: (attempt: number) => number;
 }
@@ -67,6 +70,8 @@ export function rbPremiumConfig(env: FinanceEnv): RbPremiumConfig | null {
       return { accountNumber, currency };
     }),
     timeoutMs: env.RB_PREMIUM_TIMEOUT_MS,
+    maxWindowBytes: env.RB_PREMIUM_MAX_WINDOW_BYTES,
+    maxWindowEntries: env.RB_PREMIUM_MAX_WINDOW_ENTRIES,
     retryDelayMs: (n) => env.RB_PREMIUM_RETRY_BASE_MS * 2 ** (n - 1),
   };
 }
@@ -110,29 +115,42 @@ export function certificateState(cfg: RbPremiumConfig | null): {
   }
 }
 
-type Answer = { status: number; body: string };
+type Answer = { status: number; body: string; bytes: number };
+
+/** What one request may still use of its run: bytes of the window left. */
+export interface RequestBudget {
+  maxBytes: number;
+}
+
+const tooMuchData = () =>
+  new BankFailure(
+    'TOO_MUCH_DATA',
+    'Odpovědi banky překročily povolený objem jednoho načtení; nic nebylo uloženo.',
+  );
 
 export class RbPremiumClient {
   constructor(private readonly cfg: RbPremiumConfig) {}
 
   /**
    * One page of posted transactions (including intraday) of the account × currency between two
-   * days (the bank's own day boundaries, CET). 204 = no such page / nothing.
+   * days (the bank's own day boundaries, CET). 204 = no such page / nothing. Never reads more than
+   * the budget's bytes.
    */
   async transactions(
     account: RbAccount,
     from: string,
     to: string,
     page: number,
-  ): Promise<{ lastPage: boolean; entries: BankEntry[] }> {
+    budget: RequestBudget,
+  ): Promise<{ lastPage: boolean; entries: BankEntry[]; bytes: number }> {
     const url = new URL(
       `${this.cfg.baseUrl}/accounts/${encodeURIComponent(account.accountNumber)}/${encodeURIComponent(account.currency)}/transactions`,
     );
     url.search = new URLSearchParams({ from, to, page: String(page) }).toString();
-    const answer = await this.getWithRetry(url);
-    if (answer.status === 204) return { lastPage: true, entries: [] };
+    const answer = await this.getWithRetry(url, budget);
+    if (answer.status === 204) return { lastPage: true, entries: [], bytes: answer.bytes };
     try {
-      return parseTransactionPage(answer.body);
+      return { ...parseTransactionPage(answer.body), bytes: answer.bytes };
     } catch (e) {
       if (e instanceof UnexpectedBankAnswer)
         throw new BankFailure('UNEXPECTED_RESPONSE', `Banka odpověděla nečekaně: ${e.message}.`);
@@ -140,12 +158,12 @@ export class RbPremiumClient {
     }
   }
 
-  private async getWithRetry(url: URL): Promise<Answer> {
+  private async getWithRetry(url: URL, budget: RequestBudget): Promise<Answer> {
     for (let attempt = 0; ; attempt++) {
       let answer: Answer | null = null;
       let networkFailure: string | null = null;
       try {
-        answer = await this.get(url);
+        answer = await this.get(url, this.cfg.timeoutMs, budget.maxBytes);
       } catch (e) {
         if (e instanceof BankFailure) throw e;
         networkFailure = e instanceof Error && e.message === 'timeout' ? 'timeout' : 'network';
@@ -168,7 +186,9 @@ export class RbPremiumClient {
     }
   }
 
-  private get(url: URL): Promise<Answer> {
+  private get(url: URL, timeoutMs: number, maxBytes: number): Promise<Answer> {
+    // One answer is bounded by its own limit and by what is left of the run's window.
+    const limit = Math.min(MAX_BODY_BYTES, maxBytes);
     const context = secureContext(this.cfg);
     const clientId = readSecret(this.cfg.clientIdFile);
     return new Promise((resolve, reject) => {
@@ -183,7 +203,7 @@ export class RbPremiumClient {
             'X-IBM-Client-Id': clientId,
             'X-Request-Id': randomUUID(),
           },
-          timeout: this.cfg.timeoutMs,
+          timeout: timeoutMs,
           // Passed through to tls.connect (not in the https typings).
         } as RequestOptions & { secureContext: SecureContext },
         (res) => {
@@ -191,20 +211,28 @@ export class RbPremiumClient {
           let size = 0;
           res.on('data', (c: Buffer) => {
             size += c.length;
-            if (size > MAX_BODY_BYTES) {
+            if (size > limit) {
               req.destroy();
-              reject(new BankFailure('UNEXPECTED_RESPONSE', 'Odpověď banky je nepřiměřeně velká.'));
+              reject(
+                limit < MAX_BODY_BYTES
+                  ? tooMuchData()
+                  : new BankFailure('UNEXPECTED_RESPONSE', 'Odpověď banky je nepřiměřeně velká.'),
+              );
               return;
             }
             chunks.push(c);
           });
           res.on('end', () =>
-            resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }),
+            resolve({
+              status: res.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString('utf8'),
+              bytes: size,
+            }),
           );
           res.on('error', reject);
         },
       );
-      const deadline = setTimeout(() => req.destroy(new Error('timeout')), this.cfg.timeoutMs);
+      const deadline = setTimeout(() => req.destroy(new Error('timeout')), timeoutMs);
       req.on('timeout', () => req.destroy(new Error('timeout')));
       req.on('error', (e) => {
         clearTimeout(deadline);

@@ -121,9 +121,12 @@ export class BankSyncService {
     caller: FinanceCaller,
   ): Promise<BankSyncRun> {
     const started = await this.claim(cfg, account, caller);
+    // Everything this run reads is bounded before it is kept: bytes and entries of the whole
+    // window (N3B75-R1).
     try {
       const entries: BankEntry[] = [];
       let pages = 0;
+      let bytes = 0;
       const client = new RbPremiumClient(cfg);
       for (let page = 1; ; page++) {
         if (page > MAX_PAGES)
@@ -136,7 +139,14 @@ export class BankSyncService {
           day(started.fromDate),
           day(started.toDate),
           page,
+          { maxBytes: cfg.maxWindowBytes - bytes },
         );
+        bytes += res.bytes;
+        if (entries.length + res.entries.length > cfg.maxWindowEntries)
+          throw new BankFailure(
+            'TOO_MUCH_DATA',
+            `Více než ${cfg.maxWindowEntries} pohybů v jednom načtení; nic nebylo uloženo.`,
+          );
         pages = page;
         entries.push(...res.entries);
         if (res.lastPage) break;

@@ -68,6 +68,10 @@ Source: the Swagger definitions embedded in developers.rb.cz (Production and San
    `BANK_UNAVAILABLE`, `UNEXPECTED_RESPONSE`, `TOO_MANY_PAGES`, `ABANDONED`. A connection reset is
    reported as unavailable — never guessed to be the certificate.
 
+Bounds of one run (review N3B75-R1):
+
+- **Memory:** the answers of a window together may hold at most `RB_PREMIUM_MAX_WINDOW_BYTES` (32 MiB) and `RB_PREMIUM_MAX_WINDOW_ENTRIES` (20 000). Each answer is read only up to what is left of the window budget. Exceeded → FAILED `TOO_MUCH_DATA`, nothing stored.
+
 Reads are started by a person (`finance:bank_sync`); a schedule is a later, separate decision.
 
 ## 4. API (Finance unit, `/api/admin/finance/bank`)
