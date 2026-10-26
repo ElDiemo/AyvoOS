@@ -13,7 +13,11 @@ export type FinanceOperationKind =
   | 'BILLING_CUSTOMER_VERSION'
   | 'BILLING_PRICE_VERSION'
   | 'BILLING_AGREEMENT_CREATE'
-  | 'BILLING_AGREEMENT_VERSION';
+  | 'BILLING_AGREEMENT_VERSION'
+  | 'ISSUER_VERSION'
+  | 'ISSUER_ACCOUNT_CREATE'
+  | 'ISSUER_ACCOUNT_VERSION'
+  | 'ISSUER_DEFAULT_ACCOUNT';
 
 /**
  * The core's idempotency pattern (doc 018 §8) in Finance's own schema: one transaction inserts
@@ -61,7 +65,8 @@ export async function allocateFinanceSerial(
     | 'accounting_export'
     | 'customer'
     | 'billing_agreement'
-    | 'billing_revision',
+    | 'billing_revision'
+    | 'issuer_bank_account',
 ): Promise<bigint> {
   const rows = await tx.$queryRaw<{ last_value: bigint }[]>`
     UPDATE "finance"."code_counters" SET "last_value" = "last_value" + 1

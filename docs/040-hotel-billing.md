@@ -17,7 +17,9 @@
 | Customer — the billed company (legal name, IČO, DIČ, address, billing e-mail)                                                          | Finance | `finance.customers` + `customer_versions`                                                                       |
 | Hotel billing agreement — customer, billed rooms, own price or the default, currency, payment terms, in advance / in arrears, validity | Finance | `finance.billing_agreements` (one per hotel) + `agreement_versions`                                             |
 | Default price list — currency, price per room and month, effective month                                                               | Finance | `finance.price_list_versions`                                                                                   |
-| Issuer, VAT, tax point, rounding, number series                                                                                        | Finance | N3A-2, behind the issuing gate (§5)                                                                             |
+| Issuer — our company (legal name, address, IČO, explicit VAT status, DIČ, registration, contacts)                                      | Finance | `finance.issuer_versions` (N3A-2a, §8); the only editable place                                                 |
+| Invoice bank accounts + the default per currency (not the bank connection, doc 041)                                                    | Finance | `finance.issuer_bank_accounts` + versions, `issuer_default_accounts` (N3A-2a, §8)                               |
+| VAT, tax point, rounding, number series                                                                                                | Finance | N3A-2, behind the issuing gate (§5)                                                                             |
 | Invoice — immutable snapshot + PDF                                                                                                     | Finance | N3A-2                                                                                                           |
 | Payments                                                                                                                               | Finance | N3B                                                                                                             |
 
@@ -105,6 +107,30 @@ payload replays, another payload is `IDEMPOTENCY_CONFLICT`.
 
 Both permissions belong to ADMIN only, added by a catalogue migration. The core contract
 `hotels` / `hotels/lookup` also needs `finance:billing_read`.
+
+## 8. Our company and the invoice bank accounts (N3A-2a)
+
+Owner 2026-10-26 (`N3-FIRMA-BANKA-QR-20261026.md`). Checked first: the core holds no invoicing
+identity (a site is not a legal entity, doc 022 §1; suppliers are other companies) and the
+marketing site's footer is static web text, never read by invoices. So Finance is the only place.
+
+- **Issuer** in versions (`expectedVersion`, PK = version): legal name, address, IČO (CZ: 8 digits),
+  **explicit** VAT status `VAT_PAYER | NOT_VAT_PAYER` (no default), DIČ (required for a payer),
+  registration text, e-mail, phone, web; reason, author, time.
+- **Invoice bank accounts** (`IB-000001`) in versions: label, currency, Czech domestic number
+  (prefix / number / bank code — ČNB weights) and IBAN (mod 97; for CZ derived from the domestic
+  number and must equal it), optional BIC; ACTIVE / RETIRED, never deleted.
+- **Default account per currency**: a choice in revisions (counter `billing_revision`); only an
+  active account of that currency; the current default is never retired or moved to another
+  currency before another one is chosen (`ACCOUNT_IS_DEFAULT`).
+- **Readiness** lists what of this setting blocks a live invoice (`ISSUER_MISSING`,
+  `NO_DEFAULT_ACCOUNT`, `DEFAULT_ACCOUNT_RETIRED`) — never development or synthetic tests; the
+  accountant's rules are separate gates.
+- `finance:issuer_manage` (ADMIN only) reads and changes it — no other role is given this
+  configuration. Audit = the versions. Page Finance → Naše firma a účty.
+- Issuing (N3A-2b) freezes the issuer, the account and the payment instructions into the invoice;
+  a later change never alters an issued PDF or its QR payment (ČBA/SPAYD, CZK only, generated
+  locally with the existing `qrcode` library).
 
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 

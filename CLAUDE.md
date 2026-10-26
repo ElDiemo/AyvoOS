@@ -126,6 +126,12 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   default price list per currency; exact decimals, an explicit 0.00 ≠ missing; hotels only via the
   core contract; `finance:billing_read|manage` (ADMIN). No amounts, VAT, numbering or invoices yet;
   live invoicing stays blocked until the owner approves the accounting rules.
+  Our company and invoice bank accounts (N3A-2a, owner 2026-10-26, doc 040 §8; in review): Finance
+  is the only place of the issuer (versions, explicit VAT status, DIČ for a payer) and of the bank
+  accounts printed on invoices (IBAN mod 97 = the Czech domestic number, ACTIVE/RETIRED, never
+  deleted) with one default per currency; every form names its version; `finance:issuer_manage`
+  (ADMIN only, also for reading). Not the bank connection (doc 041). Issued invoices keep their
+  own snapshot (N3A-2b).
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;

@@ -96,6 +96,7 @@ export const PERMISSION_CODES = [
   'finance:exports_manage',
   'finance:billing_read',
   'finance:billing_manage',
+  'finance:issuer_manage',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
