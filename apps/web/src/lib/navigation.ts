@@ -92,7 +92,7 @@ export const MODULES: readonly NavModule[] = [
     // Finance (doc 039): company-wide, no site; received documents first (N1).
     id: 'finance',
     section: 'finance',
-    permissions: ['finance:documents_read'],
+    permissions: ['finance:documents_read', 'finance:bank_read', 'finance:issuer_manage'],
     label: f.label,
     href: '/finance/documents',
     description: f.description,
@@ -108,6 +108,19 @@ export const MODULES: readonly NavModule[] = [
         href: '/finance/exports',
         label: f.pages.exports,
         permission: 'finance:documents_read',
+      },
+      {
+        id: 'bank',
+        href: '/finance/bank',
+        label: f.pages.bank,
+        permission: 'finance:bank_read',
+      },
+      {
+        id: 'issuer',
+        href: '/finance/settings/company',
+        label: f.pages.issuer,
+        permission: 'finance:issuer_manage',
+        group: 'setup',
       },
     ],
   },

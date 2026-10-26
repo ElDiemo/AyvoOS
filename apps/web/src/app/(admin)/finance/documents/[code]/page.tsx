@@ -16,7 +16,7 @@ import {
 import { buttonClass, Card, Field, FieldList, Notice, PageHeader } from '@/components/ui';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { ApiError, apiGet } from '@/lib/api';
-import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
+import { hasPermission, requirePermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +34,7 @@ export default async function FinanceDocumentPage({
       throw e;
     },
   );
-  const me = await currentUser();
+  const me = await requirePermission('finance:documents_read');
   const canManage = hasPermission(me, 'finance:documents_manage') && doc.status === 'ACTIVE';
   const [suppliers, zone] = await Promise.all([
     canManage ? apiGet('admin/finance/suppliers', z.array(financeSupplierSchema)) : [],

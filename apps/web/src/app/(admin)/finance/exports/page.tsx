@@ -6,7 +6,7 @@ import { financeDate, financeMonth } from '@/components/finance/finance-format';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
-import { currentUser, hasPermission } from '@/lib/session';
+import { hasPermission, requirePermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const t = financeCs.exports;
@@ -31,7 +31,7 @@ function months(now = new Date()): [string, string] {
  * history with what was handed over to the accountant (recorded by hand) and downloads.
  */
 export default async function AccountingExportsPage() {
-  const me = await currentUser();
+  const me = await requirePermission('finance:documents_read');
   const canCreate = hasPermission(me, 'finance:exports_manage');
   const exports = await apiGet('admin/finance/exports', z.array(accountingExportSchema));
   const [lastMonth, thisMonth] = months();

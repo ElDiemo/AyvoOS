@@ -1,0 +1,73 @@
+/** Czech strings of Finance → Naše firma a bankovní účty (N3A-2a, doc 040 §8). */
+export const issuerCs = {
+  title: 'Naše firma a bankovní účty',
+  subtitle:
+    'Fakturační údaje AYVO jako vystavitele a účty uváděné na fakturách. Jediné místo, kde se tyto údaje mění; každá změna je nová verze s důvodem. Vydaná faktura si nese vlastní snímek, pozdější změna ji nezmění. Nejde o propojení s bankou (Bankovní pohyby).',
+  readiness: {
+    title: 'Připravenost pro ostré vystavení',
+    ok: (currency: string) => `${currency}: z tohoto nastavení nic nechybí.`,
+    gaps: {
+      ISSUER_MISSING: 'chybí údaje vystavitele',
+      NO_DEFAULT_ACCOUNT: 'není zvolen výchozí účet',
+      DEFAULT_ACCOUNT_RETIRED: 'výchozí účet není aktivní',
+    },
+    note: 'Blokuje jen ostré faktury; vývoj a testovací doklady ne. Pravidla účetní (DPH, číselná řada, náležitosti) se potvrzují zvlášť.',
+  },
+  issuer: {
+    title: 'Vystavitel (naše firma)',
+    none: 'Údaje vystavitele zatím nejsou vyplněné.',
+    fields: {
+      legalName: 'Obchodní firma',
+      addressLine1: 'Sídlo — ulice a číslo',
+      addressLine2: 'Sídlo — další řádek',
+      postalCode: 'PSČ',
+      city: 'Obec',
+      countryCode: 'Země (kód)',
+      companyId: 'IČO',
+      vatStatus: 'Plátce DPH',
+      vatId: 'DIČ',
+      registration: 'Zápis v rejstříku',
+      email: 'E-mail pro faktury',
+      phone: 'Telefon',
+      web: 'Web',
+      reason: 'Důvod změny (povinný)',
+    },
+    vatStatus: { VAT_PAYER: 'Plátce DPH', NOT_VAT_PAYER: 'Neplátce DPH', unset: '— zvolte —' },
+    save: 'Uložit novou verzi',
+    edit: 'Upravit údaje',
+    history: 'Historie',
+    version: (v: number) => `verze ${v}`,
+  },
+  accounts: {
+    title: 'Bankovní účty na fakturách',
+    none: 'Zatím žádný účet.',
+    add: 'Přidat účet',
+    fields: {
+      label: 'Označení',
+      currency: 'Měna',
+      accountPrefix: 'Předčíslí',
+      accountNumber: 'Číslo účtu',
+      bankCode: 'Kód banky',
+      iban: 'IBAN',
+      bic: 'BIC (SWIFT)',
+      status: 'Stav',
+      reason: 'Důvod (povinný)',
+    },
+    status: { ACTIVE: 'Aktivní', RETIRED: 'Vyřazený' },
+    edit: 'Upravit',
+    retire: 'Vyřadit',
+    save: 'Uložit',
+    domesticHelp:
+      'České účty: předčíslí, číslo a kód banky se kontrolují a musí odpovídat IBAN. Zahraniční účet stačí IBAN.',
+  },
+  defaults: {
+    title: 'Výchozí účet pro měnu',
+    current: (currency: string, code: string) => `${currency}: ${code}`,
+    none: (currency: string) => `${currency}: nezvolen`,
+    choose: 'Zvolit výchozí',
+    reason: 'Důvod (povinný)',
+  },
+  errors: {
+    CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný. Stránka se načte znovu.',
+  },
+} as const;

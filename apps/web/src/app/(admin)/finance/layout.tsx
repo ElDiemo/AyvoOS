@@ -1,7 +1,15 @@
-import { requirePermission } from '@/lib/session';
+import { requireAnyPermission } from '@/lib/session';
 
-/** Finance (doc 039): finance:documents_read; company-wide, no site. Each page and the API check again. */
+/**
+ * Finance (doc 039, doc 040, doc 041): received documents and exports need finance:documents_read,
+ * bank transactions finance:bank_read, our company's settings finance:issuer_manage; company-wide,
+ * no site. Each page and the API check again.
+ */
 export default async function FinanceLayout({ children }: { children: React.ReactNode }) {
-  await requirePermission('finance:documents_read');
+  await requireAnyPermission([
+    'finance:documents_read',
+    'finance:bank_read',
+    'finance:issuer_manage',
+  ]);
   return children;
 }

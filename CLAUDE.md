@@ -13,7 +13,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - **Modular monolith** (ADR 0001). No microservices. Modules talk through exported services, never
   through another module's tables.
 - **PostgreSQL is the source of truth** (ADR 0002). Redis is non-authoritative (ADR 0010).
-- **The running core is not the DB superuser** (ADR 0041, in review): `api` connects as `ayvo_core`
+- **The running core is not the DB superuser** (ADR 0041; merged 2026-10-25 with #71, on DEV since
+  2026-10-25, not yet on PROD): `api` connects as `ayvo_core`
   (rows of `public` only — no TRUNCATE, DDL, trigger switching or other schemas); migrations, role
   setups and backups keep the privileged account. Tests run the app as such a role; fixtures that
   need more use `withPrivileged` — never broaden the runtime role.
@@ -120,6 +121,27 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   items (version + file hash) and events GENERATED / DOWNLOADED / HANDED_OVER (manual, once);
   `finance:exports_manage` for ADMIN only. Deployed only by `scripts/deploy-finance-dev.sh`. No
   VAT logic, posting, payments or automatic sending to the accountant.
+  Hotel billing settings (N3A-1, owner 2026-10-25, doc 040; in review, not merged): customers (the
+  billed company ≠ hotel) with versions, one billing agreement per hotel with append-only bitemporal
+  versions (the only place of billed rooms / own price; effective from the 1st of a month), the
+  default price list per currency; exact decimals, an explicit 0.00 ≠ missing; hotels only via the
+  core contract; `finance:billing_read|manage` (ADMIN). No amounts, VAT, numbering or invoices yet;
+  live invoicing stays blocked until the owner approves the accounting rules.
+  Our company and invoice bank accounts (N3A-2a, owner 2026-10-26, doc 040 §8; in review): Finance
+  is the only place of the issuer (versions, explicit VAT status, DIČ for a payer) and of the bank
+  accounts printed on invoices (IBAN mod 97 = the Czech domestic number, ACTIVE/RETIRED, never
+  deleted) with one default per currency; every form names its version; `finance:issuer_manage`
+  (ADMIN only, also for reading). Not the bank connection (doc 041). Issued invoices keep their
+  own snapshot (N3A-2b).
+  Bank transactions (N3B-1, doc 041, owner 2026-10-26; table design subject to review): read only
+  from Raiffeisenbank Premium API (direct, mTLS P12 + `X-IBM-Client-Id`, URLs fixed in code; no
+  payment, batch or statement call), append-only entries once per (environment, account,
+  currency, `entryReference`) with versions when the bank changes one, sync runs finished exactly
+  once, one run per account (slot); amounts exact from the answer's text (never a float, >2
+  decimals refused). `RB_PREMIUM_ENVIRONMENT=production` only with APP_ENV=production, `test` (a
+  local simulation) only with APP_ENV=test; secrets only as mounted files, never in the env, DB,
+  web, logs or git. `finance:bank_read|bank_sync` ADMIN only. No pairing with invoices until the
+  issued-invoice model exists — never a substitute invoice list.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
@@ -320,10 +342,33 @@ Tailwind 4 · Vitest · Playwright.
   training data: before changing `turbo.json` or turbo commands, read the installed version's docs
   in `node_modules/turbo/docs/`.
 
+## Workflow (owner, 2026-10-25)
+
+- Roles: the owner requests and approves; Claude implements, fixes and prepares PRs; ChatGPT (in a
+  normal chat) is the independent architect/reviewer; Codex technically performs PROD, DNS and
+  cutovers — only after the owner's explicit approval, from a deployment plan with checks and a
+  rollback prepared by Claude. No automatic production deployment.
+- Larger changes start with a short technical plan; architectural decisions wait for the owner.
+- PRs are logically whole and reviewable (target ~1 500 diff lines, not a hard limit).
+- After implementing: lint, typecheck, tests, build, format (+ e2e/Docker tests where relevant).
+  Finish with a self-contained review package (one Markdown file): what changed and why, files,
+  architecture decisions, results of the checks actually run (commit SHA, CI run), risks, open
+  questions, the relevant real diff or PR link. Never secrets, env values or personal data; never
+  the whole repository.
+- The ChatGPT review works from the package it is given; it is not a complete check of the
+  repository.
+- Review findings are fixed in separate commits with a short explanation.
+- Merge and every deployment need the owner's explicit approval; green CI and the independent
+  review are separate conditions. Record the owner's approval in the PR — never present it (or a
+  self-check) as a technical review.
+- Push only approved working branches within the agreed scope; never push directly to protected
+  branches.
+- CI/CD workflows and repository rules change only with the owner's consent.
+
 ## Before finishing any change
 
 ```bash
 pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check
 ```
 
-Check `git status` for accidentally added secrets or generated files. Don't push.
+Check `git status` for accidentally added secrets or generated files. Push only as in Workflow above.

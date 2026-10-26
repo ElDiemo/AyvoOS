@@ -20,7 +20,7 @@ import { TakeOverList } from '@/components/finance/take-over-list';
 import { buttonClass, Card, EmptyState, inputClass, PageHeader } from '@/components/ui';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
-import { currentUser, hasPermission } from '@/lib/session';
+import { hasPermission, requirePermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,7 +45,7 @@ export default async function FinanceDocumentsPage({
     const one = financeDocumentListQuerySchema.safeParse({ [key]: value });
     if (one.success) Object.assign(q, { [key]: one.data[key as keyof typeof one.data] });
   }
-  const me = await currentUser();
+  const me = await requirePermission('finance:documents_read');
   const canManage = hasPermission(me, 'finance:documents_manage');
   const canTakeOver = canManage && hasPermission(me, 'procurement:documents_read');
   const [page, suppliers, candidates] = await Promise.all([

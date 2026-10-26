@@ -251,10 +251,12 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
         .map((r) => `${r.method} ${r.route}`)
         .sort(),
     ).toEqual([
+      'GET /api/internal/v1/finance/hotels',
       'GET /api/internal/v1/finance/supplier-documents',
       'GET /api/internal/v1/finance/supplier-documents/:id',
       'GET /api/internal/v1/finance/supplier-documents/:id/content',
       'GET /api/internal/v1/finance/suppliers',
+      'POST /api/internal/v1/finance/hotels/lookup',
       'POST /api/internal/v1/finance/principal',
       'POST /api/internal/v1/finance/suppliers/lookup',
     ]);

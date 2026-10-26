@@ -12,8 +12,10 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import {
+  financeHotelLookupSchema,
   financePrincipalRequestSchema,
   financeSupplierLookupSchema,
+  type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
   type FinancePrincipal,
@@ -27,6 +29,7 @@ import { ENV, type Env } from '../config/env.js';
 import { ServiceAccess } from '../identity/access.decorators.js';
 import { CurrentPrincipal, forbidden, sameOriginRequest } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
+import { HotelsService } from '../customers/hotels.service.js';
 import { ProcurementService } from '../procurement/procurement.service.js';
 
 const require = (p: Principal, ...codes: PermissionCode[]) => {
@@ -47,6 +50,7 @@ const readsSite = (p: Principal, siteId: string) =>
 export class FinanceContractController {
   constructor(
     private readonly procurement: ProcurementService,
+    private readonly hotels: HotelsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -134,5 +138,25 @@ export class FinanceContractController {
     return new StreamableFile(await this.procurement.supplierDocumentBytes(id), {
       type: 'application/octet-stream',
     });
+  }
+
+  /** Hotels to bill (doc 040): identity and address only — the hotel stays the core's record. */
+  @ServiceAccess('finance')
+  @Get('hotels')
+  hotelsForBilling(@CurrentPrincipal() p: Principal): Promise<FinanceContractHotel[]> {
+    require(p, 'finance:billing_read');
+    return this.hotels.financeContractHotels();
+  }
+
+  /** Hotels by id (agreements name them); an unknown id is simply absent. */
+  @ServiceAccess('finance')
+  @Post('hotels/lookup')
+  @HttpCode(200)
+  hotelLookup(
+    @Body(new ZodValidationPipe(financeHotelLookupSchema)) body: { ids: string[] },
+    @CurrentPrincipal() p: Principal,
+  ): Promise<FinanceContractHotel[]> {
+    require(p, 'finance:billing_read');
+    return this.hotels.financeContractHotels(body.ids);
   }
 }

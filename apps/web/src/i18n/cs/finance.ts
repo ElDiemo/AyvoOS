@@ -176,4 +176,82 @@ export const financeCs = {
   errors: {
     stale: 'Doklad mezitím změnil někdo jiný. Stránka se načte znovu.',
   },
+  /** Bankovní pohyby (N3B-1, doc 041): read from RB Premium API, read only. */
+  bank: {
+    title: 'Bankovní pohyby',
+    subtitle:
+      'Pohyby firemních účtů načtené z Raiffeisenbank (Premium API, jen čtení — nic se do banky neodesílá). Párování s vydanými fakturami přibude s fakturami; nespárovaná platba není pohledávka po splatnosti.',
+    connection: 'Propojení s bankou',
+    notConfigured:
+      'Propojení s bankou není v této instalaci nastaveno. Nastavuje ho správce serveru (certifikát a údaje nikdy nepatří do aplikace ani do chatu).',
+    environment: {
+      PRODUCTION: 'Ostré propojení',
+      SANDBOX: 'Testovací prostředí banky (sandbox) — nejde o skutečné pohyby',
+      TEST: 'Simulovaná banka pro automatické testy — nejde o skutečné pohyby',
+    },
+    certificate: {
+      label: 'Certifikát',
+      READABLE: (until: string) => `načten, platný do ${until}`,
+      UNREADABLE: 'nelze načíst (soubor nebo heslo) — opraví správce serveru',
+      NOT_CONFIGURED: 'není nastaven',
+      expiresSoon: (until: string) =>
+        `Certifikát vyprší ${until}. Obnovte ho včas v internetovém bankovnictví. Banka ho také každý rok blokuje, dokud ho neodblokujete.`,
+    },
+    account: 'Účet',
+    lastSuccess: 'Poslední úspěšné načtení',
+    lastFailure: 'Poslední pokus selhal',
+    never: 'zatím nikdy',
+    running: 'právě se načítá',
+    runSummary: (pages: number, received: number, created: number, changed: number) =>
+      `${pages} str., ${received} pohybů, nových ${created}, změněných ${changed}`,
+    window: (from: string, to: string) => `období ${from} – ${to}`,
+    sync: 'Načíst nové pohyby',
+    syncing: 'Načítám z banky…',
+    syncDone: 'Načteno.',
+    errors: {
+      NOT_CONFIGURED: 'Propojení není nastaveno.',
+      CERTIFICATE_UNUSABLE: 'Certifikát nelze načíst (soubor nebo heslo).',
+      CERTIFICATE_REJECTED:
+        'Banka odmítla certifikát (neplatný, zablokovaný nebo prošlý). Odblokujte nebo obnovte ho v internetovém bankovnictví.',
+      INSUFFICIENT_RIGHTS: 'Certifikát nemá oprávnění číst pohyby tohoto účtu.',
+      ACCOUNT_NOT_FOUND: 'Banka tento účet a měnu nezná.',
+      REQUEST_REJECTED: 'Banka odmítla rozsah dotazu.',
+      RATE_LIMITED: 'Banka dočasně omezila počet dotazů. Zkuste to později.',
+      BANK_UNAVAILABLE: 'Banka je teď nedostupná. Nic nebylo uloženo; zkuste to později.',
+      UNEXPECTED_RESPONSE: 'Banka odpověděla nečekaně. Nic nebylo uloženo.',
+      TOO_MANY_PAGES: 'Příliš mnoho pohybů najednou. Nic nebylo uloženo.',
+      TOO_MUCH_DATA:
+        'Odpovědi banky překročily povolený objem jednoho načtení. Nic nebylo uloženo.',
+      RUN_TIMEOUT: 'Načtení nestihlo skončit v časovém limitu. Nic nebylo uloženo.',
+      ABANDONED: 'Načítání bylo přerušeno (např. restart). Nic z něj nebylo uloženo.',
+    },
+    list: {
+      total: (n: number) => `Pohyby (${n})`,
+      account: 'Účet',
+      direction: 'Směr',
+      any: 'Vše',
+      CRDT: 'Příchozí',
+      DBIT: 'Odchozí',
+      from: 'Od',
+      to: 'Do',
+      filter: 'Filtrovat',
+      reset: 'Zrušit filtry',
+      empty: 'Zatím žádné pohyby. Načtěte je z banky.',
+      emptyFiltered: 'Filtrům neodpovídá žádný pohyb.',
+      previous: '← Předchozí',
+      next: 'Další →',
+      page: (p: number, of: number) => `Strana ${p} z ${of}`,
+    },
+    fields: {
+      date: 'Datum',
+      amount: 'Částka',
+      counterparty: 'Protistrana',
+      symbols: 'VS / KS / SS',
+      message: 'Zpráva',
+      processing: 'Zpracování',
+    },
+    processing: { NOT_PAIRED: 'Nespárováno' },
+    changed: 'Banka údaje později upravila (historie se uchovává).',
+    vs: 'VS',
+  },
 } as const;
