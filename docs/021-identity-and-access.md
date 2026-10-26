@@ -304,6 +304,18 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | GET    | `/api/admin/finance/exports/:code/content`                        | `finance:documents_read`                    | global                      |
 | GET    | `/api/admin/finance/exports/preview`                              | `finance:exports_manage`                    | global                      |
 | GET    | `/api/admin/finance/suppliers`                                    | `finance:documents_manage`                  | global                      |
+| GET    | `/api/admin/finance/billing/hotels`                               | `finance:billing_read`                      | global                      |
+| GET    | `/api/admin/finance/billing/customers`                            | `finance:billing_read`                      | global                      |
+| GET    | `/api/admin/finance/billing/customers/:code`                      | `finance:billing_read`                      | global                      |
+| POST   | `/api/admin/finance/billing/customers`                            | `finance:billing_manage`                    | global                      |
+| POST   | `/api/admin/finance/billing/customers/:code/versions`             | `finance:billing_manage`                    | global                      |
+| GET    | `/api/admin/finance/billing/price-list`                           | `finance:billing_read`                      | global                      |
+| POST   | `/api/admin/finance/billing/price-list`                           | `finance:billing_manage`                    | global                      |
+| GET    | `/api/admin/finance/billing/agreements`                           | `finance:billing_read`                      | global                      |
+| GET    | `/api/admin/finance/billing/agreements/effective`                 | `finance:billing_read`                      | global                      |
+| GET    | `/api/admin/finance/billing/agreements/:code`                     | `finance:billing_read`                      | global                      |
+| POST   | `/api/admin/finance/billing/agreements`                           | `finance:billing_manage`                    | global                      |
+| POST   | `/api/admin/finance/billing/agreements/:code/versions`            | `finance:billing_manage`                    | global                      |
 | GET    | `/api/admin/goods-receipts`                                       | `inventory:read`                            | active site + its warehouse |
 | POST   | `/api/admin/goods-receipts`                                       | `inventory:receive`                         | active site + its warehouse |
 | GET    | `/api/admin/goods-receipts/:code`                                 | `inventory:read`                            | active site + its warehouse |

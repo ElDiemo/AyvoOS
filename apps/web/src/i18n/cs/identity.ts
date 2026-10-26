@@ -92,6 +92,10 @@ export const identityCs = {
     'finance:exports_manage': 'Vytvářet exporty dokladů pro účetní (ZIP s přehledem a originály)',
     'finance:documents_manage':
       'Přijímat doklady (nahrát originál), opravovat jejich údaje s důvodem a rušit je',
+    'finance:billing_read':
+      'Vidět fakturační nastavení hotelů — odběratele, smlouvy hotelů s verzemi a výchozí ceník',
+    'finance:billing_manage':
+      'Zakládat a měnit (novou verzí s důvodem) odběratele, smlouvy hotelů a výchozí ceník',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',

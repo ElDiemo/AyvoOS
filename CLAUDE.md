@@ -121,6 +121,12 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   items (version + file hash) and events GENERATED / DOWNLOADED / HANDED_OVER (manual, once);
   `finance:exports_manage` for ADMIN only. Deployed only by `scripts/deploy-finance-dev.sh`. No
   VAT logic, posting, payments or automatic sending to the accountant.
+  Hotel billing settings (N3A-1, owner 2026-10-25, doc 040; in review, not merged): customers (the
+  billed company ≠ hotel) with versions, one billing agreement per hotel with append-only bitemporal
+  versions (the only place of billed rooms / own price; effective from the 1st of a month), the
+  default price list per currency; exact decimals, an explicit 0.00 ≠ missing; hotels only via the
+  core contract; `finance:billing_read|manage` (ADMIN). No amounts, VAT, numbering or invoices yet;
+  live invoicing stays blocked until the owner approves the accounting rules.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
   implementation/model pending PR review): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;

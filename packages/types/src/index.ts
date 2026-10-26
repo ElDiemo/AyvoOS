@@ -12,6 +12,7 @@ export * from './inventory.js';
 export * from './labeling.js';
 export * from './filling.js';
 export * from './finance.js';
+export * from './finance-billing.js';
 export * from './readiness.js';
 export * from './labels.js';
 export * from './orders.js';
