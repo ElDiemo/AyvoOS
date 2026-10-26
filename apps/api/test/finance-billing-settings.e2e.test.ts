@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
@@ -110,12 +110,18 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
         UPDATE finance.code_counters SET last_value = last_value + 1
         WHERE name = 'billing_revision' RETURNING last_value AS v`
     )[0]!.v;
-  const testCurrency = () =>
-    `X${randomUUID()
-      .replace(/[^A-Z]/gi, '')
-      .slice(0, 2)
-      .toUpperCase()
-      .padEnd(2, 'Q')}`;
+  /**
+   * A synthetic currency "X??" never used before in this run: two letters A–Z (676 codes) drawn at
+   * random, unique within the file (two equal codes in one test merged its scenarios).
+   */
+  const usedCurrencies = new Set<string>();
+  const testCurrency = (): string => {
+    const letter = () => String.fromCharCode(65 + randomInt(26));
+    const code = `X${letter()}${letter()}`;
+    if (usedCurrencies.has(code)) return testCurrency();
+    usedCurrencies.add(code);
+    return code;
+  };
   const price = (
     currency: string,
     pricePerRoomMonth: string,
