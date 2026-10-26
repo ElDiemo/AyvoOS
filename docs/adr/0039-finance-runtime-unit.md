@@ -187,3 +187,10 @@ directly from Raiffeisenbank Premium API (no aggregator), read only. Details in 
   and never a failure of the core.
 - **Not here:** pairing with invoices (comes on the issued-invoice model, N3A-2), payment
   orders, statements, scheduled reads (manual first), uploading certificates through the web.
+
+## 11. Production (2026-10-26)
+
+The first PROD installation uses exactly the DEV topology (doc 036 §10): the release's api image,
+profiles `finance` / `finance-tools`, network `finance-db` (Finance, its migrations and PostgreSQL
+only), its own S3 identity and `scripts/deploy-prod.sh --finance` / `--finance-rollback`. The PROD
+edge now also aborts `/api/internal/*` for the core release itself.

@@ -668,6 +668,89 @@ describe('production deploy script', () => {
       'prod-s3-backup.env': 'AWS_ACCESS_KEY_ID=AKIABACKUPFICTIONAL0\nAWS_SECRET_ACCESS_KEY=y\n',
     };
 
+    it('Finance keys (ADR 0039): none = not installed; all four with a matching SHA and its own S3 identity; nothing printed', () => {
+      const token = 'f'.repeat(43);
+      const sha = '0b1ab6d4f4e1f7d0a32a8c1c1b2d6c2a39b53e1f2c8b2e7d6c5a4b3c2d1e0f9a'; // not the real SHA
+      const realSha = spawnSync(
+        'sh',
+        ['-c', `printf '%s' '${token}' | sha256sum | cut -d' ' -f1`],
+        {
+          encoding: 'utf8',
+        },
+      ).stdout.trim();
+      const fin = (over: Record<string, string> = {}) =>
+        Object.entries({
+          FINANCE_DB_PASSWORD: 'r'.repeat(32),
+          FINANCE_DB_OWNER_PASSWORD: 'o'.repeat(32),
+          FINANCE_SERVICE_TOKEN: token,
+          FINANCE_SERVICE_TOKEN_SHA256: realSha,
+          ...over,
+        })
+          .filter(([, v]) => v !== '')
+          .map(([k, v]) => `${k}=${v}\n`)
+          .join('');
+      const finS3 = 'AWS_ACCESS_KEY_ID=AKIAFINANCEFICTIONAL\nAWS_SECRET_ACCESS_KEY=z\n';
+      const withFin = (over: Record<string, string> = {}, s3 = finS3) => ({
+        ...good,
+        'prod.env': prod + fin(over),
+        'prod-finance-s3.env': s3,
+      });
+      const none = check(good, 0o600, { call: 'check_env_files; echo "FIN=$FINANCE_ENABLED"' });
+      expect(none.status, none.stderr).toBe(0);
+      expect(none.stdout).toContain('Finance keys not set');
+      expect(none.stdout).toContain('FIN=false');
+      const ok = check(withFin(), 0o600, { call: 'check_env_files; echo "FIN=$FINANCE_ENABLED"' });
+      expect(ok.status, ok.stderr).toBe(0);
+      expect(ok.stdout).toContain('FIN=true');
+      for (const [why, files, msg] of [
+        [
+          'only some keys',
+          withFin({ FINANCE_SERVICE_TOKEN: '', FINANCE_SERVICE_TOKEN_SHA256: '' }),
+          /all of/,
+        ],
+        ['wrong SHA', withFin({ FINANCE_SERVICE_TOKEN_SHA256: sha }), /not the SHA-256/],
+        ['short password', withFin({ FINANCE_DB_PASSWORD: 'short' }), /24-128/],
+        [
+          'equal role passwords',
+          withFin({ FINANCE_DB_OWNER_PASSWORD: 'r'.repeat(32) }),
+          /must differ/,
+        ],
+        [
+          'the core role password',
+          withFin({ FINANCE_DB_PASSWORD: 'c'.repeat(32) }),
+          /CORE_DB_PASSWORD/,
+        ],
+        ['bad token', withFin({ FINANCE_SERVICE_TOKEN: 'x y' }), /base64url/],
+        [
+          'the application S3 identity',
+          withFin({}, 'AWS_ACCESS_KEY_ID=AKIAAPPFICTIONAL0000\nAWS_SECRET_ACCESS_KEY=x\n'),
+          /application's S3 identity/,
+        ],
+        [
+          'the backup identity',
+          withFin({}, 'AWS_ACCESS_KEY_ID=AKIABACKUPFICTIONAL0\nAWS_SECRET_ACCESS_KEY=x\n'),
+          /backup identity/,
+        ],
+        [
+          'no Finance S3 file',
+          { ...good, 'prod.env': prod + fin() },
+          /prod-finance-s3.env does not exist/,
+        ],
+        [
+          'a foreign key in it',
+          withFin({}, `${finS3}AWS_ENDPOINT_URL=http://evil\n`),
+          /must not set AWS_ENDPOINT_URL/,
+        ],
+      ] as const) {
+        const res = check(files as Record<string, string>);
+        expect([why, res.status]).toEqual([why, 1]);
+        expect(res.stderr, why).toMatch(msg);
+        // Values are never printed.
+        for (const secret of ['r'.repeat(32), 'o'.repeat(32), token])
+          expect(res.stdout + res.stderr, why).not.toContain(secret);
+      }
+    });
+
     it('accepts an optional ID_DOMAIN in prod.env', () => {
       const res = check({ ...good, 'prod.env': `${prod}ID_DOMAIN=id.example.test\n` });
       expect(res.status, res.stderr).toBe(0);
@@ -927,4 +1010,142 @@ describe('production deploy script', () => {
       expect(res.stderr).toMatch(/refusing: this host is|DEV preview|is not installed/);
     },
   );
+});
+
+describe('the Finance unit in production (ADR 0039)', () => {
+  it('Caddy aborts the internal contract and routes /api/admin/finance to Finance — both before /api', () => {
+    const app = code(caddyfile).split('handle @outside {')[1]!;
+    const internal = app.indexOf('@internal path /api/internal /api/internal/*');
+    const finance = app.indexOf('@finance path /api/admin/finance /api/admin/finance/*');
+    const api = app.indexOf('@api path /api /api/*');
+    expect(internal).toBeGreaterThan(0);
+    expect(finance).toBeGreaterThan(internal);
+    expect(api).toBeGreaterThan(finance);
+    expect(app).toMatch(/handle @internal \{\n\t\t\tabort\n\t\t\}/);
+    expect(app).toMatch(/handle @finance \{\n\t\t\treverse_proxy finance:4010/);
+  });
+
+  it('Finance is the release api image, never built, in its own profile; the migrations in theirs', () => {
+    const finance = serviceBlock('finance');
+    expect(finance).toContain('image: ayvo-prod/api:${FINANCE_RELEASE:-none}');
+    expect(finance).not.toMatch(/^ {4}build:/m);
+    expect(finance).toMatch(/profiles:\n {6}- finance\n/);
+    expect(finance).not.toMatch(/^ {4}ports:/m);
+    expect(finance).toContain("command: ['node', 'dist/finance/main.js']");
+    expect(finance).toMatch(/read_only: true/);
+    expect(finance).toMatch(/mem_limit: 512m/);
+    const migrate = serviceBlock('finance-migrate');
+    expect(migrate).toContain('image: ayvo-prod/api-migrate:${FINANCE_RELEASE:-none}');
+    expect(migrate).toMatch(/profiles:\n {6}- finance-tools\n/);
+    expect(serviceEnv('finance')).toMatchObject({
+      APP_ENV: 'production',
+      FILE_STORAGE_DRIVER: 's3',
+      CORE_INTERNAL_URL: 'http://api:4000',
+    });
+    expect(serviceEnv('web')).toMatchObject({ FINANCE_API_URL: 'http://finance:4010' });
+    // The API gets the token's SHA-256 only, never the token.
+    expect(serviceEnv('api')).toHaveProperty('FINANCE_SERVICE_TOKEN_SHA256');
+    expect(serviceEnv('api')).not.toHaveProperty('FINANCE_SERVICE_TOKEN');
+  });
+
+  it.skipIf(!hasCompose)(
+    'renders: finance-db only between Finance, its migrations and postgres; its own S3 file and DB roles',
+    () => {
+      const secrets = mkdtempSync(join(tmp, 'fin-secrets-'));
+      writeFileSync(
+        join(secrets, 'prod.env'),
+        'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+          `PUBLIC_QR_BASE_URL=https://qr.example.test\nFINANCE_DB_PASSWORD=${'r'.repeat(32)}\nFINANCE_DB_OWNER_PASSWORD=${'o'.repeat(32)}\n` +
+          `FINANCE_SERVICE_TOKEN=${'f'.repeat(43)}\nFINANCE_SERVICE_TOKEN_SHA256=${'a'.repeat(64)}\n`,
+      );
+      writeFileSync(
+        join(secrets, 'prod-auth.env'),
+        'AUTH_ENCRYPTION_KEY=x\nAUTH_MAIL_DRIVER=google-relay\nAUTH_MAIL_FROM=s@example.test\n',
+      );
+      writeFileSync(
+        join(secrets, 'prod-s3.env'),
+        'AWS_ACCESS_KEY_ID=AKIAAPP\nAWS_SECRET_ACCESS_KEY=a\n',
+      );
+      writeFileSync(
+        join(secrets, 'prod-finance-s3.env'),
+        'AWS_ACCESS_KEY_ID=AKIAFIN\nAWS_SECRET_ACCESS_KEY=f\n',
+      );
+      const env = {
+        PROD_DOMAIN: 'os.example.test',
+        PROD_TAILNET_IPV4: '100.100.100.100',
+        PROD_PUBLIC_IPV4: '198.51.100.7',
+        QR_DOMAIN: 'qr.example.test',
+        AYVO_RELEASE: 'abcdef012345',
+        FINANCE_RELEASE: 'abcdef012345',
+        AYVO_RELEASE_DIR: root,
+        AYVO_PROD_SECRETS_DIR: secrets,
+      };
+      const args = [
+        'compose',
+        '-p',
+        'ayvo-prod-test',
+        '-f',
+        join(prodDir, 'compose.yml'),
+        '--env-file',
+        join(secrets, 'prod.env'),
+      ];
+      const render = (...profiles: string[]) =>
+        JSON.parse(
+          run(
+            'docker',
+            [...args, ...profiles.flatMap((p) => ['--profile', p]), 'config', '--format', 'json'],
+            env,
+          ).stdout,
+        );
+      // The OS alone renders without Finance services.
+      expect(Object.keys(render().services)).not.toContain('finance');
+      const all = render('finance', 'finance-tools', 'tools');
+      const nets = (s: string) => Object.keys(all.services[s].networks ?? {}).sort();
+      expect(nets('finance')).toEqual(['edge', 'finance-db']);
+      expect(nets('finance-migrate')).toEqual(['finance-db']);
+      expect(nets('postgres')).toEqual(['backend', 'finance-db']);
+      for (const other of ['api', 'web', 'redis', 'caddy', 'migrate'])
+        expect(nets(other), other).not.toContain('finance-db');
+      expect(all.networks['finance-db'].internal).toBe(true);
+      expect(all.services.finance.image).toBe('ayvo-prod/api:abcdef012345');
+      expect(all.services.finance.environment.AWS_ACCESS_KEY_ID).toBe('AKIAFIN');
+      expect(all.services.api.environment.AWS_ACCESS_KEY_ID).toBe('AKIAAPP');
+      const db = new URL(all.services.finance.environment.FINANCE_DATABASE_URL);
+      expect([db.username, db.password]).toEqual(['ayvo_finance', 'r'.repeat(32)]);
+      const owner = new URL(
+        all.services['finance-migrate'].environment.FINANCE_MIGRATE_DATABASE_URL,
+      );
+      expect(owner.username).toBe('ayvo_finance_owner');
+      expect(JSON.stringify(all.services.finance)).not.toContain('fictional'); // no privileged password
+      expect(JSON.stringify(all.services.api)).not.toContain('f'.repeat(43)); // no service token
+      expect(all.services.api.environment.FINANCE_SERVICE_TOKEN_SHA256).toBe('a'.repeat(64));
+    },
+  );
+
+  it('the script: Finance only from the release the OS runs, its own profiles, no build, a backup before migrating', () => {
+    const body = script.split('\n  finance)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(body).toMatch(/\$\{RELEASE:0:12\} == "\$PREVIOUS"/);
+    const order = [
+      'check_core_holds_finance_contract',
+      'backup_before_migration',
+      'migrate_finance',
+      'start_finance',
+      'verify_finance',
+      'record_finance',
+    ];
+    const at = order.map((step) => body.indexOf(step));
+    expect(
+      at.every((i) => i > 0),
+      JSON.stringify(at),
+    ).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(body).not.toMatch(/build_images|compose build/);
+    expect(script).toContain('compose --profile finance-tools run --rm finance-migrate');
+    expect(script).toContain('compose --profile finance up -d --no-build --no-deps finance');
+    const rollback = script.split('\n  finance-rollback)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(rollback).not.toMatch(/migrate_finance|backup_before_migration/);
+    // The OS deployment never starts Finance (its profile is never activated there).
+    const deploy = script.split('\n  deploy)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(deploy).not.toMatch(/finance/i);
+  });
 });

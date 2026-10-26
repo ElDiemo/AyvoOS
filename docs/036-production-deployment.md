@@ -223,3 +223,44 @@ The API refuses to start in production unless all of these are real:
   images (e.g. a registry) would be an infrastructure decision of the owner — not prepared.
 - The first real WorkOS sign-in on `os.ayvo.co`, the external negative test and the restore check
   have not been done (nothing is installed).
+
+## 10. The Finance unit (ADR 0039, docs 039–041)
+
+The same topology as on DEV, approved there: its own container from the **same** api image the OS
+release built (never built again), its own DB roles and schema `finance`, its own S3 identity, the
+core reached only through `/api/internal/v1/finance/*` (service token + forwarded session), which
+the edge aborts. Finance is installed and replaced only by `scripts/deploy-prod.sh --finance`; the
+OS deployment never starts, stops or rebuilds it. No bank connection (doc 041) is part of this.
+
+**Prerequisites (owner, on AyvoOS-PROD):**
+
+1. The OS runs a release that contains this section (Caddy route + `/api/internal/*` abort, web
+   `FINANCE_API_URL`, API `FINANCE_SERVICE_TOKEN_SHA256`).
+2. `prod.env`: the four `FINANCE_*` keys (generated on the server, `prod.env.example`), then the OS
+   release deployed again so the API holds the token's SHA-256 (checked by `--finance`).
+3. `prod-finance-s3.env` (mode 600): an IAM identity of its own with the application's rules
+   (ADR 0032) narrowed to Finance's prefixes: the read-only bucket configuration permissions
+   checked at start (`s3:ListBucket` for HeadBucket, `s3:GetBucketVersioning`,
+   `s3:GetBucketPublicAccessBlock`, `s3:GetBucketOwnershipControls`, `s3:GetEncryptionConfiguration`),
+   and `s3:GetObject` / `s3:PutObject` on `finance-documents/*` and `accounting-exports/*` only —
+   no DeleteObject, no ACL or configuration change, no other prefix, no backup bucket. Writes are
+   create-only (`If-None-Match: *`). The script refuses the application's or the backup identity.
+
+The first OS release with this section adds the network `finance-db` to PostgreSQL: Compose
+recreates the `postgres` container during that OS deployment (a short restart inside the deploy;
+the data volume is unchanged).
+
+**Install / replace:** `sudo scripts/deploy-prod.sh --finance --release <the commit the OS runs>`:
+pre-migration dump (and S3 upload when the backup tool is installed) → roles + schema as the
+privileged account → migrations as `ayvo_finance_owner` → only the `finance` container
+(`mem_limit 512m`, `cpus 0.5`, `pids_limit 128`, read-only) → verify: ready (database + core
+contract), `/api/admin/finance/*` 401 without a session, `/api/internal/*` aborted → recorded in
+`state/finance.log`.
+
+**Rollback:** `--finance-rollback <earlier release>` starts that Finance image again (no
+migration; safe only if it works with the current schema). To take Finance out entirely:
+`docker compose -p ayvo-prod stop finance` — the OS keeps running, Finance pages say "Finance jsou
+dočasně nedostupné". Finance data stay (schema `finance` in the same database and its dumps).
+
+**Backups:** the database dumps (doc 035) include schema `finance`; its files are in the
+production bucket under the prefixes above (versioned bucket, ADR 0032).

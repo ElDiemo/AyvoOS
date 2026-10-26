@@ -9,6 +9,8 @@
 # Topology (internal through the tailnet, like DEV — ADR 0026):
 #   tailnet ──443/80──▶ caddy ──/api/*──▶ api ──▶ postgres, redis      (files: private S3, ADR 0032)
 #                              └──other───▶ web ──(server-side)──▶ api
+#                              └──/api/admin/finance/*──▶ finance ──▶ postgres (schema finance only)
+#                                                          └──contract──▶ api (/api/internal/*, never via Caddy)
 #   tailnet ──53─────▶ dns (CoreDNS: answers only os.ayvo.co, refuses everything else)
 #   internet ─80/IPv4─▶ caddy: ACME HTTP-01 challenges only; every other request is aborted
 #   internet ─443/IPv4 (public address)─▶ qr-edge ──GET /<token> → /q/<token>──▶ web ──▶ api
@@ -17,7 +19,12 @@
 # Published ports: on the server's Tailscale IPv4 (PROD_TAILNET_IPV4, from `tailscale ip -4` by
 # the deploy script) — never 0.0.0.0 or IPv6 — except IPv4 :80 for certificate issuance and the
 # public QR edge on the server's public IPv4 :443 (PROD_PUBLIC_IPV4, TCP only).
-# web, api, postgres and redis publish nothing; postgres and redis have no egress.
+# web, api, finance, postgres and redis publish nothing; postgres and redis have no egress.
+#
+# Finance (ADR 0039, doc 039–041) is its own unit: the core release's own api image with its own
+# entry point, DB roles (schema finance only), S3 identity and container. Started, migrated and
+# rolled back only by `scripts/deploy-prod.sh --finance` (profiles finance / finance-tools); the OS
+# deployment never starts, stops or rebuilds it.
 
 name: ayvo-prod
 
@@ -134,6 +141,9 @@ services:
     environment:
       APP_ENV: production
       API_URL: http://api:4000
+      # Finance pages read the Finance unit server-side; while it is not installed or down, only
+      # they say "Finance jsou dočasně nedostupné".
+      FINANCE_API_URL: http://finance:4010
     networks:
       - edge
       - public
@@ -183,6 +193,9 @@ services:
       LABEL_QR_ERROR_CORRECTION: ${LABEL_QR_ERROR_CORRECTION:-}
       # Carriers: no connection is configured in production (PPL TEST is refused there).
       CARRIER_CREDENTIALS_KEY: ${CARRIER_CREDENTIALS_KEY:-}
+      # The Finance unit's service token, as its SHA-256 only (ADR 0039 §4); empty = the internal
+      # contract refuses every call (Finance not installed).
+      FINANCE_SERVICE_TOKEN_SHA256: ${FINANCE_SERVICE_TOKEN_SHA256:-}
     networks:
       - edge
       - backend
@@ -219,6 +232,79 @@ services:
       postgres:
         condition: service_healthy
 
+  # Finance (ADR 0039): exactly the api image of a core release (FINANCE_RELEASE, set by
+  # `deploy-prod.sh --finance`), never built here. Its own runtime role, schema and S3 identity.
+  finance:
+    <<: *app
+    image: ayvo-prod/api:${FINANCE_RELEASE:-none}
+    profiles:
+      - finance
+    command: ['node', 'dist/finance/main.js']
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Measured on DEV (ADR 0039 §7): ~90 MiB idle, 11 PIDs.
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 128
+    # Its own S3 identity (finance-documents/*, accounting-exports/* only) — never the core's or
+    # the backup identity (checked by deploy-prod.sh).
+    env_file:
+      - ${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}/prod-finance-s3.env
+    environment:
+      APP_ENV: production
+      FINANCE_PORT: 4010
+      FINANCE_DATABASE_URL: postgresql://ayvo_finance:${FINANCE_DB_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}
+      CORE_INTERNAL_URL: http://api:4000
+      FINANCE_SERVICE_TOKEN: ${FINANCE_SERVICE_TOKEN:-}
+      FILE_STORAGE_DRIVER: s3
+      AWS_REGION: eu-north-1
+      S3_BUCKET: ayvo-prod-files-888725257303-eu-north-1-an
+      S3_EXPECTED_BUCKET_OWNER: '888725257303'
+    networks:
+      - edge
+      - finance-db
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4010/api/admin/finance/health/live').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # Finance roles + schema (as the privileged account), then its migrations (as the schema owner).
+  finance-migrate:
+    image: ayvo-prod/api-migrate:${FINANCE_RELEASE:-none}
+    profiles:
+      - finance-tools
+    restart: 'no'
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      [
+        'sh',
+        '-c',
+        'node dist/finance/db-setup.js && node_modules/.bin/prisma migrate deploy --config prisma-finance.config.ts',
+      ]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-}:${POSTGRES_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}
+      FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-}
+      FINANCE_DB_OWNER_PASSWORD: ${FINANCE_DB_OWNER_PASSWORD:-}
+      FINANCE_MIGRATE_DATABASE_URL: postgresql://ayvo_finance_owner:${FINANCE_DB_OWNER_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}?schema=finance
+    networks:
+      - finance-db
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
@@ -233,6 +319,7 @@ services:
       - postgres-data:/var/lib/postgresql
     networks:
       - backend
+      - finance-db
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s
@@ -263,6 +350,9 @@ networks:
   dns:
   # qr-edge and web only: the public edge never reaches the API or the databases.
   public:
+  # Finance and its migrations ↔ postgres only: no route outside, no Redis, no core containers.
+  finance-db:
+    internal: true
 
 # Explicit names, separate from DEV's ayvo-dev-preview-*. Nothing removes them: the deploy script
 # never runs `down -v`, `volume rm` or a prune.

@@ -40,6 +40,22 @@
 
 	handle {
 		# The normal application sign-in (WorkOS) protects every route; no Basic Auth.
+		# The core's internal contract for the Finance unit (ADR 0039) is never reachable from a
+		# browser: only the Finance container calls it, inside the Compose network.
+		@internal path /api/internal /api/internal/*
+		handle @internal {
+			abort
+		}
+
+		# Finance runs as its own unit (ADR 0039): its routes go to its container. While it is not
+		# installed or down, only these routes fail (502); nothing else is affected.
+		@finance path /api/admin/finance /api/admin/finance/*
+		handle @finance {
+			reverse_proxy finance:4010 {
+				header_down -X-Powered-By
+			}
+		}
+
 		# Same-origin API: /api and /api/* go to NestJS with the path UNCHANGED.
 		@api path /api /api/*
 		handle @api {
