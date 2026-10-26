@@ -191,7 +191,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   (`isPlannedRole`, refused by the API), records and permissions unchanged.
   Users are onboarded only by AYVO invitations (provider API, server-side): an identity is linked
   at first sign-in only if the provider reports the user's invitation accepted by exactly that
-  identity (the bootstrap ADMIN excepted). Session defaults: 120 min idle, 12 h absolute.
+  identity (the bootstrap ADMIN excepted). Session defaults (owner 2026-10-26): 12 h idle, 24 h absolute — never
+  longer-lived MFA challenges, activation or reset links, and no remembered devices.
   WorkOS tokens: exact `WORKOS_JWT_ISSUER` (required), `client_id`, `sid`, RS256 only (doc 021 §5a).
   The permission catalogue and system roles change only inside a migration that switches
   `ayvo.catalogue_migration` on (and off at the end); custom roles never hold security
