@@ -112,6 +112,8 @@ MARKETING_ROLLBACK=""
 MARKETING_RELEASE=""
 FINANCE_ROLLBACK=""
 FINANCE_RELEASE=""
+FINANCE_IMAGE=""
+FINANCE_MIGRATE_IMAGE=""
 FINANCE_ENABLED=false
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -483,7 +485,8 @@ compose() {
   PROD_DOMAIN=$DOMAIN PROD_TAILNET_IPV4=$PROD_TAILNET_IPV4 AYVO_RELEASE=$AYVO_RELEASE \
     PROD_PUBLIC_IPV4=$PROD_PUBLIC_IPV4 QR_DOMAIN=$QR_DOMAIN ID_DOMAIN=${ID_DOMAIN:-} \
     MARKETING_DOMAIN=${MARKETING_DOMAIN:-} MARKETING_RELEASE=${MARKETING_RELEASE:-none} \
-    FINANCE_RELEASE=${FINANCE_RELEASE:-none} \
+    FINANCE_IMAGE=${FINANCE_IMAGE:-$IMAGE_PREFIX/api:none} \
+    FINANCE_MIGRATE_IMAGE=${FINANCE_MIGRATE_IMAGE:-$IMAGE_PREFIX/api-migrate:none} \
     AYVO_RELEASE_DIR=$dir AYVO_PROD_SECRETS_DIR=$SECRETS \
     docker compose -p "$PROJECT" --project-directory "$dir/deploy/prod" \
     "${files[@]}" --env-file "$SECRETS/prod.env" "$@"
@@ -520,7 +523,12 @@ validate_compose() {
 }
 
 current_release() { docker inspect --format '{{.Config.Image}}' "$PROJECT-api-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/api:||p"; }
-current_finance() { docker inspect --format '{{.Config.Image}}' "$PROJECT-finance-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/api:||p"; }
+# The Finance release that runs: the last one recorded with the image ID its container runs.
+current_finance() {
+  local id
+  id="$(docker inspect --format '{{.Image}}' "$PROJECT-finance-1" 2>/dev/null)" || return 0
+  awk -v id="$id" '$2 == id { r = $1 } END { if (r) print r }' "$PROD_DIR/state/finance.log" 2>/dev/null
+}
 current_marketing() { docker inspect --format '{{.Config.Image}}' "$PROJECT-marketing-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/marketing:||p"; }
 
 # --- the marketing site (ADR 0040) -------------------------------------------------------------
@@ -612,6 +620,23 @@ build_images() {
     compose build "$service" || die "building $service failed"
   done
   ok "images built for $AYVO_RELEASE"
+  record_built_images
+}
+
+# The image IDs this release was built as (Finance is pinned to them — PROD78-R1): a tag can be
+# moved by a later, interrupted build of the same revision; an ID cannot.
+record_built_images() {
+  local service file id
+  mkdir -p "$PROD_DIR/state/images"
+  file="$PROD_DIR/state/images/$AYVO_RELEASE"
+  : >"$file.partial"
+  for service in api api-migrate web; do
+    id="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$service:$AYVO_RELEASE")" ||
+      die "cannot read the image ID of $IMAGE_PREFIX/$service:$AYVO_RELEASE"
+    [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] || die "$IMAGE_PREFIX/$service:$AYVO_RELEASE has no image ID"
+    printf '%s %s\n' "$service" "$id" >>"$file.partial"
+  done
+  mv "$file.partial" "$file"
 }
 
 wait_healthy() {
@@ -935,6 +960,28 @@ check_core_holds_finance_contract() {
   ok "the running API holds the Finance contract"
 }
 
+# PROD78-R1: before any change, the API must run exactly the image this release was built as;
+# Finance and its migrations then run those image IDs (never a tag that may have moved since).
+pin_finance_images() {
+  STEP="pin the Finance images to the image IDs of the running OS release"
+  local file running built migrate
+  file="$PROD_DIR/state/images/$AYVO_RELEASE"
+  [[ -f $file ]] || die "no image IDs are recorded for $AYVO_RELEASE: deploy the OS release again with this script"
+  built="$(awk '$1 == "api" { print $2 }' "$file")"
+  migrate="$(awk '$1 == "api-migrate" { print $2 }' "$file")"
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-api-1" 2>/dev/null || true)"
+  [[ $built =~ ^sha256:[0-9a-f]{64}$ && $migrate =~ ^sha256:[0-9a-f]{64}$ ]] ||
+    die "the recorded image IDs of $AYVO_RELEASE are not image IDs"
+  [[ $running == "$built" ]] ||
+    die "the API does not run the image $AYVO_RELEASE was built as (running ${running:-nothing}, built $built): deploy the OS release again"
+  docker image inspect "$built" >/dev/null 2>&1 || die "image $built is gone"
+  docker image inspect "$migrate" >/dev/null 2>&1 ||
+    die "the migration image $migrate of $AYVO_RELEASE is gone: deploy the OS release again"
+  FINANCE_IMAGE=$built
+  FINANCE_MIGRATE_IMAGE=$migrate
+  ok "Finance pinned to the API's own image $built (migrations $migrate)"
+}
+
 migrate_finance() {
   STEP="Finance roles, schema and migrations (schema finance by its owner)"
   log "$STEP"
@@ -948,7 +995,11 @@ start_finance() {
   log "$STEP"
   compose --profile finance up -d --no-build --no-deps finance || die "finance did not start"
   wait_healthy finance || die "finance did not become healthy (docker compose -p $PROJECT logs --tail 200 finance)"
-  ok "finance running and healthy"
+  local running
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-finance-1" 2>/dev/null || true)"
+  [[ $running == "$FINANCE_IMAGE" ]] ||
+    die "the finance container runs ${running:-nothing}, not the pinned image $FINANCE_IMAGE"
+  ok "finance running and healthy (image $FINANCE_IMAGE)"
 }
 
 verify_finance() {
@@ -967,7 +1018,10 @@ verify_finance() {
 
 record_finance() {
   mkdir -p "$PROD_DIR/state"
-  printf '%s %s\n' "$FINANCE_RELEASE" "$(date -u +%FT%TZ)" >>"$PROD_DIR/state/finance.log"
+  # <release12> <api image ID> <migration image ID> <time> — current_finance() and the retention
+  # of remove_old_images() read it.
+  printf '%s %s %s %s\n' "$FINANCE_RELEASE" "$FINANCE_IMAGE" "$FINANCE_MIGRATE_IMAGE" "$(date -u +%FT%TZ)" \
+    >>"$PROD_DIR/state/finance.log"
 }
 
 backup_status() {
@@ -1177,10 +1231,7 @@ case $MODE in
     [[ ${RELEASE:0:12} == "$PREVIOUS" ]] ||
       die "Finance is installed only from the release the OS runs ($PREVIOUS): deploy the OS release $RELEASE first"
     AYVO_RELEASE=$PREVIOUS
-    for image in api api-migrate; do
-      docker image inspect "$IMAGE_PREFIX/$image:$AYVO_RELEASE" >/dev/null 2>&1 ||
-        die "image $IMAGE_PREFIX/$image:$AYVO_RELEASE is gone: deploy the OS release again"
-    done
+    pin_finance_images
     FINANCE_PREVIOUS=$FINANCE_RELEASE
     FINANCE_RELEASE=$AYVO_RELEASE
     log "Finance unit $RELEASE at $(date -u +%FT%TZ) (OS stays $AYVO_RELEASE; Finance now: ${FINANCE_PREVIOUS:-not installed})"
@@ -1199,10 +1250,10 @@ case $MODE in
     [[ $FINANCE_ROLLBACK =~ ^[0-9a-f]{12}$ ]] || die "--finance-rollback needs the 12-character release of an earlier Finance deployment"
     $FINANCE_ENABLED || die "the Finance keys are not set in prod.env"
     [[ -n $PREVIOUS ]] || die "production is not running"
-    grep -q "^$FINANCE_ROLLBACK " "$PROD_DIR/state/finance.log" 2>/dev/null ||
-      die "no Finance deployment of $FINANCE_ROLLBACK is recorded"
-    docker image inspect "$IMAGE_PREFIX/api:$FINANCE_ROLLBACK" >/dev/null 2>&1 ||
-      die "image $IMAGE_PREFIX/api:$FINANCE_ROLLBACK is gone"
+    read -r FINANCE_IMAGE FINANCE_MIGRATE_IMAGE <<<"$(awk -v r="$FINANCE_ROLLBACK" '$1 == r { i = $2; m = $3 } END { if (i) print i, m }' "$PROD_DIR/state/finance.log" 2>/dev/null)" || true
+    [[ ${FINANCE_IMAGE:-} =~ ^sha256:[0-9a-f]{64}$ ]] || die "no Finance deployment of $FINANCE_ROLLBACK is recorded"
+    docker image inspect "$FINANCE_IMAGE" >/dev/null 2>&1 ||
+      die "the recorded image $FINANCE_IMAGE of Finance $FINANCE_ROLLBACK is gone"
     AYVO_RELEASE=$PREVIOUS
     FINANCE_RELEASE=$FINANCE_ROLLBACK
     log "Finance rollback to $FINANCE_ROLLBACK (OS stays $AYVO_RELEASE). No migration runs."

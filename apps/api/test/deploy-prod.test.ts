@@ -1027,7 +1027,7 @@ describe('the Finance unit in production (ADR 0039)', () => {
 
   it('Finance is the release api image, never built, in its own profile; the migrations in theirs', () => {
     const finance = serviceBlock('finance');
-    expect(finance).toContain('image: ayvo-prod/api:${FINANCE_RELEASE:-none}');
+    expect(finance).toContain('image: ${FINANCE_IMAGE:-ayvo-prod/api:none}');
     expect(finance).not.toMatch(/^ {4}build:/m);
     expect(finance).toMatch(/profiles:\n {6}- finance\n/);
     expect(finance).not.toMatch(/^ {4}ports:/m);
@@ -1035,7 +1035,7 @@ describe('the Finance unit in production (ADR 0039)', () => {
     expect(finance).toMatch(/read_only: true/);
     expect(finance).toMatch(/mem_limit: 512m/);
     const migrate = serviceBlock('finance-migrate');
-    expect(migrate).toContain('image: ayvo-prod/api-migrate:${FINANCE_RELEASE:-none}');
+    expect(migrate).toContain('image: ${FINANCE_MIGRATE_IMAGE:-ayvo-prod/api-migrate:none}');
     expect(migrate).toMatch(/profiles:\n {6}- finance-tools\n/);
     expect(serviceEnv('finance')).toMatchObject({
       APP_ENV: 'production',
@@ -1076,7 +1076,8 @@ describe('the Finance unit in production (ADR 0039)', () => {
         PROD_PUBLIC_IPV4: '198.51.100.7',
         QR_DOMAIN: 'qr.example.test',
         AYVO_RELEASE: 'abcdef012345',
-        FINANCE_RELEASE: 'abcdef012345',
+        FINANCE_IMAGE: `sha256:${'1'.repeat(64)}`,
+        FINANCE_MIGRATE_IMAGE: `sha256:${'2'.repeat(64)}`,
         AYVO_RELEASE_DIR: root,
         AYVO_PROD_SECRETS_DIR: secrets,
       };
@@ -1107,7 +1108,8 @@ describe('the Finance unit in production (ADR 0039)', () => {
       for (const other of ['api', 'web', 'redis', 'caddy', 'migrate'])
         expect(nets(other), other).not.toContain('finance-db');
       expect(all.networks['finance-db'].internal).toBe(true);
-      expect(all.services.finance.image).toBe('ayvo-prod/api:abcdef012345');
+      expect(all.services.finance.image).toBe(`sha256:${'1'.repeat(64)}`);
+      expect(all.services['finance-migrate'].image).toBe(`sha256:${'2'.repeat(64)}`);
       expect(all.services.finance.environment.AWS_ACCESS_KEY_ID).toBe('AKIAFIN');
       expect(all.services.api.environment.AWS_ACCESS_KEY_ID).toBe('AKIAAPP');
       const db = new URL(all.services.finance.environment.FINANCE_DATABASE_URL);
@@ -1126,6 +1128,7 @@ describe('the Finance unit in production (ADR 0039)', () => {
     const body = script.split('\n  finance)\n')[1]!.split('\n    ;;\n')[0]!;
     expect(body).toMatch(/\$\{RELEASE:0:12\} == "\$PREVIOUS"/);
     const order = [
+      'pin_finance_images',
       'check_core_holds_finance_contract',
       'backup_before_migration',
       'migrate_finance',
@@ -1147,5 +1150,113 @@ describe('the Finance unit in production (ADR 0039)', () => {
     // The OS deployment never starts Finance (its profile is never activated there).
     const deploy = script.split('\n  deploy)\n')[1]!.split('\n    ;;\n')[0]!;
     expect(deploy).not.toMatch(/finance/i);
+  });
+
+  /** The source of one function of the script (from `name() {` to its closing brace). */
+  const fnSrc = (name: string) => {
+    const i = script.indexOf(`\n${name}() {`);
+    expect(i, name).toBeGreaterThan(0);
+    return script.slice(i + 1, script.indexOf('\n}\n', i) + 2);
+  };
+  const HELPERS = [
+    'set -Eeuo pipefail',
+    'log() { echo "LOG $*"; }',
+    'ok() { echo "OK $*"; }',
+    'warn() { echo "WARN $*"; }',
+    'die() { echo "DIE $*"; exit 1; }',
+    'PROJECT=ayvo-prod; IMAGE_PREFIX=ayvo-prod',
+  ].join('\n');
+  const id = (c: string) => `sha256:${c.repeat(64)}`;
+  /**
+   * A docker double: `inspect --format … <container>` answers RUN_API / RUN_FIN; `image inspect
+   * [--format …] <ref>` looks the ref (a tag, or an ID as its own ref) up in the IMAGES table
+   * ("<ref> <id>" per line); `image rm` is recorded in REMOVED; `image ls` lists the tags.
+   */
+  const DOCKER = [
+    'docker() {',
+    '  local last=${!#}',
+    '  case "$1 $2" in',
+    '    "inspect --format")',
+    '      case $last in',
+    '        *-api-1) [[ -n ${RUN_API:-} ]] && echo "$RUN_API" || return 1 ;;',
+    '        *-finance-1 | c-finance) [[ -n ${RUN_FIN:-} ]] && echo "$RUN_FIN" || return 1 ;;',
+    '        *) return 1 ;;',
+    '      esac ;;',
+    '    "image inspect")',
+    '      local hit',
+    '      hit="$(awk -v r="$last" \'$1 == r { print $2 }\' "$IMAGES")"',
+    '      if [[ -z $hit ]] && awk -v r="$last" \'$2 == r { f = 1 } END { exit !f }\' "$IMAGES"; then hit=$last; fi',
+    '      [[ -n $hit ]] || return 1',
+    '      [[ $3 == --format ]] && echo "$hit"',
+    '      return 0 ;;',
+    '    "image ls") awk \'$1 ~ /:/ { print $1 }\' "$IMAGES" ;;',
+    '    "image rm") echo "$3" >>"$REMOVED" ;;',
+    '    "ps -a") echo "${PS_NAMES:-}" ;;',
+    '    "ps -aq") [[ -n ${RUN_FIN:-} ]] && echo c-finance || true ;;',
+    '    *) echo "unexpected docker $*" >&2; return 1 ;;',
+    '  esac',
+    '}',
+  ].join('\n');
+  const harness = (body: string, env: Record<string, string>) =>
+    spawnSync('bash', ['-c', `${HELPERS}\n${DOCKER}\n${body}`], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env },
+    });
+
+  it('PROD78-R1: Finance is pinned to the image ID the API runs; a moved tag or another running image stops before any change', () => {
+    const dir = mkdtempSync(join(tmp, 'pin-'));
+    run('mkdir', ['-p', join(dir, 'state/images')]);
+    const images = join(dir, 'images.txt');
+    // Release abcdef012345 was built as api=1…, api-migrate=2…; its tag now points at 9….
+    writeFileSync(
+      join(dir, 'state/images/abcdef012345'),
+      `api ${id('1')}\napi-migrate ${id('2')}\nweb ${id('3')}\n`,
+    );
+    writeFileSync(images, `ayvo-prod/api:abcdef012345 ${id('9')}\nx ${id('1')}\nx ${id('2')}\n`);
+    const pin = (env: Record<string, string>, release = 'abcdef012345') =>
+      harness(
+        `PROD_DIR=${dir}; AYVO_RELEASE=${release}\n${fnSrc('pin_finance_images')}\npin_finance_images\necho "IMG=$FINANCE_IMAGE MIG=$FINANCE_MIGRATE_IMAGE"\necho AFTER-PIN`,
+        { IMAGES: images, ...env },
+      );
+    // The API runs what the release was built as: pinned to those IDs; the moved tag is ignored.
+    const okRun = pin({ RUN_API: id('1') });
+    expect(okRun.status, okRun.stdout + okRun.stderr).toBe(0);
+    expect(okRun.stdout).toContain(`IMG=${id('1')} MIG=${id('2')}`);
+    // The API runs another image (an interrupted re-deploy re-tagged the revision) or none.
+    for (const [why, env] of [
+      ['another running image', { RUN_API: id('9') }],
+      ['no API running', {}],
+    ] as const) {
+      const res = pin(env);
+      expect([why, res.status]).toEqual([why, 1]);
+      expect(res.stdout).toContain('DIE');
+      expect(res.stdout).not.toContain('AFTER-PIN');
+    }
+    // No record for the release (deployed by an older script): refused.
+    expect(pin({ RUN_API: id('1') }, '000000000000').stdout).toMatch(
+      /DIE no image IDs are recorded/,
+    );
+    // The release's migration image is gone: refused too.
+    writeFileSync(images, `x ${id('1')}\n`);
+    expect(pin({ RUN_API: id('1') }).stdout).toMatch(/DIE the migration image/);
+    // The finance case pins before its first change (the backup), never by tag.
+    const body = script.split('\n  finance)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(body.indexOf('pin_finance_images')).toBeGreaterThan(0);
+    expect(body.indexOf('pin_finance_images')).toBeLessThan(
+      body.indexOf('backup_before_migration'),
+    );
+    expect(body).not.toContain('image inspect "$IMAGE_PREFIX/api:');
+  });
+
+  it('PROD78-R1: after starting, the finance container must run exactly the pinned image ID', () => {
+    const start = (running: string) =>
+      harness(
+        `compose() { :; }\nwait_healthy() { :; }\nFINANCE_RELEASE=abcdef012345; FINANCE_IMAGE=${id('1')}\n${fnSrc('start_finance')}\nstart_finance\necho STARTED`,
+        { RUN_FIN: running, IMAGES: '/dev/null' },
+      );
+    expect(start(id('1')).stdout).toContain('STARTED');
+    const other = start(id('9'));
+    expect(other.status).toBe(1);
+    expect(other.stdout).toMatch(/DIE the finance container runs/);
   });
 });

@@ -232,11 +232,12 @@ services:
       postgres:
         condition: service_healthy
 
-  # Finance (ADR 0039): exactly the api image of a core release (FINANCE_RELEASE, set by
-  # `deploy-prod.sh --finance`), never built here. Its own runtime role, schema and S3 identity.
+  # Finance (ADR 0039): exactly the api image the running OS release was built as — pinned by its
+  # image ID (FINANCE_IMAGE, set by `deploy-prod.sh --finance`), never a tag, never built here.
+  # Its own runtime role, schema and S3 identity.
   finance:
     <<: *app
-    image: ayvo-prod/api:${FINANCE_RELEASE:-none}
+    image: ${FINANCE_IMAGE:-ayvo-prod/api:none}
     profiles:
       - finance
     command: ['node', 'dist/finance/main.js']
@@ -279,7 +280,7 @@ services:
 
   # Finance roles + schema (as the privileged account), then its migrations (as the schema owner).
   finance-migrate:
-    image: ayvo-prod/api-migrate:${FINANCE_RELEASE:-none}
+    image: ${FINANCE_MIGRATE_IMAGE:-ayvo-prod/api-migrate:none}
     profiles:
       - finance-tools
     restart: 'no'

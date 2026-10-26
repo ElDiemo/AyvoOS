@@ -251,14 +251,17 @@ recreates the `postgres` container during that OS deployment (a short restart in
 the data volume is unchanged).
 
 **Install / replace:** `sudo scripts/deploy-prod.sh --finance --release <the commit the OS runs>`:
+the OS deployment records the image IDs each release was built as (`state/images/<release>`);
+before any change Finance is pinned to them — the running API must be exactly that api image, and
+Finance and its migrations run those IDs, never a tag a later build may have moved (PROD78-R1) →
 pre-migration dump (and S3 upload when the backup tool is installed) → roles + schema as the
 privileged account → migrations as `ayvo_finance_owner` → only the `finance` container
 (`mem_limit 512m`, `cpus 0.5`, `pids_limit 128`, read-only) → verify: ready (database + core
 contract), `/api/admin/finance/*` 401 without a session, `/api/internal/*` aborted → recorded in
 `state/finance.log`.
 
-**Rollback:** `--finance-rollback <earlier release>` starts that Finance image again (no
-migration; safe only if it works with the current schema). To take Finance out entirely:
+**Rollback:** `--finance-rollback <earlier release>` starts the image ID recorded for it in
+`state/finance.log` again (no migration; safe only if it works with the current schema). To take Finance out entirely:
 `docker compose -p ayvo-prod stop finance` — the OS keeps running, Finance pages say "Finance jsou
 dočasně nedostupné". Finance data stay (schema `finance` in the same database and its dumps).
 
