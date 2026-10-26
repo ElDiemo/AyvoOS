@@ -13,7 +13,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - **Modular monolith** (ADR 0001). No microservices. Modules talk through exported services, never
   through another module's tables.
 - **PostgreSQL is the source of truth** (ADR 0002). Redis is non-authoritative (ADR 0010).
-- **The running core is not the DB superuser** (ADR 0041, in review): `api` connects as `ayvo_core`
+- **The running core is not the DB superuser** (ADR 0041; merged 2026-10-25 with #71, on DEV since
+  2026-10-25, not yet on PROD): `api` connects as `ayvo_core`
   (rows of `public` only — no TRUNCATE, DDL, trigger switching or other schemas); migrations, role
   setups and backups keep the privileged account. Tests run the app as such a role; fixtures that
   need more use `withPrivileged` — never broaden the runtime role.
@@ -325,10 +326,33 @@ Tailwind 4 · Vitest · Playwright.
   training data: before changing `turbo.json` or turbo commands, read the installed version's docs
   in `node_modules/turbo/docs/`.
 
+## Workflow (owner, 2026-10-25)
+
+- Roles: the owner requests and approves; Claude implements, fixes and prepares PRs; ChatGPT (in a
+  normal chat) is the independent architect/reviewer; Codex technically performs PROD, DNS and
+  cutovers — only after the owner's explicit approval, from a deployment plan with checks and a
+  rollback prepared by Claude. No automatic production deployment.
+- Larger changes start with a short technical plan; architectural decisions wait for the owner.
+- PRs are logically whole and reviewable (target ~1 500 diff lines, not a hard limit).
+- After implementing: lint, typecheck, tests, build, format (+ e2e/Docker tests where relevant).
+  Finish with a self-contained review package (one Markdown file): what changed and why, files,
+  architecture decisions, results of the checks actually run (commit SHA, CI run), risks, open
+  questions, the relevant real diff or PR link. Never secrets, env values or personal data; never
+  the whole repository.
+- The ChatGPT review works from the package it is given; it is not a complete check of the
+  repository.
+- Review findings are fixed in separate commits with a short explanation.
+- Merge and every deployment need the owner's explicit approval; green CI and the independent
+  review are separate conditions. Record the owner's approval in the PR — never present it (or a
+  self-check) as a technical review.
+- Push only approved working branches within the agreed scope; never push directly to protected
+  branches.
+- CI/CD workflows and repository rules change only with the owner's consent.
+
 ## Before finishing any change
 
 ```bash
 pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check
 ```
 
-Check `git status` for accidentally added secrets or generated files. Don't push.
+Check `git status` for accidentally added secrets or generated files. Push only as in Workflow above.
