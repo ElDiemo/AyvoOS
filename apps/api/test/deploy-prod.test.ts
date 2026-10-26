@@ -668,6 +668,89 @@ describe('production deploy script', () => {
       'prod-s3-backup.env': 'AWS_ACCESS_KEY_ID=AKIABACKUPFICTIONAL0\nAWS_SECRET_ACCESS_KEY=y\n',
     };
 
+    it('Finance keys (ADR 0039): none = not installed; all four with a matching SHA and its own S3 identity; nothing printed', () => {
+      const token = 'f'.repeat(43);
+      const sha = '0b1ab6d4f4e1f7d0a32a8c1c1b2d6c2a39b53e1f2c8b2e7d6c5a4b3c2d1e0f9a'; // not the real SHA
+      const realSha = spawnSync(
+        'sh',
+        ['-c', `printf '%s' '${token}' | sha256sum | cut -d' ' -f1`],
+        {
+          encoding: 'utf8',
+        },
+      ).stdout.trim();
+      const fin = (over: Record<string, string> = {}) =>
+        Object.entries({
+          FINANCE_DB_PASSWORD: 'r'.repeat(32),
+          FINANCE_DB_OWNER_PASSWORD: 'o'.repeat(32),
+          FINANCE_SERVICE_TOKEN: token,
+          FINANCE_SERVICE_TOKEN_SHA256: realSha,
+          ...over,
+        })
+          .filter(([, v]) => v !== '')
+          .map(([k, v]) => `${k}=${v}\n`)
+          .join('');
+      const finS3 = 'AWS_ACCESS_KEY_ID=AKIAFINANCEFICTIONAL\nAWS_SECRET_ACCESS_KEY=z\n';
+      const withFin = (over: Record<string, string> = {}, s3 = finS3) => ({
+        ...good,
+        'prod.env': prod + fin(over),
+        'prod-finance-s3.env': s3,
+      });
+      const none = check(good, 0o600, { call: 'check_env_files; echo "FIN=$FINANCE_ENABLED"' });
+      expect(none.status, none.stderr).toBe(0);
+      expect(none.stdout).toContain('Finance keys not set');
+      expect(none.stdout).toContain('FIN=false');
+      const ok = check(withFin(), 0o600, { call: 'check_env_files; echo "FIN=$FINANCE_ENABLED"' });
+      expect(ok.status, ok.stderr).toBe(0);
+      expect(ok.stdout).toContain('FIN=true');
+      for (const [why, files, msg] of [
+        [
+          'only some keys',
+          withFin({ FINANCE_SERVICE_TOKEN: '', FINANCE_SERVICE_TOKEN_SHA256: '' }),
+          /all of/,
+        ],
+        ['wrong SHA', withFin({ FINANCE_SERVICE_TOKEN_SHA256: sha }), /not the SHA-256/],
+        ['short password', withFin({ FINANCE_DB_PASSWORD: 'short' }), /24-128/],
+        [
+          'equal role passwords',
+          withFin({ FINANCE_DB_OWNER_PASSWORD: 'r'.repeat(32) }),
+          /must differ/,
+        ],
+        [
+          'the core role password',
+          withFin({ FINANCE_DB_PASSWORD: 'c'.repeat(32) }),
+          /CORE_DB_PASSWORD/,
+        ],
+        ['bad token', withFin({ FINANCE_SERVICE_TOKEN: 'x y' }), /base64url/],
+        [
+          'the application S3 identity',
+          withFin({}, 'AWS_ACCESS_KEY_ID=AKIAAPPFICTIONAL0000\nAWS_SECRET_ACCESS_KEY=x\n'),
+          /application's S3 identity/,
+        ],
+        [
+          'the backup identity',
+          withFin({}, 'AWS_ACCESS_KEY_ID=AKIABACKUPFICTIONAL0\nAWS_SECRET_ACCESS_KEY=x\n'),
+          /backup identity/,
+        ],
+        [
+          'no Finance S3 file',
+          { ...good, 'prod.env': prod + fin() },
+          /prod-finance-s3.env does not exist/,
+        ],
+        [
+          'a foreign key in it',
+          withFin({}, `${finS3}AWS_ENDPOINT_URL=http://evil\n`),
+          /must not set AWS_ENDPOINT_URL/,
+        ],
+      ] as const) {
+        const res = check(files as Record<string, string>);
+        expect([why, res.status]).toEqual([why, 1]);
+        expect(res.stderr, why).toMatch(msg);
+        // Values are never printed.
+        for (const secret of ['r'.repeat(32), 'o'.repeat(32), token])
+          expect(res.stdout + res.stderr, why).not.toContain(secret);
+      }
+    });
+
     it('accepts an optional ID_DOMAIN in prod.env', () => {
       const res = check({ ...good, 'prod.env': `${prod}ID_DOMAIN=id.example.test\n` });
       expect(res.status, res.stderr).toBe(0);
@@ -927,4 +1010,307 @@ describe('production deploy script', () => {
       expect(res.stderr).toMatch(/refusing: this host is|DEV preview|is not installed/);
     },
   );
+});
+
+describe('the Finance unit in production (ADR 0039)', () => {
+  it('Caddy aborts the internal contract and routes /api/admin/finance to Finance — both before /api', () => {
+    const app = code(caddyfile).split('handle @outside {')[1]!;
+    const internal = app.indexOf('@internal path /api/internal /api/internal/*');
+    const finance = app.indexOf('@finance path /api/admin/finance /api/admin/finance/*');
+    const api = app.indexOf('@api path /api /api/*');
+    expect(internal).toBeGreaterThan(0);
+    expect(finance).toBeGreaterThan(internal);
+    expect(api).toBeGreaterThan(finance);
+    expect(app).toMatch(/handle @internal \{\n\t\t\tabort\n\t\t\}/);
+    expect(app).toMatch(/handle @finance \{\n\t\t\treverse_proxy finance:4010/);
+  });
+
+  it('Finance is the release api image, never built, in its own profile; the migrations in theirs', () => {
+    const finance = serviceBlock('finance');
+    expect(finance).toContain('image: ${FINANCE_IMAGE:-ayvo-prod/api:none}');
+    expect(finance).not.toMatch(/^ {4}build:/m);
+    expect(finance).toMatch(/profiles:\n {6}- finance\n/);
+    expect(finance).not.toMatch(/^ {4}ports:/m);
+    expect(finance).toContain("command: ['node', 'dist/finance/main.js']");
+    expect(finance).toMatch(/read_only: true/);
+    expect(finance).toMatch(/mem_limit: 512m/);
+    const migrate = serviceBlock('finance-migrate');
+    expect(migrate).toContain('image: ${FINANCE_MIGRATE_IMAGE:-ayvo-prod/api-migrate:none}');
+    expect(migrate).toMatch(/profiles:\n {6}- finance-tools\n/);
+    expect(serviceEnv('finance')).toMatchObject({
+      APP_ENV: 'production',
+      FILE_STORAGE_DRIVER: 's3',
+      CORE_INTERNAL_URL: 'http://api:4000',
+    });
+    expect(serviceEnv('web')).toMatchObject({ FINANCE_API_URL: 'http://finance:4010' });
+    // The API gets the token's SHA-256 only, never the token.
+    expect(serviceEnv('api')).toHaveProperty('FINANCE_SERVICE_TOKEN_SHA256');
+    expect(serviceEnv('api')).not.toHaveProperty('FINANCE_SERVICE_TOKEN');
+  });
+
+  it.skipIf(!hasCompose)(
+    'renders: finance-db only between Finance, its migrations and postgres; its own S3 file and DB roles',
+    () => {
+      const secrets = mkdtempSync(join(tmp, 'fin-secrets-'));
+      writeFileSync(
+        join(secrets, 'prod.env'),
+        'POSTGRES_USER=ayvo\nPOSTGRES_PASSWORD=fictional\nCORE_DB_PASSWORD=cccccccccccccccccccccccccccccccc\nPOSTGRES_DB=ayvo_prod\nACME_EMAIL=ops@example.test\n' +
+          `PUBLIC_QR_BASE_URL=https://qr.example.test\nFINANCE_DB_PASSWORD=${'r'.repeat(32)}\nFINANCE_DB_OWNER_PASSWORD=${'o'.repeat(32)}\n` +
+          `FINANCE_SERVICE_TOKEN=${'f'.repeat(43)}\nFINANCE_SERVICE_TOKEN_SHA256=${'a'.repeat(64)}\n`,
+      );
+      writeFileSync(
+        join(secrets, 'prod-auth.env'),
+        'AUTH_ENCRYPTION_KEY=x\nAUTH_MAIL_DRIVER=google-relay\nAUTH_MAIL_FROM=s@example.test\n',
+      );
+      writeFileSync(
+        join(secrets, 'prod-s3.env'),
+        'AWS_ACCESS_KEY_ID=AKIAAPP\nAWS_SECRET_ACCESS_KEY=a\n',
+      );
+      writeFileSync(
+        join(secrets, 'prod-finance-s3.env'),
+        'AWS_ACCESS_KEY_ID=AKIAFIN\nAWS_SECRET_ACCESS_KEY=f\n',
+      );
+      const env = {
+        PROD_DOMAIN: 'os.example.test',
+        PROD_TAILNET_IPV4: '100.100.100.100',
+        PROD_PUBLIC_IPV4: '198.51.100.7',
+        QR_DOMAIN: 'qr.example.test',
+        AYVO_RELEASE: 'abcdef012345',
+        FINANCE_IMAGE: `sha256:${'1'.repeat(64)}`,
+        FINANCE_MIGRATE_IMAGE: `sha256:${'2'.repeat(64)}`,
+        AYVO_RELEASE_DIR: root,
+        AYVO_PROD_SECRETS_DIR: secrets,
+      };
+      const args = [
+        'compose',
+        '-p',
+        'ayvo-prod-test',
+        '-f',
+        join(prodDir, 'compose.yml'),
+        '--env-file',
+        join(secrets, 'prod.env'),
+      ];
+      const render = (...profiles: string[]) =>
+        JSON.parse(
+          run(
+            'docker',
+            [...args, ...profiles.flatMap((p) => ['--profile', p]), 'config', '--format', 'json'],
+            env,
+          ).stdout,
+        );
+      // The OS alone renders without Finance services.
+      expect(Object.keys(render().services)).not.toContain('finance');
+      const all = render('finance', 'finance-tools', 'tools');
+      const nets = (s: string) => Object.keys(all.services[s].networks ?? {}).sort();
+      expect(nets('finance')).toEqual(['edge', 'finance-db']);
+      expect(nets('finance-migrate')).toEqual(['finance-db']);
+      expect(nets('postgres')).toEqual(['backend', 'finance-db']);
+      for (const other of ['api', 'web', 'redis', 'caddy', 'migrate'])
+        expect(nets(other), other).not.toContain('finance-db');
+      expect(all.networks['finance-db'].internal).toBe(true);
+      expect(all.services.finance.image).toBe(`sha256:${'1'.repeat(64)}`);
+      expect(all.services['finance-migrate'].image).toBe(`sha256:${'2'.repeat(64)}`);
+      expect(all.services.finance.environment.AWS_ACCESS_KEY_ID).toBe('AKIAFIN');
+      expect(all.services.api.environment.AWS_ACCESS_KEY_ID).toBe('AKIAAPP');
+      const db = new URL(all.services.finance.environment.FINANCE_DATABASE_URL);
+      expect([db.username, db.password]).toEqual(['ayvo_finance', 'r'.repeat(32)]);
+      const owner = new URL(
+        all.services['finance-migrate'].environment.FINANCE_MIGRATE_DATABASE_URL,
+      );
+      expect(owner.username).toBe('ayvo_finance_owner');
+      expect(JSON.stringify(all.services.finance)).not.toContain('fictional'); // no privileged password
+      expect(JSON.stringify(all.services.api)).not.toContain('f'.repeat(43)); // no service token
+      expect(all.services.api.environment.FINANCE_SERVICE_TOKEN_SHA256).toBe('a'.repeat(64));
+    },
+  );
+
+  it('the script: Finance only from the release the OS runs, its own profiles, no build, a backup before migrating', () => {
+    const body = script.split('\n  finance)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(body).toMatch(/\$\{RELEASE:0:12\} == "\$PREVIOUS"/);
+    const order = [
+      'pin_finance_images',
+      'check_core_holds_finance_contract',
+      'backup_before_migration',
+      'migrate_finance',
+      'start_finance',
+      'verify_finance',
+      'record_finance',
+    ];
+    const at = order.map((step) => body.indexOf(step));
+    expect(
+      at.every((i) => i > 0),
+      JSON.stringify(at),
+    ).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(body).not.toMatch(/build_images|compose build/);
+    expect(script).toContain('compose --profile finance-tools run --rm finance-migrate');
+    expect(script).toContain('compose --profile finance up -d --no-build --no-deps finance');
+    const rollback = script.split('\n  finance-rollback)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(rollback).not.toMatch(/migrate_finance|backup_before_migration/);
+    // The OS deployment never starts Finance (its profile is never activated there).
+    const deploy = script.split('\n  deploy)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(deploy).not.toMatch(/finance/i);
+  });
+
+  /** The source of one function of the script (from `name() {` to its closing brace). */
+  const fnSrc = (name: string) => {
+    const i = script.indexOf(`\n${name}() {`);
+    expect(i, name).toBeGreaterThan(0);
+    return script.slice(i + 1, script.indexOf('\n}\n', i) + 2);
+  };
+  const HELPERS = [
+    'set -Eeuo pipefail',
+    'log() { echo "LOG $*"; }',
+    'ok() { echo "OK $*"; }',
+    'warn() { echo "WARN $*"; }',
+    'die() { echo "DIE $*"; exit 1; }',
+    'PROJECT=ayvo-prod; IMAGE_PREFIX=ayvo-prod',
+  ].join('\n');
+  const id = (c: string) => `sha256:${c.repeat(64)}`;
+  /**
+   * A docker double: `inspect --format … <container>` answers RUN_API / RUN_FIN; `image inspect
+   * [--format …] <ref>` looks the ref (a tag, or an ID as its own ref) up in the IMAGES table
+   * ("<ref> <id>" per line); `image rm` is recorded in REMOVED; `image ls` lists the tags.
+   */
+  const DOCKER = [
+    'docker() {',
+    '  local last=${!#}',
+    '  case "$1 $2" in',
+    '    "inspect --format")',
+    '      case $last in',
+    '        *-api-1) [[ -n ${RUN_API:-} ]] && echo "$RUN_API" || return 1 ;;',
+    '        *-finance-1 | c-finance) [[ -n ${RUN_FIN:-} ]] && echo "$RUN_FIN" || return 1 ;;',
+    '        *) return 1 ;;',
+    '      esac ;;',
+    '    "image inspect")',
+    '      local hit',
+    '      hit="$(awk -v r="$last" \'$1 == r { print $2 }\' "$IMAGES")"',
+    '      if [[ -z $hit ]] && awk -v r="$last" \'$2 == r { f = 1 } END { exit !f }\' "$IMAGES"; then hit=$last; fi',
+    '      [[ -n $hit ]] || return 1',
+    '      [[ $3 == --format ]] && echo "$hit"',
+    '      return 0 ;;',
+    '    "image ls") awk \'$1 ~ /:/ { print $1 }\' "$IMAGES" ;;',
+    '    "image rm") echo "$3" >>"$REMOVED" ;;',
+    '    "ps -a") echo "${PS_NAMES:-}" ;;',
+    '    "ps -aq") [[ -n ${RUN_FIN:-} ]] && echo c-finance || true ;;',
+    '    *) echo "unexpected docker $*" >&2; return 1 ;;',
+    '  esac',
+    '}',
+  ].join('\n');
+  const harness = (body: string, env: Record<string, string>) =>
+    spawnSync('bash', ['-c', `${HELPERS}\n${DOCKER}\n${body}`], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env },
+    });
+
+  it('PROD78-R1: Finance is pinned to the image ID the API runs; a moved tag or another running image stops before any change', () => {
+    const dir = mkdtempSync(join(tmp, 'pin-'));
+    run('mkdir', ['-p', join(dir, 'state/images')]);
+    const images = join(dir, 'images.txt');
+    // Release abcdef012345 was built as api=1…, api-migrate=2…; its tag now points at 9….
+    writeFileSync(
+      join(dir, 'state/images/abcdef012345'),
+      `api ${id('1')}\napi-migrate ${id('2')}\nweb ${id('3')}\n`,
+    );
+    writeFileSync(images, `ayvo-prod/api:abcdef012345 ${id('9')}\nx ${id('1')}\nx ${id('2')}\n`);
+    const pin = (env: Record<string, string>, release = 'abcdef012345') =>
+      harness(
+        `PROD_DIR=${dir}; AYVO_RELEASE=${release}\n${fnSrc('pin_finance_images')}\npin_finance_images\necho "IMG=$FINANCE_IMAGE MIG=$FINANCE_MIGRATE_IMAGE"\necho AFTER-PIN`,
+        { IMAGES: images, ...env },
+      );
+    // The API runs what the release was built as: pinned to those IDs; the moved tag is ignored.
+    const okRun = pin({ RUN_API: id('1') });
+    expect(okRun.status, okRun.stdout + okRun.stderr).toBe(0);
+    expect(okRun.stdout).toContain(`IMG=${id('1')} MIG=${id('2')}`);
+    // The API runs another image (an interrupted re-deploy re-tagged the revision) or none.
+    for (const [why, env] of [
+      ['another running image', { RUN_API: id('9') }],
+      ['no API running', {}],
+    ] as const) {
+      const res = pin(env);
+      expect([why, res.status]).toEqual([why, 1]);
+      expect(res.stdout).toContain('DIE');
+      expect(res.stdout).not.toContain('AFTER-PIN');
+    }
+    // No record for the release (deployed by an older script): refused.
+    expect(pin({ RUN_API: id('1') }, '000000000000').stdout).toMatch(
+      /DIE no image IDs are recorded/,
+    );
+    // The release's migration image is gone: refused too.
+    writeFileSync(images, `x ${id('1')}\n`);
+    expect(pin({ RUN_API: id('1') }).stdout).toMatch(/DIE the migration image/);
+    // The finance case pins before its first change (the backup), never by tag.
+    const body = script.split('\n  finance)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(body.indexOf('pin_finance_images')).toBeGreaterThan(0);
+    expect(body.indexOf('pin_finance_images')).toBeLessThan(
+      body.indexOf('backup_before_migration'),
+    );
+    expect(body).not.toContain('image inspect "$IMAGE_PREFIX/api:');
+  });
+
+  it('PROD78-R1: after starting, the finance container must run exactly the pinned image ID', () => {
+    const start = (running: string) =>
+      harness(
+        `compose() { :; }\nwait_healthy() { :; }\nFINANCE_RELEASE=abcdef012345; FINANCE_IMAGE=${id('1')}\n${fnSrc('start_finance')}\nstart_finance\necho STARTED`,
+        { RUN_FIN: running, IMAGES: '/dev/null' },
+      );
+    expect(start(id('1')).stdout).toContain('STARTED');
+    const other = start(id('9'));
+    expect(other.status).toBe(1);
+    expect(other.stdout).toMatch(/DIE the finance container runs/);
+  });
+
+  it("PROD78-R2: cleanup keeps the running and the previous verified Finance release (images and exports) on Finance's own history", () => {
+    const dir = mkdtempSync(join(tmp, 'retention-'));
+    run('mkdir', ['-p', join(dir, 'state')]);
+    const images = join(dir, 'images.txt');
+    const removed = join(dir, 'removed.txt');
+    writeFileSync(removed, '');
+    const rel = (x: string) => x.padEnd(12, '0');
+    // OS history c1…c4 (the newest 3 kept); Finance history fe, fa, fb (fb runs, fa before it).
+    const [c1, c2, c3, c4, fe, fa, fb] = ['c1', 'c2', 'c3', 'c4', 'fe', 'fa', 'fb'].map(rel) as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    writeFileSync(
+      join(dir, 'state/releases.log'),
+      [c1, c2, c3, c4].map((r) => `${r}0000 t`).join('\n') + '\n',
+    );
+    writeFileSync(
+      join(dir, 'state/finance.log'),
+      `${fe} ${id('e')} ${id('e')} t\n${fa} ${id('a')} ${id('a')} t\n${fb} ${id('b')} ${id('b')} t\n`,
+    );
+    const ids: Record<string, string> = { [fe]: id('e'), [fa]: id('a'), [fb]: id('b') };
+    const all = [c1, c2, c3, c4, fe, fa, fb];
+    writeFileSync(
+      images,
+      all
+        .flatMap((r, i) =>
+          ['api', 'api-migrate'].map((s) => `ayvo-prod/${s}:${r} ${ids[r] ?? id(String(i + 1))}`),
+        )
+        .join('\n') + '\n',
+    );
+    for (const r of all) run('mkdir', ['-p', join(dir, 'releases', r)]);
+    const res = harness(
+      `PROD_DIR=${dir}; KEEP_RELEASES=3; KEEP_FINANCE_RELEASES=2; PREVIOUS=${c3}\n${fnSrc('current_finance')}\n${fnSrc('remove_old_images')}\nremove_old_images`,
+      { IMAGES: images, REMOVED: removed, RUN_FIN: id('b'), PS_NAMES: `ayvo-prod/web:${c4}` },
+    );
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    expect(readFileSync(removed, 'utf8').trim().split('\n').sort()).toEqual(
+      [
+        `ayvo-prod/api:${c1}`,
+        `ayvo-prod/api-migrate:${c1}`,
+        `ayvo-prod/api:${fe}`,
+        `ayvo-prod/api-migrate:${fe}`,
+      ].sort(),
+    );
+    for (const keep of [fa, fb, c2, c3, c4])
+      expect(existsSync(join(dir, 'releases', keep)), keep).toBe(true);
+    for (const old of [c1, fe]) expect(existsSync(join(dir, 'releases', old)), old).toBe(false);
+  });
 });

@@ -29,6 +29,14 @@
 #   scripts/deploy-prod.sh --marketing-rollback <release> start an earlier marketing image again (the
 #                                                         same strict checks); <release> =
 #                                                         <revision12>-<image12> from marketing.log
+#   scripts/deploy-prod.sh --finance --release <commit>   the Finance unit alone (ADR 0039): the SAME
+#                                                         commit the OS runs, its api image (never
+#                                                         built again); back up, set up the Finance
+#                                                         roles/schema, migrate schema finance as its
+#                                                         owner, replace only the `finance` container,
+#                                                         verify (prod.env FINANCE_* + prod-finance-s3.env)
+#   scripts/deploy-prod.sh --finance-rollback <release>   start the Finance unit of an earlier release
+#                                                         again (no migration); <release> = 12 chars
 #
 # <commit> is a full 40-character commit that is already on origin/main (merged = approved). The
 # images are built from a clean `git archive` of exactly that commit — never from a working copy.
@@ -66,6 +74,8 @@ readonly PROD_DIR="${AYVO_PROD_DIR:-/opt/ayvo/prod}"
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly MIN_FREE_GB=8
 readonly KEEP_RELEASES=3
+# Finance releases kept beside the OS ones (PROD78-R2): the running one and the previous verified.
+readonly KEEP_FINANCE_RELEASES=2
 
 # Required and allowed keys per env file (doc 036 §4). Anything else is refused: a file given to a
 # container through `env_file` must not inject e.g. NODE_OPTIONS, AWS_ENDPOINT_URL or a test
@@ -77,7 +87,10 @@ readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 # ID_DOMAIN (optional): the public employee-card host; unset = no ID edge at all (compose.id.yml).
 # MARKETING_DOMAIN (optional): the public marketing site's apex (served with www.<apex>); unset = no
 # marketing site at all (compose.marketing.yml, ADR 0040).
-readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN"
+# The Finance unit (ADR 0039, optional until it is installed): all four or none. Its runtime and
+# owner roles' passwords, its service token and that token's SHA-256 (the only form the API gets).
+readonly FINANCE_KEYS="FINANCE_DB_PASSWORD FINANCE_DB_OWNER_PASSWORD FINANCE_SERVICE_TOKEN FINANCE_SERVICE_TOKEN_SHA256"
+readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN $FINANCE_KEYS"
 readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
 readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
@@ -99,6 +112,11 @@ EXPECT_IMAGE=""
 IMAGE_ARCHIVE=""
 MARKETING_ROLLBACK=""
 MARKETING_RELEASE=""
+FINANCE_ROLLBACK=""
+FINANCE_RELEASE=""
+FINANCE_IMAGE=""
+FINANCE_MIGRATE_IMAGE=""
+FINANCE_ENABLED=false
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m ok\033[0m %s\n' "$*"; }
@@ -107,7 +125,7 @@ die() {
   printf '\033[1;31mFAILED\033[0m at "%s": %s\n' "$STEP" "$*" >&2
   exit 1
 }
-usage() { sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 on_exit() {
   local code=$?
@@ -338,6 +356,46 @@ check_core_db_password() {
   ok "CORE_DB_PASSWORD set (the running core's own role)"
 }
 
+# The Finance unit's keys (ADR 0039): all four or none in prod.env; with them, its own S3 identity
+# in prod-finance-s3.env — never the application's or the backup's. Values are never printed.
+check_finance_env() {
+  local file=$SECRETS/prod.env key set=() pw owner token sha
+  for key in $FINANCE_KEYS; do [[ -n $(env_value "$file" "$key") ]] && set+=("$key"); done
+  if ((${#set[@]} == 0)); then
+    ok "Finance keys not set: the Finance unit is not installed (its routes answer 502)"
+    return
+  fi
+  ((${#set[@]} == 4)) || die "prod.env sets only ${set[*]}: set all of $FINANCE_KEYS or none (ADR 0039)"
+  pw="$(env_value "$file" FINANCE_DB_PASSWORD)"
+  owner="$(env_value "$file" FINANCE_DB_OWNER_PASSWORD)"
+  for key in FINANCE_DB_PASSWORD FINANCE_DB_OWNER_PASSWORD; do
+    [[ $(env_value "$file" "$key") =~ ^[A-Za-z0-9_-]{24,128}$ ]] ||
+      die "$key must be 24-128 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
+  done
+  [[ $pw != "$owner" ]] || die "FINANCE_DB_PASSWORD and FINANCE_DB_OWNER_PASSWORD must differ"
+  for key in POSTGRES_PASSWORD CORE_DB_PASSWORD; do
+    [[ $pw != "$(env_value "$file" "$key")" && $owner != "$(env_value "$file" "$key")" ]] ||
+      die "the Finance roles' passwords must differ from $key (ADR 0039)"
+  done
+  token="$(env_value "$file" FINANCE_SERVICE_TOKEN)"
+  [[ $token =~ ^[A-Za-z0-9_-]{43,128}$ ]] ||
+    die "FINANCE_SERVICE_TOKEN must be 43-128 characters of base64url (try: openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+  sha="$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)"
+  [[ $sha == "$(env_value "$file" FINANCE_SERVICE_TOKEN_SHA256)" ]] ||
+    die "FINANCE_SERVICE_TOKEN_SHA256 is not the SHA-256 of FINANCE_SERVICE_TOKEN"
+  check_env_file "$SECRETS/prod-finance-s3.env" "$KEYS_S3" "$KEYS_S3"
+  local id
+  id="$(env_value "$SECRETS/prod-finance-s3.env" AWS_ACCESS_KEY_ID)"
+  [[ $id != "$(env_value "$SECRETS/prod-s3.env" AWS_ACCESS_KEY_ID)" ]] ||
+    die "prod-finance-s3.env holds the application's S3 identity: Finance uses its own (ADR 0039)"
+  if [[ -r $SECRETS/prod-s3-backup.env ]] &&
+    [[ $id == "$(env_value "$SECRETS/prod-s3-backup.env" AWS_ACCESS_KEY_ID)" ]]; then
+    die "prod-finance-s3.env holds the backup identity: Finance uses its own (ADR 0039)"
+  fi
+  FINANCE_ENABLED=true
+  ok "Finance keys set; the token matches its SHA-256; its own S3 identity"
+}
+
 # Both QR label settings, or neither (then only our QR label operations are refused, ADR 0034).
 # Never a default, never a value from DEV: only the recorded physical validation (doc 036 §8).
 check_qr_label_settings() {
@@ -369,6 +427,7 @@ check_env_files() {
     [[ $(env_value "$SECRETS/prod-s3.env" AWS_ACCESS_KEY_ID) == "$(env_value "$SECRETS/prod-s3-backup.env" AWS_ACCESS_KEY_ID)" ]]; then
     die "prod-s3.env holds the backup identity: the application uses its own S3 identity (ADR 0032)"
   fi
+  check_finance_env
   if [[ -f $SECRETS/prod-workos-client.env ]]; then
     ok "prod-workos-client.env is not read by this release (keys: $(env_keys "$SECRETS/prod-workos-client.env" | tr '\n' ' '))"
   fi
@@ -428,6 +487,8 @@ compose() {
   PROD_DOMAIN=$DOMAIN PROD_TAILNET_IPV4=$PROD_TAILNET_IPV4 AYVO_RELEASE=$AYVO_RELEASE \
     PROD_PUBLIC_IPV4=$PROD_PUBLIC_IPV4 QR_DOMAIN=$QR_DOMAIN ID_DOMAIN=${ID_DOMAIN:-} \
     MARKETING_DOMAIN=${MARKETING_DOMAIN:-} MARKETING_RELEASE=${MARKETING_RELEASE:-none} \
+    FINANCE_IMAGE=${FINANCE_IMAGE:-$IMAGE_PREFIX/api:none} \
+    FINANCE_MIGRATE_IMAGE=${FINANCE_MIGRATE_IMAGE:-$IMAGE_PREFIX/api-migrate:none} \
     AYVO_RELEASE_DIR=$dir AYVO_PROD_SECRETS_DIR=$SECRETS \
     docker compose -p "$PROJECT" --project-directory "$dir/deploy/prod" \
     "${files[@]}" --env-file "$SECRETS/prod.env" "$@"
@@ -464,6 +525,12 @@ validate_compose() {
 }
 
 current_release() { docker inspect --format '{{.Config.Image}}' "$PROJECT-api-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/api:||p"; }
+# The Finance release that runs: the last one recorded with the image ID its container runs.
+current_finance() {
+  local id
+  id="$(docker inspect --format '{{.Image}}' "$PROJECT-finance-1" 2>/dev/null)" || return 0
+  awk -v id="$id" '$2 == id { r = $1 } END { if (r) print r }' "$PROD_DIR/state/finance.log" 2>/dev/null
+}
 current_marketing() { docker inspect --format '{{.Config.Image}}' "$PROJECT-marketing-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/marketing:||p"; }
 
 # --- the marketing site (ADR 0040) -------------------------------------------------------------
@@ -555,6 +622,23 @@ build_images() {
     compose build "$service" || die "building $service failed"
   done
   ok "images built for $AYVO_RELEASE"
+  record_built_images
+}
+
+# The image IDs this release was built as (Finance is pinned to them — PROD78-R1): a tag can be
+# moved by a later, interrupted build of the same revision; an ID cannot.
+record_built_images() {
+  local service file id
+  mkdir -p "$PROD_DIR/state/images"
+  file="$PROD_DIR/state/images/$AYVO_RELEASE"
+  : >"$file.partial"
+  for service in api api-migrate web; do
+    id="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$service:$AYVO_RELEASE")" ||
+      die "cannot read the image ID of $IMAGE_PREFIX/$service:$AYVO_RELEASE"
+    [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] || die "$IMAGE_PREFIX/$service:$AYVO_RELEASE has no image ID"
+    printf '%s %s\n' "$service" "$id" >>"$file.partial"
+  done
+  mv "$file.partial" "$file"
 }
 
 wait_healthy() {
@@ -695,6 +779,10 @@ verify() {
   [[ $(edge_status "https://$DOMAIN/api/auth/me") == 401 ]] || die "GET /api/auth/me must answer 401 without a session"
   [[ $(edge_status "https://$DOMAIN/api/admin/sites") == 401 ]] || die "the administration must require a session"
   ok "sign-in page served; / and the API require the application sign-in"
+  # ADR 0039: the core's internal contract for Finance is never reachable through the edge.
+  code="$(edge_status "https://$DOMAIN/api/internal/v1/finance/principal" || true)"
+  [[ $code == 000 ]] || die "/api/internal/* must be aborted by Caddy (answered '$code')"
+  ok "/api/internal/* aborted by the edge"
 
   STEP="verify: published ports"
   log "$STEP"
@@ -837,19 +925,29 @@ record_release() {
 }
 
 # Only this project's images and release exports, only of releases other than the newest
-# $KEEP_RELEASES distinct ones and the previous one, never an image a container uses.
+# $KEEP_RELEASES distinct OS ones, the previous one and — on its own history (PROD78-R2) — the
+# running and the previous verified Finance release; never an image a container uses (by name or
+# by image ID: Finance runs an ID).
 remove_old_images() {
   STEP="remove old release images"
-  local keep in_use tag image dir
+  local keep in_use in_use_ids tag image dir
   keep="$( (
     cut -c1-12 "$PROD_DIR/state/releases.log" | tac | awk '!seen[$0]++' | head -n "$KEEP_RELEASES"
     [[ -z $PREVIOUS ]] || printf '%s\n' "${PREVIOUS:0:12}"
+    if [[ -f $PROD_DIR/state/finance.log ]]; then
+      awk '{ print $1 }' "$PROD_DIR/state/finance.log" | tac | awk '!seen[$0]++' | head -n "$KEEP_FINANCE_RELEASES"
+    fi
+    current_finance
   ) | sort -u)"
   in_use="$(docker ps -a --format '{{.Image}}')" || die "cannot list the containers"
+  local container
+  in_use_ids="$(for container in $(docker ps -aq); do docker inspect --format '{{.Image}}' "$container"; done)" ||
+    die "cannot read the containers' images"
   for image in $(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E "^$IMAGE_PREFIX/(api|api-migrate|web):[0-9a-f]{12}$"); do
     tag=${image##*:}
     grep -qx "$tag" <<<"$keep" && continue
     grep -qx "$image" <<<"$in_use" && continue
+    grep -qx "$(docker image inspect --format '{{.Id}}' "$image")" <<<"$in_use_ids" && continue
     docker image rm "$image" >/dev/null && ok "removed old image $image"
   done
   for dir in "$PROD_DIR"/releases/*; do
@@ -857,6 +955,85 @@ remove_old_images() {
     grep -qx "${dir##*/}" <<<"$keep" && continue
     rm -rf "$dir" && ok "removed old release export ${dir##*/}"
   done
+}
+
+# --- the Finance unit (ADR 0039) ---------------------------------------------------------------
+
+# The running API must hold exactly the configured service token's SHA-256 (compared, never shown):
+# otherwise it refuses every contract call and Finance could not answer anything.
+check_core_holds_finance_contract() {
+  STEP="check that the running OS holds the Finance contract"
+  local want have
+  want="$(env_value "$SECRETS/prod.env" FINANCE_SERVICE_TOKEN_SHA256)"
+  have="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$PROJECT-api-1" 2>/dev/null |
+    sed -n 's/^FINANCE_SERVICE_TOKEN_SHA256=//p')"
+  [[ -n $have && $have == "$want" ]] ||
+    die "the running API does not hold the Finance token's SHA-256: deploy the OS release again after adding the Finance keys"
+  ok "the running API holds the Finance contract"
+}
+
+# PROD78-R1: before any change, the API must run exactly the image this release was built as;
+# Finance and its migrations then run those image IDs (never a tag that may have moved since).
+pin_finance_images() {
+  STEP="pin the Finance images to the image IDs of the running OS release"
+  local file running built migrate
+  file="$PROD_DIR/state/images/$AYVO_RELEASE"
+  [[ -f $file ]] || die "no image IDs are recorded for $AYVO_RELEASE: deploy the OS release again with this script"
+  built="$(awk '$1 == "api" { print $2 }' "$file")"
+  migrate="$(awk '$1 == "api-migrate" { print $2 }' "$file")"
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-api-1" 2>/dev/null || true)"
+  [[ $built =~ ^sha256:[0-9a-f]{64}$ && $migrate =~ ^sha256:[0-9a-f]{64}$ ]] ||
+    die "the recorded image IDs of $AYVO_RELEASE are not image IDs"
+  [[ $running == "$built" ]] ||
+    die "the API does not run the image $AYVO_RELEASE was built as (running ${running:-nothing}, built $built): deploy the OS release again"
+  docker image inspect "$built" >/dev/null 2>&1 || die "image $built is gone"
+  docker image inspect "$migrate" >/dev/null 2>&1 ||
+    die "the migration image $migrate of $AYVO_RELEASE is gone: deploy the OS release again"
+  FINANCE_IMAGE=$built
+  FINANCE_MIGRATE_IMAGE=$migrate
+  ok "Finance pinned to the API's own image $built (migrations $migrate)"
+}
+
+migrate_finance() {
+  STEP="Finance roles, schema and migrations (schema finance by its owner)"
+  log "$STEP"
+  MIGRATED=true
+  compose --profile finance-tools run --rm finance-migrate || die "the Finance setup or migration failed"
+  ok "roles ready; schema finance migrated by its owner"
+}
+
+start_finance() {
+  STEP="start the Finance unit ($FINANCE_RELEASE) — only the finance container"
+  log "$STEP"
+  compose --profile finance up -d --no-build --no-deps finance || die "finance did not start"
+  wait_healthy finance || die "finance did not become healthy (docker compose -p $PROJECT logs --tail 200 finance)"
+  local running
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-finance-1" 2>/dev/null || true)"
+  [[ $running == "$FINANCE_IMAGE" ]] ||
+    die "the finance container runs ${running:-nothing}, not the pinned image $FINANCE_IMAGE"
+  ok "finance running and healthy (image $FINANCE_IMAGE)"
+}
+
+verify_finance() {
+  STEP="verify: the Finance unit"
+  log "$STEP"
+  compose exec -T finance node -e \
+    "fetch('http://127.0.0.1:4010/api/admin/finance/health/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))" ||
+    die "finance is not ready (database or the core contract)"
+  [[ $(edge_status "https://$DOMAIN/api/admin/finance/documents") == 401 ]] ||
+    die "/api/admin/finance/* must reach Finance and refuse without a session (401)"
+  local code
+  code="$(edge_status "https://$DOMAIN/api/internal/v1/finance/principal" || true)"
+  [[ $code == 000 ]] || die "/api/internal/* must be aborted by Caddy (answered '$code')"
+  ok "finance ready (database + core contract); /api/admin/finance/* 401 without a session; /api/internal/* aborted"
+}
+
+record_finance() {
+  mkdir -p "$PROD_DIR/state"
+  # <release12> <api image ID> <migration image ID> <time> — current_finance() and the retention
+  # of remove_old_images() read it.
+  printf '%s %s %s %s\n' "$FINANCE_RELEASE" "$FINANCE_IMAGE" "$FINANCE_MIGRATE_IMAGE" "$(date -u +%FT%TZ)" \
+    >>"$PROD_DIR/state/finance.log"
 }
 
 backup_status() {
@@ -901,6 +1078,12 @@ while (($#)); do
       MARKETING_ROLLBACK=${2:-}
       shift
       ;;
+    --finance) MODE=finance ;;
+    --finance-rollback)
+      MODE=finance-rollback
+      FINANCE_ROLLBACK=${2:-}
+      shift
+      ;;
     --activate-bootstrap) MODE=activate ;;
     --resend) RESEND=--resend ;;
     --email)
@@ -926,7 +1109,8 @@ require_commands
 not_dev_server
 not_dev_preview
 check_runner
-if [[ $MODE == deploy || $MODE == rollback || $MODE == marketing || $MODE == marketing-rollback ]]; then
+if [[ $MODE == deploy || $MODE == rollback || $MODE == marketing || $MODE == marketing-rollback ||
+  $MODE == finance || $MODE == finance-rollback ]]; then
   mkdir -p "$PROD_DIR"
   exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
 fi
@@ -943,6 +1127,8 @@ flock -n 9 || die "another production deployment is running"
 PREVIOUS="$(current_release || true)"
 # An OS deployment keeps whatever marketing image runs (it never builds, starts or stops it).
 MARKETING_RELEASE="$(current_marketing || true)"
+# Likewise for the Finance unit: an OS deployment keeps whatever Finance image runs.
+FINANCE_RELEASE="$(current_finance || true)"
 
 case $MODE in
   check)
@@ -1048,6 +1234,48 @@ case $MODE in
     fi
     record_marketing SUCCESS "$image" "$digest"
     ok "the marketing site runs $MARKETING_ROLLBACK again"
+    ;;
+  finance)
+    [[ -n $RELEASE ]] || die "--finance needs --release <commit> (the commit the OS runs)"
+    $FINANCE_ENABLED || die "the Finance keys are not set in prod.env (see doc 036 §10)"
+    [[ -n $PREVIOUS ]] || die "production is not running: deploy the OS release first"
+    check_release
+    [[ ${RELEASE:0:12} == "$PREVIOUS" ]] ||
+      die "Finance is installed only from the release the OS runs ($PREVIOUS): deploy the OS release $RELEASE first"
+    AYVO_RELEASE=$PREVIOUS
+    pin_finance_images
+    FINANCE_PREVIOUS=$FINANCE_RELEASE
+    FINANCE_RELEASE=$AYVO_RELEASE
+    log "Finance unit $RELEASE at $(date -u +%FT%TZ) (OS stays $AYVO_RELEASE; Finance now: ${FINANCE_PREVIOUS:-not installed})"
+    validate_compose
+    check_core_holds_finance_contract
+    backup_status
+    backup_before_migration
+    migrate_finance
+    start_finance
+    verify_finance
+    record_finance
+    ok "the Finance unit runs $FINANCE_RELEASE; the OS was not restarted"
+    [[ -z $FINANCE_PREVIOUS ]] || echo "Back: scripts/deploy-prod.sh --finance-rollback $FINANCE_PREVIOUS (no migration)"
+    ;;
+  finance-rollback)
+    [[ $FINANCE_ROLLBACK =~ ^[0-9a-f]{12}$ ]] || die "--finance-rollback needs the 12-character release of an earlier Finance deployment"
+    $FINANCE_ENABLED || die "the Finance keys are not set in prod.env"
+    [[ -n $PREVIOUS ]] || die "production is not running"
+    read -r FINANCE_IMAGE FINANCE_MIGRATE_IMAGE <<<"$(awk -v r="$FINANCE_ROLLBACK" '$1 == r { i = $2; m = $3 } END { if (i) print i, m }' "$PROD_DIR/state/finance.log" 2>/dev/null)" || true
+    [[ ${FINANCE_IMAGE:-} =~ ^sha256:[0-9a-f]{64}$ ]] || die "no Finance deployment of $FINANCE_ROLLBACK is recorded"
+    docker image inspect "$FINANCE_IMAGE" >/dev/null 2>&1 ||
+      die "the recorded image $FINANCE_IMAGE of Finance $FINANCE_ROLLBACK is gone"
+    AYVO_RELEASE=$PREVIOUS
+    FINANCE_RELEASE=$FINANCE_ROLLBACK
+    log "Finance rollback to $FINANCE_ROLLBACK (OS stays $AYVO_RELEASE). No migration runs."
+    warn "schema finance keeps its current state: this is safe only if $FINANCE_ROLLBACK works with it"
+    validate_compose
+    check_core_holds_finance_contract
+    start_finance
+    verify_finance
+    record_finance
+    ok "the Finance unit runs $FINANCE_ROLLBACK again"
     ;;
   bootstrap)
     STEP="bootstrap the first administrator"
