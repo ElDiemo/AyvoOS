@@ -533,6 +533,8 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
         orderBy: { permissionCode: 'asc' },
       });
       expect(grants).toEqual([
+        { roleCode: 'ADMIN', permissionCode: 'finance:bank_read' },
+        { roleCode: 'ADMIN', permissionCode: 'finance:bank_sync' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_read' },
         { roleCode: 'ADMIN', permissionCode: 'finance:exports_manage' },

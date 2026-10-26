@@ -293,6 +293,9 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | POST   | `/api/admin/catalog/products/:code/recipes/:version/archive`      | `catalog:recipe_approve`                    | global                      |
 | GET    | `/api/admin/catalog/products/:code/recipes/:version/requirements` | `catalog:read`                              | global                      |
 | GET    | `/api/admin/finance/documents`                                    | `finance:documents_read`                    | global                      |
+| GET    | `/api/admin/finance/bank/status`                                  | `finance:bank_read`                         | global                      |
+| POST   | `/api/admin/finance/bank/sync`                                    | `finance:bank_read` + `finance:bank_sync`   | global                      |
+| GET    | `/api/admin/finance/bank/transactions`                            | `finance:bank_read`                         | global                      |
 | POST   | `/api/admin/finance/documents`                                    | `finance:documents_manage`                  | global                      |
 | GET    | `/api/admin/finance/documents/:code`                              | `finance:documents_read`                    | global                      |
 | GET    | `/api/admin/finance/documents/:code/content`                      | `finance:documents_read`                    | global                      |

@@ -46,8 +46,56 @@ export const financeEnvSchema = z
       .min(1024)
       .max(50 * 1024 * 1024)
       .default(20 * 1024 * 1024),
+
+    // --- Raiffeisenbank Premium API, read only (N3B-1, doc 041) ---------------------------------
+    /**
+     * Unset = no bank connection in this installation. `production` only with APP_ENV=production
+     * (and nothing else there); `sandbox` = the bank's mock (development/test); `test` = a local
+     * simulation (APP_ENV=test only). The URLs of the bank are fixed in code.
+     */
+    RB_PREMIUM_ENVIRONMENT: optional(z.enum(['production', 'sandbox', 'test'])),
+    /** Paths to files mounted read-only for the Finance process — never the values in the env. */
+    RB_PREMIUM_CLIENT_ID_FILE: optional(z.string().min(1)),
+    RB_PREMIUM_P12_FILE: optional(z.string().min(1)),
+    RB_PREMIUM_P12_PASSPHRASE_FILE: optional(z.string().min(1)),
+    /** Accounts read: "number:CUR" (national number without prefix or bank code), comma-separated. */
+    RB_PREMIUM_ACCOUNTS: optional(
+      z.string().regex(/^[0-9]{1,10}:[A-Z]{3}(,[0-9]{1,10}:[A-Z]{3}){0,9}$/, 'e.g. 1234567890:CZK'),
+    ),
+    /** One request to the bank (connect + answer). */
+    RB_PREMIUM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
+    /** Pause before the first retry (429 / 5xx / network); the second waits twice as long. */
+    RB_PREMIUM_RETRY_BASE_MS: z.coerce.number().int().min(100).max(10_000).default(1_000),
+    // Only for automated tests (a simulated bank with its own CA); refused unless APP_ENV=test.
+    RB_PREMIUM_BASE_URL_FOR_TESTS: optional(z.url({ protocol: /^https$/ })),
+    RB_PREMIUM_CA_FILE_FOR_TESTS: optional(z.string().min(1)),
   })
   .superRefine((env, ctx) => {
+    const fail = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    const rb = env.RB_PREMIUM_ENVIRONMENT;
+    if (rb === 'production' && env.APP_ENV !== 'production')
+      fail('RB_PREMIUM_ENVIRONMENT', 'the production bank connection exists only in production');
+    if (env.APP_ENV === 'production' && rb !== undefined && rb !== 'production')
+      fail('RB_PREMIUM_ENVIRONMENT', 'production reads only the production bank');
+    if (rb === 'test' && env.APP_ENV !== 'test')
+      fail('RB_PREMIUM_ENVIRONMENT', 'the simulated bank is allowed only with APP_ENV=test');
+    if (env.APP_ENV !== 'test') {
+      if (env.RB_PREMIUM_BASE_URL_FOR_TESTS)
+        fail('RB_PREMIUM_BASE_URL_FOR_TESTS', 'allowed only with APP_ENV=test');
+      if (env.RB_PREMIUM_CA_FILE_FOR_TESTS)
+        fail('RB_PREMIUM_CA_FILE_FOR_TESTS', 'allowed only with APP_ENV=test');
+    }
+    if (rb === 'test' && !env.RB_PREMIUM_BASE_URL_FOR_TESTS)
+      fail('RB_PREMIUM_BASE_URL_FOR_TESTS', 'the simulated bank needs its URL');
+    if (rb !== undefined)
+      for (const key of [
+        'RB_PREMIUM_CLIENT_ID_FILE',
+        'RB_PREMIUM_P12_FILE',
+        'RB_PREMIUM_P12_PASSPHRASE_FILE',
+        'RB_PREMIUM_ACCOUNTS',
+      ] as const)
+        if (!env[key]) fail(key, 'required with RB_PREMIUM_ENVIRONMENT');
     if (env.APP_ENV === 'production' && env.FILE_STORAGE_DRIVER !== 's3')
       ctx.addIssue({
         code: 'custom',

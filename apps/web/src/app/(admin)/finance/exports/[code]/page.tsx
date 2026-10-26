@@ -6,7 +6,7 @@ import { HandOverForm } from '@/components/finance/hand-over-form';
 import { buttonClass, Card, Field, FieldList, Notice, PageHeader } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { ApiError, apiGet } from '@/lib/api';
-import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
+import { hasPermission, requirePermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const t = financeCs.exports;
@@ -28,7 +28,10 @@ export default async function AccountingExportPage({
       throw e;
     },
   );
-  const [zone, me] = await Promise.all([siteTimeZone(), currentUser()]);
+  const [zone, me] = await Promise.all([
+    siteTimeZone(),
+    requirePermission('finance:documents_read'),
+  ]);
   const canHandOver = hasPermission(me, 'finance:exports_manage') && !doc.handedOverOn;
   const format = new Intl.DateTimeFormat('cs-CZ', {
     timeZone: zone,

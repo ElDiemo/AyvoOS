@@ -26,8 +26,13 @@ export const shellCs = {
   modules: {
     finance: {
       label: 'Finance',
-      description: 'Přijaté doklady: originály, údaje pro účetní a jejich historie.',
-      pages: { documents: 'Přijaté doklady', exports: 'Export pro účetní' },
+      description:
+        'Přijaté doklady: originály, údaje pro účetní a jejich historie. Bankovní pohyby z banky.',
+      pages: {
+        documents: 'Přijaté doklady',
+        exports: 'Export pro účetní',
+        bank: 'Bankovní pohyby',
+      },
     },
     sales: {
       label: 'Obchod',
