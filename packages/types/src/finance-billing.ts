@@ -71,8 +71,17 @@ export const createBillingCustomerSchema = z.object({
 });
 export type CreateBillingCustomerRequest = z.infer<typeof createBillingCustomerSchema>;
 
+/**
+ * The client sends the whole form, so it also names the version it was edited from: if the
+ * customer has a newer one meanwhile, the change is refused (409 CONCURRENT_CHANGE) instead of
+ * silently writing back the older values (review N3A74-R2).
+ */
+const expectedVersionSchema = z.number().int().min(1);
+
 export const newBillingCustomerVersionSchema = z.object({
   requestId: z.uuid(),
+  /** The current version the form was loaded from. */
+  expectedVersion: expectedVersionSchema,
   customer: billingCustomerFieldsSchema,
   reason: reasonSchema,
 });
@@ -113,6 +122,8 @@ export type BillingCustomerDetail = z.infer<typeof billingCustomerDetailSchema>;
 
 export const newPriceListVersionSchema = z.object({
   requestId: z.uuid(),
+  /** The newest revision of this currency and month the form saw; null = none existed yet. */
+  expectedRevision: expectedVersionSchema.nullable(),
   currency: currencySchema,
   pricePerRoomMonth: billingPriceSchema,
   effectiveFrom: billingMonthSchema,
@@ -169,6 +180,8 @@ export type CreateBillingAgreementRequest = z.infer<typeof createBillingAgreemen
 
 export const newBillingAgreementVersionSchema = z.object({
   requestId: z.uuid(),
+  /** The agreement's newest revision the form was loaded from (`versions[0].revision`). */
+  expectedRevision: expectedVersionSchema,
   terms: billingAgreementTermsSchema,
 });
 export type NewBillingAgreementVersionRequest = z.infer<typeof newBillingAgreementVersionSchema>;

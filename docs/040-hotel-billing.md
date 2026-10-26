@@ -37,6 +37,13 @@ A hotel is not a company: one company may run several hotels, and an IČO never 
 - **As known at moment T** = the same with `recorded_at ≤ T`. This is the API `asOf`.
   `recorded_at` is `clock_timestamp()`, taken after that lock, so it never runs against the revisions.
 - Customer versions are ordered by number; the newest one known at T is used.
+- **No stale form writes back older values** (review N3A74-R2). A new version is always a whole
+  form, so the request names what it was edited from: `expectedVersion` (customer),
+  `expectedRevision` (agreement: its newest revision; default price: the newest revision of that
+  currency and month, `null` = none yet). If something newer exists → 409 `CONCURRENT_CHANGE`,
+  nothing written; reload and save again. The expected value is part of the idempotency
+  fingerprint. Atomic without UPDATE or row locks on versions: customers through the primary key
+  (customer, version), agreements and prices through the locked `billing_revision` counter row.
 
 ## 3. Prices
 

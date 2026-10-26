@@ -83,13 +83,18 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
         .send({ requestId: randomUUID(), hotelId, terms: t })
         .expect(201)
     ).body as BillingAgreementDetail;
-  const addVersion = async (code: string, t: Record<string, unknown>) =>
-    (
+  const agreementDetail = async (code: string) =>
+    (await f.get(`${B}/agreements/${code}`).expect(200)).body as BillingAgreementDetail;
+  /** A new version edited from the agreement's current revision (as the form would). */
+  const addVersion = async (code: string, t: Record<string, unknown>) => {
+    const expectedRevision = (await agreementDetail(code)).versions[0]!.revision;
+    return (
       await f
         .post(`${B}/agreements/${code}/versions`)
-        .send({ requestId: randomUUID(), terms: t })
+        .send({ requestId: randomUUID(), expectedRevision, terms: t })
         .expect(201)
     ).body as BillingAgreementDetail;
+  };
   const effective = async (month: string, code: string, asOf?: string) => {
     const page = (
       await f
@@ -111,9 +116,15 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
       .slice(0, 2)
       .toUpperCase()
       .padEnd(2, 'Q')}`;
-  const price = (currency: string, pricePerRoomMonth: string, effectiveFrom: string) =>
+  const price = (
+    currency: string,
+    pricePerRoomMonth: string,
+    effectiveFrom: string,
+    expectedRevision: number | null = null,
+  ) =>
     f.post(`${B}/price-list`).send({
       requestId: randomUUID(),
+      expectedRevision,
       currency,
       pricePerRoomMonth,
       effectiveFrom,
@@ -135,6 +146,7 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
         .post(`${B}/customers/${c.code}/versions`)
         .send({
           requestId: randomUUID(),
+          expectedVersion: 1,
           customer: customerBody({ city: 'Brno', postalCode: '602 00' }),
           reason: 'Změna sídla',
         })
@@ -146,7 +158,7 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
     // A new version needs a reason; invalid e-mail, country and Czech IČO are refused.
     await f
       .post(`${B}/customers/${c.code}/versions`)
-      .send({ requestId: randomUUID(), customer: customerBody(), reason: '' })
+      .send({ requestId: randomUUID(), expectedVersion: 2, customer: customerBody(), reason: '' })
       .expect(400);
     for (const bad of [{ billingEmail: 'neni-email' }, { countryCode: 'cz' }, { companyId: '123' }])
       await f
@@ -486,6 +498,107 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
     expect(other.body.code).toBe('IDEMPOTENCY_CONFLICT');
   });
 
+  it('a stale customer form (review N3A74-R2): refused with 409, never writes the old values back; replay and races', async () => {
+    const c = await newCustomer({ billingEmail: 'old@example.test', city: 'Praha' });
+    const v1 = c.current.customer;
+    const save = (
+      expectedVersion: number,
+      customer: Record<string, unknown>,
+      requestId = randomUUID(),
+    ) =>
+      f
+        .post(`${B}/customers/${c.code}/versions`)
+        .send({ requestId, expectedVersion, customer, reason: 'test' });
+    // A and B both opened version 1. A changes the e-mail and saves.
+    const aRequest = randomUUID();
+    const aBody = { ...v1, billingEmail: 'new@example.test' };
+    expect((await save(1, aBody, aRequest)).status).toBe(201);
+    // B changes the city in its version-1 form and saves: refused, nothing written.
+    const stale = await save(1, { ...v1, city: 'New city' });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('CONCURRENT_CHANGE');
+    let detail = (await f.get(`${B}/customers/${c.code}`).expect(200))
+      .body as BillingCustomerDetail;
+    expect(detail.versions.map((v) => v.version)).toEqual([2, 1]);
+    expect(detail.current.customer).toMatchObject({
+      billingEmail: 'new@example.test',
+      city: 'Praha',
+    });
+    // B reloads (version 2) and saves its change on top: both changes are kept.
+    expect((await save(2, { ...detail.current.customer, city: 'New city' })).status).toBe(201);
+    detail = (await f.get(`${B}/customers/${c.code}`).expect(200)).body as BillingCustomerDetail;
+    expect(detail.current).toMatchObject({
+      version: 3,
+      customer: { billingEmail: 'new@example.test', city: 'New city' },
+    });
+    // A's request replayed later: the stored result, no new version, nothing reverted.
+    expect((await save(1, aBody, aRequest)).status).toBe(201);
+    // The expected version is part of the request's fingerprint; it is required.
+    expect((await save(3, aBody, aRequest)).body.code).toBe('IDEMPOTENCY_CONFLICT');
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({ requestId: randomUUID(), customer: aBody, reason: 'test' })
+      .expect(400);
+    detail = (await f.get(`${B}/customers/${c.code}`).expect(200)).body as BillingCustomerDetail;
+    expect(detail.current.version).toBe(3);
+    // Three saves from version 3 at once: exactly one becomes version 4.
+    const raced = await Promise.all(
+      ['A', 'B', 'C'].map((x) => save(3, { ...detail.current.customer, city: `Race ${x}` })),
+    );
+    expect(raced.map((r) => r.status).sort()).toEqual([201, 409, 409]);
+    detail = (await f.get(`${B}/customers/${c.code}`).expect(200)).body as BillingCustomerDetail;
+    expect(detail.versions.map((v) => v.version)).toEqual([4, 3, 2, 1]);
+  });
+
+  it('stale agreement terms and price forms (review N3A74-R2): refused with 409; races let exactly one in', async () => {
+    const c = await newCustomer();
+    const a = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, { ownPricePerRoomMonth: '300.00' }),
+    );
+    const opened = a.versions[0]!.revision;
+    const saveTerms = (expectedRevision: number, over: Record<string, unknown>) =>
+      f.post(`${B}/agreements/${a.code}/versions`).send({
+        requestId: randomUUID(),
+        expectedRevision,
+        terms: terms(c.id, { ownPricePerRoomMonth: '300.00', ...over }),
+      });
+    expect((await saveTerms(opened, { billedRooms: 45 })).status).toBe(201);
+    // A second form opened at the same revision changes the price: it would drop the 45 rooms.
+    const stale = await saveTerms(opened, { ownPricePerRoomMonth: '310.00' });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('CONCURRENT_CHANGE');
+    let detail = await agreementDetail(a.code);
+    expect(detail.versions).toHaveLength(2);
+    expect((await effective('2026-01', a.code))!.version).toMatchObject({
+      billedRooms: 45,
+      ownPricePerRoomMonth: '300.00',
+    });
+    const current = detail.versions[0]!.revision;
+    const raced = await Promise.all(
+      [46, 47, 48].map((billedRooms) => saveTerms(current, { billedRooms })),
+    );
+    expect(raced.map((r) => r.status).sort()).toEqual([201, 409, 409]);
+    detail = await agreementDetail(a.code);
+    expect(detail.versions).toHaveLength(3);
+
+    // The default price of a currency and month: the same rule (null = none existed yet).
+    const currency = testCurrency();
+    const first = await price(currency, '320.00', '2026-01').expect(201);
+    const seen = (first.body as PriceListVersion).revision;
+    const again = await price(currency, '330.00', '2026-01');
+    expect([again.status, again.body.code]).toEqual([409, 'CONCURRENT_CHANGE']);
+    await price(currency, '340.00', '2026-01', seen + 1000).expect(409);
+    const racedPrices = await Promise.all(
+      ['350.00', '360.00', '370.00'].map((v) => price(currency, v, '2026-01', seen)),
+    );
+    expect(racedPrices.map((r) => r.status).sort()).toEqual([201, 409, 409]);
+    // Another month of the same currency is its own slot.
+    await price(currency, '400.00', '2026-02').expect(201);
+    const list = (await f.get(`${B}/price-list`).expect(200)).body as PriceListVersion[];
+    expect(list.filter((p) => p.currency === currency)).toHaveLength(3);
+  });
+
   it('concurrency: two agreements for the same hotel at once — exactly one is created', async () => {
     const c = await newCustomer();
     const hotel = await newHotel();
@@ -598,6 +711,7 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
           `${B}/price-list`,
           {
             requestId: randomUUID(),
+            expectedRevision: null,
             currency: 'CZK',
             pricePerRoomMonth: '1.00',
             effectiveFrom: '2026-01',

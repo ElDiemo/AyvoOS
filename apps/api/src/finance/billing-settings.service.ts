@@ -150,19 +150,27 @@ export class BillingSettingsService {
     await this.operations.run(
       'BILLING_CUSTOMER_VERSION',
       req.requestId,
-      { code, customer: req.customer, reason: req.reason, actorId: userId },
+      {
+        code,
+        expectedVersion: req.expectedVersion,
+        customer: req.customer,
+        reason: req.reason,
+        actorId: userId,
+      },
       async (tx) => {
         const c = await tx.customer.findUnique({
           where: { code },
           include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
         });
         if (!c) throw new NotFoundException('Odběratel nenalezen');
+        // A form edited from an older version would write its stale values back: refused.
+        if (c.versions[0]!.version !== req.expectedVersion) throw concurrentChange();
         try {
           await tx.customerVersion.create({
             data: {
               ...customerData(req.customer),
               customerId: c.id,
-              version: c.versions[0]!.version + 1,
+              version: req.expectedVersion + 1,
               reason: req.reason,
               recordedBy: userId,
               recordedByName: displayName,
@@ -170,7 +178,8 @@ export class BillingSettingsService {
             },
           });
         } catch (e) {
-          // Two changes at once: the second loses (the runtime role cannot lock rows for update).
+          // Two changes from the same version at once: the primary key (customer, version) lets
+          // exactly one in, the other loses — no row is ever updated or locked for update.
           if (isUnique(e)) throw concurrentChange();
           throw e;
         }
@@ -198,6 +207,7 @@ export class BillingSettingsService {
       'BILLING_PRICE_VERSION',
       req.requestId,
       {
+        expectedRevision: req.expectedRevision,
         currency: req.currency,
         pricePerRoomMonth: req.pricePerRoomMonth,
         effectiveFrom: req.effectiveFrom,
@@ -205,7 +215,15 @@ export class BillingSettingsService {
         actorId: userId,
       },
       async (tx) => {
+        // The counter row is locked until commit: the check below sees every committed revision.
         const revision = await allocateFinanceSerial(tx, 'billing_revision');
+        const newest = await tx.priceListVersion.findFirst({
+          where: { currency: req.currency, effectiveFrom: monthStart(req.effectiveFrom) },
+          orderBy: { revision: 'desc' },
+          select: { revision: true },
+        });
+        if ((newest ? Number(newest.revision) : null) !== req.expectedRevision)
+          throw concurrentChange();
         const row = await tx.priceListVersion.create({
           data: {
             revision,
@@ -301,11 +319,19 @@ export class BillingSettingsService {
     await this.operations.run(
       'BILLING_AGREEMENT_VERSION',
       req.requestId,
-      { code, terms: req.terms, actorId: userId },
+      { code, expectedRevision: req.expectedRevision, terms: req.terms, actorId: userId },
       async (tx) => {
+        // The counter row is locked until commit: the check below sees every committed revision.
         const revision = await allocateFinanceSerial(tx, 'billing_revision');
-        const a = await tx.billingAgreement.findUnique({ where: { code } });
+        const a = await tx.billingAgreement.findUnique({
+          where: { code },
+          include: {
+            versions: { orderBy: { revision: 'desc' }, take: 1, select: { revision: true } },
+          },
+        });
         if (!a) throw new NotFoundException('Smlouva nenalezena');
+        // The whole terms form edited from an older revision: refused, never written back.
+        if (Number(a.versions[0]!.revision) !== req.expectedRevision) throw concurrentChange();
         try {
           await tx.agreementVersion.create({
             data: versionData(a.id, revision, req.terms, userId, displayName, req.requestId),
