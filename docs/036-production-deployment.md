@@ -260,6 +260,21 @@ privileged account → migrations as `ayvo_finance_owner` → only the `finance`
 contract), `/api/admin/finance/*` 401 without a session, `/api/internal/*` aborted → recorded in
 `state/finance.log`.
 
+**What stops during `--finance`:** only the Finance unit — on an upgrade its old container is
+stopped before the dump (nothing it writes may follow the backup, its old code must not run on the
+new schema); on the first installation nothing is stopped. The OS (api, web) keeps serving the
+whole time: Finance's migrations change schema `finance` only, `pg_dump` is a consistent snapshot,
+and Finance itself needs the running API to become ready. The dump and its S3 copy are labelled
+`finance-<release>`. If a step fails, the OS is untouched; Finance is stopped (upgrade) or absent
+(first installation) — `--finance-rollback <previous>` starts the previous Finance again, nothing
+is recorded in `state/finance.log` until Finance is verified.
+
+**Incident 2026-10-26 (first PROD installation):** the first version of `--finance` reused the OS
+backup step, which stops api and web; they were not started again, so Finance's verification got
+503 and the public ID card 502 until the operator started the existing api and web containers
+(no code or configuration change; `finance.log` correctly not written). Fixed as above and covered
+by a test of the real `finance` case flow (first installation, upgrade, failed migration).
+
 **Rollback:** `--finance-rollback <earlier release>` starts the image ID recorded for it in
 `state/finance.log` again (no migration; safe only if it works with the current schema). Image
 cleanup after an OS release keeps, besides the OS keep-set, the running and the previous verified

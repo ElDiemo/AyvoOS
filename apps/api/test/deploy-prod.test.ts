@@ -1314,3 +1314,138 @@ describe('the Finance unit in production (ADR 0039)', () => {
     for (const old of [c1, fe]) expect(existsSync(join(dir, 'releases', old)), old).toBe(false);
   });
 });
+
+describe('the Finance deployment flow keeps the OS running (incident 2026-10-26)', () => {
+  /** The source of one function of the script (from `name() {` to its closing brace). */
+  const fnSrc = (name: string) => {
+    const i = script.indexOf(`\n${name}() {`);
+    expect(i, name).toBeGreaterThan(0);
+    return script.slice(i + 1, script.indexOf('\n}\n', i) + 2);
+  };
+  /** The literal body of the `finance)` case of the script. */
+  const financeCase = () => script.split('\n  finance)\n')[1]!.split('\n    ;;\n')[0]!;
+  /**
+   * A Compose double with state: which services run (files in $STATE/run), every step appended to
+   * $STATE/steps. Finance is ready only while the API runs (it asks the core for every user).
+   */
+  const DOUBLES = [
+    'running() { [[ -f $STATE/run/$1 ]]; }',
+    'step() { echo "$*" >>"$STATE/steps"; }',
+    'compose() {',
+    '  local args=("$@")',
+    '  case "$*" in',
+    '    "ps -q "*) local s; for s in "${args[@]:2}"; do running "$s" && echo "id-$s"; done; return 0 ;;',
+    '    "stop "*) local s; for s in "${args[@]:1}"; do rm -f "$STATE/run/$s"; step "STOP $s"; done ;;',
+    '    *"exec -T postgres sh -c"*"count(*)"*) echo 5 ;;',
+    '    *"exec -T postgres sh -c"*pg_dump*)',
+    '      step "DUMP api=$(running api && echo up || echo down) web=$(running web && echo up || echo down) finance=$(running finance && echo up || echo down)"',
+    '      echo dump ;;',
+    '    *"exec -T postgres pg_restore --list"*) cat >/dev/null ;;',
+    '    "--profile finance-tools run --rm finance-migrate")',
+    '      step MIGRATE; [[ -z ${FAIL_MIGRATE:-} ]] ;;',
+    '    "--profile finance up -d --no-build --no-deps finance") touch "$STATE/run/finance"; step "START finance" ;;',
+    '    "exec -T finance node -e "*)',
+    '      step "READY? api=$(running api && echo up || echo down)"',
+    '      running api && running finance ;;',
+    '    *) echo "unexpected compose $*" >&2; return 1 ;;',
+    '  esac',
+    '}',
+    'wait_healthy() { running "$1"; }',
+    'docker() { [[ "$1 $2" == "inspect --format" ]] && running finance && echo "$FINANCE_IMAGE"; }',
+    'edge_status() {',
+    '  case "$*" in',
+    '    *"/api/admin/finance/"*) running api && running finance && echo 401 || echo 502 ;;',
+    '    *"/api/internal/"*) echo 000; return 1 ;;',
+    '  esac',
+    '}',
+    's3_backup_as_owner() { step "S3 $1"; }',
+    'check_release() { :; }',
+    'validate_compose() { :; }',
+    'check_core_holds_finance_contract() { step "CONTRACT api=$(running api && echo up || echo down)"; }',
+    'backup_status() { :; }',
+    'pin_finance_images() { FINANCE_IMAGE=sha256:$(printf 1%.0s {1..64}); FINANCE_MIGRATE_IMAGE=$FINANCE_IMAGE; }',
+  ].join('\n');
+  const flow = (opts: { financeRunning: boolean; failMigrate?: boolean }) => {
+    const state = mkdtempSync(join(tmp, 'flow-'));
+    run('mkdir', ['-p', join(state, 'run'), join(state, 'prod/state'), join(state, 'backup-tool')]);
+    for (const s of ['api', 'web', ...(opts.financeRunning ? ['finance'] : [])])
+      writeFileSync(join(state, 'run', s), '');
+    const body = [
+      'set -Eeuo pipefail',
+      'log() { echo "LOG $*"; }',
+      'ok() { echo "OK $*"; }',
+      'warn() { echo "WARN $*"; }',
+      'die() { echo "DIE $*"; exit 1; }',
+      DOUBLES,
+      ...[
+        'backup_before_migration',
+        'migrate_finance',
+        'start_finance',
+        'verify_finance',
+        'record_finance',
+      ].map(fnSrc),
+      `PROJECT=ayvo-prod; IMAGE_PREFIX=ayvo-prod; DOMAIN=os.example.test; PROD_DIR=${state}/prod`,
+      `RELEASE=${'a'.repeat(40)}; PREVIOUS=${'a'.repeat(12)}; FINANCE_ENABLED=true; MIGRATED=false`,
+      `FINANCE_RELEASE=${opts.financeRunning ? 'b'.repeat(12) : ''}`,
+      // The backup tool directory is looked up by its absolute path: point the check at a test one.
+      financeCase().replace(/\/usr\/local\/lib\/ayvo-backup/g, `${state}/backup-tool`),
+    ].join('\n');
+    const res = spawnSync(
+      'bash',
+      ['-c', body.replace(/\/usr\/local\/lib\/ayvo-backup/g, `${state}/backup-tool`)],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, STATE: state, FAIL_MIGRATE: opts.failMigrate ? '1' : '' },
+      },
+    );
+    const steps = readFileSync(join(state, 'steps'), 'utf8').trim().split('\n');
+    const running = ['api', 'web', 'finance'].filter((s) => existsSync(join(state, 'run', s)));
+    const log = existsSync(join(state, 'prod/state/finance.log'))
+      ? readFileSync(join(state, 'prod/state/finance.log'), 'utf8')
+      : '';
+    return { res, steps, running, log };
+  };
+
+  it('first installation: api and web are never stopped; backup → migrate → start → ready with the OS up; recorded', () => {
+    const { res, steps, running, log } = flow({ financeRunning: false });
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    expect(steps.filter((s) => s.startsWith('STOP'))).toEqual([]);
+    const at = (prefix: string) => steps.findIndex((s) => s.startsWith(prefix));
+    expect(steps[at('DUMP')]).toBe('DUMP api=up web=up finance=down');
+    expect(at('DUMP')).toBeLessThan(at('MIGRATE'));
+    expect(at('MIGRATE')).toBeLessThan(at('START finance'));
+    expect(at('START finance')).toBeLessThan(at('READY?'));
+    expect(steps[at('READY?')]).toBe('READY? api=up');
+    expect(running).toEqual(['api', 'web', 'finance']);
+    expect(log).toMatch(new RegExp(`^${'a'.repeat(12)} sha256:1{64} sha256:1{64} `));
+  });
+
+  it('upgrade: only the old Finance is stopped before the dump; the OS keeps running throughout; recorded', () => {
+    const { res, steps, running, log } = flow({ financeRunning: true });
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    expect(steps.filter((s) => s.startsWith('STOP'))).toEqual(['STOP finance']);
+    const at = (prefix: string) => steps.findIndex((s) => s.startsWith(prefix));
+    expect(at('STOP finance')).toBeLessThan(at('DUMP'));
+    expect(steps[at('DUMP')]).toBe('DUMP api=up web=up finance=down');
+    expect(at('DUMP')).toBeLessThan(at('MIGRATE'));
+    expect(steps[at('READY?')]).toBe('READY? api=up');
+    expect(running).toEqual(['api', 'web', 'finance']);
+    expect(log).not.toBe('');
+  });
+
+  it('a failed Finance migration records nothing and leaves the OS running', () => {
+    const { res, steps, running, log } = flow({ financeRunning: true, failMigrate: true });
+    expect(res.status).toBe(1);
+    expect(res.stdout).toContain('DIE the Finance setup or migration failed');
+    expect(steps).not.toContain('START finance');
+    expect(log).toBe('');
+    expect(running).toEqual(['api', 'web']);
+  });
+
+  it('the OS deployment still stops its own writers (web and api) before its backup', () => {
+    const deploy = script.split('\n  deploy)\n')[1]!.split('\n    ;;\n')[0]!;
+    expect(deploy).toContain('\n    backup_before_migration\n');
+    expect(fnSrc('backup_before_migration')).toContain('local writers=${1:-web api}');
+    expect(financeCase()).toContain('backup_before_migration finance "finance-$AYVO_RELEASE"');
+  });
+});

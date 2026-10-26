@@ -140,7 +140,12 @@ on_exit() {
       echo "with the new schema (doc 036 §7); otherwise restore deliberately (doc 035 §4) — never"
       echo "automatically."
     fi
-    [[ -n $PREVIOUS ]] && echo "Previous release: $PREVIOUS  (scripts/deploy-prod.sh --rollback ${PREVIOUS:0:12})"
+    if [[ $MODE == finance || $MODE == finance-rollback ]]; then
+      echo "Only the Finance unit was touched; the OS (api, web) keeps running $PREVIOUS."
+      [[ -n ${FINANCE_PREVIOUS:-} ]] && echo "Previous Finance: scripts/deploy-prod.sh --finance-rollback $FINANCE_PREVIOUS"
+    else
+      [[ -n $PREVIOUS ]] && echo "Previous release: $PREVIOUS  (scripts/deploy-prod.sh --rollback ${PREVIOUS:0:12})"
+    fi
     echo "Logs: docker compose -p $PROJECT logs --tail 200 api web caddy"
   } >&2
 }
@@ -688,14 +693,20 @@ s3_backup_as_owner() {
   return "$rc"
 }
 
+# Arguments: the writers whose code the migration replaces (default: the OS — web and api), and
+# the backup's label. Only those are stopped: nothing they write may follow the dump, and their old
+# code must not run against the new schema. The Finance unit (`--finance`) stops only `finance`
+# (and only on an upgrade, when it runs): its migrations change schema finance only, and the OS
+# keeps serving — Finance itself needs the running API (incident 2026-10-26, doc 036 §10).
 backup_before_migration() {
-  STEP="stop the application writers (api, web) for a consistent backup"
-  # Nothing may be written after the dump, and the old code must not run against the new schema:
-  # the application is unavailable from here until start_services (doc 036 §7).
-  if [[ -n $(compose ps -q api web) ]]; then
+  local writers=${1:-web api} label=${2:-$AYVO_RELEASE}
+  STEP="stop the writers whose code changes ($writers) for a consistent backup"
+  # shellcheck disable=SC2086 # the writers are a list of service names
+  if [[ -n $(compose ps -q $writers) ]]; then
     log "$STEP"
-    compose stop web api || die "api/web did not stop"
-    ok "api and web stopped (the new release starts after the migration)"
+    # shellcheck disable=SC2086
+    compose stop $writers || die "$writers did not stop"
+    ok "$writers stopped (started again after the migration)"
   fi
   STEP="back up the database before migrating"
   log "$STEP"
@@ -707,7 +718,7 @@ backup_before_migration() {
     return
   fi
   mkdir -p "$PROD_DIR/backups"
-  BACKUP_FILE="$PROD_DIR/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ)-${AYVO_RELEASE}.dump"
+  BACKUP_FILE="$PROD_DIR/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ)-${label}.dump"
   compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --compress=6' \
     >"$BACKUP_FILE.partial" || die "pg_dump failed"
   [[ -s $BACKUP_FILE.partial ]] || die "the dump is empty"
@@ -721,7 +732,7 @@ backup_before_migration() {
     local attempt rc
     for attempt in 1 2 3 4 5; do
       rc=0
-      s3_backup_as_owner "pre-deploy ${AYVO_RELEASE}" || rc=$?
+      s3_backup_as_owner "pre-deploy ${label}" || rc=$?
       # 75: a scheduled backup is running right now — wait for it, then take our own.
       ((rc == 75)) || break
       warn "a scheduled backup is running; retrying in 60 s ($attempt/5)"
@@ -1250,7 +1261,7 @@ case $MODE in
     validate_compose
     check_core_holds_finance_contract
     backup_status
-    backup_before_migration
+    backup_before_migration finance "finance-$AYVO_RELEASE"
     migrate_finance
     start_finance
     verify_finance
