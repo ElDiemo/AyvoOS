@@ -162,6 +162,9 @@ Owner, 2026-10-25: hotel billing extends this unit; there is no new application 
   `finance:billing_read`) and keeps the id plus the code and name as of the agreement.
 - **Versions.** Append-only and bitemporal (doc 040 §2).
 - **Live invoicing.** Blocked by the issuing gate until the accounting rules are approved (doc 040 §5).
+- **Our company (N3A-2a, 2026-10-26).** The issuer and the invoice bank accounts live only here
+  (a site is not a legal entity, doc 022 §1); `finance:issuer_manage` (ADMIN) reads and changes
+  them. Not the bank connection.
 
 ## 9. Decisions still open
 

@@ -96,6 +96,8 @@ export const identityCs = {
       'Vidět fakturační nastavení hotelů — odběratele, smlouvy hotelů s verzemi a výchozí ceník',
     'finance:billing_manage':
       'Zakládat a měnit (novou verzí s důvodem) odběratele, smlouvy hotelů a výchozí ceník',
+    'finance:issuer_manage':
+      'Vidět a měnit fakturační údaje naší firmy a bankovní účty uváděné na fakturách (s historií)',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',

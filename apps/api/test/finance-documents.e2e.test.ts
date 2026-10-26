@@ -538,6 +538,7 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_read' },
         { roleCode: 'ADMIN', permissionCode: 'finance:exports_manage' },
+        { roleCode: 'ADMIN', permissionCode: 'finance:issuer_manage' },
       ]);
       const doc = (await receive(base(), pdf(randomUUID())).expect(201)).body;
       const user = await prepareInvitedUser(real.core, {

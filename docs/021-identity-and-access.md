@@ -311,6 +311,11 @@ active site, `409 SITE_INACTIVE` for a write at an inactive site, `409 SITE_WITH
 | POST   | `/api/admin/finance/billing/customers/:code/versions`             | `finance:billing_manage`                    | global                      |
 | GET    | `/api/admin/finance/billing/price-list`                           | `finance:billing_read`                      | global                      |
 | POST   | `/api/admin/finance/billing/price-list`                           | `finance:billing_manage`                    | global                      |
+| GET    | `/api/admin/finance/issuer`                                       | `finance:issuer_manage`                     | global                      |
+| POST   | `/api/admin/finance/issuer/bank-accounts`                         | `finance:issuer_manage`                     | global                      |
+| POST   | `/api/admin/finance/issuer/bank-accounts/:code/versions`          | `finance:issuer_manage`                     | global                      |
+| POST   | `/api/admin/finance/issuer/default-accounts`                      | `finance:issuer_manage`                     | global                      |
+| POST   | `/api/admin/finance/issuer/versions`                              | `finance:issuer_manage`                     | global                      |
 | GET    | `/api/admin/finance/billing/agreements`                           | `finance:billing_read`                      | global                      |
 | GET    | `/api/admin/finance/billing/agreements/effective`                 | `finance:billing_read`                      | global                      |
 | GET    | `/api/admin/finance/billing/agreements/:code`                     | `finance:billing_read`                      | global                      |

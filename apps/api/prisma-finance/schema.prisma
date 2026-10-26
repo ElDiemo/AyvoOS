@@ -286,3 +286,89 @@ model AgreementVersion {
   @@map("agreement_versions")
   @@schema("finance")
 }
+
+/// Our company as the issuer of invoices, in versions (N3A-2a, doc 040 §8). DB: append-only.
+model IssuerVersion {
+  version        Int      @id
+  legalName      String   @map("legal_name")
+  addressLine1   String   @map("address_line1")
+  addressLine2   String?  @map("address_line2")
+  postalCode     String   @map("postal_code")
+  city           String
+  countryCode    String   @map("country_code") @db.Char(2)
+  companyId      String   @map("company_id")
+  vatStatus      String   @map("vat_status")
+  vatId          String?  @map("vat_id")
+  registration   String?
+  email          String
+  phone          String?
+  web            String?
+  reason         String
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  @@map("issuer_versions")
+  @@schema("finance")
+}
+
+/// A bank account printed on invoices (not the bank connection). DB: append-only, never deleted.
+model IssuerBankAccount {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial        BigInt   @unique
+  code          String   @unique
+  createdAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+  createdBy     String   @map("created_by") @db.Uuid
+  createdByName String   @map("created_by_name")
+  requestId     String   @unique @map("request_id") @db.Uuid
+
+  versions IssuerBankAccountVersion[]
+  defaults IssuerDefaultAccount[]
+
+  @@map("issuer_bank_accounts")
+  @@schema("finance")
+}
+
+/// The details of an invoice bank account in versions (ACTIVE / RETIRED). DB: append-only.
+model IssuerBankAccountVersion {
+  accountId      String   @map("account_id") @db.Uuid
+  version        Int
+  status         String
+  label          String
+  currency       String   @db.Char(3)
+  accountPrefix  String?  @map("account_prefix")
+  accountNumber  String?  @map("account_number")
+  bankCode       String?  @map("bank_code")
+  iban           String
+  bic            String?
+  reason         String
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  account IssuerBankAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@id([accountId, version])
+  @@map("issuer_bank_account_versions")
+  @@schema("finance")
+}
+
+/// The default invoice account of a currency, chosen in revisions (newest current). DB: append-only.
+model IssuerDefaultAccount {
+  revision       BigInt   @id
+  currency       String   @db.Char(3)
+  accountId      String   @map("account_id") @db.Uuid
+  reason         String
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  account IssuerBankAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([currency, revision], map: "issuer_default_accounts_currency_idx")
+  @@map("issuer_default_accounts")
+  @@schema("finance")
+}
