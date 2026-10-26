@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { czAmount, renderInvoicePdf, type InvoicePdfSnapshot } from '../src/finance/invoice-pdf.js';
+import {
+  czAmount,
+  InconsistentInvoiceSnapshot,
+  renderInvoicePdf,
+  type InvoicePdfSnapshot,
+} from '../src/finance/invoice-pdf.js';
 import { spayd, InvalidPaymentInstruction, type PaymentInstruction } from '../src/finance/spayd.js';
 import { decodeQrOnPage, openPdf, pageText } from './support/pdf-inspect.js';
 
@@ -66,19 +71,19 @@ const invoice = (
   lines: [
     {
       description: 'Služba AYVO — pokoje × měsíc 10/2026',
-      quantity: '40',
+      quantity: '50',
       unit: 'pokojů',
       unitPrice: '37.51',
-      amount: '1500.50',
+      amount: '1875.50',
     },
   ],
-  totals: { base: null, vat: null, total: '1500.50', currency: 'CZK' },
+  totals: { base: null, vat: null, total: '1875.50', currency: 'CZK' },
   vatNote: null,
   payment: {
     account: '19-2000145399/0800',
     iban: 'CZ6508000000192000145399',
     bic: 'GIBACZPX',
-    amount: '1500.50',
+    amount: '1875.50',
     currency: 'CZK',
     variableSymbol: '0012345',
     dueOn: '2026-11-14',
@@ -87,7 +92,8 @@ const invoice = (
   },
   ...over,
 });
-const plain = (text: string) => text.replace(/\u00a0/g, ' ');
+/** Text as printed, with non-breaking spaces and column gaps as single spaces. */
+const plain = (text: string) => text.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
 
 describe('QR Platba (SPAYD) and the invoice PDF', () => {
   it('the descriptor: only the keys every Czech bank processes; exact amount; leading zeros kept', () => {
@@ -127,28 +133,95 @@ describe('QR Platba (SPAYD) and the invoice PDF', () => {
       );
   });
 
-  it('read back from the rendered invoice like a phone: the QR equals the printed account, amount with haléře and VS', async () => {
-    for (const pay of [
-      {},
-      { amount: '0.01', variableSymbol: '0000000001' },
-      { amount: '9999999.99', bic: null, message: null, variableSymbol: '9' },
-    ]) {
-      const snapshot = invoice({}, pay);
+  /** An invoice of one line, consistent by construction: quantity × unit price = amount = total. */
+  const oneLine = (
+    quantity: string,
+    unitPrice: string,
+    amount: string,
+    pay: Partial<InvoicePdfSnapshot['payment']> = {},
+  ) =>
+    invoice(
+      {
+        lines: [
+          {
+            description: 'Služba AYVO — pokoje × měsíc 10/2026',
+            quantity,
+            unit: 'pokojů',
+            unitPrice,
+            amount,
+          },
+        ],
+        totals: { base: null, vat: null, total: amount, currency: 'CZK' },
+      },
+      { amount, ...pay },
+    );
+  /** quantity × unit price in haléře, computed here independently (BigInt, never a float). */
+  const product = (quantity: string, unitPrice: string) => {
+    const [qw, qf = ''] = quantity.split('.');
+    const [pw, pf = ''] = unitPrice.split('.');
+    const q = BigInt(qw + qf.padEnd(3, '0'));
+    const p = BigInt(pw + pf.padEnd(2, '0'));
+    const v = q * p; // 10^-5
+    if (v % 1000n !== 0n) return null; // not a whole haléř: no rounding rule is decided
+    return v / 1000n;
+  };
+  const halere = (amount: string) => BigInt(amount.replace('.', '').replace(/^(-?)0+(?=\d)/, '$1'));
+
+  it('read back from the rendered invoice like a phone: the QR equals the printed account, the computed total with haléře and VS', async () => {
+    for (const [quantity, unitPrice, amount, pay] of [
+      ['50', '37.51', '1875.50', {}],
+      ['1', '0.01', '0.01', { variableSymbol: '0000000001' }],
+      ['1', '9999999.99', '9999999.99', { bic: null, message: null, variableSymbol: '9' }],
+      ['3', '333.33', '999.99', {}],
+    ] as const) {
+      // The test's own arithmetic: quantity × unit price is exactly the amount and the total.
+      expect(product(quantity, unitPrice), `${quantity} × ${unitPrice}`).toBe(halere(amount));
+      const snapshot = oneLine(quantity, unitPrice, amount, pay);
       const pdf = await openPdf(await renderInvoicePdf(snapshot));
       const qr = await decodeQrOnPage(pdf, 1);
-      expect(qr, JSON.stringify(pay)).not.toBeNull();
+      expect(qr, amount).not.toBeNull();
       const fields = parse(qr!.data);
       const printed = plain(await pageText(pdf, 1));
       const [iban] = fields.ACC!.split('+');
       expect(iban).toBe(snapshot.payment.iban);
       expect(printed).toContain(`IBAN: ${iban}`);
       expect(fields.CC).toBe('CZK');
-      expect(fields.AM).toBe(snapshot.payment.amount);
+      // The QR asks for exactly the computed total, which is also what the page prints.
+      expect(halere(fields.AM!)).toBe(product(quantity, unitPrice));
       expect(printed).toContain(`Částka: ${plain(czAmount(fields.AM!))} CZK`);
+      expect(printed).toContain(`Celkem k úhradě ${plain(czAmount(amount))} CZK`);
       expect(fields['X-VS']).toBe(snapshot.payment.variableSymbol);
       expect(printed).toContain(`Variabilní symbol: ${fields['X-VS']}`);
       expect(fields.DT).toBe('20261114');
     }
+  });
+
+  it('an inconsistent snapshot is refused before rendering — never corrected: lines, VAT, total, payment', async () => {
+    const vat = (base: string, v: string, total: string) =>
+      invoice(
+        {
+          lines: [
+            { description: 'x', quantity: '2', unit: 'ks', unitPrice: '500.00', amount: '1000.00' },
+          ],
+          totals: { base, vat: v, total, currency: 'CZK' },
+        },
+        { amount: total },
+      );
+    // Consistent: 2 × 500.00 = 1000.00 base, + 210.00 VAT (a synthetic value) = 1210.00.
+    await expect(renderInvoicePdf(vat('1000.00', '210.00', '1210.00'))).resolves.toBeInstanceOf(
+      Buffer,
+    );
+    for (const [why, snapshot] of [
+      ['40 × 37.51 is 1500.40, not 1500.50', oneLine('40', '37.51', '1500.50')],
+      ['a product with a fraction of a haléř (no rounding rule)', oneLine('1.5', '0.33', '0.50')],
+      ['base is not the lines', vat('999.99', '210.00', '1209.99')],
+      ['total is not base + VAT', vat('1000.00', '210.00', '1210.01')],
+      ['payment amount is not the total', invoice({}, { amount: '1875.51' })],
+      ['payment due date differs', invoice({}, { dueOn: '2026-11-15' })],
+      ['payment currency differs', invoice({}, { currency: 'EUR' })],
+      ['more than 2 decimals', oneLine('1', '1.005', '1.005')],
+    ] as const)
+      await expect(renderInvoicePdf(snapshot), why).rejects.toThrow(InconsistentInvoiceSnapshot);
   });
 
   it('Czech text prints exactly (embedded Noto Sans); a TEST invoice says so; a LIVE one does not', async () => {
@@ -181,7 +254,12 @@ describe('QR Platba (SPAYD) and the invoice PDF', () => {
 
   it('no QR Platba for another currency (no contract); the payment details are still printed', async () => {
     const eur = invoice(
-      { totals: { base: null, vat: null, total: '61.00', currency: 'EUR' } },
+      {
+        lines: [
+          { description: 'x', quantity: '1', unit: 'ks', unitPrice: '61.00', amount: '61.00' },
+        ],
+        totals: { base: null, vat: null, total: '61.00', currency: 'EUR' },
+      },
       {
         currency: 'EUR',
         amount: '61.00',
