@@ -79,7 +79,56 @@ export const czAmount = (amount: string) => {
   return `${negative ? '−' : ''}${grouped},${fraction.padEnd(2, '0').slice(0, 2)}`;
 };
 
+export class InconsistentInvoiceSnapshot extends Error {}
+
+/** An exact decimal string as an integer of 10^-scale units (never a float). */
+function units(value: string, scale: number): bigint {
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!m) throw new InconsistentInvoiceSnapshot(`not a decimal: ${value}`);
+  const fraction = m[3] ?? '';
+  if (fraction.length > scale && /[^0]/.test(fraction.slice(scale)))
+    throw new InconsistentInvoiceSnapshot(`more than ${scale} decimals: ${value}`);
+  const n = BigInt(m[2]! + fraction.slice(0, scale).padEnd(scale, '0'));
+  return m[1] ? -n : n;
+}
+
+/**
+ * The snapshot must add up exactly as printed — it is checked, never corrected: every line's
+ * quantity × unit price = its amount (no rounding is decided yet, doc 040 §7), the lines (+ VAT)
+ * = the total, and the payment (and so the QR Platba) asks exactly for the total. Anything else is
+ * refused before a byte is rendered.
+ */
+export function checkInvoiceSnapshot(s: InvoicePdfSnapshot): void {
+  const fail = (why: string): never => {
+    throw new InconsistentInvoiceSnapshot(why);
+  };
+  let sum = 0n;
+  s.lines.forEach((l, i) => {
+    // quantity (≤ 3 decimals) × unit price (≤ 2 decimals) in 10^-5, the amount (≤ 2) likewise.
+    const product = units(l.quantity, 3) * units(l.unitPrice, 2);
+    if (product !== units(l.amount, 2) * 1000n)
+      fail(`line ${i + 1}: ${l.quantity} × ${l.unitPrice} is not ${l.amount}`);
+    sum += units(l.amount, 2);
+  });
+  const total = units(s.totals.total, 2);
+  if (s.totals.base !== null && units(s.totals.base, 2) !== sum)
+    fail(`base ${s.totals.base} is not the sum of the lines`);
+  const vat = s.totals.vat === null ? 0n : units(s.totals.vat, 2);
+  if (sum + vat !== total)
+    fail(`total ${s.totals.total} is not the lines${s.totals.vat === null ? '' : ' + VAT'}`);
+  if (s.payment.currency !== s.totals.currency)
+    fail('the payment currency is not the invoice currency');
+  if (units(s.payment.amount, 2) !== total)
+    fail(`the payment amount ${s.payment.amount} is not the total ${s.totals.total}`);
+  if (s.payment.dueOn !== s.dueOn) fail('the payment due date is not the invoice due date');
+}
+
 export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
+  try {
+    checkInvoiceSnapshot(s);
+  } catch (e) {
+    return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+  }
   return new Promise((resolve, reject) => {
     // Fixed metadata: the same snapshot renders the same bytes.
     const fixed = new Date(`${s.issuedOn}T00:00:00.000Z`);
