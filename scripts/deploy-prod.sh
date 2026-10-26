@@ -74,6 +74,8 @@ readonly PROD_DIR="${AYVO_PROD_DIR:-/opt/ayvo/prod}"
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly MIN_FREE_GB=8
 readonly KEEP_RELEASES=3
+# Finance releases kept beside the OS ones (PROD78-R2): the running one and the previous verified.
+readonly KEEP_FINANCE_RELEASES=2
 
 # Required and allowed keys per env file (doc 036 §4). Anything else is refused: a file given to a
 # container through `env_file` must not inject e.g. NODE_OPTIONS, AWS_ENDPOINT_URL or a test
@@ -923,19 +925,29 @@ record_release() {
 }
 
 # Only this project's images and release exports, only of releases other than the newest
-# $KEEP_RELEASES distinct ones and the previous one, never an image a container uses.
+# $KEEP_RELEASES distinct OS ones, the previous one and — on its own history (PROD78-R2) — the
+# running and the previous verified Finance release; never an image a container uses (by name or
+# by image ID: Finance runs an ID).
 remove_old_images() {
   STEP="remove old release images"
-  local keep in_use tag image dir
+  local keep in_use in_use_ids tag image dir
   keep="$( (
     cut -c1-12 "$PROD_DIR/state/releases.log" | tac | awk '!seen[$0]++' | head -n "$KEEP_RELEASES"
     [[ -z $PREVIOUS ]] || printf '%s\n' "${PREVIOUS:0:12}"
+    if [[ -f $PROD_DIR/state/finance.log ]]; then
+      awk '{ print $1 }' "$PROD_DIR/state/finance.log" | tac | awk '!seen[$0]++' | head -n "$KEEP_FINANCE_RELEASES"
+    fi
+    current_finance
   ) | sort -u)"
   in_use="$(docker ps -a --format '{{.Image}}')" || die "cannot list the containers"
+  local container
+  in_use_ids="$(for container in $(docker ps -aq); do docker inspect --format '{{.Image}}' "$container"; done)" ||
+    die "cannot read the containers' images"
   for image in $(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E "^$IMAGE_PREFIX/(api|api-migrate|web):[0-9a-f]{12}$"); do
     tag=${image##*:}
     grep -qx "$tag" <<<"$keep" && continue
     grep -qx "$image" <<<"$in_use" && continue
+    grep -qx "$(docker image inspect --format '{{.Id}}' "$image")" <<<"$in_use_ids" && continue
     docker image rm "$image" >/dev/null && ok "removed old image $image"
   done
   for dir in "$PROD_DIR"/releases/*; do

@@ -261,7 +261,9 @@ contract), `/api/admin/finance/*` 401 without a session, `/api/internal/*` abort
 `state/finance.log`.
 
 **Rollback:** `--finance-rollback <earlier release>` starts the image ID recorded for it in
-`state/finance.log` again (no migration; safe only if it works with the current schema). To take Finance out entirely:
+`state/finance.log` again (no migration; safe only if it works with the current schema). Image
+cleanup after an OS release keeps, besides the OS keep-set, the running and the previous verified
+Finance release (images and exports) on Finance's own history (PROD78-R2). To take Finance out entirely:
 `docker compose -p ayvo-prod stop finance` — the OS keeps running, Finance pages say "Finance jsou
 dočasně nedostupné". Finance data stay (schema `finance` in the same database and its dumps).
 

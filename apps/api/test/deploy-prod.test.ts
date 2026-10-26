@@ -1259,4 +1259,58 @@ describe('the Finance unit in production (ADR 0039)', () => {
     expect(other.status).toBe(1);
     expect(other.stdout).toMatch(/DIE the finance container runs/);
   });
+
+  it("PROD78-R2: cleanup keeps the running and the previous verified Finance release (images and exports) on Finance's own history", () => {
+    const dir = mkdtempSync(join(tmp, 'retention-'));
+    run('mkdir', ['-p', join(dir, 'state')]);
+    const images = join(dir, 'images.txt');
+    const removed = join(dir, 'removed.txt');
+    writeFileSync(removed, '');
+    const rel = (x: string) => x.padEnd(12, '0');
+    // OS history c1…c4 (the newest 3 kept); Finance history fe, fa, fb (fb runs, fa before it).
+    const [c1, c2, c3, c4, fe, fa, fb] = ['c1', 'c2', 'c3', 'c4', 'fe', 'fa', 'fb'].map(rel) as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    writeFileSync(
+      join(dir, 'state/releases.log'),
+      [c1, c2, c3, c4].map((r) => `${r}0000 t`).join('\n') + '\n',
+    );
+    writeFileSync(
+      join(dir, 'state/finance.log'),
+      `${fe} ${id('e')} ${id('e')} t\n${fa} ${id('a')} ${id('a')} t\n${fb} ${id('b')} ${id('b')} t\n`,
+    );
+    const ids: Record<string, string> = { [fe]: id('e'), [fa]: id('a'), [fb]: id('b') };
+    const all = [c1, c2, c3, c4, fe, fa, fb];
+    writeFileSync(
+      images,
+      all
+        .flatMap((r, i) =>
+          ['api', 'api-migrate'].map((s) => `ayvo-prod/${s}:${r} ${ids[r] ?? id(String(i + 1))}`),
+        )
+        .join('\n') + '\n',
+    );
+    for (const r of all) run('mkdir', ['-p', join(dir, 'releases', r)]);
+    const res = harness(
+      `PROD_DIR=${dir}; KEEP_RELEASES=3; KEEP_FINANCE_RELEASES=2; PREVIOUS=${c3}\n${fnSrc('current_finance')}\n${fnSrc('remove_old_images')}\nremove_old_images`,
+      { IMAGES: images, REMOVED: removed, RUN_FIN: id('b'), PS_NAMES: `ayvo-prod/web:${c4}` },
+    );
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    expect(readFileSync(removed, 'utf8').trim().split('\n').sort()).toEqual(
+      [
+        `ayvo-prod/api:${c1}`,
+        `ayvo-prod/api-migrate:${c1}`,
+        `ayvo-prod/api:${fe}`,
+        `ayvo-prod/api-migrate:${fe}`,
+      ].sort(),
+    );
+    for (const keep of [fa, fb, c2, c3, c4])
+      expect(existsSync(join(dir, 'releases', keep)), keep).toBe(true);
+    for (const old of [c1, fe]) expect(existsSync(join(dir, 'releases', old)), old).toBe(false);
+  });
 });
