@@ -5,8 +5,15 @@
 -- Every row is append-only: a change or a correction is a new version with its author and reason
 -- (bitemporal: effective_from = business time, recorded_at = when it was known). No amounts are
 -- computed here and no VAT, numbering or invoice exists yet (N3A-2).
+--
+-- Order of corrections: price list and agreement versions carry a "revision" from the gapless
+-- counter billing_revision. Its row stays locked until the writing transaction commits, so the
+-- revisions follow the commit order and are never tied — the newest revision is the later
+-- correction, whatever the clock says. recorded_at is clock_timestamp() (taken after that lock,
+-- not at the transaction start), so it never runs against the revisions or the version numbers.
 
-INSERT INTO "finance"."code_counters" ("name", "last_value") VALUES ('customer', 0), ('billing_agreement', 0);
+INSERT INTO "finance"."code_counters" ("name", "last_value") VALUES ('customer', 0), ('billing_agreement', 0),
+  ('billing_revision', 0);
 
 ALTER TABLE "finance"."operation_requests" DROP CONSTRAINT "operation_requests_kind_check";
 ALTER TABLE "finance"."operation_requests" ADD CONSTRAINT "operation_requests_kind_check"
@@ -40,7 +47,7 @@ CREATE TABLE "finance"."customer_versions" (
   "country_code" char(2) NOT NULL CHECK ("country_code" ~ '^[A-Z]{2}$'),
   "billing_email" text NOT NULL CHECK ("billing_email" ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' AND length("billing_email") <= 254),
   "reason" text CHECK ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 500),
-  "recorded_at" timestamptz(3) NOT NULL DEFAULT now(),
+  "recorded_at" timestamptz(3) NOT NULL DEFAULT clock_timestamp(),
   "recorded_by" uuid NOT NULL,
   "recorded_by_name" text NOT NULL,
   "request_id" uuid NOT NULL UNIQUE,
@@ -50,20 +57,21 @@ CREATE TABLE "finance"."customer_versions" (
 );
 
 -- The default price per room and month, per currency. Effective from the first day of a month;
--- a correction is a new row with the same effective_from (the newest recorded one wins).
+-- a correction is a new row with the same effective_from (the newest revision wins).
 CREATE TABLE "finance"."price_list_versions" (
   "id" uuid PRIMARY KEY DEFAULT uuidv7(),
+  "revision" bigint NOT NULL UNIQUE,
   "currency" char(3) NOT NULL CHECK ("currency" ~ '^[A-Z]{3}$'),
   "price_per_room_month" numeric(19, 2) NOT NULL CHECK ("price_per_room_month" >= 0),
   "effective_from" date NOT NULL CHECK (extract(day FROM "effective_from") = 1),
   "reason" text NOT NULL CHECK (length(btrim("reason")) BETWEEN 1 AND 500),
-  "recorded_at" timestamptz(3) NOT NULL DEFAULT now(),
+  "recorded_at" timestamptz(3) NOT NULL DEFAULT clock_timestamp(),
   "recorded_by" uuid NOT NULL,
   "recorded_by_name" text NOT NULL,
   "request_id" uuid NOT NULL UNIQUE
 );
 CREATE INDEX "price_list_versions_lookup_idx"
-  ON "finance"."price_list_versions" ("currency", "effective_from", "recorded_at");
+  ON "finance"."price_list_versions" ("currency", "effective_from", "revision");
 
 -- One billing agreement per hotel (core hotel id + its code/name as of the creation; the current
 -- name comes through the core contract). The terms live in versions.
@@ -82,6 +90,7 @@ CREATE TABLE "finance"."billing_agreements" (
 
 CREATE TABLE "finance"."agreement_versions" (
   "id" uuid PRIMARY KEY DEFAULT uuidv7(),
+  "revision" bigint NOT NULL UNIQUE,
   "agreement_id" uuid NOT NULL REFERENCES "finance"."billing_agreements" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
   -- Business time: the first month these terms apply to (mid-month changes are not decided).
   "effective_from" date NOT NULL CHECK (extract(day FROM "effective_from") = 1),
@@ -97,13 +106,13 @@ CREATE TABLE "finance"."agreement_versions" (
   "valid_from" date NOT NULL,
   "valid_to" date CHECK ("valid_to" IS NULL OR "valid_to" >= "valid_from"),
   "reason" text NOT NULL CHECK (length(btrim("reason")) BETWEEN 1 AND 500),
-  "recorded_at" timestamptz(3) NOT NULL DEFAULT now(),
+  "recorded_at" timestamptz(3) NOT NULL DEFAULT clock_timestamp(),
   "recorded_by" uuid NOT NULL,
   "recorded_by_name" text NOT NULL,
   "request_id" uuid NOT NULL UNIQUE
 );
 CREATE INDEX "agreement_versions_lookup_idx"
-  ON "finance"."agreement_versions" ("agreement_id", "effective_from", "recorded_at");
+  ON "finance"."agreement_versions" ("agreement_id", "effective_from", "revision");
 CREATE INDEX "agreement_versions_customer_idx" ON "finance"."agreement_versions" ("customer_id");
 
 -- Append-only, also for the schema owner: no UPDATE, DELETE or TRUNCATE.

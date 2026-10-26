@@ -56,7 +56,12 @@ export class FinanceOperations {
 /** Gapless serials from finance.code_counters (inside the business transaction). */
 export async function allocateFinanceSerial(
   tx: Prisma.TransactionClient,
-  name: 'finance_document' | 'accounting_export' | 'customer' | 'billing_agreement',
+  name:
+    | 'finance_document'
+    | 'accounting_export'
+    | 'customer'
+    | 'billing_agreement'
+    | 'billing_revision',
 ): Promise<bigint> {
   const rows = await tx.$queryRaw<{ last_value: bigint }[]>`
     UPDATE "finance"."code_counters" SET "last_value" = "last_value" + 1

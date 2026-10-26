@@ -44,8 +44,13 @@ const isUnique = (e: unknown) =>
 const isForeignKey = (e: unknown) =>
   e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003';
 
-/** The newest recorded row among those effective at the newest effective_from ≤ the date. */
-function effectiveAt<T extends { effectiveFrom: Date; recordedAt: Date }>(
+/**
+ * The newest revision among the rows known at `asOf` and effective at the newest effective_from
+ * ≤ the date. Revisions are unique and follow the commit order (counter billing_revision), so the
+ * result never depends on the order the rows were read in, and two rows recorded within the same
+ * millisecond are still ordered.
+ */
+function effectiveAt<T extends { effectiveFrom: Date; recordedAt: Date; revision: bigint }>(
   rows: readonly T[],
   date: Date,
   asOf: Date,
@@ -56,7 +61,7 @@ function effectiveAt<T extends { effectiveFrom: Date; recordedAt: Date }>(
     if (
       !best ||
       r.effectiveFrom > best.effectiveFrom ||
-      (r.effectiveFrom.getTime() === best.effectiveFrom.getTime() && r.recordedAt > best.recordedAt)
+      (r.effectiveFrom.getTime() === best.effectiveFrom.getTime() && r.revision > best.revision)
     )
       best = r;
   }
@@ -179,7 +184,7 @@ export class BillingSettingsService {
 
   async listPriceList(): Promise<PriceListVersion[]> {
     const rows = await this.prisma.priceListVersion.findMany({
-      orderBy: [{ currency: 'asc' }, { effectiveFrom: 'desc' }, { recordedAt: 'desc' }],
+      orderBy: [{ currency: 'asc' }, { effectiveFrom: 'desc' }, { revision: 'desc' }],
     });
     return rows.map(priceVersion);
   }
@@ -200,8 +205,10 @@ export class BillingSettingsService {
         actorId: userId,
       },
       async (tx) => {
+        const revision = await allocateFinanceSerial(tx, 'billing_revision');
         const row = await tx.priceListVersion.create({
           data: {
+            revision,
             currency: req.currency,
             pricePerRoomMonth: new Prisma.Decimal(req.pricePerRoomMonth),
             effectiveFrom: monthStart(req.effectiveFrom),
@@ -231,7 +238,7 @@ export class BillingSettingsService {
       include: {
         versions: {
           include: { customer: true },
-          orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
+          orderBy: { revision: 'desc' },
         },
       },
     });
@@ -256,6 +263,7 @@ export class BillingSettingsService {
       async (tx) => {
         const serial = await allocateFinanceSerial(tx, 'billing_agreement');
         const code = `BA-${String(serial).padStart(6, '0')}`;
+        const revision = await allocateFinanceSerial(tx, 'billing_revision');
         try {
           const created = await tx.billingAgreement.create({
             data: {
@@ -270,7 +278,7 @@ export class BillingSettingsService {
             },
           });
           await tx.agreementVersion.create({
-            data: versionData(created.id, req.terms, userId, displayName, req.requestId),
+            data: versionData(created.id, revision, req.terms, userId, displayName, req.requestId),
           });
         } catch (e) {
           if (isUnique(e))
@@ -295,11 +303,12 @@ export class BillingSettingsService {
       req.requestId,
       { code, terms: req.terms, actorId: userId },
       async (tx) => {
+        const revision = await allocateFinanceSerial(tx, 'billing_revision');
         const a = await tx.billingAgreement.findUnique({ where: { code } });
         if (!a) throw new NotFoundException('Smlouva nenalezena');
         try {
           await tx.agreementVersion.create({
-            data: versionData(a.id, req.terms, userId, displayName, req.requestId),
+            data: versionData(a.id, revision, req.terms, userId, displayName, req.requestId),
           });
         } catch (e) {
           if (isForeignKey(e)) throw customerNotFound();
@@ -423,12 +432,14 @@ function customerData(c: BillingCustomerFields) {
 
 function versionData(
   agreementId: string,
+  revision: bigint,
   t: BillingAgreementTerms,
   userId: string,
   displayName: string,
   requestId: string,
 ): Prisma.AgreementVersionUncheckedCreateInput {
   return {
+    revision,
     agreementId,
     effectiveFrom: monthStart(t.effectiveFrom),
     customerId: t.customerId,
@@ -471,6 +482,7 @@ function customerVersion(v: CustomerVersionRow): BillingCustomerVersion {
 function priceVersion(p: PriceRow): PriceListVersion {
   return {
     id: p.id,
+    revision: Number(p.revision),
     currency: p.currency,
     pricePerRoomMonth: p.pricePerRoomMonth.toFixed(2),
     effectiveFrom: month(p.effectiveFrom),
@@ -493,6 +505,7 @@ function agreement(a: AgreementRow): BillingAgreement {
 function agreementVersion(v: AgreementVersionRow): BillingAgreementVersion {
   return {
     id: v.id,
+    revision: Number(v.revision),
     effectiveFrom: month(v.effectiveFrom),
     customer: { id: v.customer.id, code: v.customer.code },
     contractNumber: v.contractNumber,

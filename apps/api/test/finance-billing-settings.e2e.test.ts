@@ -8,6 +8,7 @@ import type {
   BillingAgreementDetail,
   BillingCustomerDetail,
   EffectiveTermsPage,
+  PriceListVersion,
 } from '@ayvo/types';
 import { PrismaClient } from '../src/generated/finance-prisma/client.js';
 import { PrismaClient as CorePrismaClient } from '../src/generated/prisma/client.js';
@@ -97,6 +98,19 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
     ).body as EffectiveTermsPage;
     return page.items.find((i) => i.agreement.code === code);
   };
+  /** The next revision, taken from the real counter like the service does (owner connection). */
+  const nextRevision = async (db: PrismaClient) =>
+    (
+      await db.$queryRaw<{ v: bigint }[]>`
+        UPDATE finance.code_counters SET last_value = last_value + 1
+        WHERE name = 'billing_revision' RETURNING last_value AS v`
+    )[0]!.v;
+  const testCurrency = () =>
+    `X${randomUUID()
+      .replace(/[^A-Z]/gi, '')
+      .slice(0, 2)
+      .toUpperCase()
+      .padEnd(2, 'Q')}`;
   const price = (currency: string, pricePerRoomMonth: string, effectiveFrom: string) =>
     f.post(`${B}/price-list`).send({
       requestId: randomUUID(),
@@ -222,9 +236,9 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
     try {
       await expect(
         owner.$executeRawUnsafe(
-          `INSERT INTO finance.agreement_versions (agreement_id, effective_from, customer_id, billed_rooms,
+          `INSERT INTO finance.agreement_versions (revision, agreement_id, effective_from, customer_id, billed_rooms,
              currency, payment_terms_days, billing_timing, valid_from, reason, recorded_by, recorded_by_name, request_id)
-           VALUES ('${zero.id}', '2026-03-15', '${c.id}', 5, 'CZK', 14, 'ARREARS', '2026-01-01', 'x',
+           VALUES (${await nextRevision(owner)}, '${zero.id}', '2026-03-15', '${c.id}', 5, 'CZK', 14, 'ARREARS', '2026-01-01', 'x',
              '${randomUUID()}', 'x', '${randomUUID()}')`,
         ),
       ).rejects.toThrow(/check constraint/);
@@ -287,12 +301,122 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
     expect(detail.versions.map((v) => v.ownPricePerRoomMonth)).toEqual(['310.00', '300.00']);
   });
 
+  it('tied recording time (review N3A74-R1): the higher revision wins whatever the row order; every read agrees', async () => {
+    // Two versions effective the same month and recorded in the same millisecond, written straight
+    // into the real tables in both physical orders. Only the revision may decide.
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    const c = await newCustomer();
+    const [curA, curB] = [testCurrency(), testCurrency()];
+    const byPrice = {
+      [curA]: await newAgreement((await newHotel()).id, terms(c.id, { currency: curA })),
+      [curB]: await newAgreement((await newHotel()).id, terms(c.id, { currency: curB })),
+    };
+    // Agreement terms: own prices on agreements whose first version (300.00, January) is earlier.
+    const terms1 = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, { ownPricePerRoomMonth: '300.00' }),
+    );
+    const terms2 = await newAgreement(
+      (await newHotel()).id,
+      terms(c.id, { ownPricePerRoomMonth: '300.00' }),
+    );
+    // The tied moment: after everything above, so "as known then" lists the agreements.
+    const at = new Date();
+    const insertPrice = async (revision: bigint, currency: string, value: string) =>
+      owner.$executeRaw`
+        INSERT INTO finance.price_list_versions (revision, currency, price_per_room_month,
+          effective_from, reason, recorded_at, recorded_by, recorded_by_name, request_id)
+        VALUES (${revision}, ${currency}, ${value}::numeric, '2026-01-01', 'tie test', ${at},
+          ${randomUUID()}::uuid, 'test', ${randomUUID()}::uuid)`;
+    const insertTerms = async (
+      revision: bigint,
+      agreementId: string,
+      customerId: string,
+      own: string,
+    ) =>
+      owner.$executeRaw`
+        INSERT INTO finance.agreement_versions (revision, agreement_id, effective_from, customer_id,
+          billed_rooms, own_price_per_room_month, currency, payment_terms_days, billing_timing,
+          valid_from, reason, recorded_at, recorded_by, recorded_by_name, request_id)
+        VALUES (${revision}, ${agreementId}::uuid, '2026-02-01', ${customerId}::uuid, 40,
+          ${own}::numeric, 'CZK', 14, 'ARREARS', '2026-01-01', 'tie test', ${at},
+          ${randomUUID()}::uuid, 'test', ${randomUUID()}::uuid)`;
+    try {
+      // Price list: the higher revision inserted first (A), then last (B).
+      for (const [cur, firstIsHigher] of [
+        [curA, true],
+        [curB, false],
+      ] as const) {
+        const lo = await nextRevision(owner);
+        const hi = await nextRevision(owner);
+        const rows: [bigint, string][] = [
+          [hi, '999.00'],
+          [lo, '320.00'],
+        ];
+        for (const [rev, value] of firstIsHigher ? rows : rows.reverse())
+          await insertPrice(rev, cur, value);
+      }
+      // Agreement terms: the same, effective from February.
+      for (const [a, firstIsHigher] of [
+        [terms1, true],
+        [terms2, false],
+      ] as const) {
+        const lo = await nextRevision(owner);
+        const hi = await nextRevision(owner);
+        const rows: [bigint, string][] = [
+          [hi, '999.00'],
+          [lo, '320.00'],
+        ];
+        for (const [rev, own] of firstIsHigher ? rows : rows.reverse())
+          await insertTerms(rev, a.id, c.id, own);
+      }
+      // Repeated reads, now and as known at the tied moment itself: always the higher revision.
+      for (let i = 0; i < 5; i++) {
+        for (const cur of [curA, curB]) {
+          expect((await effective('2026-01', byPrice[cur]!.code))!.price.perRoomMonth).toBe(
+            '999.00',
+          );
+          expect(
+            (await effective('2026-01', byPrice[cur]!.code, at.toISOString()))!.price.perRoomMonth,
+          ).toBe('999.00');
+        }
+        for (const a of [terms1, terms2]) {
+          const feb = (await effective('2026-02', a.code))!;
+          expect(feb.price).toMatchObject({ source: 'OWN', perRoomMonth: '999.00' });
+          // January keeps the first version (the tied ones start in February).
+          expect((await effective('2026-01', a.code))!.price.perRoomMonth).toBe('300.00');
+        }
+      }
+      // The history and the price list are ordered by revision too, never by the row order.
+      for (const a of [terms1, terms2]) {
+        const detail = (await f.get(`${B}/agreements/${a.code}`).expect(200))
+          .body as BillingAgreementDetail;
+        expect(detail.versions.map((v) => v.ownPricePerRoomMonth)).toEqual([
+          '999.00',
+          '320.00',
+          '300.00',
+        ]);
+        const revs = detail.versions.map((v) => v.revision);
+        expect(revs).toEqual([...revs].sort((x, y) => y - x));
+      }
+      const list = (await f.get(`${B}/price-list`).expect(200)).body as PriceListVersion[];
+      for (const cur of [curA, curB])
+        expect(list.filter((p) => p.currency === cur).map((p) => p.pricePerRoomMonth)).toEqual([
+          '999.00',
+          '320.00',
+        ]);
+      // A revision is unique in the table itself (the counter keeps them apart across tables).
+      const taken = list.find((p) => p.currency === curA)!.revision;
+      await expect(insertPrice(BigInt(taken), curA, '1.00')).rejects.toThrow(/unique/i);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
   it('the default price list: by currency and month; another currency or no list is a gap, never 0', async () => {
-    const currency = `X${randomUUID()
-      .replace(/[^A-Z]/gi, '')
-      .slice(0, 2)
-      .toUpperCase()
-      .padEnd(2, 'Q')}`;
+    const currency = testCurrency();
     const c = await newCustomer();
     const a = await newAgreement((await newHotel()).id, terms(c.id, { currency }));
     expect(await effective('2026-01', a.code)).toMatchObject({

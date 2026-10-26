@@ -7,7 +7,8 @@ import { isoDateSchema } from './procurement.js';
  * billing agreement per hotel with versioned terms, and the default price list. No amounts are
  * computed and no VAT, numbering or invoice exists here (N3A-2). Versions are append-only and
  * bitemporal: `effectiveFrom` = the first month the terms apply to, `recordedAt` = when they were
- * written; a correction is a new version (the newest recorded one wins).
+ * written; a correction is a new version (the newest revision wins — revisions follow the commit
+ * order and are never tied).
  */
 
 /** A price per room and month: exact decimal string, 0 or more, at most 2 decimals ("." separator). */
@@ -121,6 +122,8 @@ export type NewPriceListVersionRequest = z.infer<typeof newPriceListVersionSchem
 
 export const priceListVersionSchema = z.object({
   id: z.uuid(),
+  /** Unique, in commit order: of two versions effective the same month the higher one applies. */
+  revision: z.number().int(),
   currency: z.string(),
   pricePerRoomMonth: z.string(),
   effectiveFrom: billingMonthSchema,
@@ -172,6 +175,8 @@ export type NewBillingAgreementVersionRequest = z.infer<typeof newBillingAgreeme
 
 export const billingAgreementVersionSchema = z.object({
   id: z.uuid(),
+  /** Unique, in commit order: of two versions effective the same month the higher one applies. */
+  revision: z.number().int(),
   effectiveFrom: billingMonthSchema,
   customer: z.object({ id: z.uuid(), code: z.string() }),
   contractNumber: z.string().nullable(),
@@ -199,7 +204,7 @@ export const billingAgreementSchema = z.object({
 export type BillingAgreement = z.infer<typeof billingAgreementSchema>;
 
 export const billingAgreementDetailSchema = billingAgreementSchema.extend({
-  /** Every version, newest recorded first. */
+  /** Every version, newest revision first. */
   versions: z.array(billingAgreementVersionSchema),
 });
 export type BillingAgreementDetail = z.infer<typeof billingAgreementDetailSchema>;

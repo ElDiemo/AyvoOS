@@ -30,8 +30,12 @@ A hotel is not a company: one company may run several hotels, and an IČO never 
 - Agreement and price versions carry `effective_from` (the first day of a month — DB CHECK; mid-month
   changes are not decided).
 - **Effective version for month P** = the greatest `effective_from ≤` first day of P, then the
-  newest `recorded_at`.
+  highest `revision`. Revisions come from the gapless counter `billing_revision`, whose row stays
+  locked until the writing transaction commits: they follow the commit order and are never tied, so
+  the result never depends on the read order or on two rows sharing a millisecond (review
+  N3A74-R1). Every read — history, price list, effective terms, `asOf` — orders by it.
 - **As known at moment T** = the same with `recorded_at ≤ T`. This is the API `asOf`.
+  `recorded_at` is `clock_timestamp()`, taken after that lock, so it never runs against the revisions.
 - Customer versions are ordered by number; the newest one known at T is used.
 
 ## 3. Prices

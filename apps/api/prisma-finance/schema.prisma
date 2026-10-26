@@ -203,7 +203,7 @@ model CustomerVersion {
   countryCode    String   @map("country_code") @db.Char(2)
   billingEmail   String   @map("billing_email")
   reason         String?
-  recordedAt     DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
   recordedBy     String   @map("recorded_by") @db.Uuid
   recordedByName String   @map("recorded_by_name")
   requestId      String   @unique @map("request_id") @db.Uuid
@@ -219,16 +219,18 @@ model CustomerVersion {
 /// A correction is a new row with the same effective_from (the newest recorded wins). DB: append-only.
 model PriceListVersion {
   id                String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// From the counter billing_revision: commit order, never tied (the newest is the later correction).
+  revision          BigInt   @unique
   currency          String   @db.Char(3)
   pricePerRoomMonth Decimal  @map("price_per_room_month") @db.Decimal(19, 2)
   effectiveFrom     DateTime @map("effective_from") @db.Date
   reason            String
-  recordedAt        DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedAt        DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
   recordedBy        String   @map("recorded_by") @db.Uuid
   recordedByName    String   @map("recorded_by_name")
   requestId         String   @unique @map("request_id") @db.Uuid
 
-  @@index([currency, effectiveFrom, recordedAt], map: "price_list_versions_lookup_idx")
+  @@index([currency, effectiveFrom, revision], map: "price_list_versions_lookup_idx")
   @@map("price_list_versions")
   @@schema("finance")
 }
@@ -256,6 +258,8 @@ model BillingAgreement {
 /// place of billed rooms and the hotel's own price. DB: append-only.
 model AgreementVersion {
   id                   String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// From the counter billing_revision: commit order, never tied (the newest is the later correction).
+  revision             BigInt    @unique
   agreementId          String    @map("agreement_id") @db.Uuid
   effectiveFrom        DateTime  @map("effective_from") @db.Date
   customerId           String    @map("customer_id") @db.Uuid
@@ -269,7 +273,7 @@ model AgreementVersion {
   validFrom            DateTime  @map("valid_from") @db.Date
   validTo              DateTime? @map("valid_to") @db.Date
   reason               String
-  recordedAt           DateTime  @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedAt           DateTime  @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
   recordedBy           String    @map("recorded_by") @db.Uuid
   recordedByName       String    @map("recorded_by_name")
   requestId            String    @unique @map("request_id") @db.Uuid
@@ -277,7 +281,7 @@ model AgreementVersion {
   agreement BillingAgreement @relation(fields: [agreementId], references: [id], onDelete: Restrict)
   customer  Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
-  @@index([agreementId, effectiveFrom, recordedAt], map: "agreement_versions_lookup_idx")
+  @@index([agreementId, effectiveFrom, revision], map: "agreement_versions_lookup_idx")
   @@index([customerId], map: "agreement_versions_customer_idx")
   @@map("agreement_versions")
   @@schema("finance")
