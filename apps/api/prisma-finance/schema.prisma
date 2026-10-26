@@ -171,6 +171,208 @@ model ExportEvent {
   @@schema("finance")
 }
 
+/// The billed company of hotel billing (doc 040, N3A-1) — not the hotel (a company may run several).
+/// Its details are versions; the newest is current. DB: append-only.
+model Customer {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial        BigInt   @unique
+  code          String   @unique
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy     String   @map("created_by") @db.Uuid
+  createdByName String   @map("created_by_name")
+  requestId     String   @unique @map("request_id") @db.Uuid
+
+  versions          CustomerVersion[]
+  agreementVersions AgreementVersion[]
+
+  @@map("customers")
+  @@schema("finance")
+}
+
+/// One version of a customer's details (version 1 = creation; later ones carry a reason).
+model CustomerVersion {
+  customerId     String   @map("customer_id") @db.Uuid
+  version        Int
+  legalName      String   @map("legal_name")
+  companyId      String?  @map("company_id")
+  vatId          String?  @map("vat_id")
+  addressLine1   String   @map("address_line1")
+  addressLine2   String?  @map("address_line2")
+  postalCode     String   @map("postal_code")
+  city           String
+  countryCode    String   @map("country_code") @db.Char(2)
+  billingEmail   String   @map("billing_email")
+  reason         String?
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@id([customerId, version])
+  @@map("customer_versions")
+  @@schema("finance")
+}
+
+/// The default price per room and month of a currency, effective from the first day of a month.
+/// A correction is a new row with the same effective_from (the newest recorded wins). DB: append-only.
+model PriceListVersion {
+  id                String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// From the counter billing_revision: commit order, never tied (the newest is the later correction).
+  revision          BigInt   @unique
+  currency          String   @db.Char(3)
+  pricePerRoomMonth Decimal  @map("price_per_room_month") @db.Decimal(19, 2)
+  effectiveFrom     DateTime @map("effective_from") @db.Date
+  reason            String
+  recordedAt        DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy        String   @map("recorded_by") @db.Uuid
+  recordedByName    String   @map("recorded_by_name")
+  requestId         String   @unique @map("request_id") @db.Uuid
+
+  @@index([currency, effectiveFrom, revision], map: "price_list_versions_lookup_idx")
+  @@map("price_list_versions")
+  @@schema("finance")
+}
+
+/// One billing agreement per hotel (core hotel id + code/name as of the creation). DB: append-only.
+model BillingAgreement {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial        BigInt   @unique
+  code          String   @unique
+  hotelId       String   @unique @map("hotel_id") @db.Uuid
+  hotelCode     String   @map("hotel_code")
+  hotelName     String   @map("hotel_name")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy     String   @map("created_by") @db.Uuid
+  createdByName String   @map("created_by_name")
+  requestId     String   @unique @map("request_id") @db.Uuid
+
+  versions AgreementVersion[]
+
+  @@map("billing_agreements")
+  @@schema("finance")
+}
+
+/// The terms of an agreement from a month on (bitemporal: effective_from + recorded_at). The only
+/// place of billed rooms and the hotel's own price. DB: append-only.
+model AgreementVersion {
+  id                   String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  /// From the counter billing_revision: commit order, never tied (the newest is the later correction).
+  revision             BigInt    @unique
+  agreementId          String    @map("agreement_id") @db.Uuid
+  effectiveFrom        DateTime  @map("effective_from") @db.Date
+  customerId           String    @map("customer_id") @db.Uuid
+  contractNumber       String?   @map("contract_number")
+  billedRooms          Int       @map("billed_rooms")
+  /// NULL = the default price list of the currency; 0.00 is an explicit price.
+  ownPricePerRoomMonth Decimal?  @map("own_price_per_room_month") @db.Decimal(19, 2)
+  currency             String    @db.Char(3)
+  paymentTermsDays     Int       @map("payment_terms_days")
+  billingTiming        String    @map("billing_timing")
+  validFrom            DateTime  @map("valid_from") @db.Date
+  validTo              DateTime? @map("valid_to") @db.Date
+  reason               String
+  recordedAt           DateTime  @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy           String    @map("recorded_by") @db.Uuid
+  recordedByName       String    @map("recorded_by_name")
+  requestId            String    @unique @map("request_id") @db.Uuid
+
+  agreement BillingAgreement @relation(fields: [agreementId], references: [id], onDelete: Restrict)
+  customer  Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([agreementId, effectiveFrom, revision], map: "agreement_versions_lookup_idx")
+  @@index([customerId], map: "agreement_versions_customer_idx")
+  @@map("agreement_versions")
+  @@schema("finance")
+}
+
+/// Our company as the issuer of invoices, in versions (N3A-2a, doc 040 §8). DB: append-only.
+model IssuerVersion {
+  version        Int      @id
+  legalName      String   @map("legal_name")
+  addressLine1   String   @map("address_line1")
+  addressLine2   String?  @map("address_line2")
+  postalCode     String   @map("postal_code")
+  city           String
+  countryCode    String   @map("country_code") @db.Char(2)
+  companyId      String   @map("company_id")
+  vatStatus      String   @map("vat_status")
+  vatId          String?  @map("vat_id")
+  registration   String?
+  email          String
+  phone          String?
+  web            String?
+  reason         String
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  @@map("issuer_versions")
+  @@schema("finance")
+}
+
+/// A bank account printed on invoices (not the bank connection). DB: append-only, never deleted.
+model IssuerBankAccount {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial        BigInt   @unique
+  code          String   @unique
+  createdAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+  createdBy     String   @map("created_by") @db.Uuid
+  createdByName String   @map("created_by_name")
+  requestId     String   @unique @map("request_id") @db.Uuid
+
+  versions IssuerBankAccountVersion[]
+  defaults IssuerDefaultAccount[]
+
+  @@map("issuer_bank_accounts")
+  @@schema("finance")
+}
+
+/// The details of an invoice bank account in versions (ACTIVE / RETIRED). DB: append-only.
+model IssuerBankAccountVersion {
+  accountId      String   @map("account_id") @db.Uuid
+  version        Int
+  status         String
+  label          String
+  currency       String   @db.Char(3)
+  accountPrefix  String?  @map("account_prefix")
+  accountNumber  String?  @map("account_number")
+  bankCode       String?  @map("bank_code")
+  iban           String
+  bic            String?
+  reason         String
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  account IssuerBankAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@id([accountId, version])
+  @@map("issuer_bank_account_versions")
+  @@schema("finance")
+}
+
+/// The default invoice account of a currency, chosen in revisions (newest current). DB: append-only.
+model IssuerDefaultAccount {
+  revision       BigInt   @id
+  currency       String   @db.Char(3)
+  accountId      String   @map("account_id") @db.Uuid
+  reason         String
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique @map("request_id") @db.Uuid
+
+  account IssuerBankAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([currency, revision], map: "issuer_default_accounts_currency_idx")
+  @@map("issuer_default_accounts")
+  @@schema("finance")
+}
+
 /// One read of one account × currency from the bank (N3B-1, doc 041). DB: RUNNING → finished
 /// exactly once (trigger); never deleted.
 model BankSyncRun {

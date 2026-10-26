@@ -226,8 +226,19 @@ describe.skipIf(!WANT_CONTAINERS)('Finance reaches PostgreSQL over the rendered 
     ]);
     for (let i = 0; i < 60; i++) {
       if (
-        run('docker', ['exec', box('postgres'), 'pg_isready', '-U', 'fixture', '-d', db]).status ===
-        0
+        // Over TCP: the image's initdb phase runs a temporary server on the Unix socket only and then
+        // shuts it down — a socket check can pass just before that shutdown (seen in CI).
+        run('docker', [
+          'exec',
+          box('postgres'),
+          'pg_isready',
+          '-h',
+          '127.0.0.1',
+          '-U',
+          'fixture',
+          '-d',
+          db,
+        ]).status === 0
       )
         break;
       spawnSync('sleep', ['1']);

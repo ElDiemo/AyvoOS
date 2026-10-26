@@ -1,4 +1,5 @@
 import type {
+  FinanceContractHotel,
   CreateHotelRequest,
   FulfillmentSiteOption,
   HotelDetail,
@@ -201,6 +202,28 @@ export class HotelsService implements OnModuleInit {
   }
 
   /** The hotel by its code (any site), or null. */
+  /**
+   * Hotels for the Finance contract (ADR 0039 §10, doc 040): identity and address only — no
+   * contacts, site or delivery details. All hotels, or those of the given ids (an unknown id is
+   * simply absent).
+   */
+  financeContractHotels(ids?: readonly string[]): Promise<FinanceContractHotel[]> {
+    return this.prisma.hotel.findMany({
+      where: ids ? { id: { in: [...ids] } } : undefined,
+      orderBy: { serial: 'asc' },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        addressLine1: true,
+        addressLine2: true,
+        postalCode: true,
+        city: true,
+        countryCode: true,
+      },
+    });
+  }
+
   byCode(code: string, db: Prisma.TransactionClient = this.prisma): Promise<HotelRecord | null> {
     const serial = parseCodeSerial(CODE_PREFIX.hotel, code);
     if (serial === null) return Promise.resolve(null);

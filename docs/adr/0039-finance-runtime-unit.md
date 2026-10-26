@@ -150,6 +150,22 @@ snapshots); `ProcurementService` calls become the core client of §4; the core g
 Compose service, Caddy route and `--finance` deploy step. The review findings F-R2–F-R6 are fixed
 in the same PRs.
 
+## 9b. Hotel billing in the Finance unit (N3, doc 040)
+
+Owner, 2026-10-25: hotel billing extends this unit; there is no new application per step.
+
+- **Ownership.** Finance owns customers (the billed company), hotel billing agreements with
+  versioned terms (the only place of billed rooms and own price), the default price list and,
+  later, invoices and payments.
+- **Hotels.** The hotel stays the core's record. Finance reads it only through
+  `GET /api/internal/v1/finance/hotels` and `POST …/hotels/lookup` (identity and address;
+  `finance:billing_read`) and keeps the id plus the code and name as of the agreement.
+- **Versions.** Append-only and bitemporal (doc 040 §2).
+- **Live invoicing.** Blocked by the issuing gate until the accounting rules are approved (doc 040 §5).
+- **Our company (N3A-2a, 2026-10-26).** The issuer and the invoice bank accounts live only here
+  (a site is not a legal entity, doc 022 §1); `finance:issuer_manage` (ADMIN) reads and changes
+  them. Not the bank connection.
+
 ## 9. Decisions still open
 
 1. §3 blocker: switch the core to a non-superuser role (own PR) — or accept one-sided isolation

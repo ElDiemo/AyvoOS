@@ -94,6 +94,9 @@ export const PERMISSION_CODES = [
   'finance:documents_read',
   'finance:documents_manage',
   'finance:exports_manage',
+  'finance:billing_read',
+  'finance:billing_manage',
+  'finance:issuer_manage',
   'finance:bank_read',
   'finance:bank_sync',
 ] as const;
