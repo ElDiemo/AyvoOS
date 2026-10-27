@@ -599,7 +599,7 @@ describe.skipIf(!hasDatabase)('finance bank transactions (N3B-1, simulated RB Pr
     await real.post(`${B}/sync`, outCookie).send({}).expect(403);
   });
 
-  it('configuration rules: production only in production, the simulation only in tests, all parts required; names only in errors', () => {
+  it('configuration rules: production only in production, the DEV simulation never there and only with its CA, the test simulation only in tests, all parts required; names only in errors', () => {
     const base = {
       FINANCE_DATABASE_URL: 'postgresql://x:y@localhost:5432/z',
       CORE_INTERNAL_URL: 'http://api:4000',
@@ -626,6 +626,40 @@ describe.skipIf(!hasDatabase)('finance bank transactions (N3B-1, simulated RB Pr
       'RB_PREMIUM_BASE_URL_FOR_TESTS',
     );
     fails({ APP_ENV: 'development', RB_PREMIUM_ENVIRONMENT: 'sandbox' }, 'RB_PREMIUM_P12_FILE');
+    // The DEV bank simulation: never in production, always with its own CA; that CA only with it;
+    // the test-only connect address only in tests.
+    const ca = { RB_PREMIUM_SIMULATION_CA_FILE: '/run/secrets/rb-premium/simulation-ca.crt' };
+    fails(
+      { APP_ENV: 'production', RB_PREMIUM_ENVIRONMENT: 'simulation', ...files, ...ca },
+      'RB_PREMIUM_ENVIRONMENT',
+    );
+    fails(
+      { APP_ENV: 'development', RB_PREMIUM_ENVIRONMENT: 'simulation', ...files },
+      'RB_PREMIUM_SIMULATION_CA_FILE',
+    );
+    fails(
+      { APP_ENV: 'development', RB_PREMIUM_ENVIRONMENT: 'sandbox', ...files, ...ca },
+      'RB_PREMIUM_SIMULATION_CA_FILE',
+    );
+    fails(
+      {
+        APP_ENV: 'development',
+        RB_PREMIUM_ENVIRONMENT: 'simulation',
+        ...files,
+        ...ca,
+        RB_PREMIUM_SIMULATION_ADDRESS_FOR_TESTS: '127.0.0.1:8443',
+      },
+      'RB_PREMIUM_SIMULATION_ADDRESS_FOR_TESTS',
+    );
+    expect(
+      loadFinanceEnv({
+        ...base,
+        APP_ENV: 'development',
+        RB_PREMIUM_ENVIRONMENT: 'simulation',
+        ...files,
+        ...ca,
+      }).RB_PREMIUM_ENVIRONMENT,
+    ).toBe('simulation');
     // A run's deadline stays well inside the 10-minute lease.
     fails(
       { APP_ENV: 'development', RB_PREMIUM_RUN_DEADLINE_MS: '600000' },

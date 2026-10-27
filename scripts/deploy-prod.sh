@@ -409,7 +409,9 @@ check_finance_env() {
 # certificate and its passphrase are files the owner stored in $SECRETS/rb-premium, mounted
 # read-only into Finance alone (compose.rb-premium.yml). Only their kind, owner and mode are
 # checked here — their contents are never read or printed.
-readonly RB_PREMIUM_FILES="certificate.p12 client-id p12-passphrase"
+# The same file checks as the DEV bank simulation (scripts/lib/rb-premium-files.sh).
+# shellcheck source=lib/rb-premium-files.sh
+source "$REPO_ROOT/scripts/lib/rb-premium-files.sh"
 check_rb_premium() {
   RB_PREMIUM_ACCOUNTS="$(env_value "$SECRETS/prod.env" RB_PREMIUM_ACCOUNTS || true)"
   if [[ -z $RB_PREMIUM_ACCOUNTS ]]; then
@@ -417,24 +419,10 @@ check_rb_premium() {
     return
   fi
   $FINANCE_ENABLED || die "RB_PREMIUM_ACCOUNTS is set without the Finance keys: the bank connection belongs to the Finance unit"
-  [[ $RB_PREMIUM_ACCOUNTS =~ ^[0-9]{1,10}:[A-Z]{3}(,[0-9]{1,10}:[A-Z]{3}){0,9}$ ]] ||
+  rb_premium_accounts_valid "$RB_PREMIUM_ACCOUNTS" ||
     die "RB_PREMIUM_ACCOUNTS must be number:CUR[,number:CUR...] (the national number without prefix or bank code)"
-  local dir=$SECRETS/rb-premium f mode entries
-  [[ -d $dir && ! -L $dir ]] || die "$dir does not exist: the owner stores the bank files there first (doc 036 §10a)"
-  [[ $(stat -c '%u' "$dir") == "$FINANCE_UID" ]] || die "$dir must belong to uid $FINANCE_UID (the Finance process)"
-  mode="$(stat -c '%a' "$dir")"
-  [[ $mode =~ ^[57]00$ ]] || die "$dir must be accessible to its owner only (mode $mode, expected 500)"
-  entries="$(find "$dir" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' ')" ||
-    die "cannot list $dir (run with sudo)"
-  [[ $entries == "$RB_PREMIUM_FILES " ]] ||
-    die "$dir must hold exactly $RB_PREMIUM_FILES (found: ${entries:-nothing})"
-  for f in $RB_PREMIUM_FILES; do
-    [[ -f $dir/$f && ! -L $dir/$f ]] || die "$dir/$f must be a regular file"
-    [[ -s $dir/$f ]] || die "$dir/$f is empty"
-    [[ $(stat -c '%u' "$dir/$f") == "$FINANCE_UID" ]] || die "$dir/$f must belong to uid $FINANCE_UID"
-    mode="$(stat -c '%a' "$dir/$f")"
-    [[ $mode =~ ^[46]00$ ]] || die "$dir/$f must be readable by its owner only (mode $mode, expected 400)"
-  done
+  # Exactly the three files: a simulation CA never reaches production.
+  rb_premium_check_dir "$SECRETS/rb-premium" "$FINANCE_UID" "$RB_PREMIUM_FILES"
   ok "bank connection: $(tr ',' '\n' <<<"$RB_PREMIUM_ACCOUNTS" | wc -l) account(s); files present, owner uid $FINANCE_UID only (contents not read)"
 }
 
@@ -1093,15 +1081,7 @@ verify_rb_premium() {
       die "RB_PREMIUM_ACCOUNTS is set but release $AYVO_RELEASE has no compose.rb-premium.yml"
     want=production
   fi
-  # shellcheck disable=SC2016 # JavaScript, run in the container
-  compose exec -T -e WANT="$want" finance node -e '
-    const fs = require("node:fs");
-    const e = process.env;
-    const dir = "/run/secrets/rb-premium";
-    if (e.WANT === "none") process.exit(e.RB_PREMIUM_ENVIRONMENT === undefined && !fs.existsSync(dir) ? 0 : 2);
-    if (e.RB_PREMIUM_ENVIRONMENT !== "production" || e.RB_PREMIUM_P12_FILE !== dir + "/certificate.p12") process.exit(3);
-    for (const f of ["client-id", "certificate.p12", "p12-passphrase"]) fs.accessSync(dir + "/" + f, fs.constants.R_OK);
-    try { fs.writeFileSync(dir + "/.w", ""); process.exit(4); } catch {}' ||
+  compose exec -T -e WANT="$want" finance node -e "$RB_PREMIUM_VERIFY_JS" ||
     die "the Finance container's bank connection is not as configured ($want): exit $?"
   if [[ $want == production ]]; then
     ok "bank connection: production, files readable by Finance through a read-only mount (no request sent)"

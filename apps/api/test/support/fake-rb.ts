@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TLSSocket } from 'node:tls';
+import { entryJson, RB_BASE_PATH, type RbEntry } from '../../src/finance/rb-simulation.js';
 
 /**
  * A SIMULATED Raiffeisenbank Premium API for automated tests only (N3B-1, doc 041) — the
@@ -18,29 +19,10 @@ import type { TLSSocket } from 'node:tls';
  * certificate (PKCS#12 with an obviously fake password) and one from a foreign CA. No real bank
  * host, certificate or account is ever involved.
  */
-export const BASE_PATH = '/rbcz/premium/api';
+export const BASE_PATH = RB_BASE_PATH;
 
-export interface FakeEntry {
-  entryReference: string;
-  /** Written as a JSON number exactly as this text. */
-  amount: string;
-  currency?: string;
-  creditDebitIndication: 'CRDT' | 'DBIT';
-  bookingDate?: string;
-  valueDate?: string;
-  code?: string;
-  counterParty?: {
-    name?: string;
-    accountNumberPrefix?: string;
-    accountNumber?: string;
-    bankCode?: string;
-    iban?: string;
-  };
-  variable?: string;
-  constant?: string;
-  specific?: string;
-  message?: string;
-}
+/** One entry as the bank writes it (the shape the DEV simulation answers too). */
+export type FakeEntry = RbEntry;
 
 /** What the next requests answer instead of the list: a status, or 'hang' (never answer). */
 type Fault = number | 'hang';
@@ -275,46 +257,4 @@ export class FakeRb {
       `{"lastPage":${lastPage},"transactions":[${slice.map((e) => entryJson(e, m[2]!)).join(',')}]}`,
     );
   }
-}
-
-/** One entry as the bank writes it: the amount a JSON number exactly as given. */
-function entryJson(e: FakeEntry, currency: string): string {
-  const details = {
-    transactionDetails: {
-      ...(e.counterParty
-        ? {
-            relatedParties: {
-              counterParty: {
-                name: e.counterParty.name,
-                ...(e.counterParty.bankCode
-                  ? { organisationIdentification: { bankCode: e.counterParty.bankCode } }
-                  : {}),
-                account: {
-                  iban: e.counterParty.iban,
-                  accountNumberPrefix: e.counterParty.accountNumberPrefix,
-                  accountNumber: e.counterParty.accountNumber,
-                },
-              },
-            },
-          }
-        : {}),
-      remittanceInformation: {
-        unstructured: e.message,
-        creditorReferenceInformation: {
-          variable: e.variable,
-          constant: e.constant,
-          specific: e.specific,
-        },
-      },
-    },
-  };
-  return JSON.stringify({
-    entryReference: e.entryReference,
-    amount: { value: JSON.rawJSON(e.amount), currency: e.currency ?? currency },
-    creditDebitIndication: e.creditDebitIndication,
-    bookingDate: e.bookingDate,
-    valueDate: e.valueDate,
-    bankTransactionCode: { code: e.code ?? '10000405000' },
-    entryDetails: details,
-  });
 }

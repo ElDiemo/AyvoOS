@@ -12,6 +12,9 @@ import { prodSecrets, renderProd } from './support/prod-compose.js';
  * arguments. The real proof from outside the tailnet is the owner's (doc 036 §5).
  */
 const root = resolve(import.meta.dirname, '../../..');
+/** A slice of the script run by `bash -c` (no BASH_SOURCE): REPO_ROOT is this checkout. */
+const withRepoRoot = (text: string) =>
+  text.replace(/^readonly REPO_ROOT=.*$/m, `readonly REPO_ROOT=${root}`);
 const prodDir = join(root, 'deploy/prod');
 const read = (f: string) => readFileSync(join(root, f), 'utf8');
 const run = (cmd: string, args: string[], env: Record<string, string> = {}, cwd = root) =>
@@ -649,7 +652,7 @@ describe('production deploy script', () => {
       const root = opts.asRoot
         ? 'id() { if [[ $# == 1 && $1 == -u ]]; then echo 0; else command id "$@"; fi; }\n'
         : '';
-      const harness = `set -Eeuo pipefail\n${root}${lines.slice(from, to).join('\n')}\nSTEP=test\n${opts.call ?? 'check_env_files'}\n`;
+      const harness = `set -Eeuo pipefail\n${root}${withRepoRoot(lines.slice(from, to).join('\n'))}\nSTEP=test\n${opts.call ?? 'check_env_files'}\n`;
       return run('bash', ['-c', harness], {
         AYVO_PROD_SECRETS_DIR: dir,
         AYVO_PROD_DIR: dir,
@@ -1388,6 +1391,8 @@ describe('the Finance deployment flow keeps the OS running (incident 2026-10-26)
         'verify_rb_premium',
       ].map(fnSrc),
       `PROJECT=ayvo-prod; IMAGE_PREFIX=ayvo-prod; DOMAIN=os.example.test; PROD_DIR=${state}/prod`,
+      // The container check's script (scripts/lib/rb-premium-files.sh); the stub only matches the call.
+      "RB_PREMIUM_VERIFY_JS='/* check */'",
       `RELEASE=${'a'.repeat(40)}; PREVIOUS=${'a'.repeat(12)}; FINANCE_ENABLED=true; MIGRATED=false`,
       `FINANCE_RELEASE=${opts.financeRunning ? 'b'.repeat(12) : ''}`,
       // The backup tool directory is looked up by its absolute path: point the check at a test one.
@@ -1455,12 +1460,15 @@ describe('the Finance deployment flow keeps the OS running (incident 2026-10-26)
 
 describe('optional bank connection from RB Premium API (doc 036 §10a)', () => {
   const lines = script.split('\n');
-  const checks = lines
-    .slice(
-      lines.findIndex((l) => l.startsWith('readonly SECRETS=')),
-      lines.findIndex((l) => l.startsWith('# --- Compose')),
-    )
-    .join('\n');
+  // The bank file checks are shared with the DEV simulation (scripts/lib/rb-premium-files.sh).
+  const checks = withRepoRoot(
+    lines
+      .slice(
+        lines.findIndex((l) => l.startsWith('readonly SECRETS=')),
+        lines.findIndex((l) => l.startsWith('# --- Compose')),
+      )
+      .join('\n'),
+  );
   const SECRET = 'NEVER-PRINTED-VALUE';
   const FILES = ['certificate.p12', 'client-id', 'p12-passphrase'];
   /** A secrets directory as the owner prepares it; options break one thing at a time. */
@@ -1631,7 +1639,9 @@ describe('optional bank connection from RB Premium API (doc 036 §10a)', () => {
   /** The container check of verify_rb_premium, run by node against a temporary directory. */
   const containerCheck = (dir: string, env: Record<string, string>) => {
     const fn = script.split('\nverify_rb_premium() {\n')[1]!.split('\n}\n')[0]!;
-    const js = fn.split("node -e '")[1]!.split("' ||")[0]!;
+    expect(fn).toContain('node -e "$RB_PREMIUM_VERIFY_JS"');
+    const lib = read('scripts/lib/rb-premium-files.sh');
+    const js = lib.split("readonly RB_PREMIUM_VERIFY_JS='")[1]!.split("'\n")[0]!;
     return spawnSync('node', ['-e', js.replaceAll('/run/secrets/rb-premium', dir)], {
       encoding: 'utf8',
       env: { PATH: process.env.PATH, ...env },

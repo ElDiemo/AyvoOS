@@ -50,14 +50,21 @@ export const financeEnvSchema = z
     // --- Raiffeisenbank Premium API, read only (N3B-1, doc 041) ---------------------------------
     /**
      * Unset = no bank connection in this installation. `production` only with APP_ENV=production
-     * (and nothing else there); `sandbox` = the bank's mock (development/test); `test` = a local
-     * simulation (APP_ENV=test only). The URLs of the bank are fixed in code.
+     * (and nothing else there); `sandbox` = the bank's mock (development/test); `simulation` = the
+     * DEV bank simulation (`rb-simulation` in the DEV Compose project, APP_ENV=development or test)
+     * reached exactly like the bank — mTLS, client ID, read-only mounted files — with its own CA;
+     * `test` = a local simulation (APP_ENV=test only). The URLs are fixed in code.
      */
-    RB_PREMIUM_ENVIRONMENT: optional(z.enum(['production', 'sandbox', 'test'])),
+    RB_PREMIUM_ENVIRONMENT: optional(z.enum(['production', 'sandbox', 'simulation', 'test'])),
     /** Paths to files mounted read-only for the Finance process — never the values in the env. */
     RB_PREMIUM_CLIENT_ID_FILE: optional(z.string().min(1)),
     RB_PREMIUM_P12_FILE: optional(z.string().min(1)),
     RB_PREMIUM_P12_PASSPHRASE_FILE: optional(z.string().min(1)),
+    /**
+     * The simulation's own CA (its server certificate is verified against it, hostname included)
+     * — required with `simulation`, refused with the real bank (the system's trusted CAs only).
+     */
+    RB_PREMIUM_SIMULATION_CA_FILE: optional(z.string().min(1)),
     /** Accounts read: "number:CUR" (national number without prefix or bank code), comma-separated. */
     RB_PREMIUM_ACCOUNTS: optional(
       z.string().regex(/^[0-9]{1,10}:[A-Z]{3}(,[0-9]{1,10}:[A-Z]{3}){0,9}$/, 'e.g. 1234567890:CZK'),
@@ -86,6 +93,13 @@ export const financeEnvSchema = z
     // Only for automated tests (a simulated bank with its own CA); refused unless APP_ENV=test.
     RB_PREMIUM_BASE_URL_FOR_TESTS: optional(z.url({ protocol: /^https$/ })),
     RB_PREMIUM_CA_FILE_FOR_TESTS: optional(z.string().min(1)),
+    /**
+     * Only for automated tests of the `simulation` path: "host:port" to connect to instead of
+     * resolving `rb-simulation` — the certificate is still verified for `rb-simulation`.
+     */
+    RB_PREMIUM_SIMULATION_ADDRESS_FOR_TESTS: optional(
+      z.string().regex(/^(127\.0\.0\.1|localhost):\d{1,5}$/),
+    ),
   })
   .superRefine((env, ctx) => {
     const fail = (path: string, message: string) =>
@@ -97,7 +111,18 @@ export const financeEnvSchema = z
       fail('RB_PREMIUM_ENVIRONMENT', 'production reads only the production bank');
     if (rb === 'test' && env.APP_ENV !== 'test')
       fail('RB_PREMIUM_ENVIRONMENT', 'the simulated bank is allowed only with APP_ENV=test');
+    if (rb === 'simulation' && env.APP_ENV === 'production')
+      fail('RB_PREMIUM_ENVIRONMENT', 'the bank simulation exists only on DEV');
+    if (rb === 'simulation' && !env.RB_PREMIUM_SIMULATION_CA_FILE)
+      fail('RB_PREMIUM_SIMULATION_CA_FILE', 'required with the simulation (its own CA)');
+    if (rb !== 'simulation' && env.RB_PREMIUM_SIMULATION_CA_FILE)
+      fail(
+        'RB_PREMIUM_SIMULATION_CA_FILE',
+        'only with the simulation: the bank is verified by the system CAs',
+      );
     if (env.APP_ENV !== 'test') {
+      if (env.RB_PREMIUM_SIMULATION_ADDRESS_FOR_TESTS)
+        fail('RB_PREMIUM_SIMULATION_ADDRESS_FOR_TESTS', 'allowed only with APP_ENV=test');
       if (env.RB_PREMIUM_BASE_URL_FOR_TESTS)
         fail('RB_PREMIUM_BASE_URL_FOR_TESTS', 'allowed only with APP_ENV=test');
       if (env.RB_PREMIUM_CA_FILE_FOR_TESTS)

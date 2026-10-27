@@ -5,6 +5,7 @@ import { createSecureContext, TLSSocket, type SecureContext } from 'node:tls';
 import type { BankEnvironment, BankSyncError } from '@ayvo/types';
 import type { FinanceEnv } from './finance-env.js';
 import { parseTransactionPage, UnexpectedBankAnswer, type BankEntry } from './rb-premium-entry.js';
+import { RB_BASE_PATH, RB_SIMULATION_HOST, RB_SIMULATION_PORT } from './rb-simulation.js';
 
 /**
  * Read-only client of Raiffeisenbank Premium API (N3B-1, doc 041): only the documented
@@ -18,6 +19,8 @@ import { parseTransactionPage, UnexpectedBankAnswer, type BankEntry } from './rb
 export const RB_PREMIUM_URLS = {
   production: 'https://api.rb.cz/rbcz/premium/api',
   sandbox: 'https://api.rb.cz/rbcz/premium/mock',
+  /** The DEV bank simulation (its own CA, never the bank). */
+  simulation: `https://${RB_SIMULATION_HOST}:${RB_SIMULATION_PORT}${RB_BASE_PATH}`,
 } as const;
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
@@ -45,6 +48,8 @@ export interface RbPremiumConfig {
   p12File: string;
   passphraseFile: string;
   caFile: string | null;
+  /** Tests of the simulation only: where to connect (the certificate is still verified by name). */
+  connectTo: { host: string; port: number } | null;
   accounts: RbAccount[];
   timeoutMs: number;
   /** One run's deadline and in-memory bounds (review N3B75-R1/R2). */
@@ -60,12 +65,22 @@ export function rbPremiumConfig(env: FinanceEnv): RbPremiumConfig | null {
   const mode = env.RB_PREMIUM_ENVIRONMENT;
   if (!mode) return null;
   return {
+    // The simulation is not the bank: its movements are TEST data, never PRODUCTION or SANDBOX.
     environment: mode === 'production' ? 'PRODUCTION' : mode === 'sandbox' ? 'SANDBOX' : 'TEST',
     baseUrl: mode === 'test' ? env.RB_PREMIUM_BASE_URL_FOR_TESTS! : RB_PREMIUM_URLS[mode],
     clientIdFile: env.RB_PREMIUM_CLIENT_ID_FILE!,
     p12File: env.RB_PREMIUM_P12_FILE!,
     passphraseFile: env.RB_PREMIUM_P12_PASSPHRASE_FILE!,
-    caFile: env.RB_PREMIUM_CA_FILE_FOR_TESTS ?? null,
+    caFile:
+      (mode === 'simulation'
+        ? env.RB_PREMIUM_SIMULATION_CA_FILE
+        : env.RB_PREMIUM_CA_FILE_FOR_TESTS) ?? null,
+    connectTo:
+      mode === 'simulation' && env.RB_PREMIUM_SIMULATION_ADDRESS_FOR_TESTS
+        ? (([host, port]) => ({ host: host!, port: Number(port) }))(
+            env.RB_PREMIUM_SIMULATION_ADDRESS_FOR_TESTS.split(':'),
+          )
+        : null,
     accounts: env.RB_PREMIUM_ACCOUNTS!.split(',').map((a) => {
       const [accountNumber, currency] = a.split(':') as [string, string];
       return { accountNumber, currency };
@@ -208,6 +223,14 @@ export class RbPremiumClient {
         {
           method: 'GET',
           secureContext: context,
+          // Tests of the simulation: connect elsewhere, verify the certificate for the fixed name.
+          ...(this.cfg.connectTo
+            ? {
+                hostname: this.cfg.connectTo.host,
+                port: this.cfg.connectTo.port,
+                servername: url.hostname,
+              }
+            : {}),
           agent: false,
           headers: {
             Accept: 'application/json',

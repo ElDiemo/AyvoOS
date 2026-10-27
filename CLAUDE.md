@@ -139,7 +139,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   currency, `entryReference`) with versions when the bank changes one, sync runs finished exactly
   once, one run per account (slot); amounts exact from the answer's text (never a float, >2
   decimals refused). `RB_PREMIUM_ENVIRONMENT=production` only with APP_ENV=production, `test` (a
-  local simulation) only with APP_ENV=test; secrets only as mounted files, never in the env, DB,
+  local simulation) only with APP_ENV=test, `simulation` (the DEV bank simulation `rb-simulation`,
+  test certificates from `scripts/dev-rb-simulation-certs.sh`, the same mount and file checks as
+  PROD, its own CA required, full TLS verification) never in production; secrets only as mounted files, never in the env, DB,
   web, logs or git. `finance:bank_read|bank_sync` ADMIN only. No pairing with invoices until the
   issued-invoice model exists — never a substitute invoice list.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
