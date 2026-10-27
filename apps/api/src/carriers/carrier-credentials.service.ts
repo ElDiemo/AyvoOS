@@ -11,7 +11,8 @@ import { OperationRequestsService } from '../database/operation-requests.service
 import { PrismaService } from '../database/prisma.service.js';
 import { accountOf, decryptSecret, encryptSecret, secretDigest } from './credentials-crypto.js';
 import {
-  isPplConnection,
+  availableConnections,
+  isAvailableConnection,
   PPL_CONNECTIONS,
   serverCredentials,
   type PplConnectionCode,
@@ -54,7 +55,7 @@ export class CarrierCredentialsService {
   ) {}
 
   async resolve(code: string): Promise<ResolvedCredentials | null> {
-    if (!isPplConnection(code)) return null;
+    if (!isAvailableConnection(this.env, code)) return null;
     const environment = PPL_CONNECTIONS[code].environment;
     const row = await this.prisma.carrierConnection.findUnique({ where: { code } });
     if (row) {
@@ -89,7 +90,8 @@ export class CarrierCredentialsService {
   }
 
   async state(code: string): Promise<CredentialState> {
-    if (!isPplConnection(code)) return { credentials: 'MISSING', source: null, account: null };
+    if (!isAvailableConnection(this.env, code))
+      return { credentials: 'MISSING', source: null, account: null };
     const resolved = await this.resolve(code);
     if (resolved) {
       return { credentials: 'SET', source: resolved.source, account: resolved.account };
@@ -106,7 +108,7 @@ export class CarrierCredentialsService {
   /** The connections a site's settings may choose from (code, environment, set / not set). */
   async connections(): Promise<CarrierConnection[]> {
     return Promise.all(
-      (Object.keys(PPL_CONNECTIONS) as PplConnectionCode[]).map(async (code) => {
+      availableConnections(this.env).map(async (code: PplConnectionCode) => {
         const s = await this.state(code);
         return {
           code,
@@ -145,7 +147,8 @@ export class CarrierCredentialsService {
     code: string,
     input: ReplaceCarrierCredentialsRequest,
   ): Promise<CarrierConnectionAdmin[]> {
-    if (!isPplConnection(code)) throw new NotFoundException('Connection not found');
+    // Production PPL does not exist on DEV: its credentials can never be stored there.
+    if (!isAvailableConnection(this.env, code)) throw new NotFoundException('Connection not found');
     const key = this.env.CARRIER_CREDENTIALS_KEY;
     if (!key) {
       throw domainError(

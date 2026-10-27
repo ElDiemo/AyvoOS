@@ -40,11 +40,16 @@ function Connection({
       title={`${c.carrier} · ${c.code}`}
       testId={`connection-${c.code}`}
       action={
-        c.environment === 'TEST' && (
-          <span className="rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-900">
-            {t.environment.TEST}
-          </span>
-        )
+        <span
+          className={
+            c.environment === 'TEST'
+              ? 'rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-900'
+              : 'rounded border border-red-500 bg-red-50 px-1.5 py-0.5 text-xs font-semibold text-red-800'
+          }
+          data-testid={`connection-${c.code}-environment`}
+        >
+          {t.environment[c.environment]}
+        </span>
       }
     >
       <div className="flex max-w-2xl flex-col gap-4">
@@ -88,6 +93,9 @@ function Connection({
               } else if (r.error) setError(errorText(r.error));
             }}
           >
+            {c.environment === 'PRODUCTION' && (
+              <Notice tone="warning">{t.productionWarning}</Notice>
+            )}
             <Notice tone="info">{t.accountWarning}</Notice>
             <label className="flex flex-col gap-1">
               <span className={label}>{t.clientId}</span>
@@ -153,7 +161,8 @@ function Connection({
 }
 
 /**
- * Správa systému → Dopravci (ADR 0027): the server-side connections (TEST only in this stage).
+ * Správa systému → Dopravci (ADR 0027, ADR 0042): the server-side connections — PPL test and, only
+ * on the production server, PPL production, each with its own credentials.
  * Credentials are write-only: the page never receives a stored secret, only "nastaveno /
  * nenastaveno" and where they come from.
  */
@@ -172,7 +181,11 @@ export function CarrierConnections({ initial }: { initial: CarrierConnectionAdmi
           }}
         />
       ))}
-      <p className="text-xs text-stone-500">{t.productionAbsent}</p>
+      {!list.some((c) => c.environment === 'PRODUCTION') && (
+        <p className="text-xs text-stone-500" data-testid="connection-production-absent">
+          {t.productionAbsent}
+        </p>
+      )}
     </div>
   );
 }

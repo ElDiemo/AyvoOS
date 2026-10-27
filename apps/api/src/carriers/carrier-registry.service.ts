@@ -5,7 +5,7 @@ import type { CarrierChoice, CarrierGateway, CarrierRef, CarrierRegistry } from 
 import { CarrierCredentialsService } from './carrier-credentials.service.js';
 import { carrierProblems, settingsSnapshot } from './carrier-settings.rules.js';
 import { PplClient } from './ppl/ppl-client.js';
-import { isPplConnection, pplBaseUrl } from './ppl/ppl-connections.js';
+import { isAvailableConnection, pplBaseUrl } from './ppl/ppl-connections.js';
 import { PplGateway } from './ppl/ppl-gateway.js';
 import { TestCarrier, testCarrierSettings } from './test-carrier.js';
 
@@ -32,7 +32,7 @@ export class CarrierRegistryService implements CarrierRegistry {
 
   /** The PPL gateway with the connection's CURRENT credentials, or null. */
   async ppl(code: string): Promise<PplGateway | null> {
-    if (!isPplConnection(code)) return null;
+    if (!isAvailableConnection(this.env, code)) return null;
     const creds = await this.credentials.resolve(code);
     if (!creds) return null;
     const cached = this.gateways.get(code);

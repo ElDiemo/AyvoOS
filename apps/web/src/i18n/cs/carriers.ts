@@ -7,7 +7,7 @@ export const carriersCs = {
     title: 'Připojení dopravců',
     subtitle:
       'Přístupové údaje k rozhraním dopravců. Ukládají se šifrovaně na serveru; tajný klíč se po uložení už nikdy nezobrazí – lze ho jen nahradit.',
-    environment: { TEST: 'Testovací prostředí', PRODUCTION: 'Produkce' },
+    environment: { TEST: 'Testovací prostředí', PRODUCTION: 'Ostré prostředí' },
     credentials: {
       SET: 'nastaveno',
       MISSING: 'nenastaveno',
@@ -30,7 +30,9 @@ export const carriersCs = {
       'Pokud zadáte údaje jiného účtu, přepravy vytvořené dosavadním účtem se přes toto připojení už neověří ani nezruší (zobrazí se jako nedostupné) a provozovny musí připojení ověřit znovu.',
     lastChange: (at: string, by: string) => `Naposledy změněno ${at} (${by}).`,
     productionAbsent:
-      'Produkční připojení v této verzi neexistuje – DEV používá výhradně testovací prostředí PPL.',
+      'Ostré připojení PPL na tomto serveru neexistuje – vývojové prostředí (DEV) používá výhradně testovací prostředí PPL.',
+    productionWarning:
+      'Ostré prostředí PPL: údaje produkčního účtu, se kterými vznikají skutečné zásilky. Vkládá je jen majitel účtu; nikdy je nepoužívejte na vývojovém serveru. Provozovna ostré připojení používá, až když ho správce v jejím nastavení výslovně vybere a ověří.',
     errors: {
       CREDENTIALS_KEY_MISSING: 'Server nemá šifrovací klíč – přístupové údaje nelze uložit.',
     } as Record<string, string>,
@@ -42,12 +44,17 @@ export const carriersCs = {
     'Připojení PPL, odesílatel a služba pro tuto provozovnu (tiskárny jsou v sekci Tiskárny). Nové přepravy vzniknou jen s úplným, ověřeným a zapnutým nastavením; již vytvořené přepravy si ponechávají nastavení, se kterým vznikly.',
   enabled: 'Používat PPL pro nové přepravy této provozovny',
   testEnvironment: 'Testovací prostředí',
+  productionEnvironment: 'Ostré prostředí',
+  productionHint:
+    'Ostré prostředí PPL: nové přepravy této provozovny budou skutečné zásilky. Již vytvořené přepravy zůstávají u připojení, se kterým vznikly.',
+  confirmProduction:
+    'Rozumím, že po uložení a ověření budou nové přepravy této provozovny vznikat jako skutečné zásilky v ostrém PPL.',
   testEnvironmentHint:
     'Testovací prostředí PPL: nevznikají skutečné zásilky ani svozy a štítky nejsou platné pro přepravu.',
   connection: 'Připojení',
   connectionNone: '– vyberte připojení –',
   connectionName: (code: string, environment: 'TEST' | 'PRODUCTION') =>
-    `${code} (${environment === 'TEST' ? 'testovací prostředí' : 'produkce'})`,
+    `${code} (${environment === 'TEST' ? 'testovací prostředí' : 'ostré prostředí'})`,
   credentials: 'Přístupové údaje na serveru',
   credentialsSet: 'nastaveno',
   credentialsMissing: 'nenastaveno',
@@ -113,6 +120,7 @@ export const carriersCs = {
     PRODUCT_NOT_VERIFIED: 'Službu lze vybrat jen ze seznamu načteného ověřením s tímto připojením.',
     NO_CONNECTION: 'Nejdřív vyberte a uložte připojení.',
     CREDENTIALS_MISSING: 'Server nemá přístupové údaje k tomuto připojení.',
+    PRODUCTION_CONFIRMATION_REQUIRED: 'Přepnutí na ostré prostředí PPL je třeba výslovně potvrdit.',
   } as Record<string, string>,
   lastChange: (at: string, by: string) => `Naposledy změněno ${at} (${by}).`,
 };

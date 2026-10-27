@@ -56,10 +56,14 @@ export function CarrierSettings({
   const [prefilled, setPrefilled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [confirmProduction, setConfirmProduction] = useState(false);
   const saving = useAttempt();
   const verifying = useAttempt();
   const dirty = JSON.stringify(form) !== JSON.stringify(inputOf(settings));
   const connection = settings.connections.find((c) => c.code === form.connection) ?? null;
+  // Switching to production PPL is an explicit decision (ADR 0042): confirmed with the save.
+  const needsConfirmation =
+    connection?.environment === 'PRODUCTION' && form.connection !== settings.connection;
   const products =
     settings.verified && settings.verified.connection === form.connection
       ? settings.verified.products
@@ -93,10 +97,12 @@ export function CarrierSettings({
       ...form,
       sender: { ...form.sender, country: form.sender.country?.toUpperCase() ?? null },
     };
-    const r = await saving.run(JSON.stringify(body), (requestId) =>
+    const confirm = needsConfirmation && confirmProduction ? { confirmProduction: true } : {};
+    const r = await saving.run(JSON.stringify({ ...body, ...confirm }), (requestId) =>
       apiSend('PUT', `admin/sites/${site.id}/carriers/ppl`, pplSettingsSchema, {
         requestId,
         ...body,
+        ...confirm,
       }),
     );
     if (r.ok) {
@@ -127,14 +133,21 @@ export function CarrierSettings({
       title={t.title}
       testId="carrier-settings"
       action={
-        connection?.environment === 'TEST' && (
+        connection?.environment === 'TEST' ? (
           <span
             className="rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-900"
             data-testid="carrier-settings-test-environment"
           >
             {t.testEnvironment}
           </span>
-        )
+        ) : connection?.environment === 'PRODUCTION' ? (
+          <span
+            className="rounded border border-red-500 bg-red-50 px-1.5 py-0.5 text-xs font-semibold text-red-800"
+            data-testid="carrier-settings-production-environment"
+          >
+            {t.productionEnvironment}
+          </span>
+        ) : null
       }
     >
       <form className="flex max-w-3xl flex-col gap-5" onSubmit={save}>
@@ -158,7 +171,10 @@ export function CarrierSettings({
           <legend className={label}>{t.connection}</legend>
           <select
             value={form.connection ?? ''}
-            onChange={(e) => setForm((f) => ({ ...f, connection: e.target.value || null }))}
+            onChange={(e) => {
+              setConfirmProduction(false);
+              setForm((f) => ({ ...f, connection: e.target.value || null }));
+            }}
             className={inputClass}
             aria-label={t.connection}
             data-testid="carrier-connection"
@@ -195,6 +211,22 @@ export function CarrierSettings({
           )}
           {connection?.environment === 'TEST' && (
             <p className="text-xs text-stone-500">{t.testEnvironmentHint}</p>
+          )}
+          {connection?.environment === 'PRODUCTION' && (
+            <Notice tone="warning">{t.productionHint}</Notice>
+          )}
+          {needsConfirmation && (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                required
+                checked={confirmProduction}
+                onChange={(e) => setConfirmProduction(e.target.checked)}
+                className="mt-1"
+                data-testid="carrier-confirm-production"
+              />
+              {t.confirmProduction}
+            </label>
           )}
           <p className="text-xs text-stone-500">{t.credentialsHint}</p>
         </fieldset>

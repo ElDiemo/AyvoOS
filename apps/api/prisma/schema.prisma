@@ -3048,7 +3048,8 @@ model SiteCarrierSetting {
 
 /// Credentials of a server-side carrier connection entered in the administration (ADR 0027): the
 /// secret only encrypted (AES-256-GCM, key in the server environment). Replaced, never deleted,
-/// never returned by the API. Only the TEST environment exists in this stage.
+/// never returned by the API. One row per connection: PPL_TEST (TEST) and PPL_PRODUCTION (PRODUCTION,
+/// only with APP_ENV=production; ADR 0042) — the DB ties each code to its environment.
 model CarrierConnection {
   code             String   @id
   carrier          String

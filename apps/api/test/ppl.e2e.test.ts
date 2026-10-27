@@ -8,6 +8,7 @@ import type {
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
+import { decryptSecret } from '../src/carriers/credentials-crypto.js';
 import { ShipmentCarrierFlow } from '../src/orders/shipment-carrier-flow.service.js';
 import { FakePpl } from './support/fake-ppl.js';
 import {
@@ -120,10 +121,12 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     expect(v).toMatchObject({ saved: false, enabled: false, label: { layout: 'SINGLE' } });
     expect(v.connections).toEqual([
       { code: 'PPL_TEST', environment: 'TEST', credentials: 'SET', source: 'SERVER' },
+      // Production PPL has its own credentials only from the administration (none yet).
+      { code: 'PPL_PRODUCTION', environment: 'PRODUCTION', credentials: 'MISSING', source: null },
     ]);
     // A product is chosen only from the verified list; an unknown connection is refused.
     expect((await save()).body.code).toBe('PRODUCT_NOT_VERIFIED');
-    expect((await save({ connection: 'PPL_PRODUCTION', productCode: null })).body.code).toBe(
+    expect((await save({ connection: 'PPL_PROD', productCode: null })).body.code).toBe(
       'UNKNOWN_CONNECTION',
     );
     v = (await save({ productCode: null, enabled: false }).expect(200)).body as PplSettings;
@@ -702,6 +705,168 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
     } finally {
       await other.close();
       await noKey.close();
+    }
+  });
+
+  // --- PPL production (ADR 0042): its own connection and credentials, chosen explicitly per site.
+
+  it('the batch id is read whatever the spelling of the Location header (lower case since 2026-02-09)', async () => {
+    for (const spelling of ['location', 'Location'] as const) {
+      await ready();
+      ppl.mode.locationHeader = spelling;
+      const { order } = await completed(1);
+      const v = ((await post(order, 'labels').expect(200)).body as OrderShipment).shipment!;
+      expect([spelling, v.status]).toEqual([spelling, 'LABELED']);
+    }
+  });
+
+  it('production: own credentials, an explicit choice, a new verification; existing shipments stay on the test connection', async () => {
+    const PROD = { id: 'ayvo-prod-synthetic', secret: 'synthetic-production-secret' };
+    ppl.clients.set(PROD.id, PROD.secret);
+    const list = async () =>
+      (await http().get(connectionsUrl).expect(200)).body as CarrierConnectionAdmin[];
+    expect((await list()).map((c) => [c.code, c.environment])).toEqual([
+      ['PPL_TEST', 'TEST'],
+      ['PPL_PRODUCTION', 'PRODUCTION'],
+    ]);
+    // A shipment made with the test connection.
+    await ready();
+    const before = await completed(1);
+    await post(before.order, 'labels').expect(200);
+    const testNumber = lastBatch().numbers[0]!.number;
+    expect((await view(before.order)).shipment!.carrier.environment).toBe('TEST');
+
+    // Production credentials: their own row; the test connection is untouched.
+    const testRow = await t.prisma.carrierConnection.findUniqueOrThrow({
+      where: { code: 'PPL_TEST' },
+    });
+    await http()
+      .post(`${connectionsUrl}/PPL_PRODUCTION/credentials`)
+      .send({
+        requestId: randomUUID(),
+        clientId: PROD.id,
+        clientSecret: PROD.secret,
+        reason: 'Synthetic production credentials',
+      })
+      .expect(200);
+    const prodRow = await t.prisma.carrierConnection.findUniqueOrThrow({
+      where: { code: 'PPL_PRODUCTION' },
+    });
+    expect(prodRow.environment).toBe('PRODUCTION');
+    expect(
+      await t.prisma.carrierConnection.findUniqueOrThrow({ where: { code: 'PPL_TEST' } }),
+    ).toEqual(testRow);
+    // The database ties each code to its environment.
+    await expect(
+      t.prisma
+        .$executeRaw`UPDATE "carrier_connections" SET "environment" = 'TEST' WHERE "code" = 'PPL_PRODUCTION'`,
+    ).rejects.toThrow(/carrier_connections_environment_check/);
+    // The test row's secret never opens as the production connection (the code is bound in).
+    expect(
+      decryptSecret(KEY, 'PPL_PRODUCTION', testRow.clientId, {
+        ciphertext: testRow.secretCiphertext,
+        iv: testRow.secretIv,
+        tag: testRow.secretTag,
+        keyId: testRow.keyId,
+      }),
+    ).toBeNull();
+
+    // Switching the site to production needs the explicit confirmation; without it nothing changes.
+    const refused = await save({ connection: 'PPL_PRODUCTION', productCode: null });
+    expect([refused.status, refused.body.code]).toEqual([422, 'PRODUCTION_CONFIRMATION_REQUIRED']);
+    expect(((await http().get(settingsUrl).expect(200)).body as PplSettings).connection).toBe(
+      'PPL_TEST',
+    );
+    const switched = (
+      await save({
+        connection: 'PPL_PRODUCTION',
+        productCode: null,
+        confirmProduction: true,
+      }).expect(200)
+    ).body as PplSettings;
+    expect(switched.problems).toContain('NOT_VERIFIED');
+    const audit = await t.prisma.auditEvent.findFirstOrThrow({
+      where: { type: 'CARRIER_SETTINGS_UPDATED', siteId: INITIAL_SITE_ID },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(audit.payload).toMatchObject({
+      connectionChange: {
+        from: 'PPL_TEST',
+        to: 'PPL_PRODUCTION',
+        environment: 'PRODUCTION',
+        confirmedProduction: true,
+      },
+    });
+    // No new shipment until verified with production; verifying reads only (token + products).
+    const seen = ppl.seen.length;
+    expect(((await verify().expect(200)).body as VerifyCarrierResult).ok).toBe(true);
+    expect(ppl.seen.slice(seen).map((x) => [x.method, x.path, x.client])).toEqual([
+      ['POST', '/login/getAccessToken', null],
+      ['GET', '/codelist/product', PROD.id],
+    ]);
+    await save({ connection: 'PPL_PRODUCTION' }).expect(200); // unchanged: no new confirmation
+
+    // The existing shipment keeps its test connection and account: cancelled with the test client.
+    const c = (
+      (await post(before.order, 'cancel', { reason: 'Omyl' }).expect(200)).body as OrderShipment
+    ).shipment!;
+    expect([c.status, c.carrier.environment]).toEqual(['CANCELLING', 'TEST']);
+    expect(
+      ppl.seen.filter((x) => x.path === `/shipment/${testNumber}/cancel`).map((x) => x.client),
+    ).toEqual([ppl.clientId]);
+    // A new shipment of the site is a production one, made with the production client only.
+    const after = await completed(1);
+    const created = ((await post(after.order, 'labels').expect(200)).body as OrderShipment)
+      .shipment!;
+    expect(created.carrier.environment).toBe('PRODUCTION');
+    expect(
+      ppl.seen.filter((x) => x.method === 'POST' && x.path === '/shipment/batch').at(-1)!.client,
+    ).toBe(PROD.id);
+    const request = await t.prisma.shipmentCarrierRequest.findFirstOrThrow({
+      where: { shipment: { order: { code: after.order } } },
+    });
+    expect([request.carrierConnection, request.carrierEnvironment]).toEqual([
+      'PPL_PRODUCTION',
+      'PRODUCTION',
+    ]);
+
+    // Back to the test connection (no confirmation needed): later tests use it again.
+    await ready();
+  });
+
+  it('DEV (APP_ENV=development): no production PPL — not listed, not stored, not chosen, never called', async () => {
+    const dev = await createTestApp(
+      {
+        PPL_TEST_API_BASE_URL_FOR_TESTS: ppl.base,
+        CARRIER_POLL_SECONDS: '0',
+        CARRIER_CREDENTIALS_KEY: KEY,
+      },
+      { APP_ENV: 'development' },
+    );
+    try {
+      const d = () => request(dev.app.getHttpServer());
+      const list = (await d().get(connectionsUrl).expect(200)).body as CarrierConnectionAdmin[];
+      expect(list.map((c) => c.code)).toEqual(['PPL_TEST']);
+      const store = await d()
+        .post(`${connectionsUrl}/PPL_PRODUCTION/credentials`)
+        .send({ requestId: randomUUID(), clientId: 'a', clientSecret: 'b', reason: 'not on DEV' });
+      expect(store.status).toBe(404);
+      const choose = await d()
+        .put(settingsUrl)
+        .send({
+          requestId: randomUUID(),
+          enabled: true,
+          connection: 'PPL_PRODUCTION',
+          sender,
+          productCode: null,
+          label: { layout: 'SINGLE' },
+          confirmProduction: true,
+        });
+      expect([choose.status, choose.body.code]).toEqual([422, 'UNKNOWN_CONNECTION']);
+      // Even with production credentials stored by the production server, DEV builds no gateway.
+      expect(await dev.app.get(CarrierRegistryService).ppl('PPL_PRODUCTION')).toBeNull();
+    } finally {
+      await dev.close();
     }
   });
 });
