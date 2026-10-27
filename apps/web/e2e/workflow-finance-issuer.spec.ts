@@ -345,6 +345,230 @@ test.describe('Testovací faktury', () => {
   });
 });
 
+/**
+ * The whole billing chain as the owner will see it on DEV — only by clicking, from the main
+ * navigation: two hotels of one company with different prices and a third hotel of another
+ * company → their agreements → a separate and a summary TEST invoice → PDF with QR → a partial
+ * simulated payment → an unclear payment allocated by hand → paid → the same statement again
+ * changes nothing. Desktop and 390 px; screenshots for the review (demo-*.png).
+ */
+test.describe('Ukázka: řetězec fakturace', () => {
+  test.use({ storageState: ADMIN_STATE });
+
+  test('settings → separate and summary TEST invoices → partial and unclear payments → paid; a repeated import changes nothing', async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    const run = crypto.randomUUID().slice(0, 4).toUpperCase();
+    const shot = async (name: string) => {
+      await mkdir(screenshots, { recursive: true });
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          `${name} ${width}`,
+        ).toBe(true);
+        await page.screenshot({
+          path: resolve(screenshots, `demo-${name}-${width}.png`),
+          fullPage: true,
+        });
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
+    };
+    // Three synthetic hotels (hotels themselves are not part of billing).
+    const me = (await (await page.request.get('/api/auth/me')).json()) as {
+      sites: { id: string; code: string }[];
+    };
+    const siteId = me.sites.find((x) => x.code === 'CZ-PREROV-01')!.id;
+    const hotel = async (name: string) =>
+      (
+        (await (
+          await page.request.post('/api/admin/hotels', {
+            data: {
+              requestId: crypto.randomUUID(),
+              name,
+              addressLine1: 'Ukázková 1',
+              addressLine2: null,
+              postalCode: '110 00',
+              city: 'Praha',
+              countryCode: 'CZ',
+              contactName: 'Recepce',
+              contactPhone: '+420 500 000 010',
+              contactEmail: 'recepce@ukazka.test',
+              fulfillmentSiteId: siteId,
+            },
+          })
+        ).json()) as { code: string }
+      ).code;
+    const [sever, jih, beta] = [`Hotel Sever ${run}`, `Hotel Jih ${run}`, `Beta Resort ${run}`];
+    const codes = [await hotel(sever), await hotel(jih), await hotel(beta)];
+
+    // --- Settings, by clicking from the main navigation.
+    await page.goto('/');
+    await page
+      .getByRole('navigation', { name: 'Hlavní navigace' })
+      .getByRole('link', { name: 'Finance' })
+      .click();
+    const finance = page.getByRole('navigation', { name: 'Finance' });
+    await finance.getByRole('link', { name: 'Smlouvy hotelů', exact: true }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy hotelů' })).toBeVisible();
+    /** Opens a collapsible section unless it is open already (it stays open after a save). */
+    const ensureOpen = async (summaryTestId: string) => {
+      const details = page.locator('details', { has: page.getByTestId(summaryTestId) });
+      if (!(await details.evaluate((d) => (d as HTMLDetailsElement).open)))
+        await page.getByTestId(summaryTestId).click();
+    };
+    const newCustomer = async (name: string, ico: string) => {
+      await ensureOpen('customer-new-open');
+      const form = page.getByTestId('customer-new');
+      await form.locator('[name=legalName]').fill(name);
+      await form.locator('[name=companyId]').fill(ico);
+      await form.locator('[name=addressLine1]').fill('Ukázková 1');
+      await form.locator('[name=postalCode]').fill('110 00');
+      await form.locator('[name=city]').fill('Praha');
+      await form.locator('[name=billingEmail]').fill('fakturace@ukazka.test');
+      await form.getByTestId('customer-save').click();
+      await expect(form.getByRole('status')).toHaveText('Uloženo.');
+      await expect(page.getByTestId('billing-customers')).toContainText(name);
+    };
+    await newCustomer(`Alfa Hotely ${run} s.r.o.`, '11111111');
+    await newCustomer(`Beta Resort ${run} a.s.`, '22222222');
+    const newAgreement = async (
+      hotelName: string,
+      hotelCode: string,
+      payer: string,
+      rooms: string,
+      price: string,
+    ) => {
+      await ensureOpen('agreement-new-open');
+      const form = page.getByTestId('agreement-new');
+      await form.locator('[name=hotelId]').selectOption({ label: `${hotelName} (${hotelCode})` });
+      const value = await form
+        .locator('[name=customerId] option', { hasText: payer })
+        .first()
+        .getAttribute('value');
+      await form.locator('[name=customerId]').selectOption(value!);
+      await form.locator('[name=effectiveFrom]').fill('2026-09');
+      await form.locator('[name=validFrom]').fill('2026-09-01');
+      await form.locator('[name=billedRooms]').fill(rooms);
+      await form.locator('[name=ownPrice]').fill(price);
+      await form.locator('[name=reason]').fill('Smlouva podepsána (ukázka)');
+      await form.getByTestId('agreement-save').click();
+      return form;
+    };
+    // A validation error is shown in Czech and nothing is saved.
+    const invalid = await newAgreement(sever, codes[0]!, `Alfa Hotely ${run}`, '0', '300.00');
+    await expect(invalid.getByRole('alert')).toBeVisible();
+    await invalid.locator('[name=billedRooms]').fill('10');
+    await invalid.getByTestId('agreement-save').click();
+    await expect(
+      page.getByTestId('billing-agreements').locator('ul li', { hasText: sever }),
+    ).toHaveCount(1);
+    await newAgreement(jih, codes[1]!, `Alfa Hotely ${run}`, '5', '1234.56');
+    await expect(
+      page.getByTestId('billing-agreements').locator('ul li', { hasText: jih }),
+    ).toHaveCount(1);
+    await newAgreement(beta, codes[2]!, `Beta Resort ${run}`, '8', '500.00');
+    await expect(
+      page.getByTestId('billing-agreements').locator('ul li', { hasText: beta }),
+    ).toHaveCount(1);
+    await shot('1-smlouvy');
+
+    // --- A separate invoice (the other company's hotel) and a summary (two hotels of Alfa).
+    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    const issue = async (hotels: string[]) => {
+      await page.getByTestId('invoice-new').click();
+      const form = page.getByTestId('test-invoice-form');
+      await form.getByTestId('invoice-month').fill('2026-09');
+      await form.getByRole('button', { name: 'Načíst smlouvy' }).click();
+      for (const h of hotels)
+        await form.locator('li', { hasText: h }).getByRole('checkbox').check();
+      return form;
+    };
+    const separate = await issue([beta]);
+    await expect(separate.getByTestId('invoice-selection')).toHaveText(
+      'Vybráno 1 – celkem 4 000,00 CZK',
+    );
+    await separate.getByTestId('invoice-issue').click();
+    await expect(page.getByTestId('invoice-total')).toHaveText('4 000,00 CZK');
+    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    const summary = await issue([sever, jih]);
+    // Choosing another company's hotel starts a new choice: never two companies on one invoice.
+    await summary.locator('li', { hasText: beta }).getByRole('checkbox').check({ force: true });
+    await expect(summary.getByTestId('invoice-selection')).toHaveText(
+      'Vybráno 1 – celkem 4 000,00 CZK',
+    );
+    await summary.locator('li', { hasText: sever }).getByRole('checkbox').check();
+    await summary.locator('li', { hasText: jih }).getByRole('checkbox').check();
+    await expect(summary.getByTestId('invoice-selection')).toHaveText(
+      'Vybráno 2 – celkem 9 172,80 CZK',
+    );
+    await shot('2-vystaveni');
+    await summary.getByTestId('invoice-issue').click();
+    await expect(page.getByTestId('invoice-total')).toHaveText('9 172,80 CZK');
+    await expect(page.getByTestId('invoice-payment-state')).toHaveText('Neuhrazeno');
+    const number = page.url().split('/').at(-1)!;
+    const vs = (await page
+      .getByText(/^99\d{8}$/)
+      .first()
+      .textContent())!.trim();
+    const pdf = await page.request.get(`/api/admin/finance/invoices/${number}/pdf`);
+    expect((await pdf.body()).subarray(0, 5).toString()).toBe('%PDF-');
+    await shot('3-faktura');
+    // Issuing the same month again is refused with a Czech explanation.
+    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    const again = await issue([beta]);
+    await again.getByTestId('invoice-issue').click();
+    await expect(again.getByRole('alert')).toContainText('už má na tento měsíc platnou');
+
+    // --- Payments: partial by VS, unclear without VS, allocated by hand, then the same again.
+    await finance.getByRole('link', { name: 'Platby', exact: true }).click();
+    const statement = page.getByTestId('simulate-statement');
+    await statement.getByTestId('simulate-amount-1').fill('1000.00');
+    await statement.getByTestId('simulate-vs-1').fill(vs);
+    await statement.getByTestId('simulate-add').click();
+    await statement.getByTestId('simulate-amount-2').fill('8172.80');
+    await statement.getByTestId('simulate-submit').click();
+    await expect(statement.getByTestId('simulate-result')).toHaveText(
+      'Nově zaznamenáno 2, už dříve načteno 0 (nezapočteno znovu). Spárováno 1, k posouzení 1.',
+    );
+    const unclear = page
+      .locator('li[data-testid^="payment-PP-"]')
+      .filter({ hasText: '8 172,80 CZK' })
+      .first();
+    const code = (await unclear.getAttribute('data-testid'))!.replace('payment-', '');
+    await expect(page.getByTestId(`payment-${code}-result`)).toHaveText(
+      'k posouzení: chybí variabilní symbol',
+    );
+    await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(number);
+    await shot('4-platby');
+    const allocate = page.getByTestId(`allocate-${code}`);
+    await allocate.locator('select').selectOption(number);
+    await allocate
+      .getByTestId(`allocate-${code}-reason`)
+      .fill('Doplatek bez VS – ověřeno s hotelem (ukázka)');
+    await allocate.getByTestId(`allocate-${code}-submit`).click();
+    await expect(page.getByTestId(`payment-${code}-state`)).toHaveText('přiřazeno');
+    await expect(page.getByTestId(`payment-${code}-result`)).toHaveText(
+      'vyřešeno ručně (původně: chybí variabilní symbol)',
+    );
+    // The same statement loaded again: nothing new, nothing counted twice.
+    await statement.getByTestId('simulate-submit').click();
+    await expect(statement.getByTestId('simulate-result')).toHaveText(
+      'Nově zaznamenáno 0, už dříve načteno 2 (nezapočteno znovu). Spárováno 0, k posouzení 0.',
+    );
+    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    const list = page.getByTestId('invoices');
+    await expect(list.locator('li', { hasText: number })).toContainText('Uhrazeno');
+    await expect(list.locator('li', { hasText: beta })).toContainText('Neuhrazeno');
+    await list.getByRole('link', { name: number }).click();
+    await expect(page.getByTestId('invoice-payment-state')).toHaveText('Uhrazeno');
+    await expect(page.getByTestId('invoice-allocations')).toContainText('automaticky');
+    await expect(page.getByTestId('invoice-allocations')).toContainText('ručně');
+    await shot('5-uhrazeno');
+  });
+});
+
 test.describe('without the issuer permission', () => {
   test.use({ storageState: OPERATOR_STATE });
 

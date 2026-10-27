@@ -72,14 +72,22 @@ export default async function PaymentsPage() {
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    <span
-                      className={
-                        p.matchResult === 'MATCHED' ? 'text-emerald-800' : 'text-amber-800'
-                      }
-                      data-testid={`payment-${p.code}-result`}
-                    >
-                      {t.result[p.matchResult]}
-                    </span>
+                    {(() => {
+                      // The matching result is history; once a person allocated it, it is resolved.
+                      const review =
+                        p.matchResult !== 'MATCHED' && p.matchResult !== 'PARTIAL_OVERPAYMENT';
+                      const resolved = review && p.state === 'ALLOCATED';
+                      return (
+                        <span
+                          className={review && !resolved ? 'text-amber-800' : 'text-emerald-800'}
+                          data-testid={`payment-${p.code}-result`}
+                        >
+                          {resolved
+                            ? t.resolved(t.result[p.matchResult]!)
+                            : t.result[p.matchResult]}
+                        </span>
+                      );
+                    })()}
                     <span className="font-medium" data-testid={`payment-${p.code}-state`}>
                       {t.state[p.state]}
                     </span>

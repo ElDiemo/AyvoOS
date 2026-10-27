@@ -237,8 +237,8 @@ export const financeCs = {
       PAID: 'Uhrazeno',
     } as Record<string, string>,
     overdue: 'po splatnosti',
-    paid: 'Uhrazeno',
-    remaining: 'Zbývá',
+    paid: 'zaplaceno',
+    remaining: 'zbývá',
     allocationsTitle: 'Platby',
     noAllocations: 'Zatím žádná přiřazená platba.',
     errors: {
@@ -296,6 +296,7 @@ export const financeCs = {
       INVOICE_ALREADY_PAID: 'k posouzení: faktura už je uhrazená',
     } as Record<string, string>,
     unallocated: (amount: string) => `Nepřiřazeno ${amount}`,
+    resolved: (why: string) => `vyřešeno ručně (původně: ${why.replace(/^k posouzení: /, '')})`,
     suggestions: 'Návrh (stejná částka jako zbývá na faktuře) – nikdy se nepřiřadí sám:',
     allocate: 'Přiřadit k faktuře',
     invoice: 'Faktura',
