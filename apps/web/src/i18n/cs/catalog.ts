@@ -1,4 +1,4 @@
-import type { ComponentKind, RecipeStatus } from '@ayvo/types';
+import type { ComponentKind, ComponentReadKind, RecipeStatus } from '@ayvo/types';
 
 /**
  * Czech strings of Výroba → Produkty a receptury (doc 023, issue #17): the company-wide product
@@ -49,7 +49,7 @@ export const catalogCs = {
     PUMP: 'Pumpička',
     PACKAGING: 'Obal (přepravní)',
     CONSUMABLE: 'Spotřební materiál',
-  } satisfies Record<ComponentKind, string>,
+  } satisfies Record<ComponentReadKind, string>,
   kindHelp: {
     NEW_BOTTLE:
       'Prázdné tělo lahve. Vždy po šaržích – při nalepení etikety se bere z vybrané šarže.',

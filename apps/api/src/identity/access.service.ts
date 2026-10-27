@@ -1,4 +1,4 @@
-import type { AccessibleSite, PermissionCode } from '@ayvo/types';
+import { isPermissionCode, type AccessibleSite, type PermissionCode } from '@ayvo/types';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service.js';
 import { SitesService, type SiteWithWarehouses } from '../sites/sites.service.js';
@@ -116,8 +116,11 @@ export class AccessService {
       }),
       this.sites.all(),
     ]);
+    // Only codes this version knows: a newer database's codes grant nothing here (rollback).
     const permissions = new Set(
-      grants.flatMap((g) => g.role.permissions.map((p) => p.permissionCode as PermissionCode)),
+      grants.flatMap((g) =>
+        g.role.permissions.map((p) => p.permissionCode).filter(isPermissionCode),
+      ),
     );
     const globalSiteAccess = permissions.has('sites:all_access');
     const sites = evaluateSites(allSites, globalSiteAccess, scopes);

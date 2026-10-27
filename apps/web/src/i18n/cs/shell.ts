@@ -27,9 +27,12 @@ export const shellCs = {
     finance: {
       label: 'Finance',
       description:
-        'Přijaté doklady a jejich export pro účetní, bankovní pohyby a fakturační údaje naší firmy.',
+        'Přijaté doklady a jejich export pro účetní, faktury hotelům, bankovní pohyby a fakturační údaje naší firmy.',
       pages: {
         documents: 'Doklady',
+        billing: 'Smlouvy hotelů',
+        invoices: 'Faktury',
+        payments: 'Platby',
         exports: 'Export pro účetní',
         bank: 'Bankovní pohyby',
         issuer: 'Naše firma a účty',

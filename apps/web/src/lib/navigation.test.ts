@@ -218,15 +218,27 @@ describe('AYVO OS navigation (doc 019)', () => {
 
   it('Finance (UI-01): one strip of the pages each permission opens; the module starts at the first one', () => {
     const finance = (...perms: string[]) => visibleModules(perms).find((m) => m.id === 'finance');
-    const all = finance('finance:documents_read', 'finance:bank_read', 'finance:issuer_manage')!;
+    const all = finance(
+      'finance:documents_read',
+      'finance:billing_read',
+      'finance:invoices_read',
+      'finance:bank_read',
+      'finance:issuer_manage',
+    )!;
     expect(all.pages.map((p) => [p.id, p.href])).toEqual([
       ['documents', '/finance/documents'],
+      ['billing', '/finance/billing'],
+      ['invoices', '/finance/invoices'],
+      ['payments', '/finance/payments'],
       ['exports', '/finance/exports'],
       ['bank', '/finance/bank'],
       ['issuer', '/finance/settings/company'],
     ]);
     expect(all.pages.map((p) => p.label)).toEqual([
       'Doklady',
+      'Smlouvy hotelů',
+      'Faktury',
+      'Platby',
       'Export pro účetní',
       'Bankovní pohyby',
       'Naše firma a účty',
@@ -244,5 +256,10 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(locate('/finance/documents/new')).toMatchObject({ page: { id: 'documents' } });
     expect(locate('/finance/documents/take-over')).toMatchObject({ page: { id: 'documents' } });
     expect(locate('/finance/exports/AE-000001')).toMatchObject({ page: { id: 'exports' } });
+    expect(locate('/finance/billing/agreements/BA-000001')).toMatchObject({
+      page: { id: 'billing' },
+    });
+    expect(locate('/finance/invoices/T2026-00001')).toMatchObject({ page: { id: 'invoices' } });
+    expect(finance('finance:invoices_read')!.href).toBe('/finance/invoices');
   });
 });
