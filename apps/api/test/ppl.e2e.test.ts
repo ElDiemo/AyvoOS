@@ -771,6 +771,13 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
       }),
     ).toBeNull();
 
+    // The choice is per site: no other site's setting changes with this one.
+    const otherSites = () =>
+      t.prisma.siteCarrierSetting.findMany({
+        where: { siteId: { not: INITIAL_SITE_ID } },
+        orderBy: { siteId: 'asc' },
+      });
+    const othersBefore = await otherSites();
     // Switching the site to production needs the explicit confirmation; without it nothing changes.
     const refused = await save({ connection: 'PPL_PRODUCTION', productCode: null });
     expect([refused.status, refused.body.code]).toEqual([422, 'PRODUCTION_CONFIRMATION_REQUIRED']);
@@ -805,6 +812,7 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
       ['GET', '/codelist/product', PROD.id],
     ]);
     await save({ connection: 'PPL_PRODUCTION' }).expect(200); // unchanged: no new confirmation
+    expect(await otherSites()).toEqual(othersBefore);
 
     // The existing shipment keeps its test connection and account: cancelled with the test client.
     const c = (
@@ -829,6 +837,19 @@ describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', (
       'PPL_PRODUCTION',
       'PRODUCTION',
     ]);
+    // What an existing request was sent with never changes — not even directly in the database.
+    const earlier = await t.prisma.shipmentCarrierRequest.findFirstOrThrow({
+      where: { shipment: { order: { code: before.order } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect([earlier.carrierConnection, earlier.carrierEnvironment]).toEqual(['PPL_TEST', 'TEST']);
+    for (const change of [
+      t.prisma
+        .$executeRaw`UPDATE "shipment_carrier_requests" SET "carrier_environment" = 'PRODUCTION', "carrier_connection" = 'PPL_PRODUCTION' WHERE "id" = ${earlier.id}::uuid`,
+      t.prisma
+        .$executeRaw`UPDATE "shipment_carrier_requests" SET "carrier_account" = 'someotheraccount' WHERE "id" = ${earlier.id}::uuid`,
+    ])
+      await expect(change).rejects.toThrow(/immutable|never changes/);
 
     // Back to the test connection (no confirmation needed): later tests use it again.
     await ready();
