@@ -1,4 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { chmodSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { BankStatus, BankSyncResult, BankTransactionPage } from '@ayvo/types';
@@ -12,6 +14,12 @@ import {
 } from './support/finance-app.js';
 import { FakeRb, type FakeEntry } from './support/fake-rb.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
+import {
+  hasCompose,
+  prodSecrets,
+  renderProd,
+  storeRbPremiumFiles,
+} from './support/prod-compose.js';
 import { hasDatabase } from './support/test-app.js';
 
 /**
@@ -60,6 +68,73 @@ describe.skipIf(!hasDatabase)('finance bank transactions (N3B-1, simulated RB Pr
     for (const a of apps) await a.close();
     await bank.stop();
   });
+
+  it.skipIf(!hasCompose)(
+    'the production wiring (doc 036 §10a): the rendered mount and paths, with the simulated bank and its test certificate, read transactions',
+    async () => {
+      // The owner's three files, as stored in <secrets>/rb-premium — here the simulation's test
+      // certificate (never a production one); the real production Compose files rendered.
+      const acc = accountNo();
+      const secrets = prodSecrets(`RB_PREMIUM_ACCOUNTS=${acc}:CZK\n`);
+      storeRbPremiumFiles(secrets, {
+        clientId: bank.file('client-id'),
+        p12: bank.file('client.p12'),
+        passphrase: bank.file('passphrase'),
+      });
+      try {
+        const rendered = renderProd(secrets, {
+          overrides: ['compose.rb-premium.yml'],
+          profiles: ['finance'],
+        });
+        expect(rendered.status, rendered.stderr).toBe(0);
+        const finance = rendered.config!.services.finance!;
+        const [mount] = finance.volumes!;
+        expect(mount).toMatchObject({ type: 'bind', read_only: true });
+        const env = finance.environment!;
+        // The container paths, resolved through the rendered mount as the process would see them.
+        const onHost = (path: string) => {
+          expect(path.startsWith(`${mount!.target}/`), path).toBe(true);
+          return mount!.source + path.slice(mount!.target.length);
+        };
+        const rb = Object.fromEntries(
+          Object.entries(env).filter(([k]) => k.startsWith('RB_PREMIUM_')),
+        );
+        // As rendered, the production Finance accepts exactly this configuration.
+        expect(
+          loadFinanceEnv({
+            ...env,
+            FINANCE_DATABASE_URL: financeDatabaseUrl!,
+            // The fictional S3 file's keys are not key-shaped; S3 is not what this checks.
+            AWS_ACCESS_KEY_ID: 'AKIAFICTIONAL00000',
+            AWS_SECRET_ACCESS_KEY: 'f'.repeat(40),
+          }),
+        ).toMatchObject({
+          RB_PREMIUM_ENVIRONMENT: 'production',
+          RB_PREMIUM_ACCOUNTS: `${acc}:CZK`,
+        });
+        // The same files and accounts against the simulated bank (the only bank a test may use).
+        bank.accounts.set(`${acc}/CZK`, [entry({ amount: '2500.00', variable: '2026001' })]);
+        const f = await appWith({
+          ...bank.env(rb.RB_PREMIUM_ACCOUNTS!),
+          RB_PREMIUM_CLIENT_ID_FILE: onHost(rb.RB_PREMIUM_CLIENT_ID_FILE!),
+          RB_PREMIUM_P12_FILE: onHost(rb.RB_PREMIUM_P12_FILE!),
+          RB_PREMIUM_P12_PASSPHRASE_FILE: onHost(rb.RB_PREMIUM_P12_PASSPHRASE_FILE!),
+        });
+        const status = (await f.get(`${B}/status`).expect(200)).body as BankStatus;
+        expect(status.certificate.state).toBe('READABLE');
+        const result = await sync(f);
+        expect(result.runs.map((r) => [r.accountNumber, r.status, r.newCount])).toEqual([
+          [acc, 'SUCCEEDED', 1],
+        ]);
+        expect((await list(f, `?account=${acc}/CZK`)).items.map((t) => t.amount)).toEqual([
+          '2500.00',
+        ]);
+      } finally {
+        chmodSync(join(secrets, 'rb-premium'), 0o700);
+        rmSync(secrets, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('not configured: the status says so, a read is refused, nothing is listed or written', async () => {
     const f = await appWith({});

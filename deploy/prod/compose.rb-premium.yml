@@ -1,0 +1,24 @@
+# AYVO OS — Finance reads bank transactions from RB Premium API (doc 041, doc 036 §10a). Added to
+# compose.yml by scripts/deploy-prod.sh ONLY when RB_PREMIUM_ACCOUNTS is set in prod.env and the
+# owner's files in $AYVO_PROD_SECRETS_DIR/rb-premium pass their checks; without it nothing here
+# exists and Finance shows "Banka zatím není připojena".
+#
+# Only paths are here: the client ID, the certificate (P12) and its passphrase stay files on the
+# server, mounted read-only into the Finance container alone (never the env, Git or another
+# service). Reading only — the application has no payment call. A live read is started by a user
+# in Finance → Bankovní pohyby, never by the deployment.
+services:
+  finance:
+    environment:
+      RB_PREMIUM_ENVIRONMENT: production
+      RB_PREMIUM_CLIENT_ID_FILE: /run/secrets/rb-premium/client-id
+      RB_PREMIUM_P12_FILE: /run/secrets/rb-premium/certificate.p12
+      RB_PREMIUM_P12_PASSPHRASE_FILE: /run/secrets/rb-premium/p12-passphrase
+      RB_PREMIUM_ACCOUNTS: ${RB_PREMIUM_ACCOUNTS:?set in prod.env (number:CUR, comma-separated)}
+    volumes:
+      - type: bind
+        source: ${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}/rb-premium
+        target: /run/secrets/rb-premium
+        read_only: true
+        bind:
+          create_host_path: false

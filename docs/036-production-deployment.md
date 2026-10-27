@@ -230,7 +230,7 @@ The same topology as on DEV, approved there: its own container from the **same**
 release built (never built again), its own DB roles and schema `finance`, its own S3 identity, the
 core reached only through `/api/internal/v1/finance/*` (service token + forwarded session), which
 the edge aborts. Finance is installed and replaced only by `scripts/deploy-prod.sh --finance`; the
-OS deployment never starts, stops or rebuilds it. No bank connection (doc 041) is part of this.
+OS deployment never starts, stops or rebuilds it. The bank connection (doc 041) is optional, §10a.
 
 **Prerequisites (owner, on AyvoOS-PROD):**
 
@@ -284,3 +284,35 @@ dočasně nedostupné". Finance data stay (schema `finance` in the same database
 
 **Backups:** the database dumps (doc 035) include schema `finance`; its files are in the
 production bucket under the prefixes above (versioned bucket, ADR 0032).
+
+### 10a. Optional: bank transactions from RB Premium API (doc 041)
+
+Off unless the owner switches it on; off, Finance runs exactly as without this section (the page
+says "Banka zatím není připojena", nothing is mounted, no variable is set). Reading only — the
+application has no payment, batch or statement call.
+
+**Switch on (owner, then `--finance`):**
+
+1. The owner stores three files in `/opt/ayvo/secrets/rb-premium/` (procedure without showing any
+   value: the owner's RB configuration handoff, §3): `client-id`, `certificate.p12`,
+   `p12-passphrase`. Directory `0500`, files `0400`, all owned by uid 1000 (the Finance process);
+   nothing else in the directory. Never on DEV, never in Git, an env file, a log or a chat.
+2. `prod.env`: `RB_PREMIUM_ACCOUNTS=<number>:CZK` — which accounts are read (not a secret).
+3. `sudo scripts/deploy-prod.sh --finance --release <the commit the OS runs>`.
+
+**What the script does:** the preflight checks the accounts' format and the files' kind, owner,
+mode and that exactly those three exist — never their contents. `compose.rb-premium.yml` is then
+added for Finance alone: `RB_PREMIUM_ENVIRONMENT=production`, the three file paths, the accounts,
+and the directory mounted **read-only** at `/run/secrets/rb-premium`. The verification checks
+inside the Finance container that it has the production connection, that its process can read
+the three files and cannot write there; it sends **no request to the bank**. Without
+`RB_PREMIUM_ACCOUNTS` it checks that Finance has no bank connection and no mount. Network:
+outgoing HTTPS to the bank's fixed host only (host guard / firewall, Codex).
+
+**First live read:** only with the owner, on their explicit instruction, by "Načíst nové pohyby"
+in Finance → Bankovní pohyby (89 days back), compared with the internet banking. Transactions are
+never paired with anything until issued invoices exist.
+
+**Switch off:** remove `RB_PREMIUM_ACCOUNTS` from `prod.env` and run `--finance` again with the
+release the OS runs: Finance is recreated without the variables and the mount; read transactions
+and sync runs stay, the files stay where they are (removed only on the owner's instruction).
