@@ -2,8 +2,10 @@
 
 import {
   BILLING_TIMINGS,
+  type BillingAgreementDetail,
   type BillingAgreementVersion,
   type BillingCustomer,
+  type BillingCustomerDetail,
   type BillingCustomerVersion,
   type FinanceContractHotel,
   type PriceListVersion,
@@ -84,10 +86,25 @@ function Field({
   );
 }
 
-function Submit({ busy, saved, testId }: { busy: boolean; saved: boolean; testId: string }) {
+function Submit({
+  busy,
+  saved,
+  testId,
+  blocked = false,
+}: {
+  busy: boolean;
+  saved: boolean;
+  testId: string;
+  blocked?: boolean;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <button type="submit" className={buttonClass.primary} disabled={busy} data-testid={testId}>
+      <button
+        type="submit"
+        className={buttonClass.primary}
+        disabled={busy || blocked}
+        data-testid={testId}
+      >
         {busy ? t.saving : t.save}
       </button>
       {saved && (
@@ -95,6 +112,35 @@ function Submit({ busy, saved, testId }: { busy: boolean; saved: boolean; testId
           {t.saved}
         </span>
       )}
+    </div>
+  );
+}
+
+/** The form was loaded from an older version than the current one: shown instead of saving. */
+function StaleNotice({
+  text,
+  action,
+  onAction,
+}: {
+  text: string;
+  action: string;
+  onAction: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-2 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+      role="alert"
+      data-testid="stale-version"
+    >
+      <p>{text}</p>
+      <button
+        type="button"
+        className={`${buttonClass.secondary} self-start`}
+        onClick={onAction}
+        data-testid="stale-version-load"
+      >
+        {action}
+      </button>
     </div>
   );
 }
@@ -128,10 +174,15 @@ export function CustomerForm({
   code?: string;
   current?: BillingCustomerVersion;
 }) {
-  const initial = Object.fromEntries(
-    CUSTOMER_KEYS.map((k) => [k, current?.customer[k] ?? (k === 'countryCode' ? 'CZ' : '')]),
-  ) as CustomerValues;
+  const valuesOf = (from?: BillingCustomerVersion) =>
+    Object.fromEntries(
+      CUSTOMER_KEYS.map((k) => [k, from?.customer[k] ?? (k === 'countryCode' ? 'CZ' : '')]),
+    ) as CustomerValues;
+  const initial = valuesOf(current);
   const [values, setValues] = useState(initial);
+  // The values belong to the version they were loaded from; that version is the one expected.
+  const [base, setBase] = useState(current?.version);
+  const stale = !!code && !!current && current.version !== base;
   const [reason, setReason] = useState('');
   const { busy, error, saved, send, fresh } = useSubmit();
   const set = (k: keyof CustomerValues) => (v: string) => {
@@ -154,9 +205,10 @@ export function CustomerForm({
           code
             ? `admin/finance/billing/customers/${code}/versions`
             : 'admin/finance/billing/customers',
-          code ? { expectedVersion: current!.version, customer, reason } : { customer },
-          () => {
+          code ? { expectedVersion: base, customer, reason } : { customer },
+          (r) => {
             if (!code) setValues(initial);
+            else setBase((r as BillingCustomerDetail).current.version);
             setReason('');
           },
         );
@@ -179,7 +231,23 @@ export function CustomerForm({
         <Field name="reason" text={t.fields.reason} value={reason} onChange={setReason} required />
       )}
       {error && <ErrorNote>{error}</ErrorNote>}
-      <Submit busy={busy} saved={saved} testId={code ? 'customer-version-save' : 'customer-save'} />
+      {stale && (
+        <StaleNotice
+          text={t.staleVersion}
+          action={t.loadCurrent}
+          onAction={() => {
+            setValues(valuesOf(current));
+            setBase(current.version);
+            fresh();
+          }}
+        />
+      )}
+      <Submit
+        busy={busy}
+        saved={saved && !stale}
+        blocked={stale}
+        testId={code ? 'customer-version-save' : 'customer-save'}
+      />
     </form>
   );
 }
@@ -206,19 +274,24 @@ export function AgreementForm({
   current?: BillingAgreementVersion;
 }) {
   const [hotelId, setHotelId] = useState('');
-  const [v, setV] = useState({
-    effectiveFrom: current ? thisMonth() : thisMonth(),
-    customerId: current?.customer.id ?? '',
-    contractNumber: current?.contractNumber ?? '',
-    billedRooms: current ? String(current.billedRooms) : '',
-    ownPrice: current?.ownPricePerRoomMonth ?? '',
-    currency: current?.currency ?? 'CZK',
-    paymentTermsDays: current ? String(current.paymentTermsDays) : '14',
-    billingTiming: current?.billingTiming ?? 'ARREARS',
-    validFrom: current?.validFrom ?? `${thisMonth()}-01`,
-    validTo: current?.validTo ?? '',
+  const valuesOf = (from?: BillingAgreementVersion) => ({
+    effectiveFrom: thisMonth(),
+    customerId: from?.customer.id ?? '',
+    contractNumber: from?.contractNumber ?? '',
+    billedRooms: from ? String(from.billedRooms) : '',
+    ownPrice: from?.ownPricePerRoomMonth ?? '',
+    currency: from?.currency ?? 'CZK',
+    paymentTermsDays: from ? String(from.paymentTermsDays) : '14',
+    billingTiming: from?.billingTiming ?? 'ARREARS',
+    validFrom: from?.validFrom ?? `${thisMonth()}-01`,
+    validTo: from?.validTo ?? '',
     reason: '',
   });
+  const [v, setV] = useState(() => valuesOf(current));
+  // The values belong to the revision they were loaded from; that revision is the one expected.
+  // A newer one (after a 409 the page reloads) is never saved over silently (review BILL88-R1).
+  const [base, setBase] = useState(current?.revision);
+  const stale = !!code && !!current && current.revision !== base;
   const { busy, error, saved, send, fresh } = useSubmit();
   const set = (k: keyof typeof v) => (x: string) => {
     setV({ ...v, [k]: x });
@@ -247,13 +320,16 @@ export function AgreementForm({
           code
             ? `admin/finance/billing/agreements/${code}/versions`
             : 'admin/finance/billing/agreements',
-          code ? { expectedRevision: current!.revision, terms } : { hotelId, terms },
-          () => {
+          code ? { expectedRevision: base, terms } : { hotelId, terms },
+          (r) => {
             // A new agreement: the form starts empty for the next hotel (never the same one again).
             if (!code) {
               setHotelId('');
               setV({ ...v, billedRooms: '', ownPrice: '', contractNumber: '', reason: '' });
-            } else setV({ ...v, reason: '' });
+            } else {
+              setV({ ...v, reason: '' });
+              setBase(Math.max(...(r as BillingAgreementDetail).versions.map((x) => x.revision)));
+            }
           },
         );
       }}
@@ -381,9 +457,21 @@ export function AgreementForm({
         />
       </div>
       {error && <ErrorNote>{error}</ErrorNote>}
+      {stale && (
+        <StaleNotice
+          text={t.staleVersion}
+          action={t.loadCurrent}
+          onAction={() => {
+            setV(valuesOf(current));
+            setBase(current.revision);
+            fresh();
+          }}
+        />
+      )}
       <Submit
         busy={busy}
-        saved={saved}
+        saved={saved && !stale}
+        blocked={stale}
         testId={code ? 'agreement-version-save' : 'agreement-save'}
       />
     </form>
@@ -399,8 +487,25 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
     reason: '',
   });
   const { busy, error, saved, send, fresh } = useSubmit();
+  /** The newest price of a currency and month as this page shows it. */
+  const newest = (currency: string, month: string) =>
+    prices
+      .filter((p) => p.currency === currency.trim().toUpperCase() && p.effectiveFrom === month)
+      .reduce<PriceListVersion | null>(
+        (m, p) => (m === null || p.revision > m.revision ? p : m),
+        null,
+      );
+  // The price the user saw when writing theirs is the one expected; a newer one saved meanwhile is
+  // shown and must be acknowledged before saving (review BILL88-R1).
+  // undefined = not read yet (nothing typed since the form was opened or saved).
+  const [seen, setSeen] = useState<number | null | undefined>(undefined);
+  const now = newest(v.currency, v.effectiveFrom);
+  const stale = seen !== undefined && (now?.revision ?? null) !== seen;
   const set = (k: keyof typeof v) => (x: string) => {
-    setV({ ...v, [k]: x });
+    const next = { ...v, [k]: x };
+    if (seen === undefined || k === 'currency' || k === 'effectiveFrom')
+      setSeen(newest(next.currency, next.effectiveFrom)?.revision ?? null);
+    setV(next);
     fresh();
   };
   return (
@@ -410,23 +515,19 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
       onSubmit={(e) => {
         e.preventDefault();
         const currency = v.currency.trim().toUpperCase();
-        const expected =
-          prices
-            .filter((p) => p.currency === currency && p.effectiveFrom === v.effectiveFrom)
-            .reduce<number | null>(
-              (m, p) => (m === null || p.revision > m ? p.revision : m),
-              null,
-            ) ?? null;
         void send(
           'admin/finance/billing/price-list',
           {
-            expectedRevision: expected,
+            expectedRevision: seen ?? null,
             currency,
             pricePerRoomMonth: v.price.trim(),
             effectiveFrom: v.effectiveFrom,
             reason: v.reason.trim(),
           },
-          () => setV({ ...v, price: '', reason: '' }),
+          () => {
+            setV({ ...v, price: '', reason: '' });
+            setSeen(undefined); // read again from the reloaded list on the next edit
+          },
         );
       }}
     >
@@ -463,7 +564,17 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
         />
       </div>
       {error && <ErrorNote>{error}</ErrorNote>}
-      <Submit busy={busy} saved={saved} testId="price-save" />
+      {stale && now && (
+        <StaleNotice
+          text={t.stalePrice(`${now.pricePerRoomMonth} ${now.currency}`)}
+          action={t.rebasePrice}
+          onAction={() => {
+            setSeen(now.revision);
+            fresh();
+          }}
+        />
+      )}
+      <Submit busy={busy} saved={saved} blocked={stale} testId="price-save" />
     </form>
   );
 }
