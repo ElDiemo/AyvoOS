@@ -248,7 +248,13 @@ export function AgreementForm({
             ? `admin/finance/billing/agreements/${code}/versions`
             : 'admin/finance/billing/agreements',
           code ? { expectedRevision: current!.revision, terms } : { hotelId, terms },
-          () => setV({ ...v, reason: '' }),
+          () => {
+            // A new agreement: the form starts empty for the next hotel (never the same one again).
+            if (!code) {
+              setHotelId('');
+              setV({ ...v, billedRooms: '', ownPrice: '', contractNumber: '', reason: '' });
+            } else setV({ ...v, reason: '' });
+          },
         );
       }}
     >
