@@ -210,6 +210,8 @@ model CustomerVersion {
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
+  invoices Invoice[]
+
   @@id([customerId, version])
   @@map("customer_versions")
   @@schema("finance")
@@ -248,7 +250,8 @@ model BillingAgreement {
   createdByName String   @map("created_by_name")
   requestId     String   @unique @map("request_id") @db.Uuid
 
-  versions AgreementVersion[]
+  versions     AgreementVersion[]
+  invoiceLines InvoiceLine[]
 
   @@map("billing_agreements")
   @@schema("finance")
@@ -280,6 +283,8 @@ model AgreementVersion {
 
   agreement BillingAgreement @relation(fields: [agreementId], references: [id], onDelete: Restrict)
   customer  Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  invoiceLines InvoiceLine[]
 
   @@index([agreementId, effectiveFrom, revision], map: "agreement_versions_lookup_idx")
   @@index([customerId], map: "agreement_versions_customer_idx")
@@ -473,5 +478,77 @@ model BankTransactionVersion {
   @@id([transactionId, version])
   @@index([runId], map: "bank_transaction_versions_run_idx")
   @@map("bank_transaction_versions")
+  @@schema("finance")
+}
+
+/// A TEST invoice (N3A-2b, doc 040 §9): one customer, currency and month; a line per hotel
+/// agreement; everything printed is frozen in `snapshot`; its PDF stored create-only. Only kind TEST
+/// (DB CHECK) — no live issuing. DB: append-only; total = Σ lines (checked at commit).
+model Invoice {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial          BigInt   @unique
+  kind            String
+  number          String   @unique
+  variableSymbol  String   @unique @map("variable_symbol")
+  customerId      String   @map("customer_id") @db.Uuid
+  customerVersion Int      @map("customer_version")
+  periodMonth     DateTime @map("period_month") @db.Date
+  issuedOn        DateTime @map("issued_on") @db.Date
+  dueOn           DateTime @map("due_on") @db.Date
+  currency        String   @db.Char(3)
+  total           Decimal  @db.Decimal(19, 2)
+  snapshot        Json
+  pdfStorageKey   String   @unique @map("pdf_storage_key")
+  pdfSha256       String   @map("pdf_sha256") @db.Char(64)
+  issuedAt        DateTime @default(dbgenerated("clock_timestamp()")) @map("issued_at") @db.Timestamptz(3)
+  issuedBy        String   @map("issued_by") @db.Uuid
+  issuedByName    String   @map("issued_by_name")
+  requestId       String   @unique @map("request_id") @db.Uuid
+
+  customer     CustomerVersion      @relation(fields: [customerId, customerVersion], references: [customerId, version], onDelete: Restrict)
+  lines        InvoiceLine[]
+  cancellation InvoiceCancellation?
+
+  @@index([customerId, periodMonth], map: "invoices_customer_idx")
+  @@map("invoices")
+  @@schema("finance")
+}
+
+/// One hotel agreement billed for the invoice's month: billed rooms × unit price (exact).
+model InvoiceLine {
+  invoiceId         String   @map("invoice_id") @db.Uuid
+  lineNo            Int      @map("line_no")
+  agreementId       String   @map("agreement_id") @db.Uuid
+  agreementRevision BigInt   @map("agreement_revision")
+  periodMonth       DateTime @map("period_month") @db.Date
+  hotelId           String   @map("hotel_id") @db.Uuid
+  hotelCode         String   @map("hotel_code")
+  hotelName         String   @map("hotel_name")
+  billedRooms       Int      @map("billed_rooms")
+  unitPrice         Decimal  @map("unit_price") @db.Decimal(19, 2)
+  amount            Decimal  @db.Decimal(19, 2)
+
+  invoice   Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  agreement BillingAgreement @relation(fields: [agreementId], references: [id], onDelete: Restrict)
+  terms     AgreementVersion @relation(fields: [agreementRevision], references: [revision], onDelete: Restrict)
+
+  @@id([invoiceId, lineNo])
+  @@index([agreementId, periodMonth], map: "invoice_lines_agreement_idx")
+  @@map("invoice_lines")
+  @@schema("finance")
+}
+
+/// The cancellation of a TEST invoice (with a reason); the invoice itself never changes.
+model InvoiceCancellation {
+  invoiceId       String   @id @map("invoice_id") @db.Uuid
+  reason          String
+  cancelledAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("cancelled_at") @db.Timestamptz(3)
+  cancelledBy     String   @map("cancelled_by") @db.Uuid
+  cancelledByName String   @map("cancelled_by_name")
+  requestId       String   @unique @map("request_id") @db.Uuid
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@map("invoice_cancellations")
   @@schema("finance")
 }

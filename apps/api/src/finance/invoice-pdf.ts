@@ -37,7 +37,8 @@ export interface InvoicePdfSnapshot {
     companyId: string | null;
     vatId: string | null;
   };
-  hotel: { code: string; name: string };
+  /** The hotel(s) billed: one for a separate invoice, several for a summary of one customer. */
+  hotels: { code: string; name: string }[];
   lines: {
     description: string;
     quantity: string;
@@ -182,7 +183,9 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       .text(`Faktura ${s.number}`, MARGIN, MARGIN + 4);
     doc.font('regular').fontSize(10).fillColor('#444444');
     doc.text(
-      `Fakturované období: ${s.period.slice(5)}/${s.period.slice(0, 4)} · hotel ${s.hotel.code} ${s.hotel.name}`,
+      `Fakturované období: ${s.period.slice(5)}/${s.period.slice(0, 4)} · ${
+        s.hotels.length === 1 ? 'hotel' : 'hotely'
+      } ${s.hotels.map((h) => `${h.code} ${h.name}`).join(', ')}`,
     );
     doc.moveDown(1);
 

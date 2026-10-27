@@ -97,6 +97,8 @@ export const PERMISSION_CODES = [
   'finance:billing_read',
   'finance:billing_manage',
   'finance:issuer_manage',
+  'finance:invoices_read',
+  'finance:invoices_test',
   'finance:bank_read',
   'finance:bank_sync',
 ] as const;

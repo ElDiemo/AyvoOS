@@ -67,7 +67,7 @@ const invoice = (
     companyId: '87654321',
     vatId: null,
   },
-  hotel: { code: 'HT-000001', name: 'Testovací hotel Šumava' },
+  hotels: [{ code: 'HT-000001', name: 'Testovací hotel Šumava' }],
   lines: [
     {
       description: 'Služba AYVO — pokoje × měsíc 10/2026',

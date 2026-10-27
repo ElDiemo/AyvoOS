@@ -77,6 +77,145 @@ test.describe('Naše firma a bankovní účty', () => {
   });
 });
 
+/**
+ * Testovací faktury (N3A-2b, doc 040 §9) right after the issuer and its CZK default exist above:
+ * one customer with two hotels (agreements set through the billing API), a summary TEST invoice
+ * chosen in the browser, its detail and stored PDF, then a cancellation with a reason.
+ */
+test.describe('Testovací faktury', () => {
+  test.use({ storageState: ADMIN_STATE });
+
+  test('a summary TEST invoice of one customer: chosen, issued with its PDF, then cancelled', async ({
+    page,
+  }) => {
+    const request = page.request;
+    const json = async <T>(r: Awaited<ReturnType<typeof request.get>>) => {
+      expect(r.ok(), await r.text()).toBe(true);
+      return (await r.json()) as T;
+    };
+    const me = await json<{ sites: { id: string; code: string }[] }>(
+      await request.get('/api/auth/me'),
+    );
+    const siteId = me.sites.find((x) => x.code === 'CZ-PREROV-01')!.id;
+    const customer = await json<{ id: string; code: string }>(
+      await request.post('/api/admin/finance/billing/customers', {
+        data: {
+          requestId: crypto.randomUUID(),
+          customer: {
+            legalName: 'Testovací hotely s.r.o. (E2E)',
+            companyId: '87654321',
+            vatId: null,
+            addressLine1: 'Hotelová 7',
+            addressLine2: null,
+            postalCode: '602 00',
+            city: 'Brno',
+            countryCode: 'CZ',
+            billingEmail: 'fakturace@hotely.test',
+          },
+        },
+      }),
+    );
+    const agreements: string[] = [];
+    for (const [name, rooms, price] of [
+      ['Hotel Faktura Sever (E2E)', 10, '300.00'],
+      ['Hotel Faktura Jih (E2E)', 5, '1234.56'],
+    ] as const) {
+      const hotel = await json<{ code: string }>(
+        await request.post('/api/admin/hotels', {
+          data: {
+            requestId: crypto.randomUUID(),
+            name,
+            addressLine1: 'Hotelová 7',
+            addressLine2: null,
+            postalCode: '602 00',
+            city: 'Brno',
+            countryCode: 'CZ',
+            contactName: 'Recepce',
+            contactPhone: '+420 500 000 000',
+            contactEmail: 'recepce@hotely.test',
+            fulfillmentSiteId: siteId,
+          },
+        }),
+      );
+      const hotels = await json<{ id: string; code: string }[]>(
+        await request.get('/api/admin/finance/billing/hotels'),
+      );
+      const created = await json<{ code: string }>(
+        await request.post('/api/admin/finance/billing/agreements', {
+          data: {
+            requestId: crypto.randomUUID(),
+            hotelId: hotels.find((h) => h.code === hotel.code)!.id,
+            terms: {
+              effectiveFrom: '2026-01',
+              customerId: customer.id,
+              contractNumber: null,
+              billedRooms: rooms,
+              ownPricePerRoomMonth: price,
+              currency: 'CZK',
+              paymentTermsDays: 14,
+              billingTiming: 'ARREARS',
+              validFrom: '2026-01-01',
+              validTo: null,
+              reason: 'Smlouva (syntetická)',
+            },
+          },
+        }),
+      );
+      agreements.push(created.code);
+    }
+
+    await page.goto('/finance/invoices');
+    await expect(page.getByRole('heading', { level: 1, name: 'Faktury' })).toBeVisible();
+    await page.getByTestId('invoice-new').click();
+    const form = page.getByTestId('test-invoice-form');
+    await form.getByTestId('invoice-month').fill('2026-09');
+    await form.getByRole('button', { name: 'Načíst smlouvy' }).click();
+    for (const code of agreements) await form.getByTestId(`invoice-agreement-${code}`).check();
+    await expect(form.getByTestId('invoice-selection')).toHaveText(
+      'Vybráno 2 – celkem 9 172,80 CZK',
+    );
+    await mkdir(screenshots, { recursive: true });
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({
+        path: resolve(screenshots, `finance-invoice-new-${width}.png`),
+        fullPage: true,
+      });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await form.getByTestId('invoice-issue').click();
+    await expect(page).toHaveURL(/\/finance\/invoices\/T\d{4}-\d{5}$/);
+    const detail = page.getByTestId('invoice-detail');
+    await expect(detail.getByTestId('invoice-total')).toHaveText('9 172,80 CZK');
+    await expect(detail.getByTestId('invoice-lines')).toContainText('Hotel Faktura Sever (E2E)');
+    await expect(detail.getByTestId('invoice-lines')).toContainText('Hotel Faktura Jih (E2E)');
+    const number = page.url().split('/').at(-1)!;
+    const pdf = await request.get(`/api/admin/finance/invoices/${number}/pdf`);
+    expect(pdf.headers()['content-type']).toContain('application/pdf');
+    expect((await pdf.body()).subarray(0, 5).toString()).toBe('%PDF-');
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({
+        path: resolve(screenshots, `finance-invoice-detail-${width}.png`),
+        fullPage: true,
+      });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await detail.getByTestId('cancel-invoice-reason').fill('Ukázka zrušení (test)');
+    await detail.getByTestId('cancel-invoice-submit').click();
+    await expect(detail).toContainText('Zrušena: Ukázka zrušení (test)');
+    await page.goto('/finance/invoices');
+    await expect(page.getByTestId('invoices')).toContainText(number);
+    await expect(page.getByTestId('invoices')).toContainText('Zrušená');
+  });
+});
+
 test.describe('without the issuer permission', () => {
   test.use({ storageState: OPERATOR_STATE });
 

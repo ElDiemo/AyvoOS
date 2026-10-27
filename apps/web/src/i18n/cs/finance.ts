@@ -180,6 +180,71 @@ export const financeCs = {
     stale: 'Doklad mezitím změnil někdo jiný. Stránka se načte znovu.',
   },
   /** Bankovní pohyby (N3B-1, doc 041): read from RB Premium API, read only. */
+  invoices: {
+    title: 'Faktury',
+    subtitle:
+      'Faktury hotelům podle smluv (pokoje × cena za měsíc). Zatím jen TESTOVACÍ faktury mimo produkci – ostré vystavení není schváleno a nic se neodesílá.',
+    testOnly:
+      'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a nikam se neposílají. DPH a účetní pravidla zatím nejsou schválena.',
+    create: 'Vystavit testovací fakturu',
+    empty: 'Zatím žádné faktury.',
+    number: 'Číslo',
+    customer: 'Odběratel',
+    period: 'Období',
+    hotels: 'Hotely',
+    total: 'Celkem',
+    issuedOn: 'Vystaveno',
+    dueOn: 'Splatnost',
+    variableSymbol: 'Variabilní symbol',
+    status: { VALID: 'Platná', CANCELLED: 'Zrušená' } as Record<string, string>,
+    back: 'Faktury',
+    newTitle: 'Testovací faktura',
+    newSubtitle:
+      'Vyberte měsíc a smlouvy jednoho odběratele: jedna smlouva = samostatná faktura, více smluv téhož odběratele = souhrnná faktura s řádkem za každý hotel.',
+    month: 'Fakturovaný měsíc',
+    load: 'Načíst smlouvy',
+    noAgreements: 'Pro tento měsíc nejsou žádné smlouvy v platnosti.',
+    notInvoiceable: 'Nelze fakturovat',
+    gaps: {
+      PRICE_MISSING: 'chybí cena',
+      PARTIAL_PERIOD_RULE_MISSING: 'smlouva pokrývá jen část měsíce (pravidlo není schválené)',
+      NO_EFFECTIVE_VERSION: 'podmínky začínají později',
+    } as Record<string, string>,
+    line: (rooms: number, price: string, amount: string) =>
+      `${rooms} pokojů × ${price} = ${amount}`,
+    selected: (n: number, total: string) => `Vybráno ${n} – celkem ${total}`,
+    submit: 'Vystavit testovací fakturu',
+    submitting: 'Vystavuji…',
+    lines: 'Řádky',
+    agreement: 'Smlouva',
+    rooms: 'Pokoje',
+    unitPrice: 'Cena za pokoj a měsíc',
+    amount: 'Částka',
+    payment: 'Platební údaje (QR Platba v PDF)',
+    account: 'Účet',
+    iban: 'IBAN',
+    pdf: 'Stáhnout PDF',
+    pdfHash: 'Otisk PDF (SHA-256)',
+    issuedBy: (at: string, by: string) => `Vystavil(a) ${by}, ${at}.`,
+    cancel: 'Zrušit testovací fakturu',
+    cancelReason: 'Důvod zrušení (povinný)',
+    cancelHelp:
+      'Faktura se nemění ani nemaže – zrušení se zaznamená s důvodem. Měsíc smlouvy pak lze vyfakturovat znovu.',
+    cancelled: (reason: string, by: string, at: string) => `Zrušena: ${reason} (${by}, ${at}).`,
+    errors: {
+      TEST_INVOICES_DISABLED: 'V produkci testovací faktury nevznikají.',
+      TERMS_INCOMPLETE: 'Smlouva nemá pro tento měsíc úplné podmínky – nic se nedopočítává.',
+      CUSTOMERS_DIFFER: 'Jedna faktura má jen jednoho odběratele.',
+      CURRENCIES_DIFFER: 'Jedna faktura má jednu měnu.',
+      PAYMENT_TERMS_DIFFER: 'Vybrané smlouvy mají různou splatnost.',
+      ISSUER_NOT_READY:
+        'Chybí údaje naší firmy nebo výchozí účet pro tuto měnu (Naše firma a účty).',
+      ALREADY_INVOICED: 'Některá smlouva už má na tento měsíc platnou testovací fakturu.',
+      ALREADY_CANCELLED: 'Faktura už je zrušená.',
+      INVOICE_NOT_CONSISTENT:
+        'Faktura by nesouhlasila (částky nebo platební údaje) – nic se nevystavilo.',
+    } as Record<string, string>,
+  },
   bank: {
     title: 'Bankovní pohyby',
     subtitle:
