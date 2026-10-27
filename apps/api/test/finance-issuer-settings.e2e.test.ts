@@ -2,10 +2,18 @@ import { createHash, randomUUID } from 'node:crypto';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { InvoiceDetail, InvoiceSummary, IssuerSettings } from '@ayvo/types';
+import type {
+  IncomingPayment,
+  InvoiceDetail,
+  InvoiceSummary,
+  IssuerSettings,
+  PaymentLoadResult,
+  PaymentsPage,
+} from '@ayvo/types';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
 import { InvoicesService } from '../src/finance/invoices.service.js';
+import { PaymentsService } from '../src/finance/payments.service.js';
 import { PrismaClient } from '../src/generated/finance-prisma/client.js';
 import {
   createFinanceTestApp,
@@ -587,6 +595,297 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         .post(`${INV}/test`, cookie)
         .send({ requestId: randomUUID(), month: '2026-09', agreementCodes: ['BA-000001'] })
         .expect(403);
+    } finally {
+      await real.close();
+    }
+  });
+
+  // --- Incoming payments and the payment state (N3B-2, doc 041 §8): after the invoices above.
+
+  const PAY = '/api/admin/finance/payments';
+  const simulate = (entries: Record<string, unknown>[], requestId = randomUUID()) =>
+    f.post(`${PAY}/simulate`).send({
+      requestId,
+      entries: entries.map((e) => ({
+        currency: 'CZK',
+        bookedOn: '2026-10-20',
+        variableSymbol: null,
+        counterpartyName: 'Testovací hotely s.r.o.',
+        message: null,
+        ...e,
+      })),
+    });
+  const payments = async () => (await f.get(PAY).expect(200)).body as PaymentsPage;
+  const payment = async (reference: string) =>
+    (await payments()).payments.find((p) => p.reference === reference)!;
+  const invoiceOf = async (number: string) =>
+    (await f.get(`${INV}/${number}`).expect(200)).body as InvoiceDetail;
+  const ref = (tag: string) => `SIM-${tag}-${randomUUID().slice(0, 8).toUpperCase()}`;
+  const freshInvoice = async () => {
+    const c = await customer();
+    const a = await agreement(c.id); // 12 × 350.00 = 4200.00
+    return (await issue([a.code]).expect(201)).body as InvoiceDetail;
+  };
+
+  it('payments: partial, unclear and repeated — matched only on the exact VS, never counted twice', async () => {
+    await ensureCzkDefault();
+    const inv = await freshInvoice();
+    const [partial, noVs, unknownVs] = [ref('A'), ref('B'), ref('C')];
+    const statement = [
+      { reference: partial, amount: '1000.00', variableSymbol: inv.variableSymbol },
+      { reference: noVs, amount: '500.00', message: 'Platba za pokoje' },
+      { reference: unknownVs, amount: '3200.00', variableSymbol: '1234' },
+    ];
+    const first = (await simulate(statement).expect(200)).body as PaymentLoadResult;
+    expect([first.created.length, first.alreadyLoaded, first.matched, first.toReview]).toEqual([
+      3, 0, 1, 2,
+    ]);
+    expect((await invoiceOf(inv.number)).paymentState).toMatchObject({
+      state: 'PARTIALLY_PAID',
+      paid: '1000.00',
+      remaining: '3200.00',
+    });
+    // The same statement loaded again (a new request): nothing recorded, nothing counted twice.
+    const again = (await simulate(statement).expect(200)).body as PaymentLoadResult;
+    expect([again.created, again.alreadyLoaded]).toEqual([[], 3]);
+    expect((await invoiceOf(inv.number)).paymentState.paid).toBe('1000.00');
+    expect(await payment(partial)).toMatchObject({
+      matchResult: 'MATCHED',
+      state: 'ALLOCATED',
+      allocations: [{ invoiceNumber: inv.number, amount: '1000.00', kind: 'AUTO', reason: null }],
+    });
+    // Unclear: no VS / an unknown VS — waiting for a person with the reason; the unknown-VS
+    // payment equals the invoice's remaining amount: a suggestion, never applied by itself.
+    expect(await payment(noVs)).toMatchObject({
+      matchResult: 'NO_VARIABLE_SYMBOL',
+      state: 'UNALLOCATED',
+      allocations: [],
+    });
+    const unclear = await payment(unknownVs);
+    expect(unclear).toMatchObject({ matchResult: 'UNKNOWN_VARIABLE_SYMBOL', state: 'UNALLOCATED' });
+    expect(unclear.suggestions).toContain(inv.number);
+    // A person allocates it with a reason: the invoice is paid.
+    const allocated = (
+      await f
+        .post(`${PAY}/${unclear.code}/allocations`)
+        .send({
+          requestId: randomUUID(),
+          invoiceNumber: inv.number,
+          amount: '3200.00',
+          reason: 'Hotel uvedl špatný VS (ověřeno telefonicky)',
+        })
+        .expect(200)
+    ).body as IncomingPayment;
+    expect(allocated).toMatchObject({ state: 'ALLOCATED', allocations: [{ kind: 'MANUAL' }] });
+    const paid = await invoiceOf(inv.number);
+    expect(paid.paymentState).toMatchObject({ state: 'PAID', paid: '4200.00', remaining: '0.00' });
+    expect(paid.allocations.map((a) => [a.paymentCode, a.amount, a.kind])).toEqual([
+      [(await payment(partial)).code, '1000.00', 'AUTO'],
+      [unclear.code, '3200.00', 'MANUAL'],
+    ]);
+    // More than the invoice still needs: refused, nothing written.
+    const over = await f.post(`${PAY}/${(await payment(noVs)).code}/allocations`).send({
+      requestId: randomUUID(),
+      invoiceNumber: inv.number,
+      amount: '500.00',
+      reason: 'pokus o přeplacení',
+    });
+    expect([over.status, over.body.code]).toEqual([422, 'EXCEEDS_INVOICE']);
+    // A paid invoice is not cancelled; a later payment with its VS is "already paid".
+    const cancel = await f
+      .post(`${INV}/${inv.number}/cancel`)
+      .send({ requestId: randomUUID(), reason: 'nelze' });
+    expect([cancel.status, cancel.body.code]).toEqual([409, 'INVOICE_HAS_PAYMENTS']);
+    const late = ref('G');
+    await simulate([
+      { reference: late, amount: '100.00', variableSymbol: inv.variableSymbol },
+    ]).expect(200);
+    expect((await payment(late)).matchResult).toBe('INVOICE_ALREADY_PAID');
+  });
+
+  it('payments: an overpayment keeps its rest; another currency or a cancelled invoice is never matched', async () => {
+    await ensureCzkDefault();
+    const inv = await freshInvoice();
+    const cancelled = await freshInvoice();
+    await f
+      .post(`${INV}/${cancelled.number}/cancel`)
+      .send({ requestId: randomUUID(), reason: 'Zrušeno (test)' })
+      .expect(200);
+    const [over, eur, gone] = [ref('D'), ref('E'), ref('F')];
+    await simulate([
+      { reference: over, amount: '5000.00', variableSymbol: inv.variableSymbol },
+      { reference: eur, amount: '170.00', currency: 'EUR', variableSymbol: inv.variableSymbol },
+      { reference: gone, amount: '4200.00', variableSymbol: cancelled.variableSymbol },
+    ]).expect(200);
+    expect(await payment(over)).toMatchObject({
+      matchResult: 'PARTIAL_OVERPAYMENT',
+      state: 'PARTIALLY_ALLOCATED',
+      allocated: '4200.00',
+      unallocated: '800.00',
+    });
+    expect((await invoiceOf(inv.number)).paymentState.state).toBe('PAID');
+    expect((await payment(eur)).matchResult).toBe('CURRENCY_MISMATCH');
+    expect((await payment(gone)).matchResult).toBe('INVOICE_CANCELLED');
+    expect((await invoiceOf(cancelled.number)).paymentState.paid).toBe('0.00');
+  });
+
+  it('payments from read bank transactions: recorded once each; a production payment never pays a TEST invoice', async () => {
+    await ensureCzkDefault();
+    const inv = await freshInvoice();
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    const account = String(Date.now()).slice(-10);
+    try {
+      const transaction = async (environment: string, amount: string, vs: string) => {
+        const run = await owner.bankSyncRun.create({
+          data: {
+            provider: 'RB_PREMIUM',
+            environment,
+            accountNumber: account,
+            currency: 'CZK',
+            fromDate: new Date('2026-10-01'),
+            toDate: new Date('2026-10-27'),
+            startedBy: randomUUID(),
+            startedByName: 'test',
+          },
+        });
+        const t = await owner.bankTransaction.create({
+          data: {
+            environment,
+            accountNumber: account,
+            currency: 'CZK',
+            entryReference: randomUUID(),
+            firstRunId: run.id,
+          },
+        });
+        await owner.bankTransactionVersion.create({
+          data: {
+            transactionId: t.id,
+            version: 1,
+            runId: run.id,
+            contentSha256: 'a'.repeat(64),
+            amount,
+            amountCurrency: 'CZK',
+            creditDebit: 'CRDT',
+            bookingDate: new Date('2026-10-21T09:00:00Z'),
+            bankTransactionCode: 'PMNT',
+            variableSymbol: vs,
+            counterpartyName: 'Testovací hotely s.r.o.',
+            raw: '{}',
+          },
+        });
+        return t.id;
+      };
+      const testTx = await transaction('TEST', '4200.00', `00${inv.variableSymbol}`.slice(-10));
+      const prodTx = await transaction('PRODUCTION', '4200.00', inv.variableSymbol);
+      const first = (
+        await f.post(`${PAY}/import-bank`).send({ requestId: randomUUID() }).expect(200)
+      ).body as PaymentLoadResult;
+      expect(first.created.length).toBeGreaterThanOrEqual(2);
+      const again = (
+        await f.post(`${PAY}/import-bank`).send({ requestId: randomUUID() }).expect(200)
+      ).body as PaymentLoadResult;
+      expect(again.created).toEqual([]);
+      const byTx = async (id: string) =>
+        (await payments()).payments.find((p) => p.reference === id)!;
+      expect(await byTx(testTx)).toMatchObject({
+        source: 'BANK',
+        environment: 'TEST',
+        matchResult: 'MATCHED',
+        state: 'ALLOCATED',
+      });
+      expect(await byTx(prodTx)).toMatchObject({
+        environment: 'PRODUCTION',
+        matchResult: 'ENVIRONMENT_MISMATCH',
+        state: 'UNALLOCATED',
+      });
+      expect((await invoiceOf(inv.number)).paymentState.state).toBe('PAID');
+      // The database refuses what the API refuses: a production payment for a TEST invoice, more
+      // than the payment or the invoice, a change of a payment.
+      const prod = await owner.incomingPayment.findFirstOrThrow({ where: { sourceKey: prodTx } });
+      const invRow = await owner.invoice.findUniqueOrThrow({ where: { number: inv.number } });
+      const alloc = (paymentId: string, invoiceId: string, amount: string) =>
+        owner.paymentAllocation.create({
+          data: {
+            paymentId,
+            invoiceId,
+            amount,
+            kind: 'AUTO',
+            recordedBy: randomUUID(),
+            recordedByName: 'x',
+          },
+        });
+      await expect(alloc(prod.id, invRow.id, '1.00')).rejects.toThrow(/no production payment/);
+      const other = await freshInvoice();
+      const otherRow = await owner.invoice.findUniqueOrThrow({ where: { number: other.number } });
+      const testPay = await owner.incomingPayment.findFirstOrThrow({
+        where: { sourceKey: testTx },
+      });
+      await expect(alloc(testPay.id, otherRow.id, '1.00')).rejects.toThrow(
+        /never exceed the payment/,
+      );
+      await expect(
+        owner.$executeRawUnsafe(
+          `UPDATE finance.incoming_payments SET amount = 1 WHERE id = '${prod.id}'`,
+        ),
+      ).rejects.toThrow();
+      await expect(
+        owner.incomingPayment.create({
+          data: {
+            ...prod,
+            id: undefined,
+            serial: prod.serial + 1000000n,
+            code: `PP-9${prod.serial}`,
+          },
+        }),
+      ).rejects.toThrow();
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('payments: simulation never in production; managing payments is ADMIN only', async () => {
+    const prod = new PaymentsService(f.prisma, f.app.get(FinanceOperations), {
+      ...f.env,
+      APP_ENV: 'production',
+    });
+    await expect(
+      prod.simulate({ requestId: randomUUID(), entries: [] }, {
+        principal: { userId: randomUUID(), displayName: 'x' },
+        sessionToken: 'x',
+      } as never),
+    ).rejects.toMatchObject({ response: { code: 'SIMULATION_DISABLED' } });
+    expect((await prod.page()).simulationAvailable).toBe(false);
+    expect((await payments()).simulationAvailable).toBe(true);
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      const grants = await real.core.prisma.rolePermission.findMany({
+        where: { permissionCode: 'finance:payments_manage' },
+        select: { roleCode: true },
+      });
+      expect(grants.map((g) => g.roleCode)).toEqual(['ADMIN']);
+      const roleCode = `FINP_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Faktury (test)', description: 'test' },
+      });
+      await real.core.prisma.rolePermission.create({
+        data: { roleCode, permissionCode: 'finance:invoices_read' },
+      });
+      const user = await prepareInvitedUser(real.core, {
+        email: `payments-${randomUUID()}@ayvo.test`,
+        displayName: 'Jen čtení faktur',
+      });
+      await real.core.prisma.userRole.create({
+        data: { userId: user.id, roleCode, grantReason: 'test: read only' },
+      });
+      const cookie = await sessionCookie(real.core, user.email);
+      await real.get(PAY, cookie).expect(200);
+      await real
+        .post(`${PAY}/simulate`, cookie)
+        .send({ requestId: randomUUID(), entries: [] })
+        .expect(403);
+      await real.post(`${PAY}/import-bank`, cookie).send({ requestId: randomUUID() }).expect(403);
     } finally {
       await real.close();
     }

@@ -127,3 +127,36 @@ reviewed separately; the production ClientID and certificate are never placed on
 4. First real read with the owner present; compare with internet banking (count, amounts, VS).
 5. Pairing rules (account, VS, amount, currency; ambiguous cases by hand; partial and over-payments
    traceable) are implemented on the issued-invoice model, not here.
+
+## 8. Incoming payments and the payment state of invoices (N3B-2, owner 2026-10-27)
+
+The end of the DEV billing chain (doc 040 §9: TEST invoice → payment → state). Nothing here calls
+the bank: payments are made from what was already read, or simulated outside production.
+
+- **Sources, each recorded once** (`incoming_payments`, UNIQUE (source, source_key)):
+  - `BANK` — a credit bank transaction already read (key = the transaction; its newest version
+    when first recorded): Finance → Platby → "Načíst platby z bankovních pohybů";
+  - `SIMULATION` — a simulated statement outside production (`APP_ENV≠production`), each entry
+    with its own reference.
+
+  Loading the same transactions or the same statement again records nothing and counts nothing
+  twice (the result says how many were loaded before). Loads run one at a time.
+
+- **Matching, deterministic** (stored as `match_result` when recorded): automatically only on an
+  **exact variable symbol** (leading zeros of a bank VS ignored) of **one** invoice that is not
+  cancelled, in the same currency, with an allowed environment (a TEST invoice never takes a
+  PRODUCTION payment), and only up to its remaining amount — a rest stays on the payment
+  (`PARTIAL_OVERPAYMENT`). Everything else waits for a person with its reason:
+  `NO_VARIABLE_SYMBOL`, `UNKNOWN_VARIABLE_SYMBOL`, `CURRENCY_MISMATCH`, `ENVIRONMENT_MISMATCH`,
+  `INVOICE_CANCELLED`, `INVOICE_ALREADY_PAID`. Open invoices whose remaining amount equals the
+  unallocated amount are shown as a **suggestion** — never applied by themselves.
+- **By hand:** `POST /api/admin/finance/payments/:code/allocations` with a reason.
+- **State (derived):** a payment is unallocated / partially / allocated; an invoice unpaid /
+  partially paid / paid (+ "po splatnosti" past its due date).
+- **DB:** payments and allocations append-only; an allocation never exceeds the payment's or the
+  invoice's remaining amount, never pays a cancelled invoice or a TEST invoice with a production
+  payment; an invoice with payments is not cancelled.
+- **Permissions:** reading with `finance:invoices_read`; recording, simulating and allocating with
+  `finance:payments_manage` (ADMIN only).
+- Not covered: refunds or offsetting an overpayment, payments changed later at the bank (a newer
+  version of a recorded transaction is not applied — open), live invoices.

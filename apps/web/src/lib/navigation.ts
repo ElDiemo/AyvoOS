@@ -115,6 +115,12 @@ export const MODULES: readonly NavModule[] = [
         permission: 'finance:invoices_read',
       },
       {
+        id: 'payments',
+        href: '/finance/payments',
+        label: f.pages.payments,
+        permission: 'finance:invoices_read',
+      },
+      {
         id: 'exports',
         href: '/finance/exports',
         label: f.pages.exports,
@@ -343,7 +349,7 @@ export type ProductionPageId =
 export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
 export type HotelsPageId = 'list' | 'new';
 /** Finance (doc 039–041, UI-01): one strip, each page by its own permission. */
-export type FinancePageId = 'documents' | 'invoices' | 'exports' | 'bank' | 'issuer';
+export type FinancePageId = 'documents' | 'invoices' | 'payments' | 'exports' | 'bank' | 'issuer';
 export type DispatchPageId = 'orders' | 'new';
 export type SalesPageId = 'overview' | 'prospects' | 'tasks';
 

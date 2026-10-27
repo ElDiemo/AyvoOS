@@ -31,6 +31,7 @@ export const shellCs = {
       pages: {
         documents: 'Doklady',
         invoices: 'Faktury',
+        payments: 'Platby',
         exports: 'Export pro účetní',
         bank: 'Bankovní pohyby',
         issuer: 'Naše firma a účty',

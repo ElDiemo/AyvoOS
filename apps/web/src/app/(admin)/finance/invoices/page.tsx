@@ -59,7 +59,13 @@ export default async function InvoicesPage() {
                   <span>
                     {t.dueOn} {financeDate(i.dueOn)}
                   </span>
-                  <span className="font-medium">{t.status[i.status]}</span>
+                  <span className="font-medium">
+                    {i.status === 'CANCELLED'
+                      ? t.status[i.status]
+                      : `${t.paymentState[i.paymentState.state]}${
+                          i.paymentState.overdue ? ` · ${t.overdue}` : ''
+                        }`}
+                  </span>
                 </li>
               ))}
             </ul>

@@ -20,6 +20,7 @@ import {
   renderInvoicePdf,
   type InvoicePdfSnapshot,
 } from './invoice-pdf.js';
+import { invoicePaymentState } from './payments.service.js';
 import { InvalidPaymentInstruction } from './spayd.js';
 
 const pad = (n: bigint, width: number) => n.toString().padStart(width, '0');
@@ -52,6 +53,10 @@ const invoiceInclude = {
   lines: { include: { agreement: { select: { code: true } } }, orderBy: { lineNo: 'asc' } },
   cancellation: true,
   customer: { include: { customer: { select: { code: true } } } },
+  allocations: {
+    include: { payment: { select: { code: true } } },
+    orderBy: { recordedAt: 'asc' },
+  },
 } satisfies Prisma.InvoiceInclude;
 type InvoiceRow = Prisma.InvoiceGetPayload<{ include: typeof invoiceInclude }>;
 
@@ -300,30 +305,40 @@ export class InvoicesService {
     caller: FinanceCaller,
   ): Promise<InvoiceDetail> {
     const { userId, displayName } = caller.principal;
-    await this.operations.run(
-      'INVOICE_TEST_CANCEL',
-      req.requestId,
-      { number, reason: req.reason, actorId: userId },
-      async (tx) => {
-        const invoice = await tx.invoice.findUnique({
-          where: { number },
-          include: { cancellation: true },
-        });
-        if (!invoice) throw new NotFoundException('Faktura neexistuje.');
-        if (invoice.cancellation)
-          throw domainError(409, 'ALREADY_CANCELLED', 'Faktura už je zrušená.');
-        await tx.invoiceCancellation.create({
-          data: {
-            invoiceId: invoice.id,
-            reason: req.reason,
-            cancelledBy: userId,
-            cancelledByName: displayName,
-            requestId: req.requestId,
-          },
-        });
-        return { number };
-      },
-    );
+    await this.operations
+      .run(
+        'INVOICE_TEST_CANCEL',
+        req.requestId,
+        { number, reason: req.reason, actorId: userId },
+        async (tx) => {
+          const invoice = await tx.invoice.findUnique({
+            where: { number },
+            include: { cancellation: true },
+          });
+          if (!invoice) throw new NotFoundException('Faktura neexistuje.');
+          if (invoice.cancellation)
+            throw domainError(409, 'ALREADY_CANCELLED', 'Faktura už je zrušená.');
+          await tx.invoiceCancellation.create({
+            data: {
+              invoiceId: invoice.id,
+              reason: req.reason,
+              cancelledBy: userId,
+              cancelledByName: displayName,
+              requestId: req.requestId,
+            },
+          });
+          return { number };
+        },
+      )
+      .catch((e: unknown) => {
+        if (e instanceof Error && /an invoice with payments is not cancelled/.test(e.message))
+          throw domainError(
+            409,
+            'INVOICE_HAS_PAYMENTS',
+            'Faktura má přiřazené platby – zrušit ji nelze.',
+          );
+        throw e;
+      });
     return this.detail(number);
   }
 
@@ -364,6 +379,7 @@ function summary(r: InvoiceRow): InvoiceSummary {
     issuedAt: r.issuedAt.toISOString(),
     issuedByName: r.issuedByName,
     pdfSha256: r.pdfSha256,
+    paymentState: invoicePaymentState(r.total, r.allocations, r.dueOn, !!r.cancellation),
   };
 }
 
@@ -378,6 +394,15 @@ function detail(r: InvoiceRow): InvoiceDetail {
       billedRooms: l.billedRooms,
       unitPrice: l.unitPrice.toFixed(2),
       amount: l.amount.toFixed(2),
+    })),
+    allocations: r.allocations.map((a) => ({
+      invoiceNumber: r.number,
+      paymentCode: a.payment.code,
+      amount: a.amount.toFixed(2),
+      kind: a.kind as 'AUTO' | 'MANUAL',
+      reason: a.reason,
+      recordedAt: a.recordedAt.toISOString(),
+      recordedByName: a.recordedByName,
     })),
     payment: {
       account: s.payment.account,

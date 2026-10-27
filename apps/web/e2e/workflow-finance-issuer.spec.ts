@@ -214,6 +214,135 @@ test.describe('Testovací faktury', () => {
     await expect(page.getByTestId('invoices')).toContainText(number);
     await expect(page.getByTestId('invoices')).toContainText('Zrušená');
   });
+
+  test('payments: a partial payment by VS, one without VS allocated by hand, the same statement loaded twice', async ({
+    page,
+  }) => {
+    const request = page.request;
+    const json = async <T>(r: Awaited<ReturnType<typeof request.get>>) => {
+      expect(r.ok(), await r.text()).toBe(true);
+      return (await r.json()) as T;
+    };
+    const me = await json<{ sites: { id: string; code: string }[] }>(
+      await request.get('/api/auth/me'),
+    );
+    const siteId = me.sites.find((x) => x.code === 'CZ-PREROV-01')!.id;
+    const customer = await json<{ id: string }>(
+      await request.post('/api/admin/finance/billing/customers', {
+        data: {
+          requestId: crypto.randomUUID(),
+          customer: {
+            legalName: 'Platby s.r.o. (E2E)',
+            companyId: '11223344',
+            vatId: null,
+            addressLine1: 'Platební 1',
+            addressLine2: null,
+            postalCode: '702 00',
+            city: 'Ostrava',
+            countryCode: 'CZ',
+            billingEmail: 'fakturace@platby.test',
+          },
+        },
+      }),
+    );
+    const hotel = await json<{ code: string }>(
+      await request.post('/api/admin/hotels', {
+        data: {
+          requestId: crypto.randomUUID(),
+          name: 'Hotel Platba (E2E)',
+          addressLine1: 'Platební 1',
+          addressLine2: null,
+          postalCode: '702 00',
+          city: 'Ostrava',
+          countryCode: 'CZ',
+          contactName: 'Recepce',
+          contactPhone: '+420 500 000 001',
+          contactEmail: 'recepce@platby.test',
+          fulfillmentSiteId: siteId,
+        },
+      }),
+    );
+    const hotels = await json<{ id: string; code: string }[]>(
+      await request.get('/api/admin/finance/billing/hotels'),
+    );
+    const agreement = await json<{ code: string }>(
+      await request.post('/api/admin/finance/billing/agreements', {
+        data: {
+          requestId: crypto.randomUUID(),
+          hotelId: hotels.find((h) => h.code === hotel.code)!.id,
+          terms: {
+            effectiveFrom: '2026-01',
+            customerId: customer.id,
+            contractNumber: null,
+            billedRooms: 12,
+            ownPricePerRoomMonth: '350.00',
+            currency: 'CZK',
+            paymentTermsDays: 14,
+            billingTiming: 'ARREARS',
+            validFrom: '2026-01-01',
+            validTo: null,
+            reason: 'Smlouva (syntetická)',
+          },
+        },
+      }),
+    );
+    const invoice = await json<{ number: string; variableSymbol: string }>(
+      await request.post('/api/admin/finance/invoices/test', {
+        data: {
+          requestId: crypto.randomUUID(),
+          month: '2026-09',
+          agreementCodes: [agreement.code],
+        },
+      }),
+    );
+
+    await page.goto('/finance/payments');
+    const form = page.getByTestId('simulate-statement');
+    await form.getByTestId('simulate-amount-1').fill('1000.00');
+    await form.getByTestId('simulate-vs-1').fill(invoice.variableSymbol);
+    await form.getByTestId('simulate-add').click();
+    await form.getByTestId('simulate-amount-2').fill('3200.00');
+    await form.getByTestId('simulate-submit').click();
+    await expect(form.getByTestId('simulate-result')).toHaveText(
+      'Nově zaznamenáno 2, už dříve načteno 0 (nezapočteno znovu). Spárováno 1, k posouzení 1.',
+    );
+    // The same statement again: nothing new, nothing counted twice.
+    await form.getByTestId('simulate-submit').click();
+    await expect(form.getByTestId('simulate-result')).toHaveText(
+      'Nově zaznamenáno 0, už dříve načteno 2 (nezapočteno znovu). Spárováno 0, k posouzení 0.',
+    );
+    await page.goto(`/finance/invoices/${invoice.number}`);
+    await expect(page.getByTestId('invoice-payment-state')).toHaveText('Částečně uhrazeno');
+
+    await page.goto('/finance/payments');
+    const unclear = page
+      .getByTestId('payments')
+      .locator('li[data-testid^="payment-PP-"]')
+      .filter({ hasText: 'chybí variabilní symbol' })
+      .first();
+    const code = (await unclear.getAttribute('data-testid'))!.replace('payment-', '');
+    await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(invoice.number);
+    await mkdir(screenshots, { recursive: true });
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({
+        path: resolve(screenshots, `finance-payments-${width}.png`),
+        fullPage: true,
+      });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const allocate = page.getByTestId(`allocate-${code}`);
+    await allocate.getByTestId(`allocate-${code}-reason`).fill('Bez VS – ověřeno s hotelem (test)');
+    await allocate.getByTestId(`allocate-${code}-submit`).click();
+    await expect(page.getByTestId(`payment-${code}-state`)).toHaveText('přiřazeno');
+    await page.goto(`/finance/invoices/${invoice.number}`);
+    await expect(page.getByTestId('invoice-payment-state')).toHaveText('Uhrazeno');
+    await expect(page.getByTestId('invoice-allocations')).toContainText('ručně');
+    await expect(page.getByTestId('invoice-allocations')).toContainText('automaticky');
+  });
 });
 
 test.describe('without the issuer permission', () => {

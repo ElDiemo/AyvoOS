@@ -227,6 +227,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(all.pages.map((p) => [p.id, p.href])).toEqual([
       ['documents', '/finance/documents'],
       ['invoices', '/finance/invoices'],
+      ['payments', '/finance/payments'],
       ['exports', '/finance/exports'],
       ['bank', '/finance/bank'],
       ['issuer', '/finance/settings/company'],
@@ -234,6 +235,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(all.pages.map((p) => p.label)).toEqual([
       'Doklady',
       'Faktury',
+      'Platby',
       'Export pro účetní',
       'Bankovní pohyby',
       'Naše firma a účty',
