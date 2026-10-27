@@ -1600,15 +1600,17 @@ describe('optional bank connection from RB Premium API (doc 036 §10a)', () => {
       const { environment: envOff, ...restOff } = before.services.finance!;
       expect(restOn).toEqual(restOff);
       expect(before.services.finance!.volumes).toBeUndefined();
-      expect(volumes).toEqual([
-        {
-          type: 'bind',
-          source: join(on, 'rb-premium'),
-          target: '/run/secrets/rb-premium',
-          read_only: true,
-          bind: { create_host_path: false },
-        },
-      ]);
+      expect(volumes).toHaveLength(1);
+      const { bind, ...mount } = volumes![0]!;
+      expect(mount).toEqual({
+        type: 'bind',
+        source: join(on, 'rb-premium'),
+        target: '/run/secrets/rb-premium',
+        read_only: true,
+      });
+      // Never created by Docker when absent. Compose versions render the false value differently
+      // (v5.6 here: `create_host_path: false`; the CI runner's omits it: `bind: {}`).
+      expect(bind?.create_host_path ?? false).toBe(false);
       const added = Object.fromEntries(
         Object.entries(envOn!).filter(([k]) => !(k in envOff!) || envOff![k] !== envOn![k]),
       );
