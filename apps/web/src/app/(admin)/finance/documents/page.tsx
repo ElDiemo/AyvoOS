@@ -1,13 +1,10 @@
 import {
   financeDocumentListQuerySchema,
   financeDocumentPageSchema,
-  financeSupplierSchema,
-  takeOverCandidateSchema,
   type FinanceDocument,
 } from '@ayvo/types';
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
-import { z } from 'zod';
 import {
   fileSize,
   financeAmount,
@@ -15,9 +12,8 @@ import {
   financeMonth,
 } from '@/components/finance/finance-format';
 import { MissingBadge } from '@/components/finance/missing-badge';
-import { ReceiveDocumentForm } from '@/components/finance/receive-document-form';
-import { TakeOverList } from '@/components/finance/take-over-list';
-import { buttonClass, Card, EmptyState, inputClass, PageHeader } from '@/components/ui';
+import { buttonClass, Card, EmptyState, inputClass } from '@/components/ui';
+import { FinanceHeader } from '@/components/finance/finance-header';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
@@ -27,10 +23,10 @@ export const dynamic = 'force-dynamic';
 type Params = Record<string, string | undefined>;
 
 /**
- * Přijaté doklady (doc 039, N1): search and filters as a plain GET form (the URL keeps them),
- * pages of 50, newest first; "K doplnění" marks what the export still needs. Receiving a PDF and
- * taking over a supplier document of Sklad for finance:documents_manage (the takeover list only
- * shows the paperwork of the user's sites; the core decides).
+ * Přijaté doklady (doc 039, N1): the default Finance screen is the list itself (UI-02) — search and
+ * filters as a plain GET form (the URL keeps them), pages of 50, newest first; "K doplnění" marks
+ * what the export still needs. Receiving a PDF (Nahrát doklad) and taking over a supplier document
+ * of Sklad (Převzít ze skladu) are actions above it, each on its own page of the module.
  */
 export default async function FinanceDocumentsPage({
   searchParams,
@@ -48,7 +44,7 @@ export default async function FinanceDocumentsPage({
   const me = await requirePermission('finance:documents_read');
   const canManage = hasPermission(me, 'finance:documents_manage');
   const canTakeOver = canManage && hasPermission(me, 'procurement:documents_read');
-  const [page, suppliers, candidates] = await Promise.all([
+  const [page] = await Promise.all([
     apiGet('admin/finance/documents', financeDocumentPageSchema, {
       q: q.q,
       supplierId: q.supplierId,
@@ -59,8 +55,6 @@ export default async function FinanceDocumentsPage({
       incomplete: q.incomplete,
       page: q.page,
     }),
-    canManage ? apiGet('admin/finance/suppliers', z.array(financeSupplierSchema)) : [],
-    canTakeOver ? apiGet('admin/finance/supplier-documents', z.array(takeOverCandidateSchema)) : [],
   ]);
   const pages = Math.max(1, Math.ceil(page.total / page.pageSize));
   const filtered = !!(
@@ -81,18 +75,36 @@ export default async function FinanceDocumentsPage({
 
   return (
     <>
-      <PageHeader title={t.title} subtitle={t.subtitle} />
+      <FinanceHeader
+        active="documents"
+        title={t.title}
+        subtitle={t.subtitle}
+        actions={
+          (canManage || canTakeOver) && (
+            <div className="flex flex-wrap gap-2">
+              {canManage && (
+                <Link
+                  href="/finance/documents/new"
+                  className={buttonClass.primary}
+                  data-testid="finance-upload"
+                >
+                  {t.list.upload}
+                </Link>
+              )}
+              {canTakeOver && (
+                <Link
+                  href="/finance/documents/take-over"
+                  className={buttonClass.secondary}
+                  data-testid="finance-take-over-link"
+                >
+                  {t.list.takeOver}
+                </Link>
+              )}
+            </div>
+          )
+        }
+      />
       <div className="flex flex-col gap-6">
-        {canManage && (
-          <Card title={t.receive.title} testId="finance-receive">
-            <ReceiveDocumentForm suppliers={suppliers} />
-          </Card>
-        )}
-        {canTakeOver && (
-          <Card title={t.takeOver.title} testId="finance-take-over">
-            <TakeOverList candidates={candidates} />
-          </Card>
-        )}
         <Card>
           <form method="get" className="flex flex-col gap-4" data-testid="finance-filters">
             <label className={filterLabel}>
@@ -106,7 +118,7 @@ export default async function FinanceDocumentsPage({
                 className={cn(inputClass, 'normal-case tracking-normal')}
               />
             </label>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <label className={filterLabel}>
                 {t.fields.status}
                 <select

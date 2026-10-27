@@ -98,6 +98,11 @@ export const identityCs = {
       'Zakládat a měnit (novou verzí s důvodem) odběratele, smlouvy hotelů a výchozí ceník',
     'finance:issuer_manage':
       'Vidět a měnit fakturační údaje naší firmy a bankovní účty uváděné na fakturách (s historií)',
+    'finance:invoices_read': 'Vidět faktury (řádky, PDF a stav úhrady)',
+    'finance:invoices_test':
+      'Vystavovat a rušit testovací faktury mimo produkci (nikdy ostrou fakturu)',
+    'finance:payments_manage':
+      'Zaznamenávat příchozí platby (z načtených pohybů, mimo produkci simulovaný výpis) a ručně je přiřazovat k fakturám',
     'finance:bank_read':
       'Vidět pohyby na firemním bankovním účtu načtené z banky a stav propojení s bankou',
     'finance:bank_sync': 'Spustit načtení nových pohybů z banky (pouze čtení, žádné platby)',

@@ -1,7 +1,7 @@
 # 040 — Finance: hotel billing (N3)
 
-- **Status:** N3A-1 (settings) implemented for review — not merged, not deployed. N3A-2 (amounts,
-  issuing, PDF), N3A-3 (UI), N3A-4 (mail, export), N3B (bank) and N3C (hotel portal) are planned
+- **Status:** N3A-1 (settings) and N3A-2a (issuer) merged; N3A-2b TEST invoices (§9) for
+  review. N3A-2 (live amounts, issuing), N3A-3 (UI), N3A-4 (mail, export), N3B (bank) and N3C (hotel portal) are planned
   separately. **Live invoicing stays blocked until the owner approves the accounting rules.**
 - **Owner:** requested 2026-10-25 (`N3-HOTEL-BILLING-OWNER-20261025.md`); direction approved, N3A-1
   started in a working branch ("pod dál", 2026-10-25). Business model: ADR 0007 — the monthly base
@@ -131,6 +131,41 @@ marketing site's footer is static web text, never read by invoices. So Finance i
 - Issuing (N3A-2b) freezes the issuer, the account and the payment instructions into the invoice;
   a later change never alters an issued PDF or its QR payment (ČBA/SPAYD, CZK only, generated
   locally with the existing `qrcode` library).
+
+## 9. TEST invoices (N3A-2b, owner 2026-10-27)
+
+A testable chain on DEV — settings → invoice with PDF and QR Platba — **without live issuing**: only
+kind `TEST` exists (DB CHECK), the API refuses it with `APP_ENV=production`, nothing is sent.
+
+- `POST /api/admin/finance/invoices/test` (`finance:invoices_test`, ADMIN): month + agreements of
+  **one customer** (one = a separate invoice, several = a summary with a line per hotel). Each
+  agreement must be in effect for the whole month with a price (no gap: `TERMS_INCOMPLETE`);
+  one currency and the same payment terms. Line = billed rooms × price (exact); total = Σ lines.
+- Number `T<year>-<serial 5>` and VS `99<year><serial 4>` from their own counter — never a live
+  series. Due date = issue date (Prague) + payment terms.
+- Frozen in `invoices.snapshot`: issuer (newest version), customer version, the default account of
+  the currency (active), lines, payment instructions. The PDF (watermark "TESTOVACÍ DOKLAD —
+  NEPLATNÝ", QR Platba, "DPH a účetní pravidla zatím nejsou schválena") is rendered from it,
+  stored create-only and identified by SHA-256 (checked on every download).
+- At most one valid TEST invoice per agreement and month (DB); `POST …/:number/cancel` with a
+  reason is a separate record — the invoice never changes; the month may then be invoiced again.
+- `GET /api/admin/finance/invoices`, `…/:number`, `…/:number/pdf` (`finance:invoices_read`). UI
+  Finance → Faktury.
+
+## 10. Hotel groups, summary invoicing and the portal — proposal (not built)
+
+- A hotel is not a company, and a **group** (e.g. a chain) is neither: it is a commercial grouping
+  of hotels that may belong to several companies. Proposed in the core next to hotels
+  (`hotel_groups`, append-only memberships with validity); Finance would only read it — never
+  derive the payer or the price from it.
+- Billing stays per **customer**: rooms and price belong to the hotel's agreement; one invoice never
+  mixes customers. A summary invoice = several agreements of the same customer (supported by the
+  invoice model now); whether a customer gets separate or summary invoices is an accountant
+  decision (§7 item 7), proposed as a versioned choice on the customer. A group overview across
+  companies is a report, not a document.
+- The future portal (N3C) needs two axes: **where** (hotels or a group — operations) and **for
+  whom it pays** (customers — invoices and payments). A group manager never sees the invoices of a
+  company they do not act for.
 
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 

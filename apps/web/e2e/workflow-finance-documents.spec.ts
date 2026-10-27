@@ -31,6 +31,10 @@ test.describe('Přijaté doklady', () => {
         .getByRole('navigation', { name: 'Hlavní navigace' })
         .getByRole('link', { name: 'Finance' }),
     ).toBeVisible();
+    // The list is the default screen; receiving is its main action (UI-02).
+    await expect(page.getByTestId('receive-document')).toHaveCount(0);
+    await page.getByTestId('finance-upload').click();
+    await expect(page).toHaveURL(/\/finance\/documents\/new$/);
     const form = page.getByTestId('receive-document');
     await form.getByLabel('Originál (PDF)').setInputFiles({
       name: 'Najem rijen.pdf',
@@ -124,7 +128,7 @@ test.describe('Rozpracovaný doklad a převzetí ze skladu', () => {
     page,
   }) => {
     // A draft: only the original and the kind.
-    await page.goto('/finance/documents');
+    await page.goto('/finance/documents/new');
     const form = page.getByTestId('receive-document');
     await form.getByLabel('Originál (PDF)').setInputFiles({
       name: 'uctenka.pdf',
@@ -162,6 +166,8 @@ test.describe('Rozpracovaný doklad a převzetí ze skladu', () => {
     });
     expect(uploaded.status()).toBe(201);
     await page.goto('/finance/documents');
+    await page.getByTestId('finance-take-over-link').click();
+    await expect(page).toHaveURL(/\/finance\/documents\/take-over$/);
     const takeOver = page.getByTestId('finance-take-over');
     await takeOver.getByLabel('Předávací měsíc').fill('2026-10');
     const row = takeOver.getByRole('listitem').filter({ hasText: number });
@@ -174,7 +180,7 @@ test.describe('Rozpracovaný doklad a převzetí ze skladu', () => {
     const download = page.waitForEvent('download');
     await page.getByTestId('finance-download').click();
     expect(Buffer.compare(await readFile((await (await download).path())!), original)).toBe(0);
-    await page.goto('/finance/documents');
+    await page.goto('/finance/documents/take-over');
     await expect(
       page.getByTestId('finance-take-over').getByRole('listitem').filter({ hasText: number }),
     ).toContainText('Převzato jako FD-');
@@ -194,5 +200,9 @@ test.describe('without Finance permissions', () => {
     await page.goto('/finance/documents');
     await expect(page).toHaveURL(/\/forbidden$/);
     expect((await page.request.get('/api/admin/finance/documents')).status()).toBe(403);
+    for (const path of ['/finance/documents/new', '/finance/documents/take-over']) {
+      await page.goto(path);
+      await expect(page, path).toHaveURL(/\/forbidden$/);
+    }
   });
 });

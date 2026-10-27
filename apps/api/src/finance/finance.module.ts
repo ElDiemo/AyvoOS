@@ -3,6 +3,10 @@ import { MulterModule } from '@nestjs/platform-express';
 import { AccountingExportsService } from './accounting-exports.service.js';
 import { BillingSettingsController } from './billing-settings.controller.js';
 import { BillingSettingsService } from './billing-settings.service.js';
+import { InvoicesController } from './invoices.controller.js';
+import { PaymentsController } from './payments.controller.js';
+import { PaymentsService } from './payments.service.js';
+import { InvoicesService } from './invoices.service.js';
 import { IssuerSettingsController } from './issuer-settings.controller.js';
 import { IssuerSettingsService } from './issuer-settings.service.js';
 import { BankController } from './bank.controller.js';
@@ -35,6 +39,8 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     FinanceController,
     BillingSettingsController,
     IssuerSettingsController,
+    InvoicesController,
+    PaymentsController,
     BankController,
     FinanceHealthController,
   ],
@@ -43,6 +49,8 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     AccountingExportsService,
     BillingSettingsService,
     IssuerSettingsService,
+    InvoicesService,
+    PaymentsService,
     BankSyncService,
     FinancePrismaService,
     FinanceOperations,
