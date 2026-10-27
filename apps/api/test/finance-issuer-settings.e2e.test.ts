@@ -452,6 +452,48 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     await issue([fresh.code]).expect(201);
   });
 
+  it('a summary follows the payer of the month: a hotel handed over to another company is never billed to the first', async () => {
+    await ensureCzkDefault();
+    const first = await customer();
+    const second = await customer();
+    const stays = await agreement(first.id);
+    const moves = await agreement(first.id);
+    // From October the second hotel is paid by another company (a new version of its terms).
+    const detail = (await f.get(`${B}/agreements/${moves.code}`).expect(200)).body as {
+      versions: { revision: number }[];
+    };
+    await f
+      .post(`${B}/agreements/${moves.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedRevision: detail.versions[0]!.revision,
+        terms: {
+          effectiveFrom: '2026-10',
+          customerId: second.id,
+          contractNumber: null,
+          billedRooms: 12,
+          ownPricePerRoomMonth: '350.00',
+          currency: 'CZK',
+          paymentTermsDays: 14,
+          billingTiming: 'ARREARS',
+          validFrom: '2026-01-01',
+          validTo: null,
+          reason: 'Hotel převzala jiná firma (syntetické)',
+        },
+      })
+      .expect(201);
+    // September: both hotels still belong to the first company.
+    const september = (await issue([stays.code, moves.code], '2026-09').expect(201))
+      .body as InvoiceDetail;
+    expect([september.customer.code, september.lines.length]).toEqual([first.code, 2]);
+    // October: the moved hotel cannot join the first company's summary...
+    const refused = await issue([stays.code, moves.code], '2026-10');
+    expect([refused.status, refused.body.code]).toEqual([422, 'CUSTOMERS_DIFFER']);
+    // ...and alone it is billed to its new payer.
+    const october = (await issue([moves.code], '2026-10').expect(201)).body as InvoiceDetail;
+    expect(october.customer.code).toBe(second.code);
+  });
+
   it('TEST invoices: append-only, only kind TEST, exact sums and one valid invoice per agreement and month — in the database', async () => {
     await ensureCzkDefault();
     const c = await customer();
