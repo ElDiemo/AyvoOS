@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { z } from 'zod';
 import { CreateExportForm } from '@/components/finance/create-export-form';
 import { financeDate, financeMonth } from '@/components/finance/finance-format';
-import { Card, EmptyState, PageHeader } from '@/components/ui';
+import { Card, EmptyState } from '@/components/ui';
+import { FinanceHeader } from '@/components/finance/finance-header';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
@@ -37,7 +38,7 @@ export default async function AccountingExportsPage() {
   const [lastMonth, thisMonth] = months();
   return (
     <>
-      <PageHeader title={t.title} subtitle={t.subtitle} />
+      <FinanceHeader active="exports" title={t.title} subtitle={t.subtitle} />
       <div className="flex flex-col gap-6">
         {canCreate && (
           <Card title={t.create}>

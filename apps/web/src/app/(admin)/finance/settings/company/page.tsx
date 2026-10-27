@@ -1,6 +1,7 @@
 import { issuerSettingsSchema, type IssuerBankAccount } from '@ayvo/types';
 import { AccountForm, DefaultAccountForm, IssuerForm } from '@/components/finance/issuer-forms';
-import { Card, EmptyState, Notice, PageHeader } from '@/components/ui';
+import { Card, EmptyState, Notice } from '@/components/ui';
+import { FinanceHeader } from '@/components/finance/finance-header';
 import { issuerCs as t } from '@/i18n/cs/finance-issuer';
 import { apiGet } from '@/lib/api';
 import { requirePermission } from '@/lib/session';
@@ -33,7 +34,7 @@ export default async function CompanySettingsPage() {
   const s = await apiGet('admin/finance/issuer', issuerSettingsSchema);
   return (
     <>
-      <PageHeader title={t.title} subtitle={t.subtitle} />
+      <FinanceHeader active="issuer" title={t.title} subtitle={t.subtitle} />
       <div className="flex flex-col gap-6">
         <Card title={t.readiness.title} testId="issuer-readiness">
           <ul className="flex flex-col gap-2 text-sm">
