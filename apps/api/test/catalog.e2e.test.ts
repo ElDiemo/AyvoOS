@@ -1478,11 +1478,9 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
     });
   });
 
-  // --- rollback base: values of a newer version (#85 consumables) ------------------------------
+  // --- consumables (#85; the rollback base #89 only read them) -------------------------------
 
-  it('rollback base: a CONSUMABLE item (#85 enum values) is read, but never created here or used in a recipe', async () => {
-    const before = await catalogCounts();
-    // Creating one is refused by this version's request contract.
+  it('a CONSUMABLE component is created and listed, read in the inventory, but never used in a recipe', async () => {
     const created = await as(admin).post(`${api}/components`, {
       requestId: randomUUID(),
       code: `CONSUM-${sfx()}`,
@@ -1492,33 +1490,17 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
       lotTracked: false,
       categoryCode: null,
       packageCapacity: null,
-      reason: 'nesmí vzniknout',
+      reason: 'spotřební materiál',
     });
-    expect(created.status).toBe(400);
-    expect(await catalogCounts()).toEqual(before);
-    // A row a newer version wrote (the enum value exists in this database).
-    const pcs = await t.prisma.inventoryUnit.findUniqueOrThrow({ where: { code: 'pcs' } });
-    const code = `RIBBON-${sfx()}`;
-    await withPrivileged((db) =>
-      db.inventoryItem.create({
-        data: {
-          code,
-          name: 'Páska (novější verze)',
-          kind: 'CONSUMABLE',
-          baseUnitId: pcs.id,
-          lotTracking: 'NONE',
-        },
-      }),
-    );
-    // Read: the inventory lists it with its kind and this version's contract accepts it.
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const code = (created.body as CatalogComponent).code;
     const items = await as(admin).get('/api/admin/inventory/items');
-    expect(items.status).toBe(200);
-    const item = (items.body as { code: string; kind: string }[]).find((i) => i.code === code);
-    expect(item?.kind).toBe('CONSUMABLE');
     expect(z.array(inventoryItemSchema).safeParse(items.body).success).toBe(true);
-    // Not offered as a catalogue component, refused in a recipe.
+    expect(
+      (items.body as { code: string; kind: string }[]).find((i) => i.code === code)?.kind,
+    ).toBe('CONSUMABLE');
     const components = await as(admin).get(`${api}/components`);
-    expect((components.body as CatalogComponent[]).map((c) => c.code)).not.toContain(code);
+    expect((components.body as CatalogComponent[]).map((c) => c.code)).toContain(code);
     const k = await kit();
     const p = await product();
     const res = await draft(p.code, {
