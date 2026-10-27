@@ -120,7 +120,6 @@ export const MODULES: readonly NavModule[] = [
         href: '/finance/settings/company',
         label: f.pages.issuer,
         permission: 'finance:issuer_manage',
-        group: 'setup',
       },
     ],
   },
@@ -332,6 +331,8 @@ export type ProductionPageId =
   | 'setup';
 export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
 export type HotelsPageId = 'list' | 'new';
+/** Finance (doc 039–041, UI-01): one strip, each page by its own permission. */
+export type FinancePageId = 'documents' | 'exports' | 'bank' | 'issuer';
 export type DispatchPageId = 'orders' | 'new';
 export type SalesPageId = 'overview' | 'prospects' | 'tasks';
 

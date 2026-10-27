@@ -3,7 +3,8 @@ import { notFound } from 'next/navigation';
 import { ExportLines } from '@/components/finance/export-lines';
 import { fileSize, financeDate, financeMonth } from '@/components/finance/finance-format';
 import { HandOverForm } from '@/components/finance/hand-over-form';
-import { buttonClass, Card, Field, FieldList, Notice, PageHeader } from '@/components/ui';
+import { buttonClass, Card, Field, FieldList, Notice } from '@/components/ui';
+import { FinanceHeader } from '@/components/finance/finance-header';
 import { financeCs } from '@/i18n/cs/finance';
 import { ApiError, apiGet } from '@/lib/api';
 import { hasPermission, requirePermission, siteTimeZone } from '@/lib/session';
@@ -42,7 +43,8 @@ export default async function AccountingExportPage({
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(new Date());
   return (
     <>
-      <PageHeader
+      <FinanceHeader
+        active="exports"
         back={{ href: '/finance/exports', label: t.back }}
         title={`${doc.code} · ${financeMonth(doc.handoverMonth)}`}
         subtitle={t.modes[doc.mode]}

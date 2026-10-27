@@ -49,6 +49,9 @@ export const financeCs = {
     note: (list: string) => `Pro export pro účetní chybí: ${list}.`,
   },
   list: {
+    upload: 'Nahrát doklad',
+    takeOver: 'Převzít ze skladu',
+    back: 'Doklady',
     search: 'Hledat',
     searchPlaceholder: 'číslo, dodavatel, popis, FD-…',
     any: 'Vše',
@@ -182,8 +185,9 @@ export const financeCs = {
     subtitle:
       'Pohyby firemních účtů načtené z Raiffeisenbank (Premium API, jen čtení — nic se do banky neodesílá). Párování s vydanými fakturami přibude s fakturami; nespárovaná platba není pohledávka po splatnosti.',
     connection: 'Propojení s bankou',
-    notConfigured:
-      'Propojení s bankou není v této instalaci nastaveno. Nastavuje ho správce serveru (certifikát a údaje nikdy nepatří do aplikace ani do chatu).',
+    notConfigured: 'Banka zatím není připojena.',
+    notConfiguredHelp:
+      'Pohyby se tu zobrazí, až správce serveru připojí firemní účet. Přístup k bance se v aplikaci nenastavuje.',
     environment: {
       PRODUCTION: 'Ostré propojení',
       SANDBOX: 'Testovací prostředí banky (sandbox) — nejde o skutečné pohyby',
@@ -236,7 +240,8 @@ export const financeCs = {
       to: 'Do',
       filter: 'Filtrovat',
       reset: 'Zrušit filtry',
-      empty: 'Zatím žádné pohyby. Načtěte je z banky.',
+      empty: 'Zatím žádné načtené pohyby.',
+      emptySync: 'Zatím žádné načtené pohyby. Načtěte je tlačítkem Načíst nové pohyby.',
       emptyFiltered: 'Filtrům neodpovídá žádný pohyb.',
       previous: '← Předchozí',
       next: 'Další →',

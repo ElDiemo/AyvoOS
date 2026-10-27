@@ -13,7 +13,8 @@ import {
   financeDate,
   financeMonth,
 } from '@/components/finance/finance-format';
-import { buttonClass, Card, Field, FieldList, Notice, PageHeader } from '@/components/ui';
+import { buttonClass, Card, Field, FieldList, Notice } from '@/components/ui';
+import { FinanceHeader } from '@/components/finance/finance-header';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { ApiError, apiGet } from '@/lib/api';
 import { hasPermission, requirePermission, siteTimeZone } from '@/lib/session';
@@ -60,7 +61,8 @@ export default async function FinanceDocumentPage({
 
   return (
     <>
-      <PageHeader
+      <FinanceHeader
+        active="documents"
         back={{ href: '/finance/documents', label: t.detail.back }}
         title={`${doc.code} · ${t.kinds[doc.kind]} ${doc.documentNumber ?? ''}`.trim()}
         subtitle={doc.supplier?.name ?? t.missing.label}
