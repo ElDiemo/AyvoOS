@@ -32,6 +32,13 @@ export const COMPONENT_KINDS = [
 ] as const;
 export const componentKindSchema = z.enum(COMPONENT_KINDS);
 export type ComponentKind = z.infer<typeof componentKindSchema>;
+/**
+ * Kinds a component is READ with: also those a newer version creates (its enum values are already
+ * in the database, rollback compatibility) — never accepted in a request of this version.
+ */
+export const COMPONENT_READ_KINDS = [...COMPONENT_KINDS, 'CONSUMABLE'] as const;
+export const componentReadKindSchema = z.enum(COMPONENT_READ_KINDS);
+export type ComponentReadKind = z.infer<typeof componentReadKindSchema>;
 
 /**
  * One finished bottle needs exactly one line of each of these kinds (owner, 2026-10-13): the
@@ -88,7 +95,7 @@ export type CreateComponentRequest = z.infer<typeof createComponentRequestSchema
 export const catalogComponentSchema = z.object({
   code: z.string(),
   name: z.string(),
-  kind: componentKindSchema,
+  kind: componentReadKindSchema,
   unit: unitSchema,
   lotTracked: z.boolean(),
   category: productCategorySchema.nullable(),
@@ -241,7 +248,7 @@ export const recipeComponentSchema = z.object({
   stage: recipeStageSchema,
   itemCode: z.string(),
   itemName: z.string(),
-  kind: componentKindSchema,
+  kind: componentReadKindSchema,
   quantity: decimalStringSchema,
   unit: unitSchema,
 });

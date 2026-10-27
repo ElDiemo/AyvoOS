@@ -139,6 +139,19 @@ export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 export const permissionModule = (code: PermissionCode): PermissionModule =>
   code.split(':')[0] as PermissionModule;
 
+export const isPermissionCode = (code: string): code is PermissionCode =>
+  (PERMISSION_CODES as readonly string[]).includes(code);
+
+/**
+ * Permissions as the server reports them. A newer database may hold codes this version does not
+ * know (an application rolled back after a migration added permissions): they are dropped here, so
+ * they never grant anything in this version, and the response still loads. The server checks every
+ * route on its own; requests keep the strict list (an unknown code is still refused there).
+ */
+export const reportedPermissionsSchema = z
+  .array(z.string())
+  .transform((codes) => codes.filter(isPermissionCode));
+
 /**
  * Permissions bound to the active site without a warehouse (doc 022): their data is filtered by
  * that site (production series, bottles, print jobs; purchasing values and paperwork).
@@ -234,7 +247,7 @@ export type AccessibleSite = z.infer<typeof accessibleSiteSchema>;
 export const currentUserSchema = z.object({
   user: z.object({ id: z.uuid(), email: z.string(), displayName: z.string() }),
   roles: z.array(z.object({ code: roleCodeSchema, name: z.string() })),
-  permissions: z.array(permissionCodeSchema),
+  permissions: reportedPermissionsSchema,
   scopes: z.array(userScopeSchema),
   /** Every site the user may access (all sites for global access). */
   sites: z.array(accessibleSiteSchema),
@@ -323,7 +336,7 @@ export type AuditEvent = z.infer<typeof auditEventSchema>;
 
 /** What a user may do and where (the administration's effective-access preview). */
 export const effectiveAccessSchema = z.object({
-  permissions: z.array(permissionCodeSchema),
+  permissions: reportedPermissionsSchema,
   globalSiteAccess: z.boolean(),
   sites: z.array(accessibleSiteSchema),
 });
@@ -348,7 +361,7 @@ export const roleSchema = z.object({
   description: z.string(),
   system: z.boolean(),
   active: z.boolean(),
-  permissions: z.array(permissionCodeSchema),
+  permissions: reportedPermissionsSchema,
   /** Users holding the role now. */
   assignedUsers: z.number().int(),
   createdAt: z.iso.datetime(),
@@ -365,15 +378,18 @@ export const roleDetailSchema = roleSchema.extend({
 export type RoleDetail = z.infer<typeof roleDetailSchema>;
 
 /** GET /api/admin/identity/permissions — the catalogue the role editor offers. */
-export const permissionCatalogSchema = z.array(
-  z.object({
-    code: permissionCodeSchema,
-    description: z.string(),
-    module: z.enum(PERMISSION_MODULES),
-    warehouseScoped: z.boolean(),
-    securityAdmin: z.boolean(),
-  }),
-);
+const permissionCatalogEntrySchema = z.object({
+  code: permissionCodeSchema,
+  description: z.string(),
+  module: z.enum(PERMISSION_MODULES),
+  warehouseScoped: z.boolean(),
+  securityAdmin: z.boolean(),
+});
+/** Entries this version does not know (a newer database) are left out of the role editor. */
+export const permissionCatalogSchema = z
+  .array(z.looseObject({ code: z.string() }))
+  .transform((entries) => entries.filter((e) => isPermissionCode(e.code)))
+  .pipe(z.array(permissionCatalogEntrySchema));
 export type PermissionCatalog = z.infer<typeof permissionCatalogSchema>;
 
 const rolePermissionsSchema = z

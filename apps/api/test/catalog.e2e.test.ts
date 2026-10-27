@@ -7,7 +7,9 @@ import type {
   Product,
   RecipeVersion,
 } from '@ayvo/types';
+import { inventoryItemSchema } from '@ayvo/types';
 import request from 'supertest';
+import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { InventoryService } from '../src/inventory/inventory.service.js';
@@ -1474,5 +1476,55 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
       expect(bom.code).toBe('LABEL_APPLICATION');
       expect(bom.version).toBe(1);
     });
+  });
+
+  // --- rollback base: values of a newer version (#85 consumables) ------------------------------
+
+  it('rollback base: a CONSUMABLE item (#85 enum values) is read, but never created here or used in a recipe', async () => {
+    const before = await catalogCounts();
+    // Creating one is refused by this version's request contract.
+    const created = await as(admin).post(`${api}/components`, {
+      requestId: randomUUID(),
+      code: `CONSUM-${sfx()}`,
+      name: 'Páska do tiskárny',
+      kind: 'CONSUMABLE',
+      unitCode: 'pcs',
+      lotTracked: false,
+      categoryCode: null,
+      packageCapacity: null,
+      reason: 'nesmí vzniknout',
+    });
+    expect(created.status).toBe(400);
+    expect(await catalogCounts()).toEqual(before);
+    // A row a newer version wrote (the enum value exists in this database).
+    const pcs = await t.prisma.inventoryUnit.findUniqueOrThrow({ where: { code: 'pcs' } });
+    const code = `RIBBON-${sfx()}`;
+    await withPrivileged((db) =>
+      db.inventoryItem.create({
+        data: {
+          code,
+          name: 'Páska (novější verze)',
+          kind: 'CONSUMABLE',
+          baseUnitId: pcs.id,
+          lotTracking: 'NONE',
+        },
+      }),
+    );
+    // Read: the inventory lists it with its kind and this version's contract accepts it.
+    const items = await as(admin).get('/api/admin/inventory/items');
+    expect(items.status).toBe(200);
+    const item = (items.body as { code: string; kind: string }[]).find((i) => i.code === code);
+    expect(item?.kind).toBe('CONSUMABLE');
+    expect(z.array(inventoryItemSchema).safeParse(items.body).success).toBe(true);
+    // Not offered as a catalogue component, refused in a recipe.
+    const components = await as(admin).get(`${api}/components`);
+    expect((components.body as CatalogComponent[]).map((c) => c.code)).not.toContain(code);
+    const k = await kit();
+    const p = await product();
+    const res = await draft(p.code, {
+      crateTypeCode: k.crate.code,
+      components: [...k.lines, { itemCode: code, quantity: '1', unitCode: 'pcs' }],
+    });
+    expect([res.status, res.body.code]).toEqual([422, 'COMPONENT_NOT_ALLOWED']);
   });
 });
