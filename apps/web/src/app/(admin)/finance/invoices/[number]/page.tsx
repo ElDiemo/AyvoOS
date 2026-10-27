@@ -68,6 +68,16 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
             <Field label={t.variableSymbol}>
               <span className="font-mono">{inv.variableSymbol}</span>
             </Field>
+            <Field label={t.allocationsTitle}>
+              <strong data-testid="invoice-payment-state">
+                {t.paymentState[inv.paymentState.state]}
+                {inv.paymentState.overdue ? ` · ${t.overdue}` : ''}
+              </strong>{' '}
+              <span className="text-stone-600">
+                ({t.paid} {financeAmount(inv.paymentState.paid, inv.currency)}, {t.remaining}{' '}
+                {financeAmount(inv.paymentState.remaining, inv.currency)})
+              </span>
+            </Field>
           </FieldList>
           <p className="mt-3 text-xs text-stone-500">
             {t.issuedBy(formatDateTimeCs(inv.issuedAt), inv.issuedByName)}
@@ -103,6 +113,22 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
               </tbody>
             </table>
           </div>
+        </Card>
+        <Card title={t.allocationsTitle} testId="invoice-allocations">
+          {inv.allocations.length === 0 ? (
+            <p className="text-sm text-stone-500">{t.noAllocations}</p>
+          ) : (
+            <ul className="divide-y divide-stone-100 text-sm">
+              {inv.allocations.map((a, i) => (
+                <li key={i} className="flex flex-wrap gap-x-4 py-2">
+                  <span className="font-mono">{a.paymentCode}</span>
+                  <span className="tabular-nums">{financeAmount(a.amount, inv.currency)}</span>
+                  <span>{financeCs.payments.kind[a.kind]}</span>
+                  {a.reason && <span className="text-stone-600">{a.reason}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
         <Card title={t.payment}>
           <FieldList>

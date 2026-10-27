@@ -32,6 +32,7 @@ export const shellCs = {
         documents: 'Doklady',
         billing: 'Smlouvy hotelů',
         invoices: 'Faktury',
+        payments: 'Platby',
         exports: 'Export pro účetní',
         bank: 'Bankovní pohyby',
         issuer: 'Naše firma a účty',

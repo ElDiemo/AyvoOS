@@ -231,6 +231,16 @@ export const financeCs = {
     cancelHelp:
       'Faktura se nemění ani nemaže – zrušení se zaznamená s důvodem. Měsíc smlouvy pak lze vyfakturovat znovu.',
     cancelled: (reason: string, by: string, at: string) => `Zrušena: ${reason} (${by}, ${at}).`,
+    paymentState: {
+      UNPAID: 'Neuhrazeno',
+      PARTIALLY_PAID: 'Částečně uhrazeno',
+      PAID: 'Uhrazeno',
+    } as Record<string, string>,
+    overdue: 'po splatnosti',
+    paid: 'zaplaceno',
+    remaining: 'zbývá',
+    allocationsTitle: 'Platby',
+    noAllocations: 'Zatím žádná přiřazená platba.',
     errors: {
       TEST_INVOICES_DISABLED: 'V produkci testovací faktury nevznikají.',
       TERMS_INCOMPLETE: 'Smlouva nemá pro tento měsíc úplné podmínky – nic se nedopočítává.',
@@ -245,6 +255,64 @@ export const financeCs = {
       ALREADY_CANCELLED: 'Faktura už je zrušená.',
       INVOICE_NOT_CONSISTENT:
         'Faktura by nesouhlasila (částky nebo platební údaje) – nic se nevystavilo.',
+      INVOICE_HAS_PAYMENTS: 'Faktura má přiřazené platby – zrušit ji nelze.',
+    } as Record<string, string>,
+  },
+  payments: {
+    title: 'Platby',
+    subtitle:
+      'Příchozí platby a jejich přiřazení k fakturám. Automaticky se páruje jen přesný variabilní symbol jedné otevřené faktury; vše ostatní čeká na člověka s důvodem. Nic se neodesílá do banky.',
+    simulationNote:
+      'Mimo produkci lze načíst simulovaný výpis. Každá reference se zaznamená jen jednou – opakované načtení téhož výpisu nic nezapočte dvakrát.',
+    simulateTitle: 'Simulovaný výpis (jen mimo produkci)',
+    reference: 'Reference',
+    amount: 'Částka (CZK)',
+    variableSymbol: 'VS',
+    message: 'Zpráva',
+    addRow: 'Přidat řádek',
+    simulate: 'Načíst simulovaný výpis',
+    importBank: 'Načíst platby z bankovních pohybů',
+    importHelp:
+      'Zaznamená přijaté (kreditní) pohyby, které už aplikace načetla z banky a ještě nejsou platbou. Banku nevolá.',
+    loaded: (created: number, already: number, matched: number, review: number) =>
+      `Nově zaznamenáno ${created}, už dříve načteno ${already} (nezapočteno znovu). Spárováno ${matched}, k posouzení ${review}.`,
+    changedAtBank: (n: number) =>
+      `Banka od zaznamenání změnila ${n} pohyb(y) – nic se nepřepsalo, zkontrolujte je.`,
+    bankChanged:
+      'Banka tento pohyb po zaznamenání změnila. Zaznamenaná platba ani přiřazení se nepřepsaly – zkontrolujte ji (postup zatím není rozhodnut).',
+    empty: 'Zatím žádné platby.',
+    source: { BANK: 'banka', SIMULATION: 'simulace' } as Record<string, string>,
+    state: {
+      UNALLOCATED: 'nepřiřazeno',
+      PARTIALLY_ALLOCATED: 'částečně přiřazeno',
+      ALLOCATED: 'přiřazeno',
+    } as Record<string, string>,
+    result: {
+      MATCHED: 'spárováno podle VS',
+      PARTIAL_OVERPAYMENT: 'spárováno, zbytek je přeplatek',
+      NO_VARIABLE_SYMBOL: 'k posouzení: chybí variabilní symbol',
+      UNKNOWN_VARIABLE_SYMBOL: 'k posouzení: neznámý variabilní symbol',
+      CURRENCY_MISMATCH: 'k posouzení: jiná měna než faktura',
+      ENVIRONMENT_MISMATCH: 'k posouzení: ostrá platba k testovací faktuře',
+      INVOICE_CANCELLED: 'k posouzení: faktura je zrušená',
+      INVOICE_ALREADY_PAID: 'k posouzení: faktura už je uhrazená',
+    } as Record<string, string>,
+    unallocated: (amount: string) => `Nepřiřazeno ${amount}`,
+    resolved: (why: string) => `vyřešeno ručně (původně: ${why.replace(/^k posouzení: /, '')})`,
+    suggestions: 'Návrh (stejná částka jako zbývá na faktuře) – nikdy se nepřiřadí sám:',
+    allocate: 'Přiřadit k faktuře',
+    invoice: 'Faktura',
+    reason: 'Důvod (povinný)',
+    allocated: (invoice: string, amount: string, how: string) => `${invoice}: ${amount} (${how})`,
+    kind: { AUTO: 'automaticky', MANUAL: 'ručně' } as Record<string, string>,
+    errors: {
+      SIMULATION_DISABLED: 'V produkci se platby nesimulují.',
+      EXCEEDS_PAYMENT: 'Přiřazení přesahuje nepřiřazenou část platby.',
+      EXCEEDS_INVOICE: 'Přiřazení přesahuje zbývající částku faktury.',
+      INVOICE_NOT_FOUND: 'Faktura neexistuje.',
+      INVOICE_CANCELLED: 'Zrušená faktura platbu nepřijímá.',
+      CURRENCY_MISMATCH: 'Platba je v jiné měně než faktura.',
+      ENVIRONMENT_MISMATCH: 'Ostrou platbu nelze přiřadit testovací faktuře.',
     } as Record<string, string>,
   },
   bank: {

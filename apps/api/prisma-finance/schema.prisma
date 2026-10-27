@@ -437,6 +437,8 @@ model BankTransaction {
   firstRun BankSyncRun              @relation(fields: [firstRunId], references: [id], onDelete: Restrict)
   versions BankTransactionVersion[]
 
+  payments IncomingPayment[]
+
   @@unique([environment, accountNumber, currency, entryReference])
   @@map("bank_transactions")
   @@schema("finance")
@@ -509,6 +511,8 @@ model Invoice {
   lines        InvoiceLine[]
   cancellation InvoiceCancellation?
 
+  allocations PaymentAllocation[]
+
   @@index([customerId, periodMonth], map: "invoices_customer_idx")
   @@map("invoices")
   @@schema("finance")
@@ -551,5 +555,61 @@ model InvoiceCancellation {
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
 
   @@map("invoice_cancellations")
+  @@schema("finance")
+}
+
+/// An incoming payment (N3B-2, doc 041 §8): a credit bank transaction (BANK) or a simulated
+/// statement entry outside production (SIMULATION), each recorded once (source, source_key).
+/// `matchResult` = the automatic matching when recorded. DB: append-only.
+model IncomingPayment {
+  id                     String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial                 BigInt   @unique
+  code                   String   @unique
+  source                 String
+  sourceKey              String   @map("source_key")
+  environment            String
+  bankTransactionId      String?  @map("bank_transaction_id") @db.Uuid
+  bankTransactionVersion Int?     @map("bank_transaction_version")
+  amount                 Decimal  @db.Decimal(19, 2)
+  currency               String   @db.Char(3)
+  bookedOn               DateTime @map("booked_on") @db.Date
+  variableSymbol         String?  @map("variable_symbol")
+  counterpartyName       String?  @map("counterparty_name")
+  counterpartyAccount    String?  @map("counterparty_account")
+  message                String?
+  matchResult            String   @map("match_result")
+  recordedAt             DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy             String   @map("recorded_by") @db.Uuid
+  recordedByName         String   @map("recorded_by_name")
+
+  bankTransaction BankTransaction?    @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  allocations     PaymentAllocation[]
+
+  @@unique([source, sourceKey])
+  @@index([variableSymbol], map: "incoming_payments_vs_idx")
+  @@map("incoming_payments")
+  @@schema("finance")
+}
+
+/// A part of a payment allocated to an invoice: AUTO (exact VS) or MANUAL (with a reason). Never
+/// more than the payment or the invoice (DB). Append-only.
+model PaymentAllocation {
+  id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  paymentId      String   @map("payment_id") @db.Uuid
+  invoiceId      String   @map("invoice_id") @db.Uuid
+  amount         Decimal  @db.Decimal(19, 2)
+  kind           String
+  reason         String?
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String?  @map("request_id") @db.Uuid
+
+  payment IncomingPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId], map: "payment_allocations_payment_idx")
+  @@index([invoiceId], map: "payment_allocations_invoice_idx")
+  @@map("payment_allocations")
   @@schema("finance")
 }

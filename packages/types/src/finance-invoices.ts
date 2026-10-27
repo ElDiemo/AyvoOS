@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { billingMonthSchema } from './finance-billing.js';
+import { invoicePaymentStateSchema, paymentAllocationSchema } from './finance-payments.js';
 
 /**
  * TEST invoices (N3A-2b, doc 040 §9; owner 2026-10-27): a testable chain from the hotel billing
@@ -31,6 +32,8 @@ export const invoiceSummarySchema = z.object({
   issuedAt: z.iso.datetime(),
   issuedByName: z.string(),
   pdfSha256: z.string(),
+  /** Derived from the allocations of incoming payments (N3B-2). */
+  paymentState: invoicePaymentStateSchema,
 });
 export type InvoiceSummary = z.infer<typeof invoiceSummarySchema>;
 
@@ -45,6 +48,7 @@ export const invoiceDetailSchema = invoiceSummarySchema.extend({
       amount: money,
     }),
   ),
+  allocations: z.array(paymentAllocationSchema),
   /** As printed in the PDF and its QR Platba. */
   payment: z.object({
     account: z.string().nullable(),
