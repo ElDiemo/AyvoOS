@@ -30,6 +30,7 @@ export const shellCs = {
         'Přijaté doklady a jejich export pro účetní, bankovní pohyby a fakturační údaje naší firmy.',
       pages: {
         documents: 'Doklady',
+        billing: 'Smlouvy hotelů',
         exports: 'Export pro účetní',
         bank: 'Bankovní pohyby',
         issuer: 'Naše firma a účty',
