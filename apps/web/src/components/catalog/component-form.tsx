@@ -58,14 +58,16 @@ export function ComponentForm({
   const [formError, setFormError] = useState<string | null>(null);
   const { busy, run } = useAttempt();
   const allowedUnits = unitsFor(kind, units);
-  const needsCategory = kind === 'BULK_LIQUID' || kind === 'LABEL_MEDIA';
+  // A liquid is made for one category; a label may be the shared blank stock (doc 023 §4a).
+  const needsCategory = kind === 'BULK_LIQUID';
+  const hasCapacity = kind === 'PACKAGING' || kind === 'LABEL_MEDIA';
   const dirty = !!(code || name || reason || categoryCode || capacity);
 
   function changeKind(next: ComponentKind) {
     setKind(next);
     setUnitCode(unitsFor(next, units)[0]?.code ?? '');
     if (next === 'NEW_BOTTLE') setLotTracked(true);
-    if (next !== 'PACKAGING') setCapacity('');
+    if (next !== 'PACKAGING' && next !== 'LABEL_MEDIA') setCapacity('');
   }
 
   async function submit(e: React.FormEvent) {
@@ -82,9 +84,7 @@ export function ComponentForm({
       unit: allowedUnits.some((u) => u.code === unitCode) ? null : t.unitNone,
       category: needsCategory && !categoryCode ? t.categoryRequired : null,
       capacity:
-        kind === 'PACKAGING' && Number.isNaN(capacityValue)
-          ? catalogCs.packageCapacityInvalid
-          : null,
+        hasCapacity && Number.isNaN(capacityValue) ? catalogCs.packageCapacityInvalid : null,
       reason: reasonError(reason),
     };
     setErrors(next);
@@ -100,7 +100,7 @@ export function ComponentForm({
       unitCode,
       lotTracked: kind === 'NEW_BOTTLE' ? true : lotTracked,
       categoryCode: categoryCode || null,
-      packageCapacity: kind === 'PACKAGING' ? (capacityValue as number | null) : null,
+      packageCapacity: hasCapacity ? (capacityValue as number | null) : null,
       reason: reason.trim(),
     };
     const result = await run(JSON.stringify(body), (requestId) =>
@@ -195,7 +195,12 @@ export function ComponentForm({
               ))}
             </select>
           </FormField>
-          <FormField id={f('category')} label={t.category} error={errors.category}>
+          <FormField
+            id={f('category')}
+            label={t.category}
+            help={kind === 'LABEL_MEDIA' ? t.labelCategoryHelp : undefined}
+            error={errors.category}
+          >
             <select
               id={f('category')}
               value={categoryCode}
@@ -204,7 +209,13 @@ export function ComponentForm({
               aria-describedby={describedBy(f('category'), false, !!errors.category)}
               className={fieldClass(!!errors.category)}
             >
-              <option value="">{needsCategory ? catalogCs.recipe.choose : c.any}</option>
+              <option value="">
+                {needsCategory
+                  ? catalogCs.recipe.choose
+                  : kind === 'LABEL_MEDIA'
+                    ? t.sharedLabel
+                    : c.any}
+              </option>
               {categories.map((cat) => (
                 <option key={cat.code} value={cat.code}>
                   {cat.name}
@@ -212,11 +223,11 @@ export function ComponentForm({
               ))}
             </select>
           </FormField>
-          {kind === 'PACKAGING' && (
+          {hasCapacity && (
             <FormField
               id={f('capacity')}
-              label={t.packageCapacity}
-              help={t.packageCapacityHelp}
+              label={kind === 'LABEL_MEDIA' ? t.piecesPerRoll : t.packageCapacity}
+              help={kind === 'LABEL_MEDIA' ? t.piecesPerRollHelp : t.packageCapacityHelp}
               error={errors.capacity}
             >
               <input

@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { crateUrl, labelingSetup, lotId, openStation, releaseOwnStation } from './labeling-setup';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -13,6 +14,7 @@ import { signInWithForm } from './test-sign-in';
  */
 test.describe.configure({ mode: 'serial' });
 
+const SHOTS_RECEIPT = resolve(import.meta.dirname, '../../../docs/screenshots/catalog');
 const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
 let urls: string[] = [];
 let codes: string[] = [];
@@ -175,6 +177,50 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
   await expect(page.getByRole('status')).toContainText(`Příjem ${receiptCode} byl potvrzen`);
   await expect(page.getByTestId('invoice-status')).toHaveText('Čeká na fakturu');
   await expect(page.getByTestId('line-1')).toContainText(lotCode);
+});
+
+test('a label with pieces per roll: rolls only fill the quantity in pieces (doc 023 §4a)', async ({
+  page,
+}) => {
+  const code = `LABEL-ROLL-${Date.now().toString(36).toUpperCase()}`;
+  const created = await page.request.post('/api/admin/catalog/components', {
+    data: {
+      requestId: randomUUID(),
+      code,
+      name: 'Prázdná etiketa v roli',
+      kind: 'LABEL_MEDIA',
+      unitCode: 'pcs',
+      lotTracked: false,
+      categoryCode: null,
+      packageCapacity: 300,
+      reason: 'společný materiál etiket',
+    },
+  });
+  expect(created.status()).toBe(201);
+  await page.goto('/warehouse/receipts/new');
+  await page
+    .getByRole('combobox', { name: 'Dodavatel' })
+    .selectOption({ label: 'Lahve Test s.r.o.' });
+  const line = page.getByTestId('receipt-line-1');
+  await line.getByLabel('Položka').selectOption({ label: `Prázdná etiketa v roli (${code})` });
+  await line.getByLabel('Počet rolí (po 300 ks)').fill('2');
+  await expect(line.getByTestId('receipt-line-1-quantity')).toHaveValue('600');
+  await mkdir(SHOTS_RECEIPT, { recursive: true });
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await line.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: resolve(SHOTS_RECEIPT, `label-rolls-receipt-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // The pieces are the truth: typing them clears the rolls aid.
+  await line.getByTestId('receipt-line-1-quantity').fill('599');
+  await expect(line.getByLabel('Počet rolí (po 300 ks)')).toHaveValue('');
+  // An item without pieces per roll has no aid.
+  await line.getByLabel('Položka').selectOption({ label: 'Nová prázdná lahev (NEW_BOTTLE)' });
+  await expect(line.getByText(/Počet rolí/)).toHaveCount(0);
 });
 
 test('labels are applied at a labelling station into a crate; the old URLs lead there', async ({

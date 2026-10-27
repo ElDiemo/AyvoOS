@@ -276,7 +276,13 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
       [{ kind: 'PUMP', unitCode: 'roll', categoryCode: null }, 422, 'UNIT_NOT_ALLOWED'],
       [{ kind: 'PUMP', unitCode: 'kg', categoryCode: null }, 422, 'UNKNOWN_UNIT'],
       [{ kind: 'BULK_LIQUID', unitCode: 'ml', categoryCode: null }, 422, 'CATEGORY_REQUIRED'],
-      [{ kind: 'LABEL_MEDIA', unitCode: 'pcs', categoryCode: null }, 422, 'CATEGORY_REQUIRED'],
+      // A label may be the shared blank stock (no category) — but never measured otherwise.
+      [{ kind: 'LABEL_MEDIA', unitCode: 'roll', categoryCode: null }, 422, 'UNIT_NOT_ALLOWED'],
+      [
+        { kind: 'BULK_LIQUID', unitCode: 'ml', categoryCode: 'HAND_SOAP', packageCapacity: 300 },
+        422,
+        'PACKAGE_CAPACITY_NOT_ALLOWED',
+      ],
       [{ kind: 'LABEL_MEDIA', unitCode: 'pcs', categoryCode: 'NO_SUCH' }, 422, 'UNKNOWN_CATEGORY'],
       [
         { kind: 'PUMP', unitCode: 'pcs', categoryCode: null, packageCapacity: 40 },
@@ -694,6 +700,50 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
     expect(await t.prisma.auditEvent.count()).toBe(auditBefore);
   });
 
+  it('a shared blank label (no category) serves every category; a category label only its own (doc 023 §4a)', async () => {
+    const shared = await component({
+      kind: 'LABEL_MEDIA',
+      name: 'Černá prázdná etiketa',
+      lotTracked: false,
+      packageCapacity: 300,
+    });
+    expect([shared.category, shared.packageCapacity]).toEqual([null, 300]);
+    for (const category of ['HAND_SOAP', 'SHOWER_GEL']) {
+      const k = await kit(category);
+      const p = await product(category);
+      const lines = k.lines.map((l) =>
+        l.itemCode === k.label.code ? { ...l, itemCode: shared.code } : l,
+      );
+      const res = await draft(p.code, { components: lines, crateTypeCode: k.crate.code });
+      expect([category, res.status], JSON.stringify(res.body)).toEqual([category, 201]);
+      // The database accepts the activated recipe with the shared label as well.
+      const v = (res.body as { version: number }).version;
+      await activate(p.code, v, null).expect(200);
+    }
+    // A label made for one category stays refused in a recipe of another (only the label differs).
+    const soap = await kit('HAND_SOAP');
+    const gelKit = await kit('SHOWER_GEL');
+    const gel = await product('SHOWER_GEL');
+    const refused = await draft(gel.code, {
+      components: gelKit.lines.map((l) =>
+        l.itemCode === gelKit.label.code ? { ...l, itemCode: soap.label.code } : l,
+      ),
+      crateTypeCode: gelKit.crate.code,
+    });
+    expect([refused.status, refused.body.code]).toEqual([422, 'COMPONENT_CATEGORY_MISMATCH']);
+    // The warehouse sees pieces per roll for the label only — stock stays in pcs.
+    const items = (await as(admin).get('/api/admin/inventory/items').expect(200)).body as {
+      code: string;
+      unit: { code: string };
+      piecesPerRoll: number | null;
+    }[];
+    expect(items.find((i) => i.code === shared.code)).toMatchObject({
+      unit: { code: 'pcs' },
+      piecesPerRoll: 300,
+    });
+    expect(items.find((i) => i.code === soap.label.code)!.piecesPerRoll).toBeNull();
+  });
+
   it('an item archived after drafting blocks the activation', async () => {
     const k = await kit();
     const p = await product();
@@ -991,7 +1041,7 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
       );
     });
 
-    it('a liquid or label names its category; only packaging has a capacity', async () => {
+    it('a liquid names its category; a label may not (shared stock); only packaging and labels have a capacity', async () => {
       const liquid = await t.prisma.inventoryItem.create({
         data: {
           code: `RAW-LIQ-${sfx()}`,
@@ -1029,8 +1079,26 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
             operationRequestId: op,
           },
         }),
-        /only packaging/,
+        /only packaging and labels/,
       );
+      // The shared blank label: no category, pieces per roll as an entry aid.
+      const label = await t.prisma.inventoryItem.create({
+        data: {
+          code: `RAW-LABEL-${sfx()}`,
+          name: 'raw',
+          kind: 'LABEL_MEDIA',
+          baseUnit: { connect: { code: 'pcs' } },
+          lotTracking: 'NONE',
+        },
+      });
+      await t.prisma.catalogComponent.create({
+        data: {
+          itemId: label.id,
+          packageCapacity: 300,
+          createdBy: adminId,
+          operationRequestId: op,
+        },
+      });
       await rejects(
         t.prisma.crateType.create({
           data: {

@@ -177,6 +177,18 @@ export class CatalogService {
    * its catalogue profile. Liquids and labels name the product category they are made for; only
    * packaging has a capacity, which may stay unknown (null).
    */
+  /**
+   * Pieces per roll of label components (doc 023 §4a): an entry aid for receipts only — stock and
+   * receipts stay in pcs. Only labels that state it; never a conversion.
+   */
+  async piecesPerRoll(): Promise<Map<string, number>> {
+    const rows = await this.prisma.catalogComponent.findMany({
+      where: { packageCapacity: { not: null }, item: { kind: 'LABEL_MEDIA' } },
+      select: { itemId: true, packageCapacity: true },
+    });
+    return new Map(rows.map((r) => [r.itemId, r.packageCapacity!]));
+  }
+
   async createComponent(actorId: string, input: CreateComponentRequest): Promise<CatalogComponent> {
     const { result } = await this.operations.run(
       'CATALOG_COMPONENT_CREATE',
@@ -194,11 +206,12 @@ export class CatalogService {
               : 'This component is counted in pieces (pcs)',
           );
         }
-        if (input.categoryCode === null && ['BULK_LIQUID', 'LABEL_MEDIA'].includes(input.kind)) {
+        // A label without a category is the shared blank label stock (doc 023 §4a).
+        if (input.categoryCode === null && input.kind === 'BULK_LIQUID') {
           throw domainError(
             422,
             'CATEGORY_REQUIRED',
-            'A liquid or a label names the product category it is made for',
+            'A liquid names the product category it is made for',
           );
         }
         if (input.kind === 'NEW_BOTTLE' && !input.lotTracked) {
@@ -208,7 +221,7 @@ export class CatalogService {
             'A bottle body must be lot-tracked (it is consumed from a chosen lot)',
           );
         }
-        if (input.packageCapacity !== null && input.kind !== 'PACKAGING') {
+        if (input.packageCapacity !== null && !['PACKAGING', 'LABEL_MEDIA'].includes(input.kind)) {
           throw domainError(
             422,
             'PACKAGE_CAPACITY_NOT_ALLOWED',
