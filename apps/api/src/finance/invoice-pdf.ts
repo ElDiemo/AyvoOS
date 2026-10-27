@@ -154,8 +154,19 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
     doc.registerFont('bold', `${FONT_DIR}NotoSans-Bold.ttf`);
 
     const width = A4.width - 2 * MARGIN;
+    const bottom = A4.height - MARGIN;
+    // pdfkit keeps the text state (font, size, colour, position) outside the graphics state.
+    const state = doc as unknown as {
+      _font: unknown;
+      _fontSize: number;
+      _fillColor: [string, number?] | undefined;
+    };
     const testMark = () => {
       if (s.environment !== 'TEST') return;
+      // Drawn on every page and then the text state restored exactly: a page break never carries
+      // the mark's font, size or colour into the invoice text (review BILL86-R4).
+      const { x, y } = doc;
+      const [font, size, fill] = [state._font, state._fontSize, state._fillColor];
       doc.save();
       doc.rotate(-35, { origin: [A4.width / 2, A4.height / 2] });
       doc.font('bold').fontSize(46).fillColor('#d0d0d0').fillOpacity(0.6);
@@ -163,6 +174,16 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       doc.text('NEPLATNÝ', 0, A4.height / 2, { width: A4.width, align: 'center' });
       doc.restore();
       doc.fillOpacity(1);
+      state._font = font;
+      doc.fontSize(size).fillColor(fill?.[0] ?? '#000000', fill?.[1] ?? 1);
+      doc.x = x;
+      doc.y = y;
+    };
+    /** Starts a new page unless `height` still fits above the bottom margin. */
+    const ensure = (height: number) => {
+      if (doc.y + height <= bottom) return false;
+      doc.addPage();
+      return true;
     };
     doc.on('pageAdded', testMark);
     testMark();
@@ -244,29 +265,40 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       { title: 'Cena za jednotku', w: 110, align: 'right' as const },
       { title: `Celkem ${s.totals.currency}`, w: 110, align: 'right' as const },
     ];
-    const row = (cells: string[], font: 'regular' | 'bold') => {
+    // A row is never split over two pages; a new page repeats the column titles.
+    const row = (cells: string[], font: 'regular' | 'bold'): boolean => {
+      doc.font(font).fontSize(10);
+      const height = Math.max(
+        ...cells.map((cell, i) => doc.heightOfString(cell, { width: cols[i]!.w - 6 })),
+      );
+      const broke = ensure(height + 4);
       const y = doc.y;
       let x = MARGIN;
-      let bottom = y;
+      let end = y;
       doc.font(font).fontSize(10).fillColor('#000000');
       cells.forEach((cell, i) => {
         doc.text(cell, x, y, { width: cols[i]!.w - 6, align: cols[i]!.align });
-        bottom = Math.max(bottom, doc.y);
+        end = Math.max(end, doc.y);
         x += cols[i]!.w;
       });
-      doc.y = bottom + 4;
+      doc.y = end + 4;
+      return broke;
     };
-    row(
-      cols.map((h) => h.title),
-      'bold',
-    );
-    doc
-      .moveTo(MARGIN, doc.y)
-      .lineTo(MARGIN + width, doc.y)
-      .strokeColor('#999999')
-      .stroke();
-    doc.y += 4;
-    for (const l of s.lines)
+    const titles = () => {
+      row(
+        cols.map((h) => h.title),
+        'bold',
+      );
+      doc
+        .moveTo(MARGIN, doc.y)
+        .lineTo(MARGIN + width, doc.y)
+        .strokeColor('#999999')
+        .stroke();
+      doc.y += 4;
+    };
+    titles();
+    for (const l of s.lines) {
+      if (ensure(14 * 3)) titles(); // titles + at least one line on a new page
       row(
         [
           l.description,
@@ -276,13 +308,16 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
         ],
         'regular',
       );
+    }
     doc
       .moveTo(MARGIN, doc.y)
       .lineTo(MARGIN + width, doc.y)
       .stroke();
     doc.y += 6;
 
-    // Totals
+    // Totals (kept together)
+    doc.font('regular').fontSize(9);
+    ensure(3 * 16 + (s.vatNote ? doc.heightOfString(s.vatNote, { width }) + 8 : 0) + 18);
     const total = (label: string, value: string, bold = false) => {
       const y = doc.y;
       doc.font(bold ? 'bold' : 'regular').fontSize(bold ? 12 : 10);
@@ -301,8 +336,10 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
     }
     doc.moveDown(1.5);
 
-    // Payment
+    // Payment: the whole block — details and the QR with its caption — on one page, above the
+    // bottom margin (review BILL86-R4).
     const p = s.payment;
+    ensure(Math.max(20 + 6 * 14, 142 + 12));
     const payTop = doc.y;
     doc.font('bold').fontSize(11).fillColor('#000000').text('Platební údaje', MARGIN, payTop);
     doc.font('regular').fontSize(10);

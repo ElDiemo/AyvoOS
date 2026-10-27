@@ -9,7 +9,7 @@ import {
   type InvoicePdfSnapshot,
 } from '../src/finance/invoice-pdf.js';
 import { spayd, InvalidPaymentInstruction, type PaymentInstruction } from '../src/finance/spayd.js';
-import { decodeQrOnPage, openPdf, pageText } from './support/pdf-inspect.js';
+import { decodeQrOnPage, MM_PER_PT, openPdf, pageText } from './support/pdf-inspect.js';
 
 /**
  * QR Platba and the invoice PDF (N3A-2b, doc 040 §8): the descriptor built from an invoice's own
@@ -193,6 +193,73 @@ describe('QR Platba (SPAYD) and the invoice PDF', () => {
       expect(fields['X-VS']).toBe(snapshot.payment.variableSymbol);
       expect(printed).toContain(`Variabilní symbol: ${fields['X-VS']}`);
       expect(fields.DT).toBe('20261114');
+    }
+  });
+
+  it('a long invoice over several pages (review BILL86-R4): every line whole on one page, the payment block with a readable QR on the last, text unchanged by the TEST mark', async () => {
+    for (const n of [20, 45]) {
+      const amount = (37.51 * n).toFixed(2);
+      const snapshot = invoice(
+        {
+          hotels: Array.from({ length: n }, (_, i) => ({
+            code: `HT-${String(i + 1).padStart(6, '0')}`,
+            name: `Testovací hotel ${i + 1}`,
+          })),
+          lines: Array.from({ length: n }, (_, i) => ({
+            description: `POLOZKA-${String(i + 1).padStart(2, '0')} Služba AYVO za hotel ${i + 1} — pokoje × měsíc 10/2026`,
+            quantity: '1',
+            unit: 'pok.',
+            unitPrice: '37.51',
+            amount: '37.51',
+          })),
+          totals: { base: null, vat: null, total: amount, currency: 'CZK' },
+        },
+        { amount },
+      );
+      const pdf = await openPdf(await renderInvoicePdf(snapshot));
+      expect(pdf.pageCount, `${n} lines`).toBeGreaterThan(1);
+      type Item = { text: string; page: number; y: number; size: number; font: string };
+      const items: Item[] = [];
+      const qrs: { page: number; data: string; bottomMm: number }[] = [];
+      for (let p = 1; p <= pdf.pageCount; p++) {
+        const page = await pdf.pdf.getPage(p);
+        for (const it of (await page.getTextContent()).items)
+          if ('str' in it && it.str.trim())
+            items.push({
+              text: it.str,
+              page: p,
+              y: it.transform[5] as number,
+              size: Math.hypot(it.transform[0] as number, it.transform[1] as number),
+              font: it.fontName,
+            });
+        expect(plain(await pageText(pdf, p))).toContain('NEPLATNÝ');
+        const qr = await decodeQrOnPage(pdf, p, 6);
+        if (qr) qrs.push({ page: p, data: qr.data, bottomMm: qr.symbolMm.bottom });
+      }
+      // Exactly one QR, whole and readable, above the bottom margin, on the payment page.
+      expect(qrs.map((q) => q.page)).toEqual([pdf.pageCount]);
+      expect(qrs[0]!.bottomMm).toBeLessThan(pdf.pageSizesMm[0]!.heightMm - 50 * MM_PER_PT);
+      expect(parse(qrs[0]!.data).AM).toBe(amount);
+      const last = plain(await pageText(pdf, pdf.pageCount));
+      expect(last).toContain(`Částka: ${plain(czAmount(amount))} CZK`);
+      expect(last).toContain(`Celkem k úhradě ${plain(czAmount(amount))} CZK`);
+      // The TEST mark of a new page leaves the text as it was: the heading is 11 pt like on one page.
+      const heading = items.find((i) => i.text === 'Platební údaje')!;
+      expect([heading.page, Math.round(heading.size)]).toEqual([pdf.pageCount, 11]);
+      const marks = new Set(['TESTOVACÍ DOKLAD', 'NEPLATNÝ']);
+      expect(items.filter((i) => !marks.has(i.text) && i.size > 12.5).map((i) => i.text)).toEqual([
+        `Faktura ${snapshot.number}`,
+      ]);
+      // Every line: description, unit price and amount on the same page at the same height.
+      for (let i = 1; i <= n; i++) {
+        const d = items.find((x) => x.text.startsWith(`POLOZKA-${String(i).padStart(2, '0')} `))!;
+        const rowItems = items.filter((x) => x.page === d.page && Math.abs(x.y - d.y) < 0.5);
+        expect(
+          rowItems.map((x) => plain(x.text)),
+          `line ${i}`,
+        ).toEqual(expect.arrayContaining(['1 pok.', plain(czAmount('37.51'))]));
+        expect(Math.round(d.size), `line ${i}`).toBe(10);
+      }
     }
   });
 
