@@ -437,6 +437,9 @@ enum InventoryItemKind {
   BULK_LIQUID
   PACKAGING
   COMPONENT
+  /// Consumable material outside recipes (e.g. a printer ribbon roll, owner 2026-10-27): received
+  /// and issued to consumption by hand (stock_issues), never consumed by a recipe.
+  CONSUMABLE
 }
 
 enum LotTracking {
@@ -560,6 +563,8 @@ enum InventoryMovementType {
   RECEIPT_CORRECTION
   LABEL_APPLICATION
   FILL
+  /// A manual issue of a consumable to consumption (stock_issues).
+  CONSUMPTION_ISSUE
 }
 
 /// The append-only stock ledger: the source of truth for every quantity.
@@ -936,6 +941,8 @@ enum OperationKind {
   SALES_TASK_SAVE
   SALES_PROSPECT_ARCHIVE
   SALES_IMPORT
+  /// A manual issue of a consumable to consumption (stock_issues).
+  STOCK_ISSUE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;

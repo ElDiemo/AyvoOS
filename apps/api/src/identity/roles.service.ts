@@ -1,4 +1,5 @@
 import {
+  isPermissionCode,
   permissionModule,
   type CreateRoleRequest,
   type PermissionCatalog,
@@ -40,13 +41,16 @@ export class RolesService {
 
   async permissions(): Promise<PermissionCatalog> {
     const rows = await this.prisma.permission.findMany({ orderBy: { code: 'asc' } });
-    return rows.map((p) => ({
-      code: p.code as PermissionCode,
-      description: p.description,
-      module: permissionModule(p.code as PermissionCode),
-      warehouseScoped: p.warehouseScoped,
-      securityAdmin: p.securityAdmin,
-    }));
+    // A newer database may hold codes this version does not know: never offered here.
+    return rows
+      .filter((p) => isPermissionCode(p.code))
+      .map((p) => ({
+        code: p.code as PermissionCode,
+        description: p.description,
+        module: permissionModule(p.code as PermissionCode),
+        warehouseScoped: p.warehouseScoped,
+        securityAdmin: p.securityAdmin,
+      }));
   }
 
   async catalog(): Promise<RoleCatalog> {
@@ -127,7 +131,9 @@ export class RolesService {
       const before = new Set(role.permissions.map((p) => p.permissionCode));
       const after = new Set<string>(input.permissions);
       const added = [...after].filter((p) => !before.has(p)).sort();
-      const removed = [...before].filter((p) => !after.has(p)).sort();
+      // Codes this version does not know (a newer database) are kept as they are: this version
+      // can neither show nor grant them, so it never removes them either.
+      const removed = [...before].filter((p) => isPermissionCode(p) && !after.has(p)).sort();
       if (removed.length > 0) {
         await tx.rolePermission.deleteMany({
           where: { roleCode: role.code, permissionCode: { in: removed } },
@@ -271,7 +277,7 @@ function toDto(role: RoleRecord): Role {
     description: role.description,
     system: role.isSystem,
     active: role.active,
-    permissions: role.permissions.map((p) => p.permissionCode as PermissionCode),
+    permissions: role.permissions.map((p) => p.permissionCode).filter(isPermissionCode),
     assignedUsers: role._count.grants,
     createdAt: role.createdAt.toISOString(),
     updatedAt: role.updatedAt.toISOString(),

@@ -34,6 +34,7 @@ export const inventoryItemKindSchema = z.enum([
   'BULK_LIQUID',
   'PACKAGING',
   'COMPONENT',
+  'CONSUMABLE',
 ]);
 export type InventoryItemKind = z.infer<typeof inventoryItemKindSchema>;
 
@@ -139,6 +140,7 @@ export const inventoryMovementTypeSchema = z.enum([
   'RECEIPT_CORRECTION',
   'LABEL_APPLICATION',
   'FILL',
+  'CONSUMPTION_ISSUE',
 ]);
 export type InventoryMovementType = z.infer<typeof inventoryMovementTypeSchema>;
 
