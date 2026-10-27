@@ -533,6 +533,7 @@ model InvoiceLine {
   terms     AgreementVersion @relation(fields: [agreementRevision], references: [revision], onDelete: Restrict)
 
   @@id([invoiceId, lineNo])
+  @@unique([invoiceId, agreementId])
   @@index([agreementId, periodMonth], map: "invoice_lines_agreement_idx")
   @@map("invoice_lines")
   @@schema("finance")

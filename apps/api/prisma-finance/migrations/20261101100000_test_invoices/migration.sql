@@ -62,6 +62,8 @@ CREATE TABLE "finance"."invoice_lines" (
   CHECK ("amount" = "billed_rooms" * "unit_price")
 );
 CREATE INDEX "invoice_lines_agreement_idx" ON "finance"."invoice_lines" ("agreement_id", "period_month");
+-- One line per agreement on an invoice (a hotel is billed once per invoice).
+CREATE UNIQUE INDEX "invoice_lines_invoice_id_agreement_id_key" ON "finance"."invoice_lines" ("invoice_id", "agreement_id");
 
 CREATE TABLE "finance"."invoice_cancellations" (
   "invoice_id" uuid PRIMARY KEY REFERENCES "finance"."invoices" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -77,8 +79,16 @@ CREATE TABLE "finance"."invoice_cancellations" (
 CREATE FUNCTION "finance"."invoice_lines_check"() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
+DECLARE
+  inv record;
 BEGIN
-  IF NEW."period_month" <> (SELECT "period_month" FROM "finance"."invoices" WHERE "id" = NEW."invoice_id") THEN
+  SELECT "period_month", xmin INTO inv FROM "finance"."invoices" WHERE "id" = NEW."invoice_id";
+  -- Lines are written only in the transaction that created their invoice: an issued invoice
+  -- (committed, its PDF stored) never gains a line later — for any role (review BILL86-R3).
+  IF inv.xmin::text <> (pg_current_xact_id()::text::bigint & 4294967295)::text THEN
+    RAISE EXCEPTION 'AYVO: an issued invoice gains no line' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NEW."period_month" <> inv."period_month" THEN
     RAISE EXCEPTION 'AYVO: an invoice line bills its invoice''s month' USING ERRCODE = 'check_violation';
   END IF;
   IF (SELECT "agreement_id" FROM "finance"."agreement_versions" WHERE "revision" = NEW."agreement_revision")
@@ -100,25 +110,45 @@ $$;
 CREATE TRIGGER "invoice_lines_check" BEFORE INSERT ON "finance"."invoice_lines"
   FOR EACH ROW EXECUTE FUNCTION "finance"."invoice_lines_check"();
 
--- At commit: an invoice has lines, numbered 1..n, and its total is exactly their sum.
-CREATE FUNCTION "finance"."invoices_complete"() RETURNS trigger
+-- At commit: an invoice has lines, numbered 1..n, and its total is exactly their sum — checked
+-- for the invoice and again for every line written (review BILL86-R3).
+CREATE FUNCTION "finance"."assert_invoice_complete"(p_invoice uuid) RETURNS void
   LANGUAGE plpgsql
   AS $$
 DECLARE
   n int;
   top int;
   s numeric;
+  expected numeric;
 BEGIN
+  SELECT i."total" INTO expected FROM "finance"."invoices" i WHERE i."id" = p_invoice;
   SELECT count(*), max("line_no"), sum("amount") INTO n, top, s
-    FROM "finance"."invoice_lines" WHERE "invoice_id" = NEW."id";
-  IF n = 0 OR top <> n OR s IS DISTINCT FROM NEW."total" THEN
+    FROM "finance"."invoice_lines" WHERE "invoice_id" = p_invoice;
+  IF n = 0 OR top <> n OR s IS DISTINCT FROM expected THEN
     RAISE EXCEPTION 'AYVO: an invoice has lines 1..n whose sum is its total' USING ERRCODE = 'check_violation';
   END IF;
+END
+$$;
+CREATE FUNCTION "finance"."invoices_complete"() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  PERFORM "finance"."assert_invoice_complete"(NEW."id");
   RETURN NULL;
 END
 $$;
 CREATE CONSTRAINT TRIGGER "invoices_complete" AFTER INSERT ON "finance"."invoices"
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "finance"."invoices_complete"();
+CREATE FUNCTION "finance"."invoice_lines_complete"() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  PERFORM "finance"."assert_invoice_complete"(NEW."invoice_id");
+  RETURN NULL;
+END
+$$;
+CREATE CONSTRAINT TRIGGER "invoice_lines_complete" AFTER INSERT ON "finance"."invoice_lines"
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "finance"."invoice_lines_complete"();
 
 -- Append-only, also for the schema owner.
 CREATE TRIGGER "invoices_append_only" BEFORE UPDATE OR DELETE ON "finance"."invoices"

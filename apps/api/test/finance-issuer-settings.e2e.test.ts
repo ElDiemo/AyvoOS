@@ -2,7 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { InvoiceDetail, InvoiceSummary, IssuerSettings } from '@ayvo/types';
+import type {
+  EffectiveTermsPage,
+  InvoiceDetail,
+  InvoiceSummary,
+  IssuerSettings,
+} from '@ayvo/types';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
 import { InvoicesService } from '../src/finance/invoices.service.js';
@@ -329,8 +334,38 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         .expect(201)
     ).body as { code: string; hotel: { code: string; name: string } };
   };
-  const issue = (agreementCodes: string[], month = '2026-09', requestId = randomUUID()) =>
-    f.post(`${INV}/test`).send({ requestId, month, agreementCodes });
+  /** The terms of a month as the issuing form loads them (its preview). */
+  const preview = async (month: string) =>
+    (
+      (await f.get(`${B}/agreements/effective?month=${month}`).expect(200))
+        .body as EffectiveTermsPage
+    ).items;
+  /** The lines the form sends: exactly what the preview showed (BILL86-R1). */
+  const linesOf = (items: EffectiveTermsPage['items'], codes: string[]) =>
+    codes.map((code) => {
+      const i = items.find((x) => x.agreement.code === code);
+      return {
+        agreementCode: code,
+        agreementRevision: i?.version?.revision ?? 1,
+        customerVersion: i?.customer?.version ?? 1,
+        priceListVersionId: i?.price.priceListVersionId ?? null,
+        unitPrice: i?.price.perRoomMonth ?? '0.00',
+        billedRooms: i?.version?.billedRooms ?? 1,
+      };
+    });
+  const issueLines = (
+    lines: ReturnType<typeof linesOf>,
+    month = '2026-09',
+    requestId = randomUUID(),
+  ) => f.post(`${INV}/test`).send({ requestId, month, lines });
+  /** Issues from a freshly loaded preview (what a user clicking "Vystavit" does). */
+  const issue = async (agreementCodes: string[], month = '2026-09', requestId = randomUUID()) =>
+    issueLines(linesOf(await preview(month), agreementCodes), month, requestId);
+  const expectStatus = async (r: Promise<request.Response> | request.Test, status: number) => {
+    const res = await r;
+    expect(res.status, JSON.stringify(res.body)).toBe(status);
+    return res;
+  };
 
   it('a separate TEST invoice: rooms × price, frozen snapshot, PDF with QR stored by hash; issued once', async () => {
     await ensureCzkDefault();
@@ -385,7 +420,8 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(inv.pdfSha256);
     // Repeated: the same invoice; another payload with the same id: refused.
     expect(
-      ((await issue([a.code], '2026-09', requestId).expect(201)).body as InvoiceDetail).number,
+      ((await expectStatus(issue([a.code], '2026-09', requestId), 201)).body as InvoiceDetail)
+        .number,
     ).toBe(inv.number);
     expect((await issue([a.code], '2026-10', requestId)).body.code).toBe('IDEMPOTENCY_CONFLICT');
     // A second valid invoice for the same agreement and month: refused.
@@ -409,7 +445,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
           .send({ requestId: randomUUID(), reason: 'znovu' })
       ).body.code,
     ).toBe('ALREADY_CANCELLED');
-    const next = (await issue([a.code]).expect(201)).body as InvoiceDetail;
+    const next = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
     expect(next.number).not.toBe(inv.number);
     const list = (await f.get(INV).expect(200)).body as InvoiceSummary[];
     expect(list.filter((i) => i.hotels[0]?.code === a.hotel.code).map((i) => i.status)).toEqual([
@@ -423,7 +459,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     const c = await customer();
     const h1 = await agreement(c.id, { billedRooms: 10, ownPricePerRoomMonth: '300.00' });
     const h2 = await agreement(c.id, { billedRooms: 5, ownPricePerRoomMonth: '1234.56' });
-    const inv = (await issue([h1.code, h2.code]).expect(201)).body as InvoiceDetail;
+    const inv = (await expectStatus(issue([h1.code, h2.code]), 201)).body as InvoiceDetail;
     expect(inv.lines.map((l) => [l.agreementCode, l.amount])).toEqual([
       [h1.code, '3000.00'],
       [h2.code, '6172.80'],
@@ -449,7 +485,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       expect([codes.join('+'), res.status, res.body.code]).toEqual([codes.join('+'), 422, code]);
     }
     // Nothing was written by a refusal: the fresh agreement can still be invoiced once.
-    await issue([fresh.code]).expect(201);
+    await expectStatus(issue([fresh.code]), 201);
   });
 
   it('a summary follows the payer of the month: a hotel handed over to another company is never billed to the first', async () => {
@@ -483,22 +519,172 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       })
       .expect(201);
     // September: both hotels still belong to the first company.
-    const september = (await issue([stays.code, moves.code], '2026-09').expect(201))
+    const september = (await expectStatus(issue([stays.code, moves.code], '2026-09'), 201))
       .body as InvoiceDetail;
     expect([september.customer.code, september.lines.length]).toEqual([first.code, 2]);
     // October: the moved hotel cannot join the first company's summary...
     const refused = await issue([stays.code, moves.code], '2026-10');
     expect([refused.status, refused.body.code]).toEqual([422, 'CUSTOMERS_DIFFER']);
     // ...and alone it is billed to its new payer.
-    const october = (await issue([moves.code], '2026-10').expect(201)).body as InvoiceDetail;
+    const october = (await expectStatus(issue([moves.code], '2026-10'), 201)).body as InvoiceDetail;
     expect(october.customer.code).toBe(second.code);
+  });
+
+  /** A new version of an agreement's terms (as a second user would save it). */
+  const changeTerms = async (code: string, over: Record<string, unknown>) => {
+    const d = (await f.get(`${B}/agreements/${code}`).expect(200)).body as {
+      versions: { revision: number; customer: { id: string } }[];
+    };
+    await f
+      .post(`${B}/agreements/${code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedRevision: d.versions[0]!.revision,
+        terms: {
+          effectiveFrom: '2026-01',
+          customerId: d.versions[0]!.customer.id,
+          contractNumber: null,
+          billedRooms: 12,
+          ownPricePerRoomMonth: '350.00',
+          currency: 'CZK',
+          paymentTermsDays: 14,
+          billingTiming: 'ARREARS',
+          validFrom: '2026-01-01',
+          validTo: null,
+          reason: 'Změna podmínek (test)',
+          ...over,
+        },
+      })
+      .expect(201);
+  };
+
+  it('BILL86-R1: issuing is bound to the terms the user saw — a change since is 409, nothing issued', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const seen = linesOf(await preview('2026-09'), [a.code]); // 12 × 350.00 = 4200.00 shown
+    await changeTerms(a.code, { ownPricePerRoomMonth: '999.00' });
+    const stale = await issueLines(seen);
+    expect([stale.status, stale.body.code]).toEqual([409, 'TERMS_CHANGED']);
+    expect(
+      (await f.get(INV).expect(200)).body.filter((i: InvoiceSummary) =>
+        i.hotels.some((h) => h.code === a.hotel.code),
+      ),
+    ).toEqual([]);
+    // The customer's details changed since the preview: refused as well.
+    const fresh = linesOf(await preview('2026-09'), [a.code]);
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 1,
+        customer: {
+          legalName: 'Přejmenovaná firma s.r.o.',
+          companyId: '87654321',
+          vatId: null,
+          addressLine1: 'Hotelová 7',
+          addressLine2: null,
+          postalCode: '602 00',
+          city: 'Brno',
+          countryCode: 'CZ',
+          billingEmail: 'fakturace@hotely.test',
+        },
+        reason: 'Změna názvu (test)',
+      })
+      .expect(201);
+    expect((await issueLines(fresh)).body.code).toBe('TERMS_CHANGED');
+    // Loaded again, the user sees and confirms the new amount.
+    const now = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
+    expect([now.total, now.customer.legalName]).toEqual(['11988.00', 'Přejmenovaná firma s.r.o.']);
+  });
+
+  it('BILL86-R1: terms changed between the check and the save are never issued (the issue waits for the writer)', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const a = await agreement((await customer()).id);
+    const seen = linesOf(await preview('2026-09'), [a.code]);
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    try {
+      let issuing: Promise<request.Response> | null = null;
+      // A writer holds the terms' lock (as saving a version does) and commits a new price only
+      // after the issue request has started.
+      await owner.$transaction(async (tx) => {
+        const [{ v }] = await tx.$queryRaw<[{ v: bigint }]>`
+          UPDATE finance.code_counters SET last_value = last_value + 1
+          WHERE name = 'billing_revision' RETURNING last_value AS v`;
+        await tx.$executeRaw`
+          INSERT INTO finance.agreement_versions (revision, agreement_id, effective_from, customer_id,
+            contract_number, billed_rooms, own_price_per_room_month, currency, payment_terms_days,
+            billing_timing, valid_from, valid_to, reason, recorded_by, recorded_by_name, request_id)
+          SELECT ${v}, agreement_id, effective_from, customer_id, contract_number, billed_rooms,
+            999.00, currency, payment_terms_days, billing_timing, valid_from, valid_to,
+            'Souběžná změna (test)', recorded_by, recorded_by_name, gen_random_uuid()
+          FROM finance.agreement_versions
+          WHERE revision = ${seen[0]!.agreementRevision}`;
+        issuing = issueLines(seen).then((r) => r);
+        await new Promise((r) => setTimeout(r, 500)); // the request reaches the lock and waits
+      });
+      const res = await issuing!;
+      expect([res.status, res.body.code]).toEqual([409, 'TERMS_CHANGED']);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('BILL86-R2: a repeated request returns the issued invoice even after its terms ended', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const a = await agreement((await customer()).id);
+    const requestId = randomUUID();
+    const lines = linesOf(await preview('2026-09'), [a.code]);
+    const first = (await expectStatus(issueLines(lines, '2026-09', requestId), 201))
+      .body as InvoiceDetail;
+    await changeTerms(a.code, { validTo: '2026-08-31' }); // September no longer in effect
+    const again = await expectStatus(issueLines(lines, '2026-09', requestId), 201);
+    expect((again.body as InvoiceDetail).number).toBe(first.number);
+  });
+
+  it('BILL86-R3: an issued invoice never gains a line — not even through the runtime role', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const other = await agreement(c.id);
+    const inv = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
+    const row = await f.prisma.invoice.findUniqueOrThrow({
+      where: { number: inv.number },
+      include: { lines: true },
+    });
+    const line = row.lines[0]!;
+    // The same hotel again, or another agreement at a price of 0.00: both refused after issuing.
+    await expect(f.prisma.invoiceLine.create({ data: { ...line, lineNo: 2 } })).rejects.toThrow(
+      /gains no line|Unique constraint/,
+    );
+    const otherTerms = (await preview('2026-09')).find((i) => i.agreement.code === other.code)!;
+    await expect(
+      f.prisma.invoiceLine.create({
+        data: {
+          ...line,
+          lineNo: 2,
+          agreementId: otherTerms.agreement.id,
+          agreementRevision: BigInt(otherTerms.version!.revision),
+          unitPrice: '0.00',
+          amount: '0.00',
+        },
+      }),
+    ).rejects.toThrow(/gains no line/);
+    const detail = (await f.get(`${INV}/${inv.number}`).expect(200)).body as InvoiceDetail;
+    expect([detail.total, detail.lines.map((l) => l.amount)]).toEqual(['4200.00', ['4200.00']]);
   });
 
   it('TEST invoices: append-only, only kind TEST, exact sums and one valid invoice per agreement and month — in the database', async () => {
     await ensureCzkDefault();
     const c = await customer();
     const a = await agreement(c.id);
-    const inv = (await issue([a.code]).expect(201)).body as InvoiceDetail;
+    const inv = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
     const owner = new PrismaClient({
       adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
     });
@@ -592,10 +778,13 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       { ...f.env, APP_ENV: 'production' },
     );
     await expect(
-      prod.issueTest({ requestId: randomUUID(), month: '2026-09', agreementCodes: ['BA-000001'] }, {
-        principal: { userId: randomUUID(), displayName: 'x' },
-        sessionToken: 'x',
-      } as never),
+      prod.issueTest(
+        { requestId: randomUUID(), month: '2026-09', lines: linesOf([], ['BA-000001']) },
+        {
+          principal: { userId: randomUUID(), displayName: 'x' },
+          sessionToken: 'x',
+        } as never,
+      ),
     ).rejects.toMatchObject({ response: { code: 'TEST_INVOICES_DISABLED' } });
     const real = await createFinanceTestApp({ core: { auth: 'real' } });
     try {
@@ -627,7 +816,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       await real.get(INV, cookie).expect(403);
       await real
         .post(`${INV}/test`, cookie)
-        .send({ requestId: randomUUID(), month: '2026-09', agreementCodes: ['BA-000001'] })
+        .send({ requestId: randomUUID(), month: '2026-09', lines: linesOf([], ['BA-000001']) })
         .expect(403);
     } finally {
       await real.close();

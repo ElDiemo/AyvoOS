@@ -36,11 +36,13 @@ export function TestInvoiceForm({ month: initialMonth }: { month: string }) {
   const [loading, setLoading] = useState(false);
   const attempt = useAttempt();
 
-  async function load(e?: React.FormEvent) {
+  async function load(e?: React.FormEvent, keepChoice = false) {
     e?.preventDefault();
     setLoading(true);
-    setError(null);
-    setChosen([]);
+    if (!keepChoice) {
+      setError(null);
+      setChosen([]);
+    }
     try {
       const page = await apiGet(
         `admin/finance/billing/agreements/effective?month=${month}`,
@@ -74,12 +76,26 @@ export function TestInvoiceForm({ month: initialMonth }: { month: string }) {
 
   async function issue() {
     setError(null);
-    const body = { month, agreementCodes: chosen };
+    // Exactly what the user sees: if the terms change before issuing, nothing is issued.
+    const lines = selected.map((i) => ({
+      agreementCode: i.agreement.code,
+      agreementRevision: i.version!.revision,
+      customerVersion: i.customer!.version,
+      priceListVersionId: i.price.priceListVersionId,
+      unitPrice: i.price.perRoomMonth!,
+      billedRooms: i.version!.billedRooms,
+    }));
+    const body = { month, lines };
     const r = await attempt.run(JSON.stringify(body), (requestId) =>
       apiSend('POST', 'admin/finance/invoices/test', invoiceDetailSchema, { requestId, ...body }),
     );
     if (r.ok) router.push(`/finance/invoices/${r.value.number}`);
-    else if (r.error) setError(errorText(r.error));
+    else if (r.error) {
+      setError(errorText(r.error));
+      // Changed meanwhile: show the current terms; the user decides again (never issued by itself).
+      if (r.error instanceof ClientApiError && r.error.code === 'TERMS_CHANGED')
+        await load(undefined, true);
+    }
   }
 
   return (
