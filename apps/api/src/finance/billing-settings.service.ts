@@ -158,6 +158,9 @@ export class BillingSettingsService {
         actorId: userId,
       },
       async (tx) => {
+        // Billed details change under the terms' lock: issuing (which holds it shared) sees either
+        // the old or the new version, never one committed in between (review BILL86-R1).
+        await tx.$executeRaw`SELECT 1 FROM "finance"."code_counters" WHERE "name" = 'billing_revision' FOR UPDATE`;
         const c = await tx.customer.findUnique({
           where: { code },
           include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
@@ -353,18 +356,23 @@ export class BillingSettingsService {
    * amounts: the effective version, the customer's details then, the price source, and what is
    * missing (never guessed, never skipped silently).
    */
-  async effectiveTerms(m: string, asOfIso?: string): Promise<EffectiveTermsPage> {
+  /** `db`: a transaction to read in (issuing reads the terms under its locks, doc 040 §9). */
+  async effectiveTerms(
+    m: string,
+    asOfIso?: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<EffectiveTermsPage> {
     const asOf = asOfIso ? new Date(asOfIso) : new Date();
     const start = monthStart(m);
     const end = monthEnd(m);
     const [agreements, prices, customerVersions] = await Promise.all([
-      this.prisma.billingAgreement.findMany({
+      db.billingAgreement.findMany({
         where: { createdAt: { lte: asOf } },
         orderBy: { serial: 'asc' },
         include: { versions: { include: { customer: true } } },
       }),
-      this.prisma.priceListVersion.findMany({ where: { recordedAt: { lte: asOf } } }),
-      this.prisma.customerVersion.findMany({ where: { recordedAt: { lte: asOf } } }),
+      db.priceListVersion.findMany({ where: { recordedAt: { lte: asOf } } }),
+      db.customerVersion.findMany({ where: { recordedAt: { lte: asOf } } }),
     ]);
     const items = agreements.map((a): EffectiveTerms => {
       const known = a.versions.filter((v) => v.recordedAt <= asOf);

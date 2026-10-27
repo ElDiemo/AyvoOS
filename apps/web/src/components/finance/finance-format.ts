@@ -28,3 +28,25 @@ export function fileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} kB`;
   return `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} MB`;
 }
+
+/** The exact sum of decimal amounts with at most 2 decimals ("1.5" + "2.25" → "3.75"); never a float. */
+export function sumAmounts(amounts: readonly string[]): string {
+  let cents = 0n;
+  for (const a of amounts) {
+    const negative = a.startsWith('-');
+    const [whole, fraction = ''] = a.replace('-', '').split('.');
+    const v = BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+    cents += negative ? -v : v;
+  }
+  const negative = cents < 0n;
+  const abs = negative ? -cents : cents;
+  return `${negative ? '-' : ''}${abs / 100n}.${String(abs % 100n).padStart(2, '0')}`;
+}
+
+/** Billed rooms × a price with at most 2 decimals, exactly ("350.5" × 12 → "4206.00"). */
+export function timesRooms(rooms: number, price: string): string {
+  const [whole, fraction = ''] = price.split('.');
+  const cents =
+    (BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2))) * BigInt(rooms);
+  return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
+}
