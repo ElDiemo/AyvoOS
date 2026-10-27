@@ -50,6 +50,9 @@ test.describe('Smlouvy hotelů', () => {
     await customer.locator('[name=city]').fill('Olomouc');
     await customer.locator('[name=billingEmail]').fill('fakturace@morava.test');
     await customer.getByTestId('customer-save').click();
+    // Saved: said so, the form stays open and empty for the next one.
+    await expect(customer.getByRole('status')).toHaveText('Uloženo.');
+    await expect(customer.locator('[name=legalName]')).toHaveValue('');
     await expect(page.getByTestId('billing-customers')).toContainText(
       'Hotelová skupina Morava s.r.o. (E2E)',
     );

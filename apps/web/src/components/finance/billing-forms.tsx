@@ -23,15 +23,21 @@ function useSubmit() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
   const requestId = useRef(crypto.randomUUID());
-  const fresh = () => (requestId.current = crypto.randomUUID());
+  const fresh = () => {
+    requestId.current = crypto.randomUUID();
+    setSaved(false);
+  };
   async function send(path: string, body: Record<string, unknown>, done?: (r: unknown) => void) {
     setBusy(true);
     setError(null);
+    setSaved(false);
     try {
       const r = await apiSend('POST', path, z.unknown(), { requestId: requestId.current, ...body });
       fresh();
       done?.(r);
+      setSaved(true);
       router.refresh();
     } catch (err) {
       if (err instanceof ClientApiError && err.code && t.errors[err.code]) {
@@ -42,7 +48,7 @@ function useSubmit() {
       setBusy(false);
     }
   }
-  return { busy, error, send, fresh };
+  return { busy, error, saved, send, fresh };
 }
 
 function Field({
@@ -78,12 +84,17 @@ function Field({
   );
 }
 
-function Submit({ busy, testId }: { busy: boolean; testId: string }) {
+function Submit({ busy, saved, testId }: { busy: boolean; saved: boolean; testId: string }) {
   return (
-    <div>
+    <div className="flex flex-wrap items-center gap-3">
       <button type="submit" className={buttonClass.primary} disabled={busy} data-testid={testId}>
         {busy ? t.saving : t.save}
       </button>
+      {saved && (
+        <span className="text-sm text-emerald-800" role="status">
+          {t.saved}
+        </span>
+      )}
     </div>
   );
 }
@@ -122,7 +133,7 @@ export function CustomerForm({
   ) as CustomerValues;
   const [values, setValues] = useState(initial);
   const [reason, setReason] = useState('');
-  const { busy, error, send, fresh } = useSubmit();
+  const { busy, error, saved, send, fresh } = useSubmit();
   const set = (k: keyof CustomerValues) => (v: string) => {
     setValues({ ...values, [k]: v });
     fresh();
@@ -168,7 +179,7 @@ export function CustomerForm({
         <Field name="reason" text={t.fields.reason} value={reason} onChange={setReason} required />
       )}
       {error && <ErrorNote>{error}</ErrorNote>}
-      <Submit busy={busy} testId={code ? 'customer-version-save' : 'customer-save'} />
+      <Submit busy={busy} saved={saved} testId={code ? 'customer-version-save' : 'customer-save'} />
     </form>
   );
 }
@@ -208,7 +219,7 @@ export function AgreementForm({
     validTo: current?.validTo ?? '',
     reason: '',
   });
-  const { busy, error, send, fresh } = useSubmit();
+  const { busy, error, saved, send, fresh } = useSubmit();
   const set = (k: keyof typeof v) => (x: string) => {
     setV({ ...v, [k]: x });
     fresh();
@@ -364,7 +375,11 @@ export function AgreementForm({
         />
       </div>
       {error && <ErrorNote>{error}</ErrorNote>}
-      <Submit busy={busy} testId={code ? 'agreement-version-save' : 'agreement-save'} />
+      <Submit
+        busy={busy}
+        saved={saved}
+        testId={code ? 'agreement-version-save' : 'agreement-save'}
+      />
     </form>
   );
 }
@@ -377,7 +392,7 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
     effectiveFrom: thisMonth(),
     reason: '',
   });
-  const { busy, error, send, fresh } = useSubmit();
+  const { busy, error, saved, send, fresh } = useSubmit();
   const set = (k: keyof typeof v) => (x: string) => {
     setV({ ...v, [k]: x });
     fresh();
@@ -442,7 +457,7 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
         />
       </div>
       {error && <ErrorNote>{error}</ErrorNote>}
-      <Submit busy={busy} testId="price-save" />
+      <Submit busy={busy} saved={saved} testId="price-save" />
     </form>
   );
 }
