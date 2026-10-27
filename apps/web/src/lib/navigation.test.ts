@@ -221,12 +221,14 @@ describe('AYVO OS navigation (doc 019)', () => {
     const all = finance(
       'finance:documents_read',
       'finance:billing_read',
+      'finance:invoices_read',
       'finance:bank_read',
       'finance:issuer_manage',
     )!;
     expect(all.pages.map((p) => [p.id, p.href])).toEqual([
       ['documents', '/finance/documents'],
       ['billing', '/finance/billing'],
+      ['invoices', '/finance/invoices'],
       ['exports', '/finance/exports'],
       ['bank', '/finance/bank'],
       ['issuer', '/finance/settings/company'],
@@ -234,6 +236,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(all.pages.map((p) => p.label)).toEqual([
       'Doklady',
       'Smlouvy hotelů',
+      'Faktury',
       'Export pro účetní',
       'Bankovní pohyby',
       'Naše firma a účty',
@@ -254,5 +257,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(locate('/finance/billing/agreements/BA-000001')).toMatchObject({
       page: { id: 'billing' },
     });
+    expect(locate('/finance/invoices/T2026-00001')).toMatchObject({ page: { id: 'invoices' } });
+    expect(finance('finance:invoices_read')!.href).toBe('/finance/invoices');
   });
 });

@@ -1,8 +1,16 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { IssuerSettings } from '@ayvo/types';
+import type {
+  EffectiveTermsPage,
+  InvoiceDetail,
+  InvoiceSummary,
+  IssuerSettings,
+} from '@ayvo/types';
+import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
+import { FinanceOperations } from '../src/finance/finance-operations.js';
+import { InvoicesService } from '../src/finance/invoices.service.js';
 import { PrismaClient } from '../src/generated/finance-prisma/client.js';
 import {
   createFinanceTestApp,
@@ -10,6 +18,7 @@ import {
   financeOwnerDatabaseUrl,
   type FinanceTestApp,
 } from './support/finance-app.js';
+import { createHotel } from './support/order-fixtures.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { hasDatabase } from './support/test-app.js';
 
@@ -253,6 +262,562 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         .send({ requestId: randomUUID(), expectedVersion: 0, issuer: issuer(), reason: 'x' })
         .expect(403);
       await request(real.app.getHttpServer()).get(I).expect(401);
+    } finally {
+      await real.close();
+    }
+  });
+
+  // --- TEST invoices (N3A-2b, doc 040 §9). Here, after the issuer and a CZK default account
+  // exist: the issuer is one per installation and the tests above start from none.
+
+  const B = '/api/admin/finance/billing';
+  const INV = '/api/admin/finance/invoices';
+  /** An active default CZK account (the tests above may leave the default retired). */
+  const ensureCzkDefault = async () => {
+    let s = await get();
+    const d = s.defaults.find((x) => x.currency === 'CZK');
+    const chosen = d && s.accounts.find((a) => a.code === d.accountCode);
+    if (chosen?.current.status === 'ACTIVE') return;
+    const fresh = ((await createAccount(czk()).expect(201)).body as IssuerSettings).accounts.at(
+      -1,
+    )!;
+    s = (await setDefault('CZK', fresh.code, d?.revision ?? null).expect(201))
+      .body as IssuerSettings;
+  };
+  const customer = async () =>
+    (
+      await f
+        .post(`${B}/customers`)
+        .send({
+          requestId: randomUUID(),
+          customer: {
+            legalName: `Testovací hotely ${randomUUID().slice(0, 6)} s.r.o.`,
+            companyId: '87654321',
+            vatId: null,
+            addressLine1: 'Hotelová 7',
+            addressLine2: null,
+            postalCode: '602 00',
+            city: 'Brno',
+            countryCode: 'CZ',
+            billingEmail: 'fakturace@hotely.test',
+          },
+        })
+        .expect(201)
+    ).body as { id: string; code: string };
+  const agreement = async (customerId: string, over: Record<string, unknown> = {}) => {
+    const h = await createHotel(f.core);
+    const { id } = await f.core.prisma.hotel.findUniqueOrThrow({
+      where: { code: h.code },
+      select: { id: true },
+    });
+    return (
+      await f
+        .post(`${B}/agreements`)
+        .send({
+          requestId: randomUUID(),
+          hotelId: id,
+          terms: {
+            effectiveFrom: '2026-01',
+            customerId,
+            contractNumber: null,
+            billedRooms: 12,
+            ownPricePerRoomMonth: '350.00',
+            currency: 'CZK',
+            paymentTermsDays: 14,
+            billingTiming: 'ARREARS',
+            validFrom: '2026-01-01',
+            validTo: null,
+            reason: 'Smlouva (syntetická)',
+            ...over,
+          },
+        })
+        .expect(201)
+    ).body as { code: string; hotel: { code: string; name: string } };
+  };
+  /** The terms of a month as the issuing form loads them (its preview). */
+  const preview = async (month: string) =>
+    (
+      (await f.get(`${B}/agreements/effective?month=${month}`).expect(200))
+        .body as EffectiveTermsPage
+    ).items;
+  /** The lines the form sends: exactly what the preview showed (BILL86-R1). */
+  const linesOf = (items: EffectiveTermsPage['items'], codes: string[]) =>
+    codes.map((code) => {
+      const i = items.find((x) => x.agreement.code === code);
+      return {
+        agreementCode: code,
+        agreementRevision: i?.version?.revision ?? 1,
+        customerVersion: i?.customer?.version ?? 1,
+        priceListVersionId: i?.price.priceListVersionId ?? null,
+        unitPrice: i?.price.perRoomMonth ?? '0.00',
+        billedRooms: i?.version?.billedRooms ?? 1,
+      };
+    });
+  const issueLines = (
+    lines: ReturnType<typeof linesOf>,
+    month = '2026-09',
+    requestId = randomUUID(),
+  ) => f.post(`${INV}/test`).send({ requestId, month, lines });
+  /** Issues from a freshly loaded preview (what a user clicking "Vystavit" does). */
+  const issue = async (agreementCodes: string[], month = '2026-09', requestId = randomUUID()) =>
+    issueLines(linesOf(await preview(month), agreementCodes), month, requestId);
+  const expectStatus = async (r: Promise<request.Response> | request.Test, status: number) => {
+    const res = await r;
+    expect(res.status, JSON.stringify(res.body)).toBe(status);
+    return res;
+  };
+
+  it('a separate TEST invoice: rooms × price, frozen snapshot, PDF with QR stored by hash; issued once', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const requestId = randomUUID();
+    const res = await issue([a.code], '2026-09', requestId);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const inv = res.body as InvoiceDetail;
+    const year = inv.issuedOn.slice(0, 4);
+    expect(inv.number).toMatch(new RegExp(`^T${year}-\\d{5}$`));
+    expect(inv.variableSymbol).toBe(`99${year}${inv.number.slice(-4)}`);
+    expect(inv).toMatchObject({
+      kind: 'TEST',
+      status: 'VALID',
+      period: '2026-09',
+      currency: 'CZK',
+      total: '4200.00',
+      customer: { code: c.code },
+      hotels: [{ code: a.hotel.code, name: a.hotel.name }],
+      lines: [
+        {
+          lineNo: 1,
+          agreementCode: a.code,
+          billedRooms: 12,
+          unitPrice: '350.00',
+          amount: '4200.00',
+        },
+      ],
+      payment: {
+        amount: '4200.00',
+        currency: 'CZK',
+        variableSymbol: inv.variableSymbol,
+        dueOn: inv.dueOn,
+      },
+    });
+    const due = new Date(`${inv.issuedOn}T00:00:00Z`);
+    due.setUTCDate(due.getUTCDate() + 14);
+    expect(inv.dueOn).toBe(due.toISOString().slice(0, 10));
+    // The PDF exactly as stored: a PDF whose hash is the one recorded.
+    const pdf = await f
+      .get(`${INV}/${inv.number}/pdf`)
+      .buffer(true)
+      .parse((r, cb) => {
+        const parts: Buffer[] = [];
+        r.on('data', (d: Buffer) => parts.push(d));
+        r.on('end', () => cb(null, Buffer.concat(parts)));
+      })
+      .expect(200);
+    const bytes = pdf.body as Buffer;
+    expect(bytes.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(inv.pdfSha256);
+    // Repeated: the same invoice; another payload with the same id: refused.
+    expect(
+      ((await expectStatus(issue([a.code], '2026-09', requestId), 201)).body as InvoiceDetail)
+        .number,
+    ).toBe(inv.number);
+    expect((await issue([a.code], '2026-10', requestId)).body.code).toBe('IDEMPOTENCY_CONFLICT');
+    // A second valid invoice for the same agreement and month: refused.
+    const again = await issue([a.code]);
+    expect([again.status, again.body.code]).toEqual([409, 'ALREADY_INVOICED']);
+    // Cancelled with a reason (a separate record): then the month may be invoiced again.
+    const cancelled = (
+      await f
+        .post(`${INV}/${inv.number}/cancel`)
+        .send({ requestId: randomUUID(), reason: 'Chybný počet pokojů (test)' })
+        .expect(200)
+    ).body as InvoiceDetail;
+    expect(cancelled).toMatchObject({
+      status: 'CANCELLED',
+      cancellation: { reason: 'Chybný počet pokojů (test)' },
+    });
+    expect(
+      (
+        await f
+          .post(`${INV}/${inv.number}/cancel`)
+          .send({ requestId: randomUUID(), reason: 'znovu' })
+      ).body.code,
+    ).toBe('ALREADY_CANCELLED');
+    const next = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
+    expect(next.number).not.toBe(inv.number);
+    const list = (await f.get(INV).expect(200)).body as InvoiceSummary[];
+    expect(list.filter((i) => i.hotels[0]?.code === a.hotel.code).map((i) => i.status)).toEqual([
+      'VALID',
+      'CANCELLED',
+    ]);
+  });
+
+  it('a summary TEST invoice of one customer: a line per hotel, exact sum; never two customers, currencies or terms', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const h1 = await agreement(c.id, { billedRooms: 10, ownPricePerRoomMonth: '300.00' });
+    const h2 = await agreement(c.id, { billedRooms: 5, ownPricePerRoomMonth: '1234.56' });
+    const inv = (await expectStatus(issue([h1.code, h2.code]), 201)).body as InvoiceDetail;
+    expect(inv.lines.map((l) => [l.agreementCode, l.amount])).toEqual([
+      [h1.code, '3000.00'],
+      [h2.code, '6172.80'],
+    ]);
+    expect([inv.total, inv.hotels.length]).toEqual(['9172.80', 2]);
+
+    const other = await customer();
+    const foreign = await agreement(other.id);
+    const eur = await agreement(c.id, { currency: 'EUR', ownPricePerRoomMonth: '20.00' });
+    const longer = await agreement(c.id, { paymentTermsDays: 30 });
+    const partial = await agreement(c.id, { validFrom: '2026-09-15' });
+    const noPrice = await agreement(c.id, { currency: 'XQZ', ownPricePerRoomMonth: null });
+    const fresh = await agreement(c.id);
+    for (const [codes, code] of [
+      [[fresh.code, foreign.code], 'CUSTOMERS_DIFFER'],
+      [[fresh.code, eur.code], 'CURRENCIES_DIFFER'],
+      [[fresh.code, longer.code], 'PAYMENT_TERMS_DIFFER'],
+      [[partial.code], 'TERMS_INCOMPLETE'],
+      [[noPrice.code], 'TERMS_INCOMPLETE'],
+      [['BA-999999'], 'AGREEMENT_NOT_FOUND'],
+    ] as const) {
+      const res = await issue([...codes]);
+      expect([codes.join('+'), res.status, res.body.code]).toEqual([codes.join('+'), 422, code]);
+    }
+    // Nothing was written by a refusal: the fresh agreement can still be invoiced once.
+    await expectStatus(issue([fresh.code]), 201);
+  });
+
+  it('a summary follows the payer of the month: a hotel handed over to another company is never billed to the first', async () => {
+    await ensureCzkDefault();
+    const first = await customer();
+    const second = await customer();
+    const stays = await agreement(first.id);
+    const moves = await agreement(first.id);
+    // From October the second hotel is paid by another company (a new version of its terms).
+    const detail = (await f.get(`${B}/agreements/${moves.code}`).expect(200)).body as {
+      versions: { revision: number }[];
+    };
+    await f
+      .post(`${B}/agreements/${moves.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedRevision: detail.versions[0]!.revision,
+        terms: {
+          effectiveFrom: '2026-10',
+          customerId: second.id,
+          contractNumber: null,
+          billedRooms: 12,
+          ownPricePerRoomMonth: '350.00',
+          currency: 'CZK',
+          paymentTermsDays: 14,
+          billingTiming: 'ARREARS',
+          validFrom: '2026-01-01',
+          validTo: null,
+          reason: 'Hotel převzala jiná firma (syntetické)',
+        },
+      })
+      .expect(201);
+    // September: both hotels still belong to the first company.
+    const september = (await expectStatus(issue([stays.code, moves.code], '2026-09'), 201))
+      .body as InvoiceDetail;
+    expect([september.customer.code, september.lines.length]).toEqual([first.code, 2]);
+    // October: the moved hotel cannot join the first company's summary...
+    const refused = await issue([stays.code, moves.code], '2026-10');
+    expect([refused.status, refused.body.code]).toEqual([422, 'CUSTOMERS_DIFFER']);
+    // ...and alone it is billed to its new payer.
+    const october = (await expectStatus(issue([moves.code], '2026-10'), 201)).body as InvoiceDetail;
+    expect(october.customer.code).toBe(second.code);
+  });
+
+  /** A new version of an agreement's terms (as a second user would save it). */
+  const changeTerms = async (code: string, over: Record<string, unknown>) => {
+    const d = (await f.get(`${B}/agreements/${code}`).expect(200)).body as {
+      versions: { revision: number; customer: { id: string } }[];
+    };
+    await f
+      .post(`${B}/agreements/${code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedRevision: d.versions[0]!.revision,
+        terms: {
+          effectiveFrom: '2026-01',
+          customerId: d.versions[0]!.customer.id,
+          contractNumber: null,
+          billedRooms: 12,
+          ownPricePerRoomMonth: '350.00',
+          currency: 'CZK',
+          paymentTermsDays: 14,
+          billingTiming: 'ARREARS',
+          validFrom: '2026-01-01',
+          validTo: null,
+          reason: 'Změna podmínek (test)',
+          ...over,
+        },
+      })
+      .expect(201);
+  };
+
+  it('BILL86-R1: issuing is bound to the terms the user saw — a change since is 409, nothing issued', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const seen = linesOf(await preview('2026-09'), [a.code]); // 12 × 350.00 = 4200.00 shown
+    await changeTerms(a.code, { ownPricePerRoomMonth: '999.00' });
+    const stale = await issueLines(seen);
+    expect([stale.status, stale.body.code]).toEqual([409, 'TERMS_CHANGED']);
+    expect(
+      (await f.get(INV).expect(200)).body.filter((i: InvoiceSummary) =>
+        i.hotels.some((h) => h.code === a.hotel.code),
+      ),
+    ).toEqual([]);
+    // The customer's details changed since the preview: refused as well.
+    const fresh = linesOf(await preview('2026-09'), [a.code]);
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 1,
+        customer: {
+          legalName: 'Přejmenovaná firma s.r.o.',
+          companyId: '87654321',
+          vatId: null,
+          addressLine1: 'Hotelová 7',
+          addressLine2: null,
+          postalCode: '602 00',
+          city: 'Brno',
+          countryCode: 'CZ',
+          billingEmail: 'fakturace@hotely.test',
+        },
+        reason: 'Změna názvu (test)',
+      })
+      .expect(201);
+    expect((await issueLines(fresh)).body.code).toBe('TERMS_CHANGED');
+    // Loaded again, the user sees and confirms the new amount.
+    const now = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
+    expect([now.total, now.customer.legalName]).toEqual(['11988.00', 'Přejmenovaná firma s.r.o.']);
+  });
+
+  it('BILL86-R1: terms changed between the check and the save are never issued (the issue waits for the writer)', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const a = await agreement((await customer()).id);
+    const seen = linesOf(await preview('2026-09'), [a.code]);
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    try {
+      let issuing: Promise<request.Response> | null = null;
+      // A writer holds the terms' lock (as saving a version does) and commits a new price only
+      // after the issue request has started.
+      await owner.$transaction(async (tx) => {
+        const [{ v }] = await tx.$queryRaw<[{ v: bigint }]>`
+          UPDATE finance.code_counters SET last_value = last_value + 1
+          WHERE name = 'billing_revision' RETURNING last_value AS v`;
+        await tx.$executeRaw`
+          INSERT INTO finance.agreement_versions (revision, agreement_id, effective_from, customer_id,
+            contract_number, billed_rooms, own_price_per_room_month, currency, payment_terms_days,
+            billing_timing, valid_from, valid_to, reason, recorded_by, recorded_by_name, request_id)
+          SELECT ${v}, agreement_id, effective_from, customer_id, contract_number, billed_rooms,
+            999.00, currency, payment_terms_days, billing_timing, valid_from, valid_to,
+            'Souběžná změna (test)', recorded_by, recorded_by_name, gen_random_uuid()
+          FROM finance.agreement_versions
+          WHERE revision = ${seen[0]!.agreementRevision}`;
+        issuing = issueLines(seen).then((r) => r);
+        await new Promise((r) => setTimeout(r, 500)); // the request reaches the lock and waits
+      });
+      const res = await issuing!;
+      expect([res.status, res.body.code]).toEqual([409, 'TERMS_CHANGED']);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('BILL86-R2: a repeated request returns the issued invoice even after its terms ended', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const a = await agreement((await customer()).id);
+    const requestId = randomUUID();
+    const lines = linesOf(await preview('2026-09'), [a.code]);
+    const first = (await expectStatus(issueLines(lines, '2026-09', requestId), 201))
+      .body as InvoiceDetail;
+    await changeTerms(a.code, { validTo: '2026-08-31' }); // September no longer in effect
+    const again = await expectStatus(issueLines(lines, '2026-09', requestId), 201);
+    expect((again.body as InvoiceDetail).number).toBe(first.number);
+  });
+
+  it('BILL86-R3: an issued invoice never gains a line — not even through the runtime role', async () => {
+    if (!(await get()).current) await saveIssuer(0).expect(201);
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const other = await agreement(c.id);
+    const inv = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
+    const row = await f.prisma.invoice.findUniqueOrThrow({
+      where: { number: inv.number },
+      include: { lines: true },
+    });
+    const line = row.lines[0]!;
+    // The same hotel again, or another agreement at a price of 0.00: both refused after issuing.
+    await expect(f.prisma.invoiceLine.create({ data: { ...line, lineNo: 2 } })).rejects.toThrow(
+      /gains no line|Unique constraint/,
+    );
+    const otherTerms = (await preview('2026-09')).find((i) => i.agreement.code === other.code)!;
+    await expect(
+      f.prisma.invoiceLine.create({
+        data: {
+          ...line,
+          lineNo: 2,
+          agreementId: otherTerms.agreement.id,
+          agreementRevision: BigInt(otherTerms.version!.revision),
+          unitPrice: '0.00',
+          amount: '0.00',
+        },
+      }),
+    ).rejects.toThrow(/gains no line/);
+    const detail = (await f.get(`${INV}/${inv.number}`).expect(200)).body as InvoiceDetail;
+    expect([detail.total, detail.lines.map((l) => l.amount)]).toEqual(['4200.00', ['4200.00']]);
+  });
+
+  it('TEST invoices: append-only, only kind TEST, exact sums and one valid invoice per agreement and month — in the database', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const inv = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
+    const owner = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    try {
+      const row = await owner.invoice.findUniqueOrThrow({
+        where: { number: inv.number },
+        include: { lines: true },
+      });
+      for (const sql of [
+        `UPDATE finance.invoices SET total = 1 WHERE id = '${row.id}'`,
+        `DELETE FROM finance.invoices WHERE id = '${row.id}'`,
+        `UPDATE finance.invoice_lines SET amount = 1 WHERE invoice_id = '${row.id}'`,
+      ])
+        await expect(owner.$executeRawUnsafe(sql), sql).rejects.toThrow();
+      const copy = (over: Record<string, unknown>) => ({
+        serial: row.serial + 100000n,
+        kind: 'TEST',
+        number: `T2099-${String((Number(row.serial) % 90000) + 10000)}`,
+        variableSymbol: `98${String(row.serial).padStart(8, '0')}`,
+        customerId: row.customerId,
+        customerVersion: row.customerVersion,
+        periodMonth: row.periodMonth,
+        issuedOn: row.issuedOn,
+        dueOn: row.dueOn,
+        currency: row.currency,
+        total: row.total,
+        snapshot: {},
+        pdfStorageKey: `finance-documents/2099/01/${randomUUID()}.pdf`,
+        pdfSha256: '0'.repeat(64),
+        issuedBy: randomUUID(),
+        issuedByName: 'x',
+        requestId: randomUUID(),
+        ...over,
+      });
+      const line = (over: Record<string, unknown> = {}) => {
+        const l = row.lines[0]!;
+        return {
+          lineNo: 1,
+          agreementId: l.agreementId,
+          agreementRevision: l.agreementRevision,
+          periodMonth: l.periodMonth,
+          hotelId: l.hotelId,
+          hotelCode: l.hotelCode,
+          hotelName: l.hotelName,
+          billedRooms: l.billedRooms,
+          unitPrice: l.unitPrice,
+          amount: l.amount,
+          ...over,
+        };
+      };
+      // Only TEST exists.
+      await expect(
+        owner.invoice.create({ data: { ...copy({ kind: 'LIVE' }), lines: { create: [line()] } } }),
+      ).rejects.toThrow();
+      // A second valid invoice of the same agreement and month.
+      await expect(
+        owner.invoice.create({ data: { ...copy({}), lines: { create: [line()] } } }),
+      ).rejects.toThrow(/already has a valid invoice/);
+      // A line that is not rooms × price; a total that is not the sum; an invoice without lines.
+      const later = new Date('2030-01-01T00:00:00Z');
+      await expect(
+        owner.invoice.create({
+          data: {
+            ...copy({ periodMonth: later }),
+            lines: { create: [line({ periodMonth: later, amount: '1.00' })] },
+          },
+        }),
+      ).rejects.toThrow();
+      await expect(
+        owner.invoice.create({
+          data: {
+            ...copy({ periodMonth: later, total: '1.00' }),
+            lines: { create: [line({ periodMonth: later })] },
+          },
+        }),
+      ).rejects.toThrow(/sum is its total/);
+      await expect(owner.invoice.create({ data: copy({ periodMonth: later }) })).rejects.toThrow(
+        /sum is its total/,
+      );
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('TEST invoices: never in production; ADMIN only', async () => {
+    const prod = new InvoicesService(
+      f.prisma,
+      f.app.get(FinanceOperations),
+      f.app.get(BillingSettingsService),
+      f.storage,
+      { ...f.env, APP_ENV: 'production' },
+    );
+    await expect(
+      prod.issueTest(
+        { requestId: randomUUID(), month: '2026-09', lines: linesOf([], ['BA-000001']) },
+        {
+          principal: { userId: randomUUID(), displayName: 'x' },
+          sessionToken: 'x',
+        } as never,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'TEST_INVOICES_DISABLED' } });
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      for (const code of ['finance:invoices_read', 'finance:invoices_test']) {
+        const grants = await real.core.prisma.rolePermission.findMany({
+          where: { permissionCode: code },
+          select: { roleCode: true },
+        });
+        expect([code, grants.map((g) => g.roleCode)]).toEqual([code, ['ADMIN']]);
+      }
+      const roleCode = `FINI_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Billing (test)', description: 'test' },
+      });
+      await real.core.prisma.rolePermission.createMany({
+        data: ['finance:billing_read', 'finance:billing_manage'].map((permissionCode) => ({
+          roleCode,
+          permissionCode,
+        })),
+      });
+      const user = await prepareInvitedUser(real.core, {
+        email: `invoices-${randomUUID()}@ayvo.test`,
+        displayName: 'Bez faktur',
+      });
+      await real.core.prisma.userRole.create({
+        data: { userId: user.id, roleCode, grantReason: 'test: no invoices' },
+      });
+      const cookie = await sessionCookie(real.core, user.email);
+      await real.get(INV, cookie).expect(403);
+      await real
+        .post(`${INV}/test`, cookie)
+        .send({ requestId: randomUUID(), month: '2026-09', lines: linesOf([], ['BA-000001']) })
+        .expect(403);
     } finally {
       await real.close();
     }
