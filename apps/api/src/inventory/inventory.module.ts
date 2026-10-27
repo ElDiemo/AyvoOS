@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { InventoryService } from './inventory.service.js';
+import { StockIssuesService } from './stock-issues.service.js';
 
 /**
  * inventory module (doc 018): items, units, locations, lots, consumption rules, the stock ledger
@@ -7,7 +8,7 @@ import { InventoryService } from './inventory.service.js';
  * Depends on no other domain module.
  */
 @Module({
-  providers: [InventoryService],
-  exports: [InventoryService],
+  providers: [InventoryService, StockIssuesService],
+  exports: [InventoryService, StockIssuesService],
 })
 export class InventoryModule {}

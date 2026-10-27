@@ -131,6 +131,20 @@ export const warehouseCs = {
     upload: 'Nahrát doklad',
     uploading: 'Nahrávám…',
   },
+  issue: {
+    title: 'Vydat do spotřeby',
+    help: 'Ruční výdej spotřebního materiálu, např. když se do tiskárny založí nová role ribbonu. Výdej se nedá vrátit ani smazat; zaznamená se s důvodem.',
+    quantity: 'Množství',
+    lot: 'Šarže',
+    chooseLot: '– vyberte šarži –',
+    reason: 'Důvod (povinný)',
+    reasonPlaceholder: 'např. nová role do tiskárny etiket',
+    submit: 'Vydat do spotřeby',
+    submitting: 'Vydávám…',
+    done: (q: string, unit: string, after: string) =>
+      `Vydáno ${q} ${unit}. Na skladě zůstává ${after} ${unit}.`,
+    nothing: 'Na skladě nic není – vydat nelze.',
+  },
   stock: {
     title: 'Stav skladu',
     subtitle: 'Zásoby v hlavním skladu. Stav vychází výhradně z knihy skladových pohybů.',
@@ -177,6 +191,7 @@ export const warehouseCs = {
       RECEIPT_CORRECTION: 'Oprava příjmu',
       LABEL_APPLICATION: 'Nalepení etikety',
       FILL: 'Plnění',
+      CONSUMPTION_ISSUE: 'Výdej do spotřeby',
     } as Record<string, string>,
     change: 'Změna',
     balance: 'Stav po pohybu',
@@ -195,6 +210,10 @@ export const warehouseCs = {
     created: 'Dodavatel založen.',
   },
   apiErrors: {
+    STOCK_CHANGED:
+      'Stav zásoby se mezitím změnil (jiný výdej nebo příjem). Nic nebylo vydáno – zkontrolujte stav a případně vydejte znovu.',
+    NOT_CONSUMABLE: 'Ručně se vydává jen spotřební materiál.',
+    LOT_REQUIRED: 'Vyberte šarži.',
     SUPPLIER_EXISTS: 'Dodavatel s tímto názvem už existuje.',
     SUPPLIER_INACTIVE: 'Dodavatel neexistuje nebo je archivován.',
     UNSUPPORTED_DOCUMENT: 'Nahrajte doklad ve formátu PDF, JPEG nebo PNG.',

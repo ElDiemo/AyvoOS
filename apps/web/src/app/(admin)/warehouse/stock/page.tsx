@@ -3,21 +3,24 @@ import Link from 'next/link';
 import { z } from 'zod';
 import { Card, Field, FieldList } from '@/components/ui';
 import { ItemSettingsForm } from '@/components/warehouse/item-settings-form';
+import { StockIssueForm } from '@/components/warehouse/stock-issue-form';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { formatDateTimeCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
-import { siteTimeZone } from '@/lib/session';
+import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const s = warehouseCs.stock;
 
 export default async function StockPage() {
   const tz = await siteTimeZone();
-  const [stock, suppliers] = await Promise.all([
+  const [stock, suppliers, me] = await Promise.all([
     apiGet('admin/inventory/stock', stockOverviewSchema),
     apiGet('admin/suppliers', z.array(supplierSchema)),
+    currentUser(),
   ]);
+  const canIssue = hasPermission(me, 'inventory:consume');
   return (
     <>
       <WarehouseHeader
@@ -107,6 +110,15 @@ export default async function StockPage() {
                       </div>
                     )}
                   </>
+                )}
+                {entry.item.kind === 'CONSUMABLE' && canIssue && (
+                  <section className="mt-6" aria-labelledby={`issue-${entry.item.code}-title`}>
+                    <h3 id={`issue-${entry.item.code}-title`} className="mb-1 text-sm font-medium">
+                      {warehouseCs.issue.title}
+                    </h3>
+                    <p className="mb-3 text-xs text-stone-500">{warehouseCs.issue.help}</p>
+                    <StockIssueForm item={entry.item} onHand={entry.onHand} lots={entry.lots} />
+                  </section>
                 )}
                 <details className="mt-6">
                   <summary className="cursor-pointer text-sm font-medium">{s.settings}</summary>

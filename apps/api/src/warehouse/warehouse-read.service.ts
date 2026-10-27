@@ -156,6 +156,7 @@ export class WarehouseReadService {
             receiptLineNo: line?.lineNo ?? correction?.lineNo ?? null,
             correctionReason: correction?.reason ?? null,
             bottleCode: m.bottleEventId ? (bottles.get(m.bottleEventId) ?? null) : null,
+            issueReason: m.stockIssue?.reason ?? null,
           },
         };
       }),
