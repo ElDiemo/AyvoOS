@@ -16,7 +16,8 @@ import type { Server } from 'node:https';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { BankStatus, BankSyncResult, BankTransactionPage } from '@ayvo/types';
 import { loadFinanceEnv } from '../src/finance/finance-env.js';
-import { rbSimulationServer } from '../src/finance/rb-simulation.js';
+import { entryJson, RB_BASE_PATH, rbSimulationServer } from '../src/finance/rb-simulation.js';
+import { BASE_PATH as FAKE_BASE_PATH, entryJson as fakeEntryJson } from './support/fake-rb.js';
 import {
   createFinanceTestApp,
   financeDatabaseUrl,
@@ -139,6 +140,22 @@ afterAll(() => {
   // The script leaves read-only directories; make them removable.
   run('chmod', ['-R', 'u+w', tmp]);
   rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('the DEV simulation answers in the same format as the test simulation', () => {
+  it('one entry serializes identically (test/support/fake-rb.ts stays self-contained for the e2e server)', () => {
+    const e = {
+      entryReference: 'SIM-1',
+      amount: '1500.50',
+      creditDebitIndication: 'CRDT' as const,
+      bookingDate: '2026-10-27T00:00:00.000+02:00',
+      counterParty: { name: 'Plátce', accountNumber: '123', bankCode: '0100' },
+      variable: '20261027',
+      message: 'zpráva',
+    };
+    expect(entryJson(e, 'CZK')).toBe(fakeEntryJson(e, 'CZK'));
+    expect(RB_BASE_PATH).toBe(FAKE_BASE_PATH);
+  });
 });
 
 describe.skipIf(!hasOpenssl)('scripts/dev-rb-simulation-certs.sh', () => {
