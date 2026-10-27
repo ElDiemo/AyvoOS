@@ -30,6 +30,13 @@ export const billingCs = {
   save: 'Uložit',
   saving: 'Ukládám…',
   saved: 'Uloženo.',
+  // A form edited from an older version (review BILL88-R1): never saved over the newer one.
+  staleVersion:
+    'Mezitím uložil někdo jiný novější verzi. Vaše rozepsané hodnoty vycházejí ze starší verze, proto je nelze uložit. Načtěte aktuální verzi a změnu zopakujte.',
+  loadCurrent: 'Načíst aktuální verzi (rozepsané změny se zahodí)',
+  stalePrice: (price: string) =>
+    `Mezitím byla pro tento měsíc uložena cena ${price}. Zkontrolujte ji; uložením ji nahradíte svou cenou.`,
+  rebasePrice: 'Rozumím, navázat na aktuální cenu',
   fields: {
     hotel: 'Hotel',
     customer: 'Odběratel (plátce)',
@@ -56,7 +63,7 @@ export const billingCs = {
   },
   timing: { ADVANCE: 'předem', ARREARS: 'zpětně' } as Record<string, string>,
   errors: {
-    CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný – stránka se načetla znovu, uložte znovu.',
+    CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný – nic se neuložilo.',
     AGREEMENT_EXISTS: 'Tento hotel už smlouvu má.',
     CUSTOMER_NOT_FOUND: 'Zvolený odběratel neexistuje.',
     HOTEL_NOT_FOUND: 'Hotel neexistuje.',
