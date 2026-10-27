@@ -108,83 +108,115 @@ export class InvoicesService {
         'Testovací faktury v produkci nevznikají; ostré vystavení není schváleno.',
       );
     const { userId, displayName } = caller.principal;
-    const terms = await this.billing.effectiveTerms(req.month);
-    const chosen = req.agreementCodes.map((code) => {
-      const t = terms.items.find((i) => i.agreement.code === code);
-      if (!t)
-        throw domainErrorWithDetails(422, 'AGREEMENT_NOT_FOUND', 'Smlouva neexistuje.', { code });
-      if (
-        t.status !== 'IN_EFFECT' ||
-        t.gaps.length > 0 ||
-        !t.version ||
-        !t.customer ||
-        t.price.perRoomMonth === null
-      )
-        throw domainErrorWithDetails(
-          422,
-          'TERMS_INCOMPLETE',
-          'Smlouva nemá pro tento měsíc úplné podmínky – nic se nedopočítává.',
-          { code, status: t.status, gaps: t.gaps },
-        );
-      return { ...t, version: t.version, customer: t.customer, price: t.price.perRoomMonth };
-    });
-    const first = chosen[0]!;
-    const differ = (what: string, code: string) =>
-      domainErrorWithDetails(
-        422,
-        code,
-        `Jedna faktura má jednoho odběratele, jednu měnu a jednu splatnost (${what}).`,
-        {},
-      );
-    if (chosen.some((c) => c.customer.id !== first.customer.id))
-      throw differ('odběratel', 'CUSTOMERS_DIFFER');
-    if (chosen.some((c) => c.version.currency !== first.version.currency))
-      throw differ('měna', 'CURRENCIES_DIFFER');
-    if (chosen.some((c) => c.version.paymentTermsDays !== first.version.paymentTermsDays))
-      throw differ('splatnost', 'PAYMENT_TERMS_DIFFER');
-    const currency = first.version.currency;
-
-    const [issuer, defaults] = await Promise.all([
-      this.prisma.issuerVersion.findFirst({ orderBy: { version: 'desc' } }),
-      this.prisma.issuerDefaultAccount.findFirst({
-        where: { currency },
-        orderBy: { revision: 'desc' },
-        include: { account: { include: { versions: { orderBy: { version: 'desc' }, take: 1 } } } },
-      }),
-    ]);
-    const account = defaults?.account.versions[0];
-    if (!issuer || !account || account.status !== 'ACTIVE' || account.currency !== currency)
-      throw domainErrorWithDetails(
-        422,
-        'ISSUER_NOT_READY',
-        'Chybí údaje naší firmy nebo aktivní výchozí účet pro tuto měnu (Naše firma a účty).',
-        { currency, issuer: !!issuer, account: !!account && account.status === 'ACTIVE' },
-      );
-
-    const lines = chosen.map((c, i) => {
-      const rooms = c.version.billedRooms;
-      const amount = new Prisma.Decimal(c.price).mul(rooms).toFixed(2);
-      return {
-        lineNo: i + 1,
-        agreementId: c.agreement.id,
-        agreementRevision: BigInt(c.version.revision),
-        hotel: c.agreement.hotel,
-        billedRooms: rooms,
-        unitPrice: c.price,
-        amount,
-      };
-    });
-    const total = lines.reduce((s, l) => s.plus(l.amount), new Prisma.Decimal(0)).toFixed(2);
-    const issuedOn = pragueToday();
-    const dueOn = addDays(issuedOn, first.version.paymentTermsDays);
-    const year = issuedOn.slice(0, 4);
-
     try {
       const { result } = await this.operations.run(
         'INVOICE_TEST_ISSUE',
         req.requestId,
-        { month: req.month, agreementCodes: req.agreementCodes, actorId: userId },
+        { month: req.month, lines: req.lines, actorId: userId },
         async (tx) => {
+          // Bound to what the user saw: read under the lock every writer of terms, prices and customers
+          // takes, then compared — nothing changes between this check and the commit (BILL86-R1).
+          await tx.$executeRaw`SELECT 1 FROM "finance"."code_counters" WHERE "name" = 'billing_revision' FOR SHARE`;
+          const terms = await this.billing.effectiveTerms(req.month, undefined, tx);
+          const chosen = req.lines.map((seen) => {
+            const code = seen.agreementCode;
+            const t = terms.items.find((i) => i.agreement.code === code);
+            if (!t)
+              throw domainErrorWithDetails(422, 'AGREEMENT_NOT_FOUND', 'Smlouva neexistuje.', {
+                code,
+              });
+            if (
+              t.status !== 'IN_EFFECT' ||
+              t.gaps.length > 0 ||
+              !t.version ||
+              !t.customer ||
+              t.price.perRoomMonth === null
+            )
+              throw domainErrorWithDetails(
+                422,
+                'TERMS_INCOMPLETE',
+                'Smlouva nemá pro tento měsíc úplné podmínky – nic se nedopočítává.',
+                { code, status: t.status, gaps: t.gaps },
+              );
+            if (
+              t.version.revision !== seen.agreementRevision ||
+              t.customer.version !== seen.customerVersion ||
+              t.price.perRoomMonth !== seen.unitPrice ||
+              t.price.priceListVersionId !== seen.priceListVersionId ||
+              t.version.billedRooms !== seen.billedRooms
+            )
+              throw domainErrorWithDetails(
+                409,
+                'TERMS_CHANGED',
+                'Podmínky smlouvy se od načtení změnily – načtěte smlouvy znovu a zkontrolujte částky. Nic se nevystavilo.',
+                { code },
+              );
+            return { ...t, version: t.version, customer: t.customer, price: t.price.perRoomMonth };
+          });
+          const first = chosen[0]!;
+          const differ = (what: string, code: string) =>
+            domainErrorWithDetails(
+              422,
+              code,
+              `Jedna faktura má jednoho odběratele, jednu měnu a jednu splatnost (${what}).`,
+              {},
+            );
+          if (chosen.some((c) => c.customer.id !== first.customer.id))
+            throw differ('odběratel', 'CUSTOMERS_DIFFER');
+          if (chosen.some((c) => c.version.currency !== first.version.currency))
+            throw differ('měna', 'CURRENCIES_DIFFER');
+          if (chosen.some((c) => c.version.paymentTermsDays !== first.version.paymentTermsDays))
+            throw differ('splatnost', 'PAYMENT_TERMS_DIFFER');
+          const currency = first.version.currency;
+          // The customer's newest version must be the one shown; the invoice records that version.
+          const latestCustomer = await tx.customerVersion.findFirst({
+            where: { customerId: first.customer.id },
+            orderBy: { version: 'desc' },
+            select: { version: true },
+          });
+          if (latestCustomer?.version !== first.customer.version)
+            throw domainError(
+              409,
+              'TERMS_CHANGED',
+              'Údaje odběratele se od načtení změnily – načtěte smlouvy znovu. Nic se nevystavilo.',
+            );
+
+          const [issuer, defaults] = await Promise.all([
+            tx.issuerVersion.findFirst({ orderBy: { version: 'desc' } }),
+            tx.issuerDefaultAccount.findFirst({
+              where: { currency },
+              orderBy: { revision: 'desc' },
+              include: {
+                account: { include: { versions: { orderBy: { version: 'desc' }, take: 1 } } },
+              },
+            }),
+          ]);
+          const account = defaults?.account.versions[0];
+          if (!issuer || !account || account.status !== 'ACTIVE' || account.currency !== currency)
+            throw domainErrorWithDetails(
+              422,
+              'ISSUER_NOT_READY',
+              'Chybí údaje naší firmy nebo aktivní výchozí účet pro tuto měnu (Naše firma a účty).',
+              { currency, issuer: !!issuer, account: !!account && account.status === 'ACTIVE' },
+            );
+
+          const lines = chosen.map((c, i) => {
+            const rooms = c.version.billedRooms;
+            const amount = new Prisma.Decimal(c.price).mul(rooms).toFixed(2);
+            return {
+              lineNo: i + 1,
+              agreementId: c.agreement.id,
+              agreementRevision: BigInt(c.version.revision),
+              hotel: c.agreement.hotel,
+              billedRooms: rooms,
+              unitPrice: c.price,
+              amount,
+            };
+          });
+          const total = lines.reduce((s, l) => s.plus(l.amount), new Prisma.Decimal(0)).toFixed(2);
+          const issuedOn = pragueToday();
+          const dueOn = addDays(issuedOn, first.version.paymentTermsDays);
+          const year = issuedOn.slice(0, 4);
           const serial = await allocateFinanceSerial(tx, 'invoice_test');
           if (serial > 9999n)
             throw domainError(409, 'TEST_SERIES_FULL', 'Testovací řada je vyčerpána.');

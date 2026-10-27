@@ -286,12 +286,32 @@ test.describe('Testovací faktury', () => {
         },
       }),
     );
+    // Issued from the terms as loaded (what the form sends, review BILL86-R1).
+    const shown = (
+      await json<{
+        items: {
+          agreement: { code: string };
+          version: { revision: number; billedRooms: number };
+          customer: { version: number };
+          price: { perRoomMonth: string; priceListVersionId: string | null };
+        }[];
+      }>(await request.get('/api/admin/finance/billing/agreements/effective?month=2026-09'))
+    ).items.find((i) => i.agreement.code === agreement.code)!;
     const invoice = await json<{ number: string; variableSymbol: string }>(
       await request.post('/api/admin/finance/invoices/test', {
         data: {
           requestId: crypto.randomUUID(),
           month: '2026-09',
-          agreementCodes: [agreement.code],
+          lines: [
+            {
+              agreementCode: agreement.code,
+              agreementRevision: shown.version.revision,
+              customerVersion: shown.customer.version,
+              priceListVersionId: shown.price.priceListVersionId,
+              unitPrice: shown.price.perRoomMonth,
+              billedRooms: shown.version.billedRooms,
+            },
+          ],
         },
       }),
     );

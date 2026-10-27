@@ -250,6 +250,8 @@ export const financeCs = {
       ISSUER_NOT_READY:
         'Chybí údaje naší firmy nebo výchozí účet pro tuto měnu (Naše firma a účty).',
       ALREADY_INVOICED: 'Některá smlouva už má na tento měsíc platnou testovací fakturu.',
+      TERMS_CHANGED:
+        'Podmínky se od načtení změnily. Níže jsou aktuální částky – zkontrolujte je a vystavte znovu. Nic se nevystavilo.',
       ALREADY_CANCELLED: 'Faktura už je zrušená.',
       INVOICE_NOT_CONSISTENT:
         'Faktura by nesouhlasila (částky nebo platební údaje) – nic se nevystavilo.',
