@@ -274,6 +274,10 @@ export const financeCs = {
       'Zaznamená přijaté (kreditní) pohyby, které už aplikace načetla z banky a ještě nejsou platbou. Banku nevolá.',
     loaded: (created: number, already: number, matched: number, review: number) =>
       `Nově zaznamenáno ${created}, už dříve načteno ${already} (nezapočteno znovu). Spárováno ${matched}, k posouzení ${review}.`,
+    changedAtBank: (n: number) =>
+      `Banka od zaznamenání změnila ${n} pohyb(y) – nic se nepřepsalo, zkontrolujte je.`,
+    bankChanged:
+      'Banka tento pohyb po zaznamenání změnila. Zaznamenaná platba ani přiřazení se nepřepsaly – zkontrolujte ji (postup zatím není rozhodnut).',
     empty: 'Zatím žádné platby.',
     source: { BANK: 'banka', SIMULATION: 'simulace' } as Record<string, string>,
     state: {

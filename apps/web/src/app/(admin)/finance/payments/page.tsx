@@ -87,6 +87,14 @@ export default async function PaymentsPage() {
                       <span>{t.unallocated(financeAmount(p.unallocated, p.currency))}</span>
                     )}
                   </div>
+                  {p.bankChangedSinceRecorded && (
+                    <p
+                      className="text-sm text-red-800"
+                      data-testid={`payment-${p.code}-bank-changed`}
+                    >
+                      {t.bankChanged}
+                    </p>
+                  )}
                   {p.allocations.length > 0 && (
                     <ul className="text-stone-600">
                       {p.allocations.map((a, i) => (

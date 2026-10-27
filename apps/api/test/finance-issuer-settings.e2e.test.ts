@@ -843,6 +843,44 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         state: 'UNALLOCATED',
       });
       expect((await invoiceOf(inv.number)).paymentState.state).toBe('PAID');
+      // A person may not allocate the production payment to the TEST invoice either.
+      const target = await freshInvoice();
+      const prodCode = (await byTx(prodTx)).code;
+      const manual = await f.post(`${PAY}/${prodCode}/allocations`).send({
+        requestId: randomUUID(),
+        invoiceNumber: target.number,
+        amount: '1.00',
+        reason: 'pokus o spojení ostré platby s testovací fakturou',
+      });
+      expect([manual.status, manual.body.code]).toEqual([422, 'ENVIRONMENT_MISMATCH']);
+      // The bank changes the recorded transaction later (a new version): nothing recorded or
+      // allocated is overwritten — it is reported and flagged for a person.
+      const v1 = await owner.bankTransactionVersion.findFirstOrThrow({
+        where: { transactionId: testTx, version: 1 },
+      });
+      await owner.bankTransactionVersion.create({
+        data: {
+          ...v1,
+          version: 2,
+          amount: '1.00',
+          contentSha256: 'b'.repeat(64),
+          recordedAt: undefined,
+        },
+      });
+      const changed = (
+        await f.post(`${PAY}/import-bank`).send({ requestId: randomUUID() }).expect(200)
+      ).body as PaymentLoadResult;
+      expect([changed.created, changed.changedAtBank]).toEqual([[], 1]);
+      expect(await byTx(testTx)).toMatchObject({
+        amount: '4200.00',
+        allocated: '4200.00',
+        bankChangedSinceRecorded: true,
+      });
+      expect((await invoiceOf(inv.number)).paymentState).toMatchObject({
+        state: 'PAID',
+        paid: '4200.00',
+      });
+      expect((await byTx(prodTx)).bankChangedSinceRecorded).toBe(false);
       // The database refuses what the API refuses: a production payment for a TEST invoice, more
       // than the payment or the invoice, a change of a payment.
       const prod = await owner.incomingPayment.findFirstOrThrow({ where: { sourceKey: prodTx } });
@@ -885,6 +923,42 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     } finally {
       await owner.$disconnect();
     }
+  });
+
+  it('payments: two people allocating at once never allocate a payment twice or pay an invoice twice', async () => {
+    await ensureCzkDefault();
+    const [one, two] = [await freshInvoice(), await freshInvoice()];
+    const [single, a, b] = [ref('H'), ref('I'), ref('J')];
+    await simulate([
+      { reference: single, amount: '4200.00' },
+      { reference: a, amount: '4200.00' },
+      { reference: b, amount: '4200.00' },
+    ]).expect(200);
+    const allocate = (code: string, invoiceNumber: string) =>
+      f.post(`${PAY}/${code}/allocations`).send({
+        requestId: randomUUID(),
+        invoiceNumber,
+        amount: '4200.00',
+        reason: 'souběžné přiřazení (test)',
+      });
+    // The same payment to two invoices at once: exactly one wins.
+    const p = (await payment(single)).code;
+    const same = await Promise.all([allocate(p, one.number), allocate(p, two.number)]);
+    expect(same.map((r) => r.status).sort()).toEqual([200, 422]);
+    expect(same.find((r) => r.status === 422)!.body.code).toBe('EXCEEDS_PAYMENT');
+    expect((await payment(single)).allocated).toBe('4200.00');
+    // Two payments completing the same (other) invoice at once: exactly one wins.
+    const target = (await invoiceOf(one.number)).paymentState.state === 'PAID' ? two : one;
+    const both = await Promise.all([
+      allocate((await payment(a)).code, target.number),
+      allocate((await payment(b)).code, target.number),
+    ]);
+    expect(both.map((r) => r.status).sort()).toEqual([200, 422]);
+    expect(both.find((r) => r.status === 422)!.body.code).toBe('EXCEEDS_INVOICE');
+    expect((await invoiceOf(target.number)).paymentState).toMatchObject({
+      state: 'PAID',
+      paid: '4200.00',
+    });
   });
 
   it('payments: simulation never in production; managing payments is ADMIN only', async () => {

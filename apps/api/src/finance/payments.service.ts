@@ -80,7 +80,14 @@ export class PaymentsService {
     const [payments, open] = await Promise.all([
       this.prisma.incomingPayment.findMany({
         orderBy: { serial: 'desc' },
-        include: { allocations: { include: { invoice: { select: { number: true } } } } },
+        include: {
+          allocations: { include: { invoice: { select: { number: true } } } },
+          bankTransaction: {
+            select: {
+              versions: { select: { version: true }, orderBy: { version: 'desc' }, take: 1 },
+            },
+          },
+        },
       }),
       this.prisma.invoice.findMany({
         where: { cancellation: null },
@@ -132,6 +139,9 @@ export class PaymentsService {
                     i.remaining.equals(unallocated),
                 )
                 .map((i) => i.number),
+          bankChangedSinceRecorded:
+            p.bankTransactionVersion !== null &&
+            (p.bankTransaction?.versions[0]?.version ?? 0) > p.bankTransactionVersion,
           recordedAt: p.recordedAt.toISOString(),
           recordedByName: p.recordedByName,
         };
@@ -276,14 +286,27 @@ export class PaymentsService {
   private async load(tx: Tx, entries: Entry[], caller: FinanceCaller): Promise<PaymentLoadResult> {
     // One load at a time: two loads of the same statement never both record an entry.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finance:payments-load'))`;
-    const result: PaymentLoadResult = { created: [], alreadyLoaded: 0, matched: 0, toReview: 0 };
+    const result: PaymentLoadResult = {
+      created: [],
+      alreadyLoaded: 0,
+      matched: 0,
+      toReview: 0,
+      changedAtBank: 0,
+    };
     for (const e of [...entries].sort((a, b) => a.sourceKey.localeCompare(b.sourceKey))) {
       const known = await tx.incomingPayment.findUnique({
         where: { source_sourceKey: { source: e.source, sourceKey: e.sourceKey } },
-        select: { id: true },
+        select: { id: true, bankTransactionVersion: true },
       });
       if (known) {
         result.alreadyLoaded += 1;
+        // Changed at the bank since: reported (and shown on the payment), never applied.
+        if (
+          known.bankTransactionVersion !== null &&
+          e.bankTransactionVersion !== null &&
+          e.bankTransactionVersion > known.bankTransactionVersion
+        )
+          result.changedAtBank += 1;
         continue;
       }
       const match = await this.match(tx, e);

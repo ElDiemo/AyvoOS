@@ -158,5 +158,8 @@ the bank: payments are made from what was already read, or simulated outside pro
   payment; an invoice with payments is not cancelled.
 - **Permissions:** reading with `finance:invoices_read`; recording, simulating and allocating with
   `finance:payments_manage` (ADMIN only).
-- Not covered: refunds or offsetting an overpayment, payments changed later at the bank (a newer
-  version of a recorded transaction is not applied — open), live invoices.
+- **Changed at the bank later:** a newer version of a recorded transaction is **never applied** —
+  the recorded payment and its allocations stay as they were; the import reports it
+  (`changedAtBank`) and the payment shows "Banka tento pohyb po zaznamenání změnila". **What to do
+  then is an open owner/accountant decision** (not invented).
+- Not covered: refunds or offsetting an overpayment (an open decision), live invoices.

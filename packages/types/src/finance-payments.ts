@@ -69,6 +69,11 @@ export const incomingPaymentSchema = z.object({
   /** Open invoices of the same currency whose remaining amount equals the unallocated amount —
    * a hint for a person, never applied automatically. */
   suggestions: z.array(z.string()),
+  /**
+   * BANK only: the bank changed the transaction after it was recorded (a newer version exists).
+   * Nothing is overwritten — a person checks it (what to do is not decided yet).
+   */
+  bankChangedSinceRecorded: z.boolean(),
   recordedAt: z.iso.datetime(),
   recordedByName: z.string(),
 });
@@ -115,6 +120,8 @@ export const paymentLoadResultSchema = z.object({
   alreadyLoaded: z.number().int(),
   matched: z.number().int(),
   toReview: z.number().int(),
+  /** Already recorded bank payments the bank has changed since — flagged, never overwritten. */
+  changedAtBank: z.number().int(),
 });
 export type PaymentLoadResult = z.infer<typeof paymentLoadResultSchema>;
 

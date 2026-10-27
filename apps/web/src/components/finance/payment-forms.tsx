@@ -21,7 +21,8 @@ const errorText = (e: unknown) =>
       ? e.message
       : String(e);
 const loadedText = (r: PaymentLoadResult) =>
-  t.loaded(r.created.length, r.alreadyLoaded, r.matched, r.toReview);
+  t.loaded(r.created.length, r.alreadyLoaded, r.matched, r.toReview) +
+  (r.changedAtBank > 0 ? ` ${t.changedAtBank(r.changedAtBank)}` : '');
 
 interface Row {
   reference: string;
