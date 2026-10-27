@@ -42,6 +42,28 @@ readonly SECRETS_DIR="${AYVO_DEV_SECRETS_DIR:-/opt/ayvo/secrets}"
 # The Finance process's UID (user `node` of the api image): owner of its bank connection files.
 readonly FINANCE_UID=1000
 readonly RB_SIMULATION_FILES="ca.crt client-id server.crt server.key"
+# The verification's single read of the simulation (run with node -e inside the Finance container):
+# mTLS with the mounted client certificate, the server verified against the simulation's CA for
+# the name rb-simulation; ends within 5 s whatever the server does (exit 0 = HTTP 200).
+# shellcheck disable=SC2016 # JavaScript
+readonly RB_SIMULATION_PROBE_JS='
+  const fs = require("node:fs"), https = require("node:https"), e = process.env;
+  const target = { host: "rb-simulation", port: 8443 };
+  const secret = (f) => fs.readFileSync(f, "utf8").replace(/\r?\n$/, "");
+  const [acc, cur] = e.RB_PREMIUM_ACCOUNTS.split(",")[0].split(":");
+  const day = new Date().toISOString().slice(0, 10);
+  const req = https.get({
+    ...target,
+    servername: "rb-simulation",
+    path: `/rbcz/premium/api/accounts/${acc}/${cur}/transactions?from=${day}&to=${day}&page=1`,
+    pfx: fs.readFileSync(e.RB_PREMIUM_P12_FILE),
+    passphrase: secret(e.RB_PREMIUM_P12_PASSPHRASE_FILE),
+    ca: fs.readFileSync(e.RB_PREMIUM_SIMULATION_CA_FILE),
+    headers: { "X-IBM-Client-Id": secret(e.RB_PREMIUM_CLIENT_ID_FILE) },
+    agent: false,
+    signal: AbortSignal.timeout(5000),
+  }, (r) => { r.resume(); process.exit(r.statusCode === 200 ? 0 : 6); });
+  req.on("error", (err) => process.exit(err.name === "AbortError" || err.name === "TimeoutError" ? 8 : 7));'
 # shellcheck source=lib/rb-premium-files.sh
 source "$REPO_ROOT/scripts/lib/rb-premium-files.sh"
 readonly FINANCE_VARS=(POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DEV_DOMAIN FINANCE_DB_PASSWORD
@@ -175,19 +197,7 @@ verify() {
   # One read of the simulation through the real path: mTLS with the mounted client certificate,
   # the server verified against the simulation's CA for its name. Nothing goes to a bank.
   # shellcheck disable=SC2016 # JavaScript
-  compose --profile finance exec -T finance node -e '
-    const fs = require("node:fs"), https = require("node:https"), e = process.env;
-    const [acc, cur] = e.RB_PREMIUM_ACCOUNTS.split(",")[0].split(":");
-    const day = new Date().toISOString().slice(0, 10);
-    https.get(`https://rb-simulation:8443/rbcz/premium/api/accounts/${acc}/${cur}/transactions?from=${day}&to=${day}&page=1`, {
-      pfx: fs.readFileSync(e.RB_PREMIUM_P12_FILE),
-      passphrase: fs.readFileSync(e.RB_PREMIUM_P12_PASSPHRASE_FILE, "utf8").replace(/?
-$/, ""),
-      ca: fs.readFileSync(e.RB_PREMIUM_SIMULATION_CA_FILE),
-      headers: { "X-IBM-Client-Id": fs.readFileSync(e.RB_PREMIUM_CLIENT_ID_FILE, "utf8").replace(/?
-$/, "") },
-      timeout: 5000,
-    }, (r) => { r.resume(); process.exit(r.statusCode === 200 ? 0 : 6); }).on("error", () => process.exit(7));' ||
+  compose --profile finance exec -T finance node -e "$RB_SIMULATION_PROBE_JS" ||
     die "Finance cannot read the bank simulation over mTLS (exit $?)"
   ok "bank connection: simulation, files read-only for Finance; one mTLS read of the simulation verified (no bank involved)"
 }

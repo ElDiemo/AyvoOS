@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
 import {
   chmodSync,
@@ -312,6 +312,106 @@ describe.skipIf(!hasOpenssl)(
       writeFileSync(join(rb, 'copy.p12'), 'x');
       expect(check(dir, '1234567890:CZK').stderr).toMatch(/must hold exactly/);
     });
+  },
+);
+
+describe.skipIf(!hasOpenssl)(
+  'the DEV deployment’s mTLS read of the simulation (review RB82-R1)',
+  () => {
+    /** RB_SIMULATION_PROBE_JS exactly as bash passes it to `node -e` (the script's own text). */
+    const probe = (() => {
+      const script = readFileSync(join(root, 'scripts/deploy-finance-dev.sh'), 'utf8');
+      const lines = script.split('\n');
+      const start = lines.findIndex((l) => l.startsWith("readonly RB_SIMULATION_PROBE_JS='"));
+      const end = lines.findIndex((l, i) => i > start && l.endsWith("'"));
+      const res = spawnSync(
+        'bash',
+        ['-c', `${lines.slice(start, end + 1).join('\n')}\nprintf '%s' "$RB_SIMULATION_PROBE_JS"`],
+        { encoding: 'utf8' },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      return res.stdout;
+    })();
+    const TARGET = 'const target = { host: "rb-simulation", port: 8443 };';
+    /** The script's probe, connecting to `address` instead of resolving rb-simulation. */
+    const runProbe = (address: AddressInfo, client: string, trusts = client) => {
+      expect(probe.split(TARGET)).toHaveLength(2); // exactly one place is replaced
+      const js = probe.replace(
+        TARGET,
+        `const target = { host: "127.0.0.1", port: ${address.port} };`,
+      );
+      const rb = join(client, 'rb-premium');
+      const started = Date.now();
+      // Asynchronously: the simulation answers from this same process meanwhile.
+      return new Promise<{ status: number | null; ms: number; stderr: string }>((resolve) => {
+        const child = spawn('node', ['-e', js], {
+          env: {
+            PATH: process.env.PATH,
+            RB_PREMIUM_ACCOUNTS: '1234567890:CZK',
+            RB_PREMIUM_P12_FILE: join(rb, 'certificate.p12'),
+            RB_PREMIUM_P12_PASSPHRASE_FILE: join(rb, 'p12-passphrase'),
+            RB_PREMIUM_SIMULATION_CA_FILE: join(trusts, 'rb-premium', 'simulation-ca.crt'),
+            RB_PREMIUM_CLIENT_ID_FILE: join(rb, 'client-id'),
+          },
+        });
+        let stderr = '';
+        child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+        const kill = setTimeout(() => child.kill('SIGKILL'), 20_000);
+        child.on('exit', (status) => {
+          clearTimeout(kill);
+          resolve({ status, ms: Date.now() - started, stderr });
+        });
+      });
+    };
+    const servers: Server[] = [];
+    const listen = async (server: Server) => {
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+      servers.push(server);
+      return server.address() as AddressInfo;
+    };
+    const simulation = (secrets: string) => {
+      const read = (f: string) => readFileSync(join(secrets, 'rb-simulation', f));
+      return rbSimulationServer({
+        key: read('server.key'),
+        cert: read('server.crt'),
+        ca: read('ca.crt'),
+        clientId: read('client-id').toString('utf8'),
+        accounts: ['1234567890:CZK'],
+      });
+    };
+    afterAll(async () => {
+      for (const s of servers) {
+        s.closeAllConnections();
+        await new Promise<void>((r) => s.close(() => r()));
+      }
+    });
+
+    it('is valid JavaScript — no line break inside a regular expression', () => {
+      const file = join(tmp, 'probe.js');
+      writeFileSync(file, probe);
+      const check = spawnSync('node', ['--check', file], { encoding: 'utf8' });
+      expect(check.status, check.stderr).toBe(0);
+      expect(probe).toContain('.replace(/\\r?\\n$/, "")');
+      expect(probe).not.toMatch(/\r/);
+    });
+
+    it('reads the simulation over mTLS (0); another client 6, another CA 7; a silent server ends by the 5 s timeout (8)', async () => {
+      const { dir } = certs();
+      const other = certs().dir;
+      const ok = await runProbe(await listen(simulation(dir)), dir);
+      expect(ok, ok.stderr).toMatchObject({ status: 0 });
+      // A foreign client certificate and ID: the simulation answers 401.
+      expect((await runProbe(await listen(simulation(dir)), other, dir)).status).toBe(6);
+      // A server not signed by the CA Finance trusts: refused in the handshake.
+      expect((await runProbe(await listen(simulation(other)), dir)).status).toBe(7);
+      // A server that accepts the connection and never answers: the probe gives up, never hangs.
+      const silent = simulation(dir);
+      silent.removeAllListeners('request');
+      silent.on('request', () => undefined);
+      const hung = await runProbe(await listen(silent), dir);
+      expect(hung.status).toBe(8);
+      expect(hung.ms).toBeLessThan(15_000);
+    }, 60_000);
   },
 );
 
