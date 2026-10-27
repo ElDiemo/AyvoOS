@@ -29,6 +29,7 @@ export const billingCs = {
   back: 'Smlouvy hotelů',
   save: 'Uložit',
   saving: 'Ukládám…',
+  saved: 'Uloženo.',
   fields: {
     hotel: 'Hotel',
     customer: 'Odběratel (plátce)',
