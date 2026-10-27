@@ -75,6 +75,16 @@ test.describe('Smlouvy hotelů', () => {
     const row = list.locator('li').filter({ hasText: 'Hotel Smlouva (E2E)' });
     await expect(row).toContainText('12 pokojů · 350,00 CZK (vlastní cena)');
     await expect(row).toContainText('Hotelová skupina Morava s.r.o. (E2E)');
+    // The form starts empty again (the hotel cannot be chosen twice by mistake) — or, with no
+    // hotel left without an agreement, it is replaced by that notice.
+    if ((await agreement.count()) > 0) {
+      await expect(agreement.locator('[name=billedRooms]')).toHaveValue('');
+      await expect(agreement.locator('[name=hotelId]')).toHaveValue('');
+    } else {
+      await expect(page.getByTestId('billing-agreements')).toContainText(
+        'Všechny hotely už smlouvu mají',
+      );
+    }
 
     // A new version of the terms (a reason; the history keeps both).
     await row.getByRole('link').click();
