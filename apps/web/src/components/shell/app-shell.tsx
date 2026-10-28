@@ -42,14 +42,17 @@ export function AppShell({
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
-      <aside className="sticky top-0 hidden h-screen flex-col overflow-y-auto bg-stone-950 lg:flex">
-        <SidebarContent
-          pathname={pathname}
-          modules={modules}
-          environment={environment}
-          user={user}
-        />
-      </aside>
+      {/* The column is black for the page's full height; the panel itself stays in view. */}
+      <div className="hidden bg-stone-950 lg:block">
+        <aside className="sticky top-0 flex h-screen flex-col">
+          <SidebarContent
+            pathname={pathname}
+            modules={modules}
+            environment={environment}
+            user={user}
+          />
+        </aside>
+      </div>
 
       <dialog
         ref={drawer}
@@ -149,14 +152,28 @@ function SidebarContent({
   children?: React.ReactNode;
 }) {
   const { module: active } = locate(pathname, modules);
-  const sales = modules.filter((m) => m.section === 'sales');
-  const finance = modules.filter((m) => m.section === 'finance');
+  const top = modules.filter((m) => m.section === 'sales' || m.section === 'finance');
   const operations = modules.filter((m) => m.section === 'operations');
   const administration = modules.filter((m) => m.section === 'administration');
+  const link = (m: NavModule) => (
+    <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
+      {m.label}
+    </NavLink>
+  );
+  const initials = user.user.displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join('');
   return (
     <>
-      <div className="mb-3 flex items-center justify-between gap-2 border-b border-white/10 px-5 pt-5 pb-6">
-        <Link href="/" className="flex items-baseline gap-2 text-white">
+      {/* Brand: the original wordmark, the environment marker, (drawer) the close button. */}
+      <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/10 px-5">
+        <Link
+          href="/"
+          className="flex items-center rounded-sm text-white outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+        >
           <BrandLogo inverse compact />
         </Link>
         <div className="flex items-center gap-1">
@@ -164,61 +181,77 @@ function SidebarContent({
           {children}
         </div>
       </div>
-      <nav aria-label={shellCs.mainNav} className="flex flex-col gap-1 px-3 pb-6">
-        <NavLink href="/" active={pathname === '/'} icon={ICONS.overview}>
-          {shellCs.overview}
-        </NavLink>
-        {/* Obchod (doc 034): its own block, apart from the operational modules below. */}
-        {sales.length > 0 && <div className="mt-4" />}
-        {sales.map((m) => (
-          <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
-            {m.label}
+      {/* One rhythm: rows of 40 px, groups 20 px apart; the list scrolls in a low window. */}
+      <nav
+        aria-label={shellCs.mainNav}
+        className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 py-4"
+      >
+        <NavGroup>
+          <NavLink href="/" active={pathname === '/'} icon={ICONS.overview}>
+            {shellCs.overview}
           </NavLink>
-        ))}
-        {/* Finance (doc 039): its own block, like Obchod. */}
-        {finance.length > 0 && <div className="mt-4" />}
-        {finance.map((m) => (
-          <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
-            {m.label}
-          </NavLink>
-        ))}
+          {/* Obchod (doc 034) and Finance (doc 039): company-wide, apart from the operations. */}
+          {top.map(link)}
+        </NavGroup>
         {operations.length > 0 && (
-          <p className="mt-6 mb-1 px-3 text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">
-            {shellCs.operations}
-          </p>
+          <NavGroup label={shellCs.operations}>{operations.map(link)}</NavGroup>
         )}
-        {operations.map((m) => (
-          <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
-            {m.label}
-          </NavLink>
-        ))}
         {administration.length > 0 && (
-          <p className="mt-6 mb-1 px-3 text-[11px] font-medium uppercase tracking-[0.14em] text-stone-500">
-            {identityCs.shell.administration}
-          </p>
+          <NavGroup label={identityCs.shell.administration}>{administration.map(link)}</NavGroup>
         )}
-        {administration.map((m) => (
-          <NavLink key={m.id} href={m.href} active={active?.id === m.id} icon={ICONS[m.id]}>
-            {m.label}
-          </NavLink>
-        ))}
       </nav>
-      <div className="mt-auto border-t border-white/10 px-5 py-4">
-        <p className="text-[11px] uppercase tracking-[0.14em] text-stone-500">
-          {identityCs.shell.account}
-        </p>
-        <p className="mt-1 truncate text-sm text-white">{user.user.displayName}</p>
-        <p className="truncate text-xs text-stone-400">{user.user.email}</p>
-        <p className="mt-1 text-xs text-stone-400">{user.roles.map((r) => r.name).join(', ')}</p>
-        <Link href="/account/security" className="mt-3 block text-xs text-stone-300 underline">
-          Zabezpečení účtu
-        </Link>
-        <LogoutButton className="mt-3 w-full border-white/20 bg-transparent text-stone-200 hover:bg-white/10" />
+      {/* The signed-in user: name, e-mail second; account security and sign-out always here. */}
+      <div className="shrink-0 border-t border-white/10 p-3">
+        <p className="sr-only">{identityCs.shell.account}</p>
+        <div
+          className="flex min-w-0 items-center gap-3 px-2"
+          title={user.roles.map((r) => r.name).join(', ')}
+          data-testid="sidebar-user"
+        >
+          <span
+            aria-hidden
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-stone-200"
+          >
+            {initials}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-medium text-white">
+              {user.user.displayName}
+            </span>
+            <span className="block truncate text-xs text-stone-400">{user.user.email}</span>
+          </span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Link
+            href="/account/security"
+            aria-label="Zabezpečení účtu"
+            className="flex h-8 items-center justify-center rounded-md border border-white/15 px-2 text-xs font-medium text-stone-200 transition outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-white/80"
+          >
+            Zabezpečení
+          </Link>
+          <LogoutButton className="h-8 border-white/15 bg-transparent px-2 py-0 text-xs text-stone-200 outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-white/80" />
+        </div>
       </div>
     </>
   );
 }
 
+function NavGroup({ label, children }: { label?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      {label && (
+        <p className="px-3 pb-1 text-xs font-medium tracking-wide text-stone-400">{label}</p>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * One row of the main navigation: 40 px, the same inset on both sides. The active page is a
+ * lighter grey surface with a thin light bar (never white, never the DEV yellow); hover is only a
+ * faint surface; keyboard focus a clear ring.
+ */
 function NavLink({
   href,
   active,
@@ -235,12 +268,14 @@ function NavLink({
       href={href}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium whitespace-nowrap transition',
-        active ? 'bg-white text-stone-950' : 'text-stone-300 hover:bg-white/10 hover:text-white',
+        'flex h-10 shrink-0 items-center gap-3 rounded-md px-3 text-sm font-medium whitespace-nowrap transition outline-none focus-visible:ring-2 focus-visible:ring-white/80',
+        active
+          ? 'bg-white/[0.12] text-white shadow-[inset_3px_0_0_0_var(--color-stone-200)]'
+          : 'text-stone-300 hover:bg-white/[0.06] hover:text-white',
       )}
     >
       <Icon path={icon} />
-      {children}
+      <span className="min-w-0 truncate">{children}</span>
     </Link>
   );
 }
