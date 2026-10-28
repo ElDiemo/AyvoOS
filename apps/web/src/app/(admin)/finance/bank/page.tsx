@@ -9,7 +9,7 @@ import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { BankSyncButton } from '@/components/finance/bank-sync-button';
 import { financeAmount, financeDate } from '@/components/finance/finance-format';
-import { buttonClass, Card, EmptyState, ErrorNote, inputClass, Notice } from '@/components/ui';
+import { buttonClass, Card, ErrorNote, inputClass, Notice } from '@/components/ui';
 import { bankListState } from '@/components/finance/bank-state';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { financeCs } from '@/i18n/cs/finance';
@@ -41,7 +41,9 @@ const pragueTime = (iso: string) =>
  * Bankovní pohyby (N3B-1, doc 041): the company accounts' transactions read from RB Premium API
  * (read only), the state of the connection — the certificate's readability and expiry, the last
  * success and the last failure of each account, never a secret — and, for finance:bank_sync, the
- * button to read new ones. Not paired with invoices yet (that comes with issued invoices).
+ * button to read new ones. Incoming payments are recorded and allocated in Platby a přiřazení
+ * (doc 042 — the other view of Banka a platby); this page says so and links there instead of
+ * claiming a pairing state per transaction.
  */
 export default async function BankTransactionsPage({
   searchParams,
@@ -50,6 +52,7 @@ export default async function BankTransactionsPage({
 }) {
   const me = await requirePermission('finance:bank_read');
   const canSync = hasPermission(me, 'finance:bank_sync');
+  const canPayments = hasPermission(me, 'finance:invoices_read');
   const raw = await searchParams;
   const q = bankTransactionListQuerySchema.parse({});
   for (const [key, value] of Object.entries(raw)) {
@@ -85,7 +88,7 @@ export default async function BankTransactionsPage({
 
   return (
     <>
-      <FinanceHeader active="bank" title={t.title} subtitle={t.subtitle} />
+      <FinanceHeader active="bank" view="bank" title={t.title} subtitle={t.subtitle} />
       <div className="flex flex-col gap-6">
         <Card title={t.connection} testId="bank-connection">
           {status.environment === null ? (
@@ -130,10 +133,25 @@ export default async function BankTransactionsPage({
             </div>
           )}
         </Card>
+        {canPayments && (
+          <p className="text-sm text-stone-600" data-testid="bank-to-payments">
+            {t.toPayments}{' '}
+            <Link href="/finance/payments" className="underline">
+              {t.toPaymentsLink} →
+            </Link>
+          </p>
+        )}
         {state !== 'NOT_CONNECTED' && (
           <>
-            <Card>
-              <form method="get" className="flex flex-col gap-4" data-testid="bank-filters">
+            <details
+              className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm"
+              open={filtered}
+              data-testid="bank-filters-box"
+            >
+              <summary className="cursor-pointer text-sm font-medium">
+                {filtered ? t.list.filterActive : t.list.filterOpen}
+              </summary>
+              <form method="get" className="mt-4 flex flex-col gap-4" data-testid="bank-filters">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                   <label className={filterLabel}>
                     {t.list.account}
@@ -195,16 +213,16 @@ export default async function BankTransactionsPage({
                   )}
                 </div>
               </form>
-            </Card>
+            </details>
             <Card title={t.list.total(page.total)} testId="bank-transactions">
               {page.items.length === 0 ? (
-                <EmptyState>
+                <p className="py-2 text-sm text-stone-600">
                   {state === 'FILTERED_EMPTY'
                     ? t.list.emptyFiltered
                     : canSync
                       ? t.list.emptySync
                       : t.list.empty}
-                </EmptyState>
+                </p>
               ) : (
                 <>
                   {/* A table on a computer, cards on a phone. */}
@@ -215,8 +233,7 @@ export default async function BankTransactionsPage({
                         <th className="py-2 pr-3 text-right font-medium">{t.fields.amount}</th>
                         <th className="py-2 pr-3 font-medium">{t.fields.counterparty}</th>
                         <th className="py-2 pr-3 font-medium">{t.fields.symbols}</th>
-                        <th className="py-2 pr-3 font-medium">{t.fields.message}</th>
-                        <th className="py-2 font-medium">{t.fields.processing}</th>
+                        <th className="py-2 font-medium">{t.fields.message}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-stone-100">
@@ -232,9 +249,8 @@ export default async function BankTransactionsPage({
                             <Party x={x} />
                           </td>
                           <td className="py-2 pr-3 font-mono text-xs">{symbols(x)}</td>
-                          <td className="py-2 pr-3 wrap-anywhere">{x.message ?? '—'}</td>
-                          <td className="py-2">
-                            {t.processing[x.processing]}
+                          <td className="py-2 wrap-anywhere">
+                            {x.message ?? '—'}
                             {x.version > 1 && (
                               <span className="block text-xs text-stone-500">{t.changed}</span>
                             )}
@@ -265,9 +281,9 @@ export default async function BankTransactionsPage({
                             {x.message}
                           </span>
                         )}
-                        <span className="mt-1 block text-xs text-stone-500">
-                          {t.processing[x.processing]}
-                        </span>
+                        {x.version > 1 && (
+                          <span className="mt-1 block text-xs text-stone-500">{t.changed}</span>
+                        )}
                       </li>
                     ))}
                   </ul>

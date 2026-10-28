@@ -38,6 +38,20 @@ export interface NavPage {
   setupWith?: readonly PermissionCode[];
   /** Set by visibleModules: the page is listed for reading only (no setup permission). */
   readOnly?: boolean;
+  /**
+   * Views inside the page (its tabs, doc 042): the page links to the first view the user may open
+   * and is active on all of them. Each view keeps its own URL and permission.
+   */
+  views?: readonly NavView[];
+  /** Listed apart from the work pages, at the end of the strip (a module's settings, doc 042). */
+  aside?: boolean;
+}
+
+export interface NavView {
+  id: string;
+  href: string;
+  label: string;
+  permission: PermissionCode;
 }
 
 export interface NavModule {
@@ -61,6 +75,15 @@ const h = shellCs.modules.hotels;
 const d = shellCs.modules.dispatch;
 const s = shellCs.modules.sales;
 const f = shellCs.modules.finance;
+
+/** Any of these opens Finance (its overview); each page and block checks its own. */
+export const FINANCE_PERMISSIONS = [
+  'finance:documents_read',
+  'finance:billing_read',
+  'finance:invoices_read',
+  'finance:bank_read',
+  'finance:issuer_manage',
+] as const satisfies readonly PermissionCode[];
 
 export const MODULES: readonly NavModule[] = [
   {
@@ -89,20 +112,43 @@ export const MODULES: readonly NavModule[] = [
     ],
   },
   {
-    // Finance (doc 039): company-wide, no site; received documents first (N1).
+    // Finance (doc 039–041; navigation doc 042): company-wide, no site. Five work pages, two of
+    // them with views; the settings of our company apart. Every former URL stays valid.
     id: 'finance',
     section: 'finance',
-    permissions: [
-      'finance:documents_read',
-      'finance:billing_read',
-      'finance:invoices_read',
-      'finance:bank_read',
-      'finance:issuer_manage',
-    ],
+    permissions: FINANCE_PERMISSIONS,
     label: f.label,
-    href: '/finance/documents',
+    href: '/finance',
     description: f.description,
     pages: [
+      {
+        id: 'overview',
+        href: '/finance',
+        label: f.pages.overview,
+        exact: true,
+        anyOf: FINANCE_PERMISSIONS,
+      },
+      {
+        id: 'invoices',
+        href: '/finance/invoices',
+        prefixes: ['/finance/billing'],
+        label: f.pages.invoices,
+        anyOf: ['finance:invoices_read', 'finance:billing_read'],
+        views: [
+          {
+            id: 'invoices',
+            href: '/finance/invoices',
+            label: f.views.invoices,
+            permission: 'finance:invoices_read',
+          },
+          {
+            id: 'billing',
+            href: '/finance/billing',
+            label: f.views.billing,
+            permission: 'finance:billing_read',
+          },
+        ],
+      },
       {
         id: 'documents',
         href: '/finance/documents',
@@ -110,22 +156,25 @@ export const MODULES: readonly NavModule[] = [
         permission: 'finance:documents_read',
       },
       {
-        id: 'billing',
-        href: '/finance/billing',
-        label: f.pages.billing,
-        permission: 'finance:billing_read',
-      },
-      {
-        id: 'invoices',
-        href: '/finance/invoices',
-        label: f.pages.invoices,
-        permission: 'finance:invoices_read',
-      },
-      {
-        id: 'payments',
-        href: '/finance/payments',
-        label: f.pages.payments,
-        permission: 'finance:invoices_read',
+        id: 'bank',
+        href: '/finance/bank',
+        prefixes: ['/finance/payments'],
+        label: f.pages.bank,
+        anyOf: ['finance:bank_read', 'finance:invoices_read'],
+        views: [
+          {
+            id: 'bank',
+            href: '/finance/bank',
+            label: f.views.bank,
+            permission: 'finance:bank_read',
+          },
+          {
+            id: 'payments',
+            href: '/finance/payments',
+            label: f.views.payments,
+            permission: 'finance:invoices_read',
+          },
+        ],
       },
       {
         id: 'exports',
@@ -134,16 +183,12 @@ export const MODULES: readonly NavModule[] = [
         permission: 'finance:documents_read',
       },
       {
-        id: 'bank',
-        href: '/finance/bank',
-        label: f.pages.bank,
-        permission: 'finance:bank_read',
-      },
-      {
-        id: 'issuer',
+        id: 'settings',
         href: '/finance/settings/company',
-        label: f.pages.issuer,
+        prefixes: ['/finance/settings'],
+        label: f.pages.settings,
         permission: 'finance:issuer_manage',
+        aside: true,
       },
     ],
   },
@@ -355,9 +400,9 @@ export type ProductionPageId =
   | 'setup';
 export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
 export type HotelsPageId = 'list' | 'new';
-/** Finance (doc 039–041, UI-01): one strip, each page by its own permission. */
-export type FinancePageId =
-  'documents' | 'billing' | 'invoices' | 'payments' | 'exports' | 'bank' | 'issuer';
+/** Finance (doc 042): one strip of work pages, the settings apart; views inside two pages. */
+export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'exports' | 'settings';
+export type FinanceViewId = 'invoices' | 'billing' | 'bank' | 'payments';
 export type DispatchPageId = 'orders' | 'new';
 export type SalesPageId = 'overview' | 'prospects' | 'tasks';
 
@@ -378,6 +423,11 @@ export function visibleModules(permissions: ReadonlySet<string> | readonly strin
           (!page.permission || has(page.permission)) && (!page.anyOf || page.anyOf.some(has)),
       )
       .map((page): NavPage => {
+        if (page.views) {
+          // Views the user may open; the page links to the first of them.
+          const views = page.views.filter((v) => has(v.permission));
+          page = { ...page, views, href: views[0]?.href ?? page.href };
+        }
         if (!page.setupWith || page.setupWith.some(has)) return page;
         // Readable, nothing to set up: listed under Evidence, read-only (doc 027 §2–3).
         return { ...page, group: 'records', readOnly: true };

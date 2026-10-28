@@ -61,6 +61,8 @@ export const financeCs = {
     reset: 'Zrušit filtry',
     month: 'Předávací měsíc',
     onlyIncomplete: 'Jen k doplnění',
+    moreFilters: 'Další filtry (stav, měsíc předání, období)',
+    moreFiltersActive: 'Další filtry jsou zapnuté',
     empty: 'Zatím žádné přijaté doklady.',
     emptyFiltered: 'Filtru neodpovídá žádný doklad.',
     total: (n: number) => `${n} ${n === 1 ? 'doklad' : n >= 2 && n <= 4 ? 'doklady' : 'dokladů'}`,
@@ -180,6 +182,49 @@ export const financeCs = {
     stale: 'Doklad mezitím změnil někdo jiný. Stránka se načte znovu.',
   },
   /** Bankovní pohyby (N3B-1, doc 041): read from RB Premium API, read only. */
+  overview: {
+    title: 'Přehled Financí',
+    subtitle:
+      'Co čeká na úhradu, co je potřeba doplnit a kde pokračovat. Počty počítá server ze skutečných záznamů.',
+    unavailable: 'Teď nedostupné – zkuste stránku načíst znovu.',
+    testInvoices:
+      'Faktury hotelům jsou zatím jen testovací (řada T) – ostré vystavení není schválené a nic se neodesílá.',
+    invoices: 'Faktury hotelům',
+    open: (currency: string) => `K úhradě (${currency})`,
+    overdue: (currency: string) => `Po splatnosti (${currency})`,
+    openNone: 'K úhradě',
+    count: (n: number) => `${n} ${n === 1 ? 'faktura' : n >= 2 && n <= 4 ? 'faktury' : 'faktur'}`,
+    remaining: (amount: string) => `zbývá ${amount}`,
+    toInvoices: 'Faktury',
+    payments: 'Platby',
+    toReview: 'K posouzení',
+    toPayments: 'Platby a přiřazení',
+    documents: 'Přijaté doklady',
+    incomplete: 'K doplnění',
+    toDocuments: 'Přijaté doklady',
+    bank: 'Banka',
+    bankNotConnected: 'Banka není připojena.',
+    bankLast: (account: string, day: string) => `${account}: naposledy načteno ${day}`,
+    bankNever: (account: string) => `${account}: zatím nenačteno`,
+    toBank: 'Pohyby z banky',
+    nextSteps: 'Další kroky',
+    nextStepsHelp:
+      'Pořadí, ve kterém se fakturace nastavuje. Nic se nezakládá samo a nic z toho neblokuje ostatní práci.',
+    done: 'hotovo',
+    todo: 'zbývá',
+    steps: {
+      issuer: 'Naše firma a výchozí účet',
+      customer: 'Odběratel (firma, které se fakturuje)',
+      agreement: 'Smlouva hotelu',
+      invoice: 'Náhled a testovací faktura',
+    },
+    stepLinks: {
+      issuer: 'Nastavení Financí',
+      customer: 'Založit odběratele',
+      agreement: 'Založit smlouvu',
+      invoice: 'Otevřít náhled',
+    },
+  },
   invoices: {
     title: 'Faktury',
     subtitle:
@@ -188,6 +233,9 @@ export const financeCs = {
       'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a nikam se neposílají. DPH a účetní pravidla zatím nejsou schválena.',
     create: 'Vystavit testovací fakturu',
     empty: 'Zatím žádné faktury.',
+    ofAgreement: 'Faktury této smlouvy',
+    noneOfAgreement: 'Na tuto smlouvu zatím nebyla vystavena žádná faktura.',
+    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy a ceny',
     number: 'Číslo',
     customer: 'Odběratel',
     period: 'Období',
@@ -204,6 +252,7 @@ export const financeCs = {
     month: 'Fakturovaný měsíc',
     load: 'Načíst smlouvy',
     noAgreements: 'Pro tento měsíc nejsou žádné smlouvy v platnosti.',
+    toAgreements: 'Smlouvy a ceny →',
     notInvoiceable: 'Nelze fakturovat',
     gaps: {
       PRICE_MISSING: 'chybí cena',
@@ -248,7 +297,7 @@ export const financeCs = {
       CURRENCIES_DIFFER: 'Jedna faktura má jednu měnu.',
       PAYMENT_TERMS_DIFFER: 'Vybrané smlouvy mají různou splatnost.',
       ISSUER_NOT_READY:
-        'Chybí údaje naší firmy nebo výchozí účet pro tuto měnu (Naše firma a účty).',
+        'Chybí údaje naší firmy nebo výchozí účet pro tuto měnu (Nastavení Financí).',
       ALREADY_INVOICED: 'Některá smlouva už má na tento měsíc platnou testovací fakturu.',
       TERMS_CHANGED:
         'Podmínky se od načtení změnily. Níže jsou aktuální částky – zkontrolujte je a vystavte znovu. Nic se nevystavilo.',
@@ -259,12 +308,14 @@ export const financeCs = {
     } as Record<string, string>,
   },
   payments: {
-    title: 'Platby',
+    title: 'Platby a přiřazení',
     subtitle:
-      'Příchozí platby a jejich přiřazení k fakturám. Automaticky se páruje jen přesný variabilní symbol jedné otevřené faktury; vše ostatní čeká na člověka s důvodem. Nic se neodesílá do banky.',
+      'Přijaté platby a jejich přiřazení k fakturám. Automaticky se přiřadí jen přesný variabilní symbol jedné otevřené faktury; vše ostatní čeká na člověka s důvodem. Nic se neodesílá do banky.',
+    fromBank:
+      'Platby vznikají z přijatých pohybů, které aplikace už načetla z banky – ty jsou v záložce',
     simulationNote:
       'Mimo produkci lze načíst simulovaný výpis. Každá reference se zaznamená jen jednou – opakované načtení téhož výpisu nic nezapočte dvakrát.',
-    simulateTitle: 'Simulovaný výpis (jen mimo produkci)',
+    simulateTitle: 'DEV simulace: simulovaný výpis (jen mimo produkci)',
     reference: 'Reference',
     amount: 'Částka (CZK)',
     variableSymbol: 'VS',
@@ -316,9 +367,12 @@ export const financeCs = {
     } as Record<string, string>,
   },
   bank: {
-    title: 'Bankovní pohyby',
+    title: 'Pohyby z banky',
     subtitle:
-      'Pohyby firemních účtů načtené z Raiffeisenbank (Premium API, jen čtení — nic se do banky neodesílá). Párování s vydanými fakturami přibude s fakturami; nespárovaná platba není pohledávka po splatnosti.',
+      'Pohyby firemních účtů načtené z Raiffeisenbank (Premium API, jen čtení — nic se do banky neodesílá). Tlačítko Načíst nové pohyby čte banku; nic dalšího nedělá.',
+    toPayments:
+      'Přijaté pohyby se k fakturám přiřazují v záložce Platby a přiřazení – tam je zaznamenáte jako platby (banku to nevolá).',
+    toPaymentsLink: 'Platby a přiřazení',
     connection: 'Propojení s bankou',
     notConfigured: 'Banka zatím není připojena.',
     notConfiguredHelp:
@@ -374,6 +428,8 @@ export const financeCs = {
       from: 'Od',
       to: 'Do',
       filter: 'Filtrovat',
+      filterOpen: 'Filtrovat pohyby (účet, směr, období)',
+      filterActive: 'Filtr je zapnutý – upravit',
       reset: 'Zrušit filtry',
       empty: 'Zatím žádné načtené pohyby.',
       emptySync: 'Zatím žádné načtené pohyby. Načtěte je tlačítkem Načíst nové pohyby.',
@@ -388,9 +444,7 @@ export const financeCs = {
       counterparty: 'Protistrana',
       symbols: 'VS / KS / SS',
       message: 'Zpráva',
-      processing: 'Zpracování',
     },
-    processing: { NOT_PAIRED: 'Nespárováno' },
     changed: 'Banka údaje později upravila (historie se uchovává).',
     vs: 'VS',
   },

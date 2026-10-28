@@ -1,4 +1,5 @@
 import { API_BASE_PATH, invoiceDetailSchema } from '@ayvo/types';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CancelInvoiceForm } from '@/components/finance/cancel-invoice-form';
 import { financeAmount, financeDate, financeMonth } from '@/components/finance/finance-format';
@@ -24,6 +25,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
     },
   );
   const canCancel = hasPermission(me, 'finance:invoices_test') && inv.status === 'VALID';
+  const canAgreements = hasPermission(me, 'finance:billing_read');
   return (
     <>
       <FinanceHeader
@@ -99,7 +101,17 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
                   <tr key={l.lineNo}>
                     <td className="py-2 pr-4">
                       {l.hotel.name}{' '}
-                      <span className="font-mono text-xs text-stone-500">{l.agreementCode}</span>
+                      {canAgreements ? (
+                        <Link
+                          href={`/finance/billing/agreements/${l.agreementCode}`}
+                          className="font-mono text-xs text-stone-500 underline"
+                          data-testid={`invoice-agreement-${l.agreementCode}`}
+                        >
+                          {l.agreementCode}
+                        </Link>
+                      ) : (
+                        <span className="font-mono text-xs text-stone-500">{l.agreementCode}</span>
+                      )}
                     </td>
                     <td className="py-2 pr-4 tabular-nums">{l.billedRooms}</td>
                     <td className="py-2 pr-4 tabular-nums">
@@ -121,7 +133,13 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
             <ul className="divide-y divide-stone-100 text-sm">
               {inv.allocations.map((a, i) => (
                 <li key={i} className="flex flex-wrap gap-x-4 py-2">
-                  <span className="font-mono">{a.paymentCode}</span>
+                  <Link
+                    href={`/finance/payments#${a.paymentCode}`}
+                    className="font-mono underline"
+                    data-testid={`invoice-payment-${a.paymentCode}`}
+                  >
+                    {a.paymentCode}
+                  </Link>
                   <span className="tabular-nums">{financeAmount(a.amount, inv.currency)}</span>
                   <span>{financeCs.payments.kind[a.kind]}</span>
                   {a.reason && <span className="text-stone-600">{a.reason}</span>}
