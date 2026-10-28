@@ -46,7 +46,7 @@ terms); the rules are the same.
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `product_categories`    | `HAND_SOAP` "Tekuté mýdlo", `SHOWER_GEL` "Sprchový gel" — confirmed reference data (doc 020), seeded; a table, so a third category needs no enum migration. Immutable.                                                                                                                                                                                                                                                                                                                                                                         |
 | `inventory_items`       | (existing, doc 018) the component itself: code, name, kind, base unit, lot tracking. New items are created by the catalogue — never a receipt (no lot, movement or balance).                                                                                                                                                                                                                                                                                                                                                                   |
-| `catalog_components`    | the catalogue profile of an item (1:1): `category_code` (the category it is made for; **required** for liquids and labels, `NULL` = any category), `package_capacity` (packaging only; `NULL` = unknown). Immutable.                                                                                                                                                                                                                                                                                                                           |
+| `catalog_components`    | the catalogue profile of an item (1:1): `category_code` (the category it is made for; **required** for liquids, `NULL` = any category — for a label: the shared blank label, §4a), `package_capacity` (packaging: bottles per package; label: pieces per roll, an entry aid; `NULL` = unknown). Immutable.                                                                                                                                                                                                                                     |
 | `crate_types`           | returnable crate type: code, name, **capacity** (1–1000, data — never a constant), immutable (crates module, doc 020 §3.4).                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `crate_type_categories` | the categories a crate type carries (at least one, checked at commit). Insert-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `products`              | code (`^[A-Z0-9][A-Z0-9_-]{1,23}$`), name, category, nominal quantity + unit (e.g. 330 ml — product data, separate from the recipe's liquid line), status `ACTIVE`/`ARCHIVED` (doc 020 §3.3). Code, category, nominal quantity and creation are immutable; the **name may be corrected** while ACTIVE (`PRODUCT_RENAMED`, before/after, reason); **archiving** is forward-only, refused while a recipe version is ACTIVE, and blocks every new or changed recipe version (`409 PRODUCT_ARCHIVED`) — all versions stay readable and calculable. |
@@ -97,9 +97,24 @@ archived (`ITEM_ARCHIVED`), each item and each kind once (`DUPLICATE_COMPONENT`,
 and allowed for the kind (liquid: a volume unit; the others: `pcs`), quantity > 0 in the unit's
 scale (pieces whole), bottle body exactly 1 (`BOTTLE_BODY_QUANTITY`) and **lot-tracked**
 (`LOT_TRACKING_REQUIRED` — label application consumes it from the lot the operator selects,
-doc 018), liquid and label made for the product's category, any other component that names a
-category names the product's (`COMPONENT_CATEGORY_MISMATCH`), crate type carrying the product's
+doc 018), liquid made for the product's category, any other component that names a
+category (also a pre-printed label; the shared blank label names none, §4a)
+names the product's (`COMPONENT_CATEGORY_MISMATCH`), crate type carrying the product's
 category (`CRATE_TYPE_CATEGORY_MISMATCH`). A new bottle-body component must be lot-tracked too.
+
+### 4a. Shared blank label and pieces per roll (owner 2026-10-27)
+
+- A **label component without a category** is the shared blank label stock (e.g. one black blank
+  label for every product): recipes of any category may use it. The product-specific part is the
+  printed design (label templates, product label approvals, print jobs) — not the material. A
+  label that names a category (pre-printed) is still allowed only in recipes of that category.
+- Consumption is unchanged: the recipe's label line (e.g. 1 pcs) is consumed by `LABEL_APPLIED`
+  only; printing consumes nothing. No consumption per label is invented (waste is not recorded).
+- **Pieces per roll** (`package_capacity` of a label, e.g. 300) is only an entry aid: on a receipt
+  "Počet rolí" fills the quantity with rolls × pieces. The quantity stays editable, is the only
+  value sent and stored, and stock stays in `pcs` — never a unit, never a conversion.
+- Bottle bodies stay lot-tracked; without a supplier lot the receipt creates an INTERNAL lot
+  (doc 018), kept distinct from supplier lots.
 
 ## 5. Material calculation
 
@@ -130,7 +145,7 @@ catalogue — it reserves, consumes and reads no stock.
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | categories, components, crate types immutable; product identity immutable, name only while ACTIVE, status forward-only, archive only without an ACTIVE recipe                                                                                                        | `ayvo_reject_modification`; `products_guard`                                                    |
 | archived product: no new version, revision or activation                                                                                                                                                                                                             | `recipe_versions_insert`, `recipe_revisions_append`, `recipe_versions_guard` (product row lock) |
-| liquid/label name a category; capacity only for packaging                                                                                                                                                                                                            | `catalog_components_check`; capacity CHECK 1–100 000                                            |
+| a liquid names a category (a label may not: shared blank stock); capacity only for packaging and labels                                                                                                                                                              | `catalog_components_check`; capacity CHECK 1–100 000                                            |
 | crate capacity is data, 1–1000; ≥ 1 category                                                                                                                                                                                                                         | CHECK; commit-time `crate_types_has_category`                                                   |
 | product code, name, nominal quantity > 0 in unit scale                                                                                                                                                                                                               | CHECKs; `products_scale`                                                                        |
 | at most one active version per product                                                                                                                                                                                                                               | partial unique `recipe_versions_one_active`                                                     |
@@ -289,7 +304,7 @@ materiál._
 
 ## 11. Known limitations and open questions
 
-- **Which label is "correct"** is checked by the label item's category. Which _label design_ a
+- **Which label is "correct"** is checked by the label item's category when it names one (§4a). Which _label design_ a
   product prints (`product_label_approvals`, doc 020 §3.3) is not implemented yet.
 - **Label media in the recipe** sit in the `LABEL_APPLICATION` stage. **Open owner question:**
   is label stock consumed when printing or when applying, and is it lot-tracked? Today's

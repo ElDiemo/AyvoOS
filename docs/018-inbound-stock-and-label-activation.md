@@ -153,6 +153,27 @@ consumes no bottle stock. The `LABEL_APPLICATION` movement names the **exact lot
 selected for the session, so the chain is: receipt line → lot → movement → `LABEL_APPLIED` event →
 bottle.
 
+### 5a. Consumables issued to consumption by hand (owner 2026-10-27)
+
+Material outside every recipe — e.g. the gold **printer ribbon**, `1 pcs = one roll of 300 m` — is
+a catalogue component of kind `CONSUMABLE` (unit `pcs`; never in a recipe: API
+`COMPONENT_NOT_ALLOWED`, DB stage check). It is received like any item and issued to consumption
+**by hand** when a roll is put into a printer. No consumption per label is estimated; metres are not
+a unit.
+
+- `POST /api/admin/inventory/issues` (`inventory:consume`, warehouse-scoped, ADMIN only — other
+  roles only on the owner's decision): item, quantity (whole pcs), the lot for a lot-tracked item,
+  a **reason** and `expectedOnHand` — the stock the user saw. If the stock changed meanwhile
+  (another issue or receipt) nothing is issued (`STOCK_CHANGED`); with too little stock
+  `INSUFFICIENT_STOCK`. One request id issues once (a repeat replays the result; another payload
+  `IDEMPOTENCY_CONFLICT`), so a repeated click, a lost answer or a second tab never issues twice.
+- `stock_issues`: append-only (UPDATE/DELETE/TRUNCATE rejected), `CONSUMABLE` items only, reason
+  3–500 characters, the actor, one row per request id; exactly one `CONSUMPTION_ISSUE` movement per
+  issue (deferred check), equal to it — the ledger's balance check refuses a negative stock.
+- Audit `STOCK_ISSUED` (item, lot, quantity, location, balance after, the reason). The ledger shows
+  "Výdej do spotřeby" with the reason. UI: Sklad → Stav skladu → "Vydat do spotřeby" (only with the
+  permission).
+
 ## 6. Labels without double counting
 
 | Thing                                      | Representation                                                                                          | Quantity stock?           |

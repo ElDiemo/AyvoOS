@@ -19,6 +19,6 @@ import { WeightsService } from './weights.service.js';
   imports: [InventoryModule, CratesModule, LabelsModule],
   controllers: [CatalogController, WeightsController],
   providers: [CatalogService, RecipesService, ProductLabelApprovalsService, WeightsService],
-  exports: [RecipesService, ProductLabelApprovalsService, WeightsService],
+  exports: [CatalogService, RecipesService, ProductLabelApprovalsService, WeightsService],
 })
 export class CatalogModule {}

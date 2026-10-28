@@ -57,6 +57,8 @@ export const catalogCs = {
     BULK_LIQUID: 'Náplň pro konkrétní kategorii produktu; měří se v objemové jednotce (ml).',
     PUMP: 'Pumpička; počítá se v kusech.',
     PACKAGING: 'Přepravní obal. Do kusovníku lahve nepatří; kapacitu lze nechat neznámou.',
+    CONSUMABLE:
+      'Materiál mimo kusovník, např. ribbon do tiskárny (1 ks = 1 role). Přijímá se jako jiná položka a do spotřeby se vydává ručně ve Skladu – nikdy se neodhaduje na etiketu.',
   } satisfies Record<ComponentKind, string>,
   status: {
     DRAFT: 'Koncept',
@@ -80,7 +82,14 @@ export const catalogCs = {
     unknown: 'Neznámá',
     archived: 'Archivovaná – nelze použít v novém kusovníku',
     unitNone: 'Pro tento druh není k dispozici vhodná jednotka.',
-    categoryRequired: 'Kapalina a etiketa musí mít kategorii produktu.',
+    categoryRequired: 'Kapalina musí mít kategorii produktu.',
+    sharedLabel: 'Společná – prázdná etiketa pro všechny produkty',
+    sharedLabelShort: 'Společná (prázdná etiketa)',
+    labelCategoryHelp:
+      'Předtištěná etiketa patří jedné kategorii. Prázdná etiketa, na kterou se potisk produktu tiskne až u nás, je společná – kategorii nevybírejte.',
+    piecesPerRoll: 'Kusů v roli',
+    piecesPerRollHelp:
+      'Jen pomůcka pro příjem (počet rolí × kusů v roli). Sklad se vede vždy v kusech. Nechte prázdné, pokud počet neznáte.',
     created: (name: string) => `Komponenta „${name}“ byla založena.`,
     submit: 'Založit komponentu',
   },

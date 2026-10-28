@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { crateUrl, labelingSetup, lotId, openStation, releaseOwnStation } from './labeling-setup';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -13,6 +14,8 @@ import { signInWithForm } from './test-sign-in';
  */
 test.describe.configure({ mode: 'serial' });
 
+const SHOTS_ISSUE = resolve(import.meta.dirname, '../../../docs/screenshots/warehouse');
+const SHOTS_RECEIPT = resolve(import.meta.dirname, '../../../docs/screenshots/catalog');
 const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
 let urls: string[] = [];
 let codes: string[] = [];
@@ -175,6 +178,124 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
   await expect(page.getByRole('status')).toContainText(`Příjem ${receiptCode} byl potvrzen`);
   await expect(page.getByTestId('invoice-status')).toHaveText('Čeká na fakturu');
   await expect(page.getByTestId('line-1')).toContainText(lotCode);
+});
+
+test('a consumable (ribbon roll) is received and issued to consumption by hand, with a reason (doc 018 §5a)', async ({
+  page,
+  browser,
+}) => {
+  const code = `RIBBON-${Date.now().toString(36).toUpperCase()}`;
+  const created = await page.request.post('/api/admin/catalog/components', {
+    data: {
+      requestId: randomUUID(),
+      code,
+      name: 'Ribbon zlatý 300 m',
+      kind: 'CONSUMABLE',
+      unitCode: 'pcs',
+      lotTracked: false,
+      categoryCode: null,
+      packageCapacity: null,
+      reason: 'spotřební materiál tisku',
+    },
+  });
+  expect(created.status()).toBe(201);
+  // Received like any item (2 rolls).
+  await page.goto('/warehouse/receipts/new');
+  await page
+    .getByRole('combobox', { name: 'Dodavatel' })
+    .selectOption({ label: 'Lahve Test s.r.o.' });
+  await page.getByLabel('Dodací list / faktura č.').fill('DL-RIBBON-1');
+  await page.getByLabel('Číslo dokladu').fill('DL-RIBBON-1');
+  await page
+    .getByLabel('Soubor')
+    .setInputFiles({ name: 'ribbon.pdf', mimeType: 'application/pdf', buffer: PDF });
+  await page.getByRole('button', { name: 'Nahrát doklad' }).click();
+  await expect(page.getByTestId('receipt-documents')).toContainText('DL-RIBBON-1');
+  const line = page.getByTestId('receipt-line-1');
+  await line.getByLabel('Položka').selectOption({ label: `Ribbon zlatý 300 m (${code})` });
+  await line.getByLabel(/Množství/).fill('2');
+  await page.getByRole('button', { name: 'Zkontrolovat' }).click();
+  await page.getByRole('button', { name: 'Potvrdit příjem' }).click();
+  await expect(page).toHaveURL(/\/warehouse\/receipts\/GR-\d{6}\?created=1$/);
+
+  // Issued by hand on the stock page: one roll, with a reason.
+  // The warehouse supervisor (this spec's user) has no inventory:consume: no form, refused.
+  await page.goto('/warehouse/stock');
+  await expect(page.getByTestId(`stock-${code}`)).toContainText('Ribbon zlatý 300 m');
+  await expect(page.getByTestId(`issue-${code}`)).toHaveCount(0);
+  // ADMIN issues it.
+  const ctx = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
+  const adminPage = await ctx.newPage();
+  await issueAsAdmin(adminPage, code);
+  await ctx.close();
+});
+
+async function issueAsAdmin(page: Page, code: string) {
+  await page.goto('/warehouse/stock');
+  const form = page.getByTestId(`issue-${code}`);
+  await expect(form.getByTestId(`issue-${code}-quantity`)).toHaveValue('1');
+  await form.getByTestId(`issue-${code}-reason`).fill('nová role do tiskárny etiket');
+  await mkdir(SHOTS_ISSUE, { recursive: true });
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await form.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: resolve(SHOTS_ISSUE, `consumable-issue-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await form.getByTestId(`issue-${code}-submit`).click();
+  await expect(form.getByRole('status')).toHaveText('Vydáno 1 ks. Na skladě zůstává 1 ks.');
+  await expect(page.getByTestId(`stock-${code}`)).toContainText('1');
+  // The ledger names the issue and its reason.
+  await page.goto(`/warehouse/movements?item=${code}`);
+  await expect(page.locator('main')).toContainText('Výdej do spotřeby');
+  await expect(page.locator('main')).toContainText('nová role do tiskárny etiket');
+}
+
+test('a label with pieces per roll: rolls only fill the quantity in pieces (doc 023 §4a)', async ({
+  page,
+}) => {
+  const code = `LABEL-ROLL-${Date.now().toString(36).toUpperCase()}`;
+  const created = await page.request.post('/api/admin/catalog/components', {
+    data: {
+      requestId: randomUUID(),
+      code,
+      name: 'Prázdná etiketa v roli',
+      kind: 'LABEL_MEDIA',
+      unitCode: 'pcs',
+      lotTracked: false,
+      categoryCode: null,
+      packageCapacity: 300,
+      reason: 'společný materiál etiket',
+    },
+  });
+  expect(created.status()).toBe(201);
+  await page.goto('/warehouse/receipts/new');
+  await page
+    .getByRole('combobox', { name: 'Dodavatel' })
+    .selectOption({ label: 'Lahve Test s.r.o.' });
+  const line = page.getByTestId('receipt-line-1');
+  await line.getByLabel('Položka').selectOption({ label: `Prázdná etiketa v roli (${code})` });
+  await line.getByLabel('Počet rolí (po 300 ks)').fill('2');
+  await expect(line.getByTestId('receipt-line-1-quantity')).toHaveValue('600');
+  await mkdir(SHOTS_RECEIPT, { recursive: true });
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await line.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: resolve(SHOTS_RECEIPT, `label-rolls-receipt-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // The pieces are the truth: typing them clears the rolls aid.
+  await line.getByTestId('receipt-line-1-quantity').fill('599');
+  await expect(line.getByLabel('Počet rolí (po 300 ks)')).toHaveValue('');
+  // An item without pieces per roll has no aid.
+  await line.getByLabel('Položka').selectOption({ label: 'Nová prázdná lahev (NEW_BOTTLE)' });
+  await expect(line.getByText(/Počet rolí/)).toHaveCount(0);
 });
 
 test('labels are applied at a labelling station into a crate; the old URLs lead there', async ({

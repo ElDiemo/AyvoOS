@@ -22,6 +22,8 @@ interface Line {
   key: number;
   itemId: string;
   quantity: string;
+  /** Labels only: rolls entered as an aid; never sent — the quantity (pcs) is the receipt. */
+  rolls: string;
   supplierLotCode: string;
   unitPrice: string;
   currency: string;
@@ -66,6 +68,7 @@ export function GoodsReceiptForm({
       key: 1,
       itemId: initialItemId === undefined ? (items[0]?.id ?? '') : (initialItemId ?? ''),
       quantity: '',
+      rolls: '',
       supplierLotCode: '',
       unitPrice: '',
       currency: 'CZK',
@@ -231,7 +234,7 @@ export function GoodsReceiptForm({
                   <select
                     value={line.itemId}
                     disabled={reviewing}
-                    onChange={(e) => update(line.key, { itemId: e.target.value })}
+                    onChange={(e) => update(line.key, { itemId: e.target.value, rolls: '' })}
                     className={inputClass}
                   >
                     {line.itemId === '' && <option value="">{r.chooseItem}</option>}
@@ -248,10 +251,37 @@ export function GoodsReceiptForm({
                     inputMode="decimal"
                     value={line.quantity}
                     disabled={reviewing}
-                    onChange={(e) => update(line.key, { quantity: e.target.value.trim() })}
+                    onChange={(e) =>
+                      // A typed quantity is the truth; the rolls aid no longer describes it.
+                      update(line.key, { quantity: e.target.value.trim(), rolls: '' })
+                    }
                     className={inputClass}
+                    data-testid={`receipt-line-${index + 1}-quantity`}
                   />
                 </label>
+                {item?.piecesPerRoll && (
+                  <label className="flex flex-col gap-1 text-sm">
+                    {r.rolls(item.piecesPerRoll)}
+                    <input
+                      inputMode="numeric"
+                      value={line.rolls}
+                      disabled={reviewing}
+                      onChange={(e) => {
+                        const rolls = e.target.value.trim();
+                        update(line.key, {
+                          rolls,
+                          // Whole rolls only; the result is written into the quantity in pcs.
+                          ...(/^[1-9]\d{0,5}$/.test(rolls)
+                            ? { quantity: String(Number(rolls) * item.piecesPerRoll!) }
+                            : {}),
+                        });
+                      }}
+                      className={inputClass}
+                      data-testid={`receipt-line-${index + 1}-rolls`}
+                    />
+                    <span className="text-xs text-stone-500">{r.rollsHint}</span>
+                  </label>
+                )}
                 {item?.lotTracked && (
                   <label className="flex flex-col gap-1 text-sm">
                     {r.supplierLot}
@@ -322,6 +352,7 @@ export function GoodsReceiptForm({
                     key: Date.now(),
                     itemId: items[0]?.id ?? '',
                     quantity: '',
+                    rolls: '',
                     supplierLotCode: '',
                     unitPrice: '',
                     currency: 'CZK',

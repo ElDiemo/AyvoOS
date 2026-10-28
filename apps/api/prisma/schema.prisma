@@ -469,6 +469,7 @@ model InventoryItem {
   lots         InventoryLot[]
   receiptLines GoodsReceiptLine[]
   movements    InventoryMovement[]
+  stockIssues  StockIssue[]
   balances     InventoryBalance[]
   bomLines     BomLine[]
   /// Catalogue profile (doc 023) — category designation, package capacity.
@@ -512,6 +513,7 @@ model InventoryLocation {
 
   site         Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
   movements    InventoryMovement[]
+  stockIssues  StockIssue[]
   balances     InventoryBalance[]
   userScopes   UserScope[]
   crateEvents  CrateEvent[]
@@ -552,6 +554,7 @@ model InventoryLot {
   originReceiptLine GoodsReceiptLine?   @relation("InternalLotOrigin", fields: [originReceiptLineId], references: [id], onDelete: Restrict)
   receiptLines      GoodsReceiptLine[]  @relation("ReceiptLineLot")
   movements         InventoryMovement[]
+  stockIssues       StockIssue[]
   balances          InventoryBalance[]
 
   @@index([itemId, code])
@@ -585,6 +588,7 @@ model InventoryMovement {
   receiptCorrectionId String?               @map("receipt_correction_id") @db.Uuid
   bottleEventId       String?               @map("bottle_event_id") @db.Uuid
   bomLineId           String?               @map("bom_line_id") @db.Uuid
+  stockIssueId        String?               @unique @map("stock_issue_id") @db.Uuid
   /// On-hand of (item, location, lot) after this movement — always set by the ledger trigger
   /// (the default only lets inserts omit it).
   balanceAfter        Decimal               @default(0) @map("balance_after") @db.Decimal(19, 3)
@@ -600,6 +604,7 @@ model InventoryMovement {
   receiptCorrection GoodsReceiptCorrection? @relation(fields: [receiptCorrectionId], references: [id], onDelete: Restrict)
   bottleEvent       BottleEvent?            @relation(fields: [bottleEventId], references: [id], onDelete: Restrict)
   bomLine           BomLine?                @relation(fields: [bomLineId], references: [id], onDelete: Restrict)
+  stockIssue        StockIssue?             @relation(fields: [stockIssueId], references: [id], onDelete: Restrict)
 
   @@index([itemId, locationId, lotId, recordedAt])
   @@index([lotId])
@@ -607,6 +612,33 @@ model InventoryMovement {
   @@index([receiptLineId])
   @@index([receiptCorrectionId])
   @@map("inventory_movements")
+}
+
+/// A manual issue of a consumable to consumption (owner 2026-10-27, doc 018 §5a): e.g. one printer
+/// ribbon roll put into a printer. Append-only (DB: UPDATE/DELETE/TRUNCATE rejected); only
+/// CONSUMABLE items; reason required; exactly one CONSUMPTION_ISSUE movement each (deferred
+/// trigger), so the ledger refuses a negative balance; one per request id.
+model StockIssue {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  itemId     String   @map("item_id") @db.Uuid
+  unitId     String   @map("unit_id") @db.Uuid
+  locationId String   @map("location_id") @db.Uuid
+  lotId      String?  @map("lot_id") @db.Uuid
+  quantity   Decimal  @db.Decimal(19, 3)
+  reason     String
+  actorId    String   @map("actor_id") @db.Uuid
+  occurredAt DateTime @map("occurred_at") @db.Timestamptz(3)
+  recordedAt DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  requestId  String   @unique @map("request_id") @db.Uuid
+
+  item     InventoryItem      @relation(fields: [itemId, unitId], references: [id, baseUnitId], onDelete: Restrict)
+  location InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  lot      InventoryLot?      @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  actor    User               @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  movement InventoryMovement?
+
+  @@index([itemId, locationId, occurredAt])
+  @@map("stock_issues")
 }
 
 /// Current on-hand per (item, location, lot): a cache of Σ ledger.
@@ -1004,6 +1036,7 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
+  stockIssues          StockIssue[]
   nativeCredential     NativeCredential?
   nativeTokens         NativeAuthToken[]
   nativeChallenges     NativeAuthChallenge[]
