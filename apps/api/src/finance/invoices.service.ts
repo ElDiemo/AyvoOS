@@ -4,6 +4,8 @@ import type {
   CancelInvoiceRequest,
   CreateTestInvoiceRequest,
   InvoiceDetail,
+  InvoiceListQuery,
+  InvoicesOverview,
   InvoiceSummary,
 } from '@ayvo/types';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
@@ -79,12 +81,54 @@ export class InvoicesService {
     @Inject(FINANCE_ENV) private readonly env: FinanceEnv,
   ) {}
 
-  async list(): Promise<InvoiceSummary[]> {
+  async list(query: InvoiceListQuery = {}): Promise<InvoiceSummary[]> {
     const rows = await this.prisma.invoice.findMany({
+      where: query.agreement ? { lines: { some: { agreement: { code: query.agreement } } } } : {},
       orderBy: { serial: 'desc' },
       include: invoiceInclude,
     });
     return rows.map(summary);
+  }
+
+  /**
+   * The Finance overview's sums (doc 042 §3a), aggregated in the database: valid invoices with a
+   * remaining amount per currency (overdue = due before today in Prague, as `invoicePaymentState`)
+   * and the incoming payments with an amount not yet allocated. Reads only.
+   */
+  async overview(): Promise<InvoicesOverview> {
+    const [rows, [payments]] = await Promise.all([
+      this.prisma.$queryRaw<
+        { currency: string; open: number; open_rem: string; overdue: number; overdue_rem: string }[]
+      >`
+        WITH open AS (
+          SELECT i."currency", i."due_on",
+                 i."total" - coalesce((SELECT sum(a."amount") FROM "finance"."payment_allocations" a
+                                       WHERE a."invoice_id" = i."id"), 0) AS "remaining"
+          FROM "finance"."invoices" i
+          WHERE NOT EXISTS (SELECT 1 FROM "finance"."invoice_cancellations" c
+                            WHERE c."invoice_id" = i."id"))
+        SELECT "currency",
+               count(*)::int AS "open",
+               sum("remaining")::text AS "open_rem",
+               (count(*) FILTER (WHERE "due_on" < ${pragueToday()}::date))::int AS "overdue",
+               coalesce(sum("remaining") FILTER (WHERE "due_on" < ${pragueToday()}::date), 0)::text
+                 AS "overdue_rem"
+        FROM open WHERE "remaining" > 0
+        GROUP BY "currency" ORDER BY "currency"`,
+      this.prisma.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::int AS "count" FROM "finance"."incoming_payments" p
+        WHERE p."amount" > coalesce((SELECT sum(a."amount") FROM "finance"."payment_allocations" a
+                                     WHERE a."payment_id" = p."id"), 0)`,
+    ]);
+    const money = (v: string) => new Prisma.Decimal(v).toFixed(2);
+    return {
+      invoices: rows.map((r) => ({
+        currency: r.currency,
+        open: { count: r.open, remaining: money(r.open_rem) },
+        overdue: { count: r.overdue, remaining: money(r.overdue_rem) },
+      })),
+      paymentsToReview: payments!.count,
+    };
   }
 
   async detail(number: string): Promise<InvoiceDetail> {

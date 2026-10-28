@@ -6,15 +6,19 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
   StreamableFile,
 } from '@nestjs/common';
 import {
   cancelInvoiceSchema,
   createTestInvoiceSchema,
+  invoiceListQuerySchema,
   invoiceNumberSchema,
   type CancelInvoiceRequest,
   type CreateTestInvoiceRequest,
   type InvoiceDetail,
+  type InvoiceListQuery,
+  type InvoicesOverview,
   type InvoiceSummary,
 } from '@ayvo/types';
 import { ADMIN_PREFIX } from '../common/routes.js';
@@ -35,8 +39,17 @@ export class InvoicesController {
 
   @RequirePermission('finance:invoices_read')
   @Get()
-  list(): Promise<InvoiceSummary[]> {
-    return this.invoices.list();
+  list(
+    @Query(new ZodValidationPipe(invoiceListQuerySchema)) query: InvoiceListQuery,
+  ): Promise<InvoiceSummary[]> {
+    return this.invoices.list(query);
+  }
+
+  /** Sums for the Finance overview (doc 042 §3a), computed in the database; reads only. */
+  @RequirePermission('finance:invoices_read')
+  @Get('overview')
+  overview(): Promise<InvoicesOverview> {
+    return this.invoices.overview();
   }
 
   @RequirePermission('finance:invoices_test')
