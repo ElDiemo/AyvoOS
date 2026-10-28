@@ -37,6 +37,39 @@ export const invoiceSummarySchema = z.object({
 });
 export type InvoiceSummary = z.infer<typeof invoiceSummarySchema>;
 
+/**
+ * GET /api/admin/finance/invoices — an optional filter (doc 042 §3b): only the invoices with a line
+ * of this hotel agreement (`invoice_lines.agreement_id`; at most one valid invoice per month).
+ */
+export const invoiceListQuerySchema = z.object({
+  agreement: z
+    .string()
+    .regex(/^BA-\d{6,}$/)
+    .optional(),
+});
+export type InvoiceListQuery = z.infer<typeof invoiceListQuerySchema>;
+
+/**
+ * GET /api/admin/finance/invoices/overview (doc 042 §3a): sums the database computes for the
+ * Finance overview — no list is loaded. Valid (not cancelled) invoices still to be paid, per
+ * currency; overdue = past due in Prague and not paid (as `paymentState`). Payments to review =
+ * incoming payments with an amount not yet allocated; changed at the bank = recorded payments whose
+ * bank transaction the bank changed since (`bankChangedSinceRecorded`, also when fully allocated) —
+ * counted apart, so neither definition hides the other (review FIN90-R1).
+ */
+export const invoicesOverviewSchema = z.object({
+  invoices: z.array(
+    z.object({
+      currency: z.string(),
+      open: z.object({ count: z.number().int(), remaining: money }),
+      overdue: z.object({ count: z.number().int(), remaining: money }),
+    }),
+  ),
+  paymentsToReview: z.number().int(),
+  paymentsChangedAtBank: z.number().int(),
+});
+export type InvoicesOverview = z.infer<typeof invoicesOverviewSchema>;
+
 export const invoiceDetailSchema = invoiceSummarySchema.extend({
   lines: z.array(
     z.object({

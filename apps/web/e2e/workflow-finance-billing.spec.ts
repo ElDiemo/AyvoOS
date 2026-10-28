@@ -5,13 +5,13 @@ const ADMIN_STATE = 'e2e/.auth/admin.json';
 const OPERATOR_STATE = 'e2e/.auth/operator.json';
 
 /**
- * Finance → Smlouvy hotelů (doc 040, N3A-1 in the UI): a customer (the billed company), the
+ * Finance → Faktury hotelům → Smlouvy a ceny (doc 040, N3A-1 in the UI; doc 042): a customer (the billed company), the
  * agreement of a hotel with its rooms and own price, a new version of the terms with a reason, and
  * a default price — all in the browser; refused without the permission. Synthetic data only.
  */
 const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/finance');
 
-test.describe('Smlouvy hotelů', () => {
+test.describe('Smlouvy a ceny', () => {
   test.use({ storageState: ADMIN_STATE });
 
   test('a customer, a hotel agreement with its own price, a new version and a default price', async ({
@@ -40,7 +40,7 @@ test.describe('Smlouvy hotelů', () => {
     ).json()) as { code: string };
 
     await page.goto('/finance/billing');
-    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy hotelů' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy a ceny' })).toBeVisible();
     await page.getByTestId('customer-new-open').click();
     const customer = page.getByTestId('customer-new');
     await customer.locator('[name=legalName]').fill('Hotelová skupina Morava s.r.o. (E2E)');

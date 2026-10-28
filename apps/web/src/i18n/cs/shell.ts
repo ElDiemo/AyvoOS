@@ -26,17 +26,22 @@ export const shellCs = {
   modules: {
     finance: {
       label: 'Finance',
-      description:
-        'Přijaté doklady a jejich export pro účetní, faktury hotelům, bankovní pohyby a fakturační údaje naší firmy.',
+      description: 'Faktury hotelům, přijaté doklady, banka a platby a podklady pro účetní.',
       pages: {
-        documents: 'Doklady',
-        billing: 'Smlouvy hotelů',
-        invoices: 'Faktury',
-        payments: 'Platby',
-        exports: 'Export pro účetní',
-        bank: 'Bankovní pohyby',
-        issuer: 'Naše firma a účty',
+        overview: 'Přehled',
+        invoices: 'Faktury hotelům',
+        documents: 'Přijaté doklady',
+        bank: 'Banka a platby',
+        exports: 'Pro účetní',
+        settings: 'Nastavení Financí',
       },
+      views: {
+        invoices: 'Faktury',
+        billing: 'Smlouvy a ceny',
+        bank: 'Pohyby z banky',
+        payments: 'Platby a přiřazení',
+      },
+      viewsLabel: 'Zobrazení',
     },
     sales: {
       label: 'Obchod',

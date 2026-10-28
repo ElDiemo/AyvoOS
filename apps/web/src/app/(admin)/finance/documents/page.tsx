@@ -12,7 +12,7 @@ import {
   financeMonth,
 } from '@/components/finance/finance-format';
 import { MissingBadge } from '@/components/finance/missing-badge';
-import { buttonClass, Card, EmptyState, inputClass } from '@/components/ui';
+import { buttonClass, Card, inputClass } from '@/components/ui';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
@@ -66,6 +66,7 @@ export default async function FinanceDocumentsPage({
     q.handoverMonth ||
     q.incomplete
   );
+  const advanced = !!(q.status || q.issuedFrom || q.issuedTo || q.handoverMonth);
   const link = (p: number) =>
     `/finance/documents?${new URLSearchParams(
       Object.entries({ ...raw, page: String(p) }).filter((e): e is [string, string] => !!e[1]),
@@ -105,9 +106,13 @@ export default async function FinanceDocumentsPage({
         }
       />
       <div className="flex flex-col gap-6">
-        <Card>
-          <form method="get" className="flex flex-col gap-4" data-testid="finance-filters">
-            <label className={filterLabel}>
+        <form
+          method="get"
+          className="flex flex-col gap-3 rounded-lg border border-stone-200 bg-white p-4 shadow-sm"
+          data-testid="finance-filters"
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className={cn(filterLabel, 'sm:flex-1')}>
               {t.list.search}
               <input
                 type="search"
@@ -118,7 +123,31 @@ export default async function FinanceDocumentsPage({
                 className={cn(inputClass, 'normal-case tracking-normal')}
               />
             </label>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <label className="flex items-center gap-2 text-sm sm:pb-2">
+              <input
+                type="checkbox"
+                name="incomplete"
+                value="true"
+                defaultChecked={q.incomplete === 'true'}
+              />
+              {t.list.onlyIncomplete}
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button type="submit" className={buttonClass.primary}>
+                {t.list.filter}
+              </button>
+              {filtered && (
+                <Link href="/finance/documents" className={buttonClass.secondary}>
+                  {t.list.reset}
+                </Link>
+              )}
+            </div>
+          </div>
+          <details open={advanced} data-testid="finance-filters-more">
+            <summary className="cursor-pointer text-sm text-stone-600">
+              {advanced ? t.list.moreFiltersActive : t.list.moreFilters}
+            </summary>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <label className={filterLabel}>
                 {t.fields.status}
                 <select
@@ -159,30 +188,13 @@ export default async function FinanceDocumentsPage({
                 />
               </label>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="incomplete"
-                value="true"
-                defaultChecked={q.incomplete === 'true'}
-              />
-              {t.list.onlyIncomplete}
-            </label>
-            <div className="flex flex-wrap gap-2">
-              <button type="submit" className={buttonClass.primary}>
-                {t.list.filter}
-              </button>
-              {filtered && (
-                <Link href="/finance/documents" className={buttonClass.secondary}>
-                  {t.list.reset}
-                </Link>
-              )}
-            </div>
-          </form>
-        </Card>
+          </details>
+        </form>
         <Card title={t.list.total(page.total)} testId="finance-documents">
           {page.items.length === 0 ? (
-            <EmptyState>{filtered ? t.list.emptyFiltered : t.list.empty}</EmptyState>
+            <p className="py-2 text-sm text-stone-600">
+              {filtered ? t.list.emptyFiltered : t.list.empty}
+            </p>
           ) : (
             <>
               {/* A table on a computer, cards on a phone. */}

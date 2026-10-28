@@ -8,7 +8,7 @@ import {
   ImportBankButton,
   SimulateStatementForm,
 } from '@/components/finance/payment-forms';
-import { Card, EmptyState, Notice } from '@/components/ui';
+import { Card, Notice } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
@@ -16,10 +16,16 @@ import { hasPermission, requirePermission } from '@/lib/session';
 export const dynamic = 'force-dynamic';
 const t = financeCs.payments;
 
-/** Platby (N3B-2, doc 041 §8): incoming payments, their matching and allocations. */
+/**
+ * Platby a přiřazení (N3B-2, doc 041 §8; a view of Banka a platby, doc 042): incoming payments,
+ * their matching and allocations. The list comes first; recording payments from the bank
+ * transactions already read is the one action above it, the DEV simulation a closed block below
+ * (never in production). Each payment is an anchor (#P-…) for the invoice detail's links.
+ */
 export default async function PaymentsPage() {
   const me = await requirePermission('finance:invoices_read');
   const canManage = hasPermission(me, 'finance:payments_manage');
+  const canBank = hasPermission(me, 'finance:bank_read');
   const [page, invoices] = await Promise.all([
     apiGet('admin/finance/payments', paymentsPageSchema),
     apiGet('admin/finance/invoices', z.array(invoiceSummarySchema)),
@@ -32,30 +38,36 @@ export default async function PaymentsPage() {
       .map((i) => i.number);
   return (
     <>
-      <FinanceHeader active="payments" title={t.title} subtitle={t.subtitle} />
+      <FinanceHeader active="bank" view="payments" title={t.title} subtitle={t.subtitle} />
       <div className="flex flex-col gap-6">
-        {canManage && page.simulationAvailable && (
-          <Card title={t.simulateTitle}>
-            <div className="flex flex-col gap-4">
-              <Notice tone="info">{t.simulationNote}</Notice>
-              <SimulateStatementForm />
-            </div>
-          </Card>
-        )}
-        {canManage && (
-          <Card>
-            <ImportBankButton />
-          </Card>
-        )}
+        {/* Where payments come from, and (finance:payments_manage) the one action that records them. */}
+        <div
+          className="flex flex-col gap-3 rounded-lg border border-stone-200 bg-white p-4 text-sm shadow-sm"
+          data-testid="payments-from-bank"
+        >
+          <p className="text-stone-600">
+            {t.fromBank} {/* A link only for whom the page opens (review FIN90-R3). */}
+            {canBank ? (
+              <Link href="/finance/bank" className="underline">
+                {financeCs.bank.title}
+              </Link>
+            ) : (
+              financeCs.bank.title
+            )}
+            .
+          </p>
+          {canManage && <ImportBankButton />}
+        </div>
         <Card testId="payments">
           {page.payments.length === 0 ? (
-            <EmptyState>{t.empty}</EmptyState>
+            <p className="py-2 text-sm text-stone-600">{t.empty}</p>
           ) : (
             <ul className="divide-y divide-stone-100 text-sm">
               {page.payments.map((p) => (
                 <li
                   key={p.code}
-                  className="flex flex-col gap-2 py-3"
+                  id={p.code}
+                  className="flex scroll-mt-24 flex-col gap-2 py-3 target:bg-amber-50"
                   data-testid={`payment-${p.code}`}
                 >
                   <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -135,6 +147,18 @@ export default async function PaymentsPage() {
             </ul>
           )}
         </Card>
+        {canManage && page.simulationAvailable && (
+          <details
+            className="rounded-lg border border-dashed border-stone-300 bg-white p-4 text-sm"
+            data-testid="payments-simulation"
+          >
+            <summary className="cursor-pointer font-medium">{t.simulateTitle}</summary>
+            <div className="mt-4 flex flex-col gap-4">
+              <Notice tone="info">{t.simulationNote}</Notice>
+              <SimulateStatementForm />
+            </div>
+          </details>
+        )}
       </div>
     </>
   );

@@ -1,6 +1,6 @@
 /** Finance → Smlouvy hotelů (doc 040, N3A-1 settings in the UI). */
 export const billingCs = {
-  title: 'Smlouvy hotelů',
+  title: 'Smlouvy a ceny',
   subtitle:
     'Kdo za hotel platí (odběratel = firma), kolik pokojů a za jakou cenu se účtuje a výchozí ceník. Každá změna je nová verze s důvodem; nic se nepřepisuje.',
   agreements: 'Smlouvy hotelů',
@@ -8,6 +8,9 @@ export const billingCs = {
   newAgreement: 'Nová smlouva hotelu',
   noFreeHotel: 'Všechny hotely už smlouvu mají (nebo žádný hotel neexistuje).',
   needCustomer: 'Nejdřív založte odběratele.',
+  noAgreementsNoCustomer:
+    'Zatím žádná smlouva. Smlouva hotelu potřebuje odběratele – firmu, které se fakturuje.',
+  createCustomer: 'Založit odběratele',
   customers: 'Odběratelé (fakturační firmy)',
   customersHelp:
     'Odběratel je firma, které se fakturuje – ne hotel. Jedna firma může platit za více hotelů.',
@@ -26,7 +29,7 @@ export const billingCs = {
   revision: (r: number) => `revize ${r}`,
   recorded: (at: string, by: string) => `${at}, ${by}`,
   newVersion: 'Nová verze',
-  back: 'Smlouvy hotelů',
+  back: 'Smlouvy a ceny',
   save: 'Uložit',
   saving: 'Ukládám…',
   saved: 'Uloženo.',

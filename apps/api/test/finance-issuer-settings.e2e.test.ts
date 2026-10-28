@@ -6,6 +6,7 @@ import type {
   EffectiveTermsPage,
   IncomingPayment,
   InvoiceDetail,
+  InvoicesOverview,
   InvoiceSummary,
   IssuerSettings,
   PaymentLoadResult,
@@ -24,7 +25,7 @@ import {
 } from './support/finance-app.js';
 import { createHotel } from './support/order-fixtures.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
-import { hasDatabase } from './support/test-app.js';
+import { hasDatabase, withPrivileged } from './support/test-app.js';
 
 /**
  * Our company (issuer) and the bank accounts printed on invoices (N3A-2a, doc 040 §8) in the
@@ -1039,7 +1040,11 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       });
       expect([manual.status, manual.body.code]).toEqual([422, 'ENVIRONMENT_MISMATCH']);
       // The bank changes the recorded transaction later (a new version): nothing recorded or
-      // allocated is overwritten — it is reported and flagged for a person.
+      // allocated is overwritten — it is reported and flagged for a person (also on the Finance
+      // overview, although the payment is fully allocated: review FIN90-R1).
+      const overviewNow = async () =>
+        (await f.get(`${INV}/overview`).expect(200)).body as InvoicesOverview;
+      const before = await overviewNow();
       const v1 = await owner.bankTransactionVersion.findFirstOrThrow({
         where: { transactionId: testTx, version: 1 },
       });
@@ -1066,6 +1071,10 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         paid: '4200.00',
       });
       expect((await byTx(prodTx)).bankChangedSinceRecorded).toBe(false);
+      // Counted apart from the unallocated ones (it is fully allocated): never lost (FIN90-R1).
+      const after = await overviewNow();
+      expect(after.paymentsChangedAtBank).toBe(before.paymentsChangedAtBank + 1);
+      expect(after.paymentsToReview).toBe(before.paymentsToReview);
       // The database refuses what the API refuses: a production payment for a TEST invoice, more
       // than the payment or the invoice, a change of a payment.
       const prod = await owner.incomingPayment.findFirstOrThrow({ where: { sourceKey: prodTx } });
@@ -1187,6 +1196,127 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         .send({ requestId: randomUUID(), entries: [] })
         .expect(403);
       await real.post(`${PAY}/import-bank`, cookie).send({ requestId: randomUUID() }).expect(403);
+    } finally {
+      await real.close();
+    }
+  });
+
+  // --- The Finance overview's sums and the agreement filter (doc 042 §3): reads only.
+
+  it('overview (doc 042 §3a): the database sums equal the invoice list and the payments page; overdue as the payment state', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const [a, b] = [await agreement(c.id), await agreement(c.id)];
+    const overdue = (await expectStatus(issue([a.code]), 201)).body as InvoiceDetail;
+    const open = (await expectStatus(issue([b.code], '2026-08'), 201)).body as InvoiceDetail;
+    // Test fixture: the first invoice was issued and due 60 days earlier (append-only otherwise).
+    await withPrivileged((db) =>
+      db.$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
+        await tx.$executeRaw`UPDATE "finance"."invoices" SET "issued_on" = "issued_on" - 60, "due_on" = "due_on" - 60
+                             WHERE "number" = ${overdue.number}`;
+      }),
+    );
+    // A partial payment of the open one: it stays open with the rest.
+    await simulate([
+      { reference: ref('OV'), amount: '1000.00', variableSymbol: open.variableSymbol },
+    ]).expect(200);
+
+    const overview = (await f.get(`${INV}/overview`).expect(200)).body as InvoicesOverview;
+    const list = (await f.get(INV).expect(200)).body as InvoiceSummary[];
+    expect(list.find((i) => i.number === overdue.number)!.paymentState.overdue).toBe(true);
+    expect(list.find((i) => i.number === open.number)!.paymentState).toMatchObject({
+      state: 'PARTIALLY_PAID',
+      remaining: '3200.00',
+      overdue: false,
+    });
+    const cents = (v: string) => Math.round(Number(v) * 100);
+    const money = (c: number) => (c / 100).toFixed(2);
+    const expected = new Map<string, { o: number; or: number; d: number; dr: number }>();
+    for (const i of list) {
+      if (i.status !== 'VALID' || i.paymentState.state === 'PAID') continue;
+      const e = expected.get(i.currency) ?? { o: 0, or: 0, d: 0, dr: 0 };
+      e.o += 1;
+      e.or += cents(i.paymentState.remaining);
+      if (i.paymentState.overdue) {
+        e.d += 1;
+        e.dr += cents(i.paymentState.remaining);
+      }
+      expected.set(i.currency, e);
+    }
+    expect(overview.invoices).toEqual(
+      [...expected.entries()]
+        .sort(([x], [y]) => x.localeCompare(y))
+        .map(([currency, e]) => ({
+          currency,
+          open: { count: e.o, remaining: money(e.or) },
+          overdue: { count: e.d, remaining: money(e.dr) },
+        })),
+    );
+    expect(overview.invoices.find((x) => x.currency === 'CZK')!.overdue.count).toBeGreaterThan(0);
+    // To review: an unallocated amount; changed at the bank: counted apart (FIN90-R1).
+    const page = (await payments()).payments;
+    expect(page.some((p) => p.state === 'ALLOCATED' && p.bankChangedSinceRecorded)).toBe(true);
+    expect(overview.paymentsToReview).toBe(page.filter((p) => p.state !== 'ALLOCATED').length);
+    expect(overview.paymentsChangedAtBank).toBe(
+      page.filter((p) => p.bankChangedSinceRecorded).length,
+    );
+  });
+
+  it('the agreement filter (doc 042 §3b): only invoices with a line of that agreement; unknown → none; malformed → 400', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const [a, b] = [await agreement(c.id), await agreement(c.id)];
+    const both = (await expectStatus(issue([a.code, b.code], '2026-07'), 201))
+      .body as InvoiceDetail;
+    const onlyA = (await expectStatus(issue([a.code], '2026-06'), 201)).body as InvoiceDetail;
+    const numbers = async (code: string) =>
+      ((await f.get(`${INV}?agreement=${code}`).expect(200)).body as InvoiceSummary[]).map(
+        (i) => i.number,
+      );
+    expect(await numbers(a.code)).toEqual([onlyA.number, both.number]);
+    expect(await numbers(b.code)).toEqual([both.number]);
+    expect(await numbers('BA-999999')).toEqual([]);
+    await f.get(`${INV}?agreement=x`).expect(400);
+  });
+
+  it('the billing summary (doc 042 §3c): the counts of customers and agreements, nothing listed', async () => {
+    const summary = (await f.get(`${B}/summary`).expect(200)).body as {
+      customers: number;
+      agreements: number;
+    };
+    const [customers, agreements] = await Promise.all([
+      f.get(`${B}/customers`).expect(200),
+      f.get(`${B}/agreements`).expect(200),
+    ]);
+    expect(summary).toEqual({
+      customers: (customers.body as unknown[]).length,
+      agreements: (agreements.body as unknown[]).length,
+    });
+    expect(summary.agreements).toBeGreaterThan(0);
+  });
+
+  it('the overview needs finance:invoices_read; billing alone is refused', async () => {
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      const roleCode = `FINB_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Smlouvy (test)', description: 'test' },
+      });
+      await real.core.prisma.rolePermission.create({
+        data: { roleCode, permissionCode: 'finance:billing_read' },
+      });
+      const user = await prepareInvitedUser(real.core, {
+        email: `overview-${randomUUID()}@ayvo.test`,
+        displayName: 'Jen smlouvy',
+      });
+      await real.core.prisma.userRole.create({
+        data: { userId: user.id, roleCode, grantReason: 'test: billing only' },
+      });
+      const cookie = await sessionCookie(real.core, user.email);
+      await real.get(`${INV}/overview`, cookie).expect(403);
+      await real.get(`${B}/summary`, cookie).expect(200);
+      await real.get(`${INV}?agreement=BA-000001`, cookie).expect(403);
     } finally {
       await real.close();
     }

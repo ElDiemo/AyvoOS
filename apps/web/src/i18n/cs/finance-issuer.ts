@@ -2,7 +2,7 @@
 export const issuerCs = {
   title: 'Naše firma a bankovní účty',
   subtitle:
-    'Fakturační údaje AYVO jako vystavitele a účty uváděné na fakturách. Jediné místo, kde se tyto údaje mění; každá změna je nová verze s důvodem. Vydaná faktura si nese vlastní snímek, pozdější změna ji nezmění. Nejde o propojení s bankou (Bankovní pohyby).',
+    'Fakturační údaje AYVO jako vystavitele a účty uváděné na fakturách. Jediné místo, kde se tyto údaje mění; každá změna je nová verze s důvodem. Vydaná faktura si nese vlastní snímek, pozdější změna ji nezmění. Nejde o propojení s bankou (Banka a platby).',
   readiness: {
     title: 'Připravenost pro ostré vystavení',
     ok: (currency: string) => `${currency}: z tohoto nastavení nic nechybí.`,
