@@ -63,13 +63,17 @@ export default async function ComponentsPage({
                 <RowValue label={t.kind}>
                   {catalogCs.kinds[c.kind]} · {unitCs(c.unit.code)}
                 </RowValue>
-                <RowValue label={t.category}>{c.category?.name ?? catalogCs.common.any}</RowValue>
+                <RowValue label={t.category}>
+                  {c.category?.name ??
+                    (c.kind === 'LABEL_MEDIA' ? t.sharedLabelShort : catalogCs.common.any)}
+                </RowValue>
                 <RowValue label={t.lotTracked}>
                   {c.kind === 'PACKAGING'
                     ? `${t.packageCapacity}: ${c.packageCapacity ?? t.unknown}`
-                    : c.lotTracked
-                      ? t.lotTracked
-                      : `${t.lotTracked}: ${catalogCs.common.no}`}
+                    : (c.lotTracked ? t.lotTracked : `${t.lotTracked}: ${catalogCs.common.no}`) +
+                      (c.kind === 'LABEL_MEDIA' && c.packageCapacity
+                        ? ` · ${t.piecesPerRoll}: ${c.packageCapacity}`
+                        : '')}
                 </RowValue>
               </CatalogRow>
             ))}

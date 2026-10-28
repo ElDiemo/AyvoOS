@@ -82,7 +82,14 @@ export const catalogCs = {
     unknown: 'Neznámá',
     archived: 'Archivovaná – nelze použít v novém kusovníku',
     unitNone: 'Pro tento druh není k dispozici vhodná jednotka.',
-    categoryRequired: 'Kapalina a etiketa musí mít kategorii produktu.',
+    categoryRequired: 'Kapalina musí mít kategorii produktu.',
+    sharedLabel: 'Společná – prázdná etiketa pro všechny produkty',
+    sharedLabelShort: 'Společná (prázdná etiketa)',
+    labelCategoryHelp:
+      'Předtištěná etiketa patří jedné kategorii. Prázdná etiketa, na kterou se potisk produktu tiskne až u nás, je společná – kategorii nevybírejte.',
+    piecesPerRoll: 'Kusů v roli',
+    piecesPerRollHelp:
+      'Jen pomůcka pro příjem (počet rolí × kusů v roli). Sklad se vede vždy v kusech. Nechte prázdné, pokud počet neznáte.',
     created: (name: string) => `Komponenta „${name}“ byla založena.`,
     submit: 'Založit komponentu',
   },

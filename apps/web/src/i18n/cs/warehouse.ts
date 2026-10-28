@@ -86,6 +86,9 @@ export const warehouseCs = {
       `Položka ${code} z přípravy výroby není mezi skladovými položkami – vyberte ji ručně nebo zkontrolujte recepturu.`,
     backToSetup: 'Zpět na přípravu výroby',
     quantity: 'Množství',
+    rolls: (perRoll: number) => `Počet rolí (po ${perRoll} ks)`,
+    rollsHint:
+      'Pomůcka: množství v kusech se dopočítá (role × kusů v roli). Přijímá se vždy jen množství v kusech – zkontrolujte ho podle dokladu.',
     supplierLot: 'Šarže dodavatele',
     supplierLotHelp: 'Prázdné = systém vytvoří interní šarži pro tuto položku.',
     lot: 'Šarže',

@@ -64,6 +64,11 @@ export const inventoryItemSchema = z.object({
   kind: inventoryItemKindSchema,
   unit: inventoryUnitSchema,
   lotTracked: z.boolean(),
+  /**
+   * Labels only (doc 023 §4a): pieces in one roll, an entry aid for receipts (rolls × pieces).
+   * Stock and receipts are always in the item's unit (pcs); null = not stated.
+   */
+  piecesPerRoll: z.number().int().nullable(),
   archivedAt: z.iso.datetime().nullable(),
   settings: inventoryItemSettingsSchema.nullable(),
 });
