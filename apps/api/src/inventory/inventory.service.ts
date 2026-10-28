@@ -33,6 +33,7 @@ export interface NewMovement {
   receiptCorrectionId?: string;
   bottleEventId?: string;
   bomLineId?: string;
+  stockIssueId?: string;
   occurredAt: Date;
   requestId: string;
 }
@@ -340,6 +341,7 @@ export class InventoryService {
             receiptCorrectionId: m.receiptCorrectionId,
             bottleEventId: m.bottleEventId,
             bomLineId: m.bomLineId,
+            stockIssueId: m.stockIssueId,
             occurredAt: m.occurredAt,
             requestId: m.requestId,
           },
@@ -373,7 +375,11 @@ export class InventoryService {
         orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
-        include: { item: { include: { baseUnit: true } }, lot: true },
+        include: {
+          item: { include: { baseUnit: true } },
+          lot: true,
+          stockIssue: { select: { reason: true } },
+        },
       }),
     ]);
     return { total, items };

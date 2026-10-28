@@ -86,6 +86,9 @@ export const warehouseCs = {
       `Položka ${code} z přípravy výroby není mezi skladovými položkami – vyberte ji ručně nebo zkontrolujte recepturu.`,
     backToSetup: 'Zpět na přípravu výroby',
     quantity: 'Množství',
+    rolls: (perRoll: number) => `Počet rolí (po ${perRoll} ks)`,
+    rollsHint:
+      'Pomůcka: množství v kusech se dopočítá (role × kusů v roli). Přijímá se vždy jen množství v kusech – zkontrolujte ho podle dokladu.',
     supplierLot: 'Šarže dodavatele',
     supplierLotHelp: 'Prázdné = systém vytvoří interní šarži pro tuto položku.',
     lot: 'Šarže',
@@ -130,6 +133,20 @@ export const warehouseCs = {
     file: 'Soubor',
     upload: 'Nahrát doklad',
     uploading: 'Nahrávám…',
+  },
+  issue: {
+    title: 'Vydat do spotřeby',
+    help: 'Ruční výdej spotřebního materiálu, např. když se do tiskárny založí nová role ribbonu. Výdej se nedá vrátit ani smazat; zaznamená se s důvodem.',
+    quantity: 'Množství',
+    lot: 'Šarže',
+    chooseLot: '– vyberte šarži –',
+    reason: 'Důvod (povinný)',
+    reasonPlaceholder: 'např. nová role do tiskárny etiket',
+    submit: 'Vydat do spotřeby',
+    submitting: 'Vydávám…',
+    done: (q: string, unit: string, after: string) =>
+      `Vydáno ${q} ${unit}. Na skladě zůstává ${after} ${unit}.`,
+    nothing: 'Na skladě nic není – vydat nelze.',
   },
   stock: {
     title: 'Stav skladu',
@@ -196,6 +213,10 @@ export const warehouseCs = {
     created: 'Dodavatel založen.',
   },
   apiErrors: {
+    STOCK_CHANGED:
+      'Stav zásoby se mezitím změnil (jiný výdej nebo příjem). Nic nebylo vydáno – zkontrolujte stav a případně vydejte znovu.',
+    NOT_CONSUMABLE: 'Ručně se vydává jen spotřební materiál.',
+    LOT_REQUIRED: 'Vyberte šarži.',
     SUPPLIER_EXISTS: 'Dodavatel s tímto názvem už existuje.',
     SUPPLIER_INACTIVE: 'Dodavatel neexistuje nebo je archivován.',
     UNSUPPORTED_DOCUMENT: 'Nahrajte doklad ve formátu PDF, JPEG nebo PNG.',

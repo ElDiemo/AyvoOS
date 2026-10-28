@@ -16,7 +16,7 @@ import { CarrierRegistryService } from './carrier-registry.service.js';
 import { carrierProblems, isVerifiedProduct } from './carrier-settings.rules.js';
 import { PplAuthError } from './ppl/ppl-client.js';
 import { CarrierCredentialsService } from './carrier-credentials.service.js';
-import { isPplConnection } from './ppl/ppl-connections.js';
+import { isAvailableConnection, PPL_CONNECTIONS } from './ppl/ppl-connections.js';
 
 const DEFAULT_INPUT: PplSettingsInput = {
   enabled: false,
@@ -129,15 +129,16 @@ export class CarrierSettingsService {
     siteId: string,
     input: UpdatePplSettingsRequest,
   ): Promise<PplSettings> {
-    const { requestId, ...settings } = input;
+    const { requestId, confirmProduction, ...settings } = input;
     await this.operations.run(
       'CARRIER_SETTINGS_UPDATE',
       requestId,
-      { actorId, siteId, ...settings },
+      { actorId, siteId, ...settings, confirmProduction: confirmProduction ?? false },
       async (tx) => {
         const site = await tx.site.findUnique({ where: { id: siteId }, select: { id: true } });
         if (!site) throw new NotFoundException('Site not found');
-        if (settings.connection && !isPplConnection(settings.connection)) {
+        // Production PPL exists only in production (ADR 0042): never chosen on DEV.
+        if (settings.connection && !isAvailableConnection(this.env, settings.connection)) {
           throw domainError(
             422,
             'UNKNOWN_CONNECTION',
@@ -147,6 +148,21 @@ export class CarrierSettingsService {
         // The site row serializes saves (also the very first one, before a settings row exists).
         await tx.$executeRaw`SELECT 1 FROM "sites" WHERE "id" = ${siteId}::uuid FOR UPDATE`;
         const before = await tx.siteCarrierSetting.findUnique({ where: { siteId } });
+        const environment = settings.connection
+          ? PPL_CONNECTIONS[settings.connection as keyof typeof PPL_CONNECTIONS].environment
+          : null;
+        // Switching a site to production PPL is an explicit decision, never a side effect of a save.
+        if (
+          environment === 'PRODUCTION' &&
+          before?.connection !== settings.connection &&
+          confirmProduction !== true
+        ) {
+          throw domainError(
+            422,
+            'PRODUCTION_CONFIRMATION_REQUIRED',
+            'Confirm that new shipments of this site will be real PPL shipments',
+          );
+        }
         const sameConnection = before?.verifiedConnection === settings.connection;
         if (
           settings.productCode &&
@@ -196,7 +212,21 @@ export class CarrierSettingsService {
             type: 'CARRIER_SETTINGS_UPDATED',
             actorUserId: actorId,
             siteId,
-            payload: { carrier: 'PPL', changes: changes(before, data) },
+            payload: {
+              carrier: 'PPL',
+              changes: changes(before, data),
+              // The environment of a newly chosen connection (and the explicit confirmation).
+              ...(before?.connection !== settings.connection
+                ? {
+                    connectionChange: {
+                      from: before?.connection ?? null,
+                      to: settings.connection,
+                      environment,
+                      confirmedProduction: environment === 'PRODUCTION',
+                    },
+                  }
+                : {}),
+            },
           },
           tx,
         );
@@ -275,6 +305,7 @@ export class CarrierSettingsService {
             payload: {
               carrier: 'PPL',
               connection: row.connection,
+              environment: gateway.environment,
               ...(products ? { products: products.length } : { error }),
             },
           },

@@ -29,6 +29,8 @@ export const COMPONENT_KINDS = [
   'BULK_LIQUID',
   'PUMP',
   'PACKAGING',
+  // Outside recipes: received and issued to consumption by hand (e.g. printer ribbon, doc 018 §5a).
+  'CONSUMABLE',
 ] as const;
 export const componentKindSchema = z.enum(COMPONENT_KINDS);
 export type ComponentKind = z.infer<typeof componentKindSchema>;

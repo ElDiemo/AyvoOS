@@ -64,6 +64,11 @@ export const inventoryItemSchema = z.object({
   kind: inventoryItemKindSchema,
   unit: inventoryUnitSchema,
   lotTracked: z.boolean(),
+  /**
+   * Labels only (doc 023 §4a): pieces in one roll, an entry aid for receipts (rolls × pieces).
+   * Stock and receipts are always in the item's unit (pcs); null = not stated.
+   */
+  piecesPerRoll: z.number().int().nullable(),
   archivedAt: z.iso.datetime().nullable(),
   settings: inventoryItemSettingsSchema.nullable(),
 });
@@ -159,9 +164,36 @@ export const inventoryMovementSchema = z.object({
     receiptLineNo: z.number().int().nullable(),
     correctionReason: z.string().nullable(),
     bottleCode: z.string().nullable(),
+    /** CONSUMPTION_ISSUE: the reason given for the manual issue. */
+    issueReason: z.string().nullable(),
   }),
 });
 export type InventoryMovement = z.infer<typeof inventoryMovementSchema>;
+
+/**
+ * POST /api/admin/inventory/issues — issues a consumable (e.g. one printer ribbon roll) to
+ * consumption by hand at the active site's warehouse (owner 2026-10-27, doc 018 §5a).
+ * `expectedOnHand` is the stock the user saw: if it changed meanwhile (another issue or receipt),
+ * nothing is issued (STOCK_CHANGED) — a second click or a second tab never issues twice.
+ */
+export const createStockIssueRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  itemCode: inventoryItemCodeSchema,
+  lotId: z.uuid().nullable(),
+  quantity: positiveDecimalSchema,
+  expectedOnHand: nonNegativeDecimalSchema,
+  reason: z.string().trim().min(3).max(500),
+});
+export type CreateStockIssueRequest = z.infer<typeof createStockIssueRequestSchema>;
+
+export const stockIssueResultSchema = z.object({
+  itemCode: z.string(),
+  lot: z.object({ id: z.uuid(), code: z.string() }).nullable(),
+  quantity: decimalStringSchema,
+  balanceAfter: decimalStringSchema,
+  occurredAt: z.iso.datetime(),
+});
+export type StockIssueResult = z.infer<typeof stockIssueResultSchema>;
 
 export const inventoryMovementPageSchema = z.object({
   items: z.array(inventoryMovementSchema),

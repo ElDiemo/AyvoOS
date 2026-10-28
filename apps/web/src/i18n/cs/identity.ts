@@ -41,6 +41,7 @@ export const identityCs = {
     'inventory:receive': 'Přijímat zboží a nahrávat doklady',
     'inventory:correct': 'Opravovat příjmy',
     'inventory:items_manage': 'Plánování položek (minimální a cílová zásoba)',
+    'inventory:consume': 'Výdej spotřebního materiálu do spotřeby (např. ribbon)',
     'procurement:suppliers_manage': 'Zakládat a archivovat dodavatele',
     'procurement:cost_read': 'Vidět nákupní ceny',
     'procurement:cost_write': 'Upravovat nákupní ceny',

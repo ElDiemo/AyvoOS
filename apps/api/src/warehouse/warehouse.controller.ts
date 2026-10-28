@@ -1,14 +1,17 @@
 import {
   bottleCodeSchema,
+  createStockIssueRequestSchema,
   inventoryItemCodeSchema,
   movementListQuerySchema,
   updateItemSettingsRequestSchema,
   type BottlePhysical,
+  type CreateStockIssueRequest,
   type InventoryItem,
   type InventoryLot,
   type InventoryMovementPage,
   type MovementListQuery,
   type StockOverview,
+  type StockIssueResult,
   type StockSummary,
   type UpdateItemSettingsRequest,
 } from '@ayvo/types';
@@ -18,8 +21,14 @@ import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { WarehouseReadService } from './warehouse-read.service.js';
 import { RequirePermission } from '../identity/access.decorators.js';
-import { OperationalSite, OperationalWarehouse } from '../identity/access.guard.js';
+import {
+  CurrentPrincipal,
+  OperationalSite,
+  OperationalWarehouse,
+} from '../identity/access.guard.js';
+import type { Principal } from '../identity/principal.js';
 import { InventoryService } from '../inventory/inventory.service.js';
+import { StockIssuesService } from '../inventory/stock-issues.service.js';
 import type { SiteContext, WarehouseContext } from '../inventory/warehouse-context.js';
 
 const ITEM_CODE = new ZodValidationPipe(inventoryItemCodeSchema);
@@ -34,7 +43,23 @@ export class WarehouseController {
   constructor(
     private readonly read: WarehouseReadService,
     private readonly inventory: InventoryService,
+    private readonly issues: StockIssuesService,
   ) {}
+
+  /**
+   * Issues a consumable (e.g. a printer ribbon roll) to consumption by hand at the active site's
+   * warehouse, with a reason (owner 2026-10-27, doc 018 §5a).
+   */
+  @RequirePermission('inventory:consume')
+  @Post('inventory/issues')
+  @HttpCode(201)
+  issue(
+    @Body(new ZodValidationPipe(createStockIssueRequestSchema)) body: CreateStockIssueRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalWarehouse() warehouse: WarehouseContext,
+  ): Promise<StockIssueResult> {
+    return this.issues.issue(principal.userId, warehouse, body);
+  }
 
   /**
    * RETIRED (doc 025 A3, owner B4): a label is applied only at a labelling station into a crate
