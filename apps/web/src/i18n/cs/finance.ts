@@ -237,6 +237,8 @@ export const financeCs = {
     ofAgreement: 'Faktury této smlouvy',
     noneOfAgreement: 'Na tuto smlouvu zatím nebyla vystavena žádná faktura.',
     emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy a ceny',
+    emptyFromAgreements:
+      'Faktura vzniká ze smlouvy hotelu; smlouvy spravuje kolega s přístupem ke Smlouvám a cenám.',
     number: 'Číslo',
     customer: 'Odběratel',
     period: 'Období',

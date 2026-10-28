@@ -305,4 +305,68 @@ test.describe('Přehled Financí', () => {
     expect((await bank.request.get('/api/admin/finance/invoices/overview')).status()).toBe(403);
     await ctx.close();
   });
+
+  test('no offered link ends in Forbidden: an invoice and document reader (review FIN90-R3)', async ({
+    page,
+    browser,
+    baseURL,
+  }) => {
+    test.setTimeout(180_000);
+    const r = page.request;
+    const role = `E2E_INV_${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
+    await json(
+      await r.post('/api/admin/identity/roles', {
+        data: {
+          code: role,
+          name: 'Faktury a doklady jen čtení (E2E)',
+          description: 'Finance: read invoices and received documents',
+          permissions: ['finance:invoices_read', 'finance:documents_read'],
+          copiedFrom: null,
+          reason: 'e2e: links never lead to Forbidden',
+        },
+      }),
+    );
+    const email = `e2e-inv-${crypto.randomUUID().slice(0, 6)}@ayvo.test`;
+    await json(
+      await r.post('/api/admin/identity/users', {
+        data: {
+          email,
+          displayName: 'Faktury jen čtení (E2E)',
+          roles: [role],
+          siteIds: [INITIAL_SITE_ID],
+          warehouseCodes: [],
+          reason: 'e2e: links never lead to Forbidden',
+        },
+      }),
+    );
+    const ctx = await browser.newContext({ baseURL });
+    const reader = await ctx.newPage();
+    await reader.goto(`/api/auth/login?next=/finance&login_hint=${encodeURIComponent(email)}`);
+    await expect(reader).toHaveURL(/\/finance$/);
+    // Issuing needs more than reading: not offered.
+    await reader.goto('/finance/invoices');
+    await expect(reader.getByTestId('invoice-new')).toHaveCount(0);
+    await expect(reader.getByTestId('invoices-to-billing')).toHaveCount(0);
+    // Every Finance link offered on these pages (navigation, cards, empty states, rows) opens.
+    const targets = new Set<string>();
+    for (const start of [
+      '/finance',
+      '/finance/invoices',
+      '/finance/payments',
+      '/finance/documents',
+      '/finance/exports',
+    ]) {
+      await reader.goto(start);
+      for (const href of await reader
+        .locator('a[href^="/finance"]')
+        .evaluateAll((as) => as.map((a) => a.getAttribute('href')!)))
+        targets.add(href.split('#')[0]!);
+    }
+    expect(targets.size).toBeGreaterThan(5);
+    for (const href of [...targets].slice(0, 60)) {
+      await reader.goto(href);
+      expect(new URL(reader.url()).pathname, `${href} must not be offered`).not.toBe('/forbidden');
+    }
+    await ctx.close();
+  });
 });

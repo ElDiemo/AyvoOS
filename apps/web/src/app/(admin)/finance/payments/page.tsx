@@ -25,6 +25,7 @@ const t = financeCs.payments;
 export default async function PaymentsPage() {
   const me = await requirePermission('finance:invoices_read');
   const canManage = hasPermission(me, 'finance:payments_manage');
+  const canBank = hasPermission(me, 'finance:bank_read');
   const [page, invoices] = await Promise.all([
     apiGet('admin/finance/payments', paymentsPageSchema),
     apiGet('admin/finance/invoices', z.array(invoiceSummarySchema)),
@@ -45,10 +46,14 @@ export default async function PaymentsPage() {
           data-testid="payments-from-bank"
         >
           <p className="text-stone-600">
-            {t.fromBank}{' '}
-            <Link href="/finance/bank" className="underline">
-              {financeCs.bank.title}
-            </Link>
+            {t.fromBank} {/* A link only for whom the page opens (review FIN90-R3). */}
+            {canBank ? (
+              <Link href="/finance/bank" className="underline">
+                {financeCs.bank.title}
+              </Link>
+            ) : (
+              financeCs.bank.title
+            )}
             .
           </p>
           {canManage && <ImportBankButton />}

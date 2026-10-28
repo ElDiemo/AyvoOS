@@ -17,7 +17,9 @@ const t = financeCs.invoices;
  */
 export default async function InvoicesPage() {
   const me = await requirePermission('finance:invoices_read');
-  const canIssue = hasPermission(me, 'finance:invoices_test');
+  // Links only where the user may go (review FIN90-R3): issuing also reads the agreements.
+  const canBilling = hasPermission(me, 'finance:billing_read');
+  const canIssue = hasPermission(me, 'finance:invoices_test') && canBilling;
   const invoices = await apiGet('admin/finance/invoices', z.array(invoiceSummarySchema));
   return (
     <>
@@ -44,9 +46,17 @@ export default async function InvoicesPage() {
           {invoices.length === 0 ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2 text-sm text-stone-600">
               <span>{t.empty}</span>
-              <Link href="/finance/billing" className="underline" data-testid="invoices-to-billing">
-                {t.emptyToBilling}
-              </Link>
+              {canBilling ? (
+                <Link
+                  href="/finance/billing"
+                  className="underline"
+                  data-testid="invoices-to-billing"
+                >
+                  {t.emptyToBilling}
+                </Link>
+              ) : (
+                <span data-testid="invoices-from-agreements">{t.emptyFromAgreements}</span>
+              )}
             </div>
           ) : (
             <InvoiceList invoices={invoices} />
