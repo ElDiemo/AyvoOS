@@ -80,6 +80,11 @@ export type PplSettingsInput = z.infer<typeof pplSettingsInputSchema>;
 
 export const updatePplSettingsRequestSchema = pplSettingsInputSchema.extend({
   requestId: z.uuid(),
+  /**
+   * Required (true) to switch a site to a PRODUCTION connection: new shipments of the site are then
+   * real PPL shipments. Never needed to keep a connection or to choose a TEST one.
+   */
+  confirmProduction: z.literal(true).optional(),
 });
 export type UpdatePplSettingsRequest = z.infer<typeof updatePplSettingsRequestSchema>;
 

@@ -150,6 +150,74 @@ test('ADMIN enters connection credentials: write-only, never shown back', async 
   await expect(site.getByTestId('carrier-problems')).toContainText('Nastavení je úplné');
 });
 
+test('production PPL (ADR 0042): its own write-only credentials and an explicit, confirmed choice per site', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/admin/carriers');
+  const prod = page.getByTestId('connection-PPL_PRODUCTION');
+  await expect(page.getByTestId('connection-PPL_PRODUCTION-environment')).toHaveText(
+    'Ostré prostředí',
+  );
+  await expect(page.getByTestId('connection-PPL_TEST-environment')).toHaveText(
+    'Testovací prostředí',
+  );
+  await expect(page.getByTestId('connection-PPL_PRODUCTION-state')).toHaveText('nenastaveno');
+  await expect(prod).toContainText('Ostré prostředí PPL: údaje produkčního účtu');
+  await expect(page.getByTestId('connection-production-absent')).toHaveCount(0);
+  // The simulation's synthetic account (never real PPL; the e2e API runs with APP_ENV=test).
+  await page.getByTestId('connection-PPL_PRODUCTION-client-id').fill('e2e-fake-ppl-client');
+  await page.getByTestId('connection-PPL_PRODUCTION-secret').fill(FAKE_SECRET);
+  await page.getByTestId('connection-PPL_PRODUCTION-reason').fill('Synthetic browser test');
+  await page.getByTestId('connection-PPL_PRODUCTION-save').click();
+  await expect(page.getByTestId('connection-PPL_PRODUCTION-state')).toHaveText(
+    'nastaveno · zadáno v administraci',
+  );
+  expect(await page.content()).not.toContain(FAKE_SECRET);
+
+  // The second site (the main one stays on the test connection).
+  await page.goto('/admin/sites');
+  await page.getByRole('link', { name: 'Testovací provozovna DE' }).click();
+  await page.waitForURL(/\/admin\/sites\/[0-9a-f-]{36}$/);
+  const card = page.getByTestId('carrier-settings');
+  await card.getByTestId('carrier-connection').selectOption('PPL_PRODUCTION');
+  await expect(card.getByTestId('carrier-settings-production-environment')).toHaveText(
+    'Ostré prostředí',
+  );
+  await expect(card).toContainText('nové přepravy této provozovny budou skutečné zásilky');
+  const confirm = card.getByTestId('carrier-confirm-production');
+  await expect(confirm).not.toBeChecked();
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await confirm.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await page.screenshot({
+      path: join(
+        import.meta.dirname,
+        `../../../docs/screenshots/carrier/carrier-production-confirm-${width}.png`,
+      ),
+    });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Not confirmed: the form is not sent (the box is required); nothing is saved.
+  await card.getByTestId('carrier-save').click();
+  expect(await confirm.evaluate((el) => (el as HTMLInputElement).validity.valid)).toBe(false);
+  await page.reload();
+  await expect(card.getByTestId('carrier-connection')).not.toHaveValue('PPL_PRODUCTION');
+
+  // Confirmed: saved; a new verification is required; no further confirmation once chosen.
+  await card.getByTestId('carrier-connection').selectOption('PPL_PRODUCTION');
+  await card.getByTestId('carrier-confirm-production').check();
+  await card.getByTestId('carrier-save').click();
+  await expect(card).toContainText('Nastavení uloženo.');
+  await page.reload();
+  await expect(card.getByTestId('carrier-connection')).toHaveValue('PPL_PRODUCTION');
+  await expect(card.getByTestId('carrier-confirm-production')).toHaveCount(0);
+  await expect(card.getByTestId('carrier-problems')).toContainText('Připojení nebylo ověřeno');
+});
+
 test('the operator never sees the carrier settings', async ({ browser }) => {
   const ctx = await browser.newContext({ storageState: 'e2e/.auth/operator.json' });
   const page = await ctx.newPage();

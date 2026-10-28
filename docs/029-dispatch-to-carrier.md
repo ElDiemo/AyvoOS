@@ -308,11 +308,22 @@ audited without any secret):
   later changes never affect it, and its polling, label download and cancellation use only its own
   connection — never another environment, never a fallback.
 
-**Connections** are defined in code (`apps/api/src/carriers/ppl/ppl-connections.ts`): only
-`PPL_TEST` → `https://api-dev.dhl.com/ecs/ppl/myapi2` exists. The URL is not editable by anyone; there
-is no production connection, so DEV can neither switch nor fall back to production PPL. The API
-refuses the PPL TEST credentials with `APP_ENV=production`; a different base URL is accepted only by
-automated tests (`APP_ENV=test`).
+**Connections** are defined in code (`apps/api/src/carriers/ppl/ppl-connections.ts`):
+`PPL_TEST` → `https://api-dev.dhl.com/ecs/ppl/myapi2` and, since ADR 0042 (owner 2026-10-27),
+`PPL_PRODUCTION` → `https://api.dhl.com/ecs/ppl/myapi2`. The URLs are not editable by anyone.
+`PPL_PRODUCTION` exists only with `APP_ENV=production` (and in automated tests against the
+simulated server): DEV can neither store its credentials, nor choose, call or fall back to
+production PPL. The API refuses the PPL TEST credentials in the server env file with
+`APP_ENV=production` (entered in the administration they remain possible); a different base URL is
+accepted only by automated tests (`APP_ENV=test`).
+
+**Production choice (§9b, ADR 0042):** a site is switched to `PPL_PRODUCTION` only explicitly — the
+settings page asks for a confirmation that new shipments of the site will be real PPL shipments
+(API: `confirmProduction: true`, else `PRODUCTION_CONFIRMATION_REQUIRED`); the audit records from →
+to, the environment and the confirmation. A new "Ověřit připojení" (token + product list, read-only)
+is required before a new shipment. Existing requests and shipments keep their recorded connection,
+environment and account. Production credentials only in Správa systému → Dopravci, entered by the
+owner — never in an env file, never on DEV.
 
 **Credentials** (ADR 0027): entered in **Správa systému → Dopravci** (ADMIN,
 `carriers:connections_manage`) — stored only AES-256-GCM-encrypted in `carrier_connections`, the

@@ -184,12 +184,30 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
     // Carrier connections (credentials): ADMIN only as well; a custom role can never hold it.
     for (const u of [supervisor, dispatcher]) {
       expect((await as(u.cookie).get('/api/admin/carrier-connections')).status).toBe(403);
+      // The test and the production connection alike (ADR 0042).
+      for (const code of ['PPL_TEST', 'PPL_PRODUCTION']) {
+        expect(
+          (
+            await http()
+              .post(`/api/admin/carrier-connections/${code}/credentials`)
+              .set('Cookie', u.cookie)
+              .send({
+                requestId: randomUUID(),
+                clientId: 'a',
+                clientSecret: 'b',
+                reason: 'not mine',
+              })
+          ).status,
+          code,
+        ).toBe(403);
+      }
+      // Nor may they switch a site to production PPL, confirmed or not.
       expect(
         (
           await http()
-            .post('/api/admin/carrier-connections/PPL_TEST/credentials')
+            .put(url)
             .set('Cookie', u.cookie)
-            .send({ requestId: randomUUID(), clientId: 'a', clientSecret: 'b', reason: 'not mine' })
+            .send({ requestId: randomUUID(), enabled: true, connection: 'PPL_PRODUCTION' })
         ).status,
       ).toBe(403);
     }

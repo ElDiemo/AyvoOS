@@ -16,6 +16,11 @@ export const BASE_PATH = '/ecs/ppl/myapi2';
 type Mode = {
   /** 201 without a Location header. */
   noLocation: boolean;
+  /**
+   * The header's spelling on the wire: PPL writes every header in lower case since 2026-02-09
+   * (developer.ppl.cz, "změny v HTTP hlavičkách") — `location`, the default; `Location` as before.
+   */
+  locationHeader: 'location' | 'Location';
   /** POST /shipment/batch answers 500. */
   batchError: boolean;
   /** 400 problem+json validation refusal. */
@@ -130,6 +135,7 @@ export class FakePpl {
   private static fresh(): Mode {
     return {
       noLocation: false,
+      locationHeader: 'location',
       batchError: false,
       reject: false,
       processingPolls: 0,
@@ -286,7 +292,9 @@ export class FakePpl {
         res,
         201,
         {},
-        this.mode.noLocation ? {} : { location: `${this.base}/shipment/batch/${id}` },
+        this.mode.noLocation
+          ? {}
+          : { [this.mode.locationHeader]: `${this.base}/shipment/batch/${id}` },
       );
     }
     const batchMatch = /^\/shipment\/batch\/([0-9a-f-]{36})$/.exec(path);

@@ -831,10 +831,11 @@ describe.skipIf(!hasDatabase)('dispatch without a configured carrier (DEV today)
     const res = await http()
       .post(`/api/admin/orders/${order.code}/shipment/labels`)
       .send({ requestId: randomUUID() });
+    // Refused with exactly the reason the page shows (it depends on the shared database, above).
     expect([res.status, res.body.code, res.body.details]).toEqual([
       409,
       'CARRIER_NOT_CONFIGURED',
-      { reason: 'NOT_CONFIGURED' },
+      { reason: v.carrier.unavailable },
     ]);
     expect(
       await t.prisma.shipmentCarrierRequest.count({
