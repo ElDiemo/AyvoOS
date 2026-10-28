@@ -14,7 +14,7 @@ export function BrandLogo({
 }) {
   return (
     <span
-      className={cn('inline-flex shrink-0 items-center gap-3', className)}
+      className={cn('inline-flex shrink-0 items-center', compact ? 'gap-2.5' : 'gap-3', className)}
       data-testid="brand-logo"
     >
       <Image
@@ -24,11 +24,12 @@ export function BrandLogo({
         height={985}
         unoptimized
         loading="eager"
-        className={cn('h-auto', compact ? 'w-24' : 'w-36', inverse && 'invert')}
+        className={cn('h-auto', compact ? 'w-20' : 'w-36', inverse && 'invert')}
       />
       <span
         className={cn(
-          'border-l pl-3 text-xs font-medium tracking-[0.14em]',
+          'border-l text-xs font-medium tracking-[0.14em]',
+          compact ? 'pl-2.5' : 'pl-3',
           inverse ? 'border-white/25 text-stone-300' : 'border-stone-300 text-stone-500',
         )}
       >
