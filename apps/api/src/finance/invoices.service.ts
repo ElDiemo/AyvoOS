@@ -93,10 +93,12 @@ export class InvoicesService {
   /**
    * The Finance overview's sums (doc 042 §3a), aggregated in the database: valid invoices with a
    * remaining amount per currency (overdue = due before today in Prague, as `invoicePaymentState`)
-   * and the incoming payments with an amount not yet allocated. Reads only.
+   * and two separate counts of incoming payments a person has to look at: with an amount not yet
+   * allocated, and changed by the bank after they were recorded (`bankChangedSinceRecorded`, also
+   * when fully allocated — review FIN90-R1; nothing is re-allocated). Reads only.
    */
   async overview(): Promise<InvoicesOverview> {
-    const [rows, [payments]] = await Promise.all([
+    const [rows, [payments], [changed]] = await Promise.all([
       this.prisma.$queryRaw<
         { currency: string; open: number; open_rem: string; overdue: number; overdue_rem: string }[]
       >`
@@ -119,6 +121,11 @@ export class InvoicesService {
         SELECT count(*)::int AS "count" FROM "finance"."incoming_payments" p
         WHERE p."amount" > coalesce((SELECT sum(a."amount") FROM "finance"."payment_allocations" a
                                      WHERE a."payment_id" = p."id"), 0)`,
+      this.prisma.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::int AS "count" FROM "finance"."incoming_payments" p
+        WHERE p."bank_transaction_version" IS NOT NULL
+          AND (SELECT max(v."version") FROM "finance"."bank_transaction_versions" v
+               WHERE v."transaction_id" = p."bank_transaction_id") > p."bank_transaction_version"`,
     ]);
     const money = (v: string) => new Prisma.Decimal(v).toFixed(2);
     return {
@@ -128,6 +135,7 @@ export class InvoicesService {
         overdue: { count: r.overdue, remaining: money(r.overdue_rem) },
       })),
       paymentsToReview: payments!.count,
+      paymentsChangedAtBank: changed!.count,
     };
   }
 

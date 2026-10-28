@@ -218,13 +218,24 @@ export default async function FinanceOverviewPage() {
               {sums === null ? (
                 <p className="text-sm text-stone-600">{t.unavailable}</p>
               ) : (
-                <Stat
-                  label={t.toReview}
-                  value={sums.paymentsToReview}
-                  tone={sums.paymentsToReview > 0 ? 'warning' : 'neutral'}
-                  href="/finance/payments"
-                  testId="overview-to-review"
-                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Stat
+                    label={t.toReview}
+                    value={sums.paymentsToReview}
+                    tone={sums.paymentsToReview > 0 ? 'warning' : 'neutral'}
+                    href="/finance/payments"
+                    testId="overview-to-review"
+                  />
+                  {/* Apart from the unallocated ones: also a fully allocated payment the bank
+                      changed later must be looked at (review FIN90-R1). */}
+                  <Stat
+                    label={t.changedAtBank}
+                    value={sums.paymentsChangedAtBank}
+                    tone={sums.paymentsChangedAtBank > 0 ? 'error' : 'neutral'}
+                    href="/finance/payments"
+                    testId="overview-changed-at-bank"
+                  />
+                </div>
               )}
             </Card>
           )}

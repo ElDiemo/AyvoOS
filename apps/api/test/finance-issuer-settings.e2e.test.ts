@@ -1040,7 +1040,11 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       });
       expect([manual.status, manual.body.code]).toEqual([422, 'ENVIRONMENT_MISMATCH']);
       // The bank changes the recorded transaction later (a new version): nothing recorded or
-      // allocated is overwritten — it is reported and flagged for a person.
+      // allocated is overwritten — it is reported and flagged for a person (also on the Finance
+      // overview, although the payment is fully allocated: review FIN90-R1).
+      const overviewNow = async () =>
+        (await f.get(`${INV}/overview`).expect(200)).body as InvoicesOverview;
+      const before = await overviewNow();
       const v1 = await owner.bankTransactionVersion.findFirstOrThrow({
         where: { transactionId: testTx, version: 1 },
       });
@@ -1067,6 +1071,10 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         paid: '4200.00',
       });
       expect((await byTx(prodTx)).bankChangedSinceRecorded).toBe(false);
+      // Counted apart from the unallocated ones (it is fully allocated): never lost (FIN90-R1).
+      const after = await overviewNow();
+      expect(after.paymentsChangedAtBank).toBe(before.paymentsChangedAtBank + 1);
+      expect(after.paymentsToReview).toBe(before.paymentsToReview);
       // The database refuses what the API refuses: a production payment for a TEST invoice, more
       // than the payment or the invoice, a change of a payment.
       const prod = await owner.incomingPayment.findFirstOrThrow({ where: { sourceKey: prodTx } });
@@ -1246,8 +1254,12 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         })),
     );
     expect(overview.invoices.find((x) => x.currency === 'CZK')!.overdue.count).toBeGreaterThan(0);
-    expect(overview.paymentsToReview).toBe(
-      (await payments()).payments.filter((p) => p.state !== 'ALLOCATED').length,
+    // To review: an unallocated amount; changed at the bank: counted apart (FIN90-R1).
+    const page = (await payments()).payments;
+    expect(page.some((p) => p.state === 'ALLOCATED' && p.bankChangedSinceRecorded)).toBe(true);
+    expect(overview.paymentsToReview).toBe(page.filter((p) => p.state !== 'ALLOCATED').length);
+    expect(overview.paymentsChangedAtBank).toBe(
+      page.filter((p) => p.bankChangedSinceRecorded).length,
     );
   });
 

@@ -53,7 +53,9 @@ export type InvoiceListQuery = z.infer<typeof invoiceListQuerySchema>;
  * GET /api/admin/finance/invoices/overview (doc 042 §3a): sums the database computes for the
  * Finance overview — no list is loaded. Valid (not cancelled) invoices still to be paid, per
  * currency; overdue = past due in Prague and not paid (as `paymentState`). Payments to review =
- * incoming payments with an amount not yet allocated.
+ * incoming payments with an amount not yet allocated; changed at the bank = recorded payments whose
+ * bank transaction the bank changed since (`bankChangedSinceRecorded`, also when fully allocated) —
+ * counted apart, so neither definition hides the other (review FIN90-R1).
  */
 export const invoicesOverviewSchema = z.object({
   invoices: z.array(
@@ -64,6 +66,7 @@ export const invoicesOverviewSchema = z.object({
     }),
   ),
   paymentsToReview: z.number().int(),
+  paymentsChangedAtBank: z.number().int(),
 });
 export type InvoicesOverview = z.infer<typeof invoicesOverviewSchema>;
 

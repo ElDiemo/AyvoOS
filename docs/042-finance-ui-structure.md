@@ -50,12 +50,15 @@ v databázi agregací, bez načtení seznamu —
 
 ```
 { invoices: [{ currency, open: { count, remaining }, overdue: { count, remaining } }],
-  paymentsToReview: number }
+  paymentsToReview: number, paymentsChangedAtBank: number }
 ```
 
 Platné (nestornované) TEST faktury; zbývá = celkem − součet přiřazení (stejná pravidla jako
 `paymentState` seznamu, splatnost podle `dueOn` a dnešního dne v Praze jako dosud). Platby
-k posouzení = platby s nepřiřazenou částkou (stav ≠ `ALLOCATED`). Nic nezapisuje.
+k posouzení = platby s nepřiřazenou částkou (stav ≠ `ALLOCATED`). **Zvlášť** `paymentsChangedAtBank`
+= zaznamenané platby, jejichž pohyb banka později změnila (`bankChangedSinceRecorded`, i když je
+platba celá přiřazená — review FIN90-R1); Přehled je ukazuje jako samostatné varování, aby žádná
+z obou definic neschovala tu druhou. Nic se nepřepárovává ani nepřepisuje. Nic nezapisuje.
 
 **b) `GET /api/admin/finance/invoices?agreement=BA-000001`** (`finance:invoices_read`): volitelný
 filtr existujícího seznamu na faktury, jejichž řádek odkazuje na smlouvu (jednoznačná vazba
