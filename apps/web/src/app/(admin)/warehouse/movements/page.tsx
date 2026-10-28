@@ -76,6 +76,9 @@ export default async function MovementsPage({
                         {x.source.receiptLineNo ? `/${x.source.receiptLineNo}` : ''}
                       </Link>
                     )}
+                    {x.source.issueReason && (
+                      <span className="text-stone-600">{x.source.issueReason}</span>
+                    )}
                     {x.source.correctionReason && (
                       <span className="ml-2 text-stone-600">{x.source.correctionReason}</span>
                     )}

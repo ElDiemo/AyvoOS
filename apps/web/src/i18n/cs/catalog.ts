@@ -57,6 +57,8 @@ export const catalogCs = {
     BULK_LIQUID: 'Náplň pro konkrétní kategorii produktu; měří se v objemové jednotce (ml).',
     PUMP: 'Pumpička; počítá se v kusech.',
     PACKAGING: 'Přepravní obal. Do kusovníku lahve nepatří; kapacitu lze nechat neznámou.',
+    CONSUMABLE:
+      'Materiál mimo kusovník, např. ribbon do tiskárny (1 ks = 1 role). Přijímá se jako jiná položka a do spotřeby se vydává ručně ve Skladu – nikdy se neodhaduje na etiketu.',
   } satisfies Record<ComponentKind, string>,
   status: {
     DRAFT: 'Koncept',
