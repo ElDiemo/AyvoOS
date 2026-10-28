@@ -28,17 +28,17 @@ fungují dál); novou URL má jen Přehled.
 
 ## 2. Dostupnost dat (bez druhého zdroje pravdy)
 
-| Údaj                                       | Zdroj                                                                                    | Omezené načtení         |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------- | ----------------------- |
-| Doklady k doplnění                         | `GET documents?incomplete=true` → `total` (existující, stránkované)                      | ano                     |
-| Stav banky (připojení, poslední načtení)   | `GET bank/status` (existující)                                                           | ano                     |
-| Naše firma a výchozí účty nastaveny        | `GET issuer` (existující, jen `finance:issuer_manage`)                                   | ano                     |
-| Nezaplacené / po splatnosti (počet, zbývá) | **chybí** — `GET invoices` vrací všechny faktury                                         | ne → §3a                |
-| Platby k posouzení (nepřiřazené)           | **chybí** — `GET payments` vrací všechny platby                                          | ne → §3a                |
-| Odběratelé / smlouvy založeny              | `GET billing/customers`, `GET billing/agreements` (existující, nastavení — počet hotelů) | ano v rozsahu nastavení |
-| Faktura → přiřazené platby                 | `GET invoices/:number` → `allocations[].paymentCode` (existující)                        | ano                     |
-| Platba → faktury                           | `GET payments` → `allocations[].invoiceNumber` (existující)                              | ano (stránka plateb)    |
-| Smlouva → související faktury              | **chybí** — kód smlouvy je jen v řádcích detailu faktury                                 | ne → §3b                |
+| Údaj                                              | Zdroj                                                               | Omezené načtení      |
+| ------------------------------------------------- | ------------------------------------------------------------------- | -------------------- |
+| Doklady k doplnění                                | `GET documents?incomplete=true` → `total` (existující, stránkované) | ano                  |
+| Stav banky (připojení, poslední načtení)          | `GET bank/status` (existující)                                      | ano                  |
+| Naše firma a výchozí účty nastaveny               | `GET issuer` (existující, jen `finance:issuer_manage`)              | ano                  |
+| Nezaplacené / po splatnosti (počet, zbývá)        | **chybí** — `GET invoices` vrací všechny faktury                    | ne → §3a             |
+| Platby k posouzení (nepřiřazené / změněné bankou) | **chybí** — `GET payments` vrací všechny platby                     | ne → §3a             |
+| Odběratelé / smlouvy založeny                     | **chybí omezeně** — seznamy vracejí všechny záznamy                 | ne → §3c             |
+| Faktura → přiřazené platby                        | `GET invoices/:number` → `allocations[].paymentCode` (existující)   | ano                  |
+| Platba → faktury                                  | `GET payments` → `allocations[].invoiceNumber` (existující)         | ano (stránka plateb) |
+| Smlouva → související faktury                     | **chybí** — kód smlouvy je jen v řádcích detailu faktury            | ne → §3b             |
 
 Nula se ukazuje jen tam, kde ji server opravdu spočítal. Blok, na který uživatel nemá oprávnění
 nebo jehož zdroj neodpověděl, říká „nedostupné“ — nikdy 0.
@@ -64,6 +64,10 @@ z obou definic neschovala tu druhou. Nic se nepřepárovává ani nepřepisuje. 
 filtr existujícího seznamu na faktury, jejichž řádek odkazuje na smlouvu (jednoznačná vazba
 `invoice_lines.agreement_id`, nejvýš jedna faktura za smlouvu a měsíc). Bez filtru se seznam
 nemění. Detail smlouvy ukáže tyto faktury jen uživateli s `finance:invoices_read`.
+
+**c) `GET /api/admin/finance/billing/summary`** (`finance:billing_read`, review FIN90-R2): jen
+počty `{ customers, agreements }` spočítané v databázi — Přehled podle nich ukazuje kroky nastavení,
+aniž by načítal seznamy. Nedostupný zdroj = „nedostupné“, ne nula.
 
 Žádný odhad z textu, jména nebo variabilního symbolu.
 

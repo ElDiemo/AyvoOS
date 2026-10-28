@@ -1280,6 +1280,22 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     await f.get(`${INV}?agreement=x`).expect(400);
   });
 
+  it('the billing summary (doc 042 §3c): the counts of customers and agreements, nothing listed', async () => {
+    const summary = (await f.get(`${B}/summary`).expect(200)).body as {
+      customers: number;
+      agreements: number;
+    };
+    const [customers, agreements] = await Promise.all([
+      f.get(`${B}/customers`).expect(200),
+      f.get(`${B}/agreements`).expect(200),
+    ]);
+    expect(summary).toEqual({
+      customers: (customers.body as unknown[]).length,
+      agreements: (agreements.body as unknown[]).length,
+    });
+    expect(summary.agreements).toBeGreaterThan(0);
+  });
+
   it('the overview needs finance:invoices_read; billing alone is refused', async () => {
     const real = await createFinanceTestApp({ core: { auth: 'real' } });
     try {
@@ -1299,6 +1315,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       });
       const cookie = await sessionCookie(real.core, user.email);
       await real.get(`${INV}/overview`, cookie).expect(403);
+      await real.get(`${B}/summary`, cookie).expect(200);
       await real.get(`${INV}?agreement=BA-000001`, cookie).expect(403);
     } finally {
       await real.close();

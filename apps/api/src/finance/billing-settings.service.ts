@@ -5,6 +5,7 @@ import type {
   BillingAgreementTerms,
   BillingAgreementVersion,
   BillingCustomer,
+  BillingSummary,
   BillingCustomerDetail,
   BillingCustomerFields,
   BillingCustomerVersion,
@@ -82,6 +83,15 @@ export class BillingSettingsService {
     private readonly operations: FinanceOperations,
     private readonly core: CoreClient,
   ) {}
+
+  /** How many customers and agreements exist (doc 042 §3c): counted, nothing listed. */
+  async summary(): Promise<BillingSummary> {
+    const [customers, agreements] = await Promise.all([
+      this.prisma.customer.count(),
+      this.prisma.billingAgreement.count(),
+    ]);
+    return { customers, agreements };
+  }
 
   // --- customers ------------------------------------------------------------------------
 

@@ -1,14 +1,12 @@
 import {
   bankStatusSchema,
-  billingAgreementSchema,
-  billingCustomerSchema,
+  billingSummarySchema,
   financeDocumentPageSchema,
   invoicesOverviewSchema,
   issuerSettingsSchema,
   type PermissionCode,
 } from '@ayvo/types';
 import { cn } from '@ayvo/ui';
-import { z } from 'zod';
 import { financeAmount, financeDate } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { Card, CardLink, Notice, Stat } from '@/components/ui';
@@ -57,7 +55,7 @@ const pragueDay = (iso: string) =>
 export default async function FinanceOverviewPage() {
   const me = await requireAnyPermission(FINANCE_PERMISSIONS);
   const can = (p: PermissionCode) => hasPermission(me, p);
-  const [sums, documents, bank, issuer, customers, agreements] = await Promise.all([
+  const [sums, documents, bank, issuer, billing] = await Promise.all([
     can('finance:invoices_read')
       ? settle(apiGet('admin/finance/invoices/overview', invoicesOverviewSchema))
       : skipped,
@@ -70,11 +68,9 @@ export default async function FinanceOverviewPage() {
     can('finance:issuer_manage')
       ? settle(apiGet('admin/finance/issuer', issuerSettingsSchema))
       : skipped,
+    // Counts only (doc 042 §3c, review FIN90-R2): no list is loaded for a set-up step.
     can('finance:billing_read')
-      ? settle(apiGet('admin/finance/billing/customers', z.array(billingCustomerSchema)))
-      : skipped,
-    can('finance:billing_read')
-      ? settle(apiGet('admin/finance/billing/agreements', z.array(billingAgreementSchema)))
+      ? settle(apiGet('admin/finance/billing/summary', billingSummarySchema))
       : skipped,
   ]);
 
@@ -86,15 +82,15 @@ export default async function FinanceOverviewPage() {
       href: '/finance/settings/company',
       allowed: true,
     },
-    customers !== undefined && {
+    billing !== undefined && {
       id: 'customer' as const,
-      done: customers ? customers.length > 0 : null,
+      done: billing ? billing.customers > 0 : null,
       href: '/finance/billing?new=customer#customers',
       allowed: can('finance:billing_manage'),
     },
-    agreements !== undefined && {
+    billing !== undefined && {
       id: 'agreement' as const,
-      done: agreements ? agreements.length > 0 : null,
+      done: billing ? billing.agreements > 0 : null,
       href: '/finance/billing?new=agreement#agreements',
       allowed: can('finance:billing_manage'),
     },

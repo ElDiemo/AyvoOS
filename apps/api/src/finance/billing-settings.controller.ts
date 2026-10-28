@@ -10,6 +10,7 @@ import {
   type BillingAgreementDetail,
   type BillingCustomer,
   type BillingCustomerDetail,
+  type BillingSummary,
   type CreateBillingAgreementRequest,
   type CreateBillingCustomerRequest,
   type EffectiveTermsPage,
@@ -81,6 +82,13 @@ export class BillingSettingsController {
     @Caller() caller: FinanceCaller,
   ): Promise<BillingCustomerDetail> {
     return this.billing.newCustomerVersion(code, body, caller);
+  }
+
+  /** How many customers and agreements exist (doc 042 §3c, the overview): counts only. */
+  @RequirePermission('finance:billing_read')
+  @Get('summary')
+  summary(): Promise<BillingSummary> {
+    return this.billing.summary();
   }
 
   @RequirePermission('finance:billing_read')

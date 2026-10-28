@@ -106,6 +106,16 @@ export const billingCustomerVersionSchema = z.object({
 });
 export type BillingCustomerVersion = z.infer<typeof billingCustomerVersionSchema>;
 
+/**
+ * GET /api/admin/finance/billing/summary (doc 042 §3c): only how many customers and hotel
+ * agreements exist, counted in the database — for the overview's set-up steps, no list loaded.
+ */
+export const billingSummarySchema = z.object({
+  customers: z.number().int(),
+  agreements: z.number().int(),
+});
+export type BillingSummary = z.infer<typeof billingSummarySchema>;
+
 export const billingCustomerSchema = z.object({
   id: z.uuid(),
   code: z.string(),
