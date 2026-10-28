@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { prodSecrets, renderProd } from './support/prod-compose.js';
 
 /**
  * The production deployment (doc 036, ADR 0033): its Compose project, edge, host guard and deploy
@@ -11,6 +12,9 @@ import { afterAll, describe, expect, it } from 'vitest';
  * arguments. The real proof from outside the tailnet is the owner's (doc 036 §5).
  */
 const root = resolve(import.meta.dirname, '../../..');
+/** A slice of the script run by `bash -c` (no BASH_SOURCE): REPO_ROOT is this checkout. */
+const withRepoRoot = (text: string) =>
+  text.replace(/^readonly REPO_ROOT=.*$/m, `readonly REPO_ROOT=${root}`);
 const prodDir = join(root, 'deploy/prod');
 const read = (f: string) => readFileSync(join(root, f), 'utf8');
 const run = (cmd: string, args: string[], env: Record<string, string> = {}, cwd = root) =>
@@ -648,7 +652,7 @@ describe('production deploy script', () => {
       const root = opts.asRoot
         ? 'id() { if [[ $# == 1 && $1 == -u ]]; then echo 0; else command id "$@"; fi; }\n'
         : '';
-      const harness = `set -Eeuo pipefail\n${root}${lines.slice(from, to).join('\n')}\nSTEP=test\n${opts.call ?? 'check_env_files'}\n`;
+      const harness = `set -Eeuo pipefail\n${root}${withRepoRoot(lines.slice(from, to).join('\n'))}\nSTEP=test\n${opts.call ?? 'check_env_files'}\n`;
       return run('bash', ['-c', harness], {
         AYVO_PROD_SECRETS_DIR: dir,
         AYVO_PROD_DIR: dir,
@@ -1344,6 +1348,7 @@ describe('the Finance deployment flow keeps the OS running (incident 2026-10-26)
     '    "--profile finance-tools run --rm finance-migrate")',
     '      step MIGRATE; [[ -z ${FAIL_MIGRATE:-} ]] ;;',
     '    "--profile finance up -d --no-build --no-deps finance") touch "$STATE/run/finance"; step "START finance" ;;',
+    '    "exec -T -e WANT=none finance node -e "*) step "RB none"; return 0 ;;',
     '    "exec -T finance node -e "*)',
     '      step "READY? api=$(running api && echo up || echo down)"',
     '      running api && running finance ;;',
@@ -1383,8 +1388,11 @@ describe('the Finance deployment flow keeps the OS running (incident 2026-10-26)
         'start_finance',
         'verify_finance',
         'record_finance',
+        'verify_rb_premium',
       ].map(fnSrc),
       `PROJECT=ayvo-prod; IMAGE_PREFIX=ayvo-prod; DOMAIN=os.example.test; PROD_DIR=${state}/prod`,
+      // The container check's script (scripts/lib/rb-premium-files.sh); the stub only matches the call.
+      "RB_PREMIUM_VERIFY_JS='/* check */'",
       `RELEASE=${'a'.repeat(40)}; PREVIOUS=${'a'.repeat(12)}; FINANCE_ENABLED=true; MIGRATED=false`,
       `FINANCE_RELEASE=${opts.financeRunning ? 'b'.repeat(12) : ''}`,
       // The backup tool directory is looked up by its absolute path: point the check at a test one.
@@ -1447,5 +1455,244 @@ describe('the Finance deployment flow keeps the OS running (incident 2026-10-26)
     expect(deploy).toContain('\n    backup_before_migration\n');
     expect(fnSrc('backup_before_migration')).toContain('local writers=${1:-web api}');
     expect(financeCase()).toContain('backup_before_migration finance "finance-$AYVO_RELEASE"');
+  });
+});
+
+describe('optional bank connection from RB Premium API (doc 036 §10a)', () => {
+  const lines = script.split('\n');
+  // The bank file checks are shared with the DEV simulation (scripts/lib/rb-premium-files.sh).
+  const checks = withRepoRoot(
+    lines
+      .slice(
+        lines.findIndex((l) => l.startsWith('readonly SECRETS=')),
+        lines.findIndex((l) => l.startsWith('# --- Compose')),
+      )
+      .join('\n'),
+  );
+  const SECRET = 'NEVER-PRINTED-VALUE';
+  const FILES = ['certificate.p12', 'client-id', 'p12-passphrase'];
+  /** A secrets directory as the owner prepares it; options break one thing at a time. */
+  const secretsDir = (
+    o: {
+      accounts?: string;
+      dirMode?: number;
+      fileMode?: number;
+      extra?: boolean;
+      missing?: string;
+      empty?: string;
+      link?: string;
+    } = {},
+  ) => {
+    const dir = mkdtempSync(join(tmp, 'rb-'));
+    writeFileSync(
+      join(dir, 'prod.env'),
+      o.accounts === undefined ? 'POSTGRES_DB=x\n' : `RB_PREMIUM_ACCOUNTS=${o.accounts}\n`,
+    );
+    const rb = join(dir, 'rb-premium');
+    run('mkdir', [rb]);
+    for (const f of FILES) {
+      if (f === o.missing) continue;
+      if (f === o.link) {
+        writeFileSync(join(dir, 'elsewhere'), SECRET);
+        run('ln', ['-s', join(dir, 'elsewhere'), join(rb, f)]);
+        continue;
+      }
+      writeFileSync(join(rb, f), f === o.empty ? '' : SECRET);
+      chmodSync(join(rb, f), o.fileMode ?? 0o400);
+    }
+    if (o.extra) writeFileSync(join(rb, 'copy.p12'), SECRET);
+    chmodSync(rb, o.dirMode ?? 0o500);
+    return dir;
+  };
+  const checkRb = (dir: string, o: { finance?: boolean; uid?: number } = {}) => {
+    const res = run(
+      'bash',
+      [
+        '-c',
+        `set -Eeuo pipefail\nFINANCE_UID=${o.uid ?? userInfo().uid}\n${checks}\nSTEP=test\nFINANCE_ENABLED=${o.finance ?? true}\ncheck_rb_premium\necho "ACCOUNTS=$RB_PREMIUM_ACCOUNTS"`,
+      ],
+      { AYVO_PROD_SECRETS_DIR: dir, AYVO_PROD_DIR: dir, AYVO_PROD_OWNER: userInfo().username },
+    );
+    chmodSync(join(dir, 'rb-premium'), 0o700); // so the temporary directory can be removed
+    return res;
+  };
+
+  it('off by default: nothing is required, nothing is enabled', () => {
+    const res = checkRb(secretsDir(), { finance: false });
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    expect(res.stdout).toContain('RB_PREMIUM_ACCOUNTS not set');
+    expect(res.stdout).toContain('ACCOUNTS=\n');
+  });
+
+  it('on: the accounts and the three owner-only files pass; no file content is ever printed', () => {
+    const res = checkRb(secretsDir({ accounts: '1234567890:CZK,123:EUR' }));
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    expect(res.stdout).toContain('bank connection: 2 account(s)');
+    expect(res.stdout).toContain('ACCOUNTS=1234567890:CZK,123:EUR');
+    expect(res.stdout + res.stderr).not.toContain(SECRET);
+  });
+
+  it.each([
+    ['without the Finance keys', {}, { finance: false }, /without the Finance keys/],
+    ['an account with a prefix', { accounts: '19-2000145399:CZK' }, {}, /number:CUR/],
+    ['an 11-digit account', { accounts: '12345678901:CZK' }, {}, /number:CUR/],
+    ['a lower-case currency', { accounts: '123:czk' }, {}, /number:CUR/],
+    ['a directory readable by others', { dirMode: 0o750 }, {}, /owner only/],
+    ['a file readable by the group', { fileMode: 0o440 }, {}, /readable by its owner only/],
+    ['another file in the directory', { extra: true }, {}, /exactly certificate\.p12/],
+    ['a missing passphrase', { missing: 'p12-passphrase' }, {}, /exactly certificate\.p12/],
+    ['an empty client ID', { empty: 'client-id' }, {}, /client-id is empty/],
+    ['a symbolic link', { link: 'certificate.p12' }, {}, /must be a regular file/],
+    ['files of another user', {}, { uid: userInfo().uid + 1 }, /must belong to uid/],
+  ])('refuses %s', (_why, dirOpts, checkOpts, message) => {
+    const res = checkRb(secretsDir({ accounts: '1234567890:CZK', ...dirOpts }), checkOpts);
+    expect(res.status).toBe(1);
+    expect(res.stdout + res.stderr).toMatch(message);
+    expect(res.stdout + res.stderr).not.toContain(SECRET);
+  });
+
+  it('prod.env may hold RB_PREMIUM_ACCOUNTS; the env example holds no value', () => {
+    expect(script).toMatch(/readonly ALLOW_PROD="[^"]* RB_PREMIUM_ACCOUNTS"/);
+    expect(read('deploy/prod/prod.env.example')).toMatch(/^# RB_PREMIUM_ACCOUNTS=$/m);
+  });
+
+  it('compose_files: the override only with RB_PREMIUM_ACCOUNTS and only if the release has it', () => {
+    const rel = mkdtempSync(join(tmp, 'release-rb-'));
+    run('mkdir', ['-p', join(rel, 'deploy/prod')]);
+    writeFileSync(join(rel, 'deploy/prod/compose.yml'), '');
+    const start = lines.findIndex((l) => l.startsWith('compose_files() {'));
+    const fn = lines.slice(start, lines.indexOf('}', start) + 1).join('\n');
+    const files = (accounts: string) =>
+      run('bash', [
+        '-c',
+        `${fn}\nRB_PREMIUM_ACCOUNTS=${accounts}; compose_files ${rel} | tr '\\n' ' '`,
+      ]).stdout.trim();
+    const base = `-f ${rel}/deploy/prod/compose.yml`;
+    expect(files('1234567890:CZK')).toBe(base); // a release without the override
+    writeFileSync(join(rel, 'deploy/prod/compose.rb-premium.yml'), '');
+    expect(files('')).toBe(base); // off: exactly as before
+    expect(files('1234567890:CZK')).toBe(`${base} -f ${rel}/deploy/prod/compose.rb-premium.yml`);
+  });
+
+  it('the override holds only paths and the accounts variable — no value of a secret', () => {
+    const override = code(read('deploy/prod/compose.rb-premium.yml'));
+    expect(override).toMatch(/^ {2}finance:$/m);
+    expect([...override.matchAll(/^ {2}(\S+):$/gm)].map((m) => m[1])).toEqual(['finance']);
+    expect(
+      [...override.matchAll(/^ {6}(RB_[A-Z0-9_]+): (.*)$/gm)].map((m) => [m[1], m[2]]),
+    ).toEqual([
+      ['RB_PREMIUM_ENVIRONMENT', 'production'],
+      ['RB_PREMIUM_CLIENT_ID_FILE', '/run/secrets/rb-premium/client-id'],
+      ['RB_PREMIUM_P12_FILE', '/run/secrets/rb-premium/certificate.p12'],
+      ['RB_PREMIUM_P12_PASSPHRASE_FILE', '/run/secrets/rb-premium/p12-passphrase'],
+      [
+        'RB_PREMIUM_ACCOUNTS',
+        '${RB_PREMIUM_ACCOUNTS:?set in prod.env (number:CUR, comma-separated)}',
+      ],
+    ]);
+    expect(override).not.toMatch(/FOR_TESTS|sandbox|BASE_URL/);
+    expect(code(compose)).not.toMatch(/RB_PREMIUM|rb-premium/);
+  });
+
+  it.skipIf(!hasCompose)(
+    'renders: on, only Finance gains the read-only mount and the connection; off, nothing changes',
+    () => {
+      const off = prodSecrets();
+      const on = prodSecrets('RB_PREMIUM_ACCOUNTS=1234567890:CZK\n');
+      const profiles = ['finance', 'finance-tools', 'tools'];
+      const before = renderProd(off, { profiles }).config!;
+      const after = renderProd(on, { overrides: ['compose.rb-premium.yml'], profiles }).config!;
+      for (const s of Object.keys(before.services).filter((n) => n !== 'finance'))
+        expect(after.services[s], s).toEqual(before.services[s]);
+      const { environment: envOn, volumes, ...restOn } = after.services.finance!;
+      const { environment: envOff, ...restOff } = before.services.finance!;
+      expect(restOn).toEqual(restOff);
+      expect(before.services.finance!.volumes).toBeUndefined();
+      expect(volumes).toHaveLength(1);
+      const { bind, ...mount } = volumes![0]!;
+      expect(mount).toEqual({
+        type: 'bind',
+        source: join(on, 'rb-premium'),
+        target: '/run/secrets/rb-premium',
+        read_only: true,
+      });
+      // Never created by Docker when absent. Compose versions render the false value differently
+      // (v5.6 here: `create_host_path: false`; the CI runner's omits it: `bind: {}`).
+      expect(bind?.create_host_path ?? false).toBe(false);
+      const added = Object.fromEntries(
+        Object.entries(envOn!).filter(([k]) => !(k in envOff!) || envOff![k] !== envOn![k]),
+      );
+      expect(added).toEqual({
+        RB_PREMIUM_ENVIRONMENT: 'production',
+        RB_PREMIUM_CLIENT_ID_FILE: '/run/secrets/rb-premium/client-id',
+        RB_PREMIUM_P12_FILE: '/run/secrets/rb-premium/certificate.p12',
+        RB_PREMIUM_P12_PASSPHRASE_FILE: '/run/secrets/rb-premium/p12-passphrase',
+        RB_PREMIUM_ACCOUNTS: '1234567890:CZK',
+      });
+      // The override without the accounts in prod.env does not render at all.
+      const missing = renderProd(off, { overrides: ['compose.rb-premium.yml'], profiles });
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain('RB_PREMIUM_ACCOUNTS');
+    },
+  );
+
+  /** The container check of verify_rb_premium, run by node against a temporary directory. */
+  const containerCheck = (dir: string, env: Record<string, string>) => {
+    const fn = script.split('\nverify_rb_premium() {\n')[1]!.split('\n}\n')[0]!;
+    expect(fn).toContain('node -e "$RB_PREMIUM_VERIFY_JS"');
+    const lib = read('scripts/lib/rb-premium-files.sh');
+    const js = lib.split("readonly RB_PREMIUM_VERIFY_JS='")[1]!.split("'\n")[0]!;
+    return spawnSync('node', ['-e', js.replaceAll('/run/secrets/rb-premium', dir)], {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH, ...env },
+    }).status;
+  };
+  it('the container check: production with readable files on a read-only directory; off means no connection and no mount', () => {
+    const base = mkdtempSync(join(tmp, 'rb-container-'));
+    const dir = join(base, 'rb-premium');
+    run('mkdir', [dir]);
+    for (const f of FILES) writeFileSync(join(dir, f), SECRET);
+    const prodEnv = {
+      WANT: 'production',
+      RB_PREMIUM_ENVIRONMENT: 'production',
+      RB_PREMIUM_P12_FILE: `${dir}/certificate.p12`,
+    };
+    chmodSync(dir, 0o500);
+    try {
+      expect(containerCheck(dir, prodEnv)).toBe(0);
+      expect(containerCheck(dir, { ...prodEnv, RB_PREMIUM_ENVIRONMENT: 'sandbox' })).toBe(3);
+      expect(containerCheck(dir, { WANT: 'none', RB_PREMIUM_ENVIRONMENT: 'production' })).toBe(2);
+      expect(containerCheck(dir, { WANT: 'none' })).toBe(2); // a mount without the variables
+      expect(containerCheck(join(base, 'absent'), { WANT: 'none' })).toBe(0);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    expect(containerCheck(dir, prodEnv)).toBe(4); // writable: not the read-only mount
+    chmodSync(join(dir, 'client-id'), 0o000);
+    expect(containerCheck(dir, prodEnv)).toBe(1); // unreadable for the process
+  });
+
+  it('verify_finance always ends with the bank connection check; a release without the override is refused', () => {
+    expect(script.split('\nverify_finance() {\n')[1]!.split('\n}\n')[0]).toMatch(
+      /\n {2}verify_rb_premium$/,
+    );
+    const rel = mkdtempSync(join(tmp, 'release-norb-'));
+    const res = run('bash', [
+      '-c',
+      `set -Eeuo pipefail\ndie() { echo "DIE $*"; exit 1; }\nok() { echo "OK $*"; }\nPROD_DIR=${rel}; AYVO_RELEASE=abcdef012345\nrelease_dir() { printf '%s/releases/%s' "$PROD_DIR" "\${1:0:12}"; }\ncompose() { echo "COMPOSE $*"; }\n${script
+        .split('\n')
+        .slice(
+          lines.findIndex((l) => l.startsWith('verify_rb_premium() {')),
+          lines.findIndex(
+            (l, i) =>
+              i > lines.findIndex((m) => m.startsWith('verify_rb_premium() {')) && l === '}',
+          ) + 1,
+        )
+        .join('\n')}\nRB_PREMIUM_ACCOUNTS=1234567890:CZK verify_rb_premium`,
+    ]);
+    expect(res.stdout).toMatch(
+      /DIE RB_PREMIUM_ACCOUNTS is set but release abcdef012345 has no compose\.rb-premium\.yml/,
+    );
+    expect(res.stdout).not.toContain('COMPOSE');
   });
 });

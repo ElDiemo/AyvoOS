@@ -1,0 +1,78 @@
+# AYVO OS — DEV: Finance reads bank transactions from the BANK SIMULATION (doc 041, doc 036 §10a),
+# with the same topology and checks as production (deploy/prod/compose.rb-premium.yml): the client
+# ID, the client certificate (P12) and its passphrase are files in $AYVO_DEV_SECRETS_DIR/rb-premium,
+# mounted read-only into the Finance container alone, and the same deployment checks run
+# (scripts/lib/rb-premium-files.sh). Added by scripts/deploy-finance-dev.sh ONLY when
+# RB_PREMIUM_ACCOUNTS is set in the DEV env file.
+#
+# What differs, and only here: the counterpart is `rb-simulation` (synthetic data, its own CA —
+# scripts/dev-rb-simulation-certs.sh), never the bank. Finance verifies its certificate against
+# that CA, hostname included; no production certificate, client ID or account is ever on DEV.
+services:
+  finance:
+    environment:
+      RB_PREMIUM_ENVIRONMENT: simulation
+      RB_PREMIUM_CLIENT_ID_FILE: /run/secrets/rb-premium/client-id
+      RB_PREMIUM_P12_FILE: /run/secrets/rb-premium/certificate.p12
+      RB_PREMIUM_P12_PASSPHRASE_FILE: /run/secrets/rb-premium/p12-passphrase
+      RB_PREMIUM_SIMULATION_CA_FILE: /run/secrets/rb-premium/simulation-ca.crt
+      RB_PREMIUM_ACCOUNTS: ${RB_PREMIUM_ACCOUNTS:?set in the DEV env file (number:CUR, comma-separated)}
+    volumes:
+      - type: bind
+        source: ${AYVO_DEV_SECRETS_DIR:-/opt/ayvo/secrets}/rb-premium
+        target: /run/secrets/rb-premium
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - rb-simulation
+
+  # The bank simulation: the api image, its own entry point; reachable only by Finance.
+  rb-simulation:
+    image: ayvo-dev-preview/api:${FINANCE_IMAGE_TAG:-none}
+    profiles:
+      - finance
+    command: ['node', 'dist/finance/rb-simulation-main.js']
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 32
+    environment:
+      APP_ENV: development
+      RB_PREMIUM_ACCOUNTS: ${RB_PREMIUM_ACCOUNTS:?set in the DEV env file (number:CUR, comma-separated)}
+    volumes:
+      - type: bind
+        source: ${AYVO_DEV_SECRETS_DIR:-/opt/ayvo/secrets}/rb-simulation
+        target: /run/secrets/rb-simulation
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - rb-simulation
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('node:net').connect(8443,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+networks:
+  # Finance ↔ the bank simulation only. No route to the outside world.
+  rb-simulation:
+    internal: true

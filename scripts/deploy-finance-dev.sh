@@ -17,6 +17,12 @@
 # FINANCE_DB_OWNER_PASSWORD (24+ chars [A-Za-z0-9_-]), FINANCE_SERVICE_TOKEN (43+ chars base64url)
 # and FINANCE_SERVICE_TOKEN_SHA256 = its SHA-256 (checked here).
 #
+# Optional bank connection to the BANK SIMULATION (doc 036 §10a): with RB_PREMIUM_ACCOUNTS in the
+# env file, Finance gets the same read-only file mount and the same checks as production
+# (scripts/lib/rb-premium-files.sh), and the `rb-simulation` container answers instead of the bank
+# (deploy/dev/compose.rb-premium.yml). The test certificates come from
+# scripts/dev-rb-simulation-certs.sh — never a production certificate, client ID or account.
+#
 # Never touches api, web, caddy, dns, postgres or redis containers, never runs `down`, `volume rm`
 # or a prune; the core database is only backed up (pg_dump) and read by the role setup.
 
@@ -32,6 +38,34 @@ readonly BACKUP_DIR="${AYVO_DEV_BACKUP_DIR:-/opt/ayvo/backups/dev-preview}"
 readonly STATE_DIR="${AYVO_DEV_STATE_DIR:-/opt/ayvo/logs}"
 readonly DEPLOY_LOG="$STATE_DIR/deployments-dev-finance.log"
 readonly IMAGE_PREFIX="ayvo-dev-preview"
+readonly SECRETS_DIR="${AYVO_DEV_SECRETS_DIR:-/opt/ayvo/secrets}"
+# The Finance process's UID (user `node` of the api image): owner of its bank connection files.
+readonly FINANCE_UID=1000
+readonly RB_SIMULATION_FILES="ca.crt client-id server.crt server.key"
+# The verification's single read of the simulation (run with node -e inside the Finance container):
+# mTLS with the mounted client certificate, the server verified against the simulation's CA for
+# the name rb-simulation; ends within 5 s whatever the server does (exit 0 = HTTP 200).
+# shellcheck disable=SC2016 # JavaScript
+readonly RB_SIMULATION_PROBE_JS='
+  const fs = require("node:fs"), https = require("node:https"), e = process.env;
+  const target = { host: "rb-simulation", port: 8443 };
+  const secret = (f) => fs.readFileSync(f, "utf8").replace(/\r?\n$/, "");
+  const [acc, cur] = e.RB_PREMIUM_ACCOUNTS.split(",")[0].split(":");
+  const day = new Date().toISOString().slice(0, 10);
+  const req = https.get({
+    ...target,
+    servername: "rb-simulation",
+    path: `/rbcz/premium/api/accounts/${acc}/${cur}/transactions?from=${day}&to=${day}&page=1`,
+    pfx: fs.readFileSync(e.RB_PREMIUM_P12_FILE),
+    passphrase: secret(e.RB_PREMIUM_P12_PASSPHRASE_FILE),
+    ca: fs.readFileSync(e.RB_PREMIUM_SIMULATION_CA_FILE),
+    headers: { "X-IBM-Client-Id": secret(e.RB_PREMIUM_CLIENT_ID_FILE) },
+    agent: false,
+    signal: AbortSignal.timeout(5000),
+  }, (r) => { r.resume(); process.exit(r.statusCode === 200 ? 0 : 6); });
+  req.on("error", (err) => process.exit(err.name === "AbortError" || err.name === "TimeoutError" ? 8 : 7));'
+# shellcheck source=lib/rb-premium-files.sh
+source "$REPO_ROOT/scripts/lib/rb-premium-files.sh"
 readonly FINANCE_VARS=(POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DEV_DOMAIN FINANCE_DB_PASSWORD
   FINANCE_DB_OWNER_PASSWORD FINANCE_SERVICE_TOKEN FINANCE_SERVICE_TOKEN_SHA256)
 
@@ -47,8 +81,9 @@ die() {
 }
 usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
 
+COMPOSE_FILES=(-f "$COMPOSE_FILE")
 compose() {
-  docker compose --project-directory "$DEPLOY_DIR" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+  docker compose --project-directory "$DEPLOY_DIR" "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" "$@"
 }
 
 record() {
@@ -104,6 +139,24 @@ validate_finance_env() {
     die "FINANCE_SERVICE_TOKEN_SHA256 is not the SHA-256 of FINANCE_SERVICE_TOKEN"
 }
 
+# Optional: the bank simulation, with the production checks of the connection's files (the
+# simulation's CA as the one extra file) and of the simulation's own files.
+RB_ENABLED=false
+check_rb_simulation() {
+  local accounts=${CFG[RB_PREMIUM_ACCOUNTS]:-}
+  if [[ -z $accounts ]]; then
+    ok "RB_PREMIUM_ACCOUNTS not set: Finance has no bank connection (its page says so)"
+    return
+  fi
+  rb_premium_accounts_valid "$accounts" ||
+    die "RB_PREMIUM_ACCOUNTS must be number:CUR[,number:CUR...] (the national number without prefix or bank code)"
+  rb_premium_check_dir "$SECRETS_DIR/rb-premium" "$FINANCE_UID" "$RB_PREMIUM_SIMULATION_FILES"
+  rb_premium_check_dir "$SECRETS_DIR/rb-simulation" "$FINANCE_UID" "$RB_SIMULATION_FILES"
+  RB_ENABLED=true
+  COMPOSE_FILES+=(-f "$DEPLOY_DIR/compose.rb-premium.yml")
+  ok "bank SIMULATION: $(tr ',' '\n' <<<"$accounts" | wc -l) account(s); files present, owner uid $FINANCE_UID only (contents not read)"
+}
+
 # The core must already run with this contract (deployed by scripts/deploy-dev.sh).
 check_core_ready() {
   local env_sha
@@ -131,6 +184,22 @@ verify() {
     die "/api/internal/* answered through the edge — it must be aborted"
   fi
   ok "/api/internal/* is not reachable through the edge"
+
+  STEP="verify: bank connection"
+  local want=none
+  $RB_ENABLED && want=simulation
+  compose --profile finance exec -T -e WANT="$want" finance node -e "$RB_PREMIUM_VERIFY_JS" ||
+    die "the Finance container's bank connection is not as configured ($want): exit $?"
+  if ! $RB_ENABLED; then
+    ok "no bank connection configured (RB_PREMIUM_ACCOUNTS not set)"
+    return
+  fi
+  # One read of the simulation through the real path: mTLS with the mounted client certificate,
+  # the server verified against the simulation's CA for its name. Nothing goes to a bank.
+  # shellcheck disable=SC2016 # JavaScript
+  compose --profile finance exec -T finance node -e "$RB_SIMULATION_PROBE_JS" ||
+    die "Finance cannot read the bank simulation over mTLS (exit $?)"
+  ok "bank connection: simulation, files read-only for Finance; one mTLS read of the simulation verified (no bank involved)"
 }
 
 while (($#)); do
@@ -159,6 +228,8 @@ done
 parse_env_file
 validate_finance_env
 ok "Finance variables present; the service token matches its SHA-256"
+STEP="check the bank simulation files"
+check_rb_simulation
 
 # Compose interpolates the whole file (the edge needs the tailnet address, ADR 0026).
 DEV_TAILNET_IPV4="$(tailscale ip -4 | head -n1)"
@@ -211,9 +282,11 @@ else
 fi
 
 STEP="start the Finance unit"
-log "$STEP (tag $FINANCE_IMAGE_TAG) — only the finance container"
-compose --profile finance up --detach --wait --wait-timeout 120 --no-build --no-deps finance
-ok "finance running and healthy"
+log "$STEP (tag $FINANCE_IMAGE_TAG) — only the Finance unit"
+services=(finance)
+$RB_ENABLED && services=(rb-simulation finance)
+compose --profile finance up --detach --wait --wait-timeout 120 --no-build --no-deps "${services[@]}"
+ok "${services[*]} running and healthy"
 
 verify
 record "SUCCESS" "mode=$MODE"

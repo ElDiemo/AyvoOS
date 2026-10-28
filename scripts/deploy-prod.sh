@@ -68,6 +68,8 @@ readonly PROJECT=ayvo-prod
 readonly DOMAIN=os.ayvo.co
 readonly IMAGE_PREFIX=ayvo-prod
 readonly GUARD_UNIT=ayvo-prod-docker-guard.service
+# The Finance process's UID (user `node` of the api image): owner of its bank connection files.
+readonly FINANCE_UID=1000
 readonly SECRETS="${AYVO_PROD_SECRETS_DIR:-/opt/ayvo/secrets}"
 readonly DEPLOY_OWNER="${AYVO_PROD_OWNER:-ayvo}"
 readonly PROD_DIR="${AYVO_PROD_DIR:-/opt/ayvo/prod}"
@@ -90,7 +92,7 @@ readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 # The Finance unit (ADR 0039, optional until it is installed): all four or none. Its runtime and
 # owner roles' passwords, its service token and that token's SHA-256 (the only form the API gets).
 readonly FINANCE_KEYS="FINANCE_DB_PASSWORD FINANCE_DB_OWNER_PASSWORD FINANCE_SERVICE_TOKEN FINANCE_SERVICE_TOKEN_SHA256"
-readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN $FINANCE_KEYS"
+readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN $FINANCE_KEYS RB_PREMIUM_ACCOUNTS"
 readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
 readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
@@ -117,6 +119,7 @@ FINANCE_RELEASE=""
 FINANCE_IMAGE=""
 FINANCE_MIGRATE_IMAGE=""
 FINANCE_ENABLED=false
+RB_PREMIUM_ACCOUNTS=""
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m ok\033[0m %s\n' "$*"; }
@@ -401,6 +404,28 @@ check_finance_env() {
   ok "Finance keys set; the token matches its SHA-256; its own S3 identity"
 }
 
+# Optional: Finance reads bank transactions from RB Premium API (doc 041, doc 036 §10a). Switched
+# on only by RB_PREMIUM_ACCOUNTS in prod.env (which accounts — not a secret); the client ID, the
+# certificate and its passphrase are files the owner stored in $SECRETS/rb-premium, mounted
+# read-only into Finance alone (compose.rb-premium.yml). Only their kind, owner and mode are
+# checked here — their contents are never read or printed.
+# The same file checks as the DEV bank simulation (scripts/lib/rb-premium-files.sh).
+# shellcheck source=lib/rb-premium-files.sh
+source "$REPO_ROOT/scripts/lib/rb-premium-files.sh"
+check_rb_premium() {
+  RB_PREMIUM_ACCOUNTS="$(env_value "$SECRETS/prod.env" RB_PREMIUM_ACCOUNTS || true)"
+  if [[ -z $RB_PREMIUM_ACCOUNTS ]]; then
+    ok "RB_PREMIUM_ACCOUNTS not set: Finance has no bank connection (its page says so)"
+    return
+  fi
+  $FINANCE_ENABLED || die "RB_PREMIUM_ACCOUNTS is set without the Finance keys: the bank connection belongs to the Finance unit"
+  rb_premium_accounts_valid "$RB_PREMIUM_ACCOUNTS" ||
+    die "RB_PREMIUM_ACCOUNTS must be number:CUR[,number:CUR...] (the national number without prefix or bank code)"
+  # Exactly the three files: a simulation CA never reaches production.
+  rb_premium_check_dir "$SECRETS/rb-premium" "$FINANCE_UID" "$RB_PREMIUM_FILES"
+  ok "bank connection: $(tr ',' '\n' <<<"$RB_PREMIUM_ACCOUNTS" | wc -l) account(s); files present, owner uid $FINANCE_UID only (contents not read)"
+}
+
 # Both QR label settings, or neither (then only our QR label operations are refused, ADR 0034).
 # Never a default, never a value from DEV: only the recorded physical validation (doc 036 §8).
 check_qr_label_settings() {
@@ -433,6 +458,7 @@ check_env_files() {
     die "prod-s3.env holds the backup identity: the application uses its own S3 identity (ADR 0032)"
   fi
   check_finance_env
+  check_rb_premium
   if [[ -f $SECRETS/prod-workos-client.env ]]; then
     ok "prod-workos-client.env is not read by this release (keys: $(env_keys "$SECRETS/prod-workos-client.env" | tr '\n' ' '))"
   fi
@@ -478,6 +504,11 @@ compose_files() {
   printf '%s\n' -f "$dir/deploy/prod/compose.yml"
   if [[ -n ${ID_DOMAIN:-} && -f $dir/deploy/prod/compose.id.yml ]]; then
     printf '%s\n' -f "$dir/deploy/prod/compose.id.yml"
+  fi
+  # Finance's bank connection (doc 041) only when RB_PREMIUM_ACCOUNTS is set and the release has it
+  # (the Finance deployment refuses a release without it, verify_rb_premium).
+  if [[ -n ${RB_PREMIUM_ACCOUNTS:-} && -f $dir/deploy/prod/compose.rb-premium.yml ]]; then
+    printf '%s\n' -f "$dir/deploy/prod/compose.rb-premium.yml"
   fi
   # The marketing site (ADR 0040) only when MARKETING_DOMAIN is set and the release has it.
   if [[ -n ${MARKETING_DOMAIN:-} && -f $dir/deploy/prod/compose.marketing.yml ]]; then
@@ -1037,6 +1068,26 @@ verify_finance() {
   code="$(edge_status "https://$DOMAIN/api/internal/v1/finance/principal" || true)"
   [[ $code == 000 ]] || die "/api/internal/* must be aborted by Caddy (answered '$code')"
   ok "finance ready (database + core contract); /api/admin/finance/* 401 without a session; /api/internal/* aborted"
+  verify_rb_premium
+}
+
+# The Finance container has exactly the configured bank connection: with RB_PREMIUM_ACCOUNTS the
+# production connection and its three files readable by the Finance process through a read-only
+# mount; without it no bank connection at all. Nothing is printed, no request goes to the bank.
+verify_rb_premium() {
+  local want=none
+  if [[ -n ${RB_PREMIUM_ACCOUNTS:-} ]]; then
+    [[ -f $(release_dir "$AYVO_RELEASE")/deploy/prod/compose.rb-premium.yml ]] ||
+      die "RB_PREMIUM_ACCOUNTS is set but release $AYVO_RELEASE has no compose.rb-premium.yml"
+    want=production
+  fi
+  compose exec -T -e WANT="$want" finance node -e "$RB_PREMIUM_VERIFY_JS" ||
+    die "the Finance container's bank connection is not as configured ($want): exit $?"
+  if [[ $want == production ]]; then
+    ok "bank connection: production, files readable by Finance through a read-only mount (no request sent)"
+  else
+    ok "no bank connection configured (RB_PREMIUM_ACCOUNTS not set)"
+  fi
 }
 
 record_finance() {

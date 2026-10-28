@@ -278,7 +278,7 @@ export class FakeRb {
 }
 
 /** One entry as the bank writes it: the amount a JSON number exactly as given. */
-function entryJson(e: FakeEntry, currency: string): string {
+export function entryJson(e: FakeEntry, currency: string): string {
   const details = {
     transactionDetails: {
       ...(e.counterParty
