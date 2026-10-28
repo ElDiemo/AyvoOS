@@ -1,15 +1,14 @@
+import { FINANCE_PERMISSIONS } from '@/lib/navigation';
 import { requireAnyPermission } from '@/lib/session';
 
 /**
- * Finance (doc 039, doc 040, doc 041): received documents and exports need finance:documents_read,
- * bank transactions finance:bank_read, our company's settings finance:issuer_manage; company-wide,
- * no site. Each page and the API check again.
+ * Finance (doc 039–042): any Finance permission opens the module — the same list as its
+ * navigation (received documents and exports finance:documents_read, contracts
+ * finance:billing_read, invoices and payments finance:invoices_read, bank transactions
+ * finance:bank_read, our company finance:issuer_manage); company-wide, no site. Each page and the
+ * API check again.
  */
 export default async function FinanceLayout({ children }: { children: React.ReactNode }) {
-  await requireAnyPermission([
-    'finance:documents_read',
-    'finance:bank_read',
-    'finance:issuer_manage',
-  ]);
+  await requireAnyPermission(FINANCE_PERMISSIONS);
   return children;
 }
