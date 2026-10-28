@@ -187,7 +187,7 @@ test('first set-up: components, crate types, product and an incomplete draft tha
   await expect(form.getByLabel('Základní jednotka')).toHaveValue('ml');
   await form.getByRole('button', { name: 'Založit komponentu' }).click();
   await expect(form.getByTestId('form-errors')).toContainText('Formulář obsahuje');
-  await expect(form.getByText('Kapalina a etiketa musí mít kategorii produktu.')).toBeVisible();
+  await expect(form.getByText('Kapalina musí mít kategorii produktu.')).toBeVisible();
   await expect(form.getByLabel('Název')).toBeFocused();
   await shot(page, '02-component-form-errors-desktop');
 

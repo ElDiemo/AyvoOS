@@ -14,6 +14,7 @@ import { BottlesService } from '../assets/bottles.service.js';
 import { formatQuantity, quantity } from '../common/quantity.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
+import { CatalogService } from '../catalog/catalog.service.js';
 import { InventoryService, type InventoryItemRecord } from '../inventory/inventory.service.js';
 import { LabelPrintJobsService } from '../label-production/label-print-jobs.service.js';
 import type { WarehouseContext } from '../inventory/warehouse-context.js';
@@ -27,6 +28,7 @@ import { ProcurementService } from '../procurement/procurement.service.js';
 export class WarehouseReadService {
   constructor(
     private readonly inventory: InventoryService,
+    private readonly catalog: CatalogService,
     private readonly procurement: ProcurementService,
     private readonly bottles: BottlesService,
     private readonly printJobs: LabelPrintJobsService,
@@ -38,7 +40,8 @@ export class WarehouseReadService {
     const names = await this.procurement.supplierNames(
       items.flatMap((i) => i.settings[0]?.preferredSupplierId ?? []),
     );
-    return items.map((i) => toItemDto(i, names));
+    const rolls = await this.catalog.piecesPerRoll();
+    return items.map((i) => toItemDto(i, names, rolls));
   }
 
   async updateSettings(code: string, input: UpdateItemSettingsRequest): Promise<InventoryItem> {
@@ -64,6 +67,7 @@ export class WarehouseReadService {
       ...lots.flatMap((l) => l.supplierId ?? []),
     ]);
     const lotById = new Map(lots.map((l) => [l.id, l]));
+    const rolls = await this.catalog.piecesPerRoll();
     return {
       location: { code: location.code, name: location.name },
       items: items.map((item) => {
@@ -73,7 +77,7 @@ export class WarehouseReadService {
         const settings = item.settings[0];
         const lowStock = !!settings?.reorderPoint && available.lessThan(settings.reorderPoint);
         return {
-          item: toItemDto(item, names),
+          item: toItemDto(item, names, rolls),
           onHand: formatQuantity(onHand),
           reserved: '0',
           available: formatQuantity(available),
@@ -256,7 +260,11 @@ export function suggestion(
   return formatQuantity(needed);
 }
 
-function toItemDto(item: InventoryItemRecord, names: Map<string, string>): InventoryItem {
+function toItemDto(
+  item: InventoryItemRecord,
+  names: Map<string, string>,
+  rolls: Map<string, number>,
+): InventoryItem {
   const s = item.settings[0];
   return {
     id: item.id,
@@ -269,6 +277,7 @@ function toItemDto(item: InventoryItemRecord, names: Map<string, string>): Inven
       decimalPlaces: item.baseUnit.decimalPlaces,
     },
     lotTracked: item.lotTracking === 'REQUIRED',
+    piecesPerRoll: rolls.get(item.id) ?? null,
     archivedAt: item.archivedAt?.toISOString() ?? null,
     settings: s
       ? {

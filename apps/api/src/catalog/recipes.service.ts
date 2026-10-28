@@ -643,7 +643,8 @@ export class RecipesService {
         );
       }
       const category = item.component?.categoryCode ?? null;
-      const needsCategory = kind === 'BULK_LIQUID' || kind === 'LABEL_MEDIA';
+      // A label names a category only when pre-printed; the shared blank label names none.
+      const needsCategory = kind === 'BULK_LIQUID';
       if ((needsCategory || category !== null) && category !== product.category_code) {
         throw domainError(
           422,
