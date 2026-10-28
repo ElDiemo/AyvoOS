@@ -317,6 +317,7 @@ test.describe('Testovací faktury', () => {
     );
 
     await page.goto('/finance/payments');
+    await page.getByTestId('payments-simulation').locator('summary').click();
     const form = page.getByTestId('simulate-statement');
     await form.getByTestId('simulate-amount-1').fill('1000.00');
     await form.getByTestId('simulate-vs-1').fill(invoice.variableSymbol);
@@ -430,8 +431,10 @@ test.describe('Ukázka: řetězec fakturace', () => {
       .getByRole('link', { name: 'Finance' })
       .click();
     const finance = page.getByRole('navigation', { name: 'Finance' });
-    await finance.getByRole('link', { name: 'Smlouvy hotelů', exact: true }).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy hotelů' })).toBeVisible();
+    const views = page.getByRole('navigation', { name: 'Zobrazení' });
+    await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
+    await views.getByRole('link', { name: 'Smlouvy a ceny', exact: true }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy a ceny' })).toBeVisible();
     /** Opens a collapsible section unless it is open already (it stays open after a save). */
     const ensureOpen = async (summaryTestId: string) => {
       const details = page.locator('details', { has: page.getByTestId(summaryTestId) });
@@ -495,7 +498,7 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await shot('1-smlouvy');
 
     // --- A separate invoice (the other company's hotel) and a summary (two hotels of Alfa).
-    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
     const issue = async (hotels: string[]) => {
       await page.getByTestId('invoice-new').click();
       const form = page.getByTestId('test-invoice-form');
@@ -511,7 +514,7 @@ test.describe('Ukázka: řetězec fakturace', () => {
     );
     await separate.getByTestId('invoice-issue').click();
     await expect(page.getByTestId('invoice-total')).toHaveText('4 000,00 CZK');
-    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
     const summary = await issue([sever, jih]);
     // Choosing another company's hotel starts a new choice: never two companies on one invoice.
     await summary.locator('li', { hasText: beta }).getByRole('checkbox').check({ force: true });
@@ -536,13 +539,16 @@ test.describe('Ukázka: řetězec fakturace', () => {
     expect((await pdf.body()).subarray(0, 5).toString()).toBe('%PDF-');
     await shot('3-faktura');
     // Issuing the same month again is refused with a Czech explanation.
-    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
     const again = await issue([beta]);
     await again.getByTestId('invoice-issue').click();
     await expect(again.getByRole('alert')).toContainText('už má na tento měsíc platnou');
 
     // --- Payments: partial by VS, unclear without VS, allocated by hand, then the same again.
-    await finance.getByRole('link', { name: 'Platby', exact: true }).click();
+    await finance.getByRole('link', { name: 'Banka a platby', exact: true }).click();
+    await views.getByRole('link', { name: 'Platby a přiřazení', exact: true }).click();
+    // The DEV simulation is a closed block below the list (doc 042, UI-03).
+    await page.getByTestId('payments-simulation').locator('summary').click();
     const statement = page.getByTestId('simulate-statement');
     await statement.getByTestId('simulate-amount-1').fill('1000.00');
     await statement.getByTestId('simulate-vs-1').fill(vs);
@@ -577,7 +583,7 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await expect(statement.getByTestId('simulate-result')).toHaveText(
       'Nově zaznamenáno 0, už dříve načteno 2 (nezapočteno znovu). Spárováno 0, k posouzení 0.',
     );
-    await finance.getByRole('link', { name: 'Faktury', exact: true }).click();
+    await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
     const list = page.getByTestId('invoices');
     await expect(list.locator('li', { hasText: number })).toContainText('Uhrazeno');
     await expect(list.locator('li', { hasText: beta })).toContainText('Neuhrazeno');

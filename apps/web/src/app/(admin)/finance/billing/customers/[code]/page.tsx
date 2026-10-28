@@ -25,7 +25,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
   return (
     <>
       <FinanceHeader
-        active="billing"
+        active="invoices"
         title={c.current.customer.legalName}
         subtitle={c.code}
         back={{ href: '/finance/billing', label: t.back }}

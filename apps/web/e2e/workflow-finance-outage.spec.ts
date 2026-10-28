@@ -42,6 +42,18 @@ test.describe('Výpadek Financí', () => {
     ).toBeVisible();
     await expect(page.getByText('Ostatní části AYVO OS fungují.')).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Hlavní navigace' })).toBeVisible();
+    // The overview (doc 042): each block says it is unavailable — never a 0 it did not get.
+    await page.goto('/finance');
+    await expect(page.getByRole('heading', { level: 1, name: 'Přehled Financí' })).toBeVisible();
+    for (const block of [
+      'overview-invoices',
+      'overview-payments',
+      'overview-documents',
+      'overview-bank',
+    ])
+      await expect(page.getByTestId(block), block).toContainText('Teď nedostupné');
+    await expect(page.getByTestId('overview-to-review')).toHaveCount(0);
+    await expect(page.getByTestId('overview-incomplete')).toHaveCount(0);
 
     // The rest of the OS: another module, the core's health, the session, the sign-in page.
     await page.goto('/hotels');

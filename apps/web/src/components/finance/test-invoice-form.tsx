@@ -1,10 +1,11 @@
 'use client';
 
 import { effectiveTermsPageSchema, invoiceDetailSchema, type EffectiveTerms } from '@ayvo/types';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useAttempt } from '@/components/catalog/form-kit';
-import { buttonClass, EmptyState, ErrorNote, inputClass } from '@/components/ui';
+import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { financeAmount, sumAmounts, timesRooms } from './finance-format';
@@ -122,7 +123,12 @@ export function TestInvoiceForm({ month: initialMonth }: { month: string }) {
       </form>
       {items !== null &&
         (items.length === 0 ? (
-          <EmptyState>{t.noAgreements}</EmptyState>
+          <p className="text-sm text-stone-600" data-testid="invoice-no-agreements">
+            {t.noAgreements}{' '}
+            <Link href="/finance/billing" className="underline">
+              {t.toAgreements}
+            </Link>
+          </p>
         ) : (
           [...groups.entries()].map(([customer, list]) => (
             <fieldset key={customer} className="rounded-md border border-stone-200 p-3">

@@ -90,11 +90,16 @@ export async function ModuleNav({ module, active }: { module: NavModule['id']; a
   );
 }
 
-/** One row of page tabs; on phones it scrolls sideways and keeps the active page in view. */
+/**
+ * One row of page tabs; on phones it scrolls sideways and keeps the active page in view. Pages
+ * marked `aside` (a module's settings, doc 042) follow the work pages, set apart and quieter.
+ */
 function PageStrip({ pages, active }: { pages: readonly NavPage[]; active: string }) {
+  const work = pages.filter((p) => !p.aside);
+  const aside = pages.filter((p) => p.aside);
   return (
     <ActiveIntoView className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] md:flex-wrap md:overflow-visible [&::-webkit-scrollbar]:hidden">
-      {pages.map((item) => (
+      {work.map((item) => (
         <li key={item.id} className="shrink-0">
           <Link
             href={item.href}
@@ -113,6 +118,29 @@ function PageStrip({ pages, active }: { pages: readonly NavPage[]; active: strin
                 ({shellCs.modules.production.readOnly})
               </span>
             )}
+          </Link>
+        </li>
+      ))}
+      {aside.map((item) => (
+        <li key={item.id} className="shrink-0 md:ml-auto" data-testid={`aside-${item.id}`}>
+          <Link
+            href={item.href}
+            aria-current={item.id === active ? 'page' : undefined}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-3 py-2 text-sm whitespace-nowrap transition',
+              item.id === active
+                ? 'bg-stone-900 text-white'
+                : 'text-stone-500 hover:bg-stone-100 hover:text-stone-900',
+            )}
+          >
+            <svg aria-hidden viewBox="0 0 20 20" fill="currentColor" className="size-4 shrink-0">
+              <path
+                fillRule="evenodd"
+                d="M8.34 1.8A1 1 0 0 1 9.32 1h1.36a1 1 0 0 1 .98.8l.28 1.4a6.97 6.97 0 0 1 1.62.94l1.36-.45a1 1 0 0 1 1.18.45l.68 1.18a1 1 0 0 1-.2 1.25l-1.08.95a7.05 7.05 0 0 1 0 1.88l1.08.95a1 1 0 0 1 .2 1.25l-.68 1.18a1 1 0 0 1-1.18.45l-1.36-.45a6.97 6.97 0 0 1-1.62.94l-.28 1.4a1 1 0 0 1-.98.8H9.32a1 1 0 0 1-.98-.8l-.28-1.4a6.97 6.97 0 0 1-1.62-.94l-1.36.45a1 1 0 0 1-1.18-.45l-.68-1.18a1 1 0 0 1 .2-1.25l1.08-.95a7.05 7.05 0 0 1 0-1.88l-1.08-.95a1 1 0 0 1-.2-1.25l.68-1.18a1 1 0 0 1 1.18-.45l1.36.45c.5-.39 1.04-.7 1.62-.94l.28-1.4ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+                clipRule="evenodd"
+              />
+            </svg>
+            {item.label}
           </Link>
         </li>
       ))}

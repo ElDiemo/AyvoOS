@@ -216,7 +216,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/admin/sites/x')).toBe('admin/sites');
   });
 
-  it('Finance (UI-01): one strip of the pages each permission opens; the module starts at the first one', () => {
+  it('Finance (doc 042): five work pages, views by permission, the settings apart; every former URL kept', () => {
     const finance = (...perms: string[]) => visibleModules(perms).find((m) => m.id === 'finance');
     const all = finance(
       'finance:documents_read',
@@ -225,41 +225,67 @@ describe('AYVO OS navigation (doc 019)', () => {
       'finance:bank_read',
       'finance:issuer_manage',
     )!;
-    expect(all.pages.map((p) => [p.id, p.href])).toEqual([
-      ['documents', '/finance/documents'],
-      ['billing', '/finance/billing'],
-      ['invoices', '/finance/invoices'],
-      ['payments', '/finance/payments'],
-      ['exports', '/finance/exports'],
-      ['bank', '/finance/bank'],
-      ['issuer', '/finance/settings/company'],
+    expect(all.pages.map((p) => [p.id, p.href, p.label, !!p.aside])).toEqual([
+      ['overview', '/finance', 'Přehled', false],
+      ['invoices', '/finance/invoices', 'Faktury hotelům', false],
+      ['documents', '/finance/documents', 'Přijaté doklady', false],
+      ['bank', '/finance/bank', 'Banka a platby', false],
+      ['exports', '/finance/exports', 'Pro účetní', false],
+      ['settings', '/finance/settings/company', 'Nastavení Financí', true],
     ]);
-    expect(all.pages.map((p) => p.label)).toEqual([
-      'Doklady',
-      'Smlouvy hotelů',
+    expect(all.pages.find((p) => p.id === 'invoices')!.views!.map((v) => v.label)).toEqual([
       'Faktury',
-      'Platby',
-      'Export pro účetní',
-      'Bankovní pohyby',
-      'Naše firma a účty',
+      'Smlouvy a ceny',
     ]);
-    // One strip, no sections (no page is grouped).
+    expect(all.pages.find((p) => p.id === 'bank')!.views!.map((v) => v.label)).toEqual([
+      'Pohyby z banky',
+      'Platby a přiřazení',
+    ]);
+    // One strip, no sections (no page is grouped); the module opens on the overview.
     expect(all.pages.some((p) => p.group)).toBe(false);
-    expect(all.href).toBe('/finance/documents');
-    // Only the bank: the module opens on the bank, nothing else is offered.
-    const bank = finance('finance:bank_read')!;
-    expect(bank.pages.map((p) => p.id)).toEqual(['bank']);
-    expect(bank.href).toBe('/finance/bank');
-    expect(finance('finance:issuer_manage')!.pages.map((p) => p.id)).toEqual(['issuer']);
+    expect(all.href).toBe('/finance');
+    // A page with views links to the first view the user may open, and lists only those.
+    const billingOnly = finance('finance:billing_read')!;
+    expect(billingOnly.pages.map((p) => [p.id, p.href])).toEqual([
+      ['overview', '/finance'],
+      ['invoices', '/finance/billing'],
+    ]);
+    expect(billingOnly.pages[1]!.views!.map((v) => v.id)).toEqual(['billing']);
+    const invoicesOnly = finance('finance:invoices_read')!;
+    expect(invoicesOnly.pages.map((p) => [p.id, p.href])).toEqual([
+      ['overview', '/finance'],
+      ['invoices', '/finance/invoices'],
+      ['bank', '/finance/payments'],
+    ]);
+    expect(finance('finance:bank_read')!.pages.map((p) => [p.id, p.href])).toEqual([
+      ['overview', '/finance'],
+      ['bank', '/finance/bank'],
+    ]);
+    expect(finance('finance:issuer_manage')!.pages.map((p) => p.id)).toEqual([
+      'overview',
+      'settings',
+    ]);
     expect(finance('sales:work')).toBeUndefined();
-    // Upload / take-over and document details belong to Doklady.
-    expect(locate('/finance/documents/new')).toMatchObject({ page: { id: 'documents' } });
-    expect(locate('/finance/documents/take-over')).toMatchObject({ page: { id: 'documents' } });
-    expect(locate('/finance/exports/AE-000001')).toMatchObject({ page: { id: 'exports' } });
-    expect(locate('/finance/billing/agreements/BA-000001')).toMatchObject({
-      page: { id: 'billing' },
-    });
-    expect(locate('/finance/invoices/T2026-00001')).toMatchObject({ page: { id: 'invoices' } });
-    expect(finance('finance:invoices_read')!.href).toBe('/finance/invoices');
+    // Every former URL belongs to its main page (details included).
+    for (const [url, id] of [
+      ['/finance', 'overview'],
+      ['/finance/invoices', 'invoices'],
+      ['/finance/invoices/new', 'invoices'],
+      ['/finance/invoices/T2026-00001', 'invoices'],
+      ['/finance/billing', 'invoices'],
+      ['/finance/billing/agreements/BA-000001', 'invoices'],
+      ['/finance/billing/customers/BC-000001', 'invoices'],
+      ['/finance/documents', 'documents'],
+      ['/finance/documents/new', 'documents'],
+      ['/finance/documents/take-over', 'documents'],
+      ['/finance/documents/FD-000001', 'documents'],
+      ['/finance/bank', 'bank'],
+      ['/finance/payments', 'bank'],
+      ['/finance/exports', 'exports'],
+      ['/finance/exports/AE-000001', 'exports'],
+      ['/finance/settings/company', 'settings'],
+    ] as const) {
+      expect([url, locate(url).page?.id]).toEqual([url, id]);
+    }
   });
 });
