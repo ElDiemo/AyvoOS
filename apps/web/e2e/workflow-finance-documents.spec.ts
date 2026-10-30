@@ -206,3 +206,34 @@ test.describe('without Finance permissions', () => {
     }
   });
 });
+
+test.describe('Doklad a dodavatel', () => {
+  test.use({ storageState: ADMIN_STATE });
+
+  test('a missing supplier: its register opens beside the unfinished document, which stays', async ({
+    page,
+    context,
+  }) => {
+    await page.goto('/finance/documents/new');
+    const form = page.getByTestId('finance-receive');
+    const note = 'Rozepsaná poznámka (doc 044 U7)';
+    const field = form.locator('[name=number], input:not([type=file])').first();
+    await field.fill(note);
+    const [tab] = await Promise.all([
+      context.waitForEvent('page'),
+      page.getByTestId('receive-open-suppliers').click(),
+    ]);
+    await tab.waitForLoadState();
+    expect(new URL(tab.url()).pathname).toBe('/warehouse/suppliers');
+    await tab.close();
+    await page.getByTestId('receive-refresh-suppliers').click();
+    await expect(field).toHaveValue(note);
+    await page.screenshot({
+      path: resolve(
+        import.meta.dirname,
+        '../../../docs/screenshots/finance/ux7-document-supplier-1440.png',
+      ),
+      fullPage: true,
+    });
+  });
+});

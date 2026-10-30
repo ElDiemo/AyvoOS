@@ -5,7 +5,7 @@ import { ReceiveDocumentForm } from '@/components/finance/receive-document-form'
 import { Card } from '@/components/ui';
 import { financeCs as t } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
-import { requirePermission } from '@/lib/session';
+import { hasPermission, requirePermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * opens the document.
  */
 export default async function ReceiveFinanceDocumentPage() {
-  await requirePermission('finance:documents_manage');
+  const me = await requirePermission('finance:documents_manage');
   const suppliers = await apiGet('admin/finance/suppliers', z.array(financeSupplierSchema));
   return (
     <>
@@ -25,7 +25,10 @@ export default async function ReceiveFinanceDocumentPage() {
         back={{ href: '/finance/documents', label: t.list.back }}
       />
       <Card testId="finance-receive">
-        <ReceiveDocumentForm suppliers={suppliers} />
+        <ReceiveDocumentForm
+          suppliers={suppliers}
+          canOpenSuppliers={hasPermission(me, 'inventory:read')}
+        />
       </Card>
     </>
   );
