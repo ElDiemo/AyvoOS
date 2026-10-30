@@ -165,3 +165,25 @@ the bank: payments are made from what was already read, or simulated outside pro
   (`changedAtBank`) and the payment shows "Banka tento pohyb po zaznamenání změnila". **What to do
   then is an open owner/accountant decision** (not invented).
 - Not covered: refunds or offsetting an overpayment (an open decision), live invoices.
+
+## 9. Scheduled reading (owner 2026-10-30; proposal in a draft PR, off everywhere)
+
+Reading by hand stays. A scheduled round uses the same code and adds no table.
+
+- **Off unless `RB_PREMIUM_SYNC_SECONDS` is set.** No default, and no Compose file passes it: a
+  deployment alone cannot switch it on. The interval is the owner's decision, with the bank's limits
+  (5 000 requests a day) and tariff in mind. The bounds 900–86 400 s only catch a typo.
+- **A round:** read each configured account (`bank_sync_slots` fencing, the run deadline, bounded
+  data, the window resuming from the last success), then, if a read succeeded, record payments as
+  `import-bank` does: an automatic allocation only on an exact VS of one open invoice; anything
+  unclear waits for a person.
+- **Failures:** the run ends `FAILED` with its code, visible as for a read by hand; the next round
+  tries again, no retry of its own. An account being read at that moment is skipped.
+- **Who:** records name "Plánované načtení" (a fixed zero id, no permissions): no user acts.
+- **Logs:** counts and error class only, never transactions.
+- **Not added:** a second record of invoices or payments, anything sent to the bank, a reaction to
+  "changed at the bank" (§8, open decision).
+
+To decide before switching on: the interval, whether automatic allocation on PROD is wanted while
+only TEST invoices exist (a production payment is never allocated to a TEST invoice, so such
+payments wait as "k posouzení"), and who watches failed runs.

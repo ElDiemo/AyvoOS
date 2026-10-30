@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import type {
   BankAccountStatus,
   BankStatus,
@@ -121,6 +121,27 @@ export class BankSyncService {
     const runs: BankSyncRun[] = [];
     for (const account of cfg.accounts) runs.push(await this.syncAccount(cfg, account, caller));
     return { runs };
+  }
+
+  /**
+   * A scheduled round (doc 041 §9): like `sync`, but an account being read right now is skipped,
+   * not an error, and does not stop the others. Without a connection it reads nothing.
+   */
+  async syncScheduled(caller: FinanceCaller): Promise<BankSyncResult & { busy: number }> {
+    const cfg = this.cfg;
+    const runs: BankSyncRun[] = [];
+    let busy = 0;
+    for (const account of cfg?.accounts ?? []) {
+      try {
+        runs.push(await this.syncAccount(cfg!, account, caller));
+      } catch (e) {
+        const code =
+          e instanceof HttpException ? (e.getResponse() as { code?: string }).code : null;
+        if (code !== 'BANK_SYNC_RUNNING') throw e;
+        busy++;
+      }
+    }
+    return { runs, busy };
   }
 
   private async syncAccount(

@@ -69,6 +69,12 @@ export const financeEnvSchema = z
     RB_PREMIUM_ACCOUNTS: optional(
       z.string().regex(/^[0-9]{1,10}:[A-Z]{3}(,[0-9]{1,10}:[A-Z]{3}){0,9}$/, 'e.g. 1234567890:CZK'),
     ),
+    /**
+     * Seconds between scheduled reads (doc 041 §9). Unset = off: there is no default and no
+     * deployment sets it; the owner chooses the interval. The lower bound only protects the
+     * bank's limits (RB: 5 000 requests a day) from a typo; it is not a recommendation.
+     */
+    RB_PREMIUM_SYNC_SECONDS: optional(z.coerce.number().int().min(900).max(86_400)),
     /** One request to the bank (connect + answer). */
     RB_PREMIUM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
     /**
@@ -128,6 +134,8 @@ export const financeEnvSchema = z
       if (env.RB_PREMIUM_CA_FILE_FOR_TESTS)
         fail('RB_PREMIUM_CA_FILE_FOR_TESTS', 'allowed only with APP_ENV=test');
     }
+    if (env.RB_PREMIUM_SYNC_SECONDS !== undefined && rb === undefined)
+      fail('RB_PREMIUM_SYNC_SECONDS', 'a scheduled read needs the bank connection');
     if (rb === 'test' && !env.RB_PREMIUM_BASE_URL_FOR_TESTS)
       fail('RB_PREMIUM_BASE_URL_FOR_TESTS', 'the simulated bank needs its URL');
     if (rb !== undefined)
