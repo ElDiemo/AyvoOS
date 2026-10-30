@@ -237,6 +237,7 @@ test.describe('Smlouvy', () => {
 
     // Customer: the same, from the customer's page.
     await page.goto(`/finance/billing/customers/${customer.code}`);
+    await page.getByTestId('customer-edit-open').click();
     const cform = page.getByTestId(`customer-version-${customer.code}`);
     await expect(cform.locator('[name=city]')).toHaveValue('Olomouc');
     await json(

@@ -306,6 +306,16 @@ test.describe.serial('Karta hotelu a Finance', () => {
     const paid = page.getByTestId('payer-hotels');
     await expect(paid).toContainText(`Hotel Plátce A ${run}`);
     await expect(paid).toContainText(`Hotel Plátce B ${run}`);
+    // Now first; the history is one click away, closed, and the form opens from the summary.
+    await expect(page.getByTestId('customer-current')).toBeVisible();
+    await expect(page.getByTestId('customer-history').locator('details')).not.toHaveAttribute(
+      'open',
+    );
+    await expect(page.locator('[name=legalName]')).toBeHidden();
+    await page.getByTestId('customer-edit-open').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('[name=legalName]')).toBeVisible();
+    await page.getByTestId('customer-edit-open').click();
     await shots(page, 'ux3-payer-detail');
 
     await page.goto('/finance/settings/prices');

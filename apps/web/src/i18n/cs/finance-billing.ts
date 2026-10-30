@@ -65,6 +65,9 @@ export const billingCs = {
     price: 'Cena za pokoj a měsíc',
   },
   toHotel: 'Karta hotelu',
+  currentData: 'Aktuální údaje',
+  edit: 'Upravit',
+  historyOpen: (n: number) => `Zobrazit historii (${n})`,
   agreementsSubtitle:
     'Jedna smlouva na hotel, s verzovanými podmínkami. Hotel se zakládá v Hotelech.',
   newPayerHere:

@@ -250,6 +250,7 @@ export const financeCs = {
     status: { VALID: 'Platná', CANCELLED: 'Zrušená' } as Record<string, string>,
     back: 'Faktury',
     newTitle: 'Testovací faktura',
+    technical: 'Technické údaje',
     newSubtitle:
       'Vyberte měsíc a smlouvy jednoho odběratele: jedna smlouva = samostatná faktura, více smluv téhož odběratele = souhrnná faktura s řádkem za každý hotel.',
     month: 'Fakturovaný měsíc',

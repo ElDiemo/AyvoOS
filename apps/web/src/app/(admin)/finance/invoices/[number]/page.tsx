@@ -160,10 +160,16 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
             <Field label={t.variableSymbol}>
               <span className="font-mono">{inv.payment.variableSymbol}</span>
             </Field>
-            <Field label={t.pdfHash}>
-              <span className="break-all font-mono text-xs">{inv.pdfSha256}</span>
-            </Field>
           </FieldList>
+          <details className="mt-3 text-sm">
+            <summary className="cursor-pointer font-medium" data-testid="invoice-technical-open">
+              {t.technical}
+            </summary>
+            <div className="mt-2">
+              <span className="text-stone-500">{t.pdfHash}: </span>
+              <span className="break-all font-mono text-xs">{inv.pdfSha256}</span>
+            </div>
+          </details>
         </Card>
         {canCancel && (
           <Card title={t.cancel}>
