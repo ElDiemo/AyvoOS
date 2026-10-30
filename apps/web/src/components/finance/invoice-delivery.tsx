@@ -18,10 +18,12 @@ const message = (e: unknown) =>
       : String(e);
 
 /** One attempt: its state in words (never "doručeno"), its code and history. */
-function Attempt({ d }: { d: InvoiceDelivery }) {
+function Attempt({ d, simulated }: { d: InvoiceDelivery; simulated: boolean }) {
   return (
     <li className="flex flex-col gap-1 py-2" data-testid={`delivery-${d.state}`}>
-      <strong data-testid="delivery-state">{t.state[d.state]}</strong>
+      <strong data-testid="delivery-state">
+        {(simulated && t.stateSimulated[d.state]) || t.state[d.state]}
+      </strong>
       <span className="break-all text-stone-600">
         {d.recipient} · {d.sender}
       </span>
@@ -90,15 +92,22 @@ export function InvoiceDeliveryPanel({
 
   return (
     <div className="flex flex-col gap-3 text-sm" data-testid="invoice-delivery">
+      {data.mode && (
+        <Notice tone={data.mode === 'RELAY' ? 'warning' : 'info'}>
+          <span data-testid={`delivery-mode-${data.mode}`}>{t.mode[data.mode]}</span>
+        </Notice>
+      )}
       {data.blocker && <Notice tone="info">{t.blockers[data.blocker]}</Notice>}
       {latest?.state === 'UNCERTAIN' && <Notice tone="warning">{t.uncertainHelp}</Notice>}
-      {latest?.state === 'SENT' && <p className="text-stone-600">{t.sentHelp}</p>}
+      {latest?.state === 'SENT' && data.mode !== 'SIMULATION' && (
+        <p className="text-stone-600">{t.sentHelp}</p>
+      )}
       {data.deliveries.length === 0 ? (
         <p className="text-stone-500">{t.none}</p>
       ) : (
         <ul className="divide-y divide-stone-100">
           {data.deliveries.map((d) => (
-            <Attempt key={d.id} d={d} />
+            <Attempt key={d.id} d={d} simulated={data.mode === 'SIMULATION'} />
           ))}
         </ul>
       )}

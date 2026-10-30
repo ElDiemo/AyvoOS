@@ -45,6 +45,11 @@ export const invoiceDeliveriesSchema = z.object({
   blocker: z
     .enum(['DELIVERY_DISABLED', 'INVOICE_CANCELLED', 'LANGUAGE_MISSING', 'PRODUCTION'])
     .nullable(),
+  /**
+   * How this server would send, from its configuration: SIMULATION opens no connection and nothing
+   * leaves the system; RELAY sends a real test e-mail, only to the allowed addresses; null: off.
+   */
+  mode: z.enum(['SIMULATION', 'RELAY']).nullable(),
   /** The address a sending would use now (the customer's current billing e-mail). */
   recipient: z.string(),
   sender: z.string(),

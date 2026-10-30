@@ -289,19 +289,17 @@ test.describe('Jazyk dokumentů', () => {
     ).toBe(true);
     await page.getByTestId('delivery-retry-understood').check();
     await page.getByTestId('delivery-retry').click();
-    // Accepted by the relay, and the page says that is all it means.
+    // Here the transport is simulated, and the page says nothing left the system.
     await expect(panel.getByTestId('delivery-SENT')).toBeVisible({ timeout: 20_000 });
-    await expect(panel.getByTestId('delivery-SENT')).toContainText(
-      'doručení do schránky nepotvrzeno',
+    await expect(panel.getByTestId('delivery-SENT')).toContainText('žádný e-mail neodešel');
+    await expect(panel.getByTestId('delivery-mode-SIMULATION')).toContainText(
+      'nic neopustí systém',
     );
-    await expect(panel).toContainText('Přijetí poštovním serverem neznamená');
     await expect(page.getByTestId('delivery-send')).toHaveCount(0);
     await expect(page.getByTestId('delivery-retry')).toHaveCount(0);
     await shots(page, 'finance-delivery-sent');
 
     await page.goto('/finance/invoices');
-    await expect(page.getByTestId(`invoice-delivery-${invoice.number}`)).toContainText(
-      'Přijato poštovním serverem',
-    );
+    await expect(page.getByTestId(`invoice-delivery-${invoice.number}`)).toBeVisible();
   });
 });

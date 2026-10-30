@@ -91,6 +91,11 @@ export class InvoiceDeliveriesService {
     const blocker = this.blockerOf(invoice.snapshot, !!invoice.cancellation);
     return {
       sendable: blocker === null,
+      mode: !this.env.FINANCE_INVOICE_MAIL
+        ? null
+        : this.env.FINANCE_INVOICE_MAIL === 'google-relay'
+          ? 'RELAY'
+          : 'SIMULATION',
       blocker,
       recipient: latest.billingEmail,
       sender: `${INVOICE_MAIL_SENDER.name} <${INVOICE_MAIL_SENDER.address}>`,

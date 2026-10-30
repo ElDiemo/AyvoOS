@@ -231,7 +231,7 @@ export const financeCs = {
     subtitle:
       'Faktury hotelům podle smluv (pokoje × cena za měsíc). Zatím jen TESTOVACÍ faktury mimo produkci – ostré vystavení není schváleno a nic se neodesílá.',
     testOnly:
-      'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a samy se nikam neposílají. DPH a účetní pravidla zatím nejsou schválena.',
+      'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a neposílají se automaticky; odeslání je vždy ruční akce níže. DPH a účetní pravidla zatím nejsou schválena.',
     create: 'Vystavit testovací fakturu',
     empty: 'Zatím žádné faktury.',
     ofAgreement: 'Faktury této smlouvy',
@@ -289,6 +289,15 @@ export const financeCs = {
     },
     delivery: {
       title: 'Odeslání e-mailem',
+      mode: {
+        SIMULATION:
+          'Zkušební odeslání: nic neopustí systém. Žádný e-mail nikomu nepřijde, ověřuje se jen průběh.',
+        RELAY:
+          'Skutečný testovací e-mail přes poštovní server, jen na povolenou adresu. Doklad je označený jako testovací.',
+      } as Record<string, string>,
+      stateSimulated: {
+        SENT: 'Přijato simulací (žádný e-mail neodešel)',
+      } as Record<string, string>,
       none: 'Faktura zatím nebyla odeslána.',
       send: 'Odeslat fakturu',
       willSend: (recipient: string, sender: string) => `Komu: ${recipient} · Od: ${sender}`,

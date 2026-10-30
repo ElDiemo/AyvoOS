@@ -128,6 +128,11 @@ QUEUED → SENDING → SENT
 - Poškozené PDF (jiný otisk): nic se neodešle.
 - Zrušená faktura: odmítnuto. S `APP_ENV=production`: odmítnuto.
 
+## 7a. Režim je vidět (doc 044 U5)
+
+Stránka faktury říká, jak tento server odesílá. `SIMULATION`: nic neopustí systém a stav to říká.
+`RELAY`: skutečný testovací e-mail jen na povolenou adresu; `SENT` je přijetí serverem, ne doručení.
+
 ## 8. Jak se rozhoduje o výsledku
 
 Vše neznámé je `UNCERTAIN`. Opakovatelné (`QUEUED`, nejvýš 5 pokusů, pak `FAILED`) je jen to, co

@@ -2350,4 +2350,30 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       await real.close();
     }
   });
+
+  it('the page is told how this server sends: simulated, the real relay, or not at all', async () => {
+    const { inv } = await issued();
+    const mode = async (app: FinanceTestApp) =>
+      ((await deliveriesOf(app, inv.number)).body as InvoiceDeliveries).mode;
+    expect(await mode(f)).toBeNull();
+    for (const [finance, expected] of [
+      [{ FINANCE_INVOICE_MAIL: 'memory' }, 'SIMULATION'],
+      [{ FINANCE_INVOICE_MAIL: 'simulation' }, 'SIMULATION'],
+      [
+        {
+          FINANCE_INVOICE_MAIL: 'google-relay',
+          FINANCE_MAIL_EHLO_NAME: 'dev.example.test',
+          FINANCE_MAIL_TEST_RECIPIENTS: 'schvaleny@example.test',
+        },
+        'RELAY',
+      ],
+    ] as const) {
+      const app = await mailApp(finance);
+      try {
+        expect(await mode(app)).toBe(expected);
+      } finally {
+        await app.close();
+      }
+    }
+  });
 });
