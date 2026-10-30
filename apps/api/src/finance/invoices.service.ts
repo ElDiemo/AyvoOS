@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { INVOICES_OF_HOTEL_LIMIT } from '@ayvo/types';
 import type {
   CancelInvoiceRequest,
   CreateTestInvoiceRequest,
@@ -83,8 +84,12 @@ export class InvoicesService {
 
   async list(query: InvoiceListQuery = {}): Promise<InvoiceSummary[]> {
     const rows = await this.prisma.invoice.findMany({
-      where: query.agreement ? { lines: { some: { agreement: { code: query.agreement } } } } : {},
+      where: {
+        ...(query.agreement ? { lines: { some: { agreement: { code: query.agreement } } } } : {}),
+        ...(query.hotelId ? { lines: { some: { hotelId: query.hotelId } } } : {}),
+      },
       orderBy: { serial: 'desc' },
+      ...(query.hotelId ? { take: INVOICES_OF_HOTEL_LIMIT } : {}),
       include: invoiceInclude,
     });
     return rows.map(summary);

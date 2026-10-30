@@ -236,7 +236,7 @@ export const financeCs = {
     empty: 'Zatím žádné faktury.',
     ofAgreement: 'Faktury této smlouvy',
     noneOfAgreement: 'Na tuto smlouvu zatím nebyla vystavena žádná faktura.',
-    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy a ceny',
+    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy',
     emptyFromAgreements:
       'Faktura vzniká ze smlouvy hotelu; smlouvy spravuje kolega s přístupem ke Smlouvám a cenám.',
     number: 'Číslo',
@@ -250,12 +250,13 @@ export const financeCs = {
     status: { VALID: 'Platná', CANCELLED: 'Zrušená' } as Record<string, string>,
     back: 'Faktury',
     newTitle: 'Testovací faktura',
+    technical: 'Technické údaje',
     newSubtitle:
       'Vyberte měsíc a smlouvy jednoho odběratele: jedna smlouva = samostatná faktura, více smluv téhož odběratele = souhrnná faktura s řádkem za každý hotel.',
     month: 'Fakturovaný měsíc',
     load: 'Načíst smlouvy',
     noAgreements: 'Pro tento měsíc nejsou žádné smlouvy v platnosti.',
-    toAgreements: 'Smlouvy a ceny →',
+    toAgreements: 'Smlouvy →',
     notInvoiceable: 'Nelze fakturovat',
     gaps: {
       PRICE_MISSING: 'chybí cena',

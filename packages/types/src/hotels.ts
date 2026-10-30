@@ -80,6 +80,8 @@ export const hotelPracticalSchema = z.object({
 export type HotelPractical = z.infer<typeof hotelPracticalSchema>;
 
 export const hotelDetailSchema = hotelSummarySchema.extend({
+  /** The id the Finance contract names this hotel by (its billing panel). */
+  id: z.uuid(),
   address: deliveryAddressSchema,
   contact: hotelContactSchema,
   practical: hotelPracticalSchema,

@@ -147,6 +147,12 @@ export const MODULES: readonly NavModule[] = [
             label: f.views.billing,
             permission: 'finance:billing_read',
           },
+          {
+            id: 'customers',
+            href: '/finance/billing/customers',
+            label: f.views.customers,
+            permission: 'finance:billing_read',
+          },
         ],
       },
       {
@@ -187,7 +193,21 @@ export const MODULES: readonly NavModule[] = [
         href: '/finance/settings/company',
         prefixes: ['/finance/settings'],
         label: f.pages.settings,
-        permission: 'finance:issuer_manage',
+        anyOf: ['finance:issuer_manage', 'finance:billing_read'],
+        views: [
+          {
+            id: 'company',
+            href: '/finance/settings/company',
+            label: f.views.company,
+            permission: 'finance:issuer_manage',
+          },
+          {
+            id: 'prices',
+            href: '/finance/settings/prices',
+            label: f.views.prices,
+            permission: 'finance:billing_read',
+          },
+        ],
         aside: true,
       },
     ],
@@ -402,7 +422,8 @@ export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
 export type HotelsPageId = 'list' | 'new';
 /** Finance (doc 042): one strip of work pages, the settings apart; views inside two pages. */
 export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'exports' | 'settings';
-export type FinanceViewId = 'invoices' | 'billing' | 'bank' | 'payments';
+export type FinanceViewId =
+  'invoices' | 'billing' | 'customers' | 'bank' | 'payments' | 'company' | 'prices';
 export type DispatchPageId = 'orders' | 'new';
 export type SalesPageId = 'overview' | 'prospects' | 'tasks';
 

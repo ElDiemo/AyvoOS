@@ -275,6 +275,17 @@ export const effectiveTermsPageSchema = z.object({
 });
 export type EffectiveTermsPage = z.infer<typeof effectiveTermsPageSchema>;
 
+/**
+ * GET /api/admin/finance/billing/agreements/by-hotel/:hotelId (doc 044 U2): what applies to one hotel
+ * in the current month (Prague), from the same computation as `effective`. `terms` null: no agreement.
+ */
+export const hotelBillingTermsSchema = z.object({
+  month: billingMonthSchema,
+  asOf: z.iso.datetime(),
+  terms: effectiveTermsSchema.nullable(),
+});
+export type HotelBillingTerms = z.infer<typeof hotelBillingTermsSchema>;
+
 // --- the core's contract: hotels (read only) ---------------------------------------------------
 
 export const financeContractHotelSchema = z.object({

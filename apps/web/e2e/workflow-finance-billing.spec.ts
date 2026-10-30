@@ -5,13 +5,13 @@ const ADMIN_STATE = 'e2e/.auth/admin.json';
 const OPERATOR_STATE = 'e2e/.auth/operator.json';
 
 /**
- * Finance → Faktury hotelům → Smlouvy a ceny (doc 040, N3A-1 in the UI; doc 042): a customer (the billed company), the
+ * Finance → Faktury hotelům → Smlouvy (doc 040, N3A-1 in the UI; doc 042): a customer (the billed company), the
  * agreement of a hotel with its rooms and own price, a new version of the terms with a reason, and
  * a default price — all in the browser; refused without the permission. Synthetic data only.
  */
 const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/finance');
 
-test.describe('Smlouvy a ceny', () => {
+test.describe('Smlouvy', () => {
   test.use({ storageState: ADMIN_STATE });
 
   test('a customer, a hotel agreement with its own price, a new version and a default price', async ({
@@ -40,7 +40,7 @@ test.describe('Smlouvy a ceny', () => {
     ).json()) as { code: string };
 
     await page.goto('/finance/billing');
-    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy a ceny' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy' })).toBeVisible();
     await page.getByTestId('customer-new-open').click();
     const customer = page.getByTestId('customer-new');
     await customer.locator('[name=legalName]').fill('Hotelová skupina Morava s.r.o. (E2E)');
@@ -53,10 +53,12 @@ test.describe('Smlouvy a ceny', () => {
     // Saved: said so, the form stays open and empty for the next one.
     await expect(customer.getByRole('status')).toHaveText('Uloženo.');
     await expect(customer.locator('[name=legalName]')).toHaveValue('');
+    await page.goto('/finance/billing/customers');
     await expect(page.getByTestId('billing-customers')).toContainText(
       'Hotelová skupina Morava s.r.o. (E2E)',
     );
 
+    await page.goto('/finance/billing');
     await page.getByTestId('agreement-new-open').click();
     const agreement = page.getByTestId('agreement-new');
     await agreement
@@ -98,10 +100,15 @@ test.describe('Smlouvy a ceny', () => {
     await expect(history.locator('li').first()).toContainText('14 pokojů');
     await expect(history).toContainText('Rozšíření o 2 pokoje (test)');
 
-    await page.goto('/finance/billing');
+    await page.goto('/finance/settings/prices');
     await page.getByText('Nová cena').click();
     const price = page.getByTestId('price-new');
-    await price.locator('[name=price]').fill('299.00');
+    // Czech notation; an unclear amount is refused, not guessed.
+    await price.locator('[name=price]').fill('1,2,3');
+    await price.locator('[name=reason]').fill('Ceník 2026 (test)');
+    await price.getByTestId('price-save').click();
+    await expect(price).toContainText('Částku zadejte jako 1 500,50');
+    await price.locator('[name=price]').fill('299,00');
     await price.locator('[name=reason]').fill('Ceník 2026 (test)');
     await price.getByTestId('price-save').click();
     await expect(page.getByTestId('billing-prices')).toContainText('299,00 CZK');
@@ -235,6 +242,7 @@ test.describe('Smlouvy a ceny', () => {
 
     // Customer: the same, from the customer's page.
     await page.goto(`/finance/billing/customers/${customer.code}`);
+    await page.getByTestId('customer-edit-open').click();
     const cform = page.getByTestId(`customer-version-${customer.code}`);
     await expect(cform.locator('[name=city]')).toHaveValue('Olomouc');
     await json(
@@ -274,7 +282,7 @@ test.describe('Smlouvy a ceny', () => {
         },
       }),
     );
-    await page.goto('/finance/billing');
+    await page.goto('/finance/settings/prices');
     await page.getByText('Nová cena').click();
     const price = page.getByTestId('price-new');
     await price.locator('[name=effectiveFrom]').fill(month);
