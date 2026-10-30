@@ -157,6 +157,21 @@ check_rb_simulation() {
   ok "bank SIMULATION: $(tr ',' '\n' <<<"$accounts" | wc -l) account(s); files present, owner uid $FINANCE_UID only (contents not read)"
 }
 
+# Optional: sending invoices (doc 043 §5), the same check and the same overlay as production.
+# shellcheck source=lib/invoice-mail.sh
+source "$REPO_ROOT/scripts/lib/invoice-mail.sh"
+check_invoice_mail() {
+  local driver=${CFG[FINANCE_INVOICE_MAIL]:-} problem
+  if [[ -z $driver ]]; then
+    ok "FINANCE_INVOICE_MAIL not set: invoices cannot be sent (the page says so)"
+    return
+  fi
+  problem="$(invoice_mail_settings_problem "$driver" "${CFG[FINANCE_MAIL_TEST_RECIPIENTS]:-}" false)" ||
+    die "$problem"
+  COMPOSE_FILES+=(-f "$DEPLOY_DIR/compose.invoice-mail.yml")
+  ok "invoice mail: $driver"
+}
+
 # The core must already run with this contract (deployed by scripts/deploy-dev.sh).
 check_core_ready() {
   local env_sha
@@ -230,6 +245,7 @@ validate_finance_env
 ok "Finance variables present; the service token matches its SHA-256"
 STEP="check the bank simulation files"
 check_rb_simulation
+  check_invoice_mail
 
 # Compose interpolates the whole file (the edge needs the tailnet address, ADR 0026).
 DEV_TAILNET_IPV4="$(tailscale ip -4 | head -n1)"
