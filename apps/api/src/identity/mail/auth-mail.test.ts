@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AYVO_LOGO_CID, ayvoLogoAttachment, pragueTime, renderAuthMail } from './auth-mail.js';
-import { AYVO_LOGO_PNG_HEIGHT, AYVO_LOGO_PNG_WIDTH } from './ayvo-logo-png.js';
+import { AYVO_LOGO_PNG_HEIGHT, AYVO_LOGO_PNG_WIDTH } from '../../common/ayvo-logo-png.js';
 
 // Synthetic, never a real link: 43 base64url characters like a token, but made up.
 const TOKEN = 'SYNTHETIC_not-a-real-token_0123456789abcde';

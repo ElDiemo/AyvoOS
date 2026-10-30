@@ -1,5 +1,12 @@
 import { fileURLToPath } from 'node:url';
+import { documentLanguageSchema, type DocumentLanguage } from '@ayvo/types';
 import PDFDocument from 'pdfkit';
+import {
+  AYVO_LOGO_PNG_BASE64,
+  AYVO_LOGO_PNG_HEIGHT,
+  AYVO_LOGO_PNG_WIDTH,
+} from '../common/ayvo-logo-png.js';
+import type { InvoiceTexts } from './invoice-texts.js';
 import { drawPaymentQr } from './payment-qr.js';
 import { spayd } from './spayd.js';
 
@@ -7,12 +14,19 @@ import { spayd } from './spayd.js';
  * The PDF of an issued invoice, rendered ONLY from the invoice's own frozen snapshot (N3A-2b, doc
  * 040 §5/§8): the issuer, customer, hotel, lines, totals and payment instructions as they were at
  * issuing — a later change of any setting never changes it. Nothing is computed here: amounts are
- * the snapshot's exact decimal strings, only regrouped for print. Czech text with the embedded Noto
- * Sans (OFL, fonts/SOURCE.md). The same snapshot always gives the same bytes (fixed metadata), so
- * the stored file's hash identifies it. A TEST invoice (DEV, synthetic) carries an unmistakable
- * "TESTOVACÍ DOKLAD — NEPLATNÝ" on every page.
+ * the snapshot's exact decimal strings, only regrouped for print. Every word comes from the
+ * snapshot's own `texts` in its `language` (doc 040 §12), with the embedded Noto Sans (OFL,
+ * fonts/SOURCE.md). The same snapshot always gives the same bytes (fixed metadata), so the stored
+ * file's hash identifies it. A TEST invoice (DEV, synthetic) is unmistakably marked on every page.
+ *
+ * Invoices issued before `templateVersion` existed have no language or texts in their snapshot.
+ * Their stored PDF is served as it is; they are never rendered again, so this renderer needs only
+ * the versioned form and refuses anything else.
  */
 export interface InvoicePdfSnapshot {
+  templateVersion: 1;
+  language: DocumentLanguage;
+  texts: InvoiceTexts;
   environment: 'TEST' | 'LIVE';
   number: string;
   /** "YYYY-MM-DD" */
@@ -66,6 +80,7 @@ export interface InvoicePdfSnapshot {
 const FONT_DIR = fileURLToPath(new URL('./fonts/', import.meta.url));
 const MARGIN = 50;
 const A4 = { width: 595.28, height: 841.89 };
+const LOGO_WIDTH = 84;
 
 /** "2026-10-26" → "26. 10. 2026" */
 export const czDate = (iso: string) => {
@@ -78,6 +93,34 @@ export const czAmount = (amount: string) => {
   const [whole, fraction = ''] = amount.replace('-', '').split('.');
   const grouped = whole!.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
   return `${negative ? '−' : ''}${grouped},${fraction.padEnd(2, '0').slice(0, 2)}`;
+};
+
+const SEPARATORS: Record<DocumentLanguage, { group: string; decimal: string }> = {
+  cs: { group: '\u00a0', decimal: ',' },
+  en: { group: ',', decimal: '.' },
+  de: { group: '.', decimal: ',' },
+};
+const EN_MONTHS = 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ');
+
+/** An exact decimal in the document's language (only regrouped; never a float). */
+export const documentAmount = (language: DocumentLanguage, amount: string) => {
+  const { group, decimal } = SEPARATORS[language];
+  const negative = amount.startsWith('-');
+  const [whole, fraction = ''] = amount.replace('-', '').split('.');
+  const grouped = whole!.replace(/\B(?=(\d{3})+(?!\d))/g, group);
+  return `${negative ? '−' : ''}${grouped}${decimal}${fraction.padEnd(2, '0').slice(0, 2)}`;
+};
+/** "2026-10-26" → cs "26. 10. 2026", en "26 Oct 2026", de "26.10.2026" */
+export const documentDate = (language: DocumentLanguage, iso: string) => {
+  const [y, m, d] = iso.split('-');
+  if (language === 'en') return `${Number(d)} ${EN_MONTHS[Number(m) - 1]} ${y}`;
+  if (language === 'de') return `${d}.${m}.${y}`;
+  return czDate(iso);
+};
+/** The language a stored snapshot was issued in; null for one issued before the choice existed. */
+export const documentLanguageOf = (snapshot: unknown): DocumentLanguage | null => {
+  const parsed = documentLanguageSchema.safeParse((snapshot as { language?: unknown }).language);
+  return parsed.success ? parsed.data : null;
 };
 
 export class InconsistentInvoiceSnapshot extends Error {}
@@ -103,6 +146,8 @@ export function checkInvoiceSnapshot(s: InvoicePdfSnapshot): void {
   const fail = (why: string): never => {
     throw new InconsistentInvoiceSnapshot(why);
   };
+  if (s.templateVersion !== 1 || !documentLanguageSchema.safeParse(s.language).success || !s.texts)
+    fail('a snapshot without its language and texts is never rendered');
   let sum = 0n;
   s.lines.forEach((l, i) => {
     // quantity (≤ 3 decimals) × unit price (≤ 2 decimals) in 10^-5, the amount (≤ 2) likewise.
@@ -130,6 +175,9 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
   } catch (e) {
     return Promise.reject(e instanceof Error ? e : new Error(String(e)));
   }
+  const t = s.texts;
+  const money = (amount: string) => documentAmount(s.language, amount);
+  const day = (iso: string) => documentDate(s.language, iso);
   return new Promise((resolve, reject) => {
     // Fixed metadata: the same snapshot renders the same bytes.
     const fixed = new Date(`${s.issuedOn}T00:00:00.000Z`);
@@ -138,7 +186,7 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       margin: MARGIN,
       autoFirstPage: true,
       info: {
-        Title: `Faktura ${s.number}`,
+        Title: `${t.invoice} ${s.number}`,
         Author: s.issuer.legalName,
         Creator: 'AYVO OS',
         Producer: 'AYVO OS',
@@ -170,8 +218,8 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       doc.save();
       doc.rotate(-35, { origin: [A4.width / 2, A4.height / 2] });
       doc.font('bold').fontSize(46).fillColor('#d0d0d0').fillOpacity(0.6);
-      doc.text('TESTOVACÍ DOKLAD', 0, A4.height / 2 - 60, { width: A4.width, align: 'center' });
-      doc.text('NEPLATNÝ', 0, A4.height / 2, { width: A4.width, align: 'center' });
+      doc.text(t.testMark, 0, A4.height / 2 - 60, { width: A4.width, align: 'center' });
+      doc.text(t.testMarkInvalid, 0, A4.height / 2, { width: A4.width, align: 'center' });
       doc.restore();
       doc.fillOpacity(1);
       state._font = font;
@@ -192,20 +240,27 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
     if (s.environment === 'TEST') {
       doc.rect(MARGIN, MARGIN - 30, width, 20).fill('#b42318');
       doc.font('bold').fontSize(10).fillColor('#ffffff');
-      doc.text('TESTOVACÍ DOKLAD — NEPLATNÝ, NEPLATIT (AYVO OS DEV)', MARGIN, MARGIN - 25, {
+      doc.text(t.testBanner, MARGIN, MARGIN - 25, {
         width,
         align: 'center',
       });
     }
+    // The wordmark as the authentication e-mails show it (same PNG, its own aspect ratio).
+    doc.image(
+      Buffer.from(AYVO_LOGO_PNG_BASE64, 'base64'),
+      MARGIN + width - LOGO_WIDTH,
+      MARGIN + 4,
+      { width: LOGO_WIDTH, height: (LOGO_WIDTH * AYVO_LOGO_PNG_HEIGHT) / AYVO_LOGO_PNG_WIDTH },
+    );
     doc
-      .fillColor('#000000')
+      .fillColor('#1c1917')
       .font('bold')
       .fontSize(20)
-      .text(`Faktura ${s.number}`, MARGIN, MARGIN + 4);
+      .text(`${t.invoice} ${s.number}`, MARGIN, MARGIN + 4, { width: width - LOGO_WIDTH - 12 });
     doc.font('regular').fontSize(10).fillColor('#444444');
     doc.text(
-      `Fakturované období: ${s.period.slice(5)}/${s.period.slice(0, 4)} · ${
-        s.hotels.length === 1 ? 'hotel' : 'hotely'
+      `${t.period}: ${s.period.slice(5)}/${s.period.slice(0, 4)} · ${
+        s.hotels.length === 1 ? t.hotel : t.hotels
       } ${s.hotels.map((h) => `${h.code} ${h.name}`).join(', ')}`,
     );
     doc.moveDown(1);
@@ -224,31 +279,31 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       return doc.y;
     };
     const iss = s.issuer;
-    const leftEnd = party('Dodavatel', MARGIN, [
+    const leftEnd = party(t.supplier, MARGIN, [
       iss.legalName,
       ...iss.address,
-      `IČO: ${iss.companyId}`,
-      iss.vatId ? `DIČ: ${iss.vatId}` : null,
+      `${t.companyId}: ${iss.companyId}`,
+      iss.vatId ? `${t.vatId}: ${iss.vatId}` : null,
       iss.registration,
       iss.email,
       iss.phone,
       iss.web,
     ]);
     const c = s.customer;
-    const rightEnd = party('Odběratel', MARGIN + col + 20, [
+    const rightEnd = party(t.customer, MARGIN + col + 20, [
       c.legalName,
       ...c.address,
-      c.companyId ? `IČO: ${c.companyId}` : null,
-      c.vatId ? `DIČ: ${c.vatId}` : null,
+      c.companyId ? `${t.companyId}: ${c.companyId}` : null,
+      c.vatId ? `${t.vatId}: ${c.vatId}` : null,
     ]);
     doc.y = Math.max(leftEnd, rightEnd) + 14;
 
     // Dates
     const dates: [string, string][] = [
-      ['Datum vystavení', czDate(s.issuedOn)],
-      ...(s.taxPointOn ? ([['DUZP', czDate(s.taxPointOn)]] as [string, string][]) : []),
-      ['Datum splatnosti', czDate(s.dueOn)],
-      ['Variabilní symbol', s.payment.variableSymbol],
+      [t.issuedOn, day(s.issuedOn)],
+      ...(s.taxPointOn ? ([[t.taxPointOn, day(s.taxPointOn)]] as [string, string][]) : []),
+      [t.dueOn, day(s.dueOn)],
+      [t.variableSymbol, s.payment.variableSymbol],
     ];
     doc.font('regular').fontSize(10);
     for (const [k, v] of dates) {
@@ -260,10 +315,10 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
 
     // Lines
     const cols = [
-      { title: 'Položka', w: width - 300, align: 'left' as const },
-      { title: 'Množství', w: 80, align: 'right' as const },
-      { title: 'Cena za jednotku', w: 110, align: 'right' as const },
-      { title: `Celkem ${s.totals.currency}`, w: 110, align: 'right' as const },
+      { title: t.item, w: width - 300, align: 'left' as const },
+      { title: t.quantity, w: 80, align: 'right' as const },
+      { title: t.unitPrice, w: 110, align: 'right' as const },
+      { title: `${t.lineTotal} ${s.totals.currency}`, w: 110, align: 'right' as const },
     ];
     // A row is never split over two pages; a new page repeats the column titles.
     const row = (cells: string[], font: 'regular' | 'bold'): boolean => {
@@ -302,9 +357,9 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       row(
         [
           l.description,
-          `${l.quantity.replace('.', ',')} ${l.unit}`,
-          czAmount(l.unitPrice),
-          czAmount(l.amount),
+          `${l.quantity.replace('.', SEPARATORS[s.language].decimal)} ${l.unit}`,
+          money(l.unitPrice),
+          money(l.amount),
         ],
         'regular',
       );
@@ -322,14 +377,14 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       const y = doc.y;
       doc.font(bold ? 'bold' : 'regular').fontSize(bold ? 12 : 10);
       doc.text(label, MARGIN + width - 330, y, { width: 210, align: 'right' });
-      doc.text(`${czAmount(value)} ${s.totals.currency}`, MARGIN + width - 120, y, {
+      doc.text(`${money(value)} ${s.totals.currency}`, MARGIN + width - 120, y, {
         width: 120,
         align: 'right',
       });
     };
-    if (s.totals.base !== null) total('Základ', s.totals.base);
-    if (s.totals.vat !== null) total('DPH', s.totals.vat);
-    total('Celkem k úhradě', s.totals.total, true);
+    if (s.totals.base !== null) total(t.base, s.totals.base);
+    if (s.totals.vat !== null) total(t.vat, s.totals.vat);
+    total(t.totalDue, s.totals.total, true);
     if (s.vatNote) {
       doc.moveDown(0.5).font('regular').fontSize(9).fillColor('#444444');
       doc.text(s.vatNote, MARGIN, doc.y, { width });
@@ -341,15 +396,15 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
     const p = s.payment;
     ensure(Math.max(20 + 6 * 14, 142 + 12));
     const payTop = doc.y;
-    doc.font('bold').fontSize(11).fillColor('#000000').text('Platební údaje', MARGIN, payTop);
+    doc.font('bold').fontSize(11).fillColor('#000000').text(t.paymentDetails, MARGIN, payTop);
     doc.font('regular').fontSize(10);
     for (const line of [
-      p.account ? `Číslo účtu: ${p.account}` : null,
+      p.account ? `${t.accountNumber}: ${p.account}` : null,
       `IBAN: ${p.iban}`,
       p.bic ? `BIC: ${p.bic}` : null,
-      `Částka: ${czAmount(p.amount)} ${p.currency}`,
-      `Variabilní symbol: ${p.variableSymbol}`,
-      `Splatnost: ${czDate(p.dueOn)}`,
+      `${t.amount}: ${money(p.amount)} ${p.currency}`,
+      `${t.variableSymbol}: ${p.variableSymbol}`,
+      `${t.dueOn}: ${day(p.dueOn)}`,
     ])
       if (line) doc.text(line, MARGIN, doc.y, { width: width - 160 });
     if (p.currency === 'CZK') {
@@ -364,7 +419,7 @@ export function renderInvoicePdf(s: InvoicePdfSnapshot): Promise<Buffer> {
       });
       drawPaymentQr(doc, code, { x: MARGIN + width - 140, y: payTop, size: 140 });
       doc.font('regular').fontSize(8).fillColor('#444444');
-      doc.text('QR Platba', MARGIN + width - 140, payTop + 142, { width: 140, align: 'center' });
+      doc.text(t.qrCaption, MARGIN + width - 140, payTop + 142, { width: 140, align: 'center' });
     }
     doc.end();
   });

@@ -62,8 +62,12 @@ export const billingCs = {
     city: 'Město',
     countryCode: 'Země (ISO, např. CZ)',
     billingEmail: 'E-mail pro faktury',
+    documentLanguage: 'Jazyk faktur a e-mailů',
     price: 'Cena za pokoj a měsíc',
   },
+  chooseLanguage: 'Vyberte jazyk',
+  languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
+  languageMissing: 'jazyk dokumentů nevybrán',
   timing: { ADVANCE: 'předem', ARREARS: 'zpětně' } as Record<string, string>,
   errors: {
     CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný – nic se neuložilo.',

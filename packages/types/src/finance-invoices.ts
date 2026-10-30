@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { billingMonthSchema } from './finance-billing.js';
+import { billingMonthSchema, documentLanguageSchema } from './finance-billing.js';
+import { invoiceDeliveryStateSchema } from './finance-deliveries.js';
 import { invoicePaymentStateSchema, paymentAllocationSchema } from './finance-payments.js';
 
 /**
@@ -16,6 +17,10 @@ const money = z.string();
 export const invoiceSummarySchema = z.object({
   number: z.string(),
   kind: z.literal('TEST'),
+  /** From the invoice's snapshot; null: issued before the choice existed (never re-rendered). */
+  documentLanguage: documentLanguageSchema.nullable(),
+  /** The newest sending attempt's state; null: never sent (doc 043). */
+  deliveryState: invoiceDeliveryStateSchema.nullable(),
   variableSymbol: z.string(),
   customer: z.object({ code: z.string(), legalName: z.string(), version: z.number().int() }),
   /** "YYYY-MM" */
@@ -100,28 +105,89 @@ export type InvoiceDetail = z.infer<typeof invoiceDetailSchema>;
  * customer version, the price (and the price-list version it came from) and the billed rooms of the
  * loaded preview. If anything differs when issuing, nothing is issued (409 TERMS_CHANGED).
  */
+const testInvoiceLinesSchema = z
+  .array(
+    z.strictObject({
+      agreementCode: z.string().regex(/^BA-\d{6,}$/),
+      agreementRevision: z.number().int().min(1),
+      customerVersion: z.number().int().min(1),
+      priceListVersionId: z.uuid().nullable(),
+      unitPrice: z.string().regex(/^\d{1,17}\.\d{2}$/),
+      billedRooms: z.number().int().min(1),
+    }),
+  )
+  .min(1)
+  .max(50)
+  .refine(
+    (l) => new Set(l.map((x) => x.agreementCode)).size === l.length,
+    'Každou smlouvu uveďte jen jednou.',
+  );
+
 export const createTestInvoiceSchema = z.strictObject({
   requestId: z.uuid(),
   month: billingMonthSchema,
-  lines: z
-    .array(
-      z.strictObject({
-        agreementCode: z.string().regex(/^BA-\d{6,}$/),
-        agreementRevision: z.number().int().min(1),
-        customerVersion: z.number().int().min(1),
-        priceListVersionId: z.uuid().nullable(),
-        unitPrice: z.string().regex(/^\d{1,17}\.\d{2}$/),
-        billedRooms: z.number().int().min(1),
-      }),
-    )
-    .min(1)
-    .max(50)
-    .refine(
-      (l) => new Set(l.map((x) => x.agreementCode)).size === l.length,
-      'Každou smlouvu uveďte jen jednou.',
-    ),
+  lines: testInvoiceLinesSchema,
 });
 export type CreateTestInvoiceRequest = z.infer<typeof createTestInvoiceSchema>;
+
+/**
+ * GET /api/admin/finance/invoices/test-run/preview?month= (doc 040 §11): every agreement of a month
+ * with what a TEST invoice would say and why it can or cannot be made. Reads only; nothing is
+ * saved, and no date, timing or period is derived from anything.
+ */
+export const TEST_RUN_STATES = ['READY', 'ALREADY_INVOICED', 'BLOCKED', 'NOT_IN_EFFECT'] as const;
+export const testRunPreviewQuerySchema = z.strictObject({ month: billingMonthSchema });
+export const testRunPreviewSchema = z.object({
+  month: billingMonthSchema,
+  /** False in production: only the preview, TEST invoices are never made there. */
+  issuable: z.boolean(),
+  items: z.array(
+    z.object({
+      agreementCode: z.string(),
+      hotel: z.object({ code: z.string(), name: z.string() }),
+      state: z.enum(TEST_RUN_STATES),
+      /** BLOCKED: the gaps of the terms, or ZERO_AMOUNT (an invoice is never 0.00). */
+      blockers: z.array(z.string()),
+      /** ALREADY_INVOICED: the valid invoice of this agreement and month. */
+      invoiceNumber: z.string().nullable(),
+      customer: z
+        .object({ code: z.string(), legalName: z.string(), version: z.number().int() })
+        .nullable(),
+      agreementRevision: z.number().int().nullable(),
+      billedRooms: z.number().int().nullable(),
+      price: z.object({
+        source: z.enum(['OWN', 'DEFAULT', 'MISSING']),
+        perRoomMonth: money.nullable(),
+        priceListVersionId: z.uuid().nullable(),
+      }),
+      amount: money.nullable(),
+      currency: z.string().nullable(),
+      paymentTermsDays: z.number().int().nullable(),
+      /** As recorded on the agreement; shown, never used to choose a period or a date. */
+      billingTiming: z.enum(['ADVANCE', 'ARREARS']).nullable(),
+    }),
+  ),
+});
+export type TestRunPreview = z.infer<typeof testRunPreviewSchema>;
+
+/**
+ * POST /api/admin/finance/invoices/test-run: separate TEST invoices (one per agreement) of an
+ * explicit period with an explicit issue date, bound to the lines the user saw. All or nothing;
+ * the same requestId replays the same result. The due date = issue date + the agreement's terms.
+ */
+export const createTestRunSchema = z.strictObject({
+  requestId: z.uuid(),
+  month: billingMonthSchema,
+  issuedOn: z.iso.date(),
+  lines: testInvoiceLinesSchema,
+});
+export type CreateTestRunRequest = z.infer<typeof createTestRunSchema>;
+export const testRunResultSchema = z.object({
+  month: billingMonthSchema,
+  issuedOn: z.iso.date(),
+  invoices: z.array(z.object({ agreementCode: z.string(), number: z.string() })),
+});
+export type TestRunResult = z.infer<typeof testRunResultSchema>;
 
 export const cancelInvoiceSchema = z.strictObject({
   requestId: z.uuid(),
