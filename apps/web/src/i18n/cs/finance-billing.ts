@@ -64,6 +64,7 @@ export const billingCs = {
     billingEmail: 'E-mail pro faktury',
     price: 'Cena za pokoj a měsíc',
   },
+  toHotel: 'Karta hotelu',
   timing: { ADVANCE: 'předem', ARREARS: 'zpětně' } as Record<string, string>,
   errors: {
     CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný – nic se neuložilo.',

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import {
   createBillingAgreementSchema,
   createBillingCustomerSchema,
@@ -16,6 +16,7 @@ import {
   type EffectiveTermsPage,
   type EffectiveTermsQuery,
   type FinanceContractHotel,
+  type HotelBillingTerms,
   type NewBillingAgreementVersionRequest,
   type NewBillingCustomerVersionRequest,
   type NewPriceListVersionRequest,
@@ -110,6 +111,13 @@ export class BillingSettingsController {
   @Get('agreements')
   agreements(): Promise<BillingAgreement[]> {
     return this.billing.listAgreements();
+  }
+
+  /** What applies to one hotel now (doc 044 U2): its card in Hotely reads this. */
+  @RequirePermission('finance:billing_read')
+  @Get('agreements/by-hotel/:hotelId')
+  hotelTerms(@Param('hotelId', ParseUUIDPipe) hotelId: string): Promise<HotelBillingTerms> {
+    return this.billing.hotelTerms(hotelId);
   }
 
   /** What applies to every agreement in a month, as known now or at `asOf` (no amounts). */

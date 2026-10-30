@@ -6,6 +6,7 @@ import {
   priceListVersionSchema,
 } from '@ayvo/types';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { AgreementForm, CustomerForm, PriceForm } from '@/components/finance/billing-forms';
 import { financeAmount, financeMonth } from '@/components/finance/finance-format';
@@ -41,9 +42,9 @@ function Empty({ children, action }: { children: React.ReactNode; action?: React
 export default async function BillingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ new?: string }>;
+  searchParams: Promise<{ new?: string; hotel?: string }>;
 }) {
-  const opened = (await searchParams).new;
+  const { new: opened, hotel: hotelParam } = await searchParams;
   const me = await requirePermission('finance:billing_read');
   const canManage = hasPermission(me, 'finance:billing_manage');
   const month = thisMonth();
@@ -56,6 +57,10 @@ export default async function BillingPage({
   ]);
   const withAgreement = new Set(agreements.map((a) => a.hotel.id));
   const free = hotels.filter((h) => !withAgreement.has(h.id));
+  // From a hotel's card: its agreement, or the new agreement's form with that hotel chosen.
+  const existing = agreements.find((a) => a.hotel.id === hotelParam);
+  if (existing) redirect(`/finance/billing/agreements/${existing.code}`);
+  const chosenHotel = free.some((h) => h.id === hotelParam) ? hotelParam : undefined;
   const termsOf = (code: string) => effective.items.find((i) => i.agreement.code === code);
   return (
     <>
@@ -112,7 +117,7 @@ export default async function BillingPage({
             </ul>
           )}
           {canManage && (
-            <details className="mt-4" open={opened === 'agreement'}>
+            <details className="mt-4" open={opened === 'agreement' || !!chosenHotel}>
               <summary
                 className="cursor-pointer text-sm font-medium"
                 data-testid="agreement-new-open"
@@ -123,14 +128,17 @@ export default async function BillingPage({
                 {customers.length === 0 ? (
                   <Notice tone="info">
                     {t.needCustomer}{' '}
-                    <Link href="/finance/billing?new=customer#customers" className="underline">
+                    <Link
+                      href={`/finance/billing?new=customer${chosenHotel ? `&hotel=${chosenHotel}` : ''}#customers`}
+                      className="underline"
+                    >
                       {t.createCustomer}
                     </Link>
                   </Notice>
                 ) : free.length === 0 ? (
                   <Notice tone="info">{t.noFreeHotel}</Notice>
                 ) : (
-                  <AgreementForm hotels={free} customers={customers} />
+                  <AgreementForm hotels={free} customers={customers} initialHotelId={chosenHotel} />
                 )}
               </div>
             </details>
@@ -161,7 +169,7 @@ export default async function BillingPage({
             </ul>
           )}
           {canManage && (
-            <details className="mt-4" open={opened === 'customer'}>
+            <details className="mt-4" open={opened === 'customer' || !!chosenHotel}>
               <summary
                 className="cursor-pointer text-sm font-medium"
                 data-testid="customer-new-open"
