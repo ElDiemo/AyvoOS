@@ -23,7 +23,7 @@ Stávající routy beze změny práv, pokud není uvedeno jinak.
 | -------------------------------------------- | ---------- | -------------------------- | -------------------------- |
 | `/hotels/[code]`                             | úprava     | stávající jádro            | `hotels:manage`            |
 | `/hotels/new`                                | text       | `hotels:manage`            | `hotels:manage`            |
-| `/finance/billing?hotel=<id>&from=hotel`     | nová volba | `finance:billing_read`     | `finance:billing_manage`   |
+| `/finance/billing?hotel=<id>`                | nová volba | `finance:billing_read`     | `finance:billing_manage`   |
 | `/finance/billing` (jen smlouvy)             | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
 | `/finance/billing/agreements/[code]`         | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
 | `/finance/billing/customers`                 | nová       | `finance:billing_read`     | `finance:billing_manage`   |
@@ -42,7 +42,7 @@ Stávající routy beze změny práv, pokud není uvedeno jinak.
 `finance:billing_read` a `finance:billing_manage`. Proto vlastní routa v Nastavení Financí, jediný
 editor, stejná práva. `/finance/billing` na ni jen odkáže.
 
-**Návrat:** `from=hotel` je pevná hodnota, cíl se skládá ze smlouvy. Žádná volná návratová URL.
+**Návrat:** ze smlouvy pevný odkaz na kartu jejího hotelu. Žádná volná návratová URL.
 
 ## 3. Dodávky
 
