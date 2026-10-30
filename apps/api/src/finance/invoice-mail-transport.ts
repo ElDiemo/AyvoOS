@@ -87,7 +87,10 @@ class SmtpInvoiceMailTransport implements InvoiceMailTransport {
   }
 }
 
-/** Automated tests only: keeps the messages; special domains stand for the relay's other answers. */
+/**
+ * Never opens a connection (tests and the DEV simulation): keeps the latest messages; special domains
+ * stand for the relay's other answers.
+ */
 export class MemoryInvoiceMailTransport implements InvoiceMailTransport {
   readonly sent: OutgoingInvoiceMail[] = [];
 
@@ -97,9 +100,12 @@ export class MemoryInvoiceMailTransport implements InvoiceMailTransport {
     if (mail.to.endsWith('@nejiste.test'))
       return Promise.resolve({ kind: 'UNCERTAIN', code: 'CONNECTION_LOST' });
     this.sent.push(mail);
+    if (this.sent.length > MEMORY_KEEP) this.sent.shift();
     return Promise.resolve({ kind: 'ACCEPTED' });
   }
 }
+
+const MEMORY_KEEP = 100;
 
 export const INVOICE_MAIL_TRANSPORT = Symbol('INVOICE_MAIL_TRANSPORT');
 
@@ -119,6 +125,7 @@ export function createInvoiceMailTransport(env: FinanceEnv): InvoiceMailTranspor
       disableUrlAccess: true,
     });
   }
-  if (env.FINANCE_INVOICE_MAIL === 'memory') return new MemoryInvoiceMailTransport();
+  if (env.FINANCE_INVOICE_MAIL === 'memory' || env.FINANCE_INVOICE_MAIL === 'simulation')
+    return new MemoryInvoiceMailTransport();
   return null;
 }

@@ -94,6 +94,22 @@ QUEUED → SENDING → SENT
 - **Běžný výpadek relay:** doručení, které prokazatelně neodešlo (spojení se neotevřelo), zůstává
   ve frontě s omezeným počtem pokusů; po jeho vyčerpání `FAILED`.
 
+### Síť a nasazení (DEV a PROD stejně)
+
+- **Žádná změna sítě ani host guardu není potřeba.** Finance je na obou prostředích na mostu `edge`
+  a sítích `finance-db`; host guardy (`DOCKER-USER`) filtrují jen provoz vstupující z veřejného
+  rozhraní a odchozí spojení kontejnerů pouštějí. Povolené IP DEV a PROD jsou na straně relay.
+  Toto vychází z konfigurace v repozitáři; živě to ověří až kontrolovaný test.
+- **Omezení odchozího provozu Finance není součástí:** `edge` dnes nemá filtr podle portu. Není to
+  rozšíření oproti stávajícímu stavu.
+- **`deploy/{dev,prod}/compose.invoice-mail.yml`** přidávají jen tři proměnné do kontejneru Finance.
+  Liší se jen doménou pro EHLO. Nasadí se jen s `FINANCE_INVOICE_MAIL`; kontrola je společná
+  (`scripts/lib/invoice-mail.sh`).
+- **DEV bez skutečné pošty:** `FINANCE_INVOICE_MAIL=simulation` neotevře žádné spojení, stav v UI
+  prochází stejným kódem. V produkci ji odmítne aplikace i nasazení.
+- **Kontrolovaný test (po review a schváleném nasazení DEV):** `google-relay` a
+  `FINANCE_MAIL_TEST_RECIPIENTS` s odsouhlasenou adresou. Na PROD se TEST faktura neodešle.
+
 ## 6. Oprávnění a UI
 
 - `finance:invoices_send` (nové, migrace v jádře, ADMIN).

@@ -92,9 +92,10 @@ export const financeEnvSchema = z
     RB_PREMIUM_RETRY_BASE_MS: z.coerce.number().int().min(100).max(10_000).default(1_000),
     /**
      * Sending invoices by e-mail (doc 043). Unset: nothing can be queued or sent. `google-relay`
-     * is the approved relay; `memory` and `test-smtp` exist only with APP_ENV=test.
+     * is the approved relay; `simulation` keeps messages in memory and never opens a connection (never
+     * in production); `memory` and `test-smtp` exist only with APP_ENV=test.
      */
-    FINANCE_INVOICE_MAIL: optional(z.enum(['google-relay', 'memory', 'test-smtp'])),
+    FINANCE_INVOICE_MAIL: optional(z.enum(['google-relay', 'simulation', 'memory', 'test-smtp'])),
     /** The EHLO name for the relay (a real host name; a container's random one is refused). */
     FINANCE_MAIL_EHLO_NAME: optional(
       z.string().regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/),
@@ -158,6 +159,8 @@ export const financeEnvSchema = z
     const mail = env.FINANCE_INVOICE_MAIL;
     if ((mail === 'memory' || mail === 'test-smtp') && env.APP_ENV !== 'test')
       fail('FINANCE_INVOICE_MAIL', 'simulated mail is allowed only with APP_ENV=test');
+    if (mail === 'simulation' && env.APP_ENV === 'production')
+      fail('FINANCE_INVOICE_MAIL', 'simulated mail does not exist in production');
     if (mail === 'google-relay' && !env.FINANCE_MAIL_EHLO_NAME)
       fail('FINANCE_MAIL_EHLO_NAME', 'required with the relay');
     if (mail === 'google-relay' && !env.FINANCE_MAIL_TEST_RECIPIENTS)
