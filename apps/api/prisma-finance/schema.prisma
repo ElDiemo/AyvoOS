@@ -213,7 +213,8 @@ model CustomerVersion {
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
-  invoices Invoice[]
+  invoices   Invoice[]
+  deliveries InvoiceDelivery[]
 
   @@id([customerId, version])
   @@map("customer_versions")
@@ -513,6 +514,7 @@ model Invoice {
   customer     CustomerVersion      @relation(fields: [customerId, customerVersion], references: [customerId, version], onDelete: Restrict)
   lines        InvoiceLine[]
   cancellation InvoiceCancellation?
+  deliveries   InvoiceDelivery[]
 
   allocations PaymentAllocation[]
 
@@ -614,5 +616,60 @@ model PaymentAllocation {
   @@index([paymentId], map: "payment_allocations_payment_idx")
   @@index([invoiceId], map: "payment_allocations_invoice_idx")
   @@map("payment_allocations")
+  @@schema("finance")
+}
+
+/// One intent to send an invoice's stored PDF by e-mail (doc 043). SENT = the relay accepted it,
+/// never "in the mailbox". Current state + a history the database writes itself; what is sent and to
+/// whom never changes (trigger), a retry is a new row pointing at the failed or uncertain attempt.
+model InvoiceDelivery {
+  id                        String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  invoiceId                 String    @map("invoice_id") @db.Uuid
+  customerId                String    @map("customer_id") @db.Uuid
+  customerVersion           Int       @map("customer_version")
+  recipient                 String
+  senderName                String    @map("sender_name")
+  senderAddress             String    @map("sender_address")
+  replyTo                   String    @map("reply_to")
+  language                  String
+  templateVersion           Int       @map("template_version")
+  messageId                 String    @map("message_id")
+  state                     String    @default("QUEUED")
+  attemptOf                 String?   @unique @map("attempt_of") @db.Uuid
+  retryReason               String?   @map("retry_reason")
+  duplicateRiskAcknowledged Boolean   @default(false) @map("duplicate_risk_acknowledged")
+  requestId                 String    @unique @map("request_id") @db.Uuid
+  requestedBy               String    @map("requested_by") @db.Uuid
+  requestedByName           String    @map("requested_by_name")
+  requestedAt               DateTime  @default(dbgenerated("clock_timestamp()")) @map("requested_at") @db.Timestamptz(3)
+  sendAttempts              Int       @default(0) @map("send_attempts")
+  nextAttemptAt             DateTime  @default(dbgenerated("clock_timestamp()")) @map("next_attempt_at") @db.Timestamptz(3)
+  leaseUntil                DateTime? @map("lease_until") @db.Timestamptz(3)
+  lastCode                  String?   @map("last_code")
+  finishedAt                DateTime? @map("finished_at") @db.Timestamptz(3)
+
+  invoice  Invoice                @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  customer CustomerVersion        @relation(fields: [customerId, customerVersion], references: [customerId, version], onDelete: Restrict, map: "invoice_deliveries_customer_version_fkey")
+  previous InvoiceDelivery?       @relation("DeliveryRetry", fields: [attemptOf], references: [id], onDelete: Restrict)
+  retry    InvoiceDelivery?       @relation("DeliveryRetry")
+  events   InvoiceDeliveryEvent[]
+
+  @@map("invoice_deliveries")
+  @@schema("finance")
+}
+
+/// Append-only: every state of a delivery with the relay's code class, never the message.
+model InvoiceDeliveryEvent {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  deliveryId String   @map("delivery_id") @db.Uuid
+  state      String
+  code       String?
+  attempt    Int
+  occurredAt DateTime @default(dbgenerated("clock_timestamp()")) @map("occurred_at") @db.Timestamptz(3)
+
+  delivery InvoiceDelivery @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
+
+  @@index([deliveryId, occurredAt], map: "invoice_delivery_events_delivery_idx")
+  @@map("invoice_delivery_events")
   @@schema("finance")
 }

@@ -231,7 +231,7 @@ export const financeCs = {
     subtitle:
       'Faktury hotelům podle smluv (pokoje × cena za měsíc). Zatím jen TESTOVACÍ faktury mimo produkci – ostré vystavení není schváleno a nic se neodesílá.',
     testOnly:
-      'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a nikam se neposílají. DPH a účetní pravidla zatím nejsou schválena.',
+      'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a samy se nikam neposílají. DPH a účetní pravidla zatím nejsou schválena.',
     create: 'Vystavit testovací fakturu',
     empty: 'Zatím žádné faktury.',
     ofAgreement: 'Faktury této smlouvy',
@@ -285,6 +285,52 @@ export const financeCs = {
         NO_EFFECTIVE_VERSION: 'podmínky začínají později',
         CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
         ZERO_AMOUNT: 'nulová částka',
+      } as Record<string, string>,
+    },
+    delivery: {
+      title: 'Odeslání e-mailem',
+      none: 'Faktura zatím nebyla odeslána.',
+      send: 'Odeslat fakturu',
+      willSend: (recipient: string, sender: string) => `Komu: ${recipient} · Od: ${sender}`,
+      requested: (at: string, by: string) => `${at}, ${by}`,
+      retry: 'Odeslat znovu',
+      retryReason: 'Důvod opakování (povinný)',
+      retryReasonShown: 'Důvod opakování',
+      duplicateWarning:
+        'Rozumím, že odběratel může fakturu dostat dvakrát: u předchozího pokusu nemusí být jasné, zda zpráva odešla.',
+      sentHelp: 'Přijetí poštovním serverem neznamená potvrzené doručení do schránky odběratele.',
+      uncertainHelp:
+        'Výsledek není znám: zpráva mohla odejít. Systém ji sám znovu neodešle; rozhodněte, zda ji odeslat ručně.',
+      state: {
+        QUEUED: 'Čeká na odeslání',
+        SENDING: 'Odesílá se',
+        SENT: 'Přijato poštovním serverem (doručení do schránky nepotvrzeno)',
+        FAILED: 'Neodesláno',
+        UNCERTAIN: 'Výsledek nejistý',
+      } as Record<string, string>,
+      codes: {
+        PROCESS_INTERRUPTED: 'Odesílání se přerušilo.',
+        CONNECTION_LOST: 'Spojení s poštovním serverem se přerušilo.',
+        RELAY_UNREACHABLE: 'Poštovní server není dostupný.',
+        RECIPIENT_REFUSED: 'Poštovní server adresu odmítl.',
+        INVOICE_CANCELLED: 'Faktura byla mezitím zrušena.',
+        PDF_UNAVAILABLE: 'Uložené PDF se nepodařilo načíst.',
+        PDF_TOO_LARGE: 'Uložené PDF je příliš velké.',
+        PDF_HASH_MISMATCH: 'Uložené PDF neodpovídá otisku z vystavení, nic se neodeslalo.',
+        PRODUCTION: 'Testovací faktury se z produkce neodesílají.',
+      } as Record<string, string>,
+      blockers: {
+        DELIVERY_DISABLED: 'Odesílání faktur tu není zapnuté.',
+        INVOICE_CANCELLED: 'Zrušená faktura se neodesílá.',
+        LANGUAGE_MISSING: 'Starší doklad nemá uložený jazyk e-mailu, proto se neodesílá.',
+        PRODUCTION: 'Testovací faktury se z produkce neodesílají.',
+      } as Record<string, string>,
+      errors: {
+        RECIPIENT_CHANGED:
+          'Adresa odběratele se změnila. Načtěte stránku znovu, nic se neodeslalo.',
+        RECIPIENT_NOT_ALLOWED: 'Na tuto adresu se testovací faktura odeslat nesmí.',
+        DELIVERY_EXISTS: 'Faktura už má záznam o odeslání.',
+        DELIVERY_NOT_RETRYABLE: 'Opakovat lze jen poslední neúspěšný nebo nejistý pokus.',
       } as Record<string, string>,
     },
     newTitle: 'Testovací faktura',

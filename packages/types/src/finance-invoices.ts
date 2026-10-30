@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { billingMonthSchema, documentLanguageSchema } from './finance-billing.js';
+import { invoiceDeliveryStateSchema } from './finance-deliveries.js';
 import { invoicePaymentStateSchema, paymentAllocationSchema } from './finance-payments.js';
 
 /**
@@ -18,6 +19,8 @@ export const invoiceSummarySchema = z.object({
   kind: z.literal('TEST'),
   /** From the invoice's snapshot; null: issued before the choice existed (never re-rendered). */
   documentLanguage: documentLanguageSchema.nullable(),
+  /** The newest sending attempt's state; null: never sent (doc 043). */
+  deliveryState: invoiceDeliveryStateSchema.nullable(),
   variableSymbol: z.string(),
   customer: z.object({ code: z.string(), legalName: z.string(), version: z.number().int() }),
   /** "YYYY-MM" */

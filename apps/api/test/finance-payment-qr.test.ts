@@ -12,6 +12,8 @@ import {
   type InvoicePdfSnapshot,
 } from '../src/finance/invoice-pdf.js';
 import { INVOICE_TEMPLATE_VERSION, invoiceTexts } from '../src/finance/invoice-texts.js';
+import { renderInvoiceMail } from '../src/finance/invoice-mail.js';
+import { classifySmtpError } from '../src/finance/invoice-mail-transport.js';
 import { spayd, InvalidPaymentInstruction, type PaymentInstruction } from '../src/finance/spayd.js';
 import { decodeQrOnPage, MM_PER_PT, openPdf, pageText } from './support/pdf-inspect.js';
 
@@ -401,5 +403,47 @@ describe('QR Platba (SPAYD) and the invoice PDF', () => {
     expect(documentLanguageOf(legacy)).toBeNull();
     expect(documentLanguageOf({ language: 'fr' })).toBeNull();
     expect(documentLanguageOf(invoice({ language: 'de' }))).toBe('de');
+  });
+
+  it('the e-mail: both versions from the snapshot in its language, marked TEST, values escaped', () => {
+    const s = invoice({
+      language: 'en',
+      texts: invoiceTexts('en'),
+      issuer: { ...invoice().issuer, legalName: 'A<b>&Co' },
+    });
+    const m = renderInvoiceMail(s);
+    expect(m.subject).toBe('[TEST] Invoice 2026001');
+    expect(m.filename).toBe('invoice-2026001.pdf');
+    for (const body of [m.text, m.html]) {
+      expect(body).toContain('TEST E-MAIL');
+      expect(body).toContain('1,875.50 CZK');
+      expect(body).toContain('14 Nov 2026');
+    }
+    expect(m.text).toContain('A<b>&Co');
+    expect(m.html).toContain('A&lt;b&gt;&amp;Co');
+    expect(m.html).not.toContain('A<b>');
+    const live = renderInvoiceMail({ ...s, environment: 'LIVE' });
+    expect(live.subject).toBe('Invoice 2026001');
+    expect(live.text).not.toContain('TEST');
+  });
+
+  it('only a connection never made or an explicit answer proves anything; the rest is uncertain', () => {
+    expect(classifySmtpError({ responseCode: 550 })).toEqual({
+      kind: 'REJECTED',
+      code: 'RELAY_550',
+    });
+    expect(classifySmtpError({ responseCode: 421 })).toEqual({
+      kind: 'NOT_SENT',
+      code: 'RELAY_421',
+    });
+    expect(classifySmtpError({ code: 'ESOCKET', syscall: 'connect' }).kind).toBe('NOT_SENT');
+    expect(classifySmtpError({ code: 'EDNS' }).kind).toBe('NOT_SENT');
+    for (const e of [
+      { code: 'ECONNECTION', command: 'CONN' },
+      { code: 'ETIMEDOUT' },
+      new Error('x'),
+      null,
+    ])
+      expect(classifySmtpError(e).kind).toBe('UNCERTAIN');
   });
 });

@@ -1,9 +1,26 @@
-# 043 — Finance: doručování PDF faktury e-mailem (návrh ke schválení)
+# 043 — Finance: doručování PDF faktury e-mailem
 
-Status: **návrh, nic není postaveno** (zadání majitele 2026-10-30). Přidává tabulky a oprávnění,
-proto čeká na schválení modelu majitelem (CLAUDE.md, „Domain models need owner approval“). Ostré
-faktury a automatické e-maily na PROD zůstávají blokované do potvrzení účetních pravidel
-(doc 040 §7). Tento dokument nic z toho nepovoluje.
+Status: **model schválil majitel 30. 10. 2026 („ano jedem“), implementováno pro TEST faktury se
+simulovaným SMTP.** Ostré faktury a automatické e-maily zůstávají blokované do potvrzení účetních
+pravidel (doc 040 §7). Skutečné doručení přes relay je až kontrolovaný test po review a schváleném
+nasazení DEV, jen na odsouhlasenou adresu.
+
+## 0. Rozhodnutí majitele (30. 10. 2026)
+
+- Evidence `invoice_deliveries`, `invoice_delivery_events`, oprávnění `finance:invoices_send` (ADMIN).
+- Odesílá se ručně, na jednu adresu `billing_email` z aktuální verze odběratele; adresu uživatel vidí
+  předem a požadavek ji obsahuje. Změněná adresa: `RECIPIENT_CHANGED`, nikdy tichá náhrada.
+- Odesílatel i Reply-To: `AYVO Billing <invoice@ayvo.co>`, pevně v kódu. Autentizační e-maily dál
+  `system@ayvo.co`.
+- Jazyk e-mailu je jazyk faktury, včetně textů ze snímku (doc 040 §12). Starší doklad bez jazyka se
+  neodesílá (`LANGUAGE_MISSING`).
+- `SENT` znamená přijetí relayem, nikdy potvrzené doručení do schránky; UI to říká slovy.
+- `UNCERTAIN` se samo neopakuje. Ruční opakování: `finance:invoices_send`, důvod a potvrzené
+  varování před duplicitou. Opakuje se poslední `FAILED` nebo `UNCERTAIN` pokus, se stejným `Message-ID`.
+
+Náhledy (syntetická data): `docs/screenshots/finance/finance-invoice-mail-{cs,en,de}.png`,
+`finance-delivery-{before,uncertain,sent}-*.png`. Text e-mailu v `invoice-texts.ts` je návrh ke
+kontrole majitelem.
 
 ## 1. Co se řeší
 
@@ -95,9 +112,17 @@ QUEUED → SENDING → SENT
 - Poškozené PDF (jiný otisk): nic se neodešle.
 - Zrušená faktura: odmítnuto. S `APP_ENV=production`: odmítnuto.
 
-## 8. Rozhodnutí majitele a účetní
+## 8. Jak se rozhoduje o výsledku
 
-1. Schválení modelu v §3 a oprávnění v §6.
-2. Odesílatel (`system@ayvo.co`, nebo jiná adresa pro fakturaci) a text e-mailu (doc 040 §7.8).
-3. Jedna adresa na odběratele, nebo víc (kopie)?
-4. Odesílat ručně, nebo automaticky po vystavení? Návrh: ručně, dokud nejsou potvrzená účetní pravidla.
+Vše neznámé je `UNCERTAIN`. Opakovatelné (`QUEUED`, nejvýš 5 pokusů, pak `FAILED`) je jen to, co
+prokazatelně neodeslalo nic: spojení se nenavázalo (`syscall connect`, DNS, TLS) nebo odpověď 4xx.
+Odpověď 5xx je `FAILED`. Spadlé spojení po navázání je vždy `UNCERTAIN`: nodemailer u něj hlásí
+`command: CONN` i po zapsání zprávy, proto se z tohoto pole nikdy nerozhoduje (zachytil to test se
+simulovaným relayem).
+
+## 9. Limity
+
+Jedna zpráva naráz na proces, nejvýš 5 za kolo, spojení se neudržuje. PDF nejvýš 10 MiB, kontrola
+otisku před odesláním. Odeslání má lhůtu 60 s, rezervace záznamu 120 s. Logy jen id a stav, nikdy
+adresa ani zpráva. Reálný relay vyžaduje `FINANCE_MAIL_EHLO_NAME` a `FINANCE_MAIL_TEST_RECIPIENTS`.
+Bez `FINANCE_INVOICE_MAIL` se nic nezařadí ani neodešle. Síť a nasazení: samostatný diff (§5).

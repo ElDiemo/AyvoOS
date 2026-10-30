@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createServer, type AddressInfo } from 'node:net';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
+  InvoiceDeliveries,
   EffectiveTermsPage,
   IncomingPayment,
   InvoiceDetail,
@@ -15,7 +19,14 @@ import type {
   TestRunResult,
 } from '@ayvo/types';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
+import { loadFinanceEnv } from '../src/finance/finance-env.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
+import { InvoiceDeliveriesService } from '../src/finance/invoice-deliveries.service.js';
+import { InvoiceDeliveryRunner } from '../src/finance/invoice-delivery-runner.service.js';
+import {
+  INVOICE_MAIL_TRANSPORT,
+  MemoryInvoiceMailTransport,
+} from '../src/finance/invoice-mail-transport.js';
 import { InvoicesService } from '../src/finance/invoices.service.js';
 import { PaymentsService } from '../src/finance/payments.service.js';
 import { PrismaClient } from '../src/generated/finance-prisma/client.js';
@@ -1789,5 +1800,553 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       (i) => i.number === number,
     );
     expect(listed?.documentLanguage).toBeNull();
+  });
+
+  // --- sending an invoice's PDF by hand (doc 043) ----------------------------------------------
+
+  const DELIVERY_ACTOR = {
+    principal: { userId: randomUUID(), displayName: 'Test' },
+    sessionToken: 'x',
+  } as never;
+  const mailApp = (finance: Record<string, string> = { FINANCE_INVOICE_MAIL: 'memory' }) =>
+    createFinanceTestApp({
+      finance: {
+        FINANCE_INVOICE_MAIL_POLL_MS: '60000',
+        FILE_STORAGE_DIR: f.env.FILE_STORAGE_DIR,
+        ...finance,
+      },
+    });
+  const issued = async (language = 'cs', billingEmail = 'fakturace@jazyk.test') => {
+    await ensureCzkDefault();
+    const c = await customerWith(language, { billingEmail });
+    const a = await agreement(c.id);
+    const inv = (await expectStatus(issue([a.code], '2026-04'), 201)).body as InvoiceDetail;
+    return { c, inv, recipient: billingEmail };
+  };
+  const deliveriesOf = (app: FinanceTestApp, number: string) =>
+    app.get(`${INV}/${number}/deliveries`).expect(200);
+  const sendBody = (recipient: string) => ({ requestId: randomUUID(), recipient });
+  const runner = (app: FinanceTestApp) => app.app.get(InvoiceDeliveryRunner);
+  const sentMail = (app: FinanceTestApp) =>
+    app.app.get<MemoryInvoiceMailTransport>(INVOICE_MAIL_TRANSPORT).sent;
+
+  it('sent by hand: one queued record, the stored PDF, AYVO Billing as sender and Reply-To; SENT is only "accepted"', async () => {
+    const app = await mailApp();
+    try {
+      for (const [language, subject, greeting] of [
+        ['cs', 'Faktura', 'Dobrý den,'],
+        ['en', 'Invoice', 'Hello,'],
+        ['de', 'Rechnung', 'Guten Tag,'],
+      ] as const) {
+        const { inv, recipient } = await issued(language);
+        // Nothing is sent by issuing.
+        expect(
+          ((await deliveriesOf(app, inv.number)).body as InvoiceDeliveries).deliveries,
+        ).toEqual([]);
+        const body = sendBody(recipient);
+        const queued = (await app.post(`${INV}/${inv.number}/deliveries`).send(body).expect(201))
+          .body as InvoiceDeliveries;
+        expect(queued.deliveries).toMatchObject([{ state: 'QUEUED', recipient, language }]);
+        // The same request again changes nothing.
+        await app.post(`${INV}/${inv.number}/deliveries`).send(body).expect(201);
+        // Another sending of the same invoice is refused; it is a retry or nothing.
+        const again = await app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient));
+        expect([again.status, again.body.code]).toEqual([409, 'DELIVERY_EXISTS']);
+
+        const before = sentMail(app).length;
+        await runner(app).tick();
+        await runner(app).tick();
+        expect(sentMail(app).length).toBe(before + 1);
+        const mail = sentMail(app).at(-1)!;
+        expect(mail).toMatchObject({
+          from: { name: 'AYVO Billing', address: 'invoice@ayvo.co' },
+          replyTo: 'invoice@ayvo.co',
+          to: recipient,
+          subject: `[TEST] ${subject} ${inv.number}`,
+        });
+        expect(mail.text).toContain(greeting);
+        expect(mail.text).toContain(inv.variableSymbol);
+        expect(mail.html).toContain(`lang="${language}"`);
+        expect(mail.html).toContain(greeting);
+        expect(mail.filename).toContain(inv.number);
+        expect(createHash('sha256').update(mail.pdf).digest('hex')).toBe(inv.pdfSha256);
+
+        const done = (await deliveriesOf(app, inv.number)).body as InvoiceDeliveries;
+        expect(done.deliveries).toHaveLength(1);
+        expect(done.deliveries[0]).toMatchObject({ state: 'SENT', code: null });
+        expect(done.deliveries[0]!.events.map((e) => e.state)).toEqual([
+          'QUEUED',
+          'SENDING',
+          'SENT',
+        ]);
+        expect(
+          ((await app.get(`${INV}/${inv.number}`).expect(200)).body as InvoiceDetail).deliveryState,
+        ).toBe('SENT');
+        // SENT is final: no retry.
+        const retry = await app
+          .post(`${INV}/${inv.number}/deliveries/${done.deliveries[0]!.id}/retry`)
+          .send({ ...sendBody(recipient), reason: 'Znovu (test)', acknowledgeDuplicateRisk: true });
+        expect([retry.status, retry.body.code]).toEqual([409, 'DELIVERY_NOT_RETRYABLE']);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('never two messages: concurrent requests and concurrent senders', async () => {
+    const app = await mailApp();
+    try {
+      const { inv, recipient } = await issued();
+      const answers = await Promise.all(
+        [1, 2, 3].map(() => app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient))),
+      );
+      expect(answers.map((a) => a.status).sort()).toEqual([201, 409, 409]);
+      const before = sentMail(app).length;
+      const service = app.app.get(InvoiceDeliveriesService);
+      await Promise.all([service.sendNext(), service.sendNext(), service.sendNext()]);
+      expect(sentMail(app).length).toBe(before + 1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a crash after SENDING: UNCERTAIN, never sent again by itself; a retry needs a person, a reason and the warning', async () => {
+    const app = await mailApp();
+    try {
+      const { inv, recipient } = await issued();
+      await app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+      const row = await app.prisma.invoiceDelivery.findFirstOrThrow({
+        where: { invoice: { number: inv.number } },
+      });
+      // As a process that died after committing SENDING.
+      await app.prisma.invoiceDelivery.update({
+        where: { id: row.id },
+        data: { state: 'SENDING', sendAttempts: 1, leaseUntil: new Date(Date.now() - 1000) },
+      });
+      const before = sentMail(app).length;
+      await runner(app).tick();
+      await runner(app).tick();
+      expect(sentMail(app).length).toBe(before);
+      const after = (await deliveriesOf(app, inv.number)).body as InvoiceDeliveries;
+      expect(after.deliveries[0]).toMatchObject({
+        state: 'UNCERTAIN',
+        code: 'PROCESS_INTERRUPTED',
+      });
+
+      const url = `${INV}/${inv.number}/deliveries/${row.id}/retry`;
+      for (const bad of [
+        { reason: 'x', acknowledgeDuplicateRisk: true },
+        { reason: 'Bez potvrzení' },
+        { reason: 'Nepotvrzeno', acknowledgeDuplicateRisk: false },
+      ])
+        await app
+          .post(url)
+          .send({ ...sendBody(recipient), ...bad })
+          .expect(400);
+      const good = {
+        ...sendBody(recipient),
+        reason: 'Odběratel nic nedostal',
+        acknowledgeDuplicateRisk: true,
+      };
+      await app.post(url).send(good).expect(201);
+      // Only one retry of one attempt.
+      const twice = await app.post(url).send({ ...good, requestId: randomUUID() });
+      expect([twice.status, twice.body.code]).toEqual([409, 'DELIVERY_NOT_RETRYABLE']);
+      await runner(app).tick();
+      const done = (await deliveriesOf(app, inv.number)).body as InvoiceDeliveries;
+      expect(done.deliveries.map((d) => d.state)).toEqual(['UNCERTAIN', 'SENT']);
+      expect(done.deliveries[1]).toMatchObject({
+        attemptOf: row.id,
+        retryReason: 'Odběratel nic nedostal',
+      });
+      expect(sentMail(app).at(-1)!.messageId).toBe(row.messageId);
+    } finally {
+      await app.close();
+    }
+  });
+
+  /** A scripted relay on localhost: what it answers decides what the delivery must become. */
+  const scriptedRelay = async (script: {
+    greeting?: string;
+    rcpt?: string;
+    afterData?: string | 'DROP';
+  }) => {
+    const server = createServer((socket) => {
+      socket.on('error', () => {});
+      let inData = false;
+      let buffered = '';
+      socket.write(`${script.greeting ?? '220 relay.test ESMTP'}\r\n`);
+      socket.on('data', (chunk) => {
+        buffered += chunk.toString('latin1');
+        if (inData) {
+          if (!buffered.includes('\r\n.\r\n')) return;
+          inData = false;
+          buffered = '';
+          if (script.afterData === 'DROP') socket.destroy();
+          else socket.write(`${script.afterData ?? '250 2.0.0 accepted'}\r\n`);
+          return;
+        }
+        let i: number;
+        while ((i = buffered.indexOf('\r\n')) >= 0) {
+          const line = buffered.slice(0, i).toUpperCase();
+          buffered = buffered.slice(i + 2);
+          if (line.startsWith('EHLO')) socket.write('250 relay.test\r\n');
+          else if (line.startsWith('MAIL')) socket.write('250 ok\r\n');
+          else if (line.startsWith('RCPT')) socket.write(`${script.rcpt ?? '250 ok'}\r\n`);
+          else if (line.startsWith('DATA')) {
+            socket.write('354 go\r\n');
+            inData = true;
+            return;
+          } else if (line.startsWith('QUIT')) socket.end('221 bye\r\n');
+          else socket.write('250 ok\r\n');
+        }
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    return {
+      address: `127.0.0.1:${(server.address() as AddressInfo).port}`,
+      close: () => new Promise<void>((done) => server.close(() => done())),
+    };
+  };
+
+  it('what the relay answers decides the state: accepted, refused, temporary, lost mid-way, unreachable', async () => {
+    for (const [script, state, code] of [
+      [{}, 'SENT', null],
+      [{ rcpt: '550 5.7.1 refused' }, 'FAILED', 'RELAY_550'],
+      [{ afterData: '554 5.7.1 refused' }, 'FAILED', 'RELAY_554'],
+      [{ rcpt: '421 4.7.0 try later' }, 'QUEUED', 'RELAY_421'],
+      [{ afterData: 'DROP' as const }, 'UNCERTAIN', 'CONNECTION_LOST'],
+    ] as const) {
+      const relay = await scriptedRelay(script);
+      const app = await mailApp({
+        FINANCE_INVOICE_MAIL: 'test-smtp',
+        FINANCE_MAIL_TEST_SMTP_ADDRESS: relay.address,
+      });
+      try {
+        const { inv, recipient } = await issued();
+        await app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+        await runner(app).tick();
+        const d = ((await deliveriesOf(app, inv.number)).body as InvoiceDeliveries).deliveries[0]!;
+        expect([d.state, d.code], JSON.stringify(script)).toEqual([state, code]);
+        if (state === 'QUEUED') {
+          const row = await app.prisma.invoiceDelivery.findUniqueOrThrow({ where: { id: d.id } });
+          expect(row.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+          // Not due yet: nothing happens before its time.
+          await runner(app).tick();
+          expect(
+            (await app.prisma.invoiceDelivery.findUniqueOrThrow({ where: { id: d.id } }))
+              .sendAttempts,
+          ).toBe(1);
+          // A bounded number of attempts, then FAILED: never for ever.
+          // (The trigger allows no such jump; it stands for the earlier attempts.)
+          await asOwner((db) =>
+            db.$transaction(async (tx) => {
+              await tx.$executeRaw`ALTER TABLE "finance"."invoice_deliveries" DISABLE TRIGGER "invoice_delivery_update_check"`;
+              await tx.$executeRaw`UPDATE "finance"."invoice_deliveries" SET "send_attempts" = 5, "next_attempt_at" = now() WHERE "id" = ${d.id}::uuid`;
+              await tx.$executeRaw`ALTER TABLE "finance"."invoice_deliveries" ENABLE TRIGGER "invoice_delivery_update_check"`;
+            }),
+          );
+          await runner(app).tick();
+          expect(
+            ((await deliveriesOf(app, inv.number)).body as InvoiceDeliveries).deliveries[0],
+          ).toMatchObject({ state: 'FAILED', code: 'RELAY_421' });
+        }
+      } finally {
+        await app.close();
+        await relay.close();
+      }
+    }
+    // No listener: provably nothing left, so it stays queued for a later attempt.
+    const closed = await scriptedRelay({});
+    const address = closed.address;
+    await closed.close();
+    const app = await mailApp({
+      FINANCE_INVOICE_MAIL: 'test-smtp',
+      FINANCE_MAIL_TEST_SMTP_ADDRESS: address,
+    });
+    try {
+      const { inv, recipient } = await issued();
+      await app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+      await runner(app).tick();
+      expect(
+        ((await deliveriesOf(app, inv.number)).body as InvoiceDeliveries).deliveries[0],
+      ).toMatchObject({ state: 'QUEUED', code: 'RELAY_UNREACHABLE' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refused before anything is queued: off, cancelled, older document, changed address, address not allowed', async () => {
+    const off = await issued();
+    const disabled = await f
+      .post(`${INV}/${off.inv.number}/deliveries`)
+      .send(sendBody(off.recipient));
+    expect([disabled.status, disabled.body.code]).toEqual([409, 'DELIVERY_DISABLED']);
+    expect(((await deliveriesOf(f, off.inv.number)).body as InvoiceDeliveries).blocker).toBe(
+      'DELIVERY_DISABLED',
+    );
+
+    const app = await mailApp();
+    const limited = await mailApp({
+      FINANCE_INVOICE_MAIL: 'memory',
+      FINANCE_MAIL_TEST_RECIPIENTS: 'schvaleny@jazyk.test, druhy@jazyk.test',
+    });
+    try {
+      const cancelled = await issued();
+      await app
+        .post(`${INV}/${cancelled.inv.number}/cancel`)
+        .send({ requestId: randomUUID(), reason: 'Zrušeno (test)' })
+        .expect(200);
+      const r1 = await app
+        .post(`${INV}/${cancelled.inv.number}/deliveries`)
+        .send(sendBody(cancelled.recipient));
+      expect([r1.status, r1.body.code]).toEqual([409, 'INVOICE_CANCELLED']);
+
+      const changed = await issued();
+      await app
+        .post(`${B}/customers/${changed.c.code}/versions`)
+        .send({
+          requestId: randomUUID(),
+          expectedVersion: 1,
+          customer: customerIn('cs', { billingEmail: 'nova@jazyk.test' }),
+          reason: 'Nová adresa (test)',
+        })
+        .expect(201);
+      const r2 = await app
+        .post(`${INV}/${changed.inv.number}/deliveries`)
+        .send(sendBody(changed.recipient));
+      expect([r2.status, r2.body.code]).toEqual([409, 'RECIPIENT_CHANGED']);
+      // The new address, shown and bound; the language stays the invoice's.
+      expect(
+        ((await deliveriesOf(app, changed.inv.number)).body as InvoiceDeliveries).recipient,
+      ).toBe('nova@jazyk.test');
+
+      const other = await issued('cs', 'nekdo-jiny@jazyk.test');
+      const r3 = await limited
+        .post(`${INV}/${other.inv.number}/deliveries`)
+        .send(sendBody(other.recipient));
+      expect([r3.status, r3.body.code]).toEqual([422, 'RECIPIENT_NOT_ALLOWED']);
+      const allowed = await issued('cs', 'schvaleny@jazyk.test');
+      await limited
+        .post(`${INV}/${allowed.inv.number}/deliveries`)
+        .send(sendBody(allowed.recipient))
+        .expect(201);
+      await runner(limited).tick();
+
+      // An invoice from before the language: readable, never sent with a guessed language.
+      const source = await issued();
+      const row = await f.prisma.invoice.findUniqueOrThrow({
+        where: { number: source.inv.number },
+        include: { lines: true },
+      });
+      const earlier = new Date('2025-02-01T00:00:00.000Z');
+      const number = `T1998-${String(Math.floor(Math.random() * 90000) + 10000)}`;
+      const key = newStorageKey('finance-documents', 'pdf');
+      const bytes = Buffer.from('%PDF-1.3 historický dokument');
+      await f.storage.put(key, bytes);
+      await f.prisma.invoice.create({
+        data: {
+          serial: BigInt(2_000_000 + Math.floor(Math.random() * 1_000_000)),
+          kind: 'TEST',
+          number,
+          variableSymbol: `97${number.slice(-5)}`,
+          customerId: row.customerId,
+          customerVersion: row.customerVersion,
+          periodMonth: earlier,
+          issuedOn: row.issuedOn,
+          dueOn: row.dueOn,
+          currency: row.currency,
+          total: row.total,
+          snapshot: Object.fromEntries(
+            Object.entries(row.snapshot as Record<string, unknown>).filter(
+              ([k]) => !['templateVersion', 'language', 'texts'].includes(k),
+            ),
+          ) as never,
+          pdfStorageKey: key,
+          pdfSha256: createHash('sha256').update(bytes).digest('hex'),
+          issuedBy: row.issuedBy,
+          issuedByName: row.issuedByName,
+          requestId: randomUUID(),
+          lines: {
+            create: row.lines.map(({ invoiceId: _i, ...l }) => ({ ...l, periodMonth: earlier })),
+          },
+        },
+      });
+      const r4 = await app.post(`${INV}/${number}/deliveries`).send(sendBody(source.recipient));
+      expect([r4.status, r4.body.code]).toEqual([409, 'LANGUAGE_MISSING']);
+    } finally {
+      await app.close();
+      await limited.close();
+    }
+  });
+
+  it('checked again when sending: a cancelled invoice or a damaged PDF sends nothing; production never sends', async () => {
+    const app = await mailApp();
+    try {
+      const before = sentMail(app).length;
+      const cancelled = await issued();
+      await app
+        .post(`${INV}/${cancelled.inv.number}/deliveries`)
+        .send(sendBody(cancelled.recipient))
+        .expect(201);
+      await app
+        .post(`${INV}/${cancelled.inv.number}/cancel`)
+        .send({ requestId: randomUUID(), reason: 'Zrušeno ve frontě' })
+        .expect(200);
+      const damaged = await issued();
+      await app
+        .post(`${INV}/${damaged.inv.number}/deliveries`)
+        .send(sendBody(damaged.recipient))
+        .expect(201);
+      const row = await f.prisma.invoice.findUniqueOrThrow({
+        where: { number: damaged.inv.number },
+      });
+      // The stored file no longer matches the recorded hash (storage is create-only: overwritten directly).
+      await writeFile(join(app.env.FILE_STORAGE_DIR, row.pdfStorageKey), 'poškozeno');
+      await runner(app).tick();
+      expect(sentMail(app).length).toBe(before);
+      expect(
+        ((await deliveriesOf(app, cancelled.inv.number)).body as InvoiceDeliveries).deliveries[0],
+      ).toMatchObject({ state: 'FAILED', code: 'INVOICE_CANCELLED' });
+      expect(
+        ((await deliveriesOf(app, damaged.inv.number)).body as InvoiceDeliveries).deliveries[0],
+      ).toMatchObject({ state: 'FAILED', code: 'PDF_HASH_MISMATCH' });
+    } finally {
+      await app.close();
+    }
+    const prod = new InvoiceDeliveriesService(
+      f.prisma,
+      f.app.get(FinanceOperations),
+      f.storage,
+      { ...f.env, APP_ENV: 'production' },
+      new MemoryInvoiceMailTransport(),
+    );
+    const { inv, recipient } = await issued();
+    await expect(prod.send(inv.number, sendBody(recipient), DELIVERY_ACTOR)).rejects.toMatchObject({
+      response: { code: 'PRODUCTION' },
+    });
+  });
+
+  it('the environment: simulated mail only in tests, the relay only named and with allowed recipients', () => {
+    const base = {
+      APP_ENV: 'development',
+      FINANCE_DATABASE_URL: 'postgresql://u:p@localhost/x',
+      CORE_INTERNAL_URL: 'http://core:4000',
+      FINANCE_SERVICE_TOKEN: 'x'.repeat(43),
+      FILE_STORAGE_DIR: '/tmp/x',
+    };
+    const fields = (over: Record<string, string>) => {
+      try {
+        loadFinanceEnv({ ...base, ...over });
+        return '';
+      } catch (e) {
+        return (e as Error).message;
+      }
+    };
+    expect(fields({ FINANCE_INVOICE_MAIL: 'memory' })).toContain('FINANCE_INVOICE_MAIL');
+    expect(fields({ FINANCE_INVOICE_MAIL: 'google-relay' })).toContain('FINANCE_MAIL_EHLO_NAME');
+    expect(
+      fields({ FINANCE_INVOICE_MAIL: 'google-relay', FINANCE_MAIL_EHLO_NAME: 'dev.ayvo.co' }),
+    ).toContain('FINANCE_MAIL_TEST_RECIPIENTS');
+    expect(
+      fields({
+        FINANCE_INVOICE_MAIL: 'google-relay',
+        FINANCE_MAIL_EHLO_NAME: 'dev.ayvo.co',
+        FINANCE_MAIL_TEST_RECIPIENTS: 'schvaleny@example.test',
+      }),
+    ).toBe('');
+    expect(fields({})).toBe('');
+  });
+
+  it('the database keeps the history: what is sent never changes, states only forward, no deletion', async () => {
+    const app = await mailApp();
+    try {
+      const { inv, recipient } = await issued();
+      await app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+      await runner(app).tick();
+      const row = await app.prisma.invoiceDelivery.findFirstOrThrow({
+        where: { invoice: { number: inv.number } },
+      });
+      for (const data of [
+        { recipient: 'jiny@jazyk.test' },
+        { state: 'QUEUED' },
+        { messageId: '<jine@ayvo.co>' },
+      ])
+        await expect(
+          app.prisma.invoiceDelivery.update({ where: { id: row.id }, data }),
+        ).rejects.toThrow();
+      await expect(app.prisma.invoiceDelivery.delete({ where: { id: row.id } })).rejects.toThrow();
+      await expect(
+        app.prisma.invoiceDeliveryEvent.deleteMany({ where: { deliveryId: row.id } }),
+      ).rejects.toThrow();
+      await expect(
+        app.prisma.invoiceDelivery.create({
+          data: {
+            invoiceId: row.invoiceId,
+            customerId: row.customerId,
+            customerVersion: row.customerVersion,
+            recipient,
+            senderName: row.senderName,
+            senderAddress: row.senderAddress,
+            replyTo: row.replyTo,
+            language: row.language,
+            templateVersion: row.templateVersion,
+            messageId: row.messageId,
+            attemptOf: row.id,
+            retryReason: 'Po odeslání nelze',
+            duplicateRiskAcknowledged: true,
+            requestId: randomUUID(),
+            requestedBy: randomUUID(),
+            requestedByName: 'test',
+          },
+        }),
+      ).rejects.toThrow();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('permissions: reading the state needs invoices_read, sending and retrying invoices_send, on every request', async () => {
+    const real = await createFinanceTestApp({
+      core: { auth: 'real' },
+      finance: { FINANCE_INVOICE_MAIL: 'memory', FINANCE_INVOICE_MAIL_POLL_MS: '60000' },
+    });
+    try {
+      const { inv, recipient } = await issued();
+      const roleCode = `FINS_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Čtení faktur (test)', description: 'test' },
+      });
+      await real.core.prisma.rolePermission.create({
+        data: { roleCode, permissionCode: 'finance:invoices_read' },
+      });
+      const user = await prepareInvitedUser(real.core, {
+        email: `send-${randomUUID()}@ayvo.test`,
+        displayName: 'Jen čtení',
+      });
+      await real.core.prisma.userRole.create({
+        data: { userId: user.id, roleCode, grantReason: 'test: read only' },
+      });
+      const cookie = await sessionCookie(real.core, user.email);
+      await real.get(`${INV}/${inv.number}/deliveries`, cookie).expect(200);
+      await real
+        .post(`${INV}/${inv.number}/deliveries`, cookie)
+        .send(sendBody(recipient))
+        .expect(403);
+      await real
+        .post(`${INV}/${inv.number}/deliveries/${randomUUID()}/retry`, cookie)
+        .send({ ...sendBody(recipient), reason: 'Znovu (test)', acknowledgeDuplicateRisk: true })
+        .expect(403);
+      // A permission taken away counts at once (evaluated per request).
+      await real.core.prisma.rolePermission.deleteMany({ where: { roleCode } });
+      await real.get(`${INV}/${inv.number}/deliveries`, cookie).expect(403);
+      // ADMIN holds it through its migration.
+      const grant = await real.core.prisma.rolePermission.findFirst({
+        where: { roleCode: 'ADMIN', permissionCode: 'finance:invoices_send' },
+      });
+      expect(grant).not.toBeNull();
+    } finally {
+      await real.close();
+    }
   });
 });
