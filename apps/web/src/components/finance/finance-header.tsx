@@ -35,6 +35,9 @@ export async function FinanceHeader({
         <ViewSwitch label={shellCs.modules.finance.viewsLabel} views={views} active={view!} />
       )}
       <PageHeader {...props} />
+      <p className="-mt-2 mb-4 text-xs text-stone-500" data-testid="finance-scope">
+        {shellCs.modules.finance.scope}
+      </p>
     </>
   );
 }

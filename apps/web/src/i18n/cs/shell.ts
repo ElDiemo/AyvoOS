@@ -35,6 +35,7 @@ export const shellCs = {
         exports: 'Pro účetní',
         settings: 'Nastavení Financí',
       },
+      scope: 'Finance platí pro celou firmu, nezávisle na zvolené provozovně.',
       views: {
         invoices: 'Faktury',
         billing: 'Smlouvy',

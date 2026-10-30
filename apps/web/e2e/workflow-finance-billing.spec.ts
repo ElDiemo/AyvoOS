@@ -103,7 +103,12 @@ test.describe('Smlouvy', () => {
     await page.goto('/finance/settings/prices');
     await page.getByText('Nová cena').click();
     const price = page.getByTestId('price-new');
-    await price.locator('[name=price]').fill('299.00');
+    // Czech notation; an unclear amount is refused, not guessed.
+    await price.locator('[name=price]').fill('1,2,3');
+    await price.locator('[name=reason]').fill('Ceník 2026 (test)');
+    await price.getByTestId('price-save').click();
+    await expect(price).toContainText('Částku zadejte jako 1 500,50');
+    await price.locator('[name=price]').fill('299,00');
     await price.locator('[name=reason]').fill('Ceník 2026 (test)');
     await price.getByTestId('price-save').click();
     await expect(page.getByTestId('billing-prices')).toContainText('299,00 CZK');
