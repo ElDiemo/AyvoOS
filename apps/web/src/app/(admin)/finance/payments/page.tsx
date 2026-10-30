@@ -1,14 +1,9 @@
-import { invoiceSummarySchema, paymentsPageSchema } from '@ayvo/types';
+import { PAYMENT_FILTERS, paymentsPageSchema, paymentsQuerySchema } from '@ayvo/types';
 import Link from 'next/link';
-import { z } from 'zod';
 import { financeAmount, financeDate } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
-import {
-  AllocatePaymentForm,
-  ImportBankButton,
-  SimulateStatementForm,
-} from '@/components/finance/payment-forms';
-import { Card, Notice } from '@/components/ui';
+import { ImportBankButton, SimulateStatementForm } from '@/components/finance/payment-forms';
+import { buttonClass, Card, inputClass, Notice } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
@@ -22,20 +17,33 @@ const t = financeCs.payments;
  * transactions already read is the one action above it, the DEV simulation a closed block below
  * (never in production). Each payment is an anchor (#P-…) for the invoice detail's links.
  */
-export default async function PaymentsPage() {
+export default async function PaymentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ filter?: string; q?: string; page?: string }>;
+}) {
   const me = await requirePermission('finance:invoices_read');
   const canManage = hasPermission(me, 'finance:payments_manage');
   const canBank = hasPermission(me, 'finance:bank_read');
-  const [page, invoices] = await Promise.all([
-    apiGet('admin/finance/payments', paymentsPageSchema),
-    apiGet('admin/finance/invoices', z.array(invoiceSummarySchema)),
-  ]);
-  const open = (currency: string) =>
-    invoices
-      .filter(
-        (i) => i.status === 'VALID' && i.currency === currency && i.paymentState.state !== 'PAID',
-      )
-      .map((i) => i.number);
+  const params = await searchParams;
+  const parsed = paymentsQuerySchema.safeParse(params);
+  const query = parsed.success ? parsed.data : {};
+  const page = await apiGet('admin/finance/payments', paymentsPageSchema, {
+    filter: query.filter,
+    q: query.q,
+    page: query.page,
+  });
+  const urlOf = (over: { filter?: string; page?: number }) => {
+    const u = new URLSearchParams();
+    const filter = 'filter' in over ? over.filter : query.filter;
+    if (filter) u.set('filter', filter);
+    if (query.q) u.set('q', query.q);
+    if (over.page && over.page > 1) u.set('page', String(over.page));
+    const text = u.toString();
+    return `/finance/payments${text ? `?${text}` : ''}`;
+  };
+  const from = (page.page - 1) * page.pageSize + 1;
+  const to = Math.min(page.page * page.pageSize, page.total);
   return (
     <>
       <FinanceHeader active="bank" view="payments" title={t.title} subtitle={t.subtitle} />
@@ -58,93 +66,118 @@ export default async function PaymentsPage() {
           </p>
           {canManage && <ImportBankButton />}
         </div>
+        <nav
+          aria-label={t.filters.ALL}
+          className="flex flex-wrap gap-2 text-sm"
+          data-testid="payments-filters"
+        >
+          {[undefined, ...PAYMENT_FILTERS].map((f) => (
+            <Link
+              key={f ?? 'ALL'}
+              href={urlOf({ filter: f })}
+              aria-current={query.filter === f ? 'page' : undefined}
+              className={query.filter === f ? buttonClass.primary : buttonClass.secondary}
+              data-testid={`payments-filter-${f ?? 'ALL'}`}
+            >
+              {t.filters[f ?? 'ALL']}
+            </Link>
+          ))}
+        </nav>
+        <form className="flex flex-wrap items-end gap-2 text-sm" data-testid="payments-search">
+          {query.filter && <input type="hidden" name="filter" value={query.filter} />}
+          <label className="flex min-w-0 flex-1 flex-col gap-1 font-medium">
+            {t.searchLabel}
+            <input
+              name="q"
+              defaultValue={query.q ?? ''}
+              maxLength={80}
+              placeholder={t.searchHint}
+              className={inputClass}
+              data-testid="payments-q"
+            />
+          </label>
+          <button type="submit" className={buttonClass.secondary} data-testid="payments-q-submit">
+            {t.search}
+          </button>
+        </form>
         <Card testId="payments">
+          <p className="mb-2 text-xs text-stone-500" data-testid="payments-found">
+            {t.found(page.total, from, to)}
+          </p>
           {page.payments.length === 0 ? (
             <p className="py-2 text-sm text-stone-600">{t.empty}</p>
           ) : (
             <ul className="divide-y divide-stone-100 text-sm">
-              {page.payments.map((p) => (
-                <li
-                  key={p.code}
-                  id={p.code}
-                  className="flex scroll-mt-24 flex-col gap-2 py-3 target:bg-amber-50"
-                  data-testid={`payment-${p.code}`}
-                >
-                  <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                    <span className="font-mono">{p.code}</span>
+              {page.payments.map((p) => {
+                // The matching result is history; once a person allocated it, it is settled.
+                const review =
+                  p.matchResult !== 'MATCHED' && p.matchResult !== 'PARTIAL_OVERPAYMENT';
+                const resolved = review && p.state === 'ALLOCATED';
+                return (
+                  <li
+                    key={p.code}
+                    id={p.code}
+                    className="grid scroll-mt-24 grid-cols-2 gap-x-4 gap-y-1 py-2 target:bg-amber-50 lg:grid-cols-[7rem_6rem_7rem_8rem_1fr_11rem]"
+                    data-testid={`payment-${p.code}`}
+                  >
+                    <Link
+                      href={`/finance/payments/${p.code}`}
+                      className="font-mono underline"
+                      data-testid={`payment-${p.code}-open`}
+                    >
+                      {p.code}
+                    </Link>
+                    <span>{financeDate(p.bookedOn)}</span>
                     <span className="font-semibold tabular-nums">
                       {financeAmount(p.amount, p.currency)}
                     </span>
-                    <span>{financeDate(p.bookedOn)}</span>
                     <span>
                       {t.variableSymbol} {p.variableSymbol ?? '—'}
                     </span>
-                    <span className="text-stone-500">
-                      {t.source[p.source]} · <span className="font-mono">{p.reference}</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    {(() => {
-                      // The matching result is history; once a person allocated it, it is resolved.
-                      const review =
-                        p.matchResult !== 'MATCHED' && p.matchResult !== 'PARTIAL_OVERPAYMENT';
-                      const resolved = review && p.state === 'ALLOCATED';
-                      return (
+                    <span className="col-span-2 min-w-0 break-words text-stone-600 lg:col-span-1">
+                      {p.counterpartyName ?? '—'}
+                      {review && !resolved && (
                         <span
-                          className={review && !resolved ? 'text-amber-800' : 'text-emerald-800'}
+                          className="block text-amber-800"
                           data-testid={`payment-${p.code}-result`}
                         >
-                          {resolved
-                            ? t.resolved(t.result[p.matchResult]!)
-                            : t.result[p.matchResult]}
+                          {t.result[p.matchResult]}
                         </span>
-                      );
-                    })()}
-                    <span className="font-medium" data-testid={`payment-${p.code}-state`}>
-                      {t.state[p.state]}
+                      )}
                     </span>
-                    {p.state !== 'ALLOCATED' && (
-                      <span>{t.unallocated(financeAmount(p.unallocated, p.currency))}</span>
-                    )}
-                  </div>
-                  {p.bankChangedSinceRecorded && (
-                    <p
-                      className="text-sm text-red-800"
-                      data-testid={`payment-${p.code}-bank-changed`}
-                    >
-                      {t.bankChanged}
-                    </p>
-                  )}
-                  {p.allocations.length > 0 && (
-                    <ul className="text-stone-600">
-                      {p.allocations.map((a, i) => (
-                        <li key={i}>
-                          <Link href={`/finance/invoices/${a.invoiceNumber}`} className="underline">
-                            {t.allocated(
-                              a.invoiceNumber,
-                              financeAmount(a.amount, p.currency),
-                              t.kind[a.kind]!,
-                            )}
-                          </Link>
-                          {a.reason ? ` – ${a.reason}` : ''}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {p.suggestions.length > 0 && (
-                    <p
-                      className="text-xs text-stone-500"
-                      data-testid={`payment-${p.code}-suggestions`}
-                    >
-                      {t.suggestions} {p.suggestions.join(', ')}
-                    </p>
-                  )}
-                  {canManage && p.state !== 'ALLOCATED' && open(p.currency).length > 0 && (
-                    <AllocatePaymentForm payment={p} openInvoices={open(p.currency)} />
-                  )}
-                </li>
-              ))}
+                    <span className="col-span-2 font-medium lg:col-span-1">
+                      <span data-testid={`payment-${p.code}-state`}>{t.state[p.state]}</span>
+                      {p.bankChangedSinceRecorded && (
+                        <span
+                          className="block text-red-800"
+                          data-testid={`payment-${p.code}-bank-changed`}
+                        >
+                          {t.filters.CHANGED}
+                        </span>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
+          )}
+          {page.total > page.pageSize && (
+            <nav className="mt-3 flex gap-2 text-sm" data-testid="payments-pages">
+              {page.page > 1 && (
+                <Link href={urlOf({ page: page.page - 1 })} className={buttonClass.secondary}>
+                  {t.previous}
+                </Link>
+              )}
+              {to < page.total && (
+                <Link
+                  href={urlOf({ page: page.page + 1 })}
+                  className={buttonClass.secondary}
+                  data-testid="payments-next"
+                >
+                  {t.next}
+                </Link>
+              )}
+            </nav>
           )}
         </Card>
         {canManage && page.simulationAvailable && (

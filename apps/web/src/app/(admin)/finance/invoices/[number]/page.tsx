@@ -134,7 +134,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
               {inv.allocations.map((a, i) => (
                 <li key={i} className="flex flex-wrap gap-x-4 py-2">
                   <Link
-                    href={`/finance/payments#${a.paymentCode}`}
+                    href={`/finance/payments/${a.paymentCode}`}
                     className="font-mono underline"
                     data-testid={`invoice-payment-${a.paymentCode}`}
                   >
