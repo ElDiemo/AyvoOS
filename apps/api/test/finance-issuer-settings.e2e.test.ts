@@ -11,12 +11,15 @@ import type {
   IssuerSettings,
   PaymentLoadResult,
   PaymentsPage,
+  TestRunPreview,
+  TestRunResult,
 } from '@ayvo/types';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
 import { InvoicesService } from '../src/finance/invoices.service.js';
 import { PaymentsService } from '../src/finance/payments.service.js';
 import { PrismaClient } from '../src/generated/finance-prisma/client.js';
+import { newStorageKey } from '../src/storage/file-storage.js';
 import {
   createFinanceTestApp,
   financeDatabaseUrl,
@@ -24,6 +27,7 @@ import {
   type FinanceTestApp,
 } from './support/finance-app.js';
 import { createHotel } from './support/order-fixtures.js';
+import { openPdf, pageText } from './support/pdf-inspect.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { hasDatabase, withPrivileged } from './support/test-app.js';
 
@@ -305,6 +309,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
             city: 'Brno',
             countryCode: 'CZ',
             billingEmail: 'fakturace@hotely.test',
+            documentLanguage: 'cs',
           },
         })
         .expect(201)
@@ -594,6 +599,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
           city: 'Brno',
           countryCode: 'CZ',
           billingEmail: 'fakturace@hotely.test',
+          documentLanguage: 'cs',
         },
         reason: 'Změna názvu (test)',
       })
@@ -1320,5 +1326,469 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     } finally {
       await real.close();
     }
+  });
+
+  // --- The monthly run of TEST invoices (doc 040 §11): no new table, nothing derived.
+
+  const RUN = `${INV}/test-run`;
+  type Preview = TestRunPreview['items'][number];
+  const previewOf = async (month: string) =>
+    (await f.get(`${RUN}/preview?month=${month}`).expect(200)).body as TestRunPreview;
+  const lineOf = (i: Preview) => ({
+    agreementCode: i.agreementCode,
+    agreementRevision: i.agreementRevision!,
+    customerVersion: i.customer!.version,
+    priceListVersionId: i.price.priceListVersionId,
+    unitPrice: i.price.perRoomMonth!,
+    billedRooms: i.billedRooms!,
+  });
+  const runFor = async (
+    month: string,
+    codes: string[],
+    issuedOn = '2026-03-15',
+    id = randomUUID(),
+  ) => {
+    const { items } = await previewOf(month);
+    const lines = codes.map((c) => lineOf(items.find((i) => i.agreementCode === c)!));
+    return f.post(RUN).send({ requestId: id, month, issuedOn, lines });
+  };
+  const invoiceCount = async () => ((await f.get(INV).expect(200)).body as unknown[]).length;
+
+  it('the run preview says for each agreement what an invoice would be and why not; it saves nothing', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const month = '2026-02';
+    const ready = await agreement(c.id);
+    const bare = await agreement(c.id, { ownPricePerRoomMonth: null, currency: 'USD' });
+    const partial = await agreement(c.id, { validFrom: '2026-02-10' });
+    const zero = await agreement(c.id, { ownPricePerRoomMonth: '0.00' });
+    const ended = await agreement(c.id, { validTo: '2026-01-31' });
+    const before = await invoiceCount();
+    const { items, issuable } = await previewOf(month);
+    const of = (code: string) => items.find((i) => i.agreementCode === code)!;
+    expect(issuable).toBe(true);
+    expect(of(ready.code)).toMatchObject({
+      state: 'READY',
+      blockers: [],
+      invoiceNumber: null,
+      hotel: { code: ready.hotel.code },
+      billedRooms: 12,
+      price: { source: 'OWN', perRoomMonth: '350.00' },
+      amount: '4200.00',
+      currency: 'CZK',
+      paymentTermsDays: 14,
+      billingTiming: 'ARREARS',
+    });
+    expect(of(bare.code)).toMatchObject({
+      state: 'BLOCKED',
+      blockers: ['PRICE_MISSING'],
+      amount: null,
+    });
+    expect(of(partial.code)).toMatchObject({
+      state: 'BLOCKED',
+      blockers: ['PARTIAL_PERIOD_RULE_MISSING'],
+    });
+    expect(of(zero.code)).toMatchObject({ state: 'BLOCKED', blockers: ['ZERO_AMOUNT'] });
+    expect(of(ended.code)).toMatchObject({ state: 'NOT_IN_EFFECT', blockers: [] });
+    expect(await invoiceCount()).toBe(before);
+    // What the preview blocks, the run refuses (never a 0.00 invoice or a silent proration).
+    for (const a of [partial, zero]) {
+      const line = lineOf(of(a.code));
+      const res = await f
+        .post(RUN)
+        .send({ requestId: randomUUID(), month, issuedOn: '2026-03-15', lines: [line] });
+      expect(res.status, a.code).toBe(422);
+    }
+    expect(await invoiceCount()).toBe(before);
+  });
+
+  it('the run needs an explicit period and issue date; nothing is filled in', async () => {
+    const c = await customer();
+    const a = await agreement(c.id);
+    const line = lineOf(
+      (await previewOf('2026-02')).items.find((i) => i.agreementCode === a.code)!,
+    );
+    const base = { requestId: randomUUID(), lines: [line] };
+    for (const body of [
+      { ...base, month: '2026-02' },
+      { ...base, issuedOn: '2026-03-15' },
+      { ...base, month: '2026-02', issuedOn: '2026-02-31' },
+      { ...base, month: '2026-02', issuedOn: '15.3.2026' },
+      { ...base, month: '2026-02', issuedOn: '2026-03-15', lines: [] },
+      { ...base, month: '2026-02', issuedOn: '2026-03-15', lines: [line, line] },
+    ])
+      await f.post(RUN).send(body).expect(400);
+    await f.get(`${RUN}/preview`).expect(400);
+  });
+
+  it('one invoice per agreement with the explicit date; the same request replays, the next finds them invoiced', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const month = '2026-03';
+    const [a, b] = [await agreement(c.id), await agreement(c.id, { paymentTermsDays: 30 })];
+    const id = randomUUID();
+    const res = await runFor(month, [a.code, b.code], '2026-04-02', id);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const result = res.body as TestRunResult;
+    expect(result.invoices.map((i) => i.agreementCode)).toEqual([a.code, b.code]);
+    const [ia, ib] = await Promise.all(result.invoices.map((i) => invoiceOf(i.number)));
+    expect(ia).toMatchObject({
+      period: month,
+      issuedOn: '2026-04-02',
+      dueOn: '2026-04-16',
+      total: '4200.00',
+    });
+    expect(ib).toMatchObject({ issuedOn: '2026-04-02', dueOn: '2026-05-02' });
+    expect(ia!.lines.map((l) => l.agreementCode)).toEqual([a.code]);
+    expect(ia!.number).toMatch(/^T2026-/);
+    // A lost answer: the same request again creates nothing and answers the same.
+    const count = await invoiceCount();
+    const { items } = await previewOf(month);
+    expect(items.find((i) => i.agreementCode === a.code)).toMatchObject({
+      state: 'ALREADY_INVOICED',
+      invoiceNumber: ia!.number,
+    });
+    const lines = [a, b].map((x) => ({
+      agreementCode: x.code,
+      agreementRevision: items.find((i) => i.agreementCode === x.code)!.agreementRevision!,
+      customerVersion: items.find((i) => i.agreementCode === x.code)!.customer!.version,
+      priceListVersionId: null,
+      unitPrice: '350.00',
+      billedRooms: 12,
+    }));
+    const again = await f.post(RUN).send({ requestId: id, month, issuedOn: '2026-04-02', lines });
+    expect([again.status, again.body]).toEqual([201, result]);
+    // The same id with anything else is a conflict; a new id is refused as invoiced.
+    const other = await f.post(RUN).send({ requestId: id, month, issuedOn: '2026-04-03', lines });
+    expect([other.status, other.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+    const fresh = await f
+      .post(RUN)
+      .send({ requestId: randomUUID(), month, issuedOn: '2026-04-02', lines });
+    expect([fresh.status, fresh.body.code]).toEqual([409, 'ALREADY_INVOICED']);
+    expect(await invoiceCount()).toBe(count);
+    // A cancelled invoice frees its month: the preview offers it again, the other stays invoiced.
+    await f
+      .post(`${INV}/${ia!.number}/cancel`)
+      .send({ requestId: randomUUID(), reason: 'test' })
+      .expect(200);
+    const after = (await previewOf(month)).items;
+    expect(after.find((i) => i.agreementCode === a.code)!.state).toBe('READY');
+    expect(after.find((i) => i.agreementCode === b.code)!.state).toBe('ALREADY_INVOICED');
+  });
+
+  it('all or nothing: a changed or invoiced agreement in the run leaves no invoice and no serial', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const month = '2026-05';
+    const [a, b] = [await agreement(c.id), await agreement(c.id)];
+    const { items } = await previewOf(month);
+    const lines = [a, b].map((x) => lineOf(items.find((i) => i.agreementCode === x.code)!));
+    const count = await invoiceCount();
+    await changeTerms(b.code, { billedRooms: 13 });
+    const stale = await f
+      .post(RUN)
+      .send({ requestId: randomUUID(), month, issuedOn: '2026-06-01', lines });
+    expect([stale.status, stale.body.code]).toEqual([409, 'TERMS_CHANGED']);
+    expect(await invoiceCount()).toBe(count);
+    // One of them invoiced by hand meanwhile.
+    await expectStatus(issue([a.code], month), 201);
+    const now = (await previewOf(month)).items;
+    const taken = await f.post(RUN).send({
+      requestId: randomUUID(),
+      month,
+      issuedOn: '2026-06-01',
+      lines: [a, b].map((x) => lineOf(now.find((i) => i.agreementCode === x.code)!)),
+    });
+    expect([taken.status, taken.body.code]).toEqual([409, 'ALREADY_INVOICED']);
+    expect(await invoiceCount()).toBe(count + 1);
+  });
+
+  it('two runs at once of the same agreement and month make exactly one invoice', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const month = '2026-06';
+    const count = await invoiceCount();
+    const results = await Promise.all([runFor(month, [a.code]), runFor(month, [a.code])]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(await invoiceCount()).toBe(count + 1);
+  });
+
+  it('the largest run (50 agreements) fits the transaction limit', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const codes: string[] = [];
+    for (let i = 0; i < 50; i++) codes.push((await agreement(c.id)).code);
+    const started = Date.now();
+    const res = await runFor('2026-07', codes);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect((res.body as TestRunResult).invoices).toHaveLength(50);
+    console.log('RUN_50_MS', Date.now() - started);
+    expect(Date.now() - started).toBeLessThan(25_000);
+  }, 120_000);
+
+  it('the run: never in production (the preview only says so); needs its permissions', async () => {
+    const prod = new InvoicesService(
+      f.prisma,
+      f.app.get(FinanceOperations),
+      f.app.get(BillingSettingsService),
+      f.storage,
+      { ...f.env, APP_ENV: 'production' },
+    );
+    await expect(
+      prod.issueTestRun(
+        { requestId: randomUUID(), month: '2026-02', issuedOn: '2026-03-15', lines: [] },
+        { principal: { userId: randomUUID(), displayName: 'x' }, sessionToken: 'x' } as never,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'TEST_INVOICES_DISABLED' } });
+    expect((await prod.testRunPreview('2026-02')).issuable).toBe(false);
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      const roleCode = `FINR_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Čtení (test)', description: 'test' },
+      });
+      for (const permissionCode of ['finance:invoices_read', 'finance:billing_read'] as const)
+        await real.core.prisma.rolePermission.create({ data: { roleCode, permissionCode } });
+      const user = await prepareInvitedUser(real.core, {
+        email: `run-${randomUUID()}@ayvo.test`,
+        displayName: 'Jen čtení',
+      });
+      await real.core.prisma.userRole.create({
+        data: { userId: user.id, roleCode, grantReason: 'test: read only' },
+      });
+      const cookie = await sessionCookie(real.core, user.email);
+      await real.get(`${RUN}/preview?month=2026-02`, cookie).expect(403);
+      await real.post(RUN, cookie).send({}).expect(403);
+    } finally {
+      await real.close();
+    }
+  });
+
+  // --- the language of documents (doc 040 §12) ------------------------------------------------
+
+  const plainText = (text: string) => text.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
+  const customerIn = (documentLanguage: unknown, over: Record<string, unknown> = {}) => ({
+    legalName: `Jazykový odběratel ${randomUUID().slice(0, 6)} s.r.o.`,
+    companyId: null,
+    vatId: null,
+    addressLine1: 'Hotelová 7',
+    addressLine2: null,
+    postalCode: '602 00',
+    city: 'Brno',
+    countryCode: 'CZ',
+    billingEmail: 'fakturace@jazyk.test',
+    documentLanguage,
+    ...over,
+  });
+  const customerWith = async (documentLanguage: string, over: Record<string, unknown> = {}) =>
+    (
+      await f
+        .post(`${B}/customers`)
+        .send({ requestId: randomUUID(), customer: customerIn(documentLanguage, over) })
+        .expect(201)
+    ).body as { id: string; code: string };
+  const pdfBytes = async (number: string) =>
+    (
+      await f
+        .get(`${INV}/${number}/pdf`)
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200)
+    ).body as Buffer;
+  /** The owner connection: what only history (or a migration) could have written. */
+  const asOwner = async <T>(work: (db: PrismaClient) => Promise<T>) => {
+    const db = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
+    });
+    try {
+      return await work(db);
+    } finally {
+      await db.$disconnect();
+    }
+  };
+
+  it('the language is an explicit choice: required, one of three, never from the country', async () => {
+    for (const bad of [undefined, null, '', 'fr', 'CS'])
+      await f
+        .post(`${B}/customers`)
+        .send({ requestId: randomUUID(), customer: customerIn(bad) })
+        .expect(400);
+    const german = await customerWith('en', {
+      countryCode: 'DE',
+      companyId: 'HRB 12345',
+    });
+    const detail = (await f.get(`${B}/customers/${german.code}`).expect(200)).body as {
+      current: { customer: { documentLanguage: string; countryCode: string } };
+    };
+    expect(detail.current.customer).toMatchObject({ countryCode: 'DE', documentLanguage: 'en' });
+    // Also the database: no new version without a choice, no other value.
+    for (const documentLanguage of [null, 'fr'])
+      await expect(
+        f.prisma.customerVersion.create({
+          data: {
+            ...customerIn(documentLanguage),
+            documentLanguage: documentLanguage as string,
+            customerId: german.id,
+            version: 99,
+            recordedBy: randomUUID(),
+            recordedByName: 'test',
+            requestId: randomUUID(),
+          },
+        }),
+      ).rejects.toThrow();
+  });
+
+  it('the invoice freezes its language and texts; a later change of the customer affects only later invoices', async () => {
+    await ensureCzkDefault();
+    const c = await customerWith('en');
+    const a = await agreement(c.id);
+    const first = (await expectStatus(issue([a.code], '2026-05'), 201)).body as InvoiceDetail;
+    expect(first.documentLanguage).toBe('en');
+    const stored = await f.prisma.invoice.findUniqueOrThrow({ where: { number: first.number } });
+    const snapshot = stored.snapshot as {
+      templateVersion: number;
+      language: string;
+      texts: { invoice: string };
+      lines: { description: string; unit: string }[];
+      payment: { message: string };
+    };
+    expect(snapshot).toMatchObject({
+      templateVersion: 1,
+      language: 'en',
+      texts: { invoice: 'Invoice' },
+      lines: [{ unit: 'rooms' }],
+      payment: { message: `Invoice ${first.number}` },
+    });
+    expect(snapshot.lines[0]!.description).toContain('AYVO service 05/2026');
+    const before = await pdfBytes(first.number);
+    expect(plainText(await pageText(await openPdf(before), 1))).toContain(
+      `Invoice ${first.number}`,
+    );
+
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 1,
+        customer: customerIn('de'),
+        reason: 'Jazyk (test)',
+      })
+      .expect(201);
+    // The issued invoice is untouched, byte for byte.
+    expect((await pdfBytes(first.number)).equals(before)).toBe(true);
+    expect(
+      ((await f.get(`${INV}/${first.number}`).expect(200)).body as InvoiceDetail).documentLanguage,
+    ).toBe('en');
+    const later = (await expectStatus(issue([a.code], '2026-06'), 201)).body as InvoiceDetail;
+    expect(later.documentLanguage).toBe('de');
+    expect(plainText(await pageText(await openPdf(await pdfBytes(later.number)), 1))).toContain(
+      `Rechnung ${later.number}`,
+    );
+  });
+
+  it('a customer whose version has no language is a visible blocker, not a guess; choosing it unblocks', async () => {
+    await ensureCzkDefault();
+    const c = await customerWith('cs');
+    const a = await agreement(c.id);
+    const row = await f.prisma.customerVersion.findFirstOrThrow({ where: { customerId: c.id } });
+    // As a version recorded before the choice existed: only history can hold NULL.
+    await asOwner((db) =>
+      db.$transaction(async (tx) => {
+        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" DISABLE TRIGGER "customer_versions_language_required"`;
+        await tx.customerVersion.create({
+          data: {
+            ...row,
+            version: 2,
+            documentLanguage: null,
+            reason: 'Historie (test)',
+            requestId: randomUUID(),
+            recordedAt: undefined,
+          },
+        });
+        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" ENABLE TRIGGER "customer_versions_language_required"`;
+      }),
+    );
+    const month = '2026-07';
+    const items = await preview(month);
+    const item = items.find((i) => i.agreement.code === a.code)!;
+    expect(item.gaps).toEqual(['CUSTOMER_LANGUAGE_MISSING']);
+    expect(item.customer?.customer.documentLanguage).toBeNull();
+    const refused = await issueLines(linesOf(items, [a.code]), month);
+    expect(refused.status).toBe(422);
+    expect(refused.body).toMatchObject({ code: 'TERMS_INCOMPLETE' });
+    const run = (await previewOf(month)).items.find((i) => i.agreementCode === a.code)!;
+    expect(run).toMatchObject({ state: 'BLOCKED', blockers: ['CUSTOMER_LANGUAGE_MISSING'] });
+
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 2,
+        customer: customerIn('cs'),
+        reason: 'Výběr jazyka (test)',
+      })
+      .expect(201);
+    expect(
+      ((await expectStatus(issue([a.code], month), 201)).body as InvoiceDetail).documentLanguage,
+    ).toBe('cs');
+  });
+
+  it('an invoice issued before the language existed stays readable and downloadable, byte for byte', async () => {
+    await ensureCzkDefault();
+    const c = await customerWith('cs');
+    const a = await agreement(c.id);
+    const source = (await expectStatus(issue([a.code], '2026-08'), 201)).body as InvoiceDetail;
+    const row = await f.prisma.invoice.findUniqueOrThrow({
+      where: { number: source.number },
+      include: { lines: true },
+    });
+    const earlier = new Date('2025-01-01T00:00:00.000Z');
+    const legacySnapshot = Object.fromEntries(
+      Object.entries(row.snapshot as Record<string, unknown>).filter(
+        ([k]) => !['templateVersion', 'language', 'texts'].includes(k),
+      ),
+    );
+    // Exact bytes that no renderer of today could produce: proof it is served, never re-rendered.
+    const bytes = Buffer.from('%PDF-1.3 historický dokument (syntetický)');
+    const key = newStorageKey('finance-documents', 'pdf');
+    await f.storage.put(key, bytes);
+    const number = `T1999-${String(Math.floor(Math.random() * 90000) + 10000)}`;
+    await f.prisma.invoice.create({
+      data: {
+        serial: BigInt(1_000_000 + Math.floor(Math.random() * 1_000_000)),
+        kind: 'TEST',
+        number,
+        variableSymbol: `98${number.slice(-5)}`,
+        customerId: row.customerId,
+        customerVersion: row.customerVersion,
+        periodMonth: earlier,
+        issuedOn: row.issuedOn,
+        dueOn: row.dueOn,
+        currency: row.currency,
+        total: row.total,
+        snapshot: legacySnapshot as never,
+        pdfStorageKey: key,
+        pdfSha256: createHash('sha256').update(bytes).digest('hex'),
+        issuedBy: row.issuedBy,
+        issuedByName: row.issuedByName,
+        requestId: randomUUID(),
+        lines: {
+          create: row.lines.map(({ invoiceId: _i, ...l }) => ({ ...l, periodMonth: earlier })),
+        },
+      },
+    });
+    const shown = (await f.get(`${INV}/${number}`).expect(200)).body as InvoiceDetail;
+    expect(shown.documentLanguage).toBeNull();
+    expect(shown.payment.variableSymbol).toBe(source.variableSymbol);
+    expect((await pdfBytes(number)).equals(bytes)).toBe(true);
+    const listed = ((await f.get(INV).expect(200)).body as InvoiceDetail[]).find(
+      (i) => i.number === number,
+    );
+    expect(listed?.documentLanguage).toBeNull();
   });
 });

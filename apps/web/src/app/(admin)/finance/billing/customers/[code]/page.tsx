@@ -42,7 +42,10 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
                 </span>
                 <span className="text-stone-600">
                   {v.customer.addressLine1}, {v.customer.postalCode} {v.customer.city} ·{' '}
-                  {v.customer.billingEmail}
+                  {v.customer.billingEmail} ·{' '}
+                  {v.customer.documentLanguage
+                    ? t.languages[v.customer.documentLanguage]
+                    : t.languageMissing}
                 </span>
                 <span className="text-xs text-stone-500">
                   {v.reason ? `${v.reason} · ` : ''}

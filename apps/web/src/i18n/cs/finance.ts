@@ -249,7 +249,48 @@ export const financeCs = {
     variableSymbol: 'Variabilní symbol',
     status: { VALID: 'Platná', CANCELLED: 'Zrušená' } as Record<string, string>,
     back: 'Faktury',
+    run: {
+      title: 'Měsíční běh testovacích faktur',
+      subtitle:
+        'Vyberte období, zkontrolujte smlouvy a zadejte datum vystavení. Každá vybraná smlouva = samostatná testovací faktura. Datum ani období se neodvozují.',
+      open: 'Měsíční běh',
+      month: 'Fakturované období',
+      load: 'Načíst smlouvy',
+      issuedOn: 'Datum vystavení',
+      needDate: 'Zadejte datum vystavení. Bez něj se nic nevystaví.',
+      empty: 'V tomto období nejsou žádné smlouvy.',
+      noAmount: 'Částku nelze určit.',
+      notIssuable: 'V produkci se testovací faktury nevystavují; ostré vystavení není schválené.',
+      chooseReady: (n: number) => `Vybrat všechny připravené (${n})`,
+      submit: (n: number) => `Vystavit testovací faktury (${n})`,
+      running: 'Vystavuji…',
+      total: (amount: string) => `Celkem ${amount}`,
+      done: (n: number) => `Vystaveno testovacích faktur: ${n}`,
+      termsDays: (n: number) => `splatnost ${n} dní`,
+      line: (rooms: number, price: string, source: string, amount: string) =>
+        `${rooms} pokojů × ${price} (${source}) = ${amount}`,
+      priceSource: { OWN: 'vlastní cena', DEFAULT: 'dle ceníku', MISSING: 'chybí' } as Record<
+        string,
+        string
+      >,
+      state: {
+        READY: 'Připraveno',
+        ALREADY_INVOICED: 'Už vystaveno',
+        BLOCKED: 'Nelze vystavit',
+        NOT_IN_EFFECT: 'Mimo platnost smlouvy',
+      },
+      blockers: {
+        PRICE_MISSING: 'chybí cena',
+        PARTIAL_PERIOD_RULE_MISSING: 'smlouva pokrývá jen část měsíce (pravidlo není schválené)',
+        NO_EFFECTIVE_VERSION: 'podmínky začínají později',
+        CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
+        ZERO_AMOUNT: 'nulová částka',
+      } as Record<string, string>,
+    },
     newTitle: 'Testovací faktura',
+    language: 'Jazyk dokladu',
+    languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
+    languageLegacy: 'starší testovací doklad bez uloženého jazyka',
     newSubtitle:
       'Vyberte měsíc a smlouvy jednoho odběratele: jedna smlouva = samostatná faktura, více smluv téhož odběratele = souhrnná faktura s řádkem za každý hotel.',
     month: 'Fakturovaný měsíc',
@@ -261,6 +302,7 @@ export const financeCs = {
       PRICE_MISSING: 'chybí cena',
       PARTIAL_PERIOD_RULE_MISSING: 'smlouva pokrývá jen část měsíce (pravidlo není schválené)',
       NO_EFFECTIVE_VERSION: 'podmínky začínají později',
+      CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
     } as Record<string, string>,
     line: (rooms: number, price: string, amount: string) =>
       `${rooms} pokojů × ${price} = ${amount}`,

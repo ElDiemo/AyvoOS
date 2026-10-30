@@ -202,6 +202,9 @@ model CustomerVersion {
   city           String
   countryCode    String   @map("country_code") @db.Char(2)
   billingEmail   String   @map("billing_email")
+  /// Explicit, never derived from the country: cs | en | de. NULL only on versions recorded before
+  /// the choice existed; such a customer gets no new invoice until a new version chooses (doc 040 §12).
+  documentLanguage String? @map("document_language")
   reason         String?
   recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
   recordedBy     String   @map("recorded_by") @db.Uuid

@@ -112,6 +112,7 @@ test.describe('Přehled Financí', () => {
             city: 'Brno',
             countryCode: 'CZ',
             billingEmail: 'fakturace@prehled.test',
+            documentLanguage: 'cs',
           },
         },
       }),
