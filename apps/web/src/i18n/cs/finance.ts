@@ -112,7 +112,7 @@ export const financeCs = {
   exports: {
     title: 'Export pro účetní',
     subtitle:
-      'Balíček dokladů jednoho předávacího měsíce: ZIP s přehledem manifest.csv a nezměněnými originály. Vytvoření, stažení a předání účetní jsou samostatné záznamy; nic z toho neznamená zaúčtování.',
+      'Balíček přijatých dokladů jednoho předávacího měsíce: ZIP s přehledem manifest.csv a nezměněnými originály. Vydané faktury v něm nejsou a testovací faktury se do předání nepřidávají. Vytvoření, stažení a předání účetní jsou samostatné záznamy; nic z toho neznamená zaúčtování.',
     create: 'Nový export',
     month: 'Předávací měsíc',
     lastMonth: 'Minulý měsíc',
