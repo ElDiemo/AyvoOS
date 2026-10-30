@@ -284,6 +284,35 @@ test.describe.serial('Karta hotelu a Finance', () => {
     await expect(page.getByTestId('hotel-billing-rooms')).toHaveText('12');
   });
 
+  test('contracts, payers and prices are separate pages; old links still work', async ({
+    page,
+  }) => {
+    await page.goto('/finance/billing');
+    await expect(page.getByTestId('billing-agreements')).toBeVisible();
+    await expect(page.getByTestId('billing-prices')).toHaveCount(0);
+    await expect(page.getByTestId('billing-customers')).toHaveCount(0);
+    await shots(page, 'ux3-agreements');
+
+    await page.goto('/finance/billing?new=customer');
+    await expect(page).toHaveURL(/\/finance\/billing\/customers\?new=customer$/);
+    await expect(page.getByTestId('customer-new')).toBeVisible();
+    await shots(page, 'ux3-payers');
+
+    // One payer, two hotels; the payer is a company, not one of them.
+    await page
+      .getByRole('link', { name: /CU-\d+/ })
+      .last()
+      .click();
+    const paid = page.getByTestId('payer-hotels');
+    await expect(paid).toContainText(`Hotel Plátce A ${run}`);
+    await expect(paid).toContainText(`Hotel Plátce B ${run}`);
+    await shots(page, 'ux3-payer-detail');
+
+    await page.goto('/finance/settings/prices');
+    await expect(page.getByTestId('billing-prices')).toBeVisible();
+    await shots(page, 'ux3-prices');
+  });
+
   test.describe('without Finance', () => {
     test.use({ storageState: OPERATOR_STATE });
     test('no panel, no link; the routes and API refuse', async ({ page }) => {
@@ -291,6 +320,10 @@ test.describe.serial('Karta hotelu a Finance', () => {
       if (await page.getByRole('heading', { level: 1 }).count())
         await expect(page.getByTestId('hotel-billing')).toHaveCount(0);
       await expect(page.locator('a[href*="/finance/"]')).toHaveCount(0);
+      for (const url of ['/finance/billing/customers', '/finance/settings/prices']) {
+        await page.goto(url);
+        await expect(page).toHaveURL(/\/forbidden/);
+      }
       expect((await page.request.get('/api/admin/finance/billing/agreements')).status()).toBe(403);
       expect((await page.request.get('/api/admin/finance/invoices')).status()).toBe(403);
     });

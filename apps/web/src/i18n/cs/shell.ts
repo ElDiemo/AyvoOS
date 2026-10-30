@@ -37,7 +37,10 @@ export const shellCs = {
       },
       views: {
         invoices: 'Faktury',
-        billing: 'Smlouvy a ceny',
+        billing: 'Smlouvy',
+        customers: 'Plátci',
+        company: 'Naše firma a účty',
+        prices: 'Výchozí ceník',
         bank: 'Pohyby z banky',
         payments: 'Platby a přiřazení',
       },

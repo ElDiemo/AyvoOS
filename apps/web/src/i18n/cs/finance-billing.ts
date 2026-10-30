@@ -1,6 +1,6 @@
 /** Finance → Smlouvy hotelů (doc 040, N3A-1 settings in the UI). */
 export const billingCs = {
-  title: 'Smlouvy a ceny',
+  title: 'Smlouvy',
   subtitle:
     'Kdo za hotel platí (odběratel = firma), kolik pokojů a za jakou cenu se účtuje a výchozí ceník. Každá změna je nová verze s důvodem; nic se nepřepisuje.',
   agreements: 'Smlouvy hotelů',
@@ -29,7 +29,7 @@ export const billingCs = {
   revision: (r: number) => `revize ${r}`,
   recorded: (at: string, by: string) => `${at}, ${by}`,
   newVersion: 'Nová verze',
-  back: 'Smlouvy a ceny',
+  back: 'Smlouvy',
   save: 'Uložit',
   saving: 'Ukládám…',
   saved: 'Uloženo.',
@@ -65,6 +65,19 @@ export const billingCs = {
     price: 'Cena za pokoj a měsíc',
   },
   toHotel: 'Karta hotelu',
+  agreementsSubtitle:
+    'Jedna smlouva na hotel, s verzovanými podmínkami. Hotel se zakládá v Hotelech.',
+  newPayerHere:
+    'Založení zde neztratí rozepsanou smlouvu. Plátce je firma, ne hotel; všechny plátce najdete v záložce Plátci.',
+  customersTitle: 'Plátci',
+  customersSubtitle:
+    'Firmy, kterým se fakturuje. Jedna firma může platit za více hotelů a nemusí být jejich vlastníkem ani provozovatelem.',
+  payerHotels: (month: string) => `Hotely, za které platí (${month.slice(5)}/${month.slice(0, 4)})`,
+  payerHelp: 'Podle smluv platných v tomto měsíci.',
+  payerNoHotels: 'V tomto měsíci nemá žádnou platnou smlouvu.',
+  pricesTitle: 'Výchozí ceník',
+  pricesSubtitle:
+    'Jediné místo výchozí ceny za pokoj a měsíc. Smlouva s vlastní cenou ji nepoužívá.',
   timing: { ADVANCE: 'předem', ARREARS: 'zpětně' } as Record<string, string>,
   errors: {
     CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný – nic se neuložilo.',

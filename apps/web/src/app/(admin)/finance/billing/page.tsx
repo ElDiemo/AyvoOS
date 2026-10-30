@@ -3,12 +3,11 @@ import {
   billingCustomerSchema,
   effectiveTermsPageSchema,
   financeContractHotelSchema,
-  priceListVersionSchema,
 } from '@ayvo/types';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { AgreementForm, CustomerForm, PriceForm } from '@/components/finance/billing-forms';
+import { AgreementForm, CustomerForm } from '@/components/finance/billing-forms';
 import { financeAmount, financeMonth } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { buttonClass, Card, Notice } from '@/components/ui';
@@ -34,7 +33,7 @@ function Empty({ children, action }: { children: React.ReactNode; action?: React
 }
 
 /**
- * Smlouvy a ceny (doc 040, N3A-1 in the UI; a view of Faktury hotelům, doc 042): customers (the
+ * Smlouvy (doc 040, N3A-1 in the UI; a view of Faktury hotelům, doc 042): customers (the
  * billed companies), one agreement per hotel with versioned terms, and the default price list.
  * Hotels come from the core contract. `?new=customer|agreement` opens that existing form (links
  * from the overview and the empty states); nothing is created by itself.
@@ -45,13 +44,14 @@ export default async function BillingPage({
   searchParams: Promise<{ new?: string; hotel?: string }>;
 }) {
   const { new: opened, hotel: hotelParam } = await searchParams;
+  // Links from before the split (doc 044 U3) keep working.
+  if (opened === 'customer' && !hotelParam) redirect('/finance/billing/customers?new=customer');
   const me = await requirePermission('finance:billing_read');
   const canManage = hasPermission(me, 'finance:billing_manage');
   const month = thisMonth();
-  const [agreements, customers, prices, hotels, effective] = await Promise.all([
+  const [agreements, customers, hotels, effective] = await Promise.all([
     apiGet('admin/finance/billing/agreements', z.array(billingAgreementSchema)),
     apiGet('admin/finance/billing/customers', z.array(billingCustomerSchema)),
-    apiGet('admin/finance/billing/price-list', z.array(priceListVersionSchema)),
     apiGet('admin/finance/billing/hotels', z.array(financeContractHotelSchema)),
     apiGet(`admin/finance/billing/agreements/effective?month=${month}`, effectiveTermsPageSchema),
   ]);
@@ -64,7 +64,12 @@ export default async function BillingPage({
   const termsOf = (code: string) => effective.items.find((i) => i.agreement.code === code);
   return (
     <>
-      <FinanceHeader active="invoices" view="billing" title={t.title} subtitle={t.subtitle} />
+      <FinanceHeader
+        active="invoices"
+        view="billing"
+        title={t.agreements}
+        subtitle={t.agreementsSubtitle}
+      />
       <div className="flex flex-col gap-6">
         <Card title={t.agreements} testId="billing-agreements" id="agreements">
           {agreements.length === 0 ? (
@@ -73,7 +78,7 @@ export default async function BillingPage({
                 canManage &&
                 customers.length === 0 && (
                   <Link
-                    href="/finance/billing?new=customer#customers"
+                    href="/finance/billing?new=customer"
                     className={buttonClass.secondary}
                     data-testid="agreements-need-customer"
                   >
@@ -129,7 +134,7 @@ export default async function BillingPage({
                   <Notice tone="info">
                     {t.needCustomer}{' '}
                     <Link
-                      href={`/finance/billing?new=customer${chosenHotel ? `&hotel=${chosenHotel}` : ''}#customers`}
+                      href={`/finance/billing?new=customer${chosenHotel ? `&hotel=${chosenHotel}` : ''}#new-payer`}
                       className="underline"
                     >
                       {t.createCustomer}
@@ -145,31 +150,10 @@ export default async function BillingPage({
           )}
         </Card>
 
-        <Card title={t.customers} testId="billing-customers" id="customers">
-          <p className="mb-3 text-xs text-stone-500">{t.customersHelp}</p>
-          {customers.length === 0 ? (
-            <Empty>{t.noCustomers}</Empty>
-          ) : (
-            <ul className="divide-y divide-stone-100 text-sm">
-              {customers.map((c) => (
-                <li key={c.code} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-2">
-                  <Link
-                    href={`/finance/billing/customers/${c.code}`}
-                    className="font-mono underline"
-                  >
-                    {c.code}
-                  </Link>
-                  <span className="min-w-0 flex-1 font-medium">{c.current.customer.legalName}</span>
-                  <span className="text-stone-600">
-                    {c.current.customer.companyId ? `IČO ${c.current.customer.companyId}` : ''}{' '}
-                    {c.current.customer.city}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {canManage && (
-            <details className="mt-4" open={opened === 'customer' || !!chosenHotel}>
+        {canManage && (
+          <Card title={t.newCustomer} testId="billing-new-payer">
+            <p className="mb-3 text-xs text-stone-500">{t.newPayerHere}</p>
+            <details open={opened === 'customer' || !!chosenHotel}>
               <summary
                 className="cursor-pointer text-sm font-medium"
                 data-testid="customer-new-open"
@@ -180,36 +164,8 @@ export default async function BillingPage({
                 <CustomerForm />
               </div>
             </details>
-          )}
-        </Card>
-
-        <Card title={t.priceList} testId="billing-prices">
-          <p className="mb-3 text-xs text-stone-500">{t.priceListHelp}</p>
-          {prices.length === 0 ? (
-            <Empty>{t.noPrices}</Empty>
-          ) : (
-            <ul className="divide-y divide-stone-100 text-sm">
-              {prices.map((p) => (
-                <li key={p.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-2">
-                  <span className="tabular-nums font-medium">
-                    {financeAmount(p.pricePerRoomMonth, p.currency)}
-                  </span>
-                  <span>od {financeMonth(p.effectiveFrom)}</span>
-                  <span className="text-stone-600">{p.reason}</span>
-                  <span className="text-xs text-stone-500">{t.revision(p.revision)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {canManage && (
-            <details className="mt-4">
-              <summary className="cursor-pointer text-sm font-medium">{t.newPrice}</summary>
-              <div className="mt-3">
-                <PriceForm prices={prices} />
-              </div>
-            </details>
-          )}
-        </Card>
+          </Card>
+        )}
       </div>
     </>
   );

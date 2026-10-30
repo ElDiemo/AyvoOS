@@ -30,7 +30,7 @@ const PAGES = [
   },
 ];
 const VIEWS = [
-  ['Faktury hotelům', 'Smlouvy a ceny', /\/finance\/billing$/, 'billing'],
+  ['Faktury hotelům', 'Smlouvy', /\/finance\/billing$/, 'billing'],
   ['Faktury hotelům', 'Faktury', /\/finance\/invoices$/, null],
   ['Banka a platby', 'Platby a přiřazení', /\/finance\/payments$/, 'payments'],
   ['Banka a platby', 'Pohyby z banky', /\/finance\/bank$/, null],
@@ -39,7 +39,7 @@ const VIEWS = [
 const FORMER = [
   ['/finance/documents', 'Přijaté doklady', 'Přijaté doklady'],
   ['/finance/documents/new', 'Přijaté doklady', 'Přijmout doklad'],
-  ['/finance/billing', 'Faktury hotelům', 'Smlouvy a ceny'],
+  ['/finance/billing', 'Faktury hotelům', 'Smlouvy'],
   ['/finance/invoices', 'Faktury hotelům', 'Faktury'],
   ['/finance/invoices/new', 'Faktury hotelům', 'Testovací faktura'],
   ['/finance/payments', 'Banka a platby', 'Platby a přiřazení'],

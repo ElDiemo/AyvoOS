@@ -85,7 +85,7 @@ export default async function FinanceOverviewPage() {
     billing !== undefined && {
       id: 'customer' as const,
       done: billing ? billing.customers > 0 : null,
-      href: '/finance/billing?new=customer#customers',
+      href: '/finance/billing/customers?new=customer',
       allowed: can('finance:billing_manage'),
     },
     billing !== undefined && {

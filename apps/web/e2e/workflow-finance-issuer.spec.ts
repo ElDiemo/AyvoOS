@@ -433,8 +433,8 @@ test.describe('Ukázka: řetězec fakturace', () => {
     const finance = page.getByRole('navigation', { name: 'Finance' });
     const views = page.getByRole('navigation', { name: 'Zobrazení' });
     await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
-    await views.getByRole('link', { name: 'Smlouvy a ceny', exact: true }).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy a ceny' })).toBeVisible();
+    await views.getByRole('link', { name: 'Smlouvy', exact: true }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy' })).toBeVisible();
     /** Opens a collapsible section unless it is open already (it stays open after a save). */
     const ensureOpen = async (summaryTestId: string) => {
       const details = page.locator('details', { has: page.getByTestId(summaryTestId) });
@@ -452,7 +452,9 @@ test.describe('Ukázka: řetězec fakturace', () => {
       await form.locator('[name=billingEmail]').fill('fakturace@ukazka.test');
       await form.getByTestId('customer-save').click();
       await expect(form.getByRole('status')).toHaveText('Uloženo.');
+      await page.goto('/finance/billing/customers');
       await expect(page.getByTestId('billing-customers')).toContainText(name);
+      await page.goto('/finance/billing');
     };
     await newCustomer(`Alfa Hotely ${run} s.r.o.`, '11111111');
     await newCustomer(`Beta Resort ${run} a.s.`, '22222222');
