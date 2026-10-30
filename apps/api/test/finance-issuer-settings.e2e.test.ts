@@ -1510,6 +1510,19 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     expect(await invoiceCount()).toBe(count + 1);
   });
 
+  it('the largest run (50 agreements) fits the transaction limit', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const codes: string[] = [];
+    for (let i = 0; i < 50; i++) codes.push((await agreement(c.id)).code);
+    const started = Date.now();
+    const res = await runFor('2026-07', codes);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect((res.body as TestRunResult).invoices).toHaveLength(50);
+    console.log('RUN_50_MS', Date.now() - started);
+    expect(Date.now() - started).toBeLessThan(25_000);
+  }, 120_000);
+
   it('the run: never in production (the preview only says so); needs its permissions', async () => {
     const prod = new InvoicesService(
       f.prisma,
