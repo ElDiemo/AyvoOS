@@ -13,8 +13,7 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 - **Modular monolith** (ADR 0001). No microservices. Modules talk through exported services, never
   through another module's tables.
 - **PostgreSQL is the source of truth** (ADR 0002). Redis is non-authoritative (ADR 0010).
-- **The running core is not the DB superuser** (ADR 0041; merged 2026-10-25 with #71, on DEV since
-  2026-10-25, not yet on PROD): `api` connects as `ayvo_core`
+- **The running core is not the DB superuser** (ADR 0041; on DEV and on PROD): `api` connects as `ayvo_core`
   (rows of `public` only — no TRUNCATE, DDL, trigger switching or other schemas); migrations, role
   setups and backups keep the privileged account. Tests run the app as such a role; fixtures that
   need more use `withPrivileged` — never broaden the runtime role.
@@ -63,8 +62,9 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   `shipments:read|prepare|handover` for ADMIN only. Carrier behind `carriers/carrier.ts`;
   `CARRIER_PROVIDER=test` only with `APP_ENV=test`. No delivery, returns or pickup ordering.
   Site carrier settings (doc 029 §9, owner 2026-10-19): `site_carrier_settings` (PPL only,
-  `sites:carrier_manage`, ADMIN), a server-side connection by code (only `PPL_TEST`, URL fixed in
-  code, no production connection), credentials only on the server — never in plaintext in the DB,
+  `sites:carrier_manage`, ADMIN), a server-side connection by code (`PPL_TEST`; `PPL_PRODUCTION` only
+  with `APP_ENV=production` and an explicit per-site choice — doc 029 §9b, ADR 0042; URLs fixed in
+  code), credentials only on the server — never in plaintext in the DB,
   never in the browser, logs, audit or git; each request snapshots settings + connection + environment +
   account. Credentials may also be entered in Správa systému → Dopravci (ADR 0027,
   `carriers:connections_manage`): AES-256-GCM in `carrier_connections`, key `CARRIER_CREDENTIALS_KEY`
@@ -121,13 +121,14 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   items (version + file hash) and events GENERATED / DOWNLOADED / HANDED_OVER (manual, once);
   `finance:exports_manage` for ADMIN only. Deployed only by `scripts/deploy-finance-dev.sh`. No
   VAT logic, posting, payments or automatic sending to the accountant.
-  Hotel billing settings (N3A-1, owner 2026-10-25, doc 040; in review, not merged): customers (the
+  Hotel billing settings (N3A-1, owner 2026-10-25, doc 040): customers (the
   billed company ≠ hotel) with versions, one billing agreement per hotel with append-only bitemporal
   versions (the only place of billed rooms / own price; effective from the 1st of a month), the
   default price list per currency; exact decimals, an explicit 0.00 ≠ missing; hotels only via the
-  core contract; `finance:billing_read|manage` (ADMIN). No amounts, VAT, numbering or invoices yet;
-  live invoicing stays blocked until the owner approves the accounting rules.
-  Our company and invoice bank accounts (N3A-2a, owner 2026-10-26, doc 040 §8; in review): Finance
+  core contract; `finance:billing_read|manage` (ADMIN). Only TEST invoices exist (doc 040 §9: kind `TEST`, refused
+  with APP_ENV=production) with incoming payments and their allocation (doc 041 §8); live invoicing
+  and automatic e-mails stay blocked until the owner approves the accounting rules (doc 040 §7).
+  Our company and invoice bank accounts (N3A-2a, owner 2026-10-26, doc 040 §8): Finance
   is the only place of the issuer (versions, explicit VAT status, DIČ for a payer) and of the bank
   accounts printed on invoices (IBAN mod 97 = the Czech domestic number, ACTIVE/RETIRED, never
   deleted) with one default per currency; every form names its version; `finance:issuer_manage`
@@ -144,8 +145,7 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   PROD, its own CA required, full TLS verification) never in production; secrets only as mounted files, never in the env, DB,
   web, logs or git. `finance:bank_read|bank_sync` ADMIN only. No pairing with invoices until the
   issued-invoice model exists — never a substitute invoice list.
-  Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md;
-  implementation/model pending PR review): one optional card per existing user, explicit public
+  Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
   `identity:users_manage` only. Deactivation hides atomically; reactivation never republishes.
   This feature does not authorize public-host cutover, real-profile imports or DNS changes.
@@ -207,8 +207,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   operational records belong to a site; codes stay globally unique; timestamps UTC, shown in the
   site's time zone. Hotel fulfilment site and per-site carriers: rules in doc 022 §7–§8 (not
   implemented).
-  **Native authentication (owner 2026-10-23/24, ADR 0037, doc 038 — in review, replaces the
-  WorkOS provider only):** e-mail + password (Argon2id) then TOTP, always both; invitations and
+  **Native authentication (owner 2026-10-23/24, ADR 0037, doc 038 — replaces the WorkOS
+  provider only):** e-mail + password (Argon2id) then TOTP, always both; invitations and
   resets by one-time e-mailed links; recovery codes; `AUTH_ENCRYPTION_KEY` per environment, never
   copied; mail only through an explicitly chosen transport (`google-relay` = the approved Google
   Workspace IPv4 relay without credentials, or `smtp` with user + password; `memory` tests only).
@@ -255,8 +255,8 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
 ## Environment
 
 - **This server is DEV only.** No production customer data and no production secrets here, ever.
-- `dev.ayvo.co` is the development preview environment. Production will run later on a
-  **separate VPS**. No staging environment yet — `APP_ENV` is `development | test | production`
+- `dev.ayvo.co` is the development preview environment. Production runs on a **separate VPS**
+  (AyvoOS-PROD, doc 036). No staging environment yet — `APP_ENV` is `development | test | production`
   (ADR 0008).
 - `docker/compose.yml` runs dev PostgreSQL 18 + Redis 8 on 127.0.0.1.
 - DEV preview (ADR 0013, **tailnet only — ADR 0026**): Caddy publishes 443 only on the server's
