@@ -265,9 +265,20 @@ stopped before the dump (nothing it writes may follow the backup, its old code m
 new schema); on the first installation nothing is stopped. The OS (api, web) keeps serving the
 whole time: Finance's migrations change schema `finance` only, `pg_dump` is a consistent snapshot,
 and Finance itself needs the running API to become ready. The dump and its S3 copy are labelled
-`finance-<release>`. If a step fails, the OS is untouched; Finance is stopped (upgrade) or absent
-(first installation) — `--finance-rollback <previous>` starts the previous Finance again, nothing
-is recorded in `state/finance.log` until Finance is verified.
+`finance-<release>`. If a step fails, the OS is untouched and nothing is recorded in
+`state/finance.log` (it is written only after the verification). What Finance does then depends on
+the step:
+
+- **before `start_finance`** (backup, migration): the old Finance stays stopped (upgrade) or
+  Finance is absent (first installation);
+- **in or after `start_finance`** (healthy, pinned image, ready, edge checks): the new Finance
+  container may be running without a verified ready state — the deployment did not succeed even
+  if it answers.
+
+In both cases inspect `docker compose -p ayvo-prod ps finance` and its logs; `--finance-rollback
+<previous>` starts the previous recorded Finance again (no migration), on the first installation
+there is no previous one — fix the cause and run `--finance` again. A missing `finance.log` does
+not mean that no Finance runs.
 
 **Incident 2026-10-26 (first PROD installation):** the first version of `--finance` reused the OS
 backup step, which stops api and web; they were not started again, so Finance's verification got
