@@ -3,6 +3,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
+  HotelBillingTerms,
   EffectiveTermsPage,
   IncomingPayment,
   InvoiceDetail,
@@ -1317,6 +1318,125 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       await real.get(`${INV}/overview`, cookie).expect(403);
       await real.get(`${B}/summary`, cookie).expect(200);
       await real.get(`${INV}?agreement=BA-000001`, cookie).expect(403);
+    } finally {
+      await real.close();
+    }
+  });
+
+  // --- a hotel's card reads Finance (doc 044 U2) ----------------------------------------------
+
+  it('one hotel: the same terms as the month computation, no agreement is not an error; invoices by exact hotel', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const first = await agreement(c.id);
+    const second = await agreement(c.id, { billedRooms: 5, ownPricePerRoomMonth: '100.00' });
+    const other = await agreement((await customer()).id);
+    const idOf = async (code: string) =>
+      (await f.core.prisma.hotel.findUniqueOrThrow({ where: { code }, select: { id: true } })).id;
+    const firstId = await idOf(first.hotel.code);
+    const secondId = await idOf(second.hotel.code);
+    const by = (id: string) => f.get(`${B}/agreements/by-hotel/${id}`).expect(200);
+
+    const one = (await by(firstId)).body as HotelBillingTerms;
+    const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' })
+      .format(new Date())
+      .slice(0, 7);
+    expect(one.month).toBe(month);
+    // Exactly what the month's computation says of this agreement.
+    const page = (await f.get(`${B}/agreements/effective?month=${month}`).expect(200))
+      .body as EffectiveTermsPage;
+    expect(one.terms).toEqual(page.items.find((i) => i.agreement.code === first.code));
+    expect(one.terms).toMatchObject({
+      status: 'IN_EFFECT',
+      customer: { code: c.code },
+      version: { billedRooms: 12, paymentTermsDays: 14, currency: 'CZK' },
+      price: { source: 'OWN', perRoomMonth: '350.00' },
+    });
+    // The same company pays for two hotels, each with its own rooms.
+    expect(((await by(secondId)).body as HotelBillingTerms).terms).toMatchObject({
+      customer: { code: c.code },
+      version: { billedRooms: 5 },
+    });
+    // A hotel without an agreement: a plain answer; a malformed id: refused.
+    const free = await createHotel(f.core);
+    const freeId = await idOf(free.code);
+    expect(((await by(freeId)).body as HotelBillingTerms).terms).toBeNull();
+    await f.get(`${B}/agreements/by-hotel/neni-uuid`).expect(400);
+
+    const single = (await expectStatus(issue([first.code], '2026-03'), 201)).body as InvoiceDetail;
+    const summaryOfBoth = (await expectStatus(issue([first.code, second.code], '2026-02'), 201))
+      .body as InvoiceDetail;
+    const foreign = (await expectStatus(issue([other.code], '2026-03'), 201)).body as InvoiceDetail;
+    const ofHotel = async (id: string) =>
+      ((await f.get(`${INV}?hotelId=${id}`).expect(200)).body as InvoiceDetail[]).map(
+        (i) => i.number,
+      );
+    expect(await ofHotel(firstId)).toEqual([summaryOfBoth.number, single.number]);
+    expect(await ofHotel(secondId)).toEqual([summaryOfBoth.number]);
+    expect(await ofHotel(freeId)).toEqual([]);
+    expect(await ofHotel(firstId)).not.toContain(foreign.number);
+    expect(summaryOfBoth.hotels).toHaveLength(2);
+    await f.get(`${INV}?hotelId=neni-uuid`).expect(400);
+
+    // A change of the payer changes no issued PDF.
+    const before = await f.get(`${INV}/${single.number}`).expect(200);
+    const version = await f.post(`${B}/customers/${c.code}/versions`).send({
+      requestId: randomUUID(),
+      expectedVersion: 1,
+      customer: {
+        legalName: 'Přejmenovaný plátce s.r.o.',
+        companyId: '87654321',
+        vatId: null,
+        addressLine1: 'Hotelová 7',
+        addressLine2: null,
+        postalCode: '602 00',
+        city: 'Brno',
+        countryCode: 'CZ',
+        billingEmail: 'fakturace@hotely.test',
+      },
+      reason: 'Změna názvu (test)',
+    });
+    expect(version.status).toBe(201);
+    const after = await f.get(`${INV}/${single.number}`).expect(200);
+    expect((after.body as InvoiceDetail).pdfSha256).toBe((before.body as InvoiceDetail).pdfSha256);
+    expect((after.body as InvoiceDetail).customer.legalName).toBe(
+      (before.body as InvoiceDetail).customer.legalName,
+    );
+  });
+
+  it('the hotel panel: billing and invoices are separate permissions, on the server', async () => {
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      const make = async (permissions: string[]) => {
+        const roleCode = `FINH_${randomUUID().slice(0, 8).toUpperCase()}`;
+        await real.core.prisma.role.create({
+          data: { code: roleCode, name: 'Test', description: 'test' },
+        });
+        for (const permissionCode of permissions)
+          await real.core.prisma.rolePermission.create({
+            data: { roleCode, permissionCode: permissionCode as never },
+          });
+        const user = await prepareInvitedUser(real.core, {
+          email: `panel-${randomUUID()}@ayvo.test`,
+          displayName: 'Test',
+        });
+        await real.core.prisma.userRole.create({
+          data: { userId: user.id, roleCode, grantReason: 'test' },
+        });
+        return sessionCookie(real.core, user.email);
+      };
+      const id = randomUUID();
+      const terms = `${B}/agreements/by-hotel/${id}`;
+      const invoices = `${INV}?hotelId=${id}`;
+      const billingOnly = await make(['finance:billing_read']);
+      await real.get(terms, billingOnly).expect(200);
+      await real.get(invoices, billingOnly).expect(403);
+      const invoicesOnly = await make(['finance:invoices_read']);
+      await real.get(terms, invoicesOnly).expect(403);
+      await real.get(invoices, invoicesOnly).expect(200);
+      const noFinance = await make(['hotels:read']);
+      await real.get(terms, noFinance).expect(403);
+      await real.get(invoices, noFinance).expect(403);
     } finally {
       await real.close();
     }
