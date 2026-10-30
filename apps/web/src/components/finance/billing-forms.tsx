@@ -267,13 +267,16 @@ export function AgreementForm({
   customers,
   code,
   current,
+  initialHotelId = '',
 }: {
   hotels?: FinanceContractHotel[];
+  /** Coming from a hotel's card: that hotel is chosen, the user can still see and change it. */
+  initialHotelId?: string;
   customers: BillingCustomer[];
   code?: string;
   current?: BillingAgreementVersion;
 }) {
-  const [hotelId, setHotelId] = useState('');
+  const [hotelId, setHotelId] = useState(initialHotelId);
   const valuesOf = (from?: BillingAgreementVersion) => ({
     effectiveFrom: thisMonth(),
     customerId: from?.customer.id ?? '',
