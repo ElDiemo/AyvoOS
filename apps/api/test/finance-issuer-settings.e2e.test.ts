@@ -11,6 +11,8 @@ import type {
   IssuerSettings,
   PaymentLoadResult,
   PaymentsPage,
+  TestRunPreview,
+  TestRunResult,
 } from '@ayvo/types';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
@@ -1317,6 +1319,230 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       await real.get(`${INV}/overview`, cookie).expect(403);
       await real.get(`${B}/summary`, cookie).expect(200);
       await real.get(`${INV}?agreement=BA-000001`, cookie).expect(403);
+    } finally {
+      await real.close();
+    }
+  });
+
+  // --- The monthly run of TEST invoices (doc 040 §11): no new table, nothing derived.
+
+  const RUN = `${INV}/test-run`;
+  type Preview = TestRunPreview['items'][number];
+  const previewOf = async (month: string) =>
+    (await f.get(`${RUN}/preview?month=${month}`).expect(200)).body as TestRunPreview;
+  const lineOf = (i: Preview) => ({
+    agreementCode: i.agreementCode,
+    agreementRevision: i.agreementRevision!,
+    customerVersion: i.customer!.version,
+    priceListVersionId: i.price.priceListVersionId,
+    unitPrice: i.price.perRoomMonth!,
+    billedRooms: i.billedRooms!,
+  });
+  const runFor = async (
+    month: string,
+    codes: string[],
+    issuedOn = '2026-03-15',
+    id = randomUUID(),
+  ) => {
+    const { items } = await previewOf(month);
+    const lines = codes.map((c) => lineOf(items.find((i) => i.agreementCode === c)!));
+    return f.post(RUN).send({ requestId: id, month, issuedOn, lines });
+  };
+  const invoiceCount = async () => ((await f.get(INV).expect(200)).body as unknown[]).length;
+
+  it('the run preview says for each agreement what an invoice would be and why not; it saves nothing', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const month = '2026-02';
+    const ready = await agreement(c.id);
+    const bare = await agreement(c.id, { ownPricePerRoomMonth: null, currency: 'USD' });
+    const partial = await agreement(c.id, { validFrom: '2026-02-10' });
+    const zero = await agreement(c.id, { ownPricePerRoomMonth: '0.00' });
+    const ended = await agreement(c.id, { validTo: '2026-01-31' });
+    const before = await invoiceCount();
+    const { items, issuable } = await previewOf(month);
+    const of = (code: string) => items.find((i) => i.agreementCode === code)!;
+    expect(issuable).toBe(true);
+    expect(of(ready.code)).toMatchObject({
+      state: 'READY',
+      blockers: [],
+      invoiceNumber: null,
+      hotel: { code: ready.hotel.code },
+      billedRooms: 12,
+      price: { source: 'OWN', perRoomMonth: '350.00' },
+      amount: '4200.00',
+      currency: 'CZK',
+      paymentTermsDays: 14,
+      billingTiming: 'ARREARS',
+    });
+    expect(of(bare.code)).toMatchObject({
+      state: 'BLOCKED',
+      blockers: ['PRICE_MISSING'],
+      amount: null,
+    });
+    expect(of(partial.code)).toMatchObject({
+      state: 'BLOCKED',
+      blockers: ['PARTIAL_PERIOD_RULE_MISSING'],
+    });
+    expect(of(zero.code)).toMatchObject({ state: 'BLOCKED', blockers: ['ZERO_AMOUNT'] });
+    expect(of(ended.code)).toMatchObject({ state: 'NOT_IN_EFFECT', blockers: [] });
+    expect(await invoiceCount()).toBe(before);
+    // What the preview blocks, the run refuses (never a 0.00 invoice or a silent proration).
+    for (const a of [partial, zero]) {
+      const line = lineOf(of(a.code));
+      const res = await f
+        .post(RUN)
+        .send({ requestId: randomUUID(), month, issuedOn: '2026-03-15', lines: [line] });
+      expect(res.status, a.code).toBe(422);
+    }
+    expect(await invoiceCount()).toBe(before);
+  });
+
+  it('the run needs an explicit period and issue date; nothing is filled in', async () => {
+    const c = await customer();
+    const a = await agreement(c.id);
+    const line = lineOf(
+      (await previewOf('2026-02')).items.find((i) => i.agreementCode === a.code)!,
+    );
+    const base = { requestId: randomUUID(), lines: [line] };
+    for (const body of [
+      { ...base, month: '2026-02' },
+      { ...base, issuedOn: '2026-03-15' },
+      { ...base, month: '2026-02', issuedOn: '2026-02-31' },
+      { ...base, month: '2026-02', issuedOn: '15.3.2026' },
+      { ...base, month: '2026-02', issuedOn: '2026-03-15', lines: [] },
+      { ...base, month: '2026-02', issuedOn: '2026-03-15', lines: [line, line] },
+    ])
+      await f.post(RUN).send(body).expect(400);
+    await f.get(`${RUN}/preview`).expect(400);
+  });
+
+  it('one invoice per agreement with the explicit date; the same request replays, the next finds them invoiced', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const month = '2026-03';
+    const [a, b] = [await agreement(c.id), await agreement(c.id, { paymentTermsDays: 30 })];
+    const id = randomUUID();
+    const res = await runFor(month, [a.code, b.code], '2026-04-02', id);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const result = res.body as TestRunResult;
+    expect(result.invoices.map((i) => i.agreementCode)).toEqual([a.code, b.code]);
+    const [ia, ib] = await Promise.all(result.invoices.map((i) => invoiceOf(i.number)));
+    expect(ia).toMatchObject({
+      period: month,
+      issuedOn: '2026-04-02',
+      dueOn: '2026-04-16',
+      total: '4200.00',
+    });
+    expect(ib).toMatchObject({ issuedOn: '2026-04-02', dueOn: '2026-05-02' });
+    expect(ia!.lines.map((l) => l.agreementCode)).toEqual([a.code]);
+    expect(ia!.number).toMatch(/^T2026-/);
+    // A lost answer: the same request again creates nothing and answers the same.
+    const count = await invoiceCount();
+    const { items } = await previewOf(month);
+    expect(items.find((i) => i.agreementCode === a.code)).toMatchObject({
+      state: 'ALREADY_INVOICED',
+      invoiceNumber: ia!.number,
+    });
+    const lines = [a, b].map((x) => ({
+      agreementCode: x.code,
+      agreementRevision: items.find((i) => i.agreementCode === x.code)!.agreementRevision!,
+      customerVersion: items.find((i) => i.agreementCode === x.code)!.customer!.version,
+      priceListVersionId: null,
+      unitPrice: '350.00',
+      billedRooms: 12,
+    }));
+    const again = await f.post(RUN).send({ requestId: id, month, issuedOn: '2026-04-02', lines });
+    expect([again.status, again.body]).toEqual([201, result]);
+    // The same id with anything else is a conflict; a new id is refused as invoiced.
+    const other = await f.post(RUN).send({ requestId: id, month, issuedOn: '2026-04-03', lines });
+    expect([other.status, other.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+    const fresh = await f
+      .post(RUN)
+      .send({ requestId: randomUUID(), month, issuedOn: '2026-04-02', lines });
+    expect([fresh.status, fresh.body.code]).toEqual([409, 'ALREADY_INVOICED']);
+    expect(await invoiceCount()).toBe(count);
+    // A cancelled invoice frees its month: the preview offers it again, the other stays invoiced.
+    await f
+      .post(`${INV}/${ia!.number}/cancel`)
+      .send({ requestId: randomUUID(), reason: 'test' })
+      .expect(200);
+    const after = (await previewOf(month)).items;
+    expect(after.find((i) => i.agreementCode === a.code)!.state).toBe('READY');
+    expect(after.find((i) => i.agreementCode === b.code)!.state).toBe('ALREADY_INVOICED');
+  });
+
+  it('all or nothing: a changed or invoiced agreement in the run leaves no invoice and no serial', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const month = '2026-05';
+    const [a, b] = [await agreement(c.id), await agreement(c.id)];
+    const { items } = await previewOf(month);
+    const lines = [a, b].map((x) => lineOf(items.find((i) => i.agreementCode === x.code)!));
+    const count = await invoiceCount();
+    await changeTerms(b.code, { billedRooms: 13 });
+    const stale = await f
+      .post(RUN)
+      .send({ requestId: randomUUID(), month, issuedOn: '2026-06-01', lines });
+    expect([stale.status, stale.body.code]).toEqual([409, 'TERMS_CHANGED']);
+    expect(await invoiceCount()).toBe(count);
+    // One of them invoiced by hand meanwhile.
+    await expectStatus(issue([a.code], month), 201);
+    const now = (await previewOf(month)).items;
+    const taken = await f.post(RUN).send({
+      requestId: randomUUID(),
+      month,
+      issuedOn: '2026-06-01',
+      lines: [a, b].map((x) => lineOf(now.find((i) => i.agreementCode === x.code)!)),
+    });
+    expect([taken.status, taken.body.code]).toEqual([409, 'ALREADY_INVOICED']);
+    expect(await invoiceCount()).toBe(count + 1);
+  });
+
+  it('two runs at once of the same agreement and month make exactly one invoice', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const month = '2026-06';
+    const count = await invoiceCount();
+    const results = await Promise.all([runFor(month, [a.code]), runFor(month, [a.code])]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(await invoiceCount()).toBe(count + 1);
+  });
+
+  it('the run: never in production (the preview only says so); needs its permissions', async () => {
+    const prod = new InvoicesService(
+      f.prisma,
+      f.app.get(FinanceOperations),
+      f.app.get(BillingSettingsService),
+      f.storage,
+      { ...f.env, APP_ENV: 'production' },
+    );
+    await expect(
+      prod.issueTestRun(
+        { requestId: randomUUID(), month: '2026-02', issuedOn: '2026-03-15', lines: [] },
+        { principal: { userId: randomUUID(), displayName: 'x' }, sessionToken: 'x' } as never,
+      ),
+    ).rejects.toMatchObject({ response: { code: 'TEST_INVOICES_DISABLED' } });
+    expect((await prod.testRunPreview('2026-02')).issuable).toBe(false);
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      const roleCode = `FINR_${randomUUID().slice(0, 8).toUpperCase()}`;
+      await real.core.prisma.role.create({
+        data: { code: roleCode, name: 'Čtení (test)', description: 'test' },
+      });
+      for (const permissionCode of ['finance:invoices_read', 'finance:billing_read'] as const)
+        await real.core.prisma.rolePermission.create({ data: { roleCode, permissionCode } });
+      const user = await prepareInvitedUser(real.core, {
+        email: `run-${randomUUID()}@ayvo.test`,
+        displayName: 'Jen čtení',
+      });
+      await real.core.prisma.userRole.create({
+        data: { userId: user.id, roleCode, grantReason: 'test: read only' },
+      });
+      const cookie = await sessionCookie(real.core, user.email);
+      await real.get(`${RUN}/preview?month=2026-02`, cookie).expect(403);
+      await real.post(RUN, cookie).send({}).expect(403);
     } finally {
       await real.close();
     }

@@ -167,6 +167,38 @@ kind `TEST` exists (DB CHECK), the API refuses it with `APP_ENV=production`, not
   whom it pays** (customers — invoices and payments). A group manager never sees the invoices of a
   company they do not act for.
 
+## 11. Monthly run of TEST invoices (owner 2026-10-30)
+
+Built without a new table; on the same gates as §9 (kind `TEST`, refused with
+`APP_ENV=production`, nothing sent). Finance → Faktury hotelům → Měsíční běh.
+
+- `GET /api/admin/finance/invoices/test-run/preview?month=` (`finance:invoices_test` +
+  `finance:billing_read`) reads only. Every agreement with hotel, customer, rooms, price and its
+  source, amount, currency, payment terms, recorded billing timing and a state:
+  `READY` / `ALREADY_INVOICED` (with the number) / `BLOCKED` (the §4 gaps or `ZERO_AMOUNT`) /
+  `NOT_IN_EFFECT`.
+- `POST /api/admin/finance/invoices/test-run` (`finance:invoices_test`): `month`, `issuedOn` — both
+  required, never filled in or derived — and the lines the user saw (as §9, at most 50; repeat the
+  run for more).
+  - One separate invoice per agreement.
+  - Due date = issue date + the agreement's payment terms.
+  - All or nothing in one transaction; `requestId` replays the same result.
+  - Changed terms: `TERMS_CHANGED`; already invoiced: `ALREADY_INVOICED`; also the database
+    refuses a second valid invoice per agreement and month.
+- `billingTiming` is only shown: neither the period nor the date follows from it.
+- One migration, only one more value of the `operation_requests.kind` CHECK.
+
+### Proposal for approval — not built (new data model)
+
+A saved run needs its own tables, so it waits for the owner's approval of the model:
+
+- `billing_run_settings`, append-only versions with a reason: the issue day, which period a run
+  bills (per timing), summary or separate invoices. **No default**: while a value is missing, the
+  run is blocked and says which one. The values come from §7 items 1, 2 and 7.
+- `billing_runs` + `billing_run_items`, append-only: who, when, period, the settings' version, the
+  state of each agreement and its invoice — so a run can be reviewed afterwards and resumed without
+  a second invoice.
+
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 
 1. In advance or in arrears, and the issuing window.
