@@ -106,6 +106,7 @@ test('the hotel in clear sections; receiving details are optional and saved with
   await page.goto(`/hotels/${hotel}`);
   await expect(page.getByTestId('hotel-sections').getByRole('link')).toHaveText([
     'Údaje',
+    'Smlouva a fakturace',
     'Plán zásobování',
     'Objednávky',
     'Dodávky',
