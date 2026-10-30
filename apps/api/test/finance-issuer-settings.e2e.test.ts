@@ -12,7 +12,6 @@ import type {
   InvoiceSummary,
   IssuerSettings,
   PaymentLoadResult,
-  PaymentsPage,
 } from '@ayvo/types';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
