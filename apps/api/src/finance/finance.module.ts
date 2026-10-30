@@ -10,6 +10,7 @@ import { InvoicesService } from './invoices.service.js';
 import { IssuerSettingsController } from './issuer-settings.controller.js';
 import { IssuerSettingsService } from './issuer-settings.service.js';
 import { BankController } from './bank.controller.js';
+import { BankSyncRunner } from './bank-sync-runner.service.js';
 import { BankSyncService } from './bank-sync.service.js';
 import { FinanceController } from './finance.controller.js';
 import { FinanceDocumentsService } from './finance-documents.service.js';
@@ -52,6 +53,7 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     InvoicesService,
     PaymentsService,
     BankSyncService,
+    BankSyncRunner,
     FinancePrismaService,
     FinanceOperations,
   ],

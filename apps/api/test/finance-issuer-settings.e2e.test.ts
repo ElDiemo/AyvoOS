@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
+  BankStatus,
   EffectiveTermsPage,
   IncomingPayment,
   InvoiceDetail,
@@ -12,7 +13,9 @@ import type {
   PaymentLoadResult,
   PaymentsPage,
 } from '@ayvo/types';
+import { BankSyncRunner } from '../src/finance/bank-sync-runner.service.js';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
+import { financeEnvSchema } from '../src/finance/finance-env.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
 import { InvoicesService } from '../src/finance/invoices.service.js';
 import { PaymentsService } from '../src/finance/payments.service.js';
@@ -23,6 +26,7 @@ import {
   financeOwnerDatabaseUrl,
   type FinanceTestApp,
 } from './support/finance-app.js';
+import { FakeRb, type FakeEntry } from './support/fake-rb.js';
 import { createHotel } from './support/order-fixtures.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { hasDatabase, withPrivileged } from './support/test-app.js';
@@ -1320,5 +1324,140 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     } finally {
       await real.close();
     }
+  });
+
+  // --- Scheduled reading of the bank (doc 041 §9): the same adapter, fencing and matching.
+
+  describe('a scheduled round', () => {
+    const bank = new FakeRb();
+    const apps: FinanceTestApp[] = [];
+    const appWith = async (accounts: string, over: Record<string, string> = {}) => {
+      const a = await createFinanceTestApp({
+        finance: bank.env(accounts, { RB_PREMIUM_RETRY_BASE_MS: '100', ...over }),
+      });
+      apps.push(a);
+      return a;
+    };
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(
+      new Date(),
+    );
+    const accountNo = () => String(randomInt(1_000_000_000, 9_999_999_999));
+    const entry = (amount: string, over: Partial<FakeEntry> = {}): FakeEntry => ({
+      entryReference: randomUUID(),
+      amount,
+      creditDebitIndication: 'CRDT',
+      bookingDate: `${today}T09:00:00.000+02:00`,
+      message: `Plán ${randomUUID().slice(0, 8)}`,
+      ...over,
+    });
+    const paymentByMessage = async (message: string) =>
+      (await payments()).payments.filter((p) => p.message === message);
+    const runner = (a: FinanceTestApp) => a.app.get(BankSyncRunner);
+
+    beforeAll(async () => {
+      await bank.start();
+    });
+    afterAll(async () => {
+      for (const a of apps) await a.close();
+      await bank.stop();
+    });
+
+    it('is off unless the interval is set; it has no default and refuses nonsense', async () => {
+      const acc = accountNo();
+      bank.accounts.set(`${acc}/CZK`, []);
+      const off = await appWith(`${acc}:CZK`);
+      expect(off.env.RB_PREMIUM_SYNC_SECONDS).toBeUndefined();
+      expect(runner(off).enabled).toBe(false);
+      expect(bank.requests.length).toBe(0);
+      const on = await appWith(`${acc}:CZK`, { RB_PREMIUM_SYNC_SECONDS: '3600' });
+      expect(runner(on).enabled).toBe(true);
+      const parse = (over: Record<string, unknown>) =>
+        financeEnvSchema.safeParse({ ...on.env, ...over }).success;
+      expect(parse({})).toBe(true);
+      expect(parse({ RB_PREMIUM_SYNC_SECONDS: '899' })).toBe(false);
+      expect(parse({ RB_PREMIUM_SYNC_SECONDS: '86401' })).toBe(false);
+      // Without a bank connection there is nothing to schedule.
+      expect(
+        financeEnvSchema.safeParse({
+          ...f.env,
+          RB_PREMIUM_ENVIRONMENT: undefined,
+          RB_PREMIUM_SYNC_SECONDS: '3600',
+        }).success,
+      ).toBe(false);
+    });
+
+    it('reads, records and matches exactly; a partial stays partial, an unclear one waits; again = nothing new', async () => {
+      await ensureCzkDefault();
+      const inv = await freshInvoice(); // 4200.00
+      const acc = accountNo();
+      const partial = entry('1000.00', { variable: inv.variableSymbol });
+      const unclear = entry('77.00');
+      bank.accounts.set(`${acc}/CZK`, [partial, unclear]);
+      const a = await appWith(`${acc}:CZK`);
+      await runner(a).tick();
+      const [recorded] = await paymentByMessage(partial.message!);
+      expect(recorded).toMatchObject({
+        source: 'BANK',
+        matchResult: 'MATCHED',
+        state: 'ALLOCATED',
+        recordedByName: 'Plánované načtení',
+        allocations: [{ invoiceNumber: inv.number, amount: '1000.00', kind: 'AUTO' }],
+      });
+      expect((await invoiceOf(inv.number)).paymentState).toMatchObject({
+        state: 'PARTIALLY_PAID',
+        remaining: '3200.00',
+      });
+      expect(await paymentByMessage(unclear.message!)).toMatchObject([
+        { matchResult: 'NO_VARIABLE_SYMBOL', state: 'UNALLOCATED', allocations: [] },
+      ]);
+      const status = (await a.get('/api/admin/finance/bank/status').expect(200)).body as BankStatus;
+      expect(status.accounts[0]!.lastSuccess?.startedByName).toBe('Plánované načtení');
+      // The next round: the same entries are not recorded or counted twice.
+      await runner(a).tick();
+      expect(await paymentByMessage(partial.message!)).toHaveLength(1);
+      expect(await paymentByMessage(unclear.message!)).toHaveLength(1);
+      expect((await invoiceOf(inv.number)).paymentState.paid).toBe('1000.00');
+    });
+
+    it('a bank outage ends as a visible failed run, nothing recorded; the next round catches up', async () => {
+      const acc = accountNo();
+      const e = entry('55.00');
+      bank.accounts.set(`${acc}/CZK`, [e]);
+      const a = await appWith(`${acc}:CZK`);
+      bank.faults.push(503, 503, 503);
+      await expect(runner(a).tick()).resolves.toBeUndefined();
+      const failed = (await a.get('/api/admin/finance/bank/status').expect(200)).body as BankStatus;
+      expect(failed.accounts[0]!.lastRun).toMatchObject({
+        status: 'FAILED',
+        errorCode: 'BANK_UNAVAILABLE',
+        startedByName: 'Plánované načtení',
+      });
+      expect(await paymentByMessage(e.message!)).toEqual([]);
+      bank.faults.length = 0;
+      await runner(a).tick();
+      expect(await paymentByMessage(e.message!)).toHaveLength(1);
+    });
+
+    it('rounds never overlap: in one process the second is skipped, between processes the slot fences', async () => {
+      const acc = accountNo();
+      const e = entry('66.00');
+      bank.accounts.set(`${acc}/CZK`, [e]);
+      const [a, b] = [await appWith(`${acc}:CZK`), await appWith(`${acc}:CZK`)];
+      const hold = bank.holdNext();
+      const first = runner(a).tick();
+      await hold.arrived;
+      const before = bank.requests.length;
+      // The same process: skipped at once. Another process: the account is busy, no error.
+      await runner(a).tick();
+      await expect(runner(b).tick()).resolves.toBeUndefined();
+      expect(bank.requests.length).toBe(before);
+      const during = (await b.get('/api/admin/finance/bank/status').expect(200)).body as BankStatus;
+      expect(during.accounts[0]!.lastRun?.status).toBe('RUNNING');
+      hold.release();
+      await first;
+      expect(await paymentByMessage(e.message!)).toHaveLength(1);
+      const after = (await a.get('/api/admin/finance/bank/status').expect(200)).body as BankStatus;
+      expect(after.accounts[0]!.lastRun?.status).toBe('SUCCEEDED');
+    });
   });
 });
