@@ -199,6 +199,25 @@ A saved run needs its own tables, so it waits for the owner's approval of the mo
   state of each agreement and its invoice — so a run can be reviewed afterwards and resumed without
   a second invoice.
 
+## 12. The language of documents (owner 2026-10-30)
+
+- **The choice:** `customer_versions.document_language` — `cs`, `en` or `de`, required on every new
+  version (also a DB trigger), the same for the PDF and the invoice e-mail. Never derived from the
+  country; the form has no preselected value.
+- **Missing:** versions recorded before the choice stay `NULL`. Such a customer has the gap
+  `CUSTOMER_LANGUAGE_MISSING`: the invoice forms and the monthly run show why, the API answers
+  `422 TERMS_INCOMPLETE`. There is no fallback; a new version with a language unblocks it.
+- **Frozen:** a new invoice's snapshot holds `templateVersion`, `language` and all its `texts`. A
+  later change of the customer or of the texts in code affects only later invoices.
+- **Older TEST invoices:** their snapshots have no language. They stay readable, the API says
+  `documentLanguage: null` and the UI "starší testovací doklad bez uloženého jazyka". Their stored
+  PDF is served byte for byte and the renderer refuses them, so they are never generated again.
+- **The texts** (`apps/api/src/finance/invoice-texts.ts`) are a draft for the owner's review. Number
+  and date formats follow the language. The labels for the company and VAT numbers and the tax
+  point, and every live VAT or reverse-charge wording, are the accountant's (§7): a TEST invoice
+  prints only the note that it is not a tax document.
+- **Previews:** `docs/screenshots/finance/finance-invoice-pdf-{cs,en,de}.png` (synthetic).
+
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 
 1. In advance or in arrears, and the issuing window.

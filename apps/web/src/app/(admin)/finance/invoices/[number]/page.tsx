@@ -61,6 +61,11 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
               {inv.customer.legalName}{' '}
               <span className="font-mono text-xs text-stone-500">{inv.customer.code}</span>
             </Field>
+            <Field label={t.language}>
+              <span data-testid="invoice-language">
+                {inv.documentLanguage ? t.languages[inv.documentLanguage] : t.languageLegacy}
+              </span>
+            </Field>
             <Field label={t.period}>{financeMonth(inv.period)}</Field>
             <Field label={t.issuedOn}>{financeDate(inv.issuedOn)}</Field>
             <Field label={t.dueOn}>{financeDate(inv.dueOn)}</Field>

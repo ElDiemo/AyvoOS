@@ -19,6 +19,7 @@ import { FinanceOperations } from '../src/finance/finance-operations.js';
 import { InvoicesService } from '../src/finance/invoices.service.js';
 import { PaymentsService } from '../src/finance/payments.service.js';
 import { PrismaClient } from '../src/generated/finance-prisma/client.js';
+import { newStorageKey } from '../src/storage/file-storage.js';
 import {
   createFinanceTestApp,
   financeDatabaseUrl,
@@ -26,6 +27,7 @@ import {
   type FinanceTestApp,
 } from './support/finance-app.js';
 import { createHotel } from './support/order-fixtures.js';
+import { openPdf, pageText } from './support/pdf-inspect.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { hasDatabase, withPrivileged } from './support/test-app.js';
 
@@ -307,6 +309,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
             city: 'Brno',
             countryCode: 'CZ',
             billingEmail: 'fakturace@hotely.test',
+            documentLanguage: 'cs',
           },
         })
         .expect(201)
@@ -596,6 +599,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
           city: 'Brno',
           countryCode: 'CZ',
           billingEmail: 'fakturace@hotely.test',
+          documentLanguage: 'cs',
         },
         reason: 'Změna názvu (test)',
       })
@@ -1559,5 +1563,231 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     } finally {
       await real.close();
     }
+  });
+
+  // --- the language of documents (doc 040 §12) ------------------------------------------------
+
+  const plainText = (text: string) => text.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
+  const customerIn = (documentLanguage: unknown, over: Record<string, unknown> = {}) => ({
+    legalName: `Jazykový odběratel ${randomUUID().slice(0, 6)} s.r.o.`,
+    companyId: null,
+    vatId: null,
+    addressLine1: 'Hotelová 7',
+    addressLine2: null,
+    postalCode: '602 00',
+    city: 'Brno',
+    countryCode: 'CZ',
+    billingEmail: 'fakturace@jazyk.test',
+    documentLanguage,
+    ...over,
+  });
+  const customerWith = async (documentLanguage: string, over: Record<string, unknown> = {}) =>
+    (
+      await f
+        .post(`${B}/customers`)
+        .send({ requestId: randomUUID(), customer: customerIn(documentLanguage, over) })
+        .expect(201)
+    ).body as { id: string; code: string };
+  const pdfBytes = async (number: string) =>
+    (
+      await f
+        .get(`${INV}/${number}/pdf`)
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200)
+    ).body as Buffer;
+  /** The owner connection: what only history (or a migration) could have written. */
+  const asOwner = async <T>(work: (db: PrismaClient) => Promise<T>) => {
+    const db = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl }),
+    });
+    try {
+      return await work(db);
+    } finally {
+      await db.$disconnect();
+    }
+  };
+
+  it('the language is an explicit choice: required, one of three, never from the country', async () => {
+    for (const bad of [undefined, null, '', 'fr', 'CS'])
+      await f
+        .post(`${B}/customers`)
+        .send({ requestId: randomUUID(), customer: customerIn(bad) })
+        .expect(400);
+    const german = await customerWith('en', {
+      countryCode: 'DE',
+      companyId: 'HRB 12345',
+    });
+    const detail = (await f.get(`${B}/customers/${german.code}`).expect(200)).body as {
+      current: { customer: { documentLanguage: string; countryCode: string } };
+    };
+    expect(detail.current.customer).toMatchObject({ countryCode: 'DE', documentLanguage: 'en' });
+    // Also the database: no new version without a choice, no other value.
+    for (const documentLanguage of [null, 'fr'])
+      await expect(
+        f.prisma.customerVersion.create({
+          data: {
+            ...customerIn(documentLanguage),
+            customerId: german.id,
+            version: 99,
+            recordedBy: randomUUID(),
+            recordedByName: 'test',
+            requestId: randomUUID(),
+          },
+        }),
+      ).rejects.toThrow();
+  });
+
+  it('the invoice freezes its language and texts; a later change of the customer affects only later invoices', async () => {
+    await ensureCzkDefault();
+    const c = await customerWith('en');
+    const a = await agreement(c.id);
+    const first = (await expectStatus(issue([a.code], '2026-05'), 201)).body as InvoiceDetail;
+    expect(first.documentLanguage).toBe('en');
+    const stored = await f.prisma.invoice.findUniqueOrThrow({ where: { number: first.number } });
+    const snapshot = stored.snapshot as {
+      templateVersion: number;
+      language: string;
+      texts: { invoice: string };
+      lines: { description: string; unit: string }[];
+      payment: { message: string };
+    };
+    expect(snapshot).toMatchObject({
+      templateVersion: 1,
+      language: 'en',
+      texts: { invoice: 'Invoice' },
+      lines: [{ unit: 'rooms' }],
+      payment: { message: `Invoice ${first.number}` },
+    });
+    expect(snapshot.lines[0]!.description).toContain('AYVO service 05/2026');
+    const before = await pdfBytes(first.number);
+    expect(plainText(await pageText(await openPdf(before), 1))).toContain(
+      `Invoice ${first.number}`,
+    );
+
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 1,
+        customer: customerIn('de'),
+        reason: 'Jazyk (test)',
+      })
+      .expect(201);
+    // The issued invoice is untouched, byte for byte.
+    expect((await pdfBytes(first.number)).equals(before)).toBe(true);
+    expect(
+      ((await f.get(`${INV}/${first.number}`).expect(200)).body as InvoiceDetail).documentLanguage,
+    ).toBe('en');
+    const later = (await expectStatus(issue([a.code], '2026-06'), 201)).body as InvoiceDetail;
+    expect(later.documentLanguage).toBe('de');
+    expect(plainText(await pageText(await openPdf(await pdfBytes(later.number)), 1))).toContain(
+      `Rechnung ${later.number}`,
+    );
+  });
+
+  it('a customer whose version has no language is a visible blocker, not a guess; choosing it unblocks', async () => {
+    await ensureCzkDefault();
+    const c = await customerWith('cs');
+    const a = await agreement(c.id);
+    const row = await f.prisma.customerVersion.findFirstOrThrow({ where: { customerId: c.id } });
+    // As a version recorded before the choice existed: only history can hold NULL.
+    await asOwner((db) =>
+      db.$transaction(async (tx) => {
+        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" DISABLE TRIGGER "customer_versions_language_required"`;
+        await tx.customerVersion.create({
+          data: {
+            ...row,
+            version: 2,
+            documentLanguage: null,
+            reason: 'Historie (test)',
+            requestId: randomUUID(),
+            recordedAt: undefined,
+          },
+        });
+        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" ENABLE TRIGGER "customer_versions_language_required"`;
+      }),
+    );
+    const month = '2026-07';
+    const items = await preview(month);
+    const item = items.find((i) => i.agreement.code === a.code)!;
+    expect(item.gaps).toEqual(['CUSTOMER_LANGUAGE_MISSING']);
+    expect(item.customer?.customer.documentLanguage).toBeNull();
+    const refused = await issueLines(linesOf(items, [a.code]), month);
+    expect(refused.status).toBe(422);
+    expect(refused.body).toMatchObject({ code: 'TERMS_INCOMPLETE' });
+    const run = (await previewOf(month)).items.find((i) => i.agreementCode === a.code)!;
+    expect(run).toMatchObject({ state: 'BLOCKED', blockers: ['CUSTOMER_LANGUAGE_MISSING'] });
+
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 2,
+        customer: customerIn('cs'),
+        reason: 'Výběr jazyka (test)',
+      })
+      .expect(201);
+    expect(
+      ((await expectStatus(issue([a.code], month), 201)).body as InvoiceDetail).documentLanguage,
+    ).toBe('cs');
+  });
+
+  it('an invoice issued before the language existed stays readable and downloadable, byte for byte', async () => {
+    await ensureCzkDefault();
+    const c = await customerWith('cs');
+    const a = await agreement(c.id);
+    const source = (await expectStatus(issue([a.code], '2026-08'), 201)).body as InvoiceDetail;
+    const row = await f.prisma.invoice.findUniqueOrThrow({
+      where: { number: source.number },
+      include: { lines: true },
+    });
+    const earlier = new Date('2025-01-01T00:00:00.000Z');
+    const legacySnapshot = Object.fromEntries(
+      Object.entries(row.snapshot as Record<string, unknown>).filter(
+        ([k]) => !['templateVersion', 'language', 'texts'].includes(k),
+      ),
+    );
+    // Exact bytes that no renderer of today could produce: proof it is served, never re-rendered.
+    const bytes = Buffer.from('%PDF-1.3 historický dokument (syntetický)');
+    const key = newStorageKey('finance-documents', 'pdf');
+    await f.storage.put(key, bytes);
+    const number = `T1999-${String(Math.floor(Math.random() * 90000) + 10000)}`;
+    await f.prisma.invoice.create({
+      data: {
+        serial: BigInt(1_000_000 + Math.floor(Math.random() * 1_000_000)),
+        kind: 'TEST',
+        number,
+        variableSymbol: `98${number.slice(-5)}`,
+        customerId: row.customerId,
+        customerVersion: row.customerVersion,
+        periodMonth: earlier,
+        issuedOn: row.issuedOn,
+        dueOn: row.dueOn,
+        currency: row.currency,
+        total: row.total,
+        snapshot: legacySnapshot as never,
+        pdfStorageKey: key,
+        pdfSha256: createHash('sha256').update(bytes).digest('hex'),
+        issuedBy: row.issuedBy,
+        issuedByName: row.issuedByName,
+        requestId: randomUUID(),
+        lines: {
+          create: row.lines.map(({ invoiceId: _i, ...l }) => ({ ...l, periodMonth: earlier })),
+        },
+      },
+    });
+    const shown = (await f.get(`${INV}/${number}`).expect(200)).body as InvoiceDetail;
+    expect(shown.documentLanguage).toBeNull();
+    expect(shown.payment.variableSymbol).toBe(source.variableSymbol);
+    expect((await pdfBytes(number)).equals(bytes)).toBe(true);
+    const listed = ((await f.get(INV).expect(200)).body as InvoiceDetail[]).find(
+      (i) => i.number === number,
+    );
+    expect(listed?.documentLanguage).toBeNull();
   });
 });

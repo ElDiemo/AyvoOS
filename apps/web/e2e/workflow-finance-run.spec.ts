@@ -42,6 +42,7 @@ test.describe('Měsíční běh', () => {
             city: 'Brno',
             countryCode: 'CZ',
             billingEmail: 'fakturace@beh.test',
+            documentLanguage: 'cs',
           },
         },
       }),

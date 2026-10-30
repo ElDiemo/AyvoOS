@@ -283,10 +283,14 @@ export const financeCs = {
         PRICE_MISSING: 'chybí cena',
         PARTIAL_PERIOD_RULE_MISSING: 'smlouva pokrývá jen část měsíce (pravidlo není schválené)',
         NO_EFFECTIVE_VERSION: 'podmínky začínají později',
+        CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
         ZERO_AMOUNT: 'nulová částka',
       } as Record<string, string>,
     },
     newTitle: 'Testovací faktura',
+    language: 'Jazyk dokladu',
+    languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
+    languageLegacy: 'starší testovací doklad bez uloženého jazyka',
     newSubtitle:
       'Vyberte měsíc a smlouvy jednoho odběratele: jedna smlouva = samostatná faktura, více smluv téhož odběratele = souhrnná faktura s řádkem za každý hotel.',
     month: 'Fakturovaný měsíc',
@@ -298,6 +302,7 @@ export const financeCs = {
       PRICE_MISSING: 'chybí cena',
       PARTIAL_PERIOD_RULE_MISSING: 'smlouva pokrývá jen část měsíce (pravidlo není schválené)',
       NO_EFFECTIVE_VERSION: 'podmínky začínají později',
+      CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
     } as Record<string, string>,
     line: (rooms: number, price: string, amount: string) =>
       `${rooms} pokojů × ${price} = ${amount}`,

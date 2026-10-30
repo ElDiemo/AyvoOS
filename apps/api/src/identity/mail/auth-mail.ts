@@ -3,7 +3,7 @@ import {
   AYVO_LOGO_PNG_BASE64,
   AYVO_LOGO_PNG_HEIGHT,
   AYVO_LOGO_PNG_WIDTH,
-} from './ayvo-logo-png.js';
+} from '../../common/ayvo-logo-png.js';
 
 /**
  * The two authentication e-mails (activation / password reset): small versioned templates in

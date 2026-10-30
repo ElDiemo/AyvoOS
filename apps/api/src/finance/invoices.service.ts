@@ -22,10 +22,12 @@ import { allocateFinanceSerial, FinanceOperations } from './finance-operations.j
 import { FinancePrismaService } from './finance-prisma.service.js';
 import {
   checkInvoiceSnapshot,
+  documentLanguageOf,
   InconsistentInvoiceSnapshot,
   renderInvoicePdf,
   type InvoicePdfSnapshot,
 } from './invoice-pdf.js';
+import { INVOICE_TEMPLATE_VERSION, invoiceTexts } from './invoice-texts.js';
 import { invoicePaymentState } from './payments.service.js';
 import { InvalidPaymentInstruction } from './spayd.js';
 
@@ -51,9 +53,6 @@ const address = (a: {
   `${a.postalCode} ${a.city}`,
   ...(a.countryCode === 'CZ' ? [] : [a.countryCode]),
 ];
-
-const VAT_NOTE =
-  'Testovací doklad – nejde o daňový doklad. DPH a účetní pravidla zatím nejsou schválena.';
 
 const invoiceInclude = {
   lines: { include: { agreement: { select: { code: true } } }, orderBy: { lineNo: 'asc' } },
@@ -198,7 +197,9 @@ export class InvoicesService {
     const bytes = await this.storage.get(row.pdfStorageKey);
     if (createHash('sha256').update(bytes).digest('hex') !== row.pdfSha256)
       throw new Error(`The stored PDF of ${number} does not match its hash`);
-    return { bytes, filename: `faktura-${number}.pdf` };
+    const language = documentLanguageOf(row.snapshot);
+    const prefix = language ? invoiceTexts(language).filePrefix : 'faktura';
+    return { bytes, filename: `${prefix}-${number}.pdf` };
   }
 
   async issueTest(req: CreateTestInvoiceRequest, caller: FinanceCaller): Promise<InvoiceDetail> {
@@ -401,6 +402,10 @@ export class InvoicesService {
     if (chosen.some((c) => c.version.paymentTermsDays !== first.version.paymentTermsDays))
       throw differ('splatnost', 'PAYMENT_TERMS_DIFFER');
     const currency = first.version.currency;
+    const language = first.customer.customer.documentLanguage;
+    // bindLines has refused this already (a gap); the snapshot never holds a guessed language.
+    if (language === null) throw new Error('A customer without a document language');
+    const texts = invoiceTexts(language);
     // The customer's newest version must be the one shown; the invoice records that version.
     const latestCustomer = await tx.customerVersion.findFirst({
       where: { customerId: first.customer.id },
@@ -460,6 +465,9 @@ export class InvoicesService {
     const number = `T${year}-${pad(serial, 5)}`;
     const variableSymbol = `99${year}${pad(serial, 4)}`;
     const snapshot: InvoicePdfSnapshot = {
+      templateVersion: INVOICE_TEMPLATE_VERSION,
+      language,
+      texts,
       environment: 'TEST',
       number,
       issuedOn,
@@ -484,14 +492,14 @@ export class InvoicesService {
       },
       hotels: lines.map((l) => ({ code: l.hotel.code, name: l.hotel.name })),
       lines: lines.map((l) => ({
-        description: `Služba AYVO ${req.month.slice(5)}/${req.month.slice(0, 4)} – ${l.hotel.name}`,
+        description: `${texts.lineService} ${req.month.slice(5)}/${req.month.slice(0, 4)} – ${l.hotel.name}`,
         quantity: String(l.billedRooms),
-        unit: 'pok.',
+        unit: texts.unitRooms,
         unitPrice: l.unitPrice,
         amount: l.amount,
       })),
       totals: { base: null, vat: null, total, currency },
-      vatNote: VAT_NOTE,
+      vatNote: texts.testNote,
       payment: {
         account: account.accountNumber
           ? `${account.accountPrefix ? `${account.accountPrefix}-` : ''}${account.accountNumber}/${account.bankCode}`
@@ -502,7 +510,7 @@ export class InvoicesService {
         currency,
         variableSymbol,
         dueOn,
-        message: `Faktura ${number}`,
+        message: `${texts.paymentMessage} ${number}`,
       },
     };
     checkInvoiceSnapshot(snapshot);
@@ -609,6 +617,7 @@ function summary(r: InvoiceRow): InvoiceSummary {
   return {
     number: r.number,
     kind: 'TEST',
+    documentLanguage: documentLanguageOf(r.snapshot),
     variableSymbol: r.variableSymbol,
     customer: {
       code: r.customer.customer.code,
