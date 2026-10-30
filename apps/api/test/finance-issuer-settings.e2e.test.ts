@@ -3,6 +3,8 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
+  PaymentOpenInvoices,
+  PaymentsPage,
   EffectiveTermsPage,
   IncomingPayment,
   InvoiceDetail,
@@ -10,7 +12,6 @@ import type {
   InvoiceSummary,
   IssuerSettings,
   PaymentLoadResult,
-  PaymentsPage,
 } from '@ayvo/types';
 import { BillingSettingsService } from '../src/finance/billing-settings.service.js';
 import { FinanceOperations } from '../src/finance/finance-operations.js';
@@ -843,7 +844,8 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         ...e,
       })),
     });
-  const payments = async () => (await f.get(PAY).expect(200)).body as PaymentsPage;
+  const payments = async () =>
+    (await f.get(`${PAY}?pageSize=100`).expect(200)).body as PaymentsPage;
   const payment = async (reference: string) =>
     (await payments()).payments.find((p) => p.reference === reference)!;
   const invoiceOf = async (number: string) =>
@@ -1320,5 +1322,104 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     } finally {
       await real.close();
     }
+  });
+
+  // --- the bounded list of payments (doc 044 U4) ----------------------------------------------
+
+  it('payments: bounded, filtered and searched in the database; REVIEW and CHANGED equal the overview', async () => {
+    const entry = (over: Record<string, unknown>) => ({
+      reference: `U4-${randomUUID().slice(0, 8).toUpperCase()}`,
+      amount: '10.00',
+      currency: 'CZK',
+      bookedOn: '2026-05-01',
+      variableSymbol: null,
+      counterpartyName: null,
+      message: null,
+      ...over,
+    });
+    const unique = `Protistrana${randomUUID().slice(0, 6)}`;
+    await f
+      .post(`${PAY}/simulate`)
+      .send({
+        requestId: randomUUID(),
+        entries: [
+          entry({ counterpartyName: unique, amount: '4321.09' }),
+          ...Array.from({ length: 30 }, () => entry({})),
+        ],
+      })
+      .expect(200);
+    const list = async (query: string) =>
+      (await f.get(`${PAY}?${query}`).expect(200)).body as PaymentsPage;
+
+    const first = await list('');
+    expect(first.payments).toHaveLength(25);
+    expect(first.pageSize).toBe(25);
+    expect(first.total).toBeGreaterThan(30);
+    const second = await list('page=2');
+    expect(second.payments[0]!.code).not.toBe(first.payments[0]!.code);
+    expect((await list(`page=${first.total + 1}`)).payments).toEqual([]);
+    for (const bad of ['pageSize=101', 'page=0', 'filter=NIC', `q=${'x'.repeat(81)}`])
+      await f.get(`${PAY}?${bad}`).expect(400);
+
+    // Search: a counterparty, an exact amount in both notations, wildcards taken literally.
+    expect((await list(`q=${unique}`)).payments.map((p) => p.counterpartyName)).toEqual([unique]);
+    for (const q of ['4321.09', '4321,09'])
+      expect((await list(`q=${encodeURIComponent(q)}`)).payments.map((p) => p.amount)).toContain(
+        '4321.09',
+      );
+    expect((await list(`q=${encodeURIComponent('%')}`)).total).toBe(0);
+
+    const overview = (await f.get(`${INV}/overview`).expect(200)).body as {
+      paymentsToReview: number;
+      paymentsChangedAtBank: number;
+    };
+    expect((await list('filter=REVIEW')).total).toBe(overview.paymentsToReview);
+    expect((await list('filter=CHANGED')).total).toBe(overview.paymentsChangedAtBank);
+    const allocated = await list('filter=ALLOCATED&pageSize=100');
+    expect(allocated.payments.every((p) => p.state === 'ALLOCATED')).toBe(true);
+
+    const one = first.payments[0]!;
+    expect((await f.get(`${PAY}/${one.code}`).expect(200)).body).toEqual(one);
+    await f.get(`${PAY}/PP-999999`).expect(404);
+  });
+
+  it('open invoices of a payment: its currency only, bounded; reading a payment needs no more than before', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const inv = (await expectStatus(issue([a.code], '2026-01'), 201)).body as InvoiceDetail;
+    const reference = `U4-${randomUUID().slice(0, 8).toUpperCase()}`;
+    await f
+      .post(`${PAY}/simulate`)
+      .send({
+        requestId: randomUUID(),
+        entries: [
+          {
+            reference,
+            amount: '1.00',
+            currency: 'CZK',
+            bookedOn: '2026-05-01',
+            variableSymbol: null,
+            counterpartyName: null,
+            message: null,
+          },
+        ],
+      })
+      .expect(200);
+    const code = (
+      (await f.get(`${PAY}?pageSize=100`).expect(200)).body as PaymentsPage
+    ).payments.find((p) => p.reference === reference)!.code;
+    const open = (await f.get(`${PAY}/${code}/open-invoices?q=${inv.number}`).expect(200))
+      .body as PaymentOpenInvoices;
+    expect(open.invoices).toEqual([{ number: inv.number, remaining: inv.total }]);
+    expect(open.limited).toBe(false);
+    // Allocation still follows its own rules, whatever the list offers.
+    const refused = await f.post(`${PAY}/${code}/allocations`).send({
+      requestId: randomUUID(),
+      invoiceNumber: inv.number,
+      amount: '2.00',
+      reason: 'Víc než platba',
+    });
+    expect(refused.status).toBeGreaterThanOrEqual(400);
   });
 });

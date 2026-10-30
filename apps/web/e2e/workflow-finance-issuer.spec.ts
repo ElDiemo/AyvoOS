@@ -342,7 +342,6 @@ test.describe('Testovací faktury', () => {
       .filter({ hasText: 'chybí variabilní symbol' })
       .first();
     const code = (await unclear.getAttribute('data-testid'))!.replace('payment-', '');
-    await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(invoice.number);
     await mkdir(screenshots, { recursive: true });
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
@@ -355,6 +354,8 @@ test.describe('Testovací faktury', () => {
       });
     }
     await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByTestId(`payment-${code}-open`).click();
+    await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(invoice.number);
     const allocate = page.getByTestId(`allocate-${code}`);
     await allocate.getByTestId(`allocate-${code}-reason`).fill('Bez VS – ověřeno s hotelem (test)');
     await allocate.getByTestId(`allocate-${code}-submit`).click();
@@ -558,6 +559,11 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await expect(statement.getByTestId('simulate-result')).toHaveText(
       'Nově zaznamenáno 2, už dříve načteno 0 (nezapočteno znovu). Spárováno 1, k posouzení 1.',
     );
+    // The same statement loaded again: nothing new, nothing counted twice.
+    await statement.getByTestId('simulate-submit').click();
+    await expect(statement.getByTestId('simulate-result')).toHaveText(
+      'Nově zaznamenáno 0, už dříve načteno 2 (nezapočteno znovu). Spárováno 0, k posouzení 0.',
+    );
     const unclear = page
       .locator('li[data-testid^="payment-PP-"]')
       .filter({ hasText: '8 172,80 CZK' })
@@ -566,6 +572,7 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await expect(page.getByTestId(`payment-${code}-result`)).toHaveText(
       'k posouzení: chybí variabilní symbol',
     );
+    await page.getByTestId(`payment-${code}-open`).click();
     await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(number);
     await shot('4-platby');
     const allocate = page.getByTestId(`allocate-${code}`);
@@ -577,11 +584,6 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await expect(page.getByTestId(`payment-${code}-state`)).toHaveText('přiřazeno');
     await expect(page.getByTestId(`payment-${code}-result`)).toHaveText(
       'vyřešeno ručně (původně: chybí variabilní symbol)',
-    );
-    // The same statement loaded again: nothing new, nothing counted twice.
-    await statement.getByTestId('simulate-submit').click();
-    await expect(statement.getByTestId('simulate-result')).toHaveText(
-      'Nově zaznamenáno 0, už dříve načteno 2 (nezapočteno znovu). Spárováno 0, k posouzení 0.',
     );
     await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
     const list = page.getByTestId('invoices');

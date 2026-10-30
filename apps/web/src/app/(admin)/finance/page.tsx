@@ -219,7 +219,7 @@ export default async function FinanceOverviewPage() {
                     label={t.toReview}
                     value={sums.paymentsToReview}
                     tone={sums.paymentsToReview > 0 ? 'warning' : 'neutral'}
-                    href="/finance/payments"
+                    href="/finance/payments?filter=REVIEW"
                     testId="overview-to-review"
                   />
                   {/* Apart from the unallocated ones: also a fully allocated payment the bank
@@ -228,7 +228,7 @@ export default async function FinanceOverviewPage() {
                     label={t.changedAtBank}
                     value={sums.paymentsChangedAtBank}
                     tone={sums.paymentsChangedAtBank > 0 ? 'error' : 'neutral'}
-                    href="/finance/payments"
+                    href="/finance/payments?filter=CHANGED"
                     testId="overview-changed-at-bank"
                   />
                 </div>

@@ -1,5 +1,8 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { PAYMENTS_DEFAULT_PAGE_SIZE } from '@ayvo/types';
 import type {
+  PaymentOpenInvoices,
+  PaymentsQuery,
   AllocatePaymentRequest,
   IncomingPayment,
   InvoicePaymentState,
@@ -56,6 +59,38 @@ export function invoicePaymentState(
   };
 }
 
+const OPEN_INVOICES_LIMIT = 50;
+
+const paymentInclude = {
+  allocations: { include: { invoice: { select: { number: true } } } },
+  bankTransaction: {
+    select: { versions: { select: { version: true }, orderBy: { version: 'desc' }, take: 1 } },
+  },
+} satisfies Prisma.IncomingPaymentInclude;
+type PaymentRow = Prisma.IncomingPaymentGetPayload<{ include: typeof paymentInclude }>;
+
+const likeEscape = (q: string) => q.replace(/[\\%_]/g, '\\$&');
+
+/** The list's filters; REVIEW and CHANGED are the same conditions as the overview's counts. */
+function paymentsWhere(query: PaymentsQuery): Prisma.Sql {
+  const allocated = Prisma.sql`coalesce((SELECT sum(a."amount") FROM "finance"."payment_allocations" a WHERE a."payment_id" = p."id"), 0)`;
+  const parts: Prisma.Sql[] = [Prisma.sql`TRUE`];
+  if (query.filter === 'REVIEW') parts.push(Prisma.sql`p."amount" > ${allocated}`);
+  if (query.filter === 'ALLOCATED') parts.push(Prisma.sql`p."amount" = ${allocated}`);
+  if (query.filter === 'CHANGED')
+    parts.push(Prisma.sql`p."bank_transaction_version" IS NOT NULL
+      AND (SELECT max(v."version") FROM "finance"."bank_transaction_versions" v
+           WHERE v."transaction_id" = p."bank_transaction_id") > p."bank_transaction_version"`);
+  if (query.q) {
+    const like = `%${likeEscape(query.q)}%`;
+    const amount = /^\d{1,15}([.,]\d{1,2})?$/.test(query.q) ? query.q.replace(',', '.') : null;
+    parts.push(Prisma.sql`(p."code" ILIKE ${like} OR p."variable_symbol" ILIKE ${like}
+      OR p."counterparty_name" ILIKE ${like}
+      ${amount ? Prisma.sql`OR p."amount" = ${amount}::numeric` : Prisma.empty})`);
+  }
+  return Prisma.join(parts, ' AND ');
+}
+
 /**
  * Incoming payments (N3B-2, doc 041 §8): recorded once per source entry (a credit bank
  * transaction already read, or a simulated statement entry outside production), matched
@@ -76,77 +111,137 @@ export class PaymentsService {
     return this.env.APP_ENV !== 'production';
   }
 
-  async page(): Promise<PaymentsPage> {
-    const [payments, open] = await Promise.all([
-      this.prisma.incomingPayment.findMany({
-        orderBy: { serial: 'desc' },
-        include: {
-          allocations: { include: { invoice: { select: { number: true } } } },
-          bankTransaction: {
-            select: {
-              versions: { select: { version: true }, orderBy: { version: 'desc' }, take: 1 },
-            },
-          },
-        },
-      }),
-      this.prisma.invoice.findMany({
-        where: { cancellation: null },
-        select: { number: true, currency: true, kind: true, total: true, allocations: true },
-      }),
+  /** One bounded page; the database filters, sorts and counts, nothing is loaded to be dropped. */
+  async page(query: PaymentsQuery = {}): Promise<PaymentsPage> {
+    const pageSize = query.pageSize ?? PAYMENTS_DEFAULT_PAGE_SIZE;
+    const page = query.page ?? 1;
+    const where = paymentsWhere(query);
+    const [[count], ids] = await Promise.all([
+      this.prisma.$queryRaw<{ total: number }[]>`
+        SELECT count(*)::int AS "total" FROM "finance"."incoming_payments" p WHERE ${where}`,
+      this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT p."id" FROM "finance"."incoming_payments" p WHERE ${where}
+        ORDER BY p."serial" DESC LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
     ]);
-    const remaining = open.map((i) => ({ ...i, remaining: i.total.minus(sum(i.allocations)) }));
+    const rows = await this.prisma.incomingPayment.findMany({
+      where: { id: { in: ids.map((r) => r.id) } },
+      orderBy: { serial: 'desc' },
+      include: paymentInclude,
+    });
     return {
       simulationAvailable: this.simulationAvailable,
-      payments: payments.map((p) => {
-        const allocated = sum(p.allocations);
-        const unallocated = p.amount.minus(allocated);
-        return {
-          code: p.code,
-          source: p.source as IncomingPayment['source'],
-          environment: p.environment as IncomingPayment['environment'],
-          reference: p.sourceKey,
-          amount: p.amount.toFixed(2),
-          currency: p.currency,
-          bookedOn: p.bookedOn.toISOString().slice(0, 10),
-          variableSymbol: p.variableSymbol,
-          counterpartyName: p.counterpartyName,
-          counterpartyAccount: p.counterpartyAccount,
-          message: p.message,
-          matchResult: p.matchResult as MatchResult,
-          state: allocated.isZero()
-            ? 'UNALLOCATED'
-            : unallocated.isZero()
-              ? 'ALLOCATED'
-              : 'PARTIALLY_ALLOCATED',
-          allocated: allocated.toFixed(2),
-          unallocated: unallocated.toFixed(2),
-          allocations: p.allocations.map((a) => ({
-            invoiceNumber: a.invoice.number,
-            paymentCode: p.code,
-            amount: a.amount.toFixed(2),
-            kind: a.kind as 'AUTO' | 'MANUAL',
-            reason: a.reason,
-            recordedAt: a.recordedAt.toISOString(),
-            recordedByName: a.recordedByName,
-          })),
-          suggestions: unallocated.isZero()
-            ? []
-            : remaining
-                .filter(
-                  (i) =>
-                    i.currency === p.currency &&
-                    !(i.kind === 'TEST' && p.environment === 'PRODUCTION') &&
-                    i.remaining.equals(unallocated),
-                )
-                .map((i) => i.number),
-          bankChangedSinceRecorded:
-            p.bankTransactionVersion !== null &&
-            (p.bankTransaction?.versions[0]?.version ?? 0) > p.bankTransactionVersion,
-          recordedAt: p.recordedAt.toISOString(),
-          recordedByName: p.recordedByName,
-        };
-      }),
+      total: count!.total,
+      page,
+      pageSize,
+      payments: await this.withSuggestions(rows),
     };
+  }
+
+  async detail(code: string): Promise<IncomingPayment> {
+    const row = await this.prisma.incomingPayment.findUnique({
+      where: { code },
+      include: paymentInclude,
+    });
+    if (!row) throw new NotFoundException('Platba neexistuje.');
+    return (await this.withSuggestions([row]))[0]!;
+  }
+
+  /** Valid invoices with a remaining amount this payment may go to (the rules of allocation). */
+  async openInvoices(code: string, q?: string): Promise<PaymentOpenInvoices> {
+    const payment = await this.prisma.incomingPayment.findUnique({
+      where: { code },
+      select: { currency: true, environment: true },
+    });
+    if (!payment) throw new NotFoundException('Platba neexistuje.');
+    const search = q ? Prisma.sql`AND i."number" ILIKE ${`%${likeEscape(q)}%`}` : Prisma.empty;
+    const testAllowed =
+      payment.environment === 'PRODUCTION' ? Prisma.sql`AND i."kind" <> 'TEST'` : Prisma.empty;
+    const rows = await this.prisma.$queryRaw<{ number: string; remaining: string }[]>`
+      SELECT i."number", r."remaining"::text AS "remaining"
+      FROM "finance"."invoices" i
+      CROSS JOIN LATERAL (SELECT i."total" - coalesce((SELECT sum(a."amount")
+        FROM "finance"."payment_allocations" a WHERE a."invoice_id" = i."id"), 0) AS "remaining") r
+      WHERE i."currency" = ${payment.currency} AND r."remaining" > 0
+        AND NOT EXISTS (SELECT 1 FROM "finance"."invoice_cancellations" c WHERE c."invoice_id" = i."id")
+        ${testAllowed} ${search}
+      ORDER BY i."serial" DESC LIMIT ${OPEN_INVOICES_LIMIT + 1}`;
+    return {
+      invoices: rows.slice(0, OPEN_INVOICES_LIMIT).map((r) => ({
+        number: r.number,
+        remaining: new Prisma.Decimal(r.remaining).toFixed(2),
+      })),
+      limited: rows.length > OPEN_INVOICES_LIMIT,
+    };
+  }
+
+  /** Suggestions read only invoices whose remaining amount equals one of these payments' rests. */
+  private async withSuggestions(rows: PaymentRow[]): Promise<IncomingPayment[]> {
+    const rests = rows
+      .map((p) => p.amount.minus(sum(p.allocations)))
+      .filter((r) => !r.isZero())
+      .map((r) => r.toFixed(2));
+    const candidates =
+      rests.length === 0
+        ? []
+        : await this.prisma.$queryRaw<
+            { number: string; currency: string; kind: string; remaining: string }[]
+          >`
+            SELECT i."number", i."currency", i."kind", r."remaining"::text AS "remaining"
+            FROM "finance"."invoices" i
+            CROSS JOIN LATERAL (SELECT i."total" - coalesce((SELECT sum(a."amount")
+              FROM "finance"."payment_allocations" a WHERE a."invoice_id" = i."id"), 0) AS "remaining") r
+            WHERE r."remaining" IN (${Prisma.join(rests.map((v) => Prisma.sql`${v}::numeric`))})
+              AND NOT EXISTS (SELECT 1 FROM "finance"."invoice_cancellations" c WHERE c."invoice_id" = i."id")
+            ORDER BY i."serial" DESC LIMIT 200`;
+    return rows.map((p) => {
+      const allocated = sum(p.allocations);
+      const unallocated = p.amount.minus(allocated);
+      return {
+        code: p.code,
+        source: p.source as IncomingPayment['source'],
+        environment: p.environment as IncomingPayment['environment'],
+        reference: p.sourceKey,
+        amount: p.amount.toFixed(2),
+        currency: p.currency,
+        bookedOn: p.bookedOn.toISOString().slice(0, 10),
+        variableSymbol: p.variableSymbol,
+        counterpartyName: p.counterpartyName,
+        counterpartyAccount: p.counterpartyAccount,
+        message: p.message,
+        matchResult: p.matchResult as MatchResult,
+        state: allocated.isZero()
+          ? 'UNALLOCATED'
+          : unallocated.isZero()
+            ? 'ALLOCATED'
+            : 'PARTIALLY_ALLOCATED',
+        allocated: allocated.toFixed(2),
+        unallocated: unallocated.toFixed(2),
+        allocations: p.allocations.map((a) => ({
+          invoiceNumber: a.invoice.number,
+          paymentCode: p.code,
+          amount: a.amount.toFixed(2),
+          kind: a.kind as 'AUTO' | 'MANUAL',
+          reason: a.reason,
+          recordedAt: a.recordedAt.toISOString(),
+          recordedByName: a.recordedByName,
+        })),
+        suggestions: unallocated.isZero()
+          ? []
+          : candidates
+              .filter(
+                (i) =>
+                  i.currency === p.currency &&
+                  !(i.kind === 'TEST' && p.environment === 'PRODUCTION') &&
+                  new Prisma.Decimal(i.remaining).equals(unallocated),
+              )
+              .map((i) => i.number),
+        bankChangedSinceRecorded:
+          p.bankTransactionVersion !== null &&
+          (p.bankTransaction?.versions[0]?.version ?? 0) > p.bankTransactionVersion,
+        recordedAt: p.recordedAt.toISOString(),
+        recordedByName: p.recordedByName,
+      };
+    });
   }
 
   /** A simulated statement (outside production only): each reference is recorded once, ever. */
