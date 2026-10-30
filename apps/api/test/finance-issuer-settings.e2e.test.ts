@@ -1603,7 +1603,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
   /** The owner connection: what only history (or a migration) could have written. */
   const asOwner = async <T>(work: (db: PrismaClient) => Promise<T>) => {
     const db = new PrismaClient({
-      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl }),
+      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
     });
     try {
       return await work(db);
@@ -1632,6 +1632,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         f.prisma.customerVersion.create({
           data: {
             ...customerIn(documentLanguage),
+            documentLanguage: documentLanguage as string,
             customerId: german.id,
             version: 99,
             recordedBy: randomUUID(),
