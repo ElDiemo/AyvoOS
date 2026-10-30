@@ -100,6 +100,7 @@ export const identityCs = {
     'finance:issuer_manage':
       'Vidět a měnit fakturační údaje naší firmy a bankovní účty uváděné na fakturách (s historií)',
     'finance:invoices_read': 'Vidět faktury (řádky, PDF a stav úhrady)',
+    'finance:invoices_send': 'Odesílat faktury e-mailem a ručně opakovat neúspěšné odeslání',
     'finance:invoices_test':
       'Vystavovat a rušit testovací faktury mimo produkci (nikdy ostrou fakturu)',
     'finance:payments_manage':

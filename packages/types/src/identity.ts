@@ -100,6 +100,7 @@ export const PERMISSION_CODES = [
   'finance:issuer_manage',
   'finance:invoices_read',
   'finance:invoices_test',
+  'finance:invoices_send',
   'finance:payments_manage',
   'finance:bank_read',
   'finance:bank_sync',

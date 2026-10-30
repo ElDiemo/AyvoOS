@@ -92,7 +92,7 @@ readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 # The Finance unit (ADR 0039, optional until it is installed): all four or none. Its runtime and
 # owner roles' passwords, its service token and that token's SHA-256 (the only form the API gets).
 readonly FINANCE_KEYS="FINANCE_DB_PASSWORD FINANCE_DB_OWNER_PASSWORD FINANCE_SERVICE_TOKEN FINANCE_SERVICE_TOKEN_SHA256"
-readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN $FINANCE_KEYS RB_PREMIUM_ACCOUNTS"
+readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN $FINANCE_KEYS FINANCE_INVOICE_MAIL FINANCE_MAIL_TEST_RECIPIENTS RB_PREMIUM_ACCOUNTS"
 readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
 readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
@@ -120,6 +120,8 @@ FINANCE_IMAGE=""
 FINANCE_MIGRATE_IMAGE=""
 FINANCE_ENABLED=false
 RB_PREMIUM_ACCOUNTS=""
+FINANCE_INVOICE_MAIL=""
+FINANCE_MAIL_TEST_RECIPIENTS=""
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m ok\033[0m %s\n' "$*"; }
@@ -426,6 +428,24 @@ check_rb_premium() {
   ok "bank connection: $(tr ',' '\n' <<<"$RB_PREMIUM_ACCOUNTS" | wc -l) account(s); files present, owner uid $FINANCE_UID only (contents not read)"
 }
 
+# Optional: sending invoices (doc 043 §5), the same check and the same overlay as DEV. Only TEST
+# invoices exist and production never sends them, so this sends nothing yet.
+# shellcheck source=lib/invoice-mail.sh
+source "$REPO_ROOT/scripts/lib/invoice-mail.sh"
+check_invoice_mail() {
+  local problem
+  FINANCE_INVOICE_MAIL="$(env_value "$SECRETS/prod.env" FINANCE_INVOICE_MAIL || true)"
+  FINANCE_MAIL_TEST_RECIPIENTS="$(env_value "$SECRETS/prod.env" FINANCE_MAIL_TEST_RECIPIENTS || true)"
+  if [[ -z $FINANCE_INVOICE_MAIL ]]; then
+    ok "FINANCE_INVOICE_MAIL not set: invoices cannot be sent (the page says so)"
+    return
+  fi
+  $FINANCE_ENABLED || die "FINANCE_INVOICE_MAIL is set without the Finance keys"
+  problem="$(invoice_mail_settings_problem "$FINANCE_INVOICE_MAIL" "$FINANCE_MAIL_TEST_RECIPIENTS" true)" ||
+    die "$problem"
+  ok "invoice mail: $FINANCE_INVOICE_MAIL"
+}
+
 # Both QR label settings, or neither (then only our QR label operations are refused, ADR 0034).
 # Never a default, never a value from DEV: only the recorded physical validation (doc 036 §8).
 check_qr_label_settings() {
@@ -459,6 +479,7 @@ check_env_files() {
   fi
   check_finance_env
   check_rb_premium
+  check_invoice_mail
   if [[ -f $SECRETS/prod-workos-client.env ]]; then
     ok "prod-workos-client.env is not read by this release (keys: $(env_keys "$SECRETS/prod-workos-client.env" | tr '\n' ' '))"
   fi
@@ -509,6 +530,10 @@ compose_files() {
   # (the Finance deployment refuses a release without it, verify_rb_premium).
   if [[ -n ${RB_PREMIUM_ACCOUNTS:-} && -f $dir/deploy/prod/compose.rb-premium.yml ]]; then
     printf '%s\n' -f "$dir/deploy/prod/compose.rb-premium.yml"
+  fi
+  # Sending invoices (doc 043 §5) only when FINANCE_INVOICE_MAIL is set and the release has it.
+  if [[ -n ${FINANCE_INVOICE_MAIL:-} && -f $dir/deploy/prod/compose.invoice-mail.yml ]]; then
+    printf '%s\n' -f "$dir/deploy/prod/compose.invoice-mail.yml"
   fi
   # The marketing site (ADR 0040) only when MARKETING_DOMAIN is set and the release has it.
   if [[ -n ${MARKETING_DOMAIN:-} && -f $dir/deploy/prod/compose.marketing.yml ]]; then

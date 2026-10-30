@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import nodemailer, { type Transporter } from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport/index.js';
+import { GOOGLE_SMTP_RELAY } from '../common/google-smtp-relay.js';
 import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -18,8 +19,7 @@ import {
   type NativeActionPurpose,
 } from './native-credentials.js';
 
-/** The approved Google Workspace relay (owner 2026-10-24): fixed, never taken from config. */
-export const GOOGLE_SMTP_RELAY = { host: 'smtp-relay.gmail.com', port: 587 } as const;
+export { GOOGLE_SMTP_RELAY };
 
 /**
  * SMTP transport for authentication mail; null only for the in-memory test driver.

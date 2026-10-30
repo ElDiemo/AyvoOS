@@ -2,6 +2,7 @@
 
 import {
   BILLING_TIMINGS,
+  DOCUMENT_LANGUAGES,
   type BillingAgreementDetail,
   type BillingAgreementVersion,
   type BillingCustomer,
@@ -183,6 +184,8 @@ export function CustomerForm({
   // The values belong to the version they were loaded from; that version is the one expected.
   const [base, setBase] = useState(current?.version);
   const stale = !!code && !!current && current.version !== base;
+  // Never preselected or derived from the country: an older version without it starts empty.
+  const [language, setLanguage] = useState<string>(current?.customer.documentLanguage ?? '');
   const [reason, setReason] = useState('');
   const { busy, error, saved, send, fresh } = useSubmit();
   const set = (k: keyof CustomerValues) => (v: string) => {
@@ -195,20 +198,25 @@ export function CustomerForm({
       data-testid={code ? `customer-version-${code}` : 'customer-new'}
       onSubmit={(e) => {
         e.preventDefault();
-        const customer = Object.fromEntries(
-          CUSTOMER_KEYS.map((k) => [
-            k,
-            REQUIRED_CUSTOMER.has(k) ? values[k].trim() : blankToNull(values[k]),
-          ]),
-        );
+        const customer = {
+          ...Object.fromEntries(
+            CUSTOMER_KEYS.map((k) => [
+              k,
+              REQUIRED_CUSTOMER.has(k) ? values[k].trim() : blankToNull(values[k]),
+            ]),
+          ),
+          documentLanguage: language,
+        };
         void send(
           code
             ? `admin/finance/billing/customers/${code}/versions`
             : 'admin/finance/billing/customers',
           code ? { expectedVersion: base, customer, reason } : { customer },
           (r) => {
-            if (!code) setValues(initial);
-            else setBase((r as BillingCustomerDetail).current.version);
+            if (!code) {
+              setValues(initial);
+              setLanguage('');
+            } else setBase((r as BillingCustomerDetail).current.version);
             setReason('');
           },
         );
@@ -226,6 +234,26 @@ export function CustomerForm({
             type={k === 'billingEmail' ? 'email' : 'text'}
           />
         ))}
+        <label className={label}>
+          {t.fields.documentLanguage}
+          <select
+            name="documentLanguage"
+            required
+            value={language}
+            onChange={(e) => {
+              setLanguage(e.target.value);
+              fresh();
+            }}
+            className={inputClass}
+          >
+            <option value="">{t.chooseLanguage}</option>
+            {DOCUMENT_LANGUAGES.map((l) => (
+              <option key={l} value={l}>
+                {t.languages[l]}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       {code && (
         <Field name="reason" text={t.fields.reason} value={reason} onChange={setReason} required />
@@ -237,6 +265,7 @@ export function CustomerForm({
           action={t.loadCurrent}
           onAction={() => {
             setValues(valuesOf(current));
+            setLanguage(current.customer.documentLanguage ?? '');
             setBase(current.version);
             fresh();
           }}

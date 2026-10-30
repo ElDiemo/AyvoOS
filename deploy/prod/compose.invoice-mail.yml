@@ -1,0 +1,13 @@
+# AYVO OS — Finance may send invoices by e-mail (doc 043 §5). Added by scripts/deploy-prod.sh ONLY when
+# FINANCE_INVOICE_MAIL is set; without it nothing here exists and nothing can be queued.
+#
+# DEV and PROD differ only in the host name. No port, network or other service is added: Finance is
+# already on the `edge` bridge, which is how it reaches the relay, and the host guards filter only
+# traffic entering the host. The relay's own IPv4 allowlist admits DEV and PROD (doc 038). Only TEST
+# invoices exist and production never sends them, so this cannot send a live invoice.
+services:
+  finance:
+    environment:
+      FINANCE_INVOICE_MAIL: ${FINANCE_INVOICE_MAIL:?simulation or google-relay}
+      FINANCE_MAIL_EHLO_NAME: ${PROD_DOMAIN:?set by scripts/deploy-prod.sh}
+      FINANCE_MAIL_TEST_RECIPIENTS: ${FINANCE_MAIL_TEST_RECIPIENTS:-}
