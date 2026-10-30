@@ -3,13 +3,14 @@ import {
   billingCustomerSchema,
   invoiceSummarySchema,
 } from '@ayvo/types';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
 import { AgreementForm } from '@/components/finance/billing-forms';
 import { financeAmount, financeDate, financeMonth } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { InvoiceList } from '@/components/finance/invoice-list';
-import { Card } from '@/components/ui';
+import { buttonClass, Card } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { billingCs as t } from '@/i18n/cs/finance-billing';
 import { formatDateTimeCs } from '@/i18n/cs/format';
@@ -47,6 +48,17 @@ export default async function AgreementPage({ params }: { params: Promise<{ code
         active="invoices"
         title={a.hotel.name}
         subtitle={`${a.code} · ${a.hotel.code}`}
+        actions={
+          hasPermission(me, 'hotels:read') && (
+            <Link
+              href={`/hotels/${a.hotel.code}#fakturace`}
+              className={buttonClass.secondary}
+              data-testid="agreement-hotel"
+            >
+              {t.toHotel}
+            </Link>
+          )
+        }
         back={{ href: '/finance/billing', label: t.back }}
       />
       <div className="flex flex-col gap-6">

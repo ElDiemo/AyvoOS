@@ -20,6 +20,7 @@ import { hotelsCs } from '@/i18n/cs/hotels';
 import { supplyPlansCs } from '@/i18n/cs/supply-plans';
 import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
+import { HotelBillingPanel } from '@/components/hotels/hotel-billing-panel';
 
 export const dynamic = 'force-dynamic';
 const t = hotelsCs.detail;
@@ -58,8 +59,11 @@ export default async function HotelPage({
     siteTimeZone(),
   ]);
   const a = hotel.address;
+  const canBilling = hasPermission(me, 'finance:billing_read');
+  const canInvoices = hasPermission(me, 'finance:invoices_read');
   const sections = [
     { href: '#udaje', label: t.sectionDetails },
+    ...(canBilling || canInvoices ? [{ href: '#fakturace', label: t.sectionBilling }] : []),
     ...(canSeeOrders
       ? [
           { href: '#plan', label: t.sectionPlan },
@@ -139,6 +143,17 @@ export default async function HotelPage({
       {hasPermission(me, 'orders:read') && !servedHere && (
         <div className="mb-6" data-testid="hotel-orders">
           <Notice tone="info">{t.otherSite(hotel.fulfillmentSite.name)}</Notice>
+        </div>
+      )}
+      {(canBilling || canInvoices) && (
+        // Bounded (2 s per call, doc 044 U2): a slow or stopped Finance only costs this panel.
+        <div className="mb-6 scroll-mt-4" id="fakturace">
+          <HotelBillingPanel
+            hotelId={hotel.id}
+            canBilling={canBilling}
+            canInvoices={canInvoices}
+            canManage={hasPermission(me, 'finance:billing_manage')}
+          />
         </div>
       )}
       {canSeeOrders && (

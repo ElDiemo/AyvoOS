@@ -1,4 +1,5 @@
-import { billingCustomerDetailSchema } from '@ayvo/types';
+import { billingCustomerDetailSchema, effectiveTermsPageSchema } from '@ayvo/types';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CustomerForm } from '@/components/finance/billing-forms';
 import { FinanceHeader } from '@/components/finance/finance-header';
@@ -22,15 +23,44 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
     if (e instanceof ApiError && e.status === 404) notFound();
     throw e;
   });
+  // Which hotels it pays for now: Finance's computation of the month, never a second record.
+  const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' })
+    .format(new Date())
+    .slice(0, 7);
+  const terms = await apiGet(
+    `admin/finance/billing/agreements/effective?month=${month}`,
+    effectiveTermsPageSchema,
+  );
+  const paid = terms.items.filter((i) => i.customer?.id === c.id);
   return (
     <>
       <FinanceHeader
         active="invoices"
         title={c.current.customer.legalName}
         subtitle={c.code}
-        back={{ href: '/finance/billing', label: t.back }}
+        back={{ href: '/finance/billing/customers', label: t.customers }}
       />
       <div className="flex flex-col gap-6">
+        <Card title={t.payerHotels(month)} testId="payer-hotels">
+          <p className="mb-2 text-xs text-stone-500">{t.payerHelp}</p>
+          {paid.length === 0 ? (
+            <p className="text-sm text-stone-500">{t.payerNoHotels}</p>
+          ) : (
+            <ul className="divide-y divide-stone-100 text-sm">
+              {paid.map((i) => (
+                <li key={i.agreement.code} className="flex flex-wrap gap-x-4 py-2">
+                  <Link
+                    href={`/finance/billing/agreements/${i.agreement.code}`}
+                    className="underline"
+                  >
+                    {i.agreement.hotel.name}
+                  </Link>
+                  <span className="font-mono text-xs text-stone-500">{i.agreement.code}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
         <Card title={t.history}>
           <ul className="divide-y divide-stone-100 text-sm">
             {c.versions.map((v) => (
