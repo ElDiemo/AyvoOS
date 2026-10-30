@@ -39,6 +39,16 @@ export interface InvoiceTexts {
   testMarkInvalid: string;
   testBanner: string;
   testNote: string;
+  /** The invoice e-mail (doc 043): frozen with the invoice, so it always matches its PDF. */
+  mail: {
+    /** With "{number}" and "{period}". */
+    intro: string;
+    greeting: string;
+    reply: string;
+    signature: string;
+    testNotice: string;
+    testSubjectPrefix: string;
+  };
 }
 
 export const INVOICE_TEMPLATE_VERSION = 1;
@@ -77,6 +87,14 @@ const TEXTS: Record<DocumentLanguage, InvoiceTexts> = {
     testBanner: 'TESTOVACÍ DOKLAD — NEPLATNÝ, NEPLATIT (AYVO OS DEV)',
     testNote:
       'Testovací doklad – nejde o daňový doklad. DPH a účetní pravidla zatím nejsou schválena.',
+    mail: {
+      greeting: 'Dobrý den,',
+      intro: 'v příloze posíláme fakturu {number} za období {period}.',
+      reply: 'Máte-li dotaz, odpovězte prosím na tento e-mail.',
+      signature: 'Tým AYVO',
+      testNotice: 'TESTOVACÍ E-MAIL: doklad je neplatný, neplaťte.',
+      testSubjectPrefix: '[TEST]',
+    },
   },
   en: {
     invoice: 'Invoice',
@@ -110,6 +128,14 @@ const TEXTS: Record<DocumentLanguage, InvoiceTexts> = {
     testMarkInvalid: 'NOT VALID',
     testBanner: 'TEST DOCUMENT — NOT VALID, DO NOT PAY (AYVO OS DEV)',
     testNote: 'Test document – not a tax document. VAT and accounting rules are not yet approved.',
+    mail: {
+      greeting: 'Hello,',
+      intro: 'please find attached invoice {number} for the period {period}.',
+      reply: 'If you have any questions, please reply to this e-mail.',
+      signature: 'The AYVO team',
+      testNotice: 'TEST E-MAIL: this document is not valid, do not pay.',
+      testSubjectPrefix: '[TEST]',
+    },
   },
   de: {
     invoice: 'Rechnung',
@@ -144,6 +170,14 @@ const TEXTS: Record<DocumentLanguage, InvoiceTexts> = {
     testBanner: 'TESTBELEG — UNGÜLTIG, NICHT BEZAHLEN (AYVO OS DEV)',
     testNote:
       'Testbeleg – kein Steuerbeleg. Umsatzsteuer- und Buchhaltungsregeln sind noch nicht freigegeben.',
+    mail: {
+      greeting: 'Guten Tag,',
+      intro: 'anbei erhalten Sie die Rechnung {number} für den Zeitraum {period}.',
+      reply: 'Bei Fragen antworten Sie bitte auf diese E-Mail.',
+      signature: 'Ihr AYVO-Team',
+      testNotice: 'TEST-E-MAIL: Dieser Beleg ist ungültig, bitte nicht bezahlen.',
+      testSubjectPrefix: '[TEST]',
+    },
   },
 };
 

@@ -381,7 +381,11 @@ describe('QR Platba (SPAYD) and the invoice PDF', () => {
       const t = invoiceTexts(language);
       expect(t.paymentMessage).toMatch(/^[A-Za-z]+$/);
       expect(Object.keys(t).sort()).toEqual(Object.keys(invoiceTexts('cs')).sort());
-      for (const value of Object.values(t)) expect(value.trim()).not.toBe('');
+      const { mail, ...labels } = t;
+      for (const value of [...Object.values(labels), ...Object.values(mail)])
+        expect(value.trim()).not.toBe('');
+      expect(mail.intro).toContain('{number}');
+      expect(mail.intro).toContain('{period}');
     }
   });
 
