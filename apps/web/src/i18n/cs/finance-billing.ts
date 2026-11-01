@@ -1,5 +1,7 @@
 /** Finance → Smlouvy hotelů (doc 040, N3A-1 settings in the UI). */
 export const billingCs = {
+  financeLanguageUnconfirmed:
+    'Nepodařilo se ověřit, že Finance ukládají jazyk faktur (přechod mezi verzemi nebo výpadek). Plátce nebyl uložen; zkuste to později.',
   title: 'Smlouvy a ceny',
   subtitle:
     'Kdo za hotel platí (odběratel = firma), kolik pokojů a za jakou cenu se účtuje a výchozí ceník. Každá změna je nová verze s důvodem; nic se nepřepisuje.',
