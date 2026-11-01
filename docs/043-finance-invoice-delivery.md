@@ -86,8 +86,7 @@ QUEUED → SENDING → SENT
 - **Vlastní přenos ve Finance:** Finance nesmí importovat moduly jádra (ADR 0039). Volba transportu
   stejná jako u přihlášení (`google-relay` bez přihlašovacích údajů, `memory` jen v testech); čistou
   funkci s volbami SMTP je potřeba přesunout do `common`. Odesílá se až po ověření otisku PDF.
-- **Síť:** Finance potřebuje odchozí 587 na relay. Na PROD je to změna host guardu a IPv4 allowlistu
-  (Codex), součást až ostrého zapnutí.
+- **Síť:** Finance potřebuje odchozí 587 na relay, viz „Síť a nasazení“ níže.
 - **Tři nezávislé pojistky pro PROD:**
   1. `FINANCE_INVOICE_MAIL` nenastaveno = fronta se nezpracovává;
   2. oprávnění;
