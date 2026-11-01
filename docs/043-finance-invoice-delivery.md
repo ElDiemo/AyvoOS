@@ -112,6 +112,14 @@ QUEUED → SENDING → SENT
 - Poškozené PDF (jiný otisk): nic se neodešle.
 - Zrušená faktura: odmítnuto. S `APP_ENV=production`: odmítnuto.
 
+## 7b. Režim patří k pokusu
+
+Každý pokus má neměnný `mode` (`SIMULATION`, `RELAY`) uložený při požadavku. Požadavek nese režim, který
+člověk viděl; jiný je `MODE_CHANGED`, nic nevznikne. Před každým odesláním se režim pokusu porovná s aktuálním
+transportem: při neshodě `FAILED` / `TRANSPORT_CHANGED` bez spojení. Změna konfigurace nic nepřeklápí ani
+nepřeposílá; nový režim použije jen nový ruční pokus. Už `SENT` zůstává konečné, i když bylo simulací: skutečné
+odeslání téže faktury není možné a na ověření se vystaví nová testovací faktura.
+
 ## 8. Jak se rozhoduje o výsledku
 
 Vše neznámé je `UNCERTAIN`. Opakovatelné (`QUEUED`, nejvýš 5 pokusů, pak `FAILED`) je jen to, co

@@ -1826,7 +1826,11 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
   };
   const deliveriesOf = (app: FinanceTestApp, number: string) =>
     app.get(`${INV}/${number}/deliveries`).expect(200);
-  const sendBody = (recipient: string) => ({ requestId: randomUUID(), recipient });
+  const sendBody = (recipient: string, mode: 'SIMULATION' | 'RELAY' = 'SIMULATION') => ({
+    requestId: randomUUID(),
+    recipient,
+    mode,
+  });
   const runner = (app: FinanceTestApp) => app.app.get(InvoiceDeliveryRunner);
   const sentMail = (app: FinanceTestApp) =>
     app.app.get<MemoryInvoiceMailTransport>(INVOICE_MAIL_TRANSPORT).sent;
@@ -2267,6 +2271,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       const retry = await after.post(`${INV}/${inv.number}/deliveries/${d.id}/retry`).send({
         requestId: randomUUID(),
         recipient,
+        mode: 'SIMULATION',
         reason: 'Znovu (test)',
         acknowledgeDuplicateRisk: true,
       });
@@ -2339,6 +2344,150 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     }
   });
 
+  describe("the mode belongs to the attempt, not to today's configuration", () => {
+    const relayEnv = (recipient: string) => ({
+      FINANCE_INVOICE_MAIL: 'google-relay',
+      FINANCE_MAIL_EHLO_NAME: 'dev.example.test',
+      FINANCE_MAIL_TEST_RECIPIENTS: recipient,
+    });
+    /** A process configured for the real relay; its SMTP only counted, no network in tests. */
+    const relayProcess = (recipient: string) => {
+      const transport = new MemoryInvoiceMailTransport();
+      const service = new InvoiceDeliveriesService(
+        f.prisma,
+        f.app.get(FinanceOperations),
+        f.storage,
+        { ...f.env, ...relayEnv(recipient) } as never,
+        transport,
+      );
+      return { service, sent: transport.sent };
+    };
+    const drain = async (service: InvoiceDeliveriesService) => {
+      while (await service.sendNext());
+    };
+
+    it('simulation QUEUED -> relay: no SMTP, a visible reason; only a newly confirmed attempt uses the relay', async () => {
+      const { inv, recipient } = await issued('cs', 'fronta@rezim.test');
+      const sim = await mailApp();
+      try {
+        await sim.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+      } finally {
+        await sim.close();
+      }
+      const relay = relayProcess(recipient);
+      await drain(relay.service);
+      expect(relay.sent.filter((m) => m.to === recipient)).toEqual([]);
+      const after = await relay.service.list(inv.number);
+      expect(after.mode).toBe('RELAY');
+      const d = after.deliveries[0]!;
+      expect(d).toMatchObject({ state: 'FAILED', mode: 'SIMULATION', code: 'TRANSPORT_CHANGED' });
+      // A page from before the switch is no intent to use the relay.
+      const retry = {
+        reason: 'Znovu přes server',
+        acknowledgeDuplicateRisk: true as const,
+      };
+      await expect(
+        relay.service.retry(
+          inv.number,
+          d.id,
+          { ...sendBody(recipient), ...retry } as never,
+          DELIVERY_ACTOR,
+        ),
+      ).rejects.toMatchObject({ response: { code: 'MODE_CHANGED' } });
+      await relay.service.retry(
+        inv.number,
+        d.id,
+        { ...sendBody(recipient, 'RELAY'), ...retry } as never,
+        DELIVERY_ACTOR,
+      );
+      await drain(relay.service);
+      expect(relay.sent.filter((m) => m.to === recipient)).toHaveLength(1);
+      expect((await relay.service.list(inv.number)).deliveries).toMatchObject([
+        { state: 'FAILED', mode: 'SIMULATION' },
+        { state: 'SENT', mode: 'RELAY' },
+      ]);
+    });
+
+    it('relay QUEUED -> simulation: not "accepted" by a simulation, nothing sent', async () => {
+      const { inv, recipient } = await issued('cs', 'opacne@rezim.test');
+      const relay = relayProcess(recipient);
+      await relay.service.send(inv.number, sendBody(recipient, 'RELAY') as never, DELIVERY_ACTOR);
+      const sim = await mailApp();
+      try {
+        await runner(sim).tick();
+        expect(sentMail(sim).filter((m) => m.to === recipient)).toEqual([]);
+        expect(
+          ((await deliveriesOf(sim, inv.number)).body as InvoiceDeliveries).deliveries[0],
+        ).toMatchObject({ state: 'FAILED', mode: 'RELAY', code: 'TRANSPORT_CHANGED' });
+      } finally {
+        await sim.close();
+      }
+    });
+
+    it('simulation SENT -> relay: history stays a simulation; relay SENT -> simulation: stays accepted by SMTP', async () => {
+      const simulated = await issued('cs', 'simulace@rezim.test');
+      const real = await issued('cs', 'server@rezim.test');
+      const sim = await mailApp();
+      const relay = relayProcess(real.recipient);
+      try {
+        await sim
+          .post(`${INV}/${simulated.inv.number}/deliveries`)
+          .send(sendBody(simulated.recipient))
+          .expect(201);
+        await runner(sim).tick();
+        await relay.service.send(
+          real.inv.number,
+          sendBody(real.recipient, 'RELAY') as never,
+          DELIVERY_ACTOR,
+        );
+        await drain(relay.service);
+        expect(relay.sent.map((m) => m.to)).toEqual([real.recipient]);
+
+        const seenByRelay = await relay.service.list(simulated.inv.number);
+        expect(seenByRelay.mode).toBe('RELAY');
+        expect(seenByRelay.deliveries).toMatchObject([{ state: 'SENT', mode: 'SIMULATION' }]);
+        const seenBySim = (await deliveriesOf(sim, real.inv.number)).body as InvoiceDeliveries;
+        expect(seenBySim.mode).toBe('SIMULATION');
+        expect(seenBySim.deliveries).toMatchObject([{ state: 'SENT', mode: 'RELAY' }]);
+        // The list of invoices reads the attempt too.
+        for (const [number, mode] of [
+          [simulated.inv.number, 'SIMULATION'],
+          [real.inv.number, 'RELAY'],
+        ] as const)
+          expect(
+            ((await sim.get(`${INV}/${number}`).expect(200)).body as InvoiceDetail).deliveryMode,
+          ).toBe(mode);
+        // Nothing is re-sent or re-labelled by a later round, and the database refuses a change.
+        await drain(relay.service);
+        expect(relay.sent).toHaveLength(1);
+        await expect(
+          asOwner(
+            (db) =>
+              db.$executeRaw`UPDATE "finance"."invoice_deliveries" SET "mode" = 'RELAY' WHERE "recipient" = ${simulated.recipient}`,
+          ),
+        ).rejects.toThrow(/never changes|cannot become/);
+      } finally {
+        await sim.close();
+      }
+    });
+
+    it('a new request from a page showing another mode creates nothing', async () => {
+      const { inv, recipient } = await issued('cs', 'stranka@rezim.test');
+      const sim = await mailApp();
+      try {
+        const r = await sim
+          .post(`${INV}/${inv.number}/deliveries`)
+          .send(sendBody(recipient, 'RELAY'));
+        expect([r.status, r.body.code]).toEqual([409, 'MODE_CHANGED']);
+        expect(
+          ((await deliveriesOf(sim, inv.number)).body as InvoiceDeliveries).deliveries,
+        ).toEqual([]);
+      } finally {
+        await sim.close();
+      }
+    });
+  });
+
   it('the environment: simulated mail only in tests, the relay only named and with allowed recipients', () => {
     const base = {
       APP_ENV: 'development',
@@ -2383,6 +2532,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         { recipient: 'jiny@jazyk.test' },
         { state: 'QUEUED' },
         { messageId: '<jine@ayvo.co>' },
+        { mode: 'RELAY' },
       ])
         await expect(
           app.prisma.invoiceDelivery.update({ where: { id: row.id }, data }),
@@ -2404,6 +2554,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
             language: row.language,
             templateVersion: row.templateVersion,
             messageId: row.messageId,
+            mode: row.mode,
             attemptOf: row.id,
             retryReason: 'Po odeslání nelze',
             duplicateRiskAcknowledged: true,
