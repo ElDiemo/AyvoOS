@@ -37,7 +37,7 @@ samo):
 - **nejvýš jedno automatické odeslání** každého doručení;
 - nejistý výsledek je viditelný stav, o dalším pokusu rozhodne člověk s důvodem.
 
-## 3. Navržený model
+## 3. Model
 
 **`invoice_deliveries`** — jeden záznam na jeden záměr odeslat:
 
@@ -48,10 +48,12 @@ samo):
 | `customer_version`                                  | verze odběratele, ze které adresa pochází                                    |
 | `template_version`                                  | verze textu v kódu                                                           |
 | `message_id`                                        | pevné `Message-ID`, stejné i při ručním opakování                            |
+| `mode`                                              | `SIMULATION` nebo `RELAY`, neměnný, viz §7b                                  |
 | `state`                                             | viz §4                                                                       |
 | `attempt_of`                                        | u ručního opakování odkaz na předchozí nejisté nebo neúspěšné doručení       |
 | `request_id`                                        | idempotence založení (unikátní)                                              |
 | `requested_by`, `requested_by_name`, `requested_at` | kdo a kdy                                                                    |
+| `lease_until`, `send_attempts`, `last_code`         | rezervace odesílání, počet pokusů a kód posledního výsledku                  |
 
 **`invoice_delivery_events`** — append-only: změny stavu, čas, kód chyby relay (bez obsahu zprávy).
 
@@ -84,13 +86,12 @@ QUEUED → SENDING → SENT
 - **Vlastní přenos ve Finance:** Finance nesmí importovat moduly jádra (ADR 0039). Volba transportu
   stejná jako u přihlášení (`google-relay` bez přihlašovacích údajů, `memory` jen v testech); čistou
   funkci s volbami SMTP je potřeba přesunout do `common`. Odesílá se až po ověření otisku PDF.
-- **Síť:** Finance potřebuje odchozí 587 na relay. Na PROD je to změna host guardu a IPv4 allowlistu
-  (Codex), součást až ostrého zapnutí.
+- **Síť:** Finance potřebuje odchozí 587 na relay, viz „Síť a nasazení“ níže.
 - **Tři nezávislé pojistky pro PROD:**
   1. `FINANCE_INVOICE_MAIL` nenastaveno = fronta se nezpracovává;
   2. oprávnění;
   3. TEST faktury se v produkci neposílají (a ostré zatím neexistují).
-- **DEV:** přenos `memory`; žádný skutečný e-mail. Ověření zachycené zprávy v testech.
+- **Testy:** přenos `memory`, jen s `APP_ENV=test`; zachycená zpráva se ověřuje v testu.
 - **Běžný výpadek relay:** doručení, které prokazatelně neodešlo (spojení se neotevřelo), zůstává
   ve frontě s omezeným počtem pokusů; po jeho vyčerpání `FAILED`.
 
@@ -117,7 +118,7 @@ QUEUED → SENDING → SENT
   stav doručení.
 - Nikdy automaticky po vystavení: odeslání je samostatná akce, dokud majitel nerozhodne jinak.
 
-## 7. Testy (po schválení, syntetická data, přenos `memory` a falešné SMTP)
+## 7. Testy (syntetická data, přenos `memory` a falešné SMTP)
 
 - Jedno odeslání obsahuje přesně uložené PDF (otisk).
 - Opakovaný požadavek se stejným `request_id` neodešle znovu.
@@ -158,3 +159,22 @@ adresa ani zpráva. Reálný relay vyžaduje `FINANCE_MAIL_EHLO_NAME` a `FINANCE
 povolených příjemců se pro uloženou adresu kontrolují i před každým odesláním: když už adresa povolená
 není, doručení končí `FAILED` / `RECIPIENT_NOT_ALLOWED` bez spojení a adresa se nezamění za jinou.
 Bez `FINANCE_INVOICE_MAIL` se nic nezařadí ani neodešle. Síť a nasazení: samostatný diff (§5).
+
+## 10. Nasazení a návrat
+
+Pořadí je stejné jako v doc 040 §12a: nejdřív jádro a web, potom Finance. Migrace jádra přidává oprávnění
+`finance:invoices_send`, migrace Finance tabulky doručení a sloupec `mode`. Vše je rozšiřující, návrat obrazů
+migrace nevrací.
+
+Návrat na obraz před touto změnou:
+
+- Starší Finance tabulky doručení nečte a nezapisuje, karta odesílání na stránce faktury zmizí se starším webem.
+- Řádky zůstávají. Starší Finance `QUEUED` neodešle a `SENDING` nepřevezme.
+- Po novém povýšení se `SENDING` po uplynutí rezervace změní na `UNCERTAIN` a člověk rozhodne o dalším pokusu.
+  `QUEUED` se odešle jen tehdy, když aktuální režim i seznam povolených příjemců odpovídají pokusu; jinak
+  `FAILED` s kódem podle §7b a §9, bez spojení.
+- Před návratem s `RELAY` vyprázdnit frontu: počkat, až žádné doručení není `QUEUED` ani `SENDING`, nebo počítat
+  s tím, že po povýšení může odejít. Doručení v režimu `SIMULATION` žádné spojení neotevře.
+
+Vypnutí bez návratu obrazů: odstranit `FINANCE_INVOICE_MAIL` a znovu nasadit Finance. Fronta se nezpracovává a
+nové odeslání nejde založit. Záznamy zůstávají, a `SENT` ze simulace zůstává konečné.
