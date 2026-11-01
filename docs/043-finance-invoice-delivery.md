@@ -123,7 +123,8 @@ simulovaným relayem).
 ## 9. Limity
 
 Jedna zpráva naráz na proces, nejvýš 5 za kolo, spojení se neudržuje. PDF nejvýš 10 MiB, kontrola
-otisku před odesláním. Odeslání má lhůtu 60 s, rezervace záznamu 120 s. Logy jen id a stav, nikdy
+otisku před odesláním. Odeslání má lhůtu 60 s, rezervace záznamu 120 s; v té lhůtě se
+konkrétní spojení ukončí a výsledek je `UNCERTAIN`, bez automatického opakování. Logy jen id a stav, nikdy
 adresa ani zpráva. Reálný relay vyžaduje `FINANCE_MAIL_EHLO_NAME` a `FINANCE_MAIL_TEST_RECIPIENTS`. Prostředí a seznam
 povolených příjemců se pro uloženou adresu kontrolují i před každým odesláním: když už adresa povolená
 není, doručení končí `FAILED` / `RECIPIENT_NOT_ALLOWED` bez spojení a adresa se nezamění za jinou.
