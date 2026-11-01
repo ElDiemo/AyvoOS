@@ -62,7 +62,11 @@ export function apiOrigin(path: string): string {
   return serverEnv.FINANCE_API_URL;
 }
 
-async function call(path: string, query?: Record<string, string | number | undefined>) {
+async function call(
+  path: string,
+  query?: Record<string, string | number | undefined>,
+  timeoutMs = 10_000,
+) {
   const url = new URL(`${API_BASE_PATH}/${path.replace(/^\//, '')}`, apiOrigin(path));
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
@@ -70,7 +74,7 @@ async function call(path: string, query?: Record<string, string | number | undef
   return fetch(url, {
     cache: 'no-store',
     headers: await sessionHeader(),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 
@@ -101,6 +105,26 @@ export async function apiGet<T extends z.ZodType>(
   if (res.status === 404) notFound();
   if (!res.ok) throw new ApiError(res.status, `API ${res.status} for ${path}`);
   return schema.parse(await res.json());
+}
+
+/**
+ * A part of a page that must not bring the page down (doc 044 U2): never redirects or throws, and
+ * ends within its limit. `forbidden` and `unavailable` are different answers; neither is an empty result.
+ */
+export async function apiGetPanel<T extends z.ZodType>(
+  path: string,
+  schema: T,
+  query?: Record<string, string | number | undefined>,
+  timeoutMs = 2_000,
+): Promise<{ state: 'ok'; data: z.infer<T> } | { state: 'forbidden' } | { state: 'unavailable' }> {
+  try {
+    const res = await call(path, query, timeoutMs);
+    if (res.status === 401 || res.status === 403) return { state: 'forbidden' };
+    if (!res.ok) return { state: 'unavailable' };
+    return { state: 'ok', data: schema.parse(await res.json()) };
+  } catch {
+    return { state: 'unavailable' };
+  }
 }
 
 /**

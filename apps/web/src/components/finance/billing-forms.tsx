@@ -17,6 +17,9 @@ import { z } from 'zod';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { billingCs as t } from '@/i18n/cs/finance-billing';
 import { apiSend, ClientApiError } from '@/lib/client-api';
+import { COUNTRY_OPTIONS } from '@/lib/country-options';
+import { CurrencyInput } from './currency-input';
+import { parseDecimalInput } from '@/lib/decimal-input';
 
 const label = 'flex min-w-0 flex-col gap-1 text-sm font-medium';
 const blankToNull = (v: string) => (v.trim() === '' ? null : v.trim());
@@ -223,17 +226,36 @@ export function CustomerForm({
       }}
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {CUSTOMER_KEYS.map((k) => (
-          <Field
-            key={k}
-            name={k}
-            text={t.fields[k]}
-            value={values[k]}
-            onChange={set(k)}
-            required={REQUIRED_CUSTOMER.has(k)}
-            type={k === 'billingEmail' ? 'email' : 'text'}
-          />
-        ))}
+        {CUSTOMER_KEYS.map((k) =>
+          k === 'countryCode' ? (
+            <label key={k} className={label}>
+              {t.fields.countryCode}
+              <select
+                name={k}
+                required
+                value={values[k]}
+                onChange={(e) => set(k)(e.target.value)}
+                className={inputClass}
+              >
+                {COUNTRY_OPTIONS.map((c) => (
+                  <option key={c.code} value={c.code} suppressHydrationWarning>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <Field
+              key={k}
+              name={k}
+              text={t.fields[k]}
+              value={values[k]}
+              onChange={set(k)}
+              required={REQUIRED_CUSTOMER.has(k)}
+              type={k === 'billingEmail' ? 'email' : 'text'}
+            />
+          ),
+        )}
         <label className={label}>
           {t.fields.documentLanguage}
           <select
@@ -296,13 +318,17 @@ export function AgreementForm({
   customers,
   code,
   current,
+  initialHotelId = '',
 }: {
   hotels?: FinanceContractHotel[];
+  /** Coming from a hotel's card: that hotel is chosen, the user can still see and change it. */
+  initialHotelId?: string;
   customers: BillingCustomer[];
   code?: string;
   current?: BillingAgreementVersion;
 }) {
-  const [hotelId, setHotelId] = useState('');
+  const [hotelId, setHotelId] = useState(initialHotelId);
+  const [inputError, setInputError] = useState<string | null>(null);
   const valuesOf = (from?: BillingAgreementVersion) => ({
     effectiveFrom: thisMonth(),
     customerId: from?.customer.id ?? '',
@@ -332,12 +358,18 @@ export function AgreementForm({
       data-testid={code ? `agreement-version-${code}` : 'agreement-new'}
       onSubmit={(e) => {
         e.preventDefault();
+        const ownPrice = v.ownPrice.trim() === '' ? null : parseDecimalInput(v.ownPrice);
+        if (v.ownPrice.trim() !== '' && ownPrice === null) {
+          setInputError(t.decimalInvalid);
+          return;
+        }
+        setInputError(null);
         const terms = {
           effectiveFrom: v.effectiveFrom,
           customerId: v.customerId,
           contractNumber: blankToNull(v.contractNumber),
           billedRooms: Number(v.billedRooms),
-          ownPricePerRoomMonth: blankToNull(v.ownPrice),
+          ownPricePerRoomMonth: ownPrice,
           currency: v.currency.trim().toUpperCase(),
           paymentTermsDays: Number(v.paymentTermsDays),
           billingTiming: v.billingTiming,
@@ -426,13 +458,7 @@ export function AgreementForm({
           value={v.ownPrice}
           onChange={set('ownPrice')}
         />
-        <Field
-          name="currency"
-          text={t.fields.currency}
-          value={v.currency}
-          onChange={set('currency')}
-          required
-        />
+        <CurrencyInput value={v.currency} onChange={set('currency')} />
         <Field
           name="paymentTermsDays"
           text={t.fields.paymentTermsDays}
@@ -485,7 +511,7 @@ export function AgreementForm({
           required
         />
       </div>
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {(inputError ?? error) && <ErrorNote>{inputError ?? error}</ErrorNote>}
       {stale && (
         <StaleNotice
           text={t.staleVersion}
@@ -509,6 +535,7 @@ export function AgreementForm({
 
 /** A default price from a month; a correction of a month names the revision it was loaded from. */
 export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
+  const [inputError, setInputError] = useState<string | null>(null);
   const [v, setV] = useState({
     currency: 'CZK',
     price: '',
@@ -544,12 +571,18 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
       onSubmit={(e) => {
         e.preventDefault();
         const currency = v.currency.trim().toUpperCase();
+        const price = parseDecimalInput(v.price);
+        if (price === null) {
+          setInputError(t.decimalInvalid);
+          return;
+        }
+        setInputError(null);
         void send(
           'admin/finance/billing/price-list',
           {
             expectedRevision: seen ?? null,
             currency,
-            pricePerRoomMonth: v.price.trim(),
+            pricePerRoomMonth: price,
             effectiveFrom: v.effectiveFrom,
             reason: v.reason.trim(),
           },
@@ -561,13 +594,7 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
       }}
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-        <Field
-          name="currency"
-          text={t.fields.currency}
-          value={v.currency}
-          onChange={set('currency')}
-          required
-        />
+        <CurrencyInput value={v.currency} onChange={set('currency')} />
         <Field
           name="price"
           text={t.fields.price}
@@ -592,7 +619,7 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
           required
         />
       </div>
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {(inputError ?? error) && <ErrorNote>{inputError ?? error}</ErrorNote>}
       {stale && now && (
         <StaleNotice
           text={t.stalePrice(`${now.pricePerRoomMonth} ${now.currency}`)}
