@@ -172,3 +172,33 @@ test.describe('without the permissions of the run', () => {
     ).toBe(403);
   });
 });
+
+test.describe('Měsíční běh: pomalá odpověď', () => {
+  test.use({ storageState: ADMIN_STATE });
+
+  test('an answer for an earlier month never becomes the current preview', async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    let answered = () => {};
+    const delivered = new Promise<void>((done) => (answered = done));
+    await page.route('**/test-run/preview?month=2026-01', async (route) => {
+      await held;
+      await route.continue();
+      answered();
+    });
+    await page.goto('/finance/invoices/run');
+    await page.getByTestId('run-month').fill('2026-01');
+    const earlier = page.waitForResponse('**/test-run/preview?month=2026-01');
+    await page.getByTestId('run-load').click();
+    await page.getByTestId('run-month').fill('2026-02');
+    release();
+    await delivered;
+    await earlier;
+    // Nothing of January is shown or can be issued under February.
+    await expect(page.getByTestId('run-month')).toHaveValue('2026-02');
+    await expect(page.getByTestId('run-empty')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="run-item-"]')).toHaveCount(0);
+    await expect(page.getByTestId('run-submit')).toHaveCount(0);
+    await expect(page.getByTestId('run-load')).toBeEnabled();
+  });
+});
