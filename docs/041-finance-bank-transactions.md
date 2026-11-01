@@ -165,3 +165,12 @@ the bank: payments are made from what was already read, or simulated outside pro
   (`changedAtBank`) and the payment shows "Banka tento pohyb po zaznamenání změnila". **What to do
   then is an open owner/accountant decision** (not invented).
 - Not covered: refunds or offsetting an overpayment (an open decision), live invoices.
+
+### 8a. Bounded payment list: rollout and return (review PAY103-R1)
+
+Finance first, then the web. The web also reads the answer of an older Finance (no `total`, `page`,
+`pageSize`): it shows the whole list read-only with a note, without filters, search and links to a
+detail, because that Finance has no such routes. So a new web with an older Finance is a supported
+combination, for the deployment window and after Finance alone returns to an earlier image. An older
+web with the new Finance also works: the new fields are ignored and the first 25 payments are shown,
+so return the web first when both go back. No migration belongs to this change.
