@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   InvoiceDeliveries,
   EffectiveTermsPage,
@@ -1702,28 +1702,38 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     );
   });
 
-  it('a customer whose version has no language is a visible blocker, not a guess; choosing it unblocks', async () => {
+  it('the previous image can still write a customer version (no language, no guess): a visible blocker; choosing it unblocks', async () => {
     await ensureCzkDefault();
     const c = await customerWith('cs');
     const a = await agreement(c.id);
-    const row = await f.prisma.customerVersion.findFirstOrThrow({ where: { customerId: c.id } });
-    // As a version recorded before the choice existed: only history can hold NULL.
-    await asOwner((db) =>
-      db.$transaction(async (tx) => {
-        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" DISABLE TRIGGER "customer_versions_language_required"`;
-        await tx.customerVersion.create({
-          data: {
-            ...row,
-            version: 2,
-            documentLanguage: null,
-            reason: 'Historie (test)',
-            requestId: randomUUID(),
-            recordedAt: undefined,
-          },
-        });
-        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" ENABLE TRIGGER "customer_versions_language_required"`;
-      }),
+    // Exactly what the image before this release writes: it does not know the column.
+    const columns = (
+      await f.prisma.$queryRaw<{ column_name: string }[]>`
+        SELECT "column_name" FROM information_schema.columns
+        WHERE "table_schema" = 'finance' AND "table_name" = 'customer_versions'
+          AND "column_name" <> 'document_language' AND "is_generated" = 'NEVER'`
+    ).map((c) => `"${c.column_name}"`);
+    const values = columns.map((c) =>
+      c === '"version"'
+        ? '2'
+        : c === '"request_id"'
+          ? 'gen_random_uuid()'
+          : c === '"reason"'
+            ? `'Zápis starého obrazu (test)'`
+            : c,
     );
+    await f.prisma.$executeRawUnsafe(
+      `INSERT INTO "finance"."customer_versions" (${columns.join(', ')})
+       SELECT ${values.join(', ')} FROM "finance"."customer_versions"
+       WHERE "customer_id" = '${c.id}'::uuid AND "version" = 1`,
+    );
+    expect(
+      (
+        await f.prisma.customerVersion.findFirstOrThrow({
+          where: { customerId: c.id, version: 2 },
+        })
+      ).documentLanguage,
+    ).toBeNull();
     const month = '2026-07';
     const items = await preview(month);
     const item = items.find((i) => i.agreement.code === a.code)!;
@@ -1734,6 +1744,26 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     expect(refused.body).toMatchObject({ code: 'TERMS_INCOMPLETE' });
     const run = (await previewOf(month)).items.find((i) => i.agreementCode === a.code)!;
     expect(run).toMatchObject({ state: 'BLOCKED', blockers: ['CUSTOMER_LANGUAGE_MISSING'] });
+
+    // The new API still requires the choice; the database does only after doc 040 §12a.
+    const triggers = await asOwner(
+      (db) =>
+        db.$queryRaw<{ tgname: string }[]>`
+        SELECT t."tgname" FROM pg_trigger t JOIN pg_class c ON c."oid" = t."tgrelid"
+        WHERE c."relname" = 'customer_versions' AND t."tgname" LIKE '%language%'`,
+    );
+    expect(triggers).toEqual([]);
+    const withoutLanguage: Record<string, unknown> = { ...customerIn('cs') };
+    delete withoutLanguage.documentLanguage;
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 2,
+        customer: withoutLanguage,
+        reason: 'Bez jazyka (test)',
+      })
+      .expect(400);
 
     await f
       .post(`${B}/customers/${c.code}/versions`)
@@ -1826,7 +1856,11 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
   };
   const deliveriesOf = (app: FinanceTestApp, number: string) =>
     app.get(`${INV}/${number}/deliveries`).expect(200);
-  const sendBody = (recipient: string) => ({ requestId: randomUUID(), recipient });
+  const sendBody = (recipient: string, mode: 'SIMULATION' | 'RELAY' = 'SIMULATION') => ({
+    requestId: randomUUID(),
+    recipient,
+    mode,
+  });
   const runner = (app: FinanceTestApp) => app.app.get(InvoiceDeliveryRunner);
   const sentMail = (app: FinanceTestApp) =>
     app.app.get<MemoryInvoiceMailTransport>(INVOICE_MAIL_TRANSPORT).sent;
@@ -1972,7 +2006,9 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     rcpt?: string;
     afterData?: string | 'DROP';
   }) => {
+    const seen = { connections: 0, rcpt: [] as string[] };
     const server = createServer((socket) => {
+      seen.connections++;
       socket.on('error', () => {});
       let inData = false;
       let buffered = '';
@@ -1993,8 +2029,10 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
           buffered = buffered.slice(i + 2);
           if (line.startsWith('EHLO')) socket.write('250 relay.test\r\n');
           else if (line.startsWith('MAIL')) socket.write('250 ok\r\n');
-          else if (line.startsWith('RCPT')) socket.write(`${script.rcpt ?? '250 ok'}\r\n`);
-          else if (line.startsWith('DATA')) {
+          else if (line.startsWith('RCPT')) {
+            seen.rcpt.push(line);
+            socket.write(`${script.rcpt ?? '250 ok'}\r\n`);
+          } else if (line.startsWith('DATA')) {
             socket.write('354 go\r\n');
             inData = true;
             return;
@@ -2005,6 +2043,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     });
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
     return {
+      seen,
       address: `127.0.0.1:${(server.address() as AddressInfo).port}`,
       close: () => new Promise<void>((done) => server.close(() => done())),
     };
@@ -2228,6 +2267,257 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     });
   });
 
+  it('a queued delivery outliving its allowlist: a new process opens no connection, says why, keeps the address', async () => {
+    const drain = async (app: FinanceTestApp) => {
+      const service = app.app.get(InvoiceDeliveriesService);
+      while (await service.sendNext());
+    };
+    const relay = await scriptedRelay({});
+    const smtp = {
+      FINANCE_INVOICE_MAIL: 'test-smtp',
+      FINANCE_MAIL_TEST_SMTP_ADDRESS: relay.address,
+    };
+    const before = await mailApp({ ...smtp, FINANCE_MAIL_TEST_RECIPIENTS: 'stary@povoleny.test' });
+    const { inv, recipient } = await issued('cs', 'stary@povoleny.test');
+    const kept = await issued('cs', 'zustava@povoleny.test');
+    try {
+      await before.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+    } finally {
+      await before.close();
+    }
+    const after = await mailApp({ ...smtp, FINANCE_MAIL_TEST_RECIPIENTS: 'novy@povoleny.test' });
+    try {
+      expect(
+        ((await deliveriesOf(after, inv.number)).body as InvoiceDeliveries).deliveries[0],
+      ).toMatchObject({ state: 'QUEUED', recipient });
+      await drain(after);
+      expect(relay.seen.connections).toBe(0);
+      const d = ((await deliveriesOf(after, inv.number)).body as InvoiceDeliveries).deliveries[0]!;
+      expect(d).toMatchObject({ state: 'FAILED', code: 'RECIPIENT_NOT_ALLOWED', recipient });
+      expect(d.events.map((e) => e.state)).toEqual(['QUEUED', 'SENDING', 'FAILED']);
+      // Failed for good: no later round touches it, and a retry to that address is refused too.
+      await drain(after);
+      expect(relay.seen.connections).toBe(0);
+      const retry = await after.post(`${INV}/${inv.number}/deliveries/${d.id}/retry`).send({
+        requestId: randomUUID(),
+        recipient,
+        mode: 'SIMULATION',
+        reason: 'Znovu (test)',
+        acknowledgeDuplicateRisk: true,
+      });
+      expect([retry.status, retry.body.code]).toEqual([422, 'RECIPIENT_NOT_ALLOWED']);
+    } finally {
+      await after.close();
+    }
+    // The control: the same path with the address still allowed does reach the relay.
+    const allowing = await mailApp({
+      ...smtp,
+      FINANCE_MAIL_TEST_RECIPIENTS: 'zustava@povoleny.test',
+    });
+    try {
+      await allowing
+        .post(`${INV}/${kept.inv.number}/deliveries`)
+        .send(sendBody(kept.recipient))
+        .expect(201);
+      await drain(allowing);
+      expect(relay.seen.connections).toBe(1);
+      expect(relay.seen.rcpt).toEqual([expect.stringContaining('ZUSTAVA@POVOLENY.TEST')]);
+    } finally {
+      await allowing.close();
+      await relay.close();
+    }
+  });
+
+  it('checked before the file and the transport: the relay without an allowlist, production, no driver', async () => {
+    const { inv, recipient } = await issued('cs', 'pojistka@povoleny.test');
+    const app = await mailApp();
+    try {
+      await app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+    } finally {
+      await app.close();
+    }
+    // No driver: the queue is not worked at all.
+    await f.app.get(InvoiceDeliveriesService).sendNext();
+    expect(
+      ((await deliveriesOf(f, inv.number)).body as InvoiceDeliveries).deliveries[0]!.state,
+    ).toBe('QUEUED');
+    const row = await f.prisma.invoiceDelivery.findFirstOrThrow({
+      where: { invoice: { number: inv.number } },
+      include: { invoice: { include: { cancellation: { select: { invoiceId: true } } } } },
+    });
+    for (const [env, code] of [
+      [{ APP_ENV: 'production' }, 'PRODUCTION'],
+      [{ FINANCE_INVOICE_MAIL: 'google-relay' }, 'RECIPIENT_NOT_ALLOWED'],
+    ] as const) {
+      const storage = { get: vi.fn() };
+      const transport = { send: vi.fn() };
+      const service = new InvoiceDeliveriesService(
+        f.prisma,
+        f.app.get(FinanceOperations),
+        storage as never,
+        { ...f.env, FINANCE_MAIL_TEST_RECIPIENTS: undefined, ...env },
+        transport,
+      );
+      const outcome = await (
+        service as unknown as { deliver(d: typeof row): Promise<unknown> }
+      ).deliver(row);
+      expect(outcome).toEqual({ kind: 'REJECTED', code });
+      expect(storage.get).not.toHaveBeenCalled();
+      expect(transport.send).not.toHaveBeenCalled();
+    }
+    // Leaves nothing queued for the tests after this one.
+    const cleanup = await mailApp();
+    try {
+      await runner(cleanup).tick();
+    } finally {
+      await cleanup.close();
+    }
+  });
+
+  describe("the mode belongs to the attempt, not to today's configuration", () => {
+    const relayEnv = (recipient: string) => ({
+      FINANCE_INVOICE_MAIL: 'google-relay',
+      FINANCE_MAIL_EHLO_NAME: 'dev.example.test',
+      FINANCE_MAIL_TEST_RECIPIENTS: recipient,
+    });
+    /** A process configured for the real relay; its SMTP only counted, no network in tests. */
+    const relayProcess = (recipient: string) => {
+      const transport = new MemoryInvoiceMailTransport();
+      const service = new InvoiceDeliveriesService(
+        f.prisma,
+        f.app.get(FinanceOperations),
+        f.storage,
+        { ...f.env, ...relayEnv(recipient) } as never,
+        transport,
+      );
+      return { service, sent: transport.sent };
+    };
+    const drain = async (service: InvoiceDeliveriesService) => {
+      while (await service.sendNext());
+    };
+
+    it('simulation QUEUED -> relay: no SMTP, a visible reason; only a newly confirmed attempt uses the relay', async () => {
+      const { inv, recipient } = await issued('cs', 'fronta@rezim.test');
+      const sim = await mailApp();
+      try {
+        await sim.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+      } finally {
+        await sim.close();
+      }
+      const relay = relayProcess(recipient);
+      await drain(relay.service);
+      expect(relay.sent.filter((m) => m.to === recipient)).toEqual([]);
+      const after = await relay.service.list(inv.number);
+      expect(after.mode).toBe('RELAY');
+      const d = after.deliveries[0]!;
+      expect(d).toMatchObject({ state: 'FAILED', mode: 'SIMULATION', code: 'TRANSPORT_CHANGED' });
+      // A page from before the switch is no intent to use the relay.
+      const retry = {
+        reason: 'Znovu přes server',
+        acknowledgeDuplicateRisk: true as const,
+      };
+      await expect(
+        relay.service.retry(
+          inv.number,
+          d.id,
+          { ...sendBody(recipient), ...retry } as never,
+          DELIVERY_ACTOR,
+        ),
+      ).rejects.toMatchObject({ response: { code: 'MODE_CHANGED' } });
+      await relay.service.retry(
+        inv.number,
+        d.id,
+        { ...sendBody(recipient, 'RELAY'), ...retry } as never,
+        DELIVERY_ACTOR,
+      );
+      await drain(relay.service);
+      expect(relay.sent.filter((m) => m.to === recipient)).toHaveLength(1);
+      expect((await relay.service.list(inv.number)).deliveries).toMatchObject([
+        { state: 'FAILED', mode: 'SIMULATION' },
+        { state: 'SENT', mode: 'RELAY' },
+      ]);
+    });
+
+    it('relay QUEUED -> simulation: not "accepted" by a simulation, nothing sent', async () => {
+      const { inv, recipient } = await issued('cs', 'opacne@rezim.test');
+      const relay = relayProcess(recipient);
+      await relay.service.send(inv.number, sendBody(recipient, 'RELAY') as never, DELIVERY_ACTOR);
+      const sim = await mailApp();
+      try {
+        await runner(sim).tick();
+        expect(sentMail(sim).filter((m) => m.to === recipient)).toEqual([]);
+        expect(
+          ((await deliveriesOf(sim, inv.number)).body as InvoiceDeliveries).deliveries[0],
+        ).toMatchObject({ state: 'FAILED', mode: 'RELAY', code: 'TRANSPORT_CHANGED' });
+      } finally {
+        await sim.close();
+      }
+    });
+
+    it('simulation SENT -> relay: history stays a simulation; relay SENT -> simulation: stays accepted by SMTP', async () => {
+      const simulated = await issued('cs', 'simulace@rezim.test');
+      const real = await issued('cs', 'server@rezim.test');
+      const sim = await mailApp();
+      const relay = relayProcess(real.recipient);
+      try {
+        await sim
+          .post(`${INV}/${simulated.inv.number}/deliveries`)
+          .send(sendBody(simulated.recipient))
+          .expect(201);
+        await runner(sim).tick();
+        await relay.service.send(
+          real.inv.number,
+          sendBody(real.recipient, 'RELAY') as never,
+          DELIVERY_ACTOR,
+        );
+        await drain(relay.service);
+        expect(relay.sent.map((m) => m.to)).toEqual([real.recipient]);
+
+        const seenByRelay = await relay.service.list(simulated.inv.number);
+        expect(seenByRelay.mode).toBe('RELAY');
+        expect(seenByRelay.deliveries).toMatchObject([{ state: 'SENT', mode: 'SIMULATION' }]);
+        const seenBySim = (await deliveriesOf(sim, real.inv.number)).body as InvoiceDeliveries;
+        expect(seenBySim.mode).toBe('SIMULATION');
+        expect(seenBySim.deliveries).toMatchObject([{ state: 'SENT', mode: 'RELAY' }]);
+        // The list of invoices reads the attempt too.
+        for (const [number, mode] of [
+          [simulated.inv.number, 'SIMULATION'],
+          [real.inv.number, 'RELAY'],
+        ] as const)
+          expect(
+            ((await sim.get(`${INV}/${number}`).expect(200)).body as InvoiceDetail).deliveryMode,
+          ).toBe(mode);
+        // Nothing is re-sent or re-labelled by a later round, and the database refuses a change.
+        await drain(relay.service);
+        expect(relay.sent).toHaveLength(1);
+        await expect(
+          asOwner(
+            (db) =>
+              db.$executeRaw`UPDATE "finance"."invoice_deliveries" SET "mode" = 'RELAY' WHERE "recipient" = ${simulated.recipient}`,
+          ),
+        ).rejects.toThrow(/never changes|cannot become/);
+      } finally {
+        await sim.close();
+      }
+    });
+
+    it('a new request from a page showing another mode creates nothing', async () => {
+      const { inv, recipient } = await issued('cs', 'stranka@rezim.test');
+      const sim = await mailApp();
+      try {
+        const r = await sim
+          .post(`${INV}/${inv.number}/deliveries`)
+          .send(sendBody(recipient, 'RELAY'));
+        expect([r.status, r.body.code]).toEqual([409, 'MODE_CHANGED']);
+        expect(
+          ((await deliveriesOf(sim, inv.number)).body as InvoiceDeliveries).deliveries,
+        ).toEqual([]);
+      } finally {
+        await sim.close();
+      }
+    });
+  });
+
   it('the environment: simulated mail only in tests, the relay only named and with allowed recipients', () => {
     const base = {
       APP_ENV: 'development',
@@ -2272,6 +2562,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         { recipient: 'jiny@jazyk.test' },
         { state: 'QUEUED' },
         { messageId: '<jine@ayvo.co>' },
+        { mode: 'RELAY' },
       ])
         await expect(
           app.prisma.invoiceDelivery.update({ where: { id: row.id }, data }),
@@ -2293,6 +2584,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
             language: row.language,
             templateVersion: row.templateVersion,
             messageId: row.messageId,
+            mode: row.mode,
             attemptOf: row.id,
             retryReason: 'Po odeslání nelze',
             duplicateRiskAcknowledged: true,

@@ -32,6 +32,7 @@ type DeliveryRow = Prisma.InvoiceDeliveryGetPayload<{ include: { events: true } 
 const asDelivery = (d: DeliveryRow): InvoiceDelivery => ({
   id: d.id,
   state: d.state as InvoiceDelivery['state'],
+  mode: d.mode as InvoiceDelivery['mode'],
   recipient: d.recipient,
   sender: `${d.senderName} <${d.senderAddress}>`,
   language: d.language as InvoiceDelivery['language'],
@@ -78,6 +79,24 @@ export class InvoiceDeliveriesService {
     return null;
   }
 
+  /** How this process sends now; a delivery is only ever sent in the mode it was requested in. */
+  private currentMode(): InvoiceDeliveries['mode'] {
+    if (!this.env.FINANCE_INVOICE_MAIL) return null;
+    return this.env.FINANCE_INVOICE_MAIL === 'google-relay' ? 'RELAY' : 'SIMULATION';
+  }
+
+  /**
+   * Whether this process may send to this address now. Asked when queuing and again before every
+   * sending: a queued delivery outlives the configuration it was queued under.
+   */
+  private sendRefusal(recipient: string): 'PRODUCTION' | 'RECIPIENT_NOT_ALLOWED' | null {
+    if (this.env.APP_ENV === 'production') return 'PRODUCTION';
+    const allowed = this.env.FINANCE_MAIL_TEST_RECIPIENTS?.split(',').map((a) => a.trim());
+    if (allowed ? !allowed.includes(recipient) : this.env.FINANCE_INVOICE_MAIL === 'google-relay')
+      return 'RECIPIENT_NOT_ALLOWED';
+    return null;
+  }
+
   async list(number: string): Promise<InvoiceDeliveries> {
     const invoice = await this.prisma.invoice.findUnique({
       where: { number },
@@ -91,6 +110,7 @@ export class InvoiceDeliveriesService {
     const blocker = this.blockerOf(invoice.snapshot, !!invoice.cancellation);
     return {
       sendable: blocker === null,
+      mode: this.currentMode(),
       blocker,
       recipient: latest.billingEmail,
       sender: `${INVOICE_MAIL_SENDER.name} <${INVOICE_MAIL_SENDER.address}>`,
@@ -107,7 +127,8 @@ export class InvoiceDeliveriesService {
   }
 
   /** The checks shared by a first sending and a retry, inside the request's transaction. */
-  private async prepare(tx: Prisma.TransactionClient, number: string, seenRecipient: string) {
+  private async prepare(tx: Prisma.TransactionClient, number: string, seen: SendInvoiceRequest) {
+    const seenRecipient = seen.recipient;
     // The lock every writer of customers takes: the address cannot change under this request.
     await tx.$executeRaw`SELECT 1 FROM "finance"."code_counters" WHERE "name" = 'billing_revision' FOR SHARE`;
     const invoice = await tx.invoice.findUnique({
@@ -127,6 +148,13 @@ export class InvoiceDeliveriesService {
           LANGUAGE_MISSING: 'Starší doklad nemá uložený jazyk e-mailu, proto se neodesílá.',
         }[blocker],
       );
+    // A new mode is used only by someone who saw it: never a page from before the switch.
+    if (this.currentMode() !== seen.mode)
+      throw domainError(
+        409,
+        'MODE_CHANGED',
+        'Způsob odesílání se změnil – načtěte stránku znovu. Nic se neodeslalo.',
+      );
     const customer = await this.latestCustomerVersion(tx, invoice.customerId);
     if (customer.billingEmail !== seenRecipient)
       throw domainError(
@@ -134,8 +162,7 @@ export class InvoiceDeliveriesService {
         'RECIPIENT_CHANGED',
         'Adresa odběratele se změnila – načtěte stránku znovu. Nic se neodeslalo.',
       );
-    const allowed = this.env.FINANCE_MAIL_TEST_RECIPIENTS?.split(',').map((a) => a.trim());
-    if (allowed && !allowed.includes(seenRecipient))
+    if (this.sendRefusal(seenRecipient) === 'RECIPIENT_NOT_ALLOWED')
       throw domainError(
         422,
         'RECIPIENT_NOT_ALLOWED',
@@ -147,6 +174,7 @@ export class InvoiceDeliveriesService {
       customerId: invoice.customerId,
       customerVersion: customer.version,
       recipient: seenRecipient,
+      mode: seen.mode,
       senderName: INVOICE_MAIL_SENDER.name,
       senderAddress: INVOICE_MAIL_SENDER.address,
       replyTo: INVOICE_MAIL_SENDER.address,
@@ -165,9 +193,9 @@ export class InvoiceDeliveriesService {
       .run(
         'INVOICE_DELIVERY_REQUEST',
         req.requestId,
-        { number, recipient: req.recipient, actorId: userId },
+        { number, recipient: req.recipient, mode: req.mode, actorId: userId },
         async (tx) => {
-          const data = await this.prepare(tx, number, req.recipient);
+          const data = await this.prepare(tx, number, req);
           const first = await tx.invoiceDelivery.findFirst({
             where: { invoiceId: data.invoiceId },
             select: { id: true },
@@ -206,9 +234,16 @@ export class InvoiceDeliveriesService {
       .run(
         'INVOICE_DELIVERY_RETRY',
         req.requestId,
-        { number, deliveryId, recipient: req.recipient, reason: req.reason, actorId: userId },
+        {
+          number,
+          deliveryId,
+          recipient: req.recipient,
+          mode: req.mode,
+          reason: req.reason,
+          actorId: userId,
+        },
         async (tx) => {
-          const data = await this.prepare(tx, number, req.recipient);
+          const data = await this.prepare(tx, number, req);
           const previous = await tx.invoiceDelivery.findFirst({
             where: { id: deliveryId, invoiceId: data.invoiceId },
             include: { retry: { select: { id: true } } },
@@ -291,7 +326,10 @@ export class InvoiceDeliveriesService {
   ): Promise<SendOutcome> {
     const { invoice } = d;
     if (invoice.cancellation) return { kind: 'REJECTED', code: 'INVOICE_CANCELLED' };
-    if (this.env.APP_ENV === 'production') return { kind: 'REJECTED', code: 'PRODUCTION' };
+    const refusal = this.sendRefusal(d.recipient);
+    if (refusal) return { kind: 'REJECTED', code: refusal };
+    // Requested under another transport: that intent does not carry over, nothing is sent.
+    if (d.mode !== this.currentMode()) return { kind: 'REJECTED', code: 'TRANSPORT_CHANGED' };
     const snapshot = invoice.snapshot as unknown as InvoicePdfSnapshot;
     let pdf: Buffer;
     try {

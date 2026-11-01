@@ -57,7 +57,7 @@ const address = (a: {
 const invoiceInclude = {
   lines: { include: { agreement: { select: { code: true } } }, orderBy: { lineNo: 'asc' } },
   cancellation: true,
-  deliveries: { select: { state: true }, orderBy: { requestedAt: 'desc' }, take: 1 },
+  deliveries: { select: { state: true, mode: true }, orderBy: { requestedAt: 'desc' }, take: 1 },
   customer: { include: { customer: { select: { code: true } } } },
   allocations: {
     include: { payment: { select: { code: true } } },
@@ -620,6 +620,7 @@ function summary(r: InvoiceRow): InvoiceSummary {
     kind: 'TEST',
     documentLanguage: documentLanguageOf(r.snapshot),
     deliveryState: (r.deliveries[0]?.state ?? null) as InvoiceSummary['deliveryState'],
+    deliveryMode: (r.deliveries[0]?.mode ?? null) as InvoiceSummary['deliveryMode'],
     variableSymbol: r.variableSymbol,
     customer: {
       code: r.customer.customer.code,

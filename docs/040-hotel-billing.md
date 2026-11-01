@@ -202,7 +202,7 @@ A saved run needs its own tables, so it waits for the owner's approval of the mo
 ## 12. The language of documents (owner 2026-10-30)
 
 - **The choice:** `customer_versions.document_language` — `cs`, `en` or `de`, required on every new
-  version (also a DB trigger), the same for the PDF and the invoice e-mail. Never derived from the
+  version by the API (in the database only after §12a), the same for the PDF and the invoice e-mail. Never derived from the
   country; the form has no preselected value.
 - **Missing:** versions recorded before the choice stay `NULL`. Such a customer has the gap
   `CUSTOMER_LANGUAGE_MISSING`: the invoice forms and the monthly run show why, the API answers
@@ -217,6 +217,25 @@ A saved run needs its own tables, so it waits for the owner's approval of the mo
   point, and every live VAT or reverse-charge wording, are the accountant's (§7): a TEST invoice
   prints only the note that it is not a tax document.
 - **Previews:** `docs/screenshots/finance/finance-invoice-pdf-{cs,en,de}.png` (synthetic).
+
+### 12a. Rollout and rollback of the language column (review LANG96-R1)
+
+Rolling back images never reverts a migration, and the image before this release inserts customer
+versions without `document_language`. So the steps are separate releases:
+
+1. **Expand (this release).** The migration only adds the nullable column and its value check. The
+   new Finance requires the language in the API. The previous image keeps working on the migrated
+   database; what it writes stays `NULL`, i.e. `CUSTOMER_LANGUAGE_MISSING` until a person chooses.
+   Nothing is guessed, no history is rewritten.
+2. **Deploy:** the migration and Finance first, the web right after. In the short window the old web
+   gets a visible 400 on saving a customer (it sends no language); nothing is stored.
+3. **Roll back images (before step 4):** web first, then Finance, to the same earlier commit; the
+   migration stays. Creating and changing customers keeps working. Versions written meanwhile have
+   `NULL`; after the return a person chooses the language with a new version.
+4. **Enforce, a later release:** only after the owner closes the rollback window for images older
+   than step 1. Its own migration adds a `BEFORE INSERT` trigger refusing `NULL` on new versions (old
+   `NULL` rows stay valid), with a test, and is not part of this PR. Rolling it back is a forward
+   migration dropping the trigger, applied before any image older than step 1 is started.
 
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 

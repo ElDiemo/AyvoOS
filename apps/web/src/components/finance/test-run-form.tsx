@@ -2,7 +2,7 @@
 
 import { testRunPreviewSchema, testRunResultSchema, type TestRunPreview } from '@ayvo/types';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAttempt } from '@/components/catalog/form-kit';
 import { buttonClass, ErrorNote, Notice, inputClass } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
@@ -37,9 +37,14 @@ export function TestRunForm() {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState<{ agreementCode: string; number: string }[] | null>(null);
   const attempt = useAttempt();
+  // Only the latest request may answer: a slower one for an earlier month is dropped.
+  const latestLoad = useRef<AbortController | null>(null);
 
   async function load(e?: React.FormEvent, keepResult = false) {
     e?.preventDefault();
+    latestLoad.current?.abort();
+    const current = new AbortController();
+    latestLoad.current = current;
     setLoading(true);
     setChosen([]);
     if (!keepResult) {
@@ -47,16 +52,15 @@ export function TestRunForm() {
       setDone(null);
     }
     try {
-      setPreview(
-        await apiGet(
-          `admin/finance/invoices/test-run/preview?month=${month}`,
-          testRunPreviewSchema,
-        ),
+      const answer = await apiGet(
+        `admin/finance/invoices/test-run/preview?month=${month}`,
+        testRunPreviewSchema,
       );
+      if (!current.signal.aborted) setPreview(answer);
     } catch (err) {
-      setError(errorText(err));
+      if (!current.signal.aborted) setError(errorText(err));
     } finally {
-      setLoading(false);
+      if (!current.signal.aborted) setLoading(false);
     }
   }
 
@@ -64,9 +68,15 @@ export function TestRunForm() {
   const ready = items.filter((i) => i.state === 'READY');
   const selected = ready.filter((i) => chosen.includes(i.agreementCode));
   const currencies = [...new Set(selected.map((i) => i.currency!))];
-  const canRun = !!preview?.issuable && selected.length > 0 && !!issuedOn && !attempt.busy;
+  const canRun =
+    !!preview?.issuable &&
+    preview.month === month &&
+    selected.length > 0 &&
+    !!issuedOn &&
+    !attempt.busy;
 
   async function run() {
+    if (preview?.month !== month) return;
     setError(null);
     // Exactly what the user sees: if the terms change before issuing, nothing is issued.
     const body = {
@@ -121,6 +131,8 @@ export function TestRunForm() {
             required
             value={month}
             onChange={(e) => {
+              latestLoad.current?.abort();
+              setLoading(false);
               setMonth(e.target.value);
               setPreview(null);
               setChosen([]);

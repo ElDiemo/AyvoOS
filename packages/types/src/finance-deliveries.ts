@@ -16,9 +16,18 @@ export const INVOICE_DELIVERY_STATES = [
 export const invoiceDeliveryStateSchema = z.enum(INVOICE_DELIVERY_STATES);
 export type InvoiceDeliveryState = z.infer<typeof invoiceDeliveryStateSchema>;
 
+/**
+ * SIMULATION opens no real connection and nothing leaves the system; RELAY sends a real test e-mail,
+ * only to the allowed addresses.
+ */
+export const invoiceDeliveryModeSchema = z.enum(['SIMULATION', 'RELAY']);
+export type InvoiceDeliveryMode = z.infer<typeof invoiceDeliveryModeSchema>;
+
 export const invoiceDeliverySchema = z.object({
   id: z.uuid(),
   state: invoiceDeliveryStateSchema,
+  /** Fixed with this attempt's request: what its result means never follows today's configuration. */
+  mode: invoiceDeliveryModeSchema,
   recipient: z.string(),
   sender: z.string(),
   language: documentLanguageSchema,
@@ -45,6 +54,8 @@ export const invoiceDeliveriesSchema = z.object({
   blocker: z
     .enum(['DELIVERY_DISABLED', 'INVOICE_CANCELLED', 'LANGUAGE_MISSING', 'PRODUCTION'])
     .nullable(),
+  /** How this server would send a new attempt, from its configuration; null: off. */
+  mode: invoiceDeliveryModeSchema.nullable(),
   /** The address a sending would use now (the customer's current billing e-mail). */
   recipient: z.string(),
   sender: z.string(),
@@ -52,10 +63,11 @@ export const invoiceDeliveriesSchema = z.object({
 });
 export type InvoiceDeliveries = z.infer<typeof invoiceDeliveriesSchema>;
 
-/** The address the user saw is part of the request: a changed one is refused, never substituted. */
+/** The address and mode the user saw are the request: changed ones are refused, never substituted. */
 export const sendInvoiceSchema = z.object({
   requestId: z.uuid(),
   recipient: z.email().max(254),
+  mode: invoiceDeliveryModeSchema,
 });
 export type SendInvoiceRequest = z.infer<typeof sendInvoiceSchema>;
 
