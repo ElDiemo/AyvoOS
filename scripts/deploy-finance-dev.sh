@@ -222,7 +222,7 @@ while (($#)); do
     --check) MODE=check ;;
     --rollback)
       MODE=rollback
-      echo 'Upozorneni: novy web se starsi Finance je podporovany jen pro seznam plateb a kartu hotelu; vratte i web, web prvni (doc 040 12a).' >&2
+      echo 'Upozorneni: web novejsi nez Finance ma cast Financi uzavrenou; pri navratu nejdriv web, pak Finance (doc 040 12a).' >&2
       TAG=${2:-}
       [[ $TAG =~ ^finance-[A-Za-z0-9][A-Za-z0-9_.-]{0,120}$ ]] || die "--rollback needs a Finance image tag (finance-…)"
       shift

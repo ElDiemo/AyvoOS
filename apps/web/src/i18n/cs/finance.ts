@@ -1,10 +1,9 @@
 /** Czech strings of Finance (doc 039): received documents. */
 export const financeCs = {
   versionMismatch: {
-    title: 'Web a Finance běží v nepodporované kombinaci verzí',
-    text: 'Finance odpovídá ve starší verzi, kterou tato verze webu nečte. Data se nezměnila a opakování nepomůže.',
-    action:
-      'Správce vrátí také web na verzi Finance, nebo Finance povýší. Seznam plateb a karta hotelu fungují dál.',
+    title: 'Finance jsou ve starší verzi než web',
+    text: 'Tato část Financí je během přechodu mezi verzemi uzavřená. Data se nezměnila a opakování nepomůže. Hotely, objednávky a logistika fungují dál.',
+    action: 'Správce dokončí přechod: povýší Finance, nebo při návratu vrátí i Finance.',
   },
   unavailable: {
     title: 'Finance jsou dočasně nedostupné',
