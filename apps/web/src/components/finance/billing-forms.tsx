@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  API_BASE_PATH,
   BILLING_TIMINGS,
   DOCUMENT_LANGUAGES,
   type BillingAgreementDetail,
@@ -28,15 +29,30 @@ function useSubmit() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const requestId = useRef(crypto.randomUUID());
+  const inFlight = useRef(false);
   const fresh = () => {
     requestId.current = crypto.randomUUID();
     setSaved(false);
   };
-  async function send(path: string, body: Record<string, unknown>, done?: (r: unknown) => void) {
+  async function send(
+    path: string,
+    body: Record<string, unknown>,
+    done?: (r: unknown) => void,
+    /** Runs inside the busy state; a text refuses the save and nothing is sent. */
+    check?: () => Promise<string | null>,
+  ) {
+    // A second click can come before the button re-renders as disabled.
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
+      const refused = await check?.();
+      if (refused) {
+        setError(refused);
+        return;
+      }
       const r = await apiSend('POST', path, z.unknown(), { requestId: requestId.current, ...body });
       fresh();
       done?.(r);
@@ -48,10 +64,31 @@ function useSubmit() {
         if (err.code === 'CONCURRENT_CHANGE') router.refresh();
       } else setError(err instanceof Error ? err.message : String(err));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
   return { busy, error, saved, send, fresh };
+}
+
+const FINANCE_CHECK_MS = 5_000;
+const languageCapability = z.object({ documentLanguage: z.literal(true) });
+
+/**
+ * A Finance older than this web would store a customer without the chosen language, silently (doc 040
+ * §12a). Only its explicit answer allows the save: no answer in time, an error or anything else refuses.
+ */
+async function financeLanguageRefusal() {
+  try {
+    const res = await fetch(`${API_BASE_PATH}/admin/finance/health/capabilities`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(FINANCE_CHECK_MS),
+    });
+    if (res.ok && languageCapability.safeParse(await res.json()).success) return null;
+  } catch {
+    // refused below
+  }
+  return t.financeLanguageUnconfirmed;
 }
 
 function Field({
@@ -219,6 +256,7 @@ export function CustomerForm({
             } else setBase((r as BillingCustomerDetail).current.version);
             setReason('');
           },
+          financeLanguageRefusal,
         );
       }}
     >

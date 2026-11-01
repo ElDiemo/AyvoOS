@@ -23,6 +23,13 @@ export class FinanceHealthController {
     return { status: 'live' };
   }
 
+  /** What this Finance takes (doc 040 §12a): an older one has no such route, and drops the language. */
+  @Public()
+  @Get('capabilities')
+  capabilities() {
+    return { documentLanguage: true };
+  }
+
   @Public()
   @Get('ready')
   @HttpCode(200)
