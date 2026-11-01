@@ -19,24 +19,24 @@ nových tabulek, migrací a obchodního modelu. Merge a nasazení schválené ne
 
 Stávající routy beze změny práv, pokud není uvedeno jinak.
 
-| Routa                                        | Stav       | Čtení                      | Změna                      |
-| -------------------------------------------- | ---------- | -------------------------- | -------------------------- |
-| `/hotels/[code]`                             | úprava     | stávající jádro            | `hotels:manage`            |
-| `/hotels/new`                                | text       | `hotels:manage`            | `hotels:manage`            |
-| `/finance/billing?hotel=<id>`                | nová volba | `finance:billing_read`     | `finance:billing_manage`   |
-| `/finance/billing` (jen smlouvy)             | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
-| `/finance/billing/agreements/[code]`         | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
-| `/finance/billing/customers`                 | nová       | `finance:billing_read`     | `finance:billing_manage`   |
-| `/finance/billing/customers/[code]`          | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
-| `/finance/settings/prices`                   | nová       | `finance:billing_read`     | `finance:billing_manage`   |
-| `/finance/settings/company`                  | text       | `finance:issuer_manage`    | `finance:issuer_manage`    |
-| `/finance/invoices?agreement=<code>`         | úprava     | `finance:invoices_read`    | žádná                      |
-| `/finance/invoices/[number]`                 | úprava     | `finance:invoices_read`    | dle akce                   |
-| `/finance/payments?state=&changed=&q=&page=` | úprava     | `finance:invoices_read`    | žádná                      |
-| `/finance/payments/[code]`                   | nová       | `finance:invoices_read`    | `finance:payments_manage`  |
-| `/finance/exports`                           | text       | `finance:documents_read`   | `finance:exports_manage`   |
-| `/finance/documents/new`                     | úprava     | `finance:documents_manage` | `finance:documents_manage` |
-| `/warehouse/suppliers`                       | beze změny | stávající jádro            | stávající jádro            |
+| Routa                                | Stav       | Čtení                      | Změna                      |
+| ------------------------------------ | ---------- | -------------------------- | -------------------------- |
+| `/hotels/[code]`                     | úprava     | stávající jádro            | `hotels:manage`            |
+| `/hotels/new`                        | text       | `hotels:manage`            | `hotels:manage`            |
+| `/finance/billing?hotel=<id>`        | nová volba | `finance:billing_read`     | `finance:billing_manage`   |
+| `/finance/billing` (jen smlouvy)     | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
+| `/finance/billing/agreements/[code]` | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
+| `/finance/billing/customers`         | nová       | `finance:billing_read`     | `finance:billing_manage`   |
+| `/finance/billing/customers/[code]`  | úprava     | `finance:billing_read`     | `finance:billing_manage`   |
+| `/finance/settings/prices`           | nová       | `finance:billing_read`     | `finance:billing_manage`   |
+| `/finance/settings/company`          | text       | `finance:issuer_manage`    | `finance:issuer_manage`    |
+| `/finance/invoices?hotel=<id>`       | úprava     | `finance:invoices_read`    | žádná                      |
+| `/finance/invoices/[number]`         | úprava     | `finance:invoices_read`    | dle akce                   |
+| `/finance/payments?filter=&q=&page=` | úprava     | `finance:invoices_read`    | žádná                      |
+| `/finance/payments/[code]`           | nová       | `finance:invoices_read`    | `finance:payments_manage`  |
+| `/finance/exports`                   | text       | `finance:documents_read`   | `finance:exports_manage`   |
+| `/finance/documents/new`             | úprava     | `finance:documents_manage` | `finance:documents_manage` |
+| `/warehouse/suppliers`               | beze změny | stávající jádro            | stávající jádro            |
 
 **Ceník nesmí pod `/finance/settings/company`:** ta stránka vyžaduje `finance:issuer_manage`, ceník
 `finance:billing_read` a `finance:billing_manage`. Proto vlastní routa v Nastavení Financí, jediný
@@ -61,7 +61,7 @@ Každá je samostatné PR s vlastními testy a snímky 1440, 390 a 320.
 
 - Panel „Smlouva a fakturace“ na kartě hotelu: plátce, platná smlouva, fakturované pokoje, cena se
   zdrojem a měnou, splatnost a faktury se stavem úhrady.
-- Data z Finance přes nový čtecí endpoint `GET billing/hotel/:hotelId`, s jasným měsícem platnosti.
+- Data z Finance přes nový čtecí endpoint `GET billing/agreements/by-hotel/:hotelId` (#101), s jasným měsícem platnosti.
   Podmínky počítá stávající výpočet platných podmínek, web nic nepočítá.
 - Faktury se filtrují přesnou vazbou řádku na hotel; souhrnná faktura stejné firmy je označená.
 - Oprávnění se hodnotí zvlášť: smlouva `finance:billing_read`, faktury `finance:invoices_read`.
@@ -76,7 +76,7 @@ své hotely. Staré odkazy `?new=` přesměrují na odpovídající formulář.
 
 ### U4 — Platby (samostatné PR s omezeným API)
 
-- `GET payments`: `state`, `changed`, `q` (kód, VS, přesná částka), stránkování se serverovým limitem.
+- `GET payments` (#103): `filter=REVIEW|CHANGED|ALLOCATED`, `q` (kód, VS, protistrana, přesná částka), `page`, `pageSize` nejvýš 100.
   Výpis faktur se přestane načítat celý; hledání otevřených faktur je omezené.
 - Přehled odkazuje zvlášť na „K posouzení“ a „Změněno bankou“.
 - Kompaktní sloupce (datum, částka, VS, protistrana, stav), jeden stav, UUID jen v detailu.
@@ -126,4 +126,9 @@ pořadí: U1 → U2 → U3 → U4 → U5 → U6 → U7 → U8.
 | A6  | Jeden editor ceníku, stejná práva; čtenář jen čte                                                                    | Playwright + API            | U3                         |
 | A7  | Platby: filtry, limit na serveru, dva odkazy z Přehledu dávají různé výsledky                                        | API + Playwright            | U4                         |
 | A8  | Simulace a skutečný test jsou slovy odlišené; `UNCERTAIN` a varování vždy viditelné                                  | Playwright                  | U5, U6                     |
-| A9  | 1440, 390, 320 bez vodorovného přetečení; celý průchod jen klávesnicí, viditelný fokus, popsaná pole                 | Playwright                  | všechny s UI               |
+| A9  | 1440, 390, 320 bez vodorovného přetečení; viditelný fokus, popsaná pole. Klávesnice viz níže                         | Playwright                  | všechny s UI               |
+
+**Co je k 1. 11. 2026 skutečně doloženo (integrační snímek #108):** šířky 1440, 390 a 320 bez
+přetečení tam, kde to spec měří (ne každá stránka). Klávesnicí prošly odkazy, odeslání, hledání a otevření
+platby; formuláře se ve spec vyplňují programově, takže úplný průchod jen klávesnicí zatím doložený není.
+Na šířce 390 je v tabulce řádků faktury oříznutý sloupec částky, posouvání není ověřené.
