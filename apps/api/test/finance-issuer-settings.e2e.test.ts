@@ -1735,7 +1735,14 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     expect(run).toMatchObject({ state: 'BLOCKED', blockers: ['CUSTOMER_LANGUAGE_MISSING'] });
 
     // The new API still requires the choice; the database does only after doc 040 §12a.
-    const { documentLanguage: _none, ...withoutLanguage } = customerIn('cs');
+    const triggers = await asOwner((db) =>
+      db.$queryRaw<{ tgname: string }[]>`
+        SELECT t."tgname" FROM pg_trigger t JOIN pg_class c ON c."oid" = t."tgrelid"
+        WHERE c."relname" = 'customer_versions' AND t."tgname" LIKE '%language%'`,
+    );
+    expect(triggers).toEqual([]);
+    const withoutLanguage: Record<string, unknown> = { ...customerIn('cs') };
+    delete withoutLanguage.documentLanguage;
     await f
       .post(`${B}/customers/${c.code}/versions`)
       .send({
