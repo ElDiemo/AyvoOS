@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { financeAmount, financeDate } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { ImportBankButton, SimulateStatementForm } from '@/components/finance/payment-forms';
+import { PaymentFragmentLink } from '@/components/finance/payment-fragment-link';
 import { buttonClass, Card, inputClass, Notice } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiGet } from '@/lib/api';
@@ -66,6 +67,7 @@ export default async function PaymentsPage({
           </p>
           {canManage && <ImportBankButton />}
         </div>
+        <PaymentFragmentLink />
         {page.legacy && (
           <Notice tone="info">
             <span data-testid="payments-legacy">{t.legacyFinance}</span>

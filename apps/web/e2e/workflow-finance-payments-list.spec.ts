@@ -63,6 +63,17 @@ test.describe('Platby', () => {
     await expect(page).toHaveURL(/page=2/);
     await expect(page.getByTestId('payments-found')).toContainText('Zobrazeno 26–');
 
+    // An older link to a payment that is not on the first page still finds it.
+    const onSecondPage = await page
+      .getByTestId('payments')
+      .locator('li[data-testid^="payment-PP-"]')
+      .first()
+      .getAttribute('id');
+    await page.goto('/finance');
+    await page.goto(`/finance/payments#${onSecondPage}`);
+    await expect(page).toHaveURL(new RegExp(`/finance/payments/${onSecondPage}$`));
+    await page.goto('/finance/payments?page=2');
+
     // By the keyboard: type and Enter.
     await page.getByTestId('payments-q').fill(name);
     await page.keyboard.press('Enter');
