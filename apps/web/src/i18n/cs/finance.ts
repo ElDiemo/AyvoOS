@@ -318,6 +318,8 @@ export const financeCs = {
       ALLOCATED: 'Přiřazené',
     } as Record<string, string>,
     searchLabel: 'Hledat',
+    legacyFinance:
+      'Finance běží ve starší verzi: zobrazuje se celý seznam jen ke čtení, bez filtrů, hledání a detailu plateb.',
     searchHint: 'Kód, variabilní symbol, protistrana nebo přesná částka',
     search: 'Hledat',
     found: (total: number, from: number, to: number) =>

@@ -104,6 +104,28 @@ export const paymentsPageSchema = z.object({
 });
 export type PaymentsPage = z.infer<typeof paymentsPageSchema>;
 
+/**
+ * What the web reads: also the answer of a Finance from before the bounded list, during a rollout or
+ * after its return to an earlier image. That one ignores the query and returns everything, has no
+ * detail route, so `legacy` makes the page a plain read-only list instead of failing.
+ */
+export const paymentsPageResponseSchema = z
+  .object({
+    simulationAvailable: z.boolean(),
+    total: z.number().int().optional(),
+    page: z.number().int().optional(),
+    pageSize: z.number().int().optional(),
+    payments: z.array(incomingPaymentSchema),
+  })
+  .transform((r) => ({
+    simulationAvailable: r.simulationAvailable,
+    payments: r.payments,
+    legacy: r.total === undefined,
+    total: r.total ?? r.payments.length,
+    page: r.page ?? 1,
+    pageSize: r.pageSize ?? Math.max(r.payments.length, 1),
+  }));
+
 /** POST /api/admin/finance/payments/simulate — a simulated statement (outside production only). */
 export const simulateStatementSchema = z.strictObject({
   requestId: z.uuid(),

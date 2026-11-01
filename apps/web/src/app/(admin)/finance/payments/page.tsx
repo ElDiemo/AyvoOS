@@ -1,4 +1,4 @@
-import { PAYMENT_FILTERS, paymentsPageSchema, paymentsQuerySchema } from '@ayvo/types';
+import { PAYMENT_FILTERS, paymentsPageResponseSchema, paymentsQuerySchema } from '@ayvo/types';
 import Link from 'next/link';
 import { financeAmount, financeDate } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
@@ -15,7 +15,7 @@ const t = financeCs.payments;
  * Platby a přiřazení (N3B-2, doc 041 §8; a view of Banka a platby, doc 042): incoming payments,
  * their matching and allocations. The list comes first; recording payments from the bank
  * transactions already read is the one action above it, the DEV simulation a closed block below
- * (never in production). Each payment is an anchor (#P-…) for the invoice detail's links.
+ * (never in production). Each payment is an anchor (#PP-…); an older link to one on another page opens its detail.
  */
 export default async function PaymentsPage({
   searchParams,
@@ -28,7 +28,7 @@ export default async function PaymentsPage({
   const params = await searchParams;
   const parsed = paymentsQuerySchema.safeParse(params);
   const query = parsed.success ? parsed.data : {};
-  const page = await apiGet('admin/finance/payments', paymentsPageSchema, {
+  const page = await apiGet('admin/finance/payments', paymentsPageResponseSchema, {
     filter: query.filter,
     q: query.q,
     page: query.page,
@@ -66,40 +66,53 @@ export default async function PaymentsPage({
           </p>
           {canManage && <ImportBankButton />}
         </div>
-        <nav
-          aria-label={t.filters.ALL}
-          className="flex flex-wrap gap-2 text-sm"
-          data-testid="payments-filters"
-        >
-          {[undefined, ...PAYMENT_FILTERS].map((f) => (
-            <Link
-              key={f ?? 'ALL'}
-              href={urlOf({ filter: f })}
-              aria-current={query.filter === f ? 'page' : undefined}
-              className={query.filter === f ? buttonClass.primary : buttonClass.secondary}
-              data-testid={`payments-filter-${f ?? 'ALL'}`}
+        {page.legacy && (
+          <Notice tone="info">
+            <span data-testid="payments-legacy">{t.legacyFinance}</span>
+          </Notice>
+        )}
+        {!page.legacy && (
+          <>
+            <nav
+              aria-label={t.filters.ALL}
+              className="flex flex-wrap gap-2 text-sm"
+              data-testid="payments-filters"
             >
-              {t.filters[f ?? 'ALL']}
-            </Link>
-          ))}
-        </nav>
-        <form className="flex flex-wrap items-end gap-2 text-sm" data-testid="payments-search">
-          {query.filter && <input type="hidden" name="filter" value={query.filter} />}
-          <label className="flex min-w-0 flex-1 flex-col gap-1 font-medium">
-            {t.searchLabel}
-            <input
-              name="q"
-              defaultValue={query.q ?? ''}
-              maxLength={80}
-              placeholder={t.searchHint}
-              className={inputClass}
-              data-testid="payments-q"
-            />
-          </label>
-          <button type="submit" className={buttonClass.secondary} data-testid="payments-q-submit">
-            {t.search}
-          </button>
-        </form>
+              {[undefined, ...PAYMENT_FILTERS].map((f) => (
+                <Link
+                  key={f ?? 'ALL'}
+                  href={urlOf({ filter: f })}
+                  aria-current={query.filter === f ? 'page' : undefined}
+                  className={query.filter === f ? buttonClass.primary : buttonClass.secondary}
+                  data-testid={`payments-filter-${f ?? 'ALL'}`}
+                >
+                  {t.filters[f ?? 'ALL']}
+                </Link>
+              ))}
+            </nav>
+            <form className="flex flex-wrap items-end gap-2 text-sm" data-testid="payments-search">
+              {query.filter && <input type="hidden" name="filter" value={query.filter} />}
+              <label className="flex min-w-0 flex-1 flex-col gap-1 font-medium">
+                {t.searchLabel}
+                <input
+                  name="q"
+                  defaultValue={query.q ?? ''}
+                  maxLength={80}
+                  placeholder={t.searchHint}
+                  className={inputClass}
+                  data-testid="payments-q"
+                />
+              </label>
+              <button
+                type="submit"
+                className={buttonClass.secondary}
+                data-testid="payments-q-submit"
+              >
+                {t.search}
+              </button>
+            </form>
+          </>
+        )}
         <Card testId="payments">
           <p className="mb-2 text-xs text-stone-500" data-testid="payments-found">
             {t.found(page.total, from, to)}
@@ -120,13 +133,17 @@ export default async function PaymentsPage({
                     className="grid scroll-mt-24 grid-cols-2 gap-x-4 gap-y-1 py-2 target:bg-amber-50 lg:grid-cols-[7rem_6rem_7rem_8rem_1fr_11rem]"
                     data-testid={`payment-${p.code}`}
                   >
-                    <Link
-                      href={`/finance/payments/${p.code}`}
-                      className="font-mono underline"
-                      data-testid={`payment-${p.code}-open`}
-                    >
-                      {p.code}
-                    </Link>
+                    {page.legacy ? (
+                      <span className="font-mono">{p.code}</span>
+                    ) : (
+                      <Link
+                        href={`/finance/payments/${p.code}`}
+                        className="font-mono underline"
+                        data-testid={`payment-${p.code}-open`}
+                      >
+                        {p.code}
+                      </Link>
+                    )}
                     <span>{financeDate(p.bookedOn)}</span>
                     <span className="font-semibold tabular-nums">
                       {financeAmount(p.amount, p.currency)}
