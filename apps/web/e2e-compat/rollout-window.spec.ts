@@ -14,6 +14,21 @@ const SHOTS = process.env.AYVO_COMPAT_SHOTS;
 const FINANCE = 'http://localhost:4110';
 const serverPid = () =>
   Number(readFileSync(join(tmpdir(), 'ayvo-e2e-server-4100.pid'), 'utf8').trim());
+/** As `docker stop`: the test server's Finance gets 5 s, then is killed (it can keep answering for 40 s). */
+function stopTestFinance() {
+  const pid = execFileSync('pgrep', ['-P', String(serverPid())], { encoding: 'utf8' })
+    .trim()
+    .split('\n')
+    .find((p) => readFileSync(`/proc/${p}/cmdline`, 'utf8').includes('dist/finance/main.js'));
+  process.kill(serverPid(), 'SIGUSR2');
+  setTimeout(() => {
+    try {
+      if (pid) process.kill(Number(pid), 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }, 5_000).unref();
+}
 let oldFinance: ChildProcess | null = null;
 
 const up = async () =>
@@ -37,7 +52,7 @@ function financeEnv() {
 }
 async function useOldFinance() {
   const env = financeEnv();
-  process.kill(serverPid(), 'SIGUSR2');
+  stopTestFinance();
   await waitFinance(false);
   oldFinance = spawn(process.execPath, ['dist/finance/main.js'], {
     cwd: resolve(OLD_ROOT, 'apps/api'),
