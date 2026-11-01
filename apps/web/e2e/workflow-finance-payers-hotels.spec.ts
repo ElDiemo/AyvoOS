@@ -111,6 +111,7 @@ test.describe.serial('Karta hotelu a Finance', () => {
     await customerForm.locator('[name=postalCode]').fill('602 00');
     await customerForm.locator('[name=city]').fill('Brno');
     await customerForm.locator('[name=billingEmail]').fill('fakturace@ukazka.test');
+    await customerForm.locator('[name=documentLanguage]').selectOption('cs');
     await customerForm.getByTestId('customer-save').click();
     await expect(customerForm.getByRole('status')).toHaveText('Uloženo.');
     await expect(chosen).toContainText(`Hotel Plátce A ${run}`);

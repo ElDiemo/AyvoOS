@@ -17,7 +17,6 @@ import type {
   InvoiceSummary,
   IssuerSettings,
   PaymentLoadResult,
-  PaymentsPage,
   TestRunPreview,
   TestRunResult,
 } from '@ayvo/types';
@@ -2642,6 +2641,11 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         where: { roleCode: 'ADMIN', permissionCode: 'finance:invoices_send' },
       });
       expect(grant).not.toBeNull();
+    } finally {
+      await real.close();
+    }
+  });
+
   // --- a hotel's card reads Finance (doc 044 U2) ----------------------------------------------
 
   it('one hotel: the same terms as the month computation, no agreement is not an error; invoices by exact hotel', async () => {
@@ -2712,6 +2716,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         city: 'Brno',
         countryCode: 'CZ',
         billingEmail: 'fakturace@hotely.test',
+        documentLanguage: 'cs',
       },
       reason: 'Změna názvu (test)',
     });
@@ -2785,6 +2790,8 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         await app.close();
       }
     }
+  });
+
   it('the list of invoices: an agreement and a hotel together mean both, a mismatched pair finds nothing', async () => {
     await ensureCzkDefault();
     const c = await customer();
@@ -2806,6 +2813,8 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     expect(await numbers(`hotelId=${hotelB}&limit=1`)).toEqual([later.number]);
     expect(await numbers(`hotelId=${hotelB}`)).toEqual([later.number, invB.number]);
     await f.get(`${INV}?hotelId=${hotelB}&limit=0`).expect(400);
+  });
+
   // --- the bounded list of payments (doc 044 U4) ----------------------------------------------
 
   it('payments: bounded, filtered and searched in the database; REVIEW and CHANGED equal the overview', async () => {
