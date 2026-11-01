@@ -75,8 +75,10 @@ export const financeCs = {
     file: 'Originál (PDF)',
     submit: 'Přijmout doklad',
     busy: 'Nahrávám…',
-    noSupplier:
-      'Dodavatel chybí? Založte ho v Sklad → Dodavatelé (stejný seznam dodavatelů pro celou firmu).',
+    noSupplier: 'Dodavatel chybí? Seznam dodavatelů je jeden pro celou firmu.',
+    openSuppliers: 'Otevřít Dodavatele v nové záložce',
+    refreshSuppliers: 'Načíst dodavatele znovu',
+    askForSupplier: 'Založí ho kolega s přístupem do Skladu. Naskladnění není potřeba.',
     amountHelp: 'Jak je uvedeno na dokladu, tečka jako desetinná čárka (např. 25000.00).',
     chooseSupplier: 'Vyberte dodavatele',
     monthHelp: 'Do exportu kterého měsíce doklad patří (rozhodnutí pro účetní, ne daňové datum).',
