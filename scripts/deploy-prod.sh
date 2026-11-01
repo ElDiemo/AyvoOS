@@ -1014,6 +1014,14 @@ check_core_holds_finance_contract() {
   ok "the running API holds the Finance contract"
 }
 
+# The OS and Finance are two steps (--finance needs the OS on its release): name the open window.
+os_ahead_note() {
+  local next="--finance --release $RELEASE"
+  [[ $MODE == rollback ]] && next="--finance-rollback $ROLLBACK"
+  [[ -z $FINANCE_RELEASE || $FINANCE_RELEASE == "$AYVO_RELEASE" ]] ||
+    warn "Finance still runs $FINANCE_RELEASE, part of it stays closed until: scripts/deploy-prod.sh $next (doc 040 §12a)"
+}
+
 # PROD78-R1: before any change, the API must run exactly the image this release was built as;
 # Finance and its migrations then run those image IDs (never a tag that may have moved since).
 pin_finance_images() {
@@ -1230,6 +1238,7 @@ case $MODE in
     record_release
     remove_old_images
     ok "production runs $RELEASE"
+    os_ahead_note
     echo "Next: the external negative test (doc 036 §5) after the first installation and every edge change."
     ;;
   rollback)
@@ -1247,6 +1256,7 @@ case $MODE in
     verify
     record_release
     ok "production runs $RELEASE again"
+    os_ahead_note
     ;;
   marketing)
     [[ $EXPECT_IMAGE =~ ^sha256:[0-9a-f]{64}$ ]] ||
@@ -1338,6 +1348,8 @@ case $MODE in
     verify_finance
     record_finance
     ok "the Finance unit runs $FINANCE_ROLLBACK again"
+    [[ $FINANCE_ROLLBACK == "$AYVO_RELEASE" ]] ||
+      warn "the OS runs $AYVO_RELEASE, newer web than Finance: part of Finance stays closed; on a return the OS goes first (doc 040 §12a)"
     ;;
   bootstrap)
     STEP="bootstrap the first administrator"

@@ -100,7 +100,11 @@ export async function apiGet<T extends z.ZodType>(
   }
   if (res.status === 404) notFound();
   if (!res.ok) throw new ApiError(res.status, `API ${res.status} for ${path}`);
-  return schema.parse(await res.json());
+  const parsed = schema.safeParse(await res.json());
+  if (parsed.success) return parsed.data;
+  // Finance answers, but not in this web's contract: an unsupported pair of releases, not an outage.
+  if (path.startsWith('admin/finance/')) redirect('/finance/version-mismatch');
+  throw parsed.error;
 }
 
 /**

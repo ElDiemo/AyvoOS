@@ -1,5 +1,10 @@
 /** Czech strings of Finance (doc 039): received documents. */
 export const financeCs = {
+  versionMismatch: {
+    title: 'Finance jsou ve starší verzi než web',
+    text: 'Tato část Financí je během přechodu mezi verzemi uzavřená. Data se nezměnila a opakování nepomůže. Hotely, objednávky a logistika fungují dál.',
+    action: 'Správce dokončí přechod: povýší Finance, nebo při návratu vrátí i Finance.',
+  },
   unavailable: {
     title: 'Finance jsou dočasně nedostupné',
     text: 'Ostatní části AYVO OS fungují. Zkuste to prosím za chvíli znovu.',

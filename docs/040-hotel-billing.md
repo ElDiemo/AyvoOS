@@ -218,24 +218,45 @@ A saved run needs its own tables, so it waits for the owner's approval of the mo
   prints only the note that it is not a tax document.
 - **Previews:** `docs/screenshots/finance/finance-invoice-pdf-{cs,en,de}.png` (synthetic).
 
-### 12a. Rollout and rollback of the language column (review LANG96-R1)
+### 12a. Rollout and rollback of the language column (reviews LANG96-R1, R2)
 
 Rolling back images never reverts a migration, and the image before this release inserts customer
-versions without `document_language`. So the steps are separate releases:
+versions without `document_language`. The steps follow what the deployment scripts actually do:
+Finance runs the image of the API (`pin_finance_images`), `--finance` is refused unless the OS already
+runs that release, and an OS deployment leaves the running Finance alone. **So the OS and the web go
+first, Finance second; Finance first is not possible**, and that release check stays.
 
-1. **Expand (this release).** The migration only adds the nullable column and its value check. The
-   new Finance requires the language in the API. The previous image keeps working on the migrated
-   database; what it writes stays `NULL`, i.e. `CUSTOMER_LANGUAGE_MISSING` until a person chooses.
-   Nothing is guessed, no history is rewritten.
-2. **Deploy:** the migration and Finance first, the web right after. In the short window the old web
-   gets a visible 400 on saving a customer (it sends no language); nothing is stored.
-3. **Roll back images (before step 4):** web first, then Finance, to the same earlier commit; the
-   migration stays. Creating and changing customers keeps working. Versions written meanwhile have
-   `NULL`; after the return a person chooses the language with a new version.
-4. **Enforce, a later release:** only after the owner closes the rollback window for images older
+1. **Expand (this release).** The migration only adds the nullable column and its value check, and it
+   runs in step 3 below. The previous image keeps working on the migrated database; what it writes
+   stays `NULL`, i.e. `CUSTOMER_LANGUAGE_MISSING` until a person chooses. Nothing is guessed, no history
+   is rewritten.
+2. **Upgrade, OS:** `scripts/deploy-prod.sh --release <commit>`. The new web now runs with the old
+   Finance: the **Finance window**, see the table. The script names it at the end.
+3. **Upgrade, Finance, right after:** `scripts/deploy-prod.sh --finance --release <commit>` (backup,
+   migration, only the `finance` container). Finance is down for the backup; its pages say so.
+4. **Return, before step 5, in this order:** `scripts/deploy-prod.sh --rollback <release>`, then
+   `scripts/deploy-prod.sh --finance-rollback <release>`. No migration runs. Saving a customer in the
+   first step's short window is refused visibly; afterwards it works and stores `NULL`; after another
+   upgrade a person chooses the language with a new version.
+5. **Enforce, a later release:** only after the owner closes the rollback window for images older
    than step 1. Its own migration adds a `BEFORE INSERT` trigger refusing `NULL` on new versions (old
    `NULL` rows stay valid), with a test, and is not part of this PR. Rolling it back is a forward
    migration dropping the trigger, applied before any image older than step 1 is started.
+
+**The Finance window is a bounded closure of the billing part of Finance, not a supported way to
+work.** Keep it to the minutes between steps 2 and 3. Hotels, orders and logistics do not read Finance.
+
+| Web | Finance | When                 | Result                                                                                                                                                                                                                                                           |
+| --- | ------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| new | new     | target               | everything                                                                                                                                                                                                                                                       |
+| new | old     | steps 2–3            | a page whose answer lacks the language says so (`/finance/version-mismatch`), no retry advice; saving a customer is refused before anything is sent (`GET …/finance/health/capabilities` is 404 there), because the old Finance would drop the language silently |
+| old | new     | first half of step 4 | reads work; saving a customer is refused with a visible error, nothing stored                                                                                                                                                                                    |
+| old | old     | after step 4         | everything; a customer's new version has no language (`NULL`); the PDF is unchanged                                                                                                                                                                              |
+
+Real processes of this build and of the release returned to on a synthetic database:
+`apps/web/e2e-compat/rollout-window.spec.ts` (`playwright.compat.config.ts`, not in CI, it needs a built
+earlier worktree). The branches of the scripts: `apps/api/test/deploy-prod-finance-order.test.ts`, with
+the real script text and a stub of Docker. No real deployment has run this.
 
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 

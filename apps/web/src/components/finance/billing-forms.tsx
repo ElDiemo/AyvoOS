@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  API_BASE_PATH,
   BILLING_TIMINGS,
   DOCUMENT_LANGUAGES,
   type BillingAgreementDetail,
@@ -51,7 +52,18 @@ function useSubmit() {
       setBusy(false);
     }
   }
-  return { busy, error, saved, send, fresh };
+  return { busy, error, saved, send, fresh, refuse: setError };
+}
+
+/**
+ * A Finance older than this web answers 404 here and would store a customer without the chosen
+ * language, silently (doc 040 §12a). Anything else (an outage too) is left to the save's own answer.
+ */
+async function financeTakesLanguage() {
+  const res = await fetch(`${API_BASE_PATH}/admin/finance/health/capabilities`, {
+    cache: 'no-store',
+  }).catch(() => null);
+  return res?.status !== 404;
 }
 
 function Field({
@@ -187,7 +199,7 @@ export function CustomerForm({
   // Never preselected or derived from the country: an older version without it starts empty.
   const [language, setLanguage] = useState<string>(current?.customer.documentLanguage ?? '');
   const [reason, setReason] = useState('');
-  const { busy, error, saved, send, fresh } = useSubmit();
+  const { busy, error, saved, send, fresh, refuse } = useSubmit();
   const set = (k: keyof CustomerValues) => (v: string) => {
     setValues({ ...values, [k]: v });
     fresh();
@@ -196,8 +208,12 @@ export function CustomerForm({
     <form
       className="flex flex-col gap-3"
       data-testid={code ? `customer-version-${code}` : 'customer-new'}
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
+        if (!(await financeTakesLanguage())) {
+          refuse(t.financeOlderNoLanguage);
+          return;
+        }
         const customer = {
           ...Object.fromEntries(
             CUSTOMER_KEYS.map((k) => [
