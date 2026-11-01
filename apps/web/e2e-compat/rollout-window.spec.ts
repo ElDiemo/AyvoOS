@@ -14,6 +14,21 @@ const SHOTS = process.env.AYVO_COMPAT_SHOTS;
 const FINANCE = 'http://localhost:4110';
 const serverPid = () =>
   Number(readFileSync(join(tmpdir(), 'ayvo-e2e-server-4100.pid'), 'utf8').trim());
+/** As `docker stop`: the test server's Finance gets 5 s, then is killed (it can keep answering for 40 s). */
+function stopTestFinance() {
+  const pid = execFileSync('pgrep', ['-P', String(serverPid())], { encoding: 'utf8' })
+    .trim()
+    .split('\n')
+    .find((p) => readFileSync(`/proc/${p}/cmdline`, 'utf8').includes('dist/finance/main.js'));
+  process.kill(serverPid(), 'SIGUSR2');
+  setTimeout(() => {
+    try {
+      if (pid) process.kill(Number(pid), 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }, 5_000).unref();
+}
 let oldFinance: ChildProcess | null = null;
 
 const up = async () =>
@@ -37,7 +52,7 @@ function financeEnv() {
 }
 async function useOldFinance() {
   const env = financeEnv();
-  process.kill(serverPid(), 'SIGUSR2');
+  stopTestFinance();
   await waitFinance(false);
   oldFinance = spawn(process.execPath, ['dist/finance/main.js'], {
     cwd: resolve(OLD_ROOT, 'apps/api'),
@@ -80,7 +95,7 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
   const name = `Okno ${run} s.r.o.`;
   try {
     // A form opened before the window, saved during it; on a fresh database the list is empty.
-    await page.goto('/finance/billing');
+    await page.goto('/finance/billing/customers');
     expect(await customers(page)).toEqual([]);
     const stale = await fillCustomer(page, name);
     await useOldFinance();
@@ -90,7 +105,7 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
     expect(await customers(page)).toEqual([]);
 
     // The same on a page opened during the window: the empty list parses, so the form is there.
-    await page.goto('/finance/billing');
+    await page.goto('/finance/billing/customers');
     await expect(page.getByTestId('finance-version-mismatch')).toHaveCount(0);
     const fresh = await fillCustomer(page, name);
     await fresh.getByTestId('customer-save').click();
@@ -99,7 +114,7 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
 
     // Back on this Finance a customer exists with its language.
     await useNewFinance();
-    await page.goto('/finance/billing');
+    await page.goto('/finance/billing/customers');
     const form = await fillCustomer(page, name);
     await form.getByTestId('customer-save').click();
     await expect(form.getByTestId('customer-save')).toBeEnabled();
@@ -109,7 +124,10 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
 
     // In the window a page that reads it is closed and says so; no retry advice, no error page.
     await useOldFinance();
-    for (const url of ['/finance/billing', `/finance/billing/customers/${created!.code}`]) {
+    for (const url of [
+      '/finance/billing/customers',
+      `/finance/billing/customers/${created!.code}`,
+    ]) {
       await page.goto(url);
       const closed = page.getByTestId('finance-version-mismatch');
       await expect(closed).toBeVisible();

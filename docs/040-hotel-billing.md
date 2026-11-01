@@ -269,7 +269,8 @@ work.** Keep it to the minutes between steps 2 and 3. Hotels, orders and logisti
 | old | new     | first half of step 4 | reads work; saving a customer is refused with a visible error, nothing stored                                                                                                                                                                                                                                                           |
 | old | old     | after step 4         | everything; a customer's new version has no language (`NULL`); the PDF is unchanged                                                                                                                                                                                                                                                     |
 
-Real processes of this build and of the release returned to on a synthetic database:
+Real processes of this build and of the release returned to on a synthetic database
+(`apps/web/e2e-compat/rollback-matrix.spec.ts` for all pairs):
 `apps/web/e2e-compat/rollout-window.spec.ts` (`playwright.compat.config.ts`, not in CI, it needs a built
 earlier worktree). The branches of the scripts: `apps/api/test/deploy-prod-finance-order.test.ts`, with
 the real script text and a stub of Docker. No real deployment has run this.
