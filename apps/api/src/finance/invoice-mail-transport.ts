@@ -72,14 +72,14 @@ export class SmtpInvoiceMailTransport implements InvoiceMailTransport {
       getSocket: (_options, callback) => {
         const opened = connect({
           host: this.options.host!,
-          port: this.options.port!,
+          port: Number(this.options.port),
           family: 4,
           ...(this.options.localAddress ? { localAddress: this.options.localAddress } : {}),
         });
         socket = opened;
         // Not connected: nothing can have left, whatever the reason (never the error's own text).
         const unreachable = () =>
-          callback(Object.assign(new Error('connect'), { syscall: 'connect' }), null);
+          callback(Object.assign(new Error('connect'), { syscall: 'connect' }), false);
         const limit = setTimeout(() => opened.destroy(), this.options.connectionTimeout ?? 10_000);
         opened.on('error', () => {});
         opened.once('close', unreachable);
