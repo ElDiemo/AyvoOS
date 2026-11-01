@@ -235,6 +235,8 @@ export const financeCs = {
     create: 'Vystavit testovací fakturu',
     empty: 'Zatím žádné faktury.',
     ofAgreement: 'Faktury této smlouvy',
+    ofHotel: 'Zobrazeny jsou faktury jednoho hotelu.',
+    allOfCompany: 'Zobrazit všechny faktury',
     noneOfAgreement: 'Na tuto smlouvu zatím nebyla vystavena žádná faktura.',
     emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy',
     emptyFromAgreements:

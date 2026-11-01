@@ -48,8 +48,10 @@ export const invoiceListQuerySchema = z.object({
     .string()
     .regex(/^BA-\d{6,}$/)
     .optional(),
-  /** Invoices with a line of exactly this hotel, newest first, at most INVOICES_OF_HOTEL_LIMIT. */
+  /** Invoices with a line of exactly this hotel, newest first. */
   hotelId: z.uuid().optional(),
+  /** The hotel's card asks for INVOICES_OF_HOTEL_LIMIT; the page of a hotel's invoices for all. */
+  limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 export type InvoiceListQuery = z.infer<typeof invoiceListQuerySchema>;
 

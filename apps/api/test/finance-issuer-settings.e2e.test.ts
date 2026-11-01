@@ -1441,4 +1441,27 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       await real.close();
     }
   });
+
+  it('the list of invoices: an agreement and a hotel together mean both, a mismatched pair finds nothing', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const [a, b] = [await agreement(c.id), await agreement(c.id)];
+    const hotelIdOf = async (code: string) =>
+      (await f.core.prisma.hotel.findUniqueOrThrow({ where: { code }, select: { id: true } })).id;
+    const [hotelA, hotelB] = [await hotelIdOf(a.hotel.code), await hotelIdOf(b.hotel.code)];
+    const invA = (await expectStatus(issue([a.code], '2026-11'), 201)).body as InvoiceDetail;
+    const invB = (await expectStatus(issue([b.code], '2026-11'), 201)).body as InvoiceDetail;
+    const numbers = async (query: string) =>
+      ((await f.get(`${INV}?${query}`).expect(200)).body as InvoiceSummary[]).map((i) => i.number);
+    expect(await numbers(`agreement=${a.code}&hotelId=${hotelA}`)).toEqual([invA.number]);
+    expect(await numbers(`agreement=${a.code}&hotelId=${hotelB}`)).toEqual([]);
+    expect(await numbers(`agreement=${b.code}&hotelId=${hotelA}`)).toEqual([]);
+    expect(await numbers(`agreement=${b.code}`)).toEqual([invB.number]);
+    expect(await numbers(`hotelId=${hotelB}`)).toEqual([invB.number]);
+    // The card's bound comes from its request; the hotel's own page asks for everything.
+    const later = (await expectStatus(issue([b.code], '2026-12'), 201)).body as InvoiceDetail;
+    expect(await numbers(`hotelId=${hotelB}&limit=1`)).toEqual([later.number]);
+    expect(await numbers(`hotelId=${hotelB}`)).toEqual([later.number, invB.number]);
+    await f.get(`${INV}?hotelId=${hotelB}&limit=0`).expect(400);
+  });
 });
