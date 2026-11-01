@@ -78,6 +78,18 @@ export class InvoiceDeliveriesService {
     return null;
   }
 
+  /**
+   * Whether this process may send to this address now. Asked when queuing and again before every
+   * sending: a queued delivery outlives the configuration it was queued under.
+   */
+  private sendRefusal(recipient: string): 'PRODUCTION' | 'RECIPIENT_NOT_ALLOWED' | null {
+    if (this.env.APP_ENV === 'production') return 'PRODUCTION';
+    const allowed = this.env.FINANCE_MAIL_TEST_RECIPIENTS?.split(',').map((a) => a.trim());
+    if (allowed ? !allowed.includes(recipient) : this.env.FINANCE_INVOICE_MAIL === 'google-relay')
+      return 'RECIPIENT_NOT_ALLOWED';
+    return null;
+  }
+
   async list(number: string): Promise<InvoiceDeliveries> {
     const invoice = await this.prisma.invoice.findUnique({
       where: { number },
@@ -134,8 +146,7 @@ export class InvoiceDeliveriesService {
         'RECIPIENT_CHANGED',
         'Adresa odběratele se změnila – načtěte stránku znovu. Nic se neodeslalo.',
       );
-    const allowed = this.env.FINANCE_MAIL_TEST_RECIPIENTS?.split(',').map((a) => a.trim());
-    if (allowed && !allowed.includes(seenRecipient))
+    if (this.sendRefusal(seenRecipient) === 'RECIPIENT_NOT_ALLOWED')
       throw domainError(
         422,
         'RECIPIENT_NOT_ALLOWED',
@@ -291,7 +302,8 @@ export class InvoiceDeliveriesService {
   ): Promise<SendOutcome> {
     const { invoice } = d;
     if (invoice.cancellation) return { kind: 'REJECTED', code: 'INVOICE_CANCELLED' };
-    if (this.env.APP_ENV === 'production') return { kind: 'REJECTED', code: 'PRODUCTION' };
+    const refusal = this.sendRefusal(d.recipient);
+    if (refusal) return { kind: 'REJECTED', code: refusal };
     const snapshot = invoice.snapshot as unknown as InvoicePdfSnapshot;
     let pdf: Buffer;
     try {

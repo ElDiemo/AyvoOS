@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   InvoiceDeliveries,
   EffectiveTermsPage,
@@ -1972,7 +1972,9 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     rcpt?: string;
     afterData?: string | 'DROP';
   }) => {
+    const seen = { connections: 0, rcpt: [] as string[] };
     const server = createServer((socket) => {
+      seen.connections++;
       socket.on('error', () => {});
       let inData = false;
       let buffered = '';
@@ -1993,8 +1995,10 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
           buffered = buffered.slice(i + 2);
           if (line.startsWith('EHLO')) socket.write('250 relay.test\r\n');
           else if (line.startsWith('MAIL')) socket.write('250 ok\r\n');
-          else if (line.startsWith('RCPT')) socket.write(`${script.rcpt ?? '250 ok'}\r\n`);
-          else if (line.startsWith('DATA')) {
+          else if (line.startsWith('RCPT')) {
+            seen.rcpt.push(line);
+            socket.write(`${script.rcpt ?? '250 ok'}\r\n`);
+          } else if (line.startsWith('DATA')) {
             socket.write('354 go\r\n');
             inData = true;
             return;
@@ -2005,6 +2009,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     });
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
     return {
+      seen,
       address: `127.0.0.1:${(server.address() as AddressInfo).port}`,
       close: () => new Promise<void>((done) => server.close(() => done())),
     };
@@ -2226,6 +2231,112 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     await expect(prod.send(inv.number, sendBody(recipient), DELIVERY_ACTOR)).rejects.toMatchObject({
       response: { code: 'PRODUCTION' },
     });
+  });
+
+  it('a queued delivery outliving its allowlist: a new process opens no connection, says why, keeps the address', async () => {
+    const drain = async (app: FinanceTestApp) => {
+      const service = app.app.get(InvoiceDeliveriesService);
+      while (await service.sendNext());
+    };
+    const relay = await scriptedRelay({});
+    const smtp = {
+      FINANCE_INVOICE_MAIL: 'test-smtp',
+      FINANCE_MAIL_TEST_SMTP_ADDRESS: relay.address,
+    };
+    const before = await mailApp({ ...smtp, FINANCE_MAIL_TEST_RECIPIENTS: 'stary@povoleny.test' });
+    const { inv, recipient } = await issued('cs', 'stary@povoleny.test');
+    const kept = await issued('cs', 'zustava@povoleny.test');
+    try {
+      await before.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+    } finally {
+      await before.close();
+    }
+    const after = await mailApp({ ...smtp, FINANCE_MAIL_TEST_RECIPIENTS: 'novy@povoleny.test' });
+    try {
+      expect(
+        ((await deliveriesOf(after, inv.number)).body as InvoiceDeliveries).deliveries[0],
+      ).toMatchObject({ state: 'QUEUED', recipient });
+      await drain(after);
+      expect(relay.seen.connections).toBe(0);
+      const d = ((await deliveriesOf(after, inv.number)).body as InvoiceDeliveries).deliveries[0]!;
+      expect(d).toMatchObject({ state: 'FAILED', code: 'RECIPIENT_NOT_ALLOWED', recipient });
+      expect(d.events.map((e) => e.state)).toEqual(['QUEUED', 'SENDING', 'FAILED']);
+      // Failed for good: no later round touches it, and a retry to that address is refused too.
+      await drain(after);
+      expect(relay.seen.connections).toBe(0);
+      const retry = await after.post(`${INV}/${inv.number}/deliveries/${d.id}/retry`).send({
+        requestId: randomUUID(),
+        recipient,
+        reason: 'Znovu (test)',
+        acknowledgeDuplicateRisk: true,
+      });
+      expect([retry.status, retry.body.code]).toEqual([422, 'RECIPIENT_NOT_ALLOWED']);
+    } finally {
+      await after.close();
+    }
+    // The control: the same path with the address still allowed does reach the relay.
+    const allowing = await mailApp({
+      ...smtp,
+      FINANCE_MAIL_TEST_RECIPIENTS: 'zustava@povoleny.test',
+    });
+    try {
+      await allowing
+        .post(`${INV}/${kept.inv.number}/deliveries`)
+        .send(sendBody(kept.recipient))
+        .expect(201);
+      await drain(allowing);
+      expect(relay.seen.connections).toBe(1);
+      expect(relay.seen.rcpt).toEqual([expect.stringContaining('ZUSTAVA@POVOLENY.TEST')]);
+    } finally {
+      await allowing.close();
+      await relay.close();
+    }
+  });
+
+  it('checked before the file and the transport: the relay without an allowlist, production, no driver', async () => {
+    const { inv, recipient } = await issued('cs', 'pojistka@povoleny.test');
+    const app = await mailApp();
+    try {
+      await app.post(`${INV}/${inv.number}/deliveries`).send(sendBody(recipient)).expect(201);
+    } finally {
+      await app.close();
+    }
+    // No driver: the queue is not worked at all.
+    await f.app.get(InvoiceDeliveriesService).sendNext();
+    expect(
+      ((await deliveriesOf(f, inv.number)).body as InvoiceDeliveries).deliveries[0]!.state,
+    ).toBe('QUEUED');
+    const row = await f.prisma.invoiceDelivery.findFirstOrThrow({
+      where: { invoice: { number: inv.number } },
+      include: { invoice: { include: { cancellation: { select: { invoiceId: true } } } } },
+    });
+    for (const [env, code] of [
+      [{ APP_ENV: 'production' }, 'PRODUCTION'],
+      [{ FINANCE_INVOICE_MAIL: 'google-relay' }, 'RECIPIENT_NOT_ALLOWED'],
+    ] as const) {
+      const storage = { get: vi.fn() };
+      const transport = { send: vi.fn() };
+      const service = new InvoiceDeliveriesService(
+        f.prisma,
+        f.app.get(FinanceOperations),
+        storage as never,
+        { ...f.env, FINANCE_MAIL_TEST_RECIPIENTS: undefined, ...env },
+        transport,
+      );
+      const outcome = await (
+        service as unknown as { deliver(d: typeof row): Promise<unknown> }
+      ).deliver(row);
+      expect(outcome).toEqual({ kind: 'REJECTED', code });
+      expect(storage.get).not.toHaveBeenCalled();
+      expect(transport.send).not.toHaveBeenCalled();
+    }
+    // Leaves nothing queued for the tests after this one.
+    const cleanup = await mailApp();
+    try {
+      await runner(cleanup).tick();
+    } finally {
+      await cleanup.close();
+    }
   });
 
   it('the environment: simulated mail only in tests, the relay only named and with allowed recipients', () => {

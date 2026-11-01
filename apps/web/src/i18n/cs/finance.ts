@@ -318,6 +318,7 @@ export const financeCs = {
         PDF_TOO_LARGE: 'Uložené PDF je příliš velké.',
         PDF_HASH_MISMATCH: 'Uložené PDF neodpovídá otisku z vystavení, nic se neodeslalo.',
         PRODUCTION: 'Testovací faktury se z produkce neodesílají.',
+        RECIPIENT_NOT_ALLOWED: 'Adresa už není mezi povolenými příjemci, nic se neodeslalo.',
       } as Record<string, string>,
       blockers: {
         DELIVERY_DISABLED: 'Odesílání faktur tu není zapnuté.',
