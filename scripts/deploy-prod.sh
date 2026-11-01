@@ -1176,7 +1176,6 @@ while (($#)); do
     --finance) MODE=finance ;;
     --finance-rollback)
       MODE=finance-rollback
-      echo 'Upozorneni: novy web se starsi Finance je podporovany jen pro seznam plateb a kartu hotelu; vratte i web, web prvni (doc 040 12a).' >&2
       FINANCE_ROLLBACK=${2:-}
       shift
       ;;
