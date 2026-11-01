@@ -14,5 +14,5 @@ export const COUNTRY_OPTIONS = [
   ),
 ].map((code) => ({ code, label: `${names.of(code) ?? code} (${code})` }));
 
-/** Currencies offered on contracts and prices; a stored other one stays selectable. */
-export const CURRENCY_OPTIONS = ['CZK', 'EUR'];
+/** Suggested on contracts and prices; any other valid code stays possible (no business rule). */
+export const CURRENCY_SUGGESTIONS = ['CZK', 'EUR'];

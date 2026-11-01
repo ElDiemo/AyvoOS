@@ -16,7 +16,8 @@ import { z } from 'zod';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { billingCs as t } from '@/i18n/cs/finance-billing';
 import { apiSend, ClientApiError } from '@/lib/client-api';
-import { COUNTRY_OPTIONS, CURRENCY_OPTIONS } from '@/lib/country-options';
+import { COUNTRY_OPTIONS } from '@/lib/country-options';
+import { CurrencyInput } from './currency-input';
 import { parseDecimalInput } from '@/lib/decimal-input';
 
 const label = 'flex min-w-0 flex-col gap-1 text-sm font-medium';
@@ -144,30 +145,6 @@ function StaleNotice({
         {action}
       </button>
     </div>
-  );
-}
-
-function CurrencySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const options = CURRENCY_OPTIONS.includes(value)
-    ? CURRENCY_OPTIONS
-    : [value, ...CURRENCY_OPTIONS];
-  return (
-    <label className={label}>
-      {t.fields.currency}
-      <select
-        name="currency"
-        required
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={inputClass}
-      >
-        {options.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
@@ -452,7 +429,7 @@ export function AgreementForm({
           value={v.ownPrice}
           onChange={set('ownPrice')}
         />
-        <CurrencySelect value={v.currency} onChange={set('currency')} />
+        <CurrencyInput value={v.currency} onChange={set('currency')} />
         <Field
           name="paymentTermsDays"
           text={t.fields.paymentTermsDays}
@@ -588,7 +565,7 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
       }}
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-        <CurrencySelect value={v.currency} onChange={set('currency')} />
+        <CurrencyInput value={v.currency} onChange={set('currency')} />
         <Field
           name="price"
           text={t.fields.price}
