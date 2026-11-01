@@ -327,6 +327,9 @@ export const financeCs = {
         PDF_TOO_LARGE: 'Uložené PDF je příliš velké.',
         PDF_HASH_MISMATCH: 'Uložené PDF neodpovídá otisku z vystavení, nic se neodeslalo.',
         PRODUCTION: 'Testovací faktury se z produkce neodesílají.',
+        RECIPIENT_NOT_ALLOWED: 'Adresa už není mezi povolenými příjemci, nic se neodeslalo.',
+        TRANSPORT_CHANGED:
+          'Způsob odesílání se od požadavku změnil, nic se neodeslalo. Další pokus je ruční.',
       } as Record<string, string>,
       blockers: {
         DELIVERY_DISABLED: 'Odesílání faktur tu není zapnuté.',
@@ -335,6 +338,7 @@ export const financeCs = {
         PRODUCTION: 'Testovací faktury se z produkce neodesílají.',
       } as Record<string, string>,
       errors: {
+        MODE_CHANGED: 'Způsob odesílání se změnil – načtěte stránku znovu. Nic se neodeslalo.',
         RECIPIENT_CHANGED:
           'Adresa odběratele se změnila. Načtěte stránku znovu, nic se neodeslalo.',
         RECIPIENT_NOT_ALLOWED: 'Na tuto adresu se testovací faktura odeslat nesmí.',

@@ -1,3 +1,4 @@
+import { connect, type Socket } from 'node:net';
 import nodemailer, { type Transporter } from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport/index.js';
 import { googleRelayOptions } from '../common/google-smtp-relay.js';
@@ -46,19 +47,53 @@ export function classifySmtpError(e: unknown): SendOutcome {
 const SEND_DEADLINE_MS = 60_000;
 export const SEND_LEASE_MS = 120_000;
 
-class SmtpInvoiceMailTransport implements InvoiceMailTransport {
-  private readonly smtp: Transporter;
+/** Waits until the socket is gone, so a message's connection never overlaps the next one's. */
+const closed = (socket: Socket | undefined) =>
+  new Promise<void>((done) => {
+    if (!socket || socket.closed) return done();
+    socket.once('close', () => done());
+    socket.destroy();
+  });
 
-  constructor(options: SMTPTransport.Options) {
-    // One connection per message, none kept open; the runner sends one message at a time.
-    this.smtp = nodemailer.createTransport({ ...options, socketTimeout: 30_000 });
-  }
+export class SmtpInvoiceMailTransport implements InvoiceMailTransport {
+  constructor(
+    private readonly options: SMTPTransport.Options,
+    private readonly deadlineMs = SEND_DEADLINE_MS,
+  ) {}
 
   async send(mail: OutgoingInvoiceMail): Promise<SendOutcome> {
     let timer: NodeJS.Timeout | undefined;
+    let socket: Socket | undefined;
+    // One connection per message, none kept open. The socket is opened here because nodemailer
+    // offers no way to end a sending in progress; STARTTLS and its verification stay nodemailer's.
+    const smtp: Transporter = nodemailer.createTransport({
+      ...this.options,
+      socketTimeout: 30_000,
+      getSocket: (_options, callback) => {
+        const opened = connect({
+          host: this.options.host!,
+          port: this.options.port!,
+          family: 4,
+          ...(this.options.localAddress ? { localAddress: this.options.localAddress } : {}),
+        });
+        socket = opened;
+        // Not connected: nothing can have left, whatever the reason (never the error's own text).
+        const unreachable = () =>
+          callback(Object.assign(new Error('connect'), { syscall: 'connect' }), null);
+        const limit = setTimeout(() => opened.destroy(), this.options.connectionTimeout ?? 10_000);
+        opened.on('error', () => {});
+        opened.once('close', unreachable);
+        opened.once('connect', () => {
+          clearTimeout(limit);
+          opened.off('close', unreachable);
+          callback(null, { connection: opened });
+        });
+        opened.once('close', () => clearTimeout(limit));
+      },
+    } as SMTPTransport.Options);
     try {
       const info = (await Promise.race([
-        this.smtp.sendMail({
+        smtp.sendMail({
           from: mail.from,
           replyTo: mail.replyTo,
           to: mail.to,
@@ -74,7 +109,7 @@ class SmtpInvoiceMailTransport implements InvoiceMailTransport {
           disableUrlAccess: true,
         }),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('deadline')), SEND_DEADLINE_MS);
+          timer = setTimeout(() => reject(new Error('deadline')), this.deadlineMs);
         }),
       ])) as { accepted?: unknown[] };
       if (!info.accepted?.length) return { kind: 'REJECTED', code: 'RECIPIENT_REFUSED' };
@@ -83,6 +118,8 @@ class SmtpInvoiceMailTransport implements InvoiceMailTransport {
       return classifySmtpError(e);
     } finally {
       clearTimeout(timer);
+      // At the deadline this ends a sending still in progress: its result stays unknown (UNCERTAIN).
+      await closed(socket);
     }
   }
 }

@@ -634,6 +634,7 @@ model InvoiceDelivery {
   language                  String
   templateVersion           Int       @map("template_version")
   messageId                 String    @map("message_id")
+  mode                      String
   state                     String    @default("QUEUED")
   attemptOf                 String?   @unique @map("attempt_of") @db.Uuid
   retryReason               String?   @map("retry_reason")

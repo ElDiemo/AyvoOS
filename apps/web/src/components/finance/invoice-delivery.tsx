@@ -78,6 +78,7 @@ export function InvoiceDeliveryPanel({
       apiSend('POST', path, invoiceDeliveriesSchema, {
         requestId,
         recipient: data.recipient,
+        mode: data.mode,
         ...body,
       }),
     );

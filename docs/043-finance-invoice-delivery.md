@@ -133,6 +133,14 @@ QUEUED → SENDING → SENT
 Stránka faktury říká, jak tento server odesílá. `SIMULATION`: nic neopustí systém a stav to říká.
 `RELAY`: skutečný testovací e-mail jen na povolenou adresu; `SENT` je přijetí serverem, ne doručení.
 
+## 7b. Režim patří k pokusu
+
+Každý pokus má neměnný `mode` (`SIMULATION`, `RELAY`) uložený při požadavku. Požadavek nese režim, který
+člověk viděl; jiný je `MODE_CHANGED`, nic nevznikne. Před každým odesláním se režim pokusu porovná s aktuálním
+transportem: při neshodě `FAILED` / `TRANSPORT_CHANGED` bez spojení. Změna konfigurace nic nepřeklápí ani
+nepřeposílá; nový režim použije jen nový ruční pokus. Už `SENT` zůstává konečné, i když bylo simulací: skutečné
+odeslání téže faktury není možné a na ověření se vystaví nová testovací faktura.
+
 ## 8. Jak se rozhoduje o výsledku
 
 Vše neznámé je `UNCERTAIN`. Opakovatelné (`QUEUED`, nejvýš 5 pokusů, pak `FAILED`) je jen to, co
@@ -144,6 +152,9 @@ simulovaným relayem).
 ## 9. Limity
 
 Jedna zpráva naráz na proces, nejvýš 5 za kolo, spojení se neudržuje. PDF nejvýš 10 MiB, kontrola
-otisku před odesláním. Odeslání má lhůtu 60 s, rezervace záznamu 120 s. Logy jen id a stav, nikdy
-adresa ani zpráva. Reálný relay vyžaduje `FINANCE_MAIL_EHLO_NAME` a `FINANCE_MAIL_TEST_RECIPIENTS`.
+otisku před odesláním. Odeslání má lhůtu 60 s, rezervace záznamu 120 s; v té lhůtě se
+konkrétní spojení ukončí a výsledek je `UNCERTAIN`, bez automatického opakování. Logy jen id a stav, nikdy
+adresa ani zpráva. Reálný relay vyžaduje `FINANCE_MAIL_EHLO_NAME` a `FINANCE_MAIL_TEST_RECIPIENTS`. Prostředí a seznam
+povolených příjemců se pro uloženou adresu kontrolují i před každým odesláním: když už adresa povolená
+není, doručení končí `FAILED` / `RECIPIENT_NOT_ALLOWED` bez spojení a adresa se nezamění za jinou.
 Bez `FINANCE_INVOICE_MAIL` se nic nezařadí ani neodešle. Síť a nasazení: samostatný diff (§5).
