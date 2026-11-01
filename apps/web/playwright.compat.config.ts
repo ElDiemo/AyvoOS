@@ -12,7 +12,10 @@ export default defineConfig({
     {
       name: 'setup',
       testDir: './e2e',
-      testMatch: /(auth\.setup|workflow-finance-issuer\.spec)\.ts/,
+      // rollback-matrix needs the issuer; rollout-window needs an empty list of customers.
+      testMatch: process.env.AYVO_COMPAT_SEED
+        ? /(auth\.setup|workflow-finance-issuer\.spec)\.ts/
+        : /auth\.setup\.ts/,
     },
     {
       name: 'compat',

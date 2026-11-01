@@ -56,7 +56,10 @@ async function useOldFinance() {
   await waitFinance(true);
 }
 async function useNewFinance() {
-  oldFinance?.kill('SIGTERM');
+  // As `docker stop`: a grace period, then killed (open connections can hold a graceful stop).
+  const stopping = oldFinance;
+  stopping?.kill('SIGTERM');
+  setTimeout(() => stopping?.kill('SIGKILL'), 5_000).unref();
   oldFinance = null;
   await waitFinance(false);
   process.kill(serverPid(), 'SIGUSR1');
@@ -294,6 +297,12 @@ test('upgrade and return: old and new web and Finance on one migrated database',
     await page.goto(`${NEW_WEB}/finance/payments?filter=REVIEW&q=x`);
     (report['B-novy-web+stara-Finance'] ??= {})['platby-legacy-poznamka'] =
       (await page.getByTestId('payments-legacy').count()) > 0 ? 'ANO' : 'NE';
+    report['B-novy-web+stara-Finance']!['platby-akce-skryte'] =
+      (await page.getByTestId('import-bank').count()) +
+        (await page.getByTestId('payments-simulation').count()) ===
+      0
+        ? 'ANO'
+        : 'NE';
     report['B-novy-web+stara-Finance']!['platby-filtry-skryte'] =
       (await page.getByTestId('payments-filters').count()) === 0 ? 'ANO' : 'NE';
     report['B-novy-web+stara-Finance']!['platby-otevreni-detailu-nabizeno'] =

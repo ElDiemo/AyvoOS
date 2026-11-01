@@ -80,7 +80,7 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
   const name = `Okno ${run} s.r.o.`;
   try {
     // A form opened before the window, saved during it; on a fresh database the list is empty.
-    await page.goto('/finance/billing');
+    await page.goto('/finance/billing/customers');
     expect(await customers(page)).toEqual([]);
     const stale = await fillCustomer(page, name);
     await useOldFinance();
@@ -90,7 +90,7 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
     expect(await customers(page)).toEqual([]);
 
     // The same on a page opened during the window: the empty list parses, so the form is there.
-    await page.goto('/finance/billing');
+    await page.goto('/finance/billing/customers');
     await expect(page.getByTestId('finance-version-mismatch')).toHaveCount(0);
     const fresh = await fillCustomer(page, name);
     await fresh.getByTestId('customer-save').click();
@@ -99,7 +99,7 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
 
     // Back on this Finance a customer exists with its language.
     await useNewFinance();
-    await page.goto('/finance/billing');
+    await page.goto('/finance/billing/customers');
     const form = await fillCustomer(page, name);
     await form.getByTestId('customer-save').click();
     await expect(form.getByTestId('customer-save')).toBeEnabled();
@@ -109,7 +109,10 @@ test('upgrade window: no language is lost, nothing fails silently, the rest of t
 
     // In the window a page that reads it is closed and says so; no retry advice, no error page.
     await useOldFinance();
-    for (const url of ['/finance/billing', `/finance/billing/customers/${created!.code}`]) {
+    for (const url of [
+      '/finance/billing/customers',
+      `/finance/billing/customers/${created!.code}`,
+    ]) {
       await page.goto(url);
       const closed = page.getByTestId('finance-version-mismatch');
       await expect(closed).toBeVisible();
