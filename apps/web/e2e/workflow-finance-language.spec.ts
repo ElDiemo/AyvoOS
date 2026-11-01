@@ -36,6 +36,83 @@ async function shots(page: Page, name: string) {
 test.describe('Jazyk dokumentů', () => {
   test.use({ storageState: ADMIN_STATE });
 
+  test('a save goes only after Finance explicitly confirms the language (LANG96-R3)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    const CHECK = '**/api/admin/finance/health/capabilities';
+    const name = `Kontrola ${crypto.randomUUID().slice(0, 6).toUpperCase()} s.r.o. (E2E)`;
+    let posts = 0;
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().endsWith('/admin/finance/billing/customers'))
+        posts++;
+    });
+    await page.goto('/finance/billing');
+    await page.getByTestId('customer-new-open').click();
+    const form = page.getByTestId('customer-new');
+    await form.locator('[name=legalName]').fill(name);
+    await form.locator('[name=addressLine1]').fill('Ukázková 1');
+    await form.locator('[name=postalCode]').fill('602 00');
+    await form.locator('[name=city]').fill('Brno');
+    await form.locator('[name=billingEmail]').fill('kontrola@jazyk.test');
+    await form.locator('[name=documentLanguage]').selectOption('en');
+    const save = form.getByTestId('customer-save');
+
+    const refusals: [string, Parameters<Page['route']>[1]][] = [
+      ['404', (r) => r.fulfill({ status: 404, json: {} })],
+      ['503', (r) => r.fulfill({ status: 503, json: {} })],
+      ['network', (r) => r.abort()],
+      ['false', (r) => r.fulfill({ status: 200, json: { documentLanguage: false } })],
+      ['missing', (r) => r.fulfill({ status: 200, json: {} })],
+      ['not json', (r) => r.fulfill({ status: 200, body: 'ok' })],
+      ['truthy', (r) => r.fulfill({ status: 200, json: { documentLanguage: 'true' } })],
+    ];
+    for (const [what, answer] of refusals) {
+      await page.route(CHECK, answer);
+      await save.click();
+      await expect(form, what).toContainText('Plátce nebyl uložen');
+      await expect(save, what).toBeEnabled();
+      expect(posts, what).toBe(0);
+      await page.unroute(CHECK);
+      await form.locator('[name=city]').fill('Brno');
+    }
+
+    // No answer at all: pending for the bounded time only, then refused; the button stays disabled.
+    await page.route(CHECK, () => {});
+    await save.click();
+    await expect(save).toBeDisabled();
+    await expect(form).toContainText('Plátce nebyl uložen', { timeout: 8_000 });
+    await expect(save).toBeEnabled();
+    expect(posts).toBe(0);
+    await page.unroute(CHECK);
+
+    // Slow confirmations (LANG96-R4): pending covers the check, two clicks are one attempt. Each
+    // check is held on its own, so a second one could only go on after the first save.
+    const held: (() => void)[] = [];
+    await page.route(CHECK, async (r) => {
+      await new Promise<void>((go) => held.push(go));
+      await r.continue();
+    });
+    await save.evaluate((b: HTMLButtonElement) => {
+      b.click();
+      b.click();
+    });
+    await expect(save).toBeDisabled();
+    await expect.poll(() => held.length).toBeGreaterThan(0);
+    expect(posts).toBe(0);
+    held[0]!();
+    await expect(form.getByRole('status')).toHaveText('Uloženo.');
+    for (const go of held.slice(1)) go();
+    await page.waitForLoadState('networkidle');
+    expect(posts).toBe(1);
+    expect(held).toHaveLength(1);
+    const saved = await json<
+      { current: { customer: { legalName: string; documentLanguage: string } } }[]
+    >(await page.request.get('/api/admin/finance/billing/customers'));
+    const mine = saved.filter((c) => c.current.customer.legalName === name);
+    expect(mine.map((c) => c.current.customer.documentLanguage)).toEqual(['en']);
+  });
+
   test('chosen on the customer, frozen on the TEST invoice and its PDF', async ({ page }) => {
     test.setTimeout(180_000);
     const r = page.request;
