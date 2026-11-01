@@ -18,12 +18,13 @@ const message = (e: unknown) =>
       : String(e);
 
 /** One attempt: its state in words (never "doručeno"), its code and history. */
-function Attempt({ d, simulated }: { d: InvoiceDelivery; simulated: boolean }) {
+function Attempt({ d }: { d: InvoiceDelivery }) {
   return (
     <li className="flex flex-col gap-1 py-2" data-testid={`delivery-${d.state}`}>
-      <strong data-testid="delivery-state">
-        {(simulated && t.stateSimulated[d.state]) || t.state[d.state]}
-      </strong>
+      <strong data-testid="delivery-state">{t.stateOf(d.mode, d.state)}</strong>
+      <span className="text-stone-600" data-testid={`delivery-attempt-mode-${d.mode}`}>
+        {t.attemptMode[d.mode]}
+      </span>
       <span className="break-all text-stone-600">
         {d.recipient} · {d.sender}
       </span>
@@ -39,7 +40,7 @@ function Attempt({ d, simulated }: { d: InvoiceDelivery; simulated: boolean }) {
       <ul className="text-xs text-stone-500" data-testid="delivery-events">
         {d.events.map((e, i) => (
           <li key={i}>
-            {formatDateTimeCs(e.occurredAt)} · {t.state[e.state]}
+            {formatDateTimeCs(e.occurredAt)} · {t.stateOf(d.mode, e.state)}
           </li>
         ))}
       </ul>
@@ -100,7 +101,7 @@ export function InvoiceDeliveryPanel({
       )}
       {data.blocker && <Notice tone="info">{t.blockers[data.blocker]}</Notice>}
       {latest?.state === 'UNCERTAIN' && <Notice tone="warning">{t.uncertainHelp}</Notice>}
-      {latest?.state === 'SENT' && data.mode !== 'SIMULATION' && (
+      {latest?.state === 'SENT' && latest.mode === 'RELAY' && (
         <p className="text-stone-600">{t.sentHelp}</p>
       )}
       {data.deliveries.length === 0 ? (
@@ -108,7 +109,7 @@ export function InvoiceDeliveryPanel({
       ) : (
         <ul className="divide-y divide-stone-100">
           {data.deliveries.map((d) => (
-            <Attempt key={d.id} d={d} simulated={data.mode === 'SIMULATION'} />
+            <Attempt key={d.id} d={d} />
           ))}
         </ul>
       )}

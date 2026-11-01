@@ -295,8 +295,15 @@ export const financeCs = {
         RELAY:
           'Skutečný testovací e-mail přes poštovní server, jen na povolenou adresu. Doklad je označený jako testovací.',
       } as Record<string, string>,
-      stateSimulated: {
-        SENT: 'Přijato simulací (žádný e-mail neodešel)',
+      /** What this attempt's result means, by the mode stored on it, never by today's. */
+      stateOf(mode: string, state: string): string {
+        return mode === 'SIMULATION' && state === 'SENT'
+          ? 'Přijato simulací (žádný e-mail neodešel)'
+          : (financeCs.invoices.delivery.state[state] ?? state);
+      },
+      attemptMode: {
+        SIMULATION: 'Pokus v simulaci',
+        RELAY: 'Pokus přes poštovní server',
       } as Record<string, string>,
       none: 'Faktura zatím nebyla odeslána.',
       send: 'Odeslat fakturu',

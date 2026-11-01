@@ -300,6 +300,8 @@ test.describe('Jazyk dokumentů', () => {
     await shots(page, 'finance-delivery-sent');
 
     await page.goto('/finance/invoices');
-    await expect(page.getByTestId(`invoice-delivery-${invoice.number}`)).toBeVisible();
+    await expect(page.getByTestId(`invoice-delivery-${invoice.number}`)).toContainText(
+      'Přijato simulací',
+    );
   });
 });
