@@ -65,7 +65,7 @@ export default async function PaymentsPage({
             )}
             .
           </p>
-          {canManage && <ImportBankButton />}
+          {canManage && !page.legacy && <ImportBankButton />}
         </div>
         <PaymentFragmentLink />
         {page.legacy && (
@@ -199,7 +199,7 @@ export default async function PaymentsPage({
             </nav>
           )}
         </Card>
-        {canManage && page.simulationAvailable && (
+        {canManage && !page.legacy && page.simulationAvailable && (
           <details
             className="rounded-lg border border-dashed border-stone-300 bg-white p-4 text-sm"
             data-testid="payments-simulation"
