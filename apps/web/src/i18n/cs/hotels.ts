@@ -32,7 +32,8 @@ export const hotelsCs = {
     billing: {
       title: 'Smlouva a fakturace',
       unavailable: 'Fakturace dočasně nedostupná. Hotel a logistika fungují dál.',
-      forbidden: 'K těmto údajům nemáte oprávnění.',
+      forbiddenTerms: 'Ke smlouvě a plátci tohoto hotelu nemáte oprávnění.',
+      forbiddenInvoices: 'K fakturám tohoto hotelu nemáte oprávnění.',
       noAgreement: 'Hotel zatím nemá smlouvu.',
       createAgreement: 'Založit smlouvu',
       asOf: (month: string) => `Platí pro ${month}`,
@@ -55,7 +56,7 @@ export const hotelsCs = {
       summaryInvoice: (n: number) =>
         `souhrnná faktura firmy (${n} hotely), částka za celou fakturu`,
       cancelled: 'zrušená',
-      allInvoices: 'Všechny faktury smlouvy',
+      allInvoices: 'Všechny faktury hotelu',
     },
     practical: 'Příjem zboží',
     deliveryNote: 'Pokyny k doručení',

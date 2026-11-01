@@ -190,6 +190,13 @@ test.describe.serial('Karta hotelu a Finance', () => {
     await expect(panel.getByTestId('hotel-billing-rooms')).toHaveText('5');
     await shots(page, 'ux2-hotel-billing');
 
+    // The card shows the latest; there is a way to all of this hotel's invoices.
+    await panel.getByTestId('hotel-billing-all-invoices').click();
+    await expect(page).toHaveURL(/\/finance\/invoices\?hotel=/);
+    await expect(page.getByTestId('invoices-of-hotel')).toBeVisible();
+    await expect(page.getByTestId('invoices')).toContainText(number);
+    await page.goBack();
+
     // Invoice → payment → back to the invoice and the hotel.
     await panel.getByRole('link', { name: number }).click();
     await expect(page).toHaveURL(new RegExp(`/finance/invoices/${number}$`));

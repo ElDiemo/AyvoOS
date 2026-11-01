@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { INVOICES_OF_HOTEL_LIMIT } from '@ayvo/types';
 import type {
   CancelInvoiceRequest,
   CreateTestInvoiceRequest,
@@ -94,7 +93,7 @@ export class InvoicesService {
         ],
       },
       orderBy: { serial: 'desc' },
-      ...(query.hotelId ? { take: INVOICES_OF_HOTEL_LIMIT } : {}),
+      ...(query.limit ? { take: query.limit } : {}),
       include: invoiceInclude,
     });
     return rows.map(summary);

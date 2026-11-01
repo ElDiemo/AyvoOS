@@ -1458,5 +1458,10 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     expect(await numbers(`agreement=${b.code}&hotelId=${hotelA}`)).toEqual([]);
     expect(await numbers(`agreement=${b.code}`)).toEqual([invB.number]);
     expect(await numbers(`hotelId=${hotelB}`)).toEqual([invB.number]);
+    // The card's bound comes from its request; the hotel's own page asks for everything.
+    const later = (await expectStatus(issue([b.code], '2026-12'), 201)).body as InvoiceDetail;
+    expect(await numbers(`hotelId=${hotelB}&limit=1`)).toEqual([later.number]);
+    expect(await numbers(`hotelId=${hotelB}`)).toEqual([later.number, invB.number]);
+    await f.get(`${INV}?hotelId=${hotelB}&limit=0`).expect(400);
   });
 });

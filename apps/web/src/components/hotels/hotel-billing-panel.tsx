@@ -35,10 +35,16 @@ export async function HotelBillingPanel({
       ? apiGetPanel(`admin/finance/billing/agreements/by-hotel/${hotelId}`, hotelBillingTermsSchema)
       : null,
     canInvoices
-      ? apiGetPanel('admin/finance/invoices', z.array(invoiceSummarySchema), { hotelId })
+      ? apiGetPanel('admin/finance/invoices', z.array(invoiceSummarySchema), {
+          hotelId,
+          limit: INVOICES_OF_HOTEL_LIMIT,
+        })
       : null,
   ]);
   const down = billing?.state === 'unavailable' || invoices?.state === 'unavailable';
+  // Each part says it is out of reach; nothing here may read as "no contract" or "no invoices".
+  const noBilling = !canBilling || billing?.state === 'forbidden';
+  const noInvoices = !canInvoices || invoices?.state === 'forbidden';
   const b = billing?.state === 'ok' ? billing.data : null;
   const terms = b?.terms ?? null;
   const v = terms?.version ?? null;
@@ -48,6 +54,11 @@ export async function HotelBillingPanel({
     <Card title={t.title} testId="hotel-billing">
       <div className="flex flex-col gap-4 text-sm">
         {down && <Notice tone="warning">{t.unavailable}</Notice>}
+        {noBilling && (
+          <p className="text-stone-600" data-testid="hotel-billing-forbidden-terms">
+            {t.forbiddenTerms}
+          </p>
+        )}
         {b && !terms && (
           <div className="flex flex-wrap items-center gap-3" data-testid="hotel-billing-none">
             <span>{t.noAgreement}</span>
@@ -117,6 +128,11 @@ export async function HotelBillingPanel({
             </FieldList>
           </div>
         )}
+        {noInvoices && (
+          <p className="text-stone-600" data-testid="hotel-billing-forbidden-invoices">
+            {t.forbiddenInvoices}
+          </p>
+        )}
         {list && (
           <div data-testid="hotel-billing-invoices">
             <h3 className="mb-1 font-medium">{t.invoices}</h3>
@@ -150,6 +166,15 @@ export async function HotelBillingPanel({
             )}
             {list.length >= INVOICES_OF_HOTEL_LIMIT && (
               <p className="mt-1 text-xs text-stone-500">{t.limited(INVOICES_OF_HOTEL_LIMIT)}</p>
+            )}
+            {list.length > 0 && (
+              <Link
+                href={`/finance/invoices?hotel=${hotelId}`}
+                className="mt-1 inline-block underline"
+                data-testid="hotel-billing-all-invoices"
+              >
+                {t.allInvoices}
+              </Link>
             )}
           </div>
         )}
