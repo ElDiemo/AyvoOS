@@ -1691,28 +1691,38 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     );
   });
 
-  it('a customer whose version has no language is a visible blocker, not a guess; choosing it unblocks', async () => {
+  it('the previous image can still write a customer version (no language, no guess): a visible blocker; choosing it unblocks', async () => {
     await ensureCzkDefault();
     const c = await customerWith('cs');
     const a = await agreement(c.id);
-    const row = await f.prisma.customerVersion.findFirstOrThrow({ where: { customerId: c.id } });
-    // As a version recorded before the choice existed: only history can hold NULL.
-    await asOwner((db) =>
-      db.$transaction(async (tx) => {
-        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" DISABLE TRIGGER "customer_versions_language_required"`;
-        await tx.customerVersion.create({
-          data: {
-            ...row,
-            version: 2,
-            documentLanguage: null,
-            reason: 'Historie (test)',
-            requestId: randomUUID(),
-            recordedAt: undefined,
-          },
-        });
-        await tx.$executeRaw`ALTER TABLE "finance"."customer_versions" ENABLE TRIGGER "customer_versions_language_required"`;
-      }),
+    // Exactly what the image before this release writes: it does not know the column.
+    const columns = (
+      await f.prisma.$queryRaw<{ column_name: string }[]>`
+        SELECT "column_name" FROM information_schema.columns
+        WHERE "table_schema" = 'finance' AND "table_name" = 'customer_versions'
+          AND "column_name" <> 'document_language' AND "is_generated" = 'NEVER'`
+    ).map((c) => `"${c.column_name}"`);
+    const values = columns.map((c) =>
+      c === '"version"'
+        ? '2'
+        : c === '"request_id"'
+          ? 'gen_random_uuid()'
+          : c === '"reason"'
+            ? `'Zápis starého obrazu (test)'`
+            : c,
     );
+    await f.prisma.$executeRawUnsafe(
+      `INSERT INTO "finance"."customer_versions" (${columns.join(', ')})
+       SELECT ${values.join(', ')} FROM "finance"."customer_versions"
+       WHERE "customer_id" = '${c.id}'::uuid AND "version" = 1`,
+    );
+    expect(
+      (
+        await f.prisma.customerVersion.findFirstOrThrow({
+          where: { customerId: c.id, version: 2 },
+        })
+      ).documentLanguage,
+    ).toBeNull();
     const month = '2026-07';
     const items = await preview(month);
     const item = items.find((i) => i.agreement.code === a.code)!;
@@ -1723,6 +1733,18 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     expect(refused.body).toMatchObject({ code: 'TERMS_INCOMPLETE' });
     const run = (await previewOf(month)).items.find((i) => i.agreementCode === a.code)!;
     expect(run).toMatchObject({ state: 'BLOCKED', blockers: ['CUSTOMER_LANGUAGE_MISSING'] });
+
+    // The new API still requires the choice; the database does only after doc 040 §12a.
+    const { documentLanguage: _none, ...withoutLanguage } = customerIn('cs');
+    await f
+      .post(`${B}/customers/${c.code}/versions`)
+      .send({
+        requestId: randomUUID(),
+        expectedVersion: 2,
+        customer: withoutLanguage,
+        reason: 'Bez jazyka (test)',
+      })
+      .expect(400);
 
     await f
       .post(`${B}/customers/${c.code}/versions`)
