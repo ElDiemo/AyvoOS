@@ -33,7 +33,7 @@ function financeEnv() {
   }
   throw new Error('Finance process not found');
 }
-async function useOldFinance() {
+async function startOldFinance() {
   const env = financeEnv();
   process.kill(serverPid(), 'SIGUSR2');
   await waitFinance(false);
@@ -44,7 +44,7 @@ async function useOldFinance() {
   });
   await waitFinance(true);
 }
-async function useNewFinance() {
+async function startNewFinance() {
   // As `docker stop`: a grace period, then killed (open connections can hold a graceful stop).
   const stopping = oldFinance;
   stopping?.kill('SIGTERM');
@@ -68,7 +68,7 @@ test('with an older Finance the list is read-only and offers no action; a return
       await expect(page.getByTestId('payments-filters')).toBeVisible();
       await actions(1);
 
-      await useOldFinance();
+      await startOldFinance();
       await page.goto('/finance/payments');
       await expect(page.getByTestId('payments-legacy')).toBeVisible();
       await expect(page.getByTestId('payments-filters')).toHaveCount(0);
@@ -77,9 +77,9 @@ test('with an older Finance the list is read-only and offers no action; a return
       await actions(0);
       expect((await page.goto('/finance/payments/PP-000001'))?.status()).toBe(404);
 
-      await useNewFinance();
+      await startNewFinance();
     }
   } finally {
-    if (oldFinance) await useNewFinance();
+    if (oldFinance) await startNewFinance();
   }
 });
