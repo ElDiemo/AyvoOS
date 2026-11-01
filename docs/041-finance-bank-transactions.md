@@ -166,11 +166,15 @@ the bank: payments are made from what was already read, or simulated outside pro
   then is an open owner/accountant decision** (not invented).
 - Not covered: refunds or offsetting an overpayment (an open decision), live invoices.
 
-### 8a. Bounded payment list: rollout and return (review PAY103-R1)
+### 8a. Bounded payment list: rollout and return (reviews PAY103-R1, LANG96-R2)
 
-Finance first, then the web. The web also reads the answer of an older Finance (no `total`, `page`,
-`pageSize`): it shows the whole list read-only with a note, without filters, search and links to a
-detail, because that Finance has no such routes. So a new web with an older Finance is a supported
-combination, for the deployment window and after Finance alone returns to an earlier image. An older
-web with the new Finance also works: the new fields are ignored and the first 25 payments are shown,
-so return the web first when both go back. No migration belongs to this change.
+The OS and the web go first, then Finance: `scripts/deploy-prod.sh --release <commit>`, then `--finance
+--release <commit>` (`--finance` is refused until the OS runs that release). So the web also reads the
+answer of an older Finance (no `total`, `page`, `pageSize`): it shows the whole list **read-only** with
+a note, without filters, search and links to a detail, because that Finance has no such routes, and
+without the import of bank movements and the DEV simulation, because the page says read-only. A new web
+with an older Finance is thus a real state, for the deployment window and after Finance alone returns to
+an earlier image. An older web with the new Finance also works: the new fields are ignored and the first
+25 payments are shown. Return: `--rollback`, then `--finance-rollback`. No migration belongs to this
+change. Measured with a real earlier Finance process: `apps/web/e2e-compat/payments-legacy.spec.ts`
+(not in CI).
