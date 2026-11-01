@@ -35,6 +35,36 @@ async function shots(page: Page, name: string) {
   }
   await page.setViewportSize({ width: 1440, height: 900 });
 }
+/** The last column of the lines is reached on a phone: scrolled by a gesture, and from the keyboard. */
+async function lastColumnReached(page: Page, width: number, height: number) {
+  await page.setViewportSize({ width, height });
+  const table = page.getByTestId('invoice-lines');
+  const scroller = table.locator('xpath=..');
+  const amount = table.locator('tbody tr').first().locator('td').last();
+  const fits = async () => {
+    // Inside what the scroller shows, which is narrower than the window, and inside the window.
+    const box = (await amount.boundingBox())!;
+    const shown = (await scroller.boundingBox())!;
+    const right = box.x + box.width;
+    return box.x >= shown.x - 1 && right <= shown.x + shown.width + 1 && right <= width + 1;
+  };
+  const left = () => scroller.evaluate((e) => e.scrollLeft);
+  const overflowing = await scroller.evaluate((e) => e.scrollWidth > e.clientWidth);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  if (overflowing) {
+    expect(await fits(), `the amount starts cut off at ${width}`).toBe(false);
+    await table.scrollIntoViewIfNeeded();
+    await table.hover();
+    await page.mouse.wheel(2000, 0);
+    await expect.poll(fits, `a gesture at ${width}`).toBe(true);
+    await scroller.evaluate((e) => (e.scrollLeft = 0));
+    await table.locator('a').first().focus();
+    for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
+    await expect.poll(left, `arrow keys at ${width}`).toBeGreaterThan(0);
+    await expect.poll(fits, `arrow keys reach the end at ${width}`).toBe(true);
+  } else expect(await fits()).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+}
 const follow = async (page: Page, link: ReturnType<Page['getByTestId']>) => {
   await link.focus();
   await page.keyboard.press('Enter');
@@ -132,6 +162,8 @@ test.describe('Celý průchod', () => {
       await done.getByRole('link').first().focus();
       await page.keyboard.press('Enter');
       await expect(page).toHaveURL(new RegExp(`/finance/invoices/${number}$`));
+      await lastColumnReached(page, 390, 844);
+      await lastColumnReached(page, 320, 700);
       await expect(page.getByTestId('invoice-language')).toHaveText(language.shown);
 
       // The PDF in its language, exactly the stored bytes.
