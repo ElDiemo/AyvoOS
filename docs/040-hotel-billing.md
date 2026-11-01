@@ -229,13 +229,27 @@ versions without `document_language`. So the steps are separate releases:
    Nothing is guessed, no history is rewritten.
 2. **Deploy:** the migration and Finance first, the web right after. In the short window the old web
    gets a visible 400 on saving a customer (it sends no language); nothing is stored.
-3. **Roll back images (before step 4):** web first, then Finance, to the same earlier commit; the
+3. **Roll back images (before step 4):** web first, then Finance, to the same earlier commit (the
+   deployment scripts print this on a Finance rollback); the
    migration stays. Creating and changing customers keeps working. Versions written meanwhile have
    `NULL`; after the return a person chooses the language with a new version.
 4. **Enforce, a later release:** only after the owner closes the rollback window for images older
    than step 1. Its own migration adds a `BEFORE INSERT` trigger refusing `NULL` on new versions (old
    `NULL` rows stay valid), with a test, and is not part of this PR. Rolling it back is a forward
    migration dropping the trigger, applied before any image older than step 1 is started.
+
+**Which pairs work, measured** (`apps/web/e2e-compat/rollback-matrix.spec.ts`: real processes of this
+build and of the release returned to, one migrated synthetic database, not in CI):
+
+| Web | Finance | Result                                                                                                                                                               | Status                                    |
+| --- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| new | new     | everything                                                                                                                                                           | target                                    |
+| old | new     | reads work; saving a customer is refused with a visible error, nothing stored                                                                                        | deployment window only                    |
+| old | old     | everything; a customer's new version has no language (`NULL`); the PDF is unchanged                                                                                  | supported return                          |
+| new | old     | payments read-only with a note, the hotel's card says billing is unavailable; invoices, contracts and payers show "unsupported pair of versions", nothing is written | **not supported**: visible, keep it short |
+
+After the upgrade finishes, what the old image wrote shows `CUSTOMER_LANGUAGE_MISSING`, and a person
+chooses the language with a new version. Returning a second time and upgrading again work the same.
 
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 
