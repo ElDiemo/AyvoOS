@@ -1,6 +1,8 @@
 /** Finance → Smlouvy hotelů (doc 040, N3A-1 settings in the UI). */
 export const billingCs = {
-  title: 'Smlouvy a ceny',
+  financeLanguageUnconfirmed:
+    'Nepodařilo se ověřit, že Finance ukládají jazyk faktur (přechod mezi verzemi nebo výpadek). Plátce nebyl uložen; zkuste to později.',
+  title: 'Smlouvy',
   subtitle:
     'Kdo za hotel platí (odběratel = firma), kolik pokojů a za jakou cenu se účtuje a výchozí ceník. Každá změna je nová verze s důvodem; nic se nepřepisuje.',
   agreements: 'Smlouvy hotelů',
@@ -29,7 +31,7 @@ export const billingCs = {
   revision: (r: number) => `revize ${r}`,
   recorded: (at: string, by: string) => `${at}, ${by}`,
   newVersion: 'Nová verze',
-  back: 'Smlouvy a ceny',
+  back: 'Smlouvy',
   save: 'Uložit',
   saving: 'Ukládám…',
   saved: 'Uloženo.',
@@ -60,10 +62,32 @@ export const billingCs = {
     addressLine2: 'Doplněk adresy',
     postalCode: 'PSČ',
     city: 'Město',
-    countryCode: 'Země (ISO, např. CZ)',
+    countryCode: 'Země',
     billingEmail: 'E-mail pro faktury',
+    documentLanguage: 'Jazyk faktur a e-mailů',
     price: 'Cena za pokoj a měsíc',
   },
+  chooseLanguage: 'Vyberte jazyk',
+  languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
+  languageMissing: 'jazyk dokumentů nevybrán',
+  toHotel: 'Karta hotelu',
+  decimalInvalid: 'Částku zadejte jako 1 500,50 (nejvýš 2 desetinná místa). Nic se neuložilo.',
+  currentData: 'Aktuální údaje',
+  edit: 'Upravit',
+  historyOpen: (n: number) => `Zobrazit historii (${n})`,
+  agreementsSubtitle:
+    'Jedna smlouva na hotel, s verzovanými podmínkami. Hotel se zakládá v Hotelech.',
+  newPayerHere:
+    'Založení zde neztratí rozepsanou smlouvu. Plátce je firma, ne hotel; všechny plátce najdete v záložce Plátci.',
+  customersTitle: 'Plátci',
+  customersSubtitle:
+    'Firmy, kterým se fakturuje. Jedna firma může platit za více hotelů a nemusí být jejich vlastníkem ani provozovatelem.',
+  payerHotels: (month: string) => `Hotely, za které platí (${month.slice(5)}/${month.slice(0, 4)})`,
+  payerHelp: 'Podle smluv platných v tomto měsíci.',
+  payerNoHotels: 'V tomto měsíci nemá žádnou platnou smlouvu.',
+  pricesTitle: 'Výchozí ceník',
+  pricesSubtitle:
+    'Jediné místo výchozí ceny za pokoj a měsíc. Smlouva s vlastní cenou ji nepoužívá.',
   timing: { ADVANCE: 'předem', ARREARS: 'zpětně' } as Record<string, string>,
   errors: {
     CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný – nic se neuložilo.',

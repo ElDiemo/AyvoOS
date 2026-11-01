@@ -167,6 +167,98 @@ kind `TEST` exists (DB CHECK), the API refuses it with `APP_ENV=production`, not
   whom it pays** (customers — invoices and payments). A group manager never sees the invoices of a
   company they do not act for.
 
+## 11. Monthly run of TEST invoices (owner 2026-10-30)
+
+Built without a new table; on the same gates as §9 (kind `TEST`, refused with
+`APP_ENV=production`, nothing sent). Finance → Faktury hotelům → Měsíční běh.
+
+- `GET /api/admin/finance/invoices/test-run/preview?month=` (`finance:invoices_test` +
+  `finance:billing_read`) reads only. Every agreement with hotel, customer, rooms, price and its
+  source, amount, currency, payment terms, recorded billing timing and a state:
+  `READY` / `ALREADY_INVOICED` (with the number) / `BLOCKED` (the §4 gaps or `ZERO_AMOUNT`) /
+  `NOT_IN_EFFECT`.
+- `POST /api/admin/finance/invoices/test-run` (`finance:invoices_test`): `month`, `issuedOn` — both
+  required, never filled in or derived — and the lines the user saw (as §9, at most 50; repeat the
+  run for more).
+  - One separate invoice per agreement.
+  - Due date = issue date + the agreement's payment terms.
+  - All or nothing in one transaction; `requestId` replays the same result.
+  - Changed terms: `TERMS_CHANGED`; already invoiced: `ALREADY_INVOICED`; also the database
+    refuses a second valid invoice per agreement and month.
+- `billingTiming` is only shown: neither the period nor the date follows from it.
+- One migration, only one more value of the `operation_requests.kind` CHECK.
+
+### Proposal for approval — not built (new data model)
+
+A saved run needs its own tables, so it waits for the owner's approval of the model:
+
+- `billing_run_settings`, append-only versions with a reason: the issue day, which period a run
+  bills (per timing), summary or separate invoices. **No default**: while a value is missing, the
+  run is blocked and says which one. The values come from §7 items 1, 2 and 7.
+- `billing_runs` + `billing_run_items`, append-only: who, when, period, the settings' version, the
+  state of each agreement and its invoice — so a run can be reviewed afterwards and resumed without
+  a second invoice.
+
+## 12. The language of documents (owner 2026-10-30)
+
+- **The choice:** `customer_versions.document_language` — `cs`, `en` or `de`, required on every new
+  version by the API (in the database only after §12a), the same for the PDF and the invoice e-mail. Never derived from the
+  country; the form has no preselected value.
+- **Missing:** versions recorded before the choice stay `NULL`. Such a customer has the gap
+  `CUSTOMER_LANGUAGE_MISSING`: the invoice forms and the monthly run show why, the API answers
+  `422 TERMS_INCOMPLETE`. There is no fallback; a new version with a language unblocks it.
+- **Frozen:** a new invoice's snapshot holds `templateVersion`, `language` and all its `texts`. A
+  later change of the customer or of the texts in code affects only later invoices.
+- **Older TEST invoices:** their snapshots have no language. They stay readable, the API says
+  `documentLanguage: null` and the UI "starší testovací doklad bez uloženého jazyka". Their stored
+  PDF is served byte for byte and the renderer refuses them, so they are never generated again.
+- **The texts** (`apps/api/src/finance/invoice-texts.ts`) are a draft for the owner's review. Number
+  and date formats follow the language. The labels for the company and VAT numbers and the tax
+  point, and every live VAT or reverse-charge wording, are the accountant's (§7): a TEST invoice
+  prints only the note that it is not a tax document.
+- **Previews:** `docs/screenshots/finance/finance-invoice-pdf-{cs,en,de}.png` (synthetic).
+
+### 12a. Rollout and rollback of the language column (reviews LANG96-R1, R2)
+
+Rolling back images never reverts a migration, and the image before this release inserts customer
+versions without `document_language`. The steps follow what the deployment scripts actually do:
+Finance runs the image of the API (`pin_finance_images`), `--finance` is refused unless the OS already
+runs that release, and an OS deployment leaves the running Finance alone. **So the OS and the web go
+first, Finance second; Finance first is not possible**, and that release check stays.
+
+1. **Expand (this release).** The migration only adds the nullable column and its value check, and it
+   runs in step 3 below. The previous image keeps working on the migrated database; what it writes
+   stays `NULL`, i.e. `CUSTOMER_LANGUAGE_MISSING` until a person chooses. Nothing is guessed, no history
+   is rewritten.
+2. **Upgrade, OS:** `scripts/deploy-prod.sh --release <commit>`. The new web now runs with the old
+   Finance: the **Finance window**, see the table. The script names it at the end.
+3. **Upgrade, Finance, right after:** `scripts/deploy-prod.sh --finance --release <commit>` (backup,
+   migration, only the `finance` container). Finance is down for the backup; its pages say so.
+4. **Return, before step 5, in this order:** `scripts/deploy-prod.sh --rollback <release>`, then
+   `scripts/deploy-prod.sh --finance-rollback <release>`. No migration runs. Saving a customer in the
+   first step's short window is refused visibly; afterwards it works and stores `NULL`; after another
+   upgrade a person chooses the language with a new version.
+5. **Enforce, a later release:** only after the owner closes the rollback window for images older
+   than step 1. Its own migration adds a `BEFORE INSERT` trigger refusing `NULL` on new versions (old
+   `NULL` rows stay valid), with a test, and is not part of this PR. Rolling it back is a forward
+   migration dropping the trigger, applied before any image older than step 1 is started.
+
+**The Finance window is a bounded closure of the billing part of Finance, not a supported way to
+work.** Keep it to the minutes between steps 2 and 3. Hotels, orders and logistics do not read Finance.
+
+| Web | Finance | When                 | Result                                                                                                                                                                                                                                                                                                                                  |
+| --- | ------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| new | new     | target               | everything                                                                                                                                                                                                                                                                                                                              |
+| new | old     | steps 2–3            | a page whose answer lacks the language says so (`/finance/version-mismatch`), no retry advice; saving a customer is refused before anything is sent unless `GET …/finance/health/capabilities` answers `documentLanguage: true` within 5 s (404 there; an outage refuses too), because the old Finance would drop the language silently |
+| old | new     | first half of step 4 | reads work; saving a customer is refused with a visible error, nothing stored                                                                                                                                                                                                                                                           |
+| old | old     | after step 4         | everything; a customer's new version has no language (`NULL`); the PDF is unchanged                                                                                                                                                                                                                                                     |
+
+Real processes of this build and of the release returned to on a synthetic database
+(`apps/web/e2e-compat/rollback-matrix.spec.ts` for all pairs):
+`apps/web/e2e-compat/rollout-window.spec.ts` (`playwright.compat.config.ts`, not in CI, it needs a built
+earlier worktree). The branches of the scripts: `apps/api/test/deploy-prod-finance-order.test.ts`, with
+the real script text and a stub of Docker. No real deployment has run this.
+
 ## 7. Open — blocks live issuing, not development (owner + accountant)
 
 1. In advance or in arrears, and the issuing window.

@@ -15,7 +15,13 @@ import {
 } from './document-fields';
 
 /** Receiving a document: the original + its metadata, one request id per attempt. */
-export function ReceiveDocumentForm({ suppliers }: { suppliers: readonly FinanceSupplier[] }) {
+export function ReceiveDocumentForm({
+  suppliers,
+  canOpenSuppliers,
+}: {
+  suppliers: readonly FinanceSupplier[];
+  canOpenSuppliers: boolean;
+}) {
   const router = useRouter();
   const [values, setValues] = useState<DocumentFieldValues>(emptyFields);
   const [file, setFile] = useState<File | null>(null);
@@ -77,7 +83,33 @@ export function ReceiveDocumentForm({ suppliers }: { suppliers: readonly Finance
         suppliers={suppliers}
       />
       <p className="text-xs text-stone-500">{t.receive.draftHelp}</p>
-      <p className="text-xs text-stone-500">{t.receive.noSupplier}</p>
+      {/* A new tab: the unfinished document, its file included, stays here (doc 044 U7). */}
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500">
+        <span>{t.receive.noSupplier}</span>
+        {canOpenSuppliers ? (
+          <>
+            <a
+              href="/warehouse/suppliers"
+              target="_blank"
+              rel="noopener"
+              className="underline"
+              data-testid="receive-open-suppliers"
+            >
+              {t.receive.openSuppliers}
+            </a>
+            <button
+              type="button"
+              className="underline"
+              onClick={() => router.refresh()}
+              data-testid="receive-refresh-suppliers"
+            >
+              {t.receive.refreshSuppliers}
+            </button>
+          </>
+        ) : (
+          <span>{t.receive.askForSupplier}</span>
+        )}
+      </p>
       {error && <ErrorNote>{error}</ErrorNote>}
       <div>
         <button type="submit" disabled={busy || !file} className={buttonClass.primary}>
