@@ -89,6 +89,7 @@ export class HotelsService implements OnModuleInit {
             }
           : null,
       },
+      id: row.id,
       createdBy: row.creator.displayName,
     };
   }

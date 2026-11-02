@@ -6,6 +6,8 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
+  PaymentOpenInvoices,
+  HotelBillingTerms,
   InvoiceDeliveries,
   EffectiveTermsPage,
   IncomingPayment,
@@ -860,7 +862,8 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         ...e,
       })),
     });
-  const payments = async () => (await f.get(PAY).expect(200)).body as PaymentsPage;
+  const payments = async () =>
+    (await f.get(`${PAY}?pageSize=100`).expect(200)).body as PaymentsPage;
   const payment = async (reference: string) =>
     (await payments()).payments.find((p) => p.reference === reference)!;
   const invoiceOf = async (number: string) =>
@@ -1334,6 +1337,225 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       await real.get(`${INV}/overview`, cookie).expect(403);
       await real.get(`${B}/summary`, cookie).expect(200);
       await real.get(`${INV}?agreement=BA-000001`, cookie).expect(403);
+    } finally {
+      await real.close();
+    }
+  });
+
+  // --- the bounded list of payments (doc 044 U4) ----------------------------------------------
+
+  it('payments: bounded, filtered and searched in the database; REVIEW and CHANGED equal the overview', async () => {
+    const entry = (over: Record<string, unknown>) => ({
+      reference: `U4-${randomUUID().slice(0, 8).toUpperCase()}`,
+      amount: '10.00',
+      currency: 'CZK',
+      bookedOn: '2026-05-01',
+      variableSymbol: null,
+      counterpartyName: null,
+      message: null,
+      ...over,
+    });
+    const unique = `Protistrana${randomUUID().slice(0, 6)}`;
+    await f
+      .post(`${PAY}/simulate`)
+      .send({
+        requestId: randomUUID(),
+        entries: [
+          entry({ counterpartyName: unique, amount: '4321.09' }),
+          ...Array.from({ length: 30 }, () => entry({})),
+        ],
+      })
+      .expect(200);
+    const list = async (query: string) =>
+      (await f.get(`${PAY}?${query}`).expect(200)).body as PaymentsPage;
+
+    const first = await list('');
+    expect(first.payments).toHaveLength(25);
+    expect(first.pageSize).toBe(25);
+    expect(first.total).toBeGreaterThan(30);
+    const second = await list('page=2');
+    expect(second.payments[0]!.code).not.toBe(first.payments[0]!.code);
+    expect((await list(`page=${first.total + 1}`)).payments).toEqual([]);
+    for (const bad of ['pageSize=101', 'page=0', 'filter=NIC', `q=${'x'.repeat(81)}`])
+      await f.get(`${PAY}?${bad}`).expect(400);
+
+    // Search: a counterparty, an exact amount in both notations, wildcards taken literally.
+    expect((await list(`q=${unique}`)).payments.map((p) => p.counterpartyName)).toEqual([unique]);
+    for (const q of ['4321.09', '4321,09'])
+      expect((await list(`q=${encodeURIComponent(q)}`)).payments.map((p) => p.amount)).toContain(
+        '4321.09',
+      );
+    expect((await list(`q=${encodeURIComponent('%')}`)).total).toBe(0);
+
+    const overview = (await f.get(`${INV}/overview`).expect(200)).body as {
+      paymentsToReview: number;
+      paymentsChangedAtBank: number;
+    };
+    expect((await list('filter=REVIEW')).total).toBe(overview.paymentsToReview);
+    expect((await list('filter=CHANGED')).total).toBe(overview.paymentsChangedAtBank);
+    const allocated = await list('filter=ALLOCATED&pageSize=100');
+    expect(allocated.payments.every((p) => p.state === 'ALLOCATED')).toBe(true);
+
+    const one = first.payments[0]!;
+    expect((await f.get(`${PAY}/${one.code}`).expect(200)).body).toEqual(one);
+    await f.get(`${PAY}/PP-999999`).expect(404);
+  });
+
+  it('open invoices of a payment: its currency only, bounded; reading a payment needs no more than before', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const a = await agreement(c.id);
+    const inv = (await expectStatus(issue([a.code], '2026-01'), 201)).body as InvoiceDetail;
+    const reference = `U4-${randomUUID().slice(0, 8).toUpperCase()}`;
+    await f
+      .post(`${PAY}/simulate`)
+      .send({
+        requestId: randomUUID(),
+        entries: [
+          {
+            reference,
+            amount: '1.00',
+            currency: 'CZK',
+            bookedOn: '2026-05-01',
+            variableSymbol: null,
+            counterpartyName: null,
+            message: null,
+          },
+        ],
+      })
+      .expect(200);
+    const code = (
+      (await f.get(`${PAY}?pageSize=100`).expect(200)).body as PaymentsPage
+    ).payments.find((p) => p.reference === reference)!.code;
+    const open = (await f.get(`${PAY}/${code}/open-invoices?q=${inv.number}`).expect(200))
+      .body as PaymentOpenInvoices;
+    expect(open.invoices).toEqual([{ number: inv.number, remaining: inv.total }]);
+    expect(open.limited).toBe(false);
+    // Allocation still follows its own rules, whatever the list offers.
+    const refused = await f.post(`${PAY}/${code}/allocations`).send({
+      requestId: randomUUID(),
+      invoiceNumber: inv.number,
+      amount: '2.00',
+      reason: 'Víc než platba',
+    });
+    expect(refused.status).toBeGreaterThanOrEqual(400);
+  });
+
+  // --- a hotel's card reads Finance (doc 044 U2) ----------------------------------------------
+
+  it('one hotel: the same terms as the month computation, no agreement is not an error; invoices by exact hotel', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const first = await agreement(c.id);
+    const second = await agreement(c.id, { billedRooms: 5, ownPricePerRoomMonth: '100.00' });
+    const other = await agreement((await customer()).id);
+    const idOf = async (code: string) =>
+      (await f.core.prisma.hotel.findUniqueOrThrow({ where: { code }, select: { id: true } })).id;
+    const firstId = await idOf(first.hotel.code);
+    const secondId = await idOf(second.hotel.code);
+    const by = (id: string) => f.get(`${B}/agreements/by-hotel/${id}`).expect(200);
+
+    const one = (await by(firstId)).body as HotelBillingTerms;
+    const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' })
+      .format(new Date())
+      .slice(0, 7);
+    expect(one.month).toBe(month);
+    // Exactly what the month's computation says of this agreement.
+    const page = (await f.get(`${B}/agreements/effective?month=${month}`).expect(200))
+      .body as EffectiveTermsPage;
+    expect(one.terms).toEqual(page.items.find((i) => i.agreement.code === first.code));
+    expect(one.terms).toMatchObject({
+      status: 'IN_EFFECT',
+      customer: { code: c.code },
+      version: { billedRooms: 12, paymentTermsDays: 14, currency: 'CZK' },
+      price: { source: 'OWN', perRoomMonth: '350.00' },
+    });
+    // The same company pays for two hotels, each with its own rooms.
+    expect(((await by(secondId)).body as HotelBillingTerms).terms).toMatchObject({
+      customer: { code: c.code },
+      version: { billedRooms: 5 },
+    });
+    // A hotel without an agreement: a plain answer; a malformed id: refused.
+    const free = await createHotel(f.core);
+    const freeId = await idOf(free.code);
+    expect(((await by(freeId)).body as HotelBillingTerms).terms).toBeNull();
+    await f.get(`${B}/agreements/by-hotel/neni-uuid`).expect(400);
+
+    const single = (await expectStatus(issue([first.code], '2026-03'), 201)).body as InvoiceDetail;
+    const summaryOfBoth = (await expectStatus(issue([first.code, second.code], '2026-02'), 201))
+      .body as InvoiceDetail;
+    const foreign = (await expectStatus(issue([other.code], '2026-03'), 201)).body as InvoiceDetail;
+    const ofHotel = async (id: string) =>
+      ((await f.get(`${INV}?hotelId=${id}`).expect(200)).body as InvoiceDetail[]).map(
+        (i) => i.number,
+      );
+    expect(await ofHotel(firstId)).toEqual([summaryOfBoth.number, single.number]);
+    expect(await ofHotel(secondId)).toEqual([summaryOfBoth.number]);
+    expect(await ofHotel(freeId)).toEqual([]);
+    expect(await ofHotel(firstId)).not.toContain(foreign.number);
+    expect(summaryOfBoth.hotels).toHaveLength(2);
+    await f.get(`${INV}?hotelId=neni-uuid`).expect(400);
+
+    // A change of the payer changes no issued PDF.
+    const before = await f.get(`${INV}/${single.number}`).expect(200);
+    const version = await f.post(`${B}/customers/${c.code}/versions`).send({
+      requestId: randomUUID(),
+      expectedVersion: 1,
+      customer: {
+        legalName: 'Přejmenovaný plátce s.r.o.',
+        companyId: '87654321',
+        vatId: null,
+        addressLine1: 'Hotelová 7',
+        addressLine2: null,
+        postalCode: '602 00',
+        city: 'Brno',
+        countryCode: 'CZ',
+        billingEmail: 'fakturace@hotely.test',
+        documentLanguage: 'cs',
+      },
+      reason: 'Změna názvu (test)',
+    });
+    expect(version.status).toBe(201);
+    const after = await f.get(`${INV}/${single.number}`).expect(200);
+    expect((after.body as InvoiceDetail).pdfSha256).toBe((before.body as InvoiceDetail).pdfSha256);
+    expect((after.body as InvoiceDetail).customer.legalName).toBe(
+      (before.body as InvoiceDetail).customer.legalName,
+    );
+  });
+
+  it('the hotel panel: billing and invoices are separate permissions, on the server', async () => {
+    const real = await createFinanceTestApp({ core: { auth: 'real' } });
+    try {
+      const make = async (permissions: string[]) => {
+        const roleCode = `FINH_${randomUUID().slice(0, 8).toUpperCase()}`;
+        await real.core.prisma.role.create({
+          data: { code: roleCode, name: 'Test', description: 'test' },
+        });
+        for (const permissionCode of permissions)
+          await real.core.prisma.rolePermission.create({
+            data: { roleCode, permissionCode: permissionCode as never },
+          });
+        const user = await prepareInvitedUser(real.core, {
+          email: `panel-${randomUUID()}@ayvo.test`,
+          displayName: 'Test',
+        });
+        await real.core.prisma.userRole.create({
+          data: { userId: user.id, roleCode, grantReason: 'test' },
+        });
+        return sessionCookie(real.core, user.email);
+      };
+      const id = randomUUID();
+      const terms = `${B}/agreements/by-hotel/${id}`;
+      const invoices = `${INV}?hotelId=${id}`;
+      const billingOnly = await make(['finance:billing_read']);
+      await real.get(terms, billingOnly).expect(200);
+      await real.get(invoices, billingOnly).expect(403);
+      const invoicesOnly = await make(['finance:invoices_read']);
+      await real.get(terms, invoicesOnly).expect(403);
+      await real.get(invoices, invoicesOnly).expect(200);
+      const noFinance = await make(['hotels:read']);
+      await real.get(terms, noFinance).expect(403);
+      await real.get(invoices, noFinance).expect(403);
     } finally {
       await real.close();
     }
@@ -2641,6 +2863,29 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     } finally {
       await real.close();
     }
+  });
+
+  it('the list of invoices: an agreement and a hotel together mean both, a mismatched pair finds nothing', async () => {
+    await ensureCzkDefault();
+    const c = await customer();
+    const [a, b] = [await agreement(c.id), await agreement(c.id)];
+    const hotelIdOf = async (code: string) =>
+      (await f.core.prisma.hotel.findUniqueOrThrow({ where: { code }, select: { id: true } })).id;
+    const [hotelA, hotelB] = [await hotelIdOf(a.hotel.code), await hotelIdOf(b.hotel.code)];
+    const invA = (await expectStatus(issue([a.code], '2026-11'), 201)).body as InvoiceDetail;
+    const invB = (await expectStatus(issue([b.code], '2026-11'), 201)).body as InvoiceDetail;
+    const numbers = async (query: string) =>
+      ((await f.get(`${INV}?${query}`).expect(200)).body as InvoiceSummary[]).map((i) => i.number);
+    expect(await numbers(`agreement=${a.code}&hotelId=${hotelA}`)).toEqual([invA.number]);
+    expect(await numbers(`agreement=${a.code}&hotelId=${hotelB}`)).toEqual([]);
+    expect(await numbers(`agreement=${b.code}&hotelId=${hotelA}`)).toEqual([]);
+    expect(await numbers(`agreement=${b.code}`)).toEqual([invB.number]);
+    expect(await numbers(`hotelId=${hotelB}`)).toEqual([invB.number]);
+    // The card's bound comes from its request; the hotel's own page asks for everything.
+    const later = (await expectStatus(issue([b.code], '2026-12'), 201)).body as InvoiceDetail;
+    expect(await numbers(`hotelId=${hotelB}&limit=1`)).toEqual([later.number]);
+    expect(await numbers(`hotelId=${hotelB}`)).toEqual([later.number, invB.number]);
+    await f.get(`${INV}?hotelId=${hotelB}&limit=0`).expect(400);
   });
 
   it('the page is told how this server sends: simulated, the real relay, or not at all', async () => {

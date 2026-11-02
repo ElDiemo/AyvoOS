@@ -344,7 +344,6 @@ test.describe('Testovací faktury', () => {
       .filter({ hasText: 'chybí variabilní symbol' })
       .first();
     const code = (await unclear.getAttribute('data-testid'))!.replace('payment-', '');
-    await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(invoice.number);
     await mkdir(screenshots, { recursive: true });
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
@@ -357,6 +356,8 @@ test.describe('Testovací faktury', () => {
       });
     }
     await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByTestId(`payment-${code}-open`).click();
+    await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(invoice.number);
     const allocate = page.getByTestId(`allocate-${code}`);
     await allocate.getByTestId(`allocate-${code}-reason`).fill('Bez VS – ověřeno s hotelem (test)');
     await allocate.getByTestId(`allocate-${code}-submit`).click();
@@ -435,8 +436,8 @@ test.describe('Ukázka: řetězec fakturace', () => {
     const finance = page.getByRole('navigation', { name: 'Finance' });
     const views = page.getByRole('navigation', { name: 'Zobrazení' });
     await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
-    await views.getByRole('link', { name: 'Smlouvy a ceny', exact: true }).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy a ceny' })).toBeVisible();
+    await views.getByRole('link', { name: 'Smlouvy', exact: true }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy' })).toBeVisible();
     /** Opens a collapsible section unless it is open already (it stays open after a save). */
     const ensureOpen = async (summaryTestId: string) => {
       const details = page.locator('details', { has: page.getByTestId(summaryTestId) });
@@ -455,7 +456,9 @@ test.describe('Ukázka: řetězec fakturace', () => {
       await form.locator('[name=documentLanguage]').selectOption('cs');
       await form.getByTestId('customer-save').click();
       await expect(form.getByRole('status')).toHaveText('Uloženo.');
+      await page.goto('/finance/billing/customers');
       await expect(page.getByTestId('billing-customers')).toContainText(name);
+      await page.goto('/finance/billing');
     };
     await newCustomer(`Alfa Hotely ${run} s.r.o.`, '11111111');
     await newCustomer(`Beta Resort ${run} a.s.`, '22222222');
@@ -561,6 +564,11 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await expect(statement.getByTestId('simulate-result')).toHaveText(
       'Nově zaznamenáno 2, už dříve načteno 0 (nezapočteno znovu). Spárováno 1, k posouzení 1.',
     );
+    // The same statement loaded again: nothing new, nothing counted twice.
+    await statement.getByTestId('simulate-submit').click();
+    await expect(statement.getByTestId('simulate-result')).toHaveText(
+      'Nově zaznamenáno 0, už dříve načteno 2 (nezapočteno znovu). Spárováno 0, k posouzení 0.',
+    );
     const unclear = page
       .locator('li[data-testid^="payment-PP-"]')
       .filter({ hasText: '8 172,80 CZK' })
@@ -569,6 +577,7 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await expect(page.getByTestId(`payment-${code}-result`)).toHaveText(
       'k posouzení: chybí variabilní symbol',
     );
+    await page.getByTestId(`payment-${code}-open`).click();
     await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(number);
     await shot('4-platby');
     const allocate = page.getByTestId(`allocate-${code}`);
@@ -580,11 +589,6 @@ test.describe('Ukázka: řetězec fakturace', () => {
     await expect(page.getByTestId(`payment-${code}-state`)).toHaveText('přiřazeno');
     await expect(page.getByTestId(`payment-${code}-result`)).toHaveText(
       'vyřešeno ručně (původně: chybí variabilní symbol)',
-    );
-    // The same statement loaded again: nothing new, nothing counted twice.
-    await statement.getByTestId('simulate-submit').click();
-    await expect(statement.getByTestId('simulate-result')).toHaveText(
-      'Nově zaznamenáno 0, už dříve načteno 2 (nezapočteno znovu). Spárováno 0, k posouzení 0.',
     );
     await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
     const list = page.getByTestId('invoices');

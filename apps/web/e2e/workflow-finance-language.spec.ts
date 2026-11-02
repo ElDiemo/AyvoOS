@@ -126,7 +126,7 @@ test.describe('Jazyk dokumentů', () => {
     await form.locator('[name=addressLine1]').fill('Hauptstraße 1');
     await form.locator('[name=postalCode]').fill('10115');
     await form.locator('[name=city]').fill('Berlin');
-    await form.locator('[name=countryCode]').fill('DE');
+    await form.locator('[name=countryCode]').selectOption('DE');
     await form.locator('[name=billingEmail]').fill('rechnung@sprache.test');
     // The country suggests nothing: no language until the user chooses, and the form says so.
     const language = form.locator('[name=documentLanguage]');
@@ -136,6 +136,7 @@ test.describe('Jazyk dokumentů', () => {
     await language.selectOption('de');
     await form.getByTestId('customer-save').click();
     await expect(form.getByRole('status')).toHaveText('Uloženo.');
+    await page.goto('/finance/billing/customers');
     await expect(page.getByTestId('billing-customers')).toContainText(name);
 
     const customers = await json<

@@ -235,7 +235,8 @@ describe('AYVO OS navigation (doc 019)', () => {
     ]);
     expect(all.pages.find((p) => p.id === 'invoices')!.views!.map((v) => v.label)).toEqual([
       'Faktury',
-      'Smlouvy a ceny',
+      'Smlouvy',
+      'Plátci',
     ]);
     expect(all.pages.find((p) => p.id === 'bank')!.views!.map((v) => v.label)).toEqual([
       'Pohyby z banky',
@@ -249,8 +250,10 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(billingOnly.pages.map((p) => [p.id, p.href])).toEqual([
       ['overview', '/finance'],
       ['invoices', '/finance/billing'],
+      ['settings', '/finance/settings/prices'],
     ]);
-    expect(billingOnly.pages[1]!.views!.map((v) => v.id)).toEqual(['billing']);
+    expect(billingOnly.pages[1]!.views!.map((v) => v.id)).toEqual(['billing', 'customers']);
+    expect(billingOnly.pages[2]!.views!.map((v) => v.id)).toEqual(['prices']);
     const invoicesOnly = finance('finance:invoices_read')!;
     expect(invoicesOnly.pages.map((p) => [p.id, p.href])).toEqual([
       ['overview', '/finance'],
