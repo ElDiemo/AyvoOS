@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 const ADMIN_STATE = 'e2e/.auth/admin.json';
 
 /**
@@ -65,6 +65,42 @@ test.describe('Nastavení měsíčního běhu', () => {
   });
 
   // --- reviews RUN112-R1, R2 (Codex 2026-11-02, reproductions taken over) ---------------------
+
+  async function saveDay(page: Page, day: string) {
+    // Wait for the new version itself (the same day may already be shown from before).
+    const current = page.getByTestId('run-settings-current');
+    const before = (await current.textContent())!;
+    const form = page.getByTestId('run-settings-form');
+    await form.getByTestId('run-settings-day').fill(day);
+    await form.getByTestId('run-settings-advance').selectOption('ISSUE_MONTH');
+    await form.getByTestId('run-settings-arrears').selectOption('PREVIOUS_MONTH');
+    await form.getByTestId('run-settings-reason').fill(`Den ${day} (E2E review)`);
+    await form.getByTestId('run-settings-save').click();
+    await expect(current).not.toHaveText(before);
+    await expect(current).toContainText(`Vystavení ${day}. dne`);
+  }
+
+  test('RUN112-R1: a new settings version drops the calculated plan; an older link fills nothing in', async ({
+    page,
+  }) => {
+    await page.goto('/finance/invoices/run');
+    await saveDay(page, '1');
+    await page.getByTestId('run-plan-month').fill('2026-12');
+    await page.getByTestId('run-plan-load').click();
+    await expect(page.getByTestId('run-plan-ADVANCE')).toContainText('2026-12-01');
+    const oldLink = await page.getByTestId('run-plan-ADVANCE').getAttribute('href');
+    await saveDay(page, '15');
+    await expect(page.getByTestId('run-plan-ADVANCE')).toHaveCount(0);
+    // Calculated again: the new issue day.
+    await page.getByTestId('run-plan-month').fill('2026-12');
+    await page.getByTestId('run-plan-load').click();
+    await expect(page.getByTestId('run-plan-ADVANCE')).toContainText('2026-12-15');
+    // The link of the older plan: nothing filled in, said so.
+    await page.goto(oldLink!);
+    await expect(page.getByTestId('run-planned-stale')).toBeVisible();
+    await expect(page.getByTestId('run-planned')).toHaveCount(0);
+    await expect(page.getByTestId('run-month')).toHaveValue('');
+  });
 
   test('RUN112-R2: a late plan or error of an earlier month is dropped', async ({ page }) => {
     await page.goto('/finance/invoices/run');

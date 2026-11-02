@@ -144,10 +144,12 @@ export function RunSettingsForm({ current }: { current: BillingRunSettings | nul
  * The plan of an issue month by the settings: its issue date and, per billing timing, the billed
  * month — each a link that opens the run with them filled in. Nothing is issued here.
  *
- * A plan belongs to the month and the attempt it was asked for (review RUN112-R2): an answer or
- * error of an earlier attempt is dropped and changing the month drops the shown plan.
+ * A plan belongs to the month, the settings revision and the attempt it was asked for (reviews
+ * RUN112-R1, R2): an answer or error of an earlier attempt is dropped, changing the month drops
+ * the shown plan, and a plan of another settings revision is never shown (the page also remounts
+ * this form when the revision changes).
  */
-export function RunPlanForm() {
+export function RunPlanForm({ settingsRevision }: { settingsRevision: number | null }) {
   const [issueMonth, setIssueMonth] = useState('');
   const [plan, setPlan] = useState<TestRunPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -158,7 +160,10 @@ export function RunPlanForm() {
     setPlan(null);
     setError(null);
   };
-  const current = plan && plan.issueMonth === issueMonth ? plan : null;
+  const current =
+    plan && plan.issueMonth === issueMonth && plan.settingsRevision === settingsRevision
+      ? plan
+      : null;
   return (
     <div className="flex flex-col gap-3" data-testid="run-plan">
       <form
@@ -211,6 +216,7 @@ export function RunPlanForm() {
                   month: g.billedMonth,
                   issuedOn: current.issuedOn!,
                   timing: g.billingTiming,
+                  revision: String(current.settingsRevision),
                 }).toString()}`}
                 className="underline"
                 data-testid={`run-plan-${g.billingTiming}`}

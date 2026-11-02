@@ -21,7 +21,7 @@ const s = t.runSettings;
 export default async function TestRunPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; issuedOn?: string; timing?: string }>;
+  searchParams: Promise<{ month?: string; issuedOn?: string; timing?: string; revision?: string }>;
 }) {
   const me = await requirePermission('finance:invoices_test');
   await requirePermission('finance:billing_read');
@@ -32,15 +32,18 @@ export default async function TestRunPage({
   ]);
   const timing: 'ADVANCE' | 'ARREARS' | null =
     q.timing === 'ADVANCE' || q.timing === 'ARREARS' ? q.timing : null;
-  const planned =
-    q.month &&
-    /^\d{4}-\d{2}$/.test(q.month) &&
-    q.issuedOn &&
-    /^\d{4}-\d{2}-\d{2}$/.test(q.issuedOn) &&
-    timing
-      ? { month: q.month, issuedOn: q.issuedOn, timing }
-      : undefined;
   const c = settings.current;
+  const fromPlan =
+    !!q.month &&
+    /^\d{4}-\d{2}$/.test(q.month) &&
+    !!q.issuedOn &&
+    /^\d{4}-\d{2}-\d{2}$/.test(q.issuedOn) &&
+    !!timing;
+  // Filled in only from a plan of the current settings revision (review RUN112-R1): a link from an
+  // older plan fills nothing in and says so.
+  const stale = fromPlan && (c === null || q.revision !== String(c.revision));
+  const planned =
+    fromPlan && !stale ? { month: q.month!, issuedOn: q.issuedOn!, timing: timing! } : undefined;
   return (
     <>
       <FinanceHeader
@@ -83,9 +86,14 @@ export default async function TestRunPage({
           )}
         </Card>
         <Card title={s.planTitle}>
-          <RunPlanForm />
+          <RunPlanForm key={c?.revision ?? 0} settingsRevision={c?.revision ?? null} />
         </Card>
         <Card>
+          {stale && (
+            <p className="mb-3 text-sm text-amber-800" data-testid="run-planned-stale">
+              {s.stale}
+            </p>
+          )}
           {planned && (
             <p className="mb-3 text-sm text-stone-700" data-testid="run-planned">
               {s.planned(s.timing[planned.timing]!)}

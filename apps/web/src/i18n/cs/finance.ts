@@ -319,6 +319,8 @@ export const financeCs = {
       timing: { ADVANCE: 'Smlouvy předem', ARREARS: 'Smlouvy zpětně' } as Record<string, string>,
       group: (timing: string, month: string, issuedOn: string) =>
         `${timing}: období ${month}, vystavení ${issuedOn} → otevřít běh`,
+      stale:
+        'Odkaz je z plánu podle starší verze nastavení – nic se nepředvyplnilo. Spočítejte běh znovu podle aktuálního nastavení.',
       planned: (timing: string) =>
         `Předvyplněno podle nastavení: ${timing}. Načtěte smlouvy, zkontrolujte je a potvrďte; nic se nevystaví samo.`,
     },
