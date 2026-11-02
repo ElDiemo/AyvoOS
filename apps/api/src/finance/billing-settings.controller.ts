@@ -5,11 +5,13 @@ import {
   effectiveTermsQuerySchema,
   newBillingAgreementVersionSchema,
   newBillingCustomerVersionSchema,
+  newBillingRunSettingsSchema,
   newPriceListVersionSchema,
   type BillingAgreement,
   type BillingAgreementDetail,
   type BillingCustomer,
   type BillingCustomerDetail,
+  type BillingRunSettingsPage,
   type BillingSummary,
   type CreateBillingAgreementRequest,
   type CreateBillingCustomerRequest,
@@ -19,6 +21,7 @@ import {
   type HotelBillingTerms,
   type NewBillingAgreementVersionRequest,
   type NewBillingCustomerVersionRequest,
+  type NewBillingRunSettingsRequest,
   type NewPriceListVersionRequest,
   type PriceListVersion,
 } from '@ayvo/types';
@@ -45,6 +48,22 @@ export class BillingSettingsController {
     private readonly billing: BillingSettingsService,
     private readonly core: CoreClient,
   ) {}
+
+  /** The settings of the monthly invoicing run (doc 040 §11, §13). */
+  @RequirePermission('finance:billing_read')
+  @Get('run-settings')
+  runSettings(): Promise<BillingRunSettingsPage> {
+    return this.billing.runSettings();
+  }
+
+  @RequirePermission('finance:billing_manage')
+  @Post('run-settings')
+  newRunSettings(
+    @Body(new ZodValidationPipe(newBillingRunSettingsSchema)) body: NewBillingRunSettingsRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<BillingRunSettingsPage> {
+    return this.billing.newRunSettings(body, caller);
+  }
 
   /** The core's hotels to choose from (identity and address only). */
   @RequirePermission('finance:billing_read')

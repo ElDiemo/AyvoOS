@@ -178,6 +178,25 @@ export const testRunPreviewSchema = z.object({
 export type TestRunPreview = z.infer<typeof testRunPreviewSchema>;
 
 /**
+ * GET /api/admin/finance/invoices/test-run/plan?issueMonth= (doc 040 §11, §13): what the run of an
+ * issue month bills by the current settings — the issue date and, per billing timing, the billed
+ * month. Reads only. Without settings `settingsRevision` is null and nothing is planned.
+ */
+export const testRunPlanQuerySchema = z.strictObject({ issueMonth: billingMonthSchema });
+export const testRunPlanSchema = z.object({
+  issueMonth: billingMonthSchema,
+  settingsRevision: z.number().int().nullable(),
+  issuedOn: z.iso.date().nullable(),
+  groups: z.array(
+    z.object({
+      billingTiming: z.enum(['ADVANCE', 'ARREARS']),
+      billedMonth: billingMonthSchema,
+    }),
+  ),
+});
+export type TestRunPlan = z.infer<typeof testRunPlanSchema>;
+
+/**
  * POST /api/admin/finance/invoices/test-run: separate TEST invoices (one per agreement) of an
  * explicit period with an explicit issue date, bound to the lines the user saw. All or nothing;
  * the same requestId replays the same result. The due date = issue date + the agreement's terms.

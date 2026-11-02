@@ -261,7 +261,7 @@ export const financeCs = {
     run: {
       title: 'Měsíční běh testovacích faktur',
       subtitle:
-        'Vyberte období, zkontrolujte smlouvy a zadejte datum vystavení. Každá vybraná smlouva = samostatná testovací faktura. Datum ani období se neodvozují.',
+        'Období a datum vystavení zadejte ručně, nebo je spočítejte podle nastavení měsíčního běhu. Smlouvy vždy zkontrolujete a potvrdíte; každá vybraná smlouva = samostatná testovací faktura. Nic se nevystaví samo.',
       open: 'Měsíční běh',
       month: 'Fakturované období',
       load: 'Načíst smlouvy',
@@ -295,6 +295,38 @@ export const financeCs = {
         CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
         ZERO_AMOUNT: 'nulová částka',
       } as Record<string, string>,
+    },
+    runSettings: {
+      title: 'Nastavení měsíčního běhu',
+      help: 'Den vystavení a měsíc, za který faktura účtuje, podle druhu smlouvy. Splatnost je vždy ze smlouvy. Bez nastavení se běh podle nastavení neplánuje – nic se nedoplňuje samo.',
+      none: 'Zatím nenastaveno.',
+      current: (day: number, advance: string, arrears: string) =>
+        `Vystavení ${day}. dne v měsíci · smlouvy předem: ${advance} · smlouvy zpětně: ${arrears} · splatnost ze smlouvy`,
+      revision: (n: number) => `verze ${n}`,
+      history: 'Dřívější verze',
+      issueDay: 'Den vystavení (1–28)',
+      advance: 'Smlouvy předem účtují',
+      arrears: 'Smlouvy zpětně účtují',
+      billedMonth: {
+        ISSUE_MONTH: 'měsíc vystavení',
+        NEXT_MONTH: 'následující měsíc',
+        PREVIOUS_MONTH: 'předchozí měsíc',
+      } as Record<string, string>,
+      reason: 'Důvod změny (povinný)',
+      save: 'Uložit novou verzi',
+      concurrent: 'Nastavení mezitím změnil někdo jiný. Načtěte stránku znovu.',
+      planTitle: 'Běh podle nastavení',
+      issueMonth: 'Měsíc vystavení',
+      plan: 'Spočítat',
+      missing:
+        'Nastavení měsíčního běhu chybí – nejdřív ho uložte. Do té doby zadejte období a datum ručně níže.',
+      timing: { ADVANCE: 'Smlouvy předem', ARREARS: 'Smlouvy zpětně' } as Record<string, string>,
+      group: (timing: string, month: string, issuedOn: string) =>
+        `${timing}: období ${month}, vystavení ${issuedOn} → otevřít běh`,
+      stale:
+        'Odkaz je z plánu podle starší verze nastavení – nic se nepředvyplnilo. Spočítejte běh znovu podle aktuálního nastavení.',
+      planned: (timing: string) =>
+        `Předvyplněno podle nastavení: ${timing}. Načtěte smlouvy, zkontrolujte je a potvrďte; nic se nevystaví samo.`,
     },
     delivery: {
       title: 'Odeslání e-mailem',
