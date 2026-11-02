@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -1219,6 +1221,26 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       });
       expect((await invoiceOf(inv2.number)).paymentState.paid).toBe('4200.00');
       expect((await overviewNow()).paymentsToReview).toBe(before.paymentsToReview + 2);
+      // The rollback preflight (doc 041 §8b) finds it: an image older than #110 does not know it.
+      const preflight = readFileSync(
+        resolve(
+          import.meta.dirname,
+          '../../../scripts/sql/finance-payments-rollback-preflight.sql',
+        ),
+        'utf8',
+      );
+      const unknown = await owner.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
+        return tx.$queryRawUnsafe<{ match_result: string; payments: number }[]>(preflight);
+      });
+      expect(unknown).toEqual([
+        {
+          match_result: 'PAID_BEFORE_ISSUE',
+          payments: await owner.incomingPayment.count({
+            where: { matchResult: 'PAID_BEFORE_ISSUE' },
+          }),
+        },
+      ]);
       // Loaded again: other income is still not recorded, nothing twice.
       expect((await importBank()).created).toEqual([]);
       for (const id of [unknownVs, noVs]) expect(await paymentsOf(owner, id)).toBe(0);

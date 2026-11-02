@@ -598,8 +598,9 @@ export class PaymentsService {
       return { result: 'ENVIRONMENT_MISMATCH' };
     if (invoice.cancellation) return { result: 'INVOICE_CANCELLED' };
     if (invoice.currency !== e.currency) return { result: 'CURRENCY_MISMATCH' };
-    // Money received before the invoice was issued (the tax point, doc 040 §13) is never silently
-    // an ordinary later payment: a person decides.
+    // Money received before the invoice was issued is never silently an ordinary later payment: a
+    // person decides (doc 040 §13). A TEST invoice has no tax point of its own; a live invoice must
+    // compare with its tax point wherever it differs from the issue date (doc 041 §8b).
     if (e.bookedOn < invoice.issuedOn.toISOString().slice(0, 10))
       return { result: 'PAID_BEFORE_ISSUE' };
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice-payments:${invoice.id}`}))`;
