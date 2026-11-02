@@ -35,6 +35,11 @@ export function InvoiceList({ invoices }: { invoices: readonly InvoiceSummary[] 
                   i.paymentState.overdue ? ` · ${t.overdue}` : ''
                 }`}
           </span>
+          {i.deliveryState && (
+            <span className="text-stone-600" data-testid={`invoice-delivery-${i.number}`}>
+              {t.delivery.stateOf(i.deliveryMode ?? 'RELAY', i.deliveryState)}
+            </span>
+          )}
         </li>
       ))}
     </ul>

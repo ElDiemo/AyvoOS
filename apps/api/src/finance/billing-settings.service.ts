@@ -442,6 +442,8 @@ export class BillingSettingsService {
       const cv = customerVersions
         .filter((x) => x.customerId === v.customerId)
         .reduce<CustomerVersionRow | null>((b, x) => (!b || x.version > b.version ? x : b), null);
+      // Never guessed from the country: a customer without a chosen language is a visible blocker.
+      if (cv && cv.documentLanguage === null) gaps.push('CUSTOMER_LANGUAGE_MISSING');
       return {
         ...base,
         status: 'IN_EFFECT',
@@ -471,6 +473,7 @@ function customerData(c: BillingCustomerFields) {
     city: c.city,
     countryCode: c.countryCode,
     billingEmail: c.billingEmail,
+    documentLanguage: c.documentLanguage,
   };
 }
 
@@ -516,6 +519,8 @@ function customerVersion(v: CustomerVersionRow): BillingCustomerVersion {
       city: v.city,
       countryCode: v.countryCode,
       billingEmail: v.billingEmail,
+      documentLanguage:
+        v.documentLanguage as BillingCustomerVersion['customer']['documentLanguage'],
     },
     reason: v.reason,
     recordedAt: v.recordedAt.toISOString(),

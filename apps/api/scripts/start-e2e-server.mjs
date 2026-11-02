@@ -214,6 +214,8 @@ const startFinance = () =>
       FINANCE_DATABASE_URL: asRole(finance.runtimeRole, finance.runtimePassword),
       CORE_INTERNAL_URL: `http://localhost:${port}`,
       FINANCE_SERVICE_TOKEN: serviceToken,
+      FINANCE_INVOICE_MAIL: 'memory',
+      FINANCE_INVOICE_MAIL_POLL_MS: '300',
       FILE_STORAGE_DIR: storageDir,
       ...fakeRb.env(`${e2eBankAccount}:CZK`),
     },
