@@ -180,3 +180,73 @@ kind `TEST` exists (DB CHECK), the API refuses it with `APP_ENV=production`, not
 9. The PROD topology of Finance.
 
 The questionnaire is `DOTAZNIK-UCETNI-FAKTURACE-20261025.md` (outside the repository).
+
+## 13. Live invoicing: one monthly tax document per agreement (owner 2026-11-02, "as UOL")
+
+Approved by the owner on 2026-11-02; it replaces the earlier proposal of a default advance-payment
+cycle. A decision of scope, **not built**: the gate of §5 stays closed and nothing here enables
+live issuing, a scheduler, real sending or a bank call.
+
+**Scope (binding):**
+
+- **One regular monthly invoice per agreement, a tax document:** billed rooms × the agreement's
+  own price, otherwise the valid default price list (§3). It carries the right payer (the
+  customer's version), the billed period, currency, due date, VS and QR Platba.
+- **Issued and sent automatically according to settings.** The issue day, the billed month's
+  relation to the issue date and the due date are settings: never hard-coded and never guessed.
+  For example, UOL issues on the 1st of the billed month, with the tax point on the same day and
+  the due date later. The owner originally said hotels pay for the following month; the exact day
+  and offset come with the settings proposal.
+- **Bank:** RB is read regularly and only payments of hotel invoices are paired (doc 041 §8b). A
+  person may allocate a payment with a wrong VS, with a reason. Unrelated bank income creates no
+  work queue.
+- **Overview:** all invoices and each hotel's invoices, paid / partially paid / unpaid / overdue,
+  with the balance. Paying an ordinary invoice never creates another invoice and never changes the
+  issued PDF.
+- **Accountant:** issued invoices go into the accountant's handover, clearly separated from the
+  received documents (doc 039 §7).
+- **Not the default now:** proformas, tax documents for advance payments and their settlement. No
+  model or backlog is added for them.
+
+**Tax, only what has been verified:**
+
+- REvolaris is a VAT payer (owner).
+- Act 235/2004 Coll., §21(3): for a service, the taxable supply also arises when a tax document is
+  issued earlier. §21(7) covers contractual partial supplies. The tax liability therefore does not
+  wait for the bank payment.
+- This does not confirm the tax treatment of our particular mix of service and refill deliveries.
+  UOL confirms the nature of the supply, the tax point, the rate, rounding and the number series.
+  None of them is copied from another company's example.
+
+**Money received before the tax point** is never silently treated as an ordinary later payment. A
+payment booked before the issue date of the invoice its VS names is recorded as
+`PAID_BEFORE_ISSUE`. It is not allocated automatically and it is to review; a person decides by
+UOL's rule (doc 041 §8b, PR #110).
+
+**The open items of §7 on 2026-11-02:**
+
+| §7                                             | State                                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| 1. In advance or in arrears, issuing window    | decided as a setting (above); the setting itself is still to be proposed |
+| 2. Partial months, mid-month room changes      | open                                                                     |
+| 3. Number series                               | UOL                                                                      |
+| 4. VAT, tax point, rounding, foreign customers | UOL (law above)                                                          |
+| 5. PDF contents, QR payment                    | done for TEST invoices (§9); tax-document contents with UOL              |
+| 6. Corrections (credit note)                   | open                                                                     |
+| 7. Summary invoices                            | one invoice per agreement (above); summary invoices not now              |
+| 8. E-mail sender and text                      | sender decided (doc 043 §0); the text awaits the owner                   |
+| 9. PROD topology of Finance                    | Finance runs on PROD; mail topology in the approved stack                |
+
+**Smallest missing steps to a visible DEV walk-through** (each a draft PR → independent review →
+DEV → owner acceptance → the same commit on PROD):
+
+1. The approved stack and its fixes (#109, #110 after #103) on DEV: TEST invoice, sending in
+   simulation, payment, state.
+2. Billing settings (§11 proposal: `billing_run_settings`, versioned, no default — a missing value
+   blocks the run and says which one), for model review.
+3. Recorded runs (`billing_runs` + items) and a scheduler that is off by default, creating TEST
+   invoices on DEV by those settings and sending them through the doc 043 path (simulation on DEV).
+4. Issued invoices in the accountant's export, separated from received documents.
+5. The RB read scheduler (#94) on top of #110, off by default.
+6. The live tax document (kind, series, tax point, VAT, rounding), only after UOL's answers, behind
+   the §5 gate.
