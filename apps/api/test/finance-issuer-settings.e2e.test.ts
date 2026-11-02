@@ -1742,4 +1742,43 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       await owner.$disconnect();
     }
   });
+
+  it('RB110-R2: a change at the bank warns only for invoice payments, also fully allocated ones', async () => {
+    await ensureCzkDefault();
+    const inv = await freshInvoice();
+    const owner = ownerDb();
+    const newVersion = async (id: string) => {
+      const v = await owner.bankTransactionVersion.findFirstOrThrow({
+        where: { transactionId: id, version: 1 },
+      });
+      await owner.bankTransactionVersion.create({
+        data: {
+          ...v,
+          version: 2,
+          contentSha256: 'b'.repeat(64),
+          message: 'synthetic update',
+          recordedAt: undefined,
+        },
+      });
+    };
+    try {
+      const unrelated = await bankTransaction(owner, 'TEST', '100.00', null);
+      await historicalPayment(owner, unrelated, '100.00');
+      const paid = await bankTransaction(owner, 'TEST', '4200.00', inv.variableSymbol);
+      await importBank();
+      expect(await byTx(paid)).toMatchObject({ state: 'ALLOCATED', matchResult: 'MATCHED' });
+      // (Other tests' payments changed at the bank are counted on every import: a baseline.)
+      const base = (await importBank()).changedAtBank;
+      const before = await overviewNow();
+      await newVersion(unrelated);
+      expect((await importBank()).changedAtBank).toBe(base);
+      expect((await overviewNow()).paymentsChangedAtBank).toBe(before.paymentsChangedAtBank);
+      await newVersion(paid);
+      expect((await importBank()).changedAtBank).toBe(base + 1);
+      expect((await overviewNow()).paymentsChangedAtBank).toBe(before.paymentsChangedAtBank + 1);
+      expect((await byTx(paid))!.bankChangedSinceRecorded).toBe(true);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
 });

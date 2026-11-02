@@ -510,12 +510,20 @@ export class PaymentsService {
     for (const e of [...entries].sort((a, b) => a.sourceKey.localeCompare(b.sourceKey))) {
       const known = await tx.incomingPayment.findUnique({
         where: { source_sourceKey: { source: e.source, sourceKey: e.sourceKey } },
-        select: { id: true, bankTransactionVersion: true },
+        select: {
+          id: true,
+          bankTransactionVersion: true,
+          matchResult: true,
+          _count: { select: { allocations: true } },
+        },
       });
       if (known) {
         result.alreadyLoaded += 1;
-        // Changed at the bank since: reported (and shown on the payment), never applied.
+        // Changed at the bank since: reported (and shown on the payment), never applied — for an
+        // invoice payment only, the same rule as the overview (review RB110-R2).
         if (
+          (known._count.allocations > 0 ||
+            INVOICE_PAYMENT_RESULTS.includes(known.matchResult as MatchResult)) &&
           known.bankTransactionVersion !== null &&
           e.bankTransactionVersion !== null &&
           e.bankTransactionVersion > known.bankTransactionVersion
