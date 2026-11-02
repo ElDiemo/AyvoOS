@@ -79,12 +79,52 @@ export const incomingPaymentSchema = z.object({
 });
 export type IncomingPayment = z.infer<typeof incomingPaymentSchema>;
 
+export const PAYMENTS_DEFAULT_PAGE_SIZE = 25;
+export const PAYMENT_FILTERS = ['REVIEW', 'CHANGED', 'ALLOCATED'] as const;
+
+/**
+ * GET /api/admin/finance/payments (doc 044 U4): bounded. REVIEW and CHANGED are exactly what the
+ * Finance overview counts; `q` finds a code, variable symbol, counterparty or an exact amount.
+ */
+export const paymentsQuerySchema = z.object({
+  filter: z.enum(PAYMENT_FILTERS).optional(),
+  q: z.string().trim().max(80).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
+});
+export type PaymentsQuery = z.infer<typeof paymentsQuerySchema>;
+
 export const paymentsPageSchema = z.object({
   /** Whether a simulated statement may be loaded here (never in production). */
   simulationAvailable: z.boolean(),
+  total: z.number().int(),
+  page: z.number().int(),
+  pageSize: z.number().int(),
   payments: z.array(incomingPaymentSchema),
 });
 export type PaymentsPage = z.infer<typeof paymentsPageSchema>;
+
+/**
+ * What the web reads: also the answer of a Finance from before the bounded list, during a rollout or
+ * after its return to an earlier image. That one ignores the query and returns everything, has no
+ * detail route, so `legacy` makes the page a plain read-only list instead of failing.
+ */
+export const paymentsPageResponseSchema = z
+  .object({
+    simulationAvailable: z.boolean(),
+    total: z.number().int().optional(),
+    page: z.number().int().optional(),
+    pageSize: z.number().int().optional(),
+    payments: z.array(incomingPaymentSchema),
+  })
+  .transform((r) => ({
+    simulationAvailable: r.simulationAvailable,
+    payments: r.payments,
+    legacy: r.total === undefined,
+    total: r.total ?? r.payments.length,
+    page: r.page ?? 1,
+    pageSize: r.pageSize ?? Math.max(r.payments.length, 1),
+  }));
 
 /** POST /api/admin/finance/payments/simulate — a simulated statement (outside production only). */
 export const simulateStatementSchema = z.strictObject({
@@ -135,3 +175,10 @@ export const allocatePaymentSchema = z.strictObject({
 export type AllocatePaymentRequest = z.infer<typeof allocatePaymentSchema>;
 
 export const paymentCodeSchema = z.string().regex(/^PP-\d{6,}$/);
+
+/** GET /api/admin/finance/payments/:code/open-invoices: what it may be allocated to, bounded. */
+export const paymentOpenInvoicesSchema = z.object({
+  invoices: z.array(z.object({ number: z.string(), remaining: z.string() })),
+  limited: z.boolean(),
+});
+export type PaymentOpenInvoices = z.infer<typeof paymentOpenInvoicesSchema>;
