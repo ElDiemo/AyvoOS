@@ -90,6 +90,24 @@ export const financeEnvSchema = z
     RB_PREMIUM_MAX_WINDOW_ENTRIES: z.coerce.number().int().min(1).max(50_000).default(20_000),
     /** Pause before the first retry (429 / 5xx / network); the second waits twice as long. */
     RB_PREMIUM_RETRY_BASE_MS: z.coerce.number().int().min(100).max(10_000).default(1_000),
+    /**
+     * Sending invoices by e-mail (doc 043). Unset: nothing can be queued or sent. `google-relay`
+     * is the approved relay; `simulation` keeps messages in memory and never opens a connection (never
+     * in production); `memory` and `test-smtp` exist only with APP_ENV=test.
+     */
+    FINANCE_INVOICE_MAIL: optional(z.enum(['google-relay', 'simulation', 'memory', 'test-smtp'])),
+    /** The EHLO name for the relay (a real host name; a container's random one is refused). */
+    FINANCE_MAIL_EHLO_NAME: optional(
+      z.string().regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/),
+    ),
+    /**
+     * Comma-separated exact addresses a TEST invoice may be sent to through the real relay: required
+     * with google-relay, so a controlled test can reach nobody else.
+     */
+    FINANCE_MAIL_TEST_RECIPIENTS: optional(z.string().min(3).max(1000)),
+    FINANCE_INVOICE_MAIL_POLL_MS: z.coerce.number().int().min(200).max(60_000).default(5_000),
+    /** Only with `test-smtp`: "host:port" of a scripted local SMTP server. */
+    FINANCE_MAIL_TEST_SMTP_ADDRESS: optional(z.string().regex(/^127\.0\.0\.1:\d{1,5}$/)),
     // Only for automated tests (a simulated bank with its own CA); refused unless APP_ENV=test.
     RB_PREMIUM_BASE_URL_FOR_TESTS: optional(z.url({ protocol: /^https$/ })),
     RB_PREMIUM_CA_FILE_FOR_TESTS: optional(z.string().min(1)),
@@ -138,6 +156,22 @@ export const financeEnvSchema = z
         'RB_PREMIUM_ACCOUNTS',
       ] as const)
         if (!env[key]) fail(key, 'required with RB_PREMIUM_ENVIRONMENT');
+    const mail = env.FINANCE_INVOICE_MAIL;
+    if ((mail === 'memory' || mail === 'test-smtp') && env.APP_ENV !== 'test')
+      fail('FINANCE_INVOICE_MAIL', 'simulated mail is allowed only with APP_ENV=test');
+    if (mail === 'simulation' && env.APP_ENV === 'production')
+      fail('FINANCE_INVOICE_MAIL', 'simulated mail does not exist in production');
+    if (mail === 'google-relay' && !env.FINANCE_MAIL_EHLO_NAME)
+      fail('FINANCE_MAIL_EHLO_NAME', 'required with the relay');
+    if (mail === 'google-relay' && !env.FINANCE_MAIL_TEST_RECIPIENTS)
+      fail(
+        'FINANCE_MAIL_TEST_RECIPIENTS',
+        'required with the relay while only TEST invoices exist',
+      );
+    if (mail === 'test-smtp' && !env.FINANCE_MAIL_TEST_SMTP_ADDRESS)
+      fail('FINANCE_MAIL_TEST_SMTP_ADDRESS', 'required with test-smtp');
+    if (mail !== 'test-smtp' && env.FINANCE_MAIL_TEST_SMTP_ADDRESS)
+      fail('FINANCE_MAIL_TEST_SMTP_ADDRESS', 'only with test-smtp');
     if (env.APP_ENV === 'production' && env.FILE_STORAGE_DRIVER !== 's3')
       ctx.addIssue({
         code: 'custom',

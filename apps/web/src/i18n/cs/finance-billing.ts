@@ -1,5 +1,7 @@
 /** Finance → Smlouvy hotelů (doc 040, N3A-1 settings in the UI). */
 export const billingCs = {
+  financeLanguageUnconfirmed:
+    'Nepodařilo se ověřit, že Finance ukládají jazyk faktur (přechod mezi verzemi nebo výpadek). Plátce nebyl uložen; zkuste to později.',
   title: 'Smlouvy',
   subtitle:
     'Kdo za hotel platí (odběratel = firma), kolik pokojů a za jakou cenu se účtuje a výchozí ceník. Každá změna je nová verze s důvodem; nic se nepřepisuje.',
@@ -62,8 +64,12 @@ export const billingCs = {
     city: 'Město',
     countryCode: 'Země',
     billingEmail: 'E-mail pro faktury',
+    documentLanguage: 'Jazyk faktur a e-mailů',
     price: 'Cena za pokoj a měsíc',
   },
+  chooseLanguage: 'Vyberte jazyk',
+  languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
+  languageMissing: 'jazyk dokumentů nevybrán',
   toHotel: 'Karta hotelu',
   decimalInvalid: 'Částku zadejte jako 1 500,50 (nejvýš 2 desetinná místa). Nic se neuložilo.',
   currentData: 'Aktuální údaje',

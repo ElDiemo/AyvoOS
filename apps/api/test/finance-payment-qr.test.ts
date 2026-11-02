@@ -4,10 +4,16 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   czAmount,
+  documentAmount,
+  documentDate,
+  documentLanguageOf,
   InconsistentInvoiceSnapshot,
   renderInvoicePdf,
   type InvoicePdfSnapshot,
 } from '../src/finance/invoice-pdf.js';
+import { INVOICE_TEMPLATE_VERSION, invoiceTexts } from '../src/finance/invoice-texts.js';
+import { renderInvoiceMail } from '../src/finance/invoice-mail.js';
+import { classifySmtpError } from '../src/finance/invoice-mail-transport.js';
 import { spayd, InvalidPaymentInstruction, type PaymentInstruction } from '../src/finance/spayd.js';
 import { decodeQrOnPage, MM_PER_PT, openPdf, pageText } from './support/pdf-inspect.js';
 
@@ -45,6 +51,9 @@ const invoice = (
   over: Partial<InvoicePdfSnapshot> = {},
   pay: Partial<InvoicePdfSnapshot['payment']> = {},
 ): InvoicePdfSnapshot => ({
+  templateVersion: INVOICE_TEMPLATE_VERSION,
+  language: 'cs',
+  texts: invoiceTexts('cs'),
   environment: 'TEST',
   number: '2026001',
   issuedOn: '2026-10-31',
@@ -350,5 +359,91 @@ describe('QR Platba (SPAYD) and the invoice PDF', () => {
       expect(source, f).toContain(`\`${f}\` \`${sha}\``);
     }
     expect(readFileSync(`${dir}/OFL.txt`, 'utf8')).toContain('SIL Open Font License, Version 1.1');
+  });
+
+  it('every language: its own words, formats and test mark; the QR is unchanged', async () => {
+    for (const [language, title, due, amount, mark] of [
+      ['cs', 'Faktura 2026001', '14. 11. 2026', '1 875,50', 'TESTOVACÍ DOKLAD'],
+      ['en', 'Invoice 2026001', '14 Nov 2026', '1,875.50', 'TEST DOCUMENT'],
+      ['de', 'Rechnung 2026001', '14.11.2026', '1.875,50', 'TESTBELEG'],
+    ] as const) {
+      const snapshot = invoice({ language, texts: invoiceTexts(language) });
+      const pdf = await openPdf(await renderInvoicePdf(snapshot));
+      const text = plain(await pageText(pdf, 1));
+      for (const expected of [title, due, amount, mark]) expect(text).toContain(expected);
+      expect(parse((await decodeQrOnPage(pdf, 1))!.data).AM).toBe('1875.50');
+      if (language !== 'cs') expect(text).not.toContain('Odběratel');
+    }
+    expect(documentAmount('de', '-1234567.5')).toBe('−1.234.567,50');
+    expect(documentDate('en', '2026-01-05')).toBe('5 Jan 2026');
+  });
+
+  it('the versioned texts are ASCII in the QR message and complete in every language', () => {
+    for (const language of ['cs', 'en', 'de'] as const) {
+      const t = invoiceTexts(language);
+      expect(t.paymentMessage).toMatch(/^[A-Za-z]+$/);
+      expect(Object.keys(t).sort()).toEqual(Object.keys(invoiceTexts('cs')).sort());
+      const { mail, ...labels } = t;
+      for (const value of [...Object.values(labels), ...Object.values(mail)])
+        expect(value.trim()).not.toBe('');
+      expect(mail.intro).toContain('{number}');
+      expect(mail.intro).toContain('{period}');
+    }
+  });
+
+  it('a snapshot from before the language choice is never rendered; its language is explicitly unknown', async () => {
+    const legacy = Object.fromEntries(
+      Object.entries(invoice()).filter(
+        ([k]) => !['templateVersion', 'language', 'texts'].includes(k),
+      ),
+    );
+    await expect(renderInvoicePdf(legacy as unknown as InvoicePdfSnapshot)).rejects.toThrow(
+      InconsistentInvoiceSnapshot,
+    );
+    expect(documentLanguageOf(legacy)).toBeNull();
+    expect(documentLanguageOf({ language: 'fr' })).toBeNull();
+    expect(documentLanguageOf(invoice({ language: 'de' }))).toBe('de');
+  });
+
+  it('the e-mail: both versions from the snapshot in its language, marked TEST, values escaped', () => {
+    const s = invoice({
+      language: 'en',
+      texts: invoiceTexts('en'),
+      issuer: { ...invoice().issuer, legalName: 'A<b>&Co' },
+    });
+    const m = renderInvoiceMail(s);
+    expect(m.subject).toBe('[TEST] Invoice 2026001');
+    expect(m.filename).toBe('invoice-2026001.pdf');
+    for (const body of [m.text, m.html]) {
+      expect(body).toContain('TEST E-MAIL');
+      expect(body).toContain('1,875.50 CZK');
+      expect(body).toContain('14 Nov 2026');
+    }
+    expect(m.text).toContain('A<b>&Co');
+    expect(m.html).toContain('A&lt;b&gt;&amp;Co');
+    expect(m.html).not.toContain('A<b>');
+    const live = renderInvoiceMail({ ...s, environment: 'LIVE' });
+    expect(live.subject).toBe('Invoice 2026001');
+    expect(live.text).not.toContain('TEST');
+  });
+
+  it('only a connection never made or an explicit answer proves anything; the rest is uncertain', () => {
+    expect(classifySmtpError({ responseCode: 550 })).toEqual({
+      kind: 'REJECTED',
+      code: 'RELAY_550',
+    });
+    expect(classifySmtpError({ responseCode: 421 })).toEqual({
+      kind: 'NOT_SENT',
+      code: 'RELAY_421',
+    });
+    expect(classifySmtpError({ code: 'ESOCKET', syscall: 'connect' }).kind).toBe('NOT_SENT');
+    expect(classifySmtpError({ code: 'EDNS' }).kind).toBe('NOT_SENT');
+    for (const e of [
+      { code: 'ECONNECTION', command: 'CONN' },
+      { code: 'ETIMEDOUT' },
+      new Error('x'),
+      null,
+    ])
+      expect(classifySmtpError(e).kind).toBe('UNCERTAIN');
   });
 });

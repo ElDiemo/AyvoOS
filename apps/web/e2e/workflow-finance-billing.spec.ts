@@ -49,6 +49,7 @@ test.describe('Smlouvy', () => {
     await customer.locator('[name=postalCode]').fill('779 00');
     await customer.locator('[name=city]').fill('Olomouc');
     await customer.locator('[name=billingEmail]').fill('fakturace@morava.test');
+    await customer.locator('[name=documentLanguage]').selectOption('cs');
     await customer.getByTestId('customer-save').click();
     // Saved: said so, the form stays open and empty for the next one.
     await expect(customer.getByRole('status')).toHaveText('Uloženo.');
@@ -167,6 +168,7 @@ test.describe('Smlouvy', () => {
       city: 'Olomouc',
       countryCode: 'CZ',
       billingEmail: 'fakturace@soubeh.test',
+      documentLanguage: 'cs',
     };
     const customer = await json(
       request.post(`${B}/customers`, {

@@ -1,9 +1,10 @@
-import { API_BASE_PATH, invoiceDetailSchema } from '@ayvo/types';
+import { API_BASE_PATH, invoiceDeliveriesSchema, invoiceDetailSchema } from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CancelInvoiceForm } from '@/components/finance/cancel-invoice-form';
 import { financeAmount, financeDate, financeMonth } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
+import { InvoiceDeliveryPanel } from '@/components/finance/invoice-delivery';
 import { buttonClass, Card, Field, FieldList, Notice } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { formatDateTimeCs } from '@/i18n/cs/format';
@@ -23,6 +24,10 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
       if (e instanceof ApiError && e.status === 404) notFound();
       throw e;
     },
+  );
+  const deliveries = await apiGet(
+    `admin/finance/invoices/${number}/deliveries`,
+    invoiceDeliveriesSchema,
   );
   const canCancel = hasPermission(me, 'finance:invoices_test') && inv.status === 'VALID';
   const canAgreements = hasPermission(me, 'finance:billing_read');
@@ -61,6 +66,11 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
               {inv.customer.legalName}{' '}
               <span className="font-mono text-xs text-stone-500">{inv.customer.code}</span>
             </Field>
+            <Field label={t.language}>
+              <span data-testid="invoice-language">
+                {inv.documentLanguage ? t.languages[inv.documentLanguage] : t.languageLegacy}
+              </span>
+            </Field>
             <Field label={t.period}>{financeMonth(inv.period)}</Field>
             <Field label={t.issuedOn}>{financeDate(inv.issuedOn)}</Field>
             <Field label={t.dueOn}>{financeDate(inv.dueOn)}</Field>
@@ -84,6 +94,13 @@ export default async function InvoicePage({ params }: { params: Promise<{ number
           <p className="mt-3 text-xs text-stone-500">
             {t.issuedBy(formatDateTimeCs(inv.issuedAt), inv.issuedByName)}
           </p>
+        </Card>
+        <Card title={t.delivery.title}>
+          <InvoiceDeliveryPanel
+            number={inv.number}
+            data={deliveries}
+            canSend={hasPermission(me, 'finance:invoices_send')}
+          />
         </Card>
         <Card title={t.lines}>
           <div className="relative overflow-x-auto">

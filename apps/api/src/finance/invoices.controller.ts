@@ -12,14 +12,19 @@ import {
 import {
   cancelInvoiceSchema,
   createTestInvoiceSchema,
+  createTestRunSchema,
   invoiceListQuerySchema,
   invoiceNumberSchema,
+  testRunPreviewQuerySchema,
   type CancelInvoiceRequest,
   type CreateTestInvoiceRequest,
+  type CreateTestRunRequest,
   type InvoiceDetail,
   type InvoiceListQuery,
   type InvoicesOverview,
   type InvoiceSummary,
+  type TestRunPreview,
+  type TestRunResult,
 } from '@ayvo/types';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -59,6 +64,24 @@ export class InvoicesController {
     @Caller() caller: FinanceCaller,
   ): Promise<InvoiceDetail> {
     return this.invoices.issueTest(body, caller);
+  }
+
+  /** A month's agreements and what a TEST invoice of each would say (doc 040 §11); reads only. */
+  @RequirePermission('finance:invoices_test', 'finance:billing_read')
+  @Get('test-run/preview')
+  testRunPreview(
+    @Query(new ZodValidationPipe(testRunPreviewQuerySchema)) query: { month: string },
+  ): Promise<TestRunPreview> {
+    return this.invoices.testRunPreview(query.month);
+  }
+
+  @RequirePermission('finance:invoices_test')
+  @Post('test-run')
+  issueTestRun(
+    @Body(new ZodValidationPipe(createTestRunSchema)) body: CreateTestRunRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<TestRunResult> {
+    return this.invoices.issueTestRun(body, caller);
   }
 
   @RequirePermission('finance:invoices_read')

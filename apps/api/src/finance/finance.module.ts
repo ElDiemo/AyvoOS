@@ -3,6 +3,10 @@ import { MulterModule } from '@nestjs/platform-express';
 import { AccountingExportsService } from './accounting-exports.service.js';
 import { BillingSettingsController } from './billing-settings.controller.js';
 import { BillingSettingsService } from './billing-settings.service.js';
+import { InvoiceDeliveriesController } from './invoice-deliveries.controller.js';
+import { InvoiceDeliveriesService } from './invoice-deliveries.service.js';
+import { InvoiceDeliveryRunner } from './invoice-delivery-runner.service.js';
+import { createInvoiceMailTransport, INVOICE_MAIL_TRANSPORT } from './invoice-mail-transport.js';
 import { InvoicesController } from './invoices.controller.js';
 import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
@@ -40,6 +44,7 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     BillingSettingsController,
     IssuerSettingsController,
     InvoicesController,
+    InvoiceDeliveriesController,
     PaymentsController,
     BankController,
     FinanceHealthController,
@@ -50,6 +55,13 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     BillingSettingsService,
     IssuerSettingsService,
     InvoicesService,
+    InvoiceDeliveriesService,
+    InvoiceDeliveryRunner,
+    {
+      provide: INVOICE_MAIL_TRANSPORT,
+      inject: [FINANCE_ENV],
+      useFactory: (env: FinanceEnv) => createInvoiceMailTransport(env),
+    },
     PaymentsService,
     BankSyncService,
     FinancePrismaService,

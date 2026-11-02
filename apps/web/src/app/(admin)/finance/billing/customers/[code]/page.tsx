@@ -53,6 +53,11 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
             <Field label={t.fields.billingEmail}>
               <span className="break-all">{c.current.customer.billingEmail}</span>
             </Field>
+            <Field label={t.fields.documentLanguage}>
+              {c.current.customer.documentLanguage
+                ? t.languages[c.current.customer.documentLanguage]
+                : t.languageMissing}
+            </Field>
           </FieldList>
           <p className="mt-2 text-xs text-stone-500">{t.version(c.current.version)}</p>
           {hasPermission(me, 'finance:billing_manage') && (
@@ -107,7 +112,10 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
                   </span>
                   <span className="text-stone-600">
                     {v.customer.addressLine1}, {v.customer.postalCode} {v.customer.city} ·{' '}
-                    {v.customer.billingEmail}
+                    {v.customer.billingEmail} ·{' '}
+                    {v.customer.documentLanguage
+                      ? t.languages[v.customer.documentLanguage]
+                      : t.languageMissing}
                   </span>
                   <span className="text-xs text-stone-500">
                     {v.reason ? `${v.reason} · ` : ''}
