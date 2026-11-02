@@ -62,7 +62,7 @@ export const hotelsCs = {
   form: {
     title: 'Nový hotel',
     subtitle:
-      'Jedna doručovací adresa a kontakt. Smlouvy, fakturace ani přihlašování hotelu zatím nejsou.',
+      'Jedna doručovací adresa a kontakt. Hotel se zakládá jen tady; smlouvu a fakturaci k němu vede Finance. Přihlašování hotelu zatím není.',
     name: 'Název hotelu',
     addressLine1: 'Ulice a číslo',
     addressLine2: 'Doplněk adresy (nepovinné)',
