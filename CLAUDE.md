@@ -126,8 +126,12 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   versions (the only place of billed rooms / own price; effective from the 1st of a month), the
   default price list per currency; exact decimals, an explicit 0.00 ≠ missing; hotels only via the
   core contract; `finance:billing_read|manage` (ADMIN). Only TEST invoices exist (doc 040 §9: kind `TEST`, refused
-  with APP_ENV=production) with incoming payments and their allocation (doc 041 §8); live invoicing
-  and automatic e-mails stay blocked until the owner approves the accounting rules (doc 040 §7).
+  with APP_ENV=production), in the payer's document language (doc 040 §12), issued singly or by the
+  manual monthly run (§11; its settings — issue day, billed month per timing — have no default and
+  only fill the run in); sent by hand by e-mail (doc 043: `FINANCE_INVOICE_MAIL`, `simulation` on
+  DEV, never automatic). Live invoicing ("as UOL", one monthly tax document per agreement, doc 040
+  §13), recorded runs, a scheduler and automatic sending stay blocked until the owner and UOL decide
+  (doc 040 §5, §7); no proformas.
   Our company and invoice bank accounts (N3A-2a, owner 2026-10-26, doc 040 §8): Finance
   is the only place of the issuer (versions, explicit VAT status, DIČ for a payer) and of the bank
   accounts printed on invoices (IBAN mod 97 = the Czech domestic number, ACTIVE/RETIRED, never
@@ -143,8 +147,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   local simulation) only with APP_ENV=test, `simulation` (the DEV bank simulation `rb-simulation`,
   test certificates from `scripts/dev-rb-simulation-certs.sh`, the same mount and file checks as
   PROD, its own CA required, full TLS verification) never in production; secrets only as mounted files, never in the env, DB,
-  web, logs or git. `finance:bank_read|bank_sync` ADMIN only. No pairing with invoices until the
-  issued-invoice model exists — never a substitute invoice list.
+  web, logs or git. `finance:bank_read|bank_sync` ADMIN only. Pairing only for incoming payments of
+  hotel invoices (doc 041 §8, §8b, owner 2026-11-02): automatic only on an exact VS; other income
+  stays in the bank list, no task; a wrong VS allocated by hand with a reason; money before an
+  invoice's issue is never paired by itself. No scheduled read on DEV/PROD (#94 off).
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
   `identity:users_manage` only. Deactivation hides atomically; reactivation never republishes.
