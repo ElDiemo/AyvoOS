@@ -40,6 +40,8 @@ export default async function PaymentPage({
   const f = t.detailFacts;
   const review = p.matchResult !== 'MATCHED' && p.matchResult !== 'PARTIAL_OVERPAYMENT';
   const resolved = review && p.state === 'ALLOCATED';
+  // Only an invoice payment's rest is a task (an older Finance: any rest).
+  const task = p.toReview ?? !resolved;
   return (
     <>
       <FinanceHeader
@@ -65,7 +67,7 @@ export default async function PaymentPage({
             </Field>
             <Field label={f.source}>
               <span
-                className={review && !resolved ? 'text-amber-800' : undefined}
+                className={review && !resolved && task ? 'text-amber-800' : undefined}
                 data-testid={`payment-${p.code}-result`}
               >
                 {resolved ? t.resolved(t.result[p.matchResult]!) : t.result[p.matchResult]}

@@ -210,11 +210,13 @@ test.describe('Přehled Financí', () => {
       }),
     );
 
-    // The overview: one more open invoice in CZK, one more payment to review — as the API says.
+    // The overview: one more open invoice in CZK — as the API says. Nothing more to review: the
+    // partial payment is allocated in full and the payment without a VS names no invoice (owner
+    // 2026-11-02: only an invoice payment's rest is a task).
     const after = await expectOverviewMatches(page);
     const czk = (s: Sums) => s.invoices.find((c) => c.currency === 'CZK')?.open.count ?? 0;
     expect(czk(after)).toBe(czk(before) + 1);
-    expect(after.paymentsToReview).toBe(before.paymentsToReview + 1);
+    expect(after.paymentsToReview).toBe(before.paymentsToReview);
     await mkdir(screenshots, { recursive: true });
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
@@ -248,6 +250,43 @@ test.describe('Přehled Financí', () => {
     await expect(related).toContainText(invoice.number);
     await related.getByRole('link', { name: invoice.number }).click();
     await expect(page).toHaveURL(new RegExp(`/finance/invoices/${invoice.number}$`));
+
+    // A hotel paid with a wrong VS (owner 2026-11-02): the incoming transaction is found in Pohyby
+    // z banky (no payment, no task) and allocated by hand — recorded and allocated in one step.
+    await page.goto('/finance/bank');
+    await page.getByTestId('bank-sync').click();
+    await expect(page.getByTestId('bank-connection')).toContainText('nových');
+    const income = page.getByTestId('bank-transaction').filter({ hasText: '15 000,50 CZK' });
+    await income.getByRole('link', { name: 'Přiřadit k faktuře' }).click();
+    await expect(page).toHaveURL(/\/finance\/bank\/[0-9a-f-]{36}$/);
+    const transactionUrl = page.url();
+    await page.getByLabel('Číslo faktury').fill(invoice.number);
+    await page.getByRole('button', { name: 'Hledat' }).click();
+    const form = page.getByTestId('allocate-bank');
+    await form.locator('select').selectOption(invoice.number);
+    await form.locator('input[inputmode="decimal"]').fill('100.00');
+    await form.getByTestId('allocate-bank-reason').fill('Hotel uvedl chybný VS (ukázka)');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await noOverflow(page);
+      await page.screenshot({
+        path: resolve(screenshots, `finance-bank-allocate-${width}.png`),
+        fullPage: true,
+      });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const reviewBefore = (await sums(r)).paymentsToReview;
+    await form.getByTestId('allocate-bank-submit').click();
+    await expect(page).toHaveURL(/\/finance\/payments\/PP-\d+$/);
+    const recorded = page.url().split('/').pop()!;
+    await expect(page.getByTestId(`payment-${recorded}-state`)).toHaveText('částečně přiřazeno');
+    await expect(page.getByTestId('payment-allocations')).toContainText(invoice.number);
+    await expect(page.getByTestId('payment-allocations')).toContainText('ručně');
+    // Its rest is now the rest of a hotel's payment: to review. The same transaction opens the
+    // same payment — never a second one.
+    expect((await sums(r)).paymentsToReview).toBe(reviewBefore + 1);
+    await page.goto(transactionUrl);
+    await expect(page).toHaveURL(new RegExp(`/finance/payments/${recorded}$`));
   });
 
   test('one Finance permission: only its block and page; the rest is refused', async ({

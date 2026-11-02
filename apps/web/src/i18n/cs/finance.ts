@@ -346,7 +346,7 @@ export const financeCs = {
     noOpen: 'Žádná otevřená faktura v této měně.',
     title: 'Platby a přiřazení',
     subtitle:
-      'Přijaté platby a jejich přiřazení k fakturám. Automaticky se přiřadí jen přesný variabilní symbol jedné otevřené faktury; vše ostatní čeká na člověka s důvodem. Nic se neodesílá do banky.',
+      'Úhrady hotelových faktur a jejich přiřazení. Automaticky se přiřadí jen přesný variabilní symbol jedné otevřené faktury. Ostatní příjmy zůstávají jen v Pohybech z banky – úkolem nejsou, a když hotel uvedl chybný VS, přiřadíte pohyb k faktuře tam. Nic se neodesílá do banky.',
     fromBank:
       'Platby vznikají z přijatých pohybů, které aplikace už načetla z banky – ty jsou v záložce',
     simulationNote:
@@ -360,9 +360,13 @@ export const financeCs = {
     simulate: 'Načíst simulovaný výpis',
     importBank: 'Načíst platby z bankovních pohybů',
     importHelp:
-      'Zaznamená přijaté (kreditní) pohyby, které už aplikace načetla z banky a ještě nejsou platbou. Banku nevolá.',
+      'Zaznamená přijaté pohyby, které už aplikace načetla z banky a jejichž variabilní symbol patří faktuře. Ostatní příjmy zůstanou jen v Pohybech z banky, bez úkolu. Banku nevolá.',
     loaded: (created: number, already: number, matched: number, review: number) =>
       `Nově zaznamenáno ${created}, už dříve načteno ${already} (nezapočteno znovu). Spárováno ${matched}, k posouzení ${review}.`,
+    otherIncome: (n: number, recorded: boolean) =>
+      recorded
+        ? `Bez faktury podle VS ${n} – zaznamenáno, k posouzení není.`
+        : `Jiné příjmy ${n} – nezaznamenány, zůstávají v Pohybech z banky.`,
     changedAtBank: (n: number) =>
       `Banka od zaznamenání změnila ${n} pohyb(y) – nic se nepřepsalo, zkontrolujte je.`,
     bankChanged:
@@ -377,10 +381,10 @@ export const financeCs = {
     result: {
       MATCHED: 'spárováno podle VS',
       PARTIAL_OVERPAYMENT: 'spárováno, zbytek je přeplatek',
-      NO_VARIABLE_SYMBOL: 'k posouzení: chybí variabilní symbol',
-      UNKNOWN_VARIABLE_SYMBOL: 'k posouzení: neznámý variabilní symbol',
+      NO_VARIABLE_SYMBOL: 'bez variabilního symbolu',
+      UNKNOWN_VARIABLE_SYMBOL: 'variabilní symbol nepatří žádné faktuře',
       CURRENCY_MISMATCH: 'k posouzení: jiná měna než faktura',
-      ENVIRONMENT_MISMATCH: 'k posouzení: ostrá platba k testovací faktuře',
+      ENVIRONMENT_MISMATCH: 'ostrá platba k testovací faktuře',
       INVOICE_CANCELLED: 'k posouzení: faktura je zrušená',
       INVOICE_ALREADY_PAID: 'k posouzení: faktura už je uhrazená',
     } as Record<string, string>,
@@ -400,14 +404,23 @@ export const financeCs = {
       INVOICE_CANCELLED: 'Zrušená faktura platbu nepřijímá.',
       CURRENCY_MISMATCH: 'Platba je v jiné měně než faktura.',
       ENVIRONMENT_MISMATCH: 'Ostrou platbu nelze přiřadit testovací faktuře.',
+      IMPORT_FIRST:
+        'Pohyb nese variabilní symbol faktury: nejdřív v Platbách a přiřazení načtěte platby z bankovních pohybů.',
     } as Record<string, string>,
+  },
+  bankAllocate: {
+    title: 'Přiřadit pohyb k faktuře',
+    subtitle:
+      'Pro hotel, který zaplatil s chybným variabilním symbolem. Pohyb se zaznamená jako platba a přiřadí k faktuře v jednom kroku – jen když přiřazení projde všemi kontrolami; jinak se nezaznamená nic.',
+    back: 'Pohyby z banky',
   },
   bank: {
     title: 'Pohyby z banky',
     subtitle:
       'Pohyby firemních účtů načtené z Raiffeisenbank (Premium API, jen čtení — nic se do banky neodesílá). Tlačítko Načíst nové pohyby čte banku; nic dalšího nedělá.',
     toPayments:
-      'Přijaté pohyby se k fakturám přiřazují v záložce Platby a přiřazení – tam je zaznamenáte jako platby (banku to nevolá).',
+      'Úhrady faktur se zaznamenávají v záložce Platby a přiřazení. Ostatní příjmy úkolem nejsou; hotel s chybným variabilním symbolem dohledáte tady a přiřadíte ho k faktuře.',
+    allocate: 'Přiřadit k faktuře',
     toPaymentsLink: 'Platby a přiřazení',
     connection: 'Propojení s bankou',
     notConfigured: 'Banka zatím není připojena.',

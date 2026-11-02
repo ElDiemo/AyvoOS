@@ -41,9 +41,11 @@ const pragueTime = (iso: string) =>
  * Bankovní pohyby (N3B-1, doc 041): the company accounts' transactions read from RB Premium API
  * (read only), the state of the connection — the certificate's readability and expiry, the last
  * success and the last failure of each account, never a secret — and, for finance:bank_sync, the
- * button to read new ones. Incoming payments are recorded and allocated in Platby a přiřazení
- * (doc 042 — the other view of Banka a platby); this page says so and links there instead of
- * claiming a pairing state per transaction.
+ * button to read new ones. Payments of hotel invoices are recorded and allocated in Platby a
+ * přiřazení (doc 042 — the other view of Banka a platby); this page says so and links there
+ * instead of claiming a pairing state per transaction. Other income is no task; with
+ * finance:payments_manage an incoming transaction may be allocated to an invoice from here (a
+ * hotel's wrong VS, owner 2026-11-02).
  */
 export default async function BankTransactionsPage({
   searchParams,
@@ -53,6 +55,18 @@ export default async function BankTransactionsPage({
   const me = await requirePermission('finance:bank_read');
   const canSync = hasPermission(me, 'finance:bank_sync');
   const canPayments = hasPermission(me, 'finance:invoices_read');
+  // A hotel paid with a wrong VS: an incoming transaction is allocated to an invoice from here.
+  const canAllocate = hasPermission(me, 'finance:payments_manage');
+  const allocateLink = (x: BankTransaction) =>
+    canAllocate && x.creditDebit === 'CRDT' ? (
+      <Link
+        href={`/finance/bank/${x.id}`}
+        className="mt-1 block text-xs underline"
+        data-testid={`bank-allocate-${x.id}`}
+      >
+        {t.allocate}
+      </Link>
+    ) : null;
   const raw = await searchParams;
   const q = bankTransactionListQuerySchema.parse({});
   for (const [key, value] of Object.entries(raw)) {
@@ -254,6 +268,7 @@ export default async function BankTransactionsPage({
                             {x.version > 1 && (
                               <span className="block text-xs text-stone-500">{t.changed}</span>
                             )}
+                            {allocateLink(x)}
                           </td>
                         </tr>
                       ))}
@@ -284,6 +299,7 @@ export default async function BankTransactionsPage({
                         {x.version > 1 && (
                           <span className="mt-1 block text-xs text-stone-500">{t.changed}</span>
                         )}
+                        {allocateLink(x)}
                       </li>
                     ))}
                   </ul>
