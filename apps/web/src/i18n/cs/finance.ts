@@ -387,6 +387,7 @@ export const financeCs = {
       ENVIRONMENT_MISMATCH: 'ostrá platba k testovací faktuře',
       INVOICE_CANCELLED: 'k posouzení: faktura je zrušená',
       INVOICE_ALREADY_PAID: 'k posouzení: faktura už je uhrazená',
+      PAID_BEFORE_ISSUE: 'k posouzení: přijato před vystavením faktury',
     } as Record<string, string>,
     unallocated: (amount: string) => `Nepřiřazeno ${amount}`,
     resolved: (why: string) => `vyřešeno ručně (původně: ${why.replace(/^k posouzení: /, '')})`,

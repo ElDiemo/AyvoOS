@@ -833,12 +833,16 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
   // --- Incoming payments and the payment state (N3B-2, doc 041 §8): after the invoices above.
 
   const PAY = '/api/admin/finance/payments';
+  // Payments are booked on or after the invoices' issue day (today in Prague): money received
+  // before the issue is its own case (PAID_BEFORE_ISSUE, doc 040 §13).
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  const bookedLater = tomorrow.toISOString().slice(0, 10);
   const simulate = (entries: Record<string, unknown>[], requestId = randomUUID()) =>
     f.post(`${PAY}/simulate`).send({
       requestId,
       entries: entries.map((e) => ({
         currency: 'CZK',
-        bookedOn: '2026-10-20',
+        bookedOn: bookedLater,
         variableSymbol: null,
         counterpartyName: 'Testovací hotely s.r.o.',
         message: null,
@@ -980,6 +984,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     amount: string,
     vs: string | null,
     creditDebit: 'CRDT' | 'DBIT' = 'CRDT',
+    bookingDate = tomorrow,
   ) => {
     const account = String(Date.now()).slice(-10);
     const run = await owner.bankSyncRun.create({
@@ -1012,7 +1017,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         amount,
         amountCurrency: 'CZK',
         creditDebit,
-        bookingDate: new Date('2026-10-21T09:00:00Z'),
+        bookingDate,
         bankTransactionCode: 'PMNT',
         variableSymbol: vs,
         counterpartyName: 'Testovací hotely s.r.o.',
@@ -1195,6 +1200,24 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       // The rest of an overpayment is to review (what happens to it is not decided).
       expect(o).toMatchObject({ matchResult: 'PARTIAL_OVERPAYMENT', toReview: true });
       expect((await overviewNow()).paymentsToReview).toBe(before.paymentsToReview + 1);
+      // Money received before the invoice was issued (doc 040 §13): recorded, never allocated by
+      // itself, to review — not a silent ordinary payment.
+      const early = await bankTransaction(
+        owner,
+        'TEST',
+        '4200.00',
+        inv2.variableSymbol,
+        'CRDT',
+        new Date(Date.now() - 30 * 86_400_000),
+      );
+      await importBank();
+      expect(await byTx(early)).toMatchObject({
+        matchResult: 'PAID_BEFORE_ISSUE',
+        state: 'UNALLOCATED',
+        toReview: true,
+      });
+      expect((await invoiceOf(inv2.number)).paymentState.paid).toBe('4200.00');
+      expect((await overviewNow()).paymentsToReview).toBe(before.paymentsToReview + 2);
       // Loaded again: other income is still not recorded, nothing twice.
       expect((await importBank()).created).toEqual([]);
       for (const id of [unknownVs, noVs]) expect(await paymentsOf(owner, id)).toBe(0);
@@ -1511,6 +1534,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         'INVOICE_ALREADY_PAID',
         'INVOICE_CANCELLED',
         'CURRENCY_MISMATCH',
+        'PAID_BEFORE_ISSUE',
       ].includes(p.matchResult);
     expect(overview.paymentsChangedAtBank).toBe(
       page.filter((p) => p.bankChangedSinceRecorded && invoicePayment(p)).length,

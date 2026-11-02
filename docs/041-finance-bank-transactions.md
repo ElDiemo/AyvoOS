@@ -175,7 +175,7 @@ accountant's work (received documents are only archived and exported, doc 039).
 
 - **Import from the bank** records a payment only when the variable symbol names exactly one
   invoice of an allowed environment (`MATCHED`, `PARTIAL_OVERPAYMENT`, `INVOICE_ALREADY_PAID`,
-  `INVOICE_CANCELLED`, `CURRENCY_MISMATCH`). Any other credit transaction is not recorded: it
+  `INVOICE_CANCELLED`, `CURRENCY_MISMATCH`, `PAID_BEFORE_ISSUE`). Any other credit transaction is not recorded: it
   stays findable in Pohyby z banky, and the result counts it as `otherIncome`. Its matching is
   evaluated again on each import (no new rule: the same exact VS).
 - **A hotel's wrong VS, by hand:** Pohyby z banky → "Přiřadit k faktuře" →
@@ -186,6 +186,13 @@ accountant's work (received documents are only archived and exported, doc 039).
   now (newest bank version, the person) and kept only if the allocation passes every check of §8.
   Idempotent per `requestId`. A transaction whose VS names an invoice answers 409 `IMPORT_FIRST`
   (the import records it with its automatic allocation).
+- **Money received before the invoice was issued** (doc 040 §13: the tax point does not wait for
+  the payment, and a payment before it is never a silent ordinary payment): booked before the
+  issue date of the invoice its VS names → `PAID_BEFORE_ISSUE`, recorded, never allocated
+  automatically, to review; a person decides with UOL's rule. Migration
+  `20261106100000_payment_before_issue` only widens the `match_result` CHECK. Before returning the
+  web to an earlier image, no such payment may exist (an older web does not know the value); on
+  PROD none can exist until live invoices do.
 - **To review** (the overview's count, the list's REVIEW): the unallocated rest of an invoice
   payment, i.e. a payment allocated to an invoice or naming one by its VS — an overpayment, or a
   payment of a cancelled / paid / other-currency invoice. A partial payment allocated in full is not

@@ -89,6 +89,7 @@ const INVOICE_PAYMENT_RESULTS: readonly MatchResult[] = [
   'INVOICE_ALREADY_PAID',
   'INVOICE_CANCELLED',
   'CURRENCY_MISMATCH',
+  'PAID_BEFORE_ISSUE',
 ];
 
 /**
@@ -587,6 +588,10 @@ export class PaymentsService {
     if (invoice.currency !== e.currency) return { result: 'CURRENCY_MISMATCH' };
     if (invoice.kind === 'TEST' && e.environment === 'PRODUCTION')
       return { result: 'ENVIRONMENT_MISMATCH' };
+    // Money received before the invoice was issued (the tax point, doc 040 §13) is never silently
+    // an ordinary later payment: a person decides.
+    if (e.bookedOn < invoice.issuedOn.toISOString().slice(0, 10))
+      return { result: 'PAID_BEFORE_ISSUE' };
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice-payments:${invoice.id}`}))`;
     const paid = sum(await tx.paymentAllocation.findMany({ where: { invoiceId: invoice.id } }));
     const remaining = invoice.total.minus(paid);

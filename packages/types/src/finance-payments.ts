@@ -24,6 +24,8 @@ export const PAYMENT_MATCH_RESULTS = [
   'ENVIRONMENT_MISMATCH',
   'INVOICE_CANCELLED',
   'INVOICE_ALREADY_PAID',
+  /** Booked before the issue date of the invoice its VS names (doc 040 §13): never automatic. */
+  'PAID_BEFORE_ISSUE',
 ] as const;
 export const paymentMatchResultSchema = z.enum(PAYMENT_MATCH_RESULTS);
 
