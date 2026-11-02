@@ -1,7 +1,9 @@
 'use client';
 
 import {
+  API_BASE_PATH,
   BILLING_TIMINGS,
+  DOCUMENT_LANGUAGES,
   type BillingAgreementDetail,
   type BillingAgreementVersion,
   type BillingCustomer,
@@ -16,6 +18,9 @@ import { z } from 'zod';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { billingCs as t } from '@/i18n/cs/finance-billing';
 import { apiSend, ClientApiError } from '@/lib/client-api';
+import { COUNTRY_OPTIONS } from '@/lib/country-options';
+import { CurrencyInput } from './currency-input';
+import { parseDecimalInput } from '@/lib/decimal-input';
 
 const label = 'flex min-w-0 flex-col gap-1 text-sm font-medium';
 const blankToNull = (v: string) => (v.trim() === '' ? null : v.trim());
@@ -27,15 +32,30 @@ function useSubmit() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const requestId = useRef(crypto.randomUUID());
+  const inFlight = useRef(false);
   const fresh = () => {
     requestId.current = crypto.randomUUID();
     setSaved(false);
   };
-  async function send(path: string, body: Record<string, unknown>, done?: (r: unknown) => void) {
+  async function send(
+    path: string,
+    body: Record<string, unknown>,
+    done?: (r: unknown) => void,
+    /** Runs inside the busy state; a text refuses the save and nothing is sent. */
+    check?: () => Promise<string | null>,
+  ) {
+    // A second click can come before the button re-renders as disabled.
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
+      const refused = await check?.();
+      if (refused) {
+        setError(refused);
+        return;
+      }
       const r = await apiSend('POST', path, z.unknown(), { requestId: requestId.current, ...body });
       fresh();
       done?.(r);
@@ -47,10 +67,31 @@ function useSubmit() {
         if (err.code === 'CONCURRENT_CHANGE') router.refresh();
       } else setError(err instanceof Error ? err.message : String(err));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
   return { busy, error, saved, send, fresh };
+}
+
+const FINANCE_CHECK_MS = 5_000;
+const languageCapability = z.object({ documentLanguage: z.literal(true) });
+
+/**
+ * A Finance older than this web would store a customer without the chosen language, silently (doc 040
+ * §12a). Only its explicit answer allows the save: no answer in time, an error or anything else refuses.
+ */
+async function financeLanguageRefusal() {
+  try {
+    const res = await fetch(`${API_BASE_PATH}/admin/finance/health/capabilities`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(FINANCE_CHECK_MS),
+    });
+    if (res.ok && languageCapability.safeParse(await res.json()).success) return null;
+  } catch {
+    // refused below
+  }
+  return t.financeLanguageUnconfirmed;
 }
 
 function Field({
@@ -183,6 +224,8 @@ export function CustomerForm({
   // The values belong to the version they were loaded from; that version is the one expected.
   const [base, setBase] = useState(current?.version);
   const stale = !!code && !!current && current.version !== base;
+  // Never preselected or derived from the country: an older version without it starts empty.
+  const [language, setLanguage] = useState<string>(current?.customer.documentLanguage ?? '');
   const [reason, setReason] = useState('');
   const { busy, error, saved, send, fresh } = useSubmit();
   const set = (k: keyof CustomerValues) => (v: string) => {
@@ -195,37 +238,82 @@ export function CustomerForm({
       data-testid={code ? `customer-version-${code}` : 'customer-new'}
       onSubmit={(e) => {
         e.preventDefault();
-        const customer = Object.fromEntries(
-          CUSTOMER_KEYS.map((k) => [
-            k,
-            REQUIRED_CUSTOMER.has(k) ? values[k].trim() : blankToNull(values[k]),
-          ]),
-        );
+        const customer = {
+          ...Object.fromEntries(
+            CUSTOMER_KEYS.map((k) => [
+              k,
+              REQUIRED_CUSTOMER.has(k) ? values[k].trim() : blankToNull(values[k]),
+            ]),
+          ),
+          documentLanguage: language,
+        };
         void send(
           code
             ? `admin/finance/billing/customers/${code}/versions`
             : 'admin/finance/billing/customers',
           code ? { expectedVersion: base, customer, reason } : { customer },
           (r) => {
-            if (!code) setValues(initial);
-            else setBase((r as BillingCustomerDetail).current.version);
+            if (!code) {
+              setValues(initial);
+              setLanguage('');
+            } else setBase((r as BillingCustomerDetail).current.version);
             setReason('');
           },
+          financeLanguageRefusal,
         );
       }}
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {CUSTOMER_KEYS.map((k) => (
-          <Field
-            key={k}
-            name={k}
-            text={t.fields[k]}
-            value={values[k]}
-            onChange={set(k)}
-            required={REQUIRED_CUSTOMER.has(k)}
-            type={k === 'billingEmail' ? 'email' : 'text'}
-          />
-        ))}
+        {CUSTOMER_KEYS.map((k) =>
+          k === 'countryCode' ? (
+            <label key={k} className={label}>
+              {t.fields.countryCode}
+              <select
+                name={k}
+                required
+                value={values[k]}
+                onChange={(e) => set(k)(e.target.value)}
+                className={inputClass}
+              >
+                {COUNTRY_OPTIONS.map((c) => (
+                  <option key={c.code} value={c.code} suppressHydrationWarning>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <Field
+              key={k}
+              name={k}
+              text={t.fields[k]}
+              value={values[k]}
+              onChange={set(k)}
+              required={REQUIRED_CUSTOMER.has(k)}
+              type={k === 'billingEmail' ? 'email' : 'text'}
+            />
+          ),
+        )}
+        <label className={label}>
+          {t.fields.documentLanguage}
+          <select
+            name="documentLanguage"
+            required
+            value={language}
+            onChange={(e) => {
+              setLanguage(e.target.value);
+              fresh();
+            }}
+            className={inputClass}
+          >
+            <option value="">{t.chooseLanguage}</option>
+            {DOCUMENT_LANGUAGES.map((l) => (
+              <option key={l} value={l}>
+                {t.languages[l]}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       {code && (
         <Field name="reason" text={t.fields.reason} value={reason} onChange={setReason} required />
@@ -237,6 +325,7 @@ export function CustomerForm({
           action={t.loadCurrent}
           onAction={() => {
             setValues(valuesOf(current));
+            setLanguage(current.customer.documentLanguage ?? '');
             setBase(current.version);
             fresh();
           }}
@@ -267,13 +356,17 @@ export function AgreementForm({
   customers,
   code,
   current,
+  initialHotelId = '',
 }: {
   hotels?: FinanceContractHotel[];
+  /** Coming from a hotel's card: that hotel is chosen, the user can still see and change it. */
+  initialHotelId?: string;
   customers: BillingCustomer[];
   code?: string;
   current?: BillingAgreementVersion;
 }) {
-  const [hotelId, setHotelId] = useState('');
+  const [hotelId, setHotelId] = useState(initialHotelId);
+  const [inputError, setInputError] = useState<string | null>(null);
   const valuesOf = (from?: BillingAgreementVersion) => ({
     effectiveFrom: thisMonth(),
     customerId: from?.customer.id ?? '',
@@ -303,12 +396,18 @@ export function AgreementForm({
       data-testid={code ? `agreement-version-${code}` : 'agreement-new'}
       onSubmit={(e) => {
         e.preventDefault();
+        const ownPrice = v.ownPrice.trim() === '' ? null : parseDecimalInput(v.ownPrice);
+        if (v.ownPrice.trim() !== '' && ownPrice === null) {
+          setInputError(t.decimalInvalid);
+          return;
+        }
+        setInputError(null);
         const terms = {
           effectiveFrom: v.effectiveFrom,
           customerId: v.customerId,
           contractNumber: blankToNull(v.contractNumber),
           billedRooms: Number(v.billedRooms),
-          ownPricePerRoomMonth: blankToNull(v.ownPrice),
+          ownPricePerRoomMonth: ownPrice,
           currency: v.currency.trim().toUpperCase(),
           paymentTermsDays: Number(v.paymentTermsDays),
           billingTiming: v.billingTiming,
@@ -397,13 +496,7 @@ export function AgreementForm({
           value={v.ownPrice}
           onChange={set('ownPrice')}
         />
-        <Field
-          name="currency"
-          text={t.fields.currency}
-          value={v.currency}
-          onChange={set('currency')}
-          required
-        />
+        <CurrencyInput value={v.currency} onChange={set('currency')} />
         <Field
           name="paymentTermsDays"
           text={t.fields.paymentTermsDays}
@@ -456,7 +549,7 @@ export function AgreementForm({
           required
         />
       </div>
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {(inputError ?? error) && <ErrorNote>{inputError ?? error}</ErrorNote>}
       {stale && (
         <StaleNotice
           text={t.staleVersion}
@@ -480,6 +573,7 @@ export function AgreementForm({
 
 /** A default price from a month; a correction of a month names the revision it was loaded from. */
 export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
+  const [inputError, setInputError] = useState<string | null>(null);
   const [v, setV] = useState({
     currency: 'CZK',
     price: '',
@@ -515,12 +609,18 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
       onSubmit={(e) => {
         e.preventDefault();
         const currency = v.currency.trim().toUpperCase();
+        const price = parseDecimalInput(v.price);
+        if (price === null) {
+          setInputError(t.decimalInvalid);
+          return;
+        }
+        setInputError(null);
         void send(
           'admin/finance/billing/price-list',
           {
             expectedRevision: seen ?? null,
             currency,
-            pricePerRoomMonth: v.price.trim(),
+            pricePerRoomMonth: price,
             effectiveFrom: v.effectiveFrom,
             reason: v.reason.trim(),
           },
@@ -532,13 +632,7 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
       }}
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-        <Field
-          name="currency"
-          text={t.fields.currency}
-          value={v.currency}
-          onChange={set('currency')}
-          required
-        />
+        <CurrencyInput value={v.currency} onChange={set('currency')} />
         <Field
           name="price"
           text={t.fields.price}
@@ -563,7 +657,7 @@ export function PriceForm({ prices }: { prices: PriceListVersion[] }) {
           required
         />
       </div>
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {(inputError ?? error) && <ErrorNote>{inputError ?? error}</ErrorNote>}
       {stale && now && (
         <StaleNotice
           text={t.stalePrice(`${now.pricePerRoomMonth} ${now.currency}`)}

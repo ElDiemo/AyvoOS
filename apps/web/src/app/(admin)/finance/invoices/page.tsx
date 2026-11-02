@@ -15,12 +15,23 @@ const t = financeCs.invoices;
  * Faktury (N3A-2b, doc 040 §9; a view of Faktury hotelům, doc 042): the list; TEST invoices only
  * (no live issuing exists).
  */
-export default async function InvoicesPage() {
+export default async function InvoicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ hotel?: string }>;
+}) {
   const me = await requirePermission('finance:invoices_read');
   // Links only where the user may go (review FIN90-R3): issuing also reads the agreements.
   const canBilling = hasPermission(me, 'finance:billing_read');
   const canIssue = hasPermission(me, 'finance:invoices_test') && canBilling;
-  const invoices = await apiGet('admin/finance/invoices', z.array(invoiceSummarySchema));
+  // From a hotel's card: all its invoices. Anything else in the address is the whole list.
+  const parsed = z.uuid().safeParse((await searchParams).hotel);
+  const hotelId = parsed.success ? parsed.data : undefined;
+  const invoices = await apiGet(
+    'admin/finance/invoices',
+    z.array(invoiceSummarySchema),
+    hotelId ? { hotelId } : {},
+  );
   return (
     <>
       <FinanceHeader
@@ -30,18 +41,35 @@ export default async function InvoicesPage() {
         subtitle={t.subtitle}
         actions={
           canIssue ? (
-            <Link
-              href="/finance/invoices/new"
-              className={buttonClass.primary}
-              data-testid="invoice-new"
-            >
-              {t.create}
-            </Link>
+            <>
+              <Link
+                href="/finance/invoices/run"
+                className={buttonClass.secondary}
+                data-testid="invoice-run"
+              >
+                {t.run.open}
+              </Link>
+              <Link
+                href="/finance/invoices/new"
+                className={buttonClass.primary}
+                data-testid="invoice-new"
+              >
+                {t.create}
+              </Link>
+            </>
           ) : undefined
         }
       />
       <div className="flex flex-col gap-4">
         <Notice tone="warning">{t.testOnly}</Notice>
+        {hotelId && (
+          <p className="text-sm" data-testid="invoices-of-hotel">
+            {t.ofHotel}{' '}
+            <Link href="/finance/invoices" className="underline">
+              {t.allOfCompany}
+            </Link>
+          </p>
+        )}
         <Card testId="invoices">
           {invoices.length === 0 ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2 text-sm text-stone-600">

@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { json, measurement, noOverflow, printedBottles } from './dispatch-setup';
-import { e2eSql } from './e2e-db';
+import { e2eRows, e2eSql } from './e2e-db';
 import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from './labeling-setup';
 
 /**
@@ -10,8 +10,10 @@ import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from
  * in the recreated e2e database: four orders of one hotel — fully delivered, partially delivered
  * (one parcel delivered, one only picked up), open, cancelled. SIMULATED carrier events: the test
  * carrier runs inside the API process, so this spec writes the events the carrier "reported"
- * (PPL codes 150 pickup, 450 delivery) into the e2e database only; the operator presses "Obnovit
- * tracking" and the real tracking service derives the parcels' and orders' states. The overview
+ * (PPL codes 150 pickup, 450 delivery) into the e2e database only; the real tracking service derives
+ * the parcels' and orders' states, for one order when the operator presses "Obnovit tracking", for
+ * the other in its automatic round. The test holds the schedule itself, so each path is the one
+ * asserted, never a race with the poller. The overview
  * then counts only parcels the carrier delivered, with the content stored at loading; the open
  * part separately; the cancelled order not at all. Nothing here talks to PPL.
  */
@@ -35,6 +37,30 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: join(SHOTS, `${name}.png`) });
   await page.setViewportSize(size);
 }
+
+const trackingOf = (order: string) =>
+  `(SELECT s."id" FROM "shipments" s JOIN "orders" o ON o."id" = s."order_id"
+     WHERE o."code" = '${order}' AND s."status" = 'LABELED')`;
+
+/** When the poller may look at this order next: `later` keeps it away, `now` makes it due. */
+async function scheduleTracking(order: string, when: 'later' | 'now') {
+  const at = when === 'now' ? `now()` : `now() + interval '1 day'`;
+  await e2eSql([
+    `INSERT INTO "shipment_tracking" ("shipment_id", "next_at")
+     SELECT ${trackingOf(order)}, ${at}
+     ON CONFLICT ("shipment_id") DO UPDATE SET "next_at" = ${at}`,
+  ]);
+}
+const trackingRow = async (order: string) =>
+  (
+    await e2eRows<{ held: boolean; stop_reason: string | null }>(
+      `SELECT "lease_until" IS NOT NULL AND "lease_until" > now() AS "held", "stop_reason"
+         FROM "shipment_tracking" WHERE "shipment_id" = ${trackingOf(order)}`,
+    )
+  )[0]!;
+/** A look already running finishes; after `later` no other one starts. */
+const noLookRunning = (order: string) =>
+  expect.poll(async () => (await trackingRow(order)).held, { timeout: 30_000 }).toBe(false);
 
 /** Simulated carrier event of one parcel of one order (e2e database only). */
 async function carrierReports(order: string, parcelNo: number, delivered: boolean) {
@@ -214,6 +240,10 @@ test('deliveries: the carrier delivers three parcels of four — orders Doručen
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
+  for (const order of [orders.full, orders.partial]) {
+    await scheduleTracking(order, 'later');
+    await noLookRunning(order);
+  }
   for (const [order, parcels] of [
     [orders.full, [1, 2]],
     [orders.partial, [1, 2]],
@@ -223,16 +253,57 @@ test('deliveries: the carrier delivers three parcels of four — orders Doručen
   await carrierReports(orders.full, 1, true);
   await carrierReports(orders.full, 2, true);
   await carrierReports(orders.partial, 1, true);
-  for (const [order, summary, status] of [
-    [orders.full, 'Převzato 2/2 · Doručeno 2/2', 'Doručená'],
-    [orders.partial, 'Převzato 2/2 · Doručeno 1/2', 'Převzatá dopravcem'],
-  ] as const) {
-    await page.goto(`/dispatch/orders/${order}`);
-    const card = page.getByTestId('tracking-card');
-    await card.getByTestId('tracking-refresh').click();
-    await expect(card.getByTestId('tracking-summary')).toHaveText(summary);
-    await expect(page.getByTestId('order-status')).toHaveText(status);
-  }
+  const refreshed = (order: string) =>
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'POST' && r.url().endsWith(`/${order}/shipment/tracking/refresh`),
+    );
+
+  // The partial order, by hand. Nothing has looked yet: what follows is the button's doing.
+  await page.goto(`/dispatch/orders/${orders.partial}`);
+  const card = page.getByTestId('tracking-card');
+  const summary = card.getByTestId('tracking-summary');
+  await expect(summary).toHaveText('Převzato 0/2 · Doručeno 0/2');
+
+  // A look holding the shipment: refused, said so, nothing changes.
+  await e2eSql([
+    `UPDATE "shipment_tracking" SET "lease_until" = now() + interval '1 hour'
+      WHERE "shipment_id" = ${trackingOf(orders.partial)}`,
+  ]);
+  const busy = refreshed(orders.partial);
+  await card.getByTestId('tracking-refresh').click();
+  const refused = await busy;
+  expect(refused.status()).toBe(409);
+  expect(((await refused.json()) as { code: string }).code).toBe('TRACKING_BUSY');
+  await expect(card.getByTestId('tracking-error')).toBeVisible();
+  await expect(summary).toHaveText('Převzato 0/2 · Doručeno 0/2');
+  await e2eSql([
+    `UPDATE "shipment_tracking" SET "lease_until" = NULL
+      WHERE "shipment_id" = ${trackingOf(orders.partial)}`,
+  ]);
+
+  const manual = refreshed(orders.partial);
+  await card.getByTestId('tracking-refresh').click();
+  const answered = await manual;
+  expect(answered.status(), await answered.text()).toBe(200);
+  await expect(summary).toHaveText('Převzato 2/2 · Doručeno 1/2');
+  await expect(page.getByTestId('order-status')).toHaveText('Převzatá dopravcem');
+  await expect(card.getByTestId('tracking-error')).toHaveCount(0);
+  await expect(card.getByTestId('tracking-refresh')).toBeVisible();
+
+  // The full order, by the automatic round: not looked at yet, then finished without anyone.
+  await page.goto(`/dispatch/orders/${orders.full}`);
+  await expect(summary).toHaveText('Převzato 0/2 · Doručeno 0/2');
+  await scheduleTracking(orders.full, 'now');
+  await expect
+    .poll(async () => (await trackingRow(orders.full)).stop_reason, { timeout: 60_000 })
+    .toBe('DELIVERED');
+  await page.reload();
+  await expect(summary).toHaveText('Převzato 2/2 · Doručeno 2/2');
+  await expect(page.getByTestId('order-status')).toHaveText('Doručená');
+  await expect(card.getByTestId('tracking-checked')).toContainText('ověřování skončilo');
+  // Delivered: nothing more to ask, so the button is correctly gone.
+  await expect(card.getByTestId('tracking-refresh')).toHaveCount(0);
 });
 
 test('deliveries: the filled overview — delivered from confirmed parcels only, open separately — desktop, 390, 320', async ({
