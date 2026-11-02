@@ -985,6 +985,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
     vs: string | null,
     creditDebit: 'CRDT' | 'DBIT' = 'CRDT',
     bookingDate = tomorrow,
+    currency = 'CZK',
   ) => {
     const account = String(Date.now()).slice(-10);
     const run = await owner.bankSyncRun.create({
@@ -992,7 +993,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         provider: 'RB_PREMIUM',
         environment,
         accountNumber: account,
-        currency: 'CZK',
+        currency,
         fromDate: new Date('2026-10-01'),
         toDate: new Date('2026-10-27'),
         startedBy: randomUUID(),
@@ -1003,7 +1004,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       data: {
         environment,
         accountNumber: account,
-        currency: 'CZK',
+        currency,
         entryReference: randomUUID(),
         firstRunId: run.id,
       },
@@ -1015,7 +1016,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         runId: run.id,
         contentSha256: 'a'.repeat(64),
         amount,
-        amountCurrency: 'CZK',
+        amountCurrency: currency,
         creditDebit,
         bookingDate,
         bankTransactionCode: 'PMNT',
@@ -1697,5 +1698,48 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       reason: 'Víc než platba',
     });
     expect(refused.status).toBeGreaterThanOrEqual(400);
+  });
+
+  // --- reviews RB110-R1, R2 (Codex 2026-11-02, reproductions taken over) ---------------------
+
+  it('RB110-R1: a production payment naming a TEST invoice is no invoice payment, also when cancelled or in another currency', async () => {
+    await ensureCzkDefault();
+    const [cancelled, other] = [await freshInvoice(), await freshInvoice()];
+    await f
+      .post(`${INV}/${cancelled.number}/cancel`)
+      .send({ requestId: randomUUID(), reason: 'synthetic review' })
+      .expect(200);
+    const owner = ownerDb();
+    try {
+      const before = await overviewNow();
+      const toCancelled = await bankTransaction(
+        owner,
+        'PRODUCTION',
+        '100.00',
+        cancelled.variableSymbol,
+      );
+      const eur = await bankTransaction(
+        owner,
+        'PRODUCTION',
+        '100.00',
+        other.variableSymbol,
+        'CRDT',
+        tomorrow,
+        'EUR',
+      );
+      await importBank();
+      expect(await paymentsOf(owner, toCancelled)).toBe(0);
+      expect(await paymentsOf(owner, eur)).toBe(0);
+      expect((await overviewNow()).paymentsToReview).toBe(before.paymentsToReview);
+      // The same in a TEST environment stays a hotel's payment to review (control).
+      const testEnv = await bankTransaction(owner, 'TEST', '100.00', cancelled.variableSymbol);
+      await importBank();
+      expect(await byTx(testEnv)).toMatchObject({
+        matchResult: 'INVOICE_CANCELLED',
+        toReview: true,
+      });
+    } finally {
+      await owner.$disconnect();
+    }
   });
 });

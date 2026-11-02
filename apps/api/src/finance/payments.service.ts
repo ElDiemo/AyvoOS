@@ -584,10 +584,12 @@ export class PaymentsService {
       include: { cancellation: true },
     });
     if (!invoice) return { result: 'UNKNOWN_VARIABLE_SYMBOL' };
-    if (invoice.cancellation) return { result: 'INVOICE_CANCELLED' };
-    if (invoice.currency !== e.currency) return { result: 'CURRENCY_MISMATCH' };
+    // The environment first (review RB110-R1): a production payment naming a TEST invoice is no
+    // invoice payment at all, whatever else differs — never recorded from the bank, never a task.
     if (invoice.kind === 'TEST' && e.environment === 'PRODUCTION')
       return { result: 'ENVIRONMENT_MISMATCH' };
+    if (invoice.cancellation) return { result: 'INVOICE_CANCELLED' };
+    if (invoice.currency !== e.currency) return { result: 'CURRENCY_MISMATCH' };
     // Money received before the invoice was issued (the tax point, doc 040 §13) is never silently
     // an ordinary later payment: a person decides.
     if (e.bookedOn < invoice.issuedOn.toISOString().slice(0, 10))
