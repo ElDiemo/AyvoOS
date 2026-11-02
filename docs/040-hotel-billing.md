@@ -188,16 +188,32 @@ Built without a new table; on the same gates as §9 (kind `TEST`, refused with
 - `billingTiming` is only shown: neither the period nor the date follows from it.
 - One migration, only one more value of the `operation_requests.kind` CHECK.
 
-### Proposal for approval — not built (new data model)
+### Run settings (owner 2026-11-02, "as UOL" — doc 040 §13 on its PR; TEST only)
 
-A saved run needs its own tables, so it waits for the owner's approval of the model:
+`billing_run_settings`, append-only versions with a reason; the newest applies. **No default**:
+without a version nothing is planned and the page says so.
 
-- `billing_run_settings`, append-only versions with a reason: the issue day, which period a run
-  bills (per timing), summary or separate invoices. **No default**: while a value is missing, the
-  run is blocked and says which one. The values come from §7 items 1, 2 and 7.
-- `billing_runs` + `billing_run_items`, append-only: who, when, period, the settings' version, the
-  state of each agreement and its invoice — so a run can be reviewed afterwards and resumed without
-  a second invoice.
+| Value                  | Choices                         | Meaning                                                              |
+| ---------------------- | ------------------------------- | -------------------------------------------------------------------- |
+| `issue_day`            | 1–28                            | the day of the issue month an invoice is issued (every month has it) |
+| `advance_billed_month` | `ISSUE_MONTH`, `NEXT_MONTH`     | the month an ADVANCE agreement's invoice bills                       |
+| `arrears_billed_month` | `PREVIOUS_MONTH`, `ISSUE_MONTH` | the month an ARREARS agreement's invoice bills                       |
+
+The due date is not a setting: issue date + the agreement's payment terms, as before. One invoice
+per agreement (§13); summary invoices are not part of the settings.
+
+- `GET/POST /api/admin/finance/billing/run-settings` (`finance:billing_read` / `finance:billing_manage`;
+  the form names the revision it saw, else 409 `CONCURRENT_CHANGE`; idempotent per `requestId`).
+- `GET /api/admin/finance/invoices/test-run/plan?issueMonth=` (`finance:invoices_test` +
+  `finance:billing_read`): the issue date and, per billing timing, the billed month. Reads only.
+- Měsíční běh shows the settings and the plan; each billed month opens the run with its period,
+  issue date and timing filled in (only the agreements of that timing). **The person still loads,
+  reviews and confirms**; the run itself is unchanged (§11 above) and checks everything again.
+
+**Not built** (next steps of §13): recorded runs (`billing_runs` + `billing_run_items`,
+append-only: who, when, period, the settings' revision, the state of each agreement and its
+invoice), a scheduler (off by default) and automatic sending. The settings decide nothing for live
+invoices, which stay behind the §5 gate; the example values in the tests are synthetic.
 
 ## 12. The language of documents (owner 2026-10-30)
 

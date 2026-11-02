@@ -241,6 +241,24 @@ model PriceListVersion {
   @@schema("finance")
 }
 
+/// The settings of the monthly invoicing run (doc 040 §11, §13): the issue day and the billed month
+/// per billing timing. No default; the newest revision applies. DB: append-only.
+model BillingRunSettings {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  revision           BigInt   @unique
+  issueDay           Int      @map("issue_day") @db.SmallInt
+  advanceBilledMonth String   @map("advance_billed_month")
+  arrearsBilledMonth String   @map("arrears_billed_month")
+  reason             String
+  recordedAt         DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String   @map("recorded_by") @db.Uuid
+  recordedByName     String   @map("recorded_by_name")
+  requestId          String   @unique @map("request_id") @db.Uuid
+
+  @@map("billing_run_settings")
+  @@schema("finance")
+}
+
 /// One billing agreement per hotel (core hotel id + code/name as of the creation). DB: append-only.
 model BillingAgreement {
   id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid

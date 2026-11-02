@@ -1,0 +1,66 @@
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { expect, test } from '@playwright/test';
+const ADMIN_STATE = 'e2e/.auth/admin.json';
+
+/**
+ * The run settings on Měsíční běh (doc 040 §11, §13): saved as a version with a reason, the plan
+ * of an issue month (issue date, billed month per billing timing) and a link that opens the run
+ * with them filled in — the person still loads, reviews and confirms. Synthetic values; nothing is
+ * issued or sent here.
+ */
+const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/finance');
+
+test.describe('Nastavení měsíčního běhu', () => {
+  test.use({ storageState: ADMIN_STATE });
+
+  test('a version with a reason, the plan of a month, the run filled in', async ({ page }) => {
+    await page.goto('/finance/invoices/run');
+    const card = page.getByTestId('run-settings');
+    await expect(card).toBeVisible();
+    const form = page.getByTestId('run-settings-form');
+    await form.getByTestId('run-settings-day').fill('1');
+    await form.getByTestId('run-settings-advance').selectOption('ISSUE_MONTH');
+    await form.getByTestId('run-settings-arrears').selectOption('PREVIOUS_MONTH');
+    await form.getByTestId('run-settings-reason').fill('Jako UOL: 1. dne za daný měsíc (E2E)');
+    await form.getByTestId('run-settings-save').click();
+    await expect(page.getByTestId('run-settings-current')).toContainText(
+      'Vystavení 1. dne v měsíci · smlouvy předem: měsíc vystavení · smlouvy zpětně: předchozí měsíc',
+    );
+
+    const plan = page.getByTestId('run-plan');
+    await plan.getByTestId('run-plan-month').fill('2026-12');
+    await plan.getByTestId('run-plan-load').click();
+    await expect(plan.getByTestId('run-plan-ADVANCE')).toContainText(
+      'období 2026-12, vystavení 2026-12-01',
+    );
+    await expect(plan.getByTestId('run-plan-ARREARS')).toContainText(
+      'období 2026-11, vystavení 2026-12-01',
+    );
+    await mkdir(screenshots, { recursive: true });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(() => window.scrollTo(0, 0));
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({
+        path: resolve(screenshots, `finance-run-settings-${width}.png`),
+        fullPage: true,
+      });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // The link opens the run with the period, issue date and timing; nothing is loaded or issued
+    // by itself.
+    await plan.getByTestId('run-plan-ARREARS').click();
+    await expect(page).toHaveURL(/month=2026-11&issuedOn=2026-12-01&timing=ARREARS/);
+    await expect(page.getByTestId('run-planned')).toContainText('Smlouvy zpětně');
+    await expect(page.getByTestId('run-month')).toHaveValue('2026-11');
+    await expect(page.getByTestId('run-items')).toHaveCount(0);
+    await page.getByTestId('run-load').click();
+    await expect(page.getByTestId('run-issued-on').or(page.getByTestId('run-empty'))).toBeVisible();
+    if (await page.getByTestId('run-issued-on').isVisible())
+      await expect(page.getByTestId('run-issued-on')).toHaveValue('2026-12-01');
+  });
+});

@@ -301,3 +301,41 @@ export type FinanceContractHotel = z.infer<typeof financeContractHotelSchema>;
 export const financeHotelLookupSchema = z.object({
   ids: z.array(z.uuid()).min(1).max(500),
 });
+
+/**
+ * The settings of the monthly invoicing run (owner 2026-11-02, doc 040 §11 and §13): the day an
+ * invoice is issued and which month it bills, relative to the month it is issued in, per the
+ * agreement's billing timing. Never a default — without a version the planned run is blocked. The
+ * due date is the agreement's payment terms. The newest revision applies.
+ */
+export const ADVANCE_BILLED_MONTHS = ['ISSUE_MONTH', 'NEXT_MONTH'] as const;
+export const ARREARS_BILLED_MONTHS = ['PREVIOUS_MONTH', 'ISSUE_MONTH'] as const;
+export const billingRunSettingsSchema = z.object({
+  revision: z.number().int(),
+  issueDay: z.number().int().min(1).max(28),
+  advanceBilledMonth: z.enum(ADVANCE_BILLED_MONTHS),
+  arrearsBilledMonth: z.enum(ARREARS_BILLED_MONTHS),
+  reason: z.string(),
+  recordedAt: z.iso.datetime(),
+  recordedByName: z.string(),
+});
+export type BillingRunSettings = z.infer<typeof billingRunSettingsSchema>;
+
+/** GET /api/admin/finance/billing/run-settings: the newest version (null = none yet) and history. */
+export const billingRunSettingsPageSchema = z.object({
+  current: billingRunSettingsSchema.nullable(),
+  versions: z.array(billingRunSettingsSchema),
+});
+export type BillingRunSettingsPage = z.infer<typeof billingRunSettingsPageSchema>;
+
+/** POST /api/admin/finance/billing/run-settings: a new version, made from the one the form saw. */
+export const newBillingRunSettingsSchema = z.strictObject({
+  requestId: z.uuid(),
+  /** The newest revision the form saw; null = none existed yet. */
+  expectedRevision: z.number().int().min(1).nullable(),
+  issueDay: z.number().int().min(1, 'Den 1–28.').max(28, 'Den 1–28.'),
+  advanceBilledMonth: z.enum(ADVANCE_BILLED_MONTHS),
+  arrearsBilledMonth: z.enum(ARREARS_BILLED_MONTHS),
+  reason: reasonSchema,
+});
+export type NewBillingRunSettingsRequest = z.infer<typeof newBillingRunSettingsSchema>;

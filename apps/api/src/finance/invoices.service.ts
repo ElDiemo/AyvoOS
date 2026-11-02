@@ -11,6 +11,7 @@ import type {
   InvoiceSummary,
   TestRunPreview,
   TestRunResult,
+  TestRunPlan,
 } from '@ayvo/types';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { Prisma } from '../generated/finance-prisma/client.js';
@@ -233,6 +234,34 @@ export class InvoicesService {
         throw domainError(422, 'INVOICE_NOT_CONSISTENT', e.message);
       throw e;
     }
+  }
+
+  /**
+   * What the run of an issue month bills by the current settings (doc 040 §11, §13): the issue
+   * date and, per billing timing, the billed month. Reads only; without settings nothing is
+   * planned. The due date stays each agreement's payment terms.
+   */
+  async testRunPlan(issueMonth: string): Promise<TestRunPlan> {
+    const settings = (await this.billing.runSettings()).current;
+    if (!settings) return { issueMonth, settingsRevision: null, issuedOn: null, groups: [] };
+    return {
+      issueMonth,
+      settingsRevision: settings.revision,
+      issuedOn: `${issueMonth}-${String(settings.issueDay).padStart(2, '0')}`,
+      groups: [
+        {
+          billingTiming: 'ADVANCE',
+          billedMonth: shiftMonth(issueMonth, settings.advanceBilledMonth === 'NEXT_MONTH' ? 1 : 0),
+        },
+        {
+          billingTiming: 'ARREARS',
+          billedMonth: shiftMonth(
+            issueMonth,
+            settings.arrearsBilledMonth === 'PREVIOUS_MONTH' ? -1 : 0,
+          ),
+        },
+      ],
+    };
   }
 
   /**
@@ -678,4 +707,11 @@ function detail(r: InvoiceRow): InvoiceDetail {
       dueOn: s.payment.dueOn,
     },
   };
+}
+
+/** "YYYY-MM" shifted by whole months. */
+function shiftMonth(month: string, by: number): string {
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  const d = new Date(Date.UTC(y, m - 1 + by, 1));
+  return d.toISOString().slice(0, 7);
 }

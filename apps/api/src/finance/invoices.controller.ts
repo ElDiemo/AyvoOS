@@ -15,6 +15,7 @@ import {
   createTestRunSchema,
   invoiceListQuerySchema,
   invoiceNumberSchema,
+  testRunPlanQuerySchema,
   testRunPreviewQuerySchema,
   type CancelInvoiceRequest,
   type CreateTestInvoiceRequest,
@@ -23,6 +24,7 @@ import {
   type InvoiceListQuery,
   type InvoicesOverview,
   type InvoiceSummary,
+  type TestRunPlan,
   type TestRunPreview,
   type TestRunResult,
 } from '@ayvo/types';
@@ -64,6 +66,15 @@ export class InvoicesController {
     @Caller() caller: FinanceCaller,
   ): Promise<InvoiceDetail> {
     return this.invoices.issueTest(body, caller);
+  }
+
+  /** The issue date and billed months of an issue month by the run settings; reads only. */
+  @RequirePermission('finance:invoices_test', 'finance:billing_read')
+  @Get('test-run/plan')
+  testRunPlan(
+    @Query(new ZodValidationPipe(testRunPlanQuerySchema)) query: { issueMonth: string },
+  ): Promise<TestRunPlan> {
+    return this.invoices.testRunPlan(query.issueMonth);
   }
 
   /** A month's agreements and what a TEST invoice of each would say (doc 040 §11); reads only. */

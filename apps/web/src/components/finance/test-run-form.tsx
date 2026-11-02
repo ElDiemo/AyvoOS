@@ -28,9 +28,18 @@ type Item = TestRunPreview['items'][number];
  * the agreements. Neither date is filled in or derived; the action stays disabled without them.
  * One separate invoice per agreement; nothing is sent anywhere.
  */
-export function TestRunForm() {
-  const [month, setMonth] = useState('');
-  const [issuedOn, setIssuedOn] = useState('');
+export function TestRunForm({
+  planned,
+}: {
+  /**
+   * From the plan of an issue month by the run settings (doc 040 §11, §13): the billed month, the
+   * issue date and the billing timing — only the agreements of that timing are shown. The user
+   * still reviews and confirms; nothing is issued by itself.
+   */
+  planned?: { month: string; issuedOn: string; timing: 'ADVANCE' | 'ARREARS' };
+} = {}) {
+  const [month, setMonth] = useState(planned?.month ?? '');
+  const [issuedOn, setIssuedOn] = useState(planned?.issuedOn ?? '');
   const [preview, setPreview] = useState<TestRunPreview | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +73,9 @@ export function TestRunForm() {
     }
   }
 
-  const items = preview?.items ?? [];
+  const items = (preview?.items ?? []).filter(
+    (i) => !planned || i.billingTiming === planned.timing,
+  );
   const ready = items.filter((i) => i.state === 'READY');
   const selected = ready.filter((i) => chosen.includes(i.agreementCode));
   const currencies = [...new Set(selected.map((i) => i.currency!))];

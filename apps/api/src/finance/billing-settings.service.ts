@@ -5,6 +5,8 @@ import type {
   BillingAgreementTerms,
   BillingAgreementVersion,
   BillingCustomer,
+  BillingRunSettings,
+  BillingRunSettingsPage,
   BillingSummary,
   BillingCustomerDetail,
   BillingCustomerFields,
@@ -16,6 +18,7 @@ import type {
   EffectiveTermsPage,
   NewBillingAgreementVersionRequest,
   NewBillingCustomerVersionRequest,
+  NewBillingRunSettingsRequest,
   NewPriceListVersionRequest,
   PriceListVersion,
 } from '@ayvo/types';
@@ -203,6 +206,57 @@ export class BillingSettingsService {
   }
 
   // --- the default price list -----------------------------------------------------------
+
+  /** The settings of the monthly run (doc 040 §11, §13): the newest version and the history. */
+  async runSettings(): Promise<BillingRunSettingsPage> {
+    const rows = await this.prisma.billingRunSettings.findMany({ orderBy: { revision: 'desc' } });
+    const versions = rows.map(runSettings);
+    return { current: versions[0] ?? null, versions };
+  }
+
+  /** A new version of the run settings, made from the newest one the form saw (no default). */
+  async newRunSettings(
+    req: NewBillingRunSettingsRequest,
+    caller: FinanceCaller,
+  ): Promise<BillingRunSettingsPage> {
+    const { userId, displayName } = caller.principal;
+    await this.operations.run(
+      'BILLING_RUN_SETTINGS_VERSION',
+      req.requestId,
+      {
+        expectedRevision: req.expectedRevision,
+        issueDay: req.issueDay,
+        advanceBilledMonth: req.advanceBilledMonth,
+        arrearsBilledMonth: req.arrearsBilledMonth,
+        reason: req.reason,
+        actorId: userId,
+      },
+      async (tx) => {
+        // The counter row is locked until commit: the check below sees every committed revision.
+        const revision = await allocateFinanceSerial(tx, 'billing_revision');
+        const newest = await tx.billingRunSettings.findFirst({
+          orderBy: { revision: 'desc' },
+          select: { revision: true },
+        });
+        if ((newest ? Number(newest.revision) : null) !== req.expectedRevision)
+          throw concurrentChange();
+        const row = await tx.billingRunSettings.create({
+          data: {
+            revision,
+            issueDay: req.issueDay,
+            advanceBilledMonth: req.advanceBilledMonth,
+            arrearsBilledMonth: req.arrearsBilledMonth,
+            reason: req.reason,
+            recordedBy: userId,
+            recordedByName: displayName,
+            requestId: req.requestId,
+          },
+        });
+        return { id: row.id };
+      },
+    );
+    return this.runSettings();
+  }
 
   async listPriceList(): Promise<PriceListVersion[]> {
     const rows = await this.prisma.priceListVersion.findMany({
@@ -525,6 +579,26 @@ function customerVersion(v: CustomerVersionRow): BillingCustomerVersion {
     reason: v.reason,
     recordedAt: v.recordedAt.toISOString(),
     recordedByName: v.recordedByName,
+  };
+}
+
+function runSettings(r: {
+  revision: bigint;
+  issueDay: number;
+  advanceBilledMonth: string;
+  arrearsBilledMonth: string;
+  reason: string;
+  recordedAt: Date;
+  recordedByName: string;
+}): BillingRunSettings {
+  return {
+    revision: Number(r.revision),
+    issueDay: r.issueDay,
+    advanceBilledMonth: r.advanceBilledMonth as BillingRunSettings['advanceBilledMonth'],
+    arrearsBilledMonth: r.arrearsBilledMonth as BillingRunSettings['arrearsBilledMonth'],
+    reason: r.reason,
+    recordedAt: r.recordedAt.toISOString(),
+    recordedByName: r.recordedByName,
   };
 }
 
