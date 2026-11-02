@@ -14,6 +14,7 @@ import type {
   CreateBillingCustomerRequest,
   EffectiveTerms,
   EffectiveTermsPage,
+  HotelBillingTerms,
   NewBillingAgreementVersionRequest,
   NewBillingCustomerVersionRequest,
   NewPriceListVersionRequest,
@@ -361,6 +362,15 @@ export class BillingSettingsService {
 
   // --- terms effective for a month ------------------------------------------------------
 
+  /** One hotel in the current month (Prague): the same computation, never a second one. */
+  async hotelTerms(hotelId: string): Promise<HotelBillingTerms> {
+    const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' })
+      .format(new Date())
+      .slice(0, 7);
+    const page = await this.effectiveTerms(month, undefined, this.prisma, hotelId);
+    return { month: page.month, asOf: page.asOf, terms: page.items[0] ?? null };
+  }
+
   /**
    * The terms of every agreement for the month, as known at `asOf` (default: now). Read only, no
    * amounts: the effective version, the customer's details then, the price source, and what is
@@ -371,13 +381,14 @@ export class BillingSettingsService {
     m: string,
     asOfIso?: string,
     db: Prisma.TransactionClient = this.prisma,
+    hotelId?: string,
   ): Promise<EffectiveTermsPage> {
     const asOf = asOfIso ? new Date(asOfIso) : new Date();
     const start = monthStart(m);
     const end = monthEnd(m);
     const [agreements, prices, customerVersions] = await Promise.all([
       db.billingAgreement.findMany({
-        where: { createdAt: { lte: asOf } },
+        where: { createdAt: { lte: asOf }, ...(hotelId ? { hotelId } : {}) },
         orderBy: { serial: 'asc' },
         include: { versions: { include: { customer: true } } },
       }),
@@ -442,6 +453,8 @@ export class BillingSettingsService {
       const cv = customerVersions
         .filter((x) => x.customerId === v.customerId)
         .reduce<CustomerVersionRow | null>((b, x) => (!b || x.version > b.version ? x : b), null);
+      // Never guessed from the country: a customer without a chosen language is a visible blocker.
+      if (cv && cv.documentLanguage === null) gaps.push('CUSTOMER_LANGUAGE_MISSING');
       return {
         ...base,
         status: 'IN_EFFECT',
@@ -471,6 +484,7 @@ function customerData(c: BillingCustomerFields) {
     city: c.city,
     countryCode: c.countryCode,
     billingEmail: c.billingEmail,
+    documentLanguage: c.documentLanguage,
   };
 }
 
@@ -516,6 +530,8 @@ function customerVersion(v: CustomerVersionRow): BillingCustomerVersion {
       city: v.city,
       countryCode: v.countryCode,
       billingEmail: v.billingEmail,
+      documentLanguage:
+        v.documentLanguage as BillingCustomerVersion['customer']['documentLanguage'],
     },
     reason: v.reason,
     recordedAt: v.recordedAt.toISOString(),
