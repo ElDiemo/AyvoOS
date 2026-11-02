@@ -55,7 +55,9 @@ export async function createFinanceTestApp(
   );
   await core.app.listen(0, '127.0.0.1');
   const port = (core.app.getHttpServer().address() as AddressInfo).port;
-  const storageDir = await mkdtemp(join(tmpdir(), 'ayvo-finance-files-'));
+  // Several apps may share one directory, as several Finance processes share one bucket.
+  const storageDir =
+    options.finance?.FILE_STORAGE_DIR ?? (await mkdtemp(join(tmpdir(), 'ayvo-finance-files-')));
   const env = loadFinanceEnv({
     APP_ENV: 'test',
     FINANCE_DATABASE_URL: financeDatabaseUrl,

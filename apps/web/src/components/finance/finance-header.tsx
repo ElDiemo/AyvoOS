@@ -7,7 +7,7 @@ import { currentUser } from '@/lib/session';
 /**
  * Finance pages (doc 042): the module's own navigation — Přehled, Faktury hotelům, Přijaté
  * doklady, Banka a platby, Pro účetní, the settings apart — above the page title. Faktury hotelům
- * and Banka a platby show their views (Faktury · Smlouvy a ceny, Pohyby z banky · Platby a
+ * and Banka a platby show their views (Faktury · Smlouvy, Pohyby z banky · Platby a
  * přiřazení) as tabs, each only with its permission. Every page and the API still check the
  * permission themselves.
  */
@@ -35,6 +35,9 @@ export async function FinanceHeader({
         <ViewSwitch label={shellCs.modules.finance.viewsLabel} views={views} active={view!} />
       )}
       <PageHeader {...props} />
+      <p className="-mt-2 mb-4 text-xs text-stone-500" data-testid="finance-scope">
+        {shellCs.modules.finance.scope}
+      </p>
     </>
   );
 }

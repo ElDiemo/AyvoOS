@@ -44,6 +44,7 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
     city: 'Praha',
     countryCode: 'CZ',
     billingEmail: 'fakturace@hotel.test',
+    documentLanguage: 'cs',
     ...over,
   });
   const newCustomer = async (over: Record<string, unknown> = {}) =>
@@ -528,6 +529,7 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
     expect(detail.versions.map((v) => v.version)).toEqual([2, 1]);
     expect(detail.current.customer).toMatchObject({
       billingEmail: 'new@example.test',
+      documentLanguage: 'cs',
       city: 'Praha',
     });
     // B reloads (version 2) and saves its change on top: both changes are kept.
