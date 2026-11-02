@@ -250,3 +250,43 @@ DEV → owner acceptance → the same commit on PROD):
 5. The RB read scheduler (#94) on top of #110, off by default.
 6. The live tax document (kind, series, tax point, VAT, rounding), only after UOL's answers, behind
    the §5 gate.
+
+## 14. Hotel portal: the customer's issued invoices (owner 2026-11-02; backlog, not built)
+
+Recorded as a requirement for a separate delivery after the internal walk-through of §13 (hotel →
+one monthly invoice → e-mail → payment from RB) has been accepted. Nothing of it exists today:
+everything in Finance is the **internal** administration on `os.ayvo.co` (tailnet only, ADR 0033).
+There is no hotel portal, and no hotel user can sign in.
+
+**Requirement:**
+
+- A customer user sees the invoices they are allowed to see, each with its payment state and its
+  PDF.
+- By period and among their allowed hotels, the user downloads a ZIP with the PDFs and a short
+  overview (`manifest.csv`). A summary invoice covering several hotels is included **once**.
+- **Access to an invoice is granted explicitly for its billing payer and scope.** A right to a
+  hotel alone never grants every invoice of the payer, nor other hotels: a summary invoice may
+  contain other hotels, so the whole document is shown only to a user explicitly allowed for that
+  payer and scope.
+- Hiding links is not enough. The list, the detail, the PDF and the ZIP each check access on the
+  server, in one central layer (doc 012), with tests that one customer or hotel never reads
+  another's.
+- The ZIP has bounds (number of documents, bytes, period) and is built outside DB transactions,
+  as the export of doc 039 §7.
+- This is the customer's package of **issued** invoices. It is not the accountant's export of
+  received documents (doc 039) and does not replace it.
+
+**Decisions needed before implementation** (a short concrete proposal, never an automatic change of
+infrastructure, DNS or the edge):
+
+1. **Exposure:** `os.ayvo.co` is tailnet only (ADR 0026/0033). The portal needs a public host and
+   edge, its own ADR, and Codex for DNS and edge after the owner's approval.
+2. **Identity:** `HOTEL_USER` is a planned, non-assignable role (doc 021 §4c). The portal needs
+   external customer users: the native sign-in (ADR 0037 — invitation, password, TOTP) or another
+   method, with its own session policy, separated from staff.
+3. **Model of access:** grants of a portal user to a billing payer (customer) and, within it, to
+   hotels. This is a new data model for the owner's review (§10 already proposes the two axes).
+4. **Boundary to Finance:** the portal reads invoices only through an explicit contract (ADR 0039).
+   Finance never reads core tables; whether the portal is part of the shared web app or its own
+   app is an architecture decision.
+5. **Payment-state wording** shown to a customer, and whether overdue is shown.
