@@ -4,14 +4,14 @@ export const issuerCs = {
   subtitle:
     'Fakturační údaje AYVO jako vystavitele a účty uváděné na fakturách. Jediné místo, kde se tyto údaje mění; každá změna je nová verze s důvodem. Vydaná faktura si nese vlastní snímek, pozdější změna ji nezmění. Nejde o propojení s bankou (Banka a platby).',
   readiness: {
-    title: 'Připravenost pro ostré vystavení',
+    title: 'Připravenost k vystavení faktur',
     ok: (currency: string) => `${currency}: z tohoto nastavení nic nechybí.`,
     gaps: {
       ISSUER_MISSING: 'chybí údaje vystavitele',
       NO_DEFAULT_ACCOUNT: 'není zvolen výchozí účet',
       DEFAULT_ACCOUNT_RETIRED: 'výchozí účet není aktivní',
     },
-    note: 'Blokuje jen ostré faktury; vývoj a testovací doklady ne. Pravidla účetní (DPH, číselná řada, náležitosti) se potvrzují zvlášť.',
+    note: 'Bez těchto údajů nevznikne žádná faktura, ani testovací. Ostré vystavení navíc čeká na potvrzení pravidel účetní (DPH, číselná řada, náležitosti).',
   },
   issuer: {
     title: 'Vystavitel (naše firma)',

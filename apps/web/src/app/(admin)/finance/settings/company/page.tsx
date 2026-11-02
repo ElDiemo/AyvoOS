@@ -34,7 +34,7 @@ export default async function CompanySettingsPage() {
   const s = await apiGet('admin/finance/issuer', issuerSettingsSchema);
   return (
     <>
-      <FinanceHeader active="settings" title={t.title} subtitle={t.subtitle} />
+      <FinanceHeader active="settings" view="company" title={t.title} subtitle={t.subtitle} />
       <div className="flex flex-col gap-6">
         <Card title={t.readiness.title} testId="issuer-readiness">
           <ul className="flex flex-col gap-2 text-sm">

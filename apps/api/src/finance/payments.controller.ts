@@ -1,12 +1,15 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import {
   allocatePaymentSchema,
   paymentCodeSchema,
+  paymentsQuerySchema,
   simulateStatementSchema,
   type AllocatePaymentRequest,
   type IncomingPayment,
   type PaymentLoadResult,
+  type PaymentOpenInvoices,
   type PaymentsPage,
+  type PaymentsQuery,
   type SimulateStatementRequest,
 } from '@ayvo/types';
 import { z } from 'zod';
@@ -30,8 +33,25 @@ export class PaymentsController {
 
   @RequirePermission('finance:invoices_read')
   @Get()
-  page(): Promise<PaymentsPage> {
-    return this.payments.page();
+  page(
+    @Query(new ZodValidationPipe(paymentsQuerySchema)) query: PaymentsQuery,
+  ): Promise<PaymentsPage> {
+    return this.payments.page(query);
+  }
+
+  @RequirePermission('finance:invoices_read')
+  @Get(':code')
+  detail(@Param('code', CODE) code: string): Promise<IncomingPayment> {
+    return this.payments.detail(code);
+  }
+
+  @RequirePermission('finance:payments_manage')
+  @Get(':code/open-invoices')
+  openInvoices(
+    @Param('code', CODE) code: string,
+    @Query('q') q?: string,
+  ): Promise<PaymentOpenInvoices> {
+    return this.payments.openInvoices(code, q?.trim().slice(0, 40));
   }
 
   @RequirePermission('finance:payments_manage')

@@ -1,5 +1,10 @@
 /** Czech strings of Finance (doc 039): received documents. */
 export const financeCs = {
+  versionMismatch: {
+    title: 'Finance jsou ve starší verzi než web',
+    text: 'Tato část Financí je během přechodu mezi verzemi uzavřená. Data se nezměnila a opakování nepomůže. Hotely, objednávky a logistika fungují dál.',
+    action: 'Správce dokončí přechod: povýší Finance, nebo při návratu vrátí i Finance.',
+  },
   unavailable: {
     title: 'Finance jsou dočasně nedostupné',
     text: 'Ostatní části AYVO OS fungují. Zkuste to prosím za chvíli znovu.',
@@ -114,7 +119,7 @@ export const financeCs = {
   exports: {
     title: 'Export pro účetní',
     subtitle:
-      'Balíček dokladů jednoho předávacího měsíce: ZIP s přehledem manifest.csv a nezměněnými originály. Vytvoření, stažení a předání účetní jsou samostatné záznamy; nic z toho neznamená zaúčtování.',
+      'Balíček přijatých dokladů jednoho předávacího měsíce: ZIP s přehledem manifest.csv a nezměněnými originály. Vydané faktury v něm nejsou a testovací faktury se do předání nepřidávají. Vytvoření, stažení a předání účetní jsou samostatné záznamy; nic z toho neznamená zaúčtování.',
     create: 'Nový export',
     month: 'Předávací měsíc',
     lastMonth: 'Minulý měsíc',
@@ -233,12 +238,14 @@ export const financeCs = {
     subtitle:
       'Faktury hotelům podle smluv (pokoje × cena za měsíc). Zatím jen TESTOVACÍ faktury mimo produkci – ostré vystavení není schváleno a nic se neodesílá.',
     testOnly:
-      'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a nikam se neposílají. DPH a účetní pravidla zatím nejsou schválena.',
+      'Testovací režim: faktury mají řadu T, vodoznak „TESTOVACÍ DOKLAD — NEPLATNÝ“ a neposílají se automaticky; odeslání je vždy ruční akce níže. DPH a účetní pravidla zatím nejsou schválena.',
     create: 'Vystavit testovací fakturu',
     empty: 'Zatím žádné faktury.',
     ofAgreement: 'Faktury této smlouvy',
+    ofHotel: 'Zobrazeny jsou faktury jednoho hotelu.',
+    allOfCompany: 'Zobrazit všechny faktury',
     noneOfAgreement: 'Na tuto smlouvu zatím nebyla vystavena žádná faktura.',
-    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy a ceny',
+    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy',
     emptyFromAgreements:
       'Faktura vzniká ze smlouvy hotelu; smlouvy spravuje kolega s přístupem ke Smlouvám a cenám.',
     number: 'Číslo',
@@ -251,18 +258,127 @@ export const financeCs = {
     variableSymbol: 'Variabilní symbol',
     status: { VALID: 'Platná', CANCELLED: 'Zrušená' } as Record<string, string>,
     back: 'Faktury',
+    run: {
+      title: 'Měsíční běh testovacích faktur',
+      subtitle:
+        'Vyberte období, zkontrolujte smlouvy a zadejte datum vystavení. Každá vybraná smlouva = samostatná testovací faktura. Datum ani období se neodvozují.',
+      open: 'Měsíční běh',
+      month: 'Fakturované období',
+      load: 'Načíst smlouvy',
+      issuedOn: 'Datum vystavení',
+      needDate: 'Zadejte datum vystavení. Bez něj se nic nevystaví.',
+      empty: 'V tomto období nejsou žádné smlouvy.',
+      noAmount: 'Částku nelze určit.',
+      notIssuable: 'V produkci se testovací faktury nevystavují; ostré vystavení není schválené.',
+      chooseReady: (n: number) => `Vybrat všechny připravené (${n})`,
+      submit: (n: number) => `Vystavit testovací faktury (${n})`,
+      running: 'Vystavuji…',
+      total: (amount: string) => `Celkem ${amount}`,
+      done: (n: number) => `Vystaveno testovacích faktur: ${n}`,
+      termsDays: (n: number) => `splatnost ${n} dní`,
+      line: (rooms: number, price: string, source: string, amount: string) =>
+        `${rooms} pokojů × ${price} (${source}) = ${amount}`,
+      priceSource: { OWN: 'vlastní cena', DEFAULT: 'dle ceníku', MISSING: 'chybí' } as Record<
+        string,
+        string
+      >,
+      state: {
+        READY: 'Připraveno',
+        ALREADY_INVOICED: 'Už vystaveno',
+        BLOCKED: 'Nelze vystavit',
+        NOT_IN_EFFECT: 'Mimo platnost smlouvy',
+      },
+      blockers: {
+        PRICE_MISSING: 'chybí cena',
+        PARTIAL_PERIOD_RULE_MISSING: 'smlouva pokrývá jen část měsíce (pravidlo není schválené)',
+        NO_EFFECTIVE_VERSION: 'podmínky začínají později',
+        CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
+        ZERO_AMOUNT: 'nulová částka',
+      } as Record<string, string>,
+    },
+    delivery: {
+      title: 'Odeslání e-mailem',
+      mode: {
+        SIMULATION:
+          'Zkušební odeslání: nic neopustí systém. Žádný e-mail nikomu nepřijde, ověřuje se jen průběh.',
+        RELAY:
+          'Skutečný testovací e-mail přes poštovní server, jen na povolenou adresu. Doklad je označený jako testovací.',
+      } as Record<string, string>,
+      /** What this attempt's result means, by the mode stored on it, never by today's. */
+      stateOf(mode: string, state: string): string {
+        return mode === 'SIMULATION' && state === 'SENT'
+          ? 'Přijato simulací (žádný e-mail neodešel)'
+          : (financeCs.invoices.delivery.state[state] ?? state);
+      },
+      attemptMode: {
+        SIMULATION: 'Pokus v simulaci',
+        RELAY: 'Pokus přes poštovní server',
+      } as Record<string, string>,
+      none: 'Faktura zatím nebyla odeslána.',
+      send: 'Odeslat fakturu',
+      willSend: (recipient: string, sender: string) => `Komu: ${recipient} · Od: ${sender}`,
+      requested: (at: string, by: string) => `${at}, ${by}`,
+      retry: 'Odeslat znovu',
+      retryReason: 'Důvod opakování (povinný)',
+      retryReasonShown: 'Důvod opakování',
+      duplicateWarning:
+        'Rozumím, že odběratel může fakturu dostat dvakrát: u předchozího pokusu nemusí být jasné, zda zpráva odešla.',
+      sentHelp: 'Přijetí poštovním serverem neznamená potvrzené doručení do schránky odběratele.',
+      uncertainHelp:
+        'Výsledek není znám: zpráva mohla odejít. Systém ji sám znovu neodešle; rozhodněte, zda ji odeslat ručně.',
+      state: {
+        QUEUED: 'Čeká na odeslání',
+        SENDING: 'Odesílá se',
+        SENT: 'Přijato poštovním serverem (doručení do schránky nepotvrzeno)',
+        FAILED: 'Neodesláno',
+        UNCERTAIN: 'Výsledek nejistý',
+      } as Record<string, string>,
+      codes: {
+        PROCESS_INTERRUPTED: 'Odesílání se přerušilo.',
+        CONNECTION_LOST: 'Spojení s poštovním serverem se přerušilo.',
+        RELAY_UNREACHABLE: 'Poštovní server není dostupný.',
+        RECIPIENT_REFUSED: 'Poštovní server adresu odmítl.',
+        INVOICE_CANCELLED: 'Faktura byla mezitím zrušena.',
+        PDF_UNAVAILABLE: 'Uložené PDF se nepodařilo načíst.',
+        PDF_TOO_LARGE: 'Uložené PDF je příliš velké.',
+        PDF_HASH_MISMATCH: 'Uložené PDF neodpovídá otisku z vystavení, nic se neodeslalo.',
+        PRODUCTION: 'Testovací faktury se z produkce neodesílají.',
+        RECIPIENT_NOT_ALLOWED: 'Adresa už není mezi povolenými příjemci, nic se neodeslalo.',
+        TRANSPORT_CHANGED:
+          'Způsob odesílání se od požadavku změnil, nic se neodeslalo. Další pokus je ruční.',
+      } as Record<string, string>,
+      blockers: {
+        DELIVERY_DISABLED: 'Odesílání faktur tu není zapnuté.',
+        INVOICE_CANCELLED: 'Zrušená faktura se neodesílá.',
+        LANGUAGE_MISSING: 'Starší doklad nemá uložený jazyk e-mailu, proto se neodesílá.',
+        PRODUCTION: 'Testovací faktury se z produkce neodesílají.',
+      } as Record<string, string>,
+      errors: {
+        MODE_CHANGED: 'Způsob odesílání se změnil – načtěte stránku znovu. Nic se neodeslalo.',
+        RECIPIENT_CHANGED:
+          'Adresa odběratele se změnila. Načtěte stránku znovu, nic se neodeslalo.',
+        RECIPIENT_NOT_ALLOWED: 'Na tuto adresu se testovací faktura odeslat nesmí.',
+        DELIVERY_EXISTS: 'Faktura už má záznam o odeslání.',
+        DELIVERY_NOT_RETRYABLE: 'Opakovat lze jen poslední neúspěšný nebo nejistý pokus.',
+      } as Record<string, string>,
+    },
     newTitle: 'Testovací faktura',
+    technical: 'Technické údaje',
+    language: 'Jazyk dokladu',
+    languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
+    languageLegacy: 'starší testovací doklad bez uloženého jazyka',
     newSubtitle:
       'Vyberte měsíc a smlouvy jednoho odběratele: jedna smlouva = samostatná faktura, více smluv téhož odběratele = souhrnná faktura s řádkem za každý hotel.',
     month: 'Fakturovaný měsíc',
     load: 'Načíst smlouvy',
     noAgreements: 'Pro tento měsíc nejsou žádné smlouvy v platnosti.',
-    toAgreements: 'Smlouvy a ceny →',
+    toAgreements: 'Smlouvy →',
     notInvoiceable: 'Nelze fakturovat',
     gaps: {
       PRICE_MISSING: 'chybí cena',
       PARTIAL_PERIOD_RULE_MISSING: 'smlouva pokrývá jen část měsíce (pravidlo není schválené)',
       NO_EFFECTIVE_VERSION: 'podmínky začínají později',
+      CUSTOMER_LANGUAGE_MISSING: 'odběratel nemá vybraný jazyk dokumentů',
     } as Record<string, string>,
     line: (rooms: number, price: string, amount: string) =>
       `${rooms} pokojů × ${price} = ${amount}`,
@@ -313,6 +429,39 @@ export const financeCs = {
     } as Record<string, string>,
   },
   payments: {
+    filters: {
+      ALL: 'Všechny',
+      REVIEW: 'K posouzení',
+      CHANGED: 'Změněno bankou',
+      ALLOCATED: 'Přiřazené',
+    } as Record<string, string>,
+    searchLabel: 'Hledat',
+    legacyFinance:
+      'Finance běží ve starší verzi: zobrazuje se celý seznam jen ke čtení, bez filtrů, hledání a detailu plateb.',
+    searchHint: 'Kód, variabilní symbol, protistrana nebo přesná částka',
+    search: 'Hledat',
+    found: (total: number, from: number, to: number) =>
+      total === 0 ? 'Nic nenalezeno.' : `Zobrazeno ${from}–${to} z ${total}.`,
+    previous: 'Předchozí',
+    next: 'Další',
+    back: 'Platby',
+    detailFacts: {
+      amount: 'Částka',
+      bookedOn: 'Zaúčtováno',
+      variableSymbol: 'Variabilní symbol',
+      counterparty: 'Protistrana',
+      account: 'Účet protistrany',
+      message: 'Zpráva',
+      source: 'Zdroj',
+      reference: 'Reference',
+      recorded: 'Zaznamenáno',
+    },
+    allocationsTitle: 'Přiřazení',
+    noAllocations: 'Zatím bez přiřazení.',
+    allocateTitle: 'Přiřadit k faktuře',
+    openLimited: 'Zobrazeno jen 50 nejnovějších faktur, zadejte číslo faktury.',
+    invoiceSearch: 'Číslo faktury',
+    noOpen: 'Žádná otevřená faktura v této měně.',
     title: 'Platby a přiřazení',
     subtitle:
       'Přijaté platby a jejich přiřazení k fakturám. Automaticky se přiřadí jen přesný variabilní symbol jedné otevřené faktury; vše ostatní čeká na člověka s důvodem. Nic se neodesílá do banky.',

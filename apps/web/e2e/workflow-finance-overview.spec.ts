@@ -112,6 +112,7 @@ test.describe('Přehled Financí', () => {
             city: 'Brno',
             countryCode: 'CZ',
             billingEmail: 'fakturace@prehled.test',
+            documentLanguage: 'cs',
           },
         },
       }),
@@ -235,9 +236,8 @@ test.describe('Přehled Financí', () => {
     await expect(paymentLink).toHaveCount(1);
     const paymentCode = (await paymentLink.textContent())!.trim();
     await paymentLink.click();
-    await expect(page).toHaveURL(new RegExp(`/finance/payments#${paymentCode}$`));
+    await expect(page).toHaveURL(new RegExp(`/finance/payments/${paymentCode}$`));
     const payment = page.getByTestId(`payment-${paymentCode}`);
-    await expect(payment).toBeInViewport();
     await payment.getByRole('link', { name: new RegExp(invoice.number) }).click();
     await expect(page).toHaveURL(new RegExp(`/finance/invoices/${invoice.number}$`));
 
