@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
  * the UI cannot produce, e.g. a shipment labelled before a later feature existed. Uses the same
  * Prisma client and adapter as the e2e API server (apps/api/scripts/start-e2e-server.mjs).
  */
-export async function e2eSql(statements: string[]): Promise<void> {
+async function connect() {
   const apiRoot = resolve(import.meta.dirname, '../../api');
   const envFile = resolve(apiRoot, '../../.env');
   if (!process.env.AYVO_TEST_DATABASE_URL && !process.env.DATABASE_URL && existsSync(envFile)) {
@@ -23,13 +23,29 @@ export async function e2eSql(statements: string[]): Promise<void> {
   const { PrismaClient } = (await import(resolve(apiRoot, 'dist/generated/prisma/client.js'))) as {
     PrismaClient: new (o: { adapter: unknown }) => {
       $executeRawUnsafe(sql: string): Promise<number>;
+      $queryRawUnsafe<T>(sql: string): Promise<T>;
       $transaction(ops: Promise<number>[]): Promise<number[]>;
       $disconnect(): Promise<void>;
     };
   };
   const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+  return db;
+}
+
+export async function e2eSql(statements: string[]): Promise<void> {
+  const db = await connect();
   try {
     await db.$transaction(statements.map((s) => db.$executeRawUnsafe(s)));
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+/** Reads a state the page does not show (e.g. whether a background look holds a shipment). */
+export async function e2eRows<T>(sql: string): Promise<T[]> {
+  const db = await connect();
+  try {
+    return await db.$queryRawUnsafe<T[]>(sql);
   } finally {
     await db.$disconnect();
   }

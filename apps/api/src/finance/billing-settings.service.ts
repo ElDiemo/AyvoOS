@@ -5,6 +5,8 @@ import type {
   BillingAgreementTerms,
   BillingAgreementVersion,
   BillingCustomer,
+  BillingRunSettings,
+  BillingRunSettingsPage,
   BillingSummary,
   BillingCustomerDetail,
   BillingCustomerFields,
@@ -14,8 +16,10 @@ import type {
   CreateBillingCustomerRequest,
   EffectiveTerms,
   EffectiveTermsPage,
+  HotelBillingTerms,
   NewBillingAgreementVersionRequest,
   NewBillingCustomerVersionRequest,
+  NewBillingRunSettingsRequest,
   NewPriceListVersionRequest,
   PriceListVersion,
 } from '@ayvo/types';
@@ -204,6 +208,57 @@ export class BillingSettingsService {
 
   // --- the default price list -----------------------------------------------------------
 
+  /** The settings of the monthly run (doc 040 §11, §13): the newest version and the history. */
+  async runSettings(): Promise<BillingRunSettingsPage> {
+    const rows = await this.prisma.billingRunSettings.findMany({ orderBy: { revision: 'desc' } });
+    const versions = rows.map(runSettings);
+    return { current: versions[0] ?? null, versions };
+  }
+
+  /** A new version of the run settings, made from the newest one the form saw (no default). */
+  async newRunSettings(
+    req: NewBillingRunSettingsRequest,
+    caller: FinanceCaller,
+  ): Promise<BillingRunSettingsPage> {
+    const { userId, displayName } = caller.principal;
+    await this.operations.run(
+      'BILLING_RUN_SETTINGS_VERSION',
+      req.requestId,
+      {
+        expectedRevision: req.expectedRevision,
+        issueDay: req.issueDay,
+        advanceBilledMonth: req.advanceBilledMonth,
+        arrearsBilledMonth: req.arrearsBilledMonth,
+        reason: req.reason,
+        actorId: userId,
+      },
+      async (tx) => {
+        // The counter row is locked until commit: the check below sees every committed revision.
+        const revision = await allocateFinanceSerial(tx, 'billing_revision');
+        const newest = await tx.billingRunSettings.findFirst({
+          orderBy: { revision: 'desc' },
+          select: { revision: true },
+        });
+        if ((newest ? Number(newest.revision) : null) !== req.expectedRevision)
+          throw concurrentChange();
+        const row = await tx.billingRunSettings.create({
+          data: {
+            revision,
+            issueDay: req.issueDay,
+            advanceBilledMonth: req.advanceBilledMonth,
+            arrearsBilledMonth: req.arrearsBilledMonth,
+            reason: req.reason,
+            recordedBy: userId,
+            recordedByName: displayName,
+            requestId: req.requestId,
+          },
+        });
+        return { id: row.id };
+      },
+    );
+    return this.runSettings();
+  }
+
   async listPriceList(): Promise<PriceListVersion[]> {
     const rows = await this.prisma.priceListVersion.findMany({
       orderBy: [{ currency: 'asc' }, { effectiveFrom: 'desc' }, { revision: 'desc' }],
@@ -361,6 +416,15 @@ export class BillingSettingsService {
 
   // --- terms effective for a month ------------------------------------------------------
 
+  /** One hotel in the current month (Prague): the same computation, never a second one. */
+  async hotelTerms(hotelId: string): Promise<HotelBillingTerms> {
+    const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' })
+      .format(new Date())
+      .slice(0, 7);
+    const page = await this.effectiveTerms(month, undefined, this.prisma, hotelId);
+    return { month: page.month, asOf: page.asOf, terms: page.items[0] ?? null };
+  }
+
   /**
    * The terms of every agreement for the month, as known at `asOf` (default: now). Read only, no
    * amounts: the effective version, the customer's details then, the price source, and what is
@@ -371,13 +435,14 @@ export class BillingSettingsService {
     m: string,
     asOfIso?: string,
     db: Prisma.TransactionClient = this.prisma,
+    hotelId?: string,
   ): Promise<EffectiveTermsPage> {
     const asOf = asOfIso ? new Date(asOfIso) : new Date();
     const start = monthStart(m);
     const end = monthEnd(m);
     const [agreements, prices, customerVersions] = await Promise.all([
       db.billingAgreement.findMany({
-        where: { createdAt: { lte: asOf } },
+        where: { createdAt: { lte: asOf }, ...(hotelId ? { hotelId } : {}) },
         orderBy: { serial: 'asc' },
         include: { versions: { include: { customer: true } } },
       }),
@@ -442,6 +507,8 @@ export class BillingSettingsService {
       const cv = customerVersions
         .filter((x) => x.customerId === v.customerId)
         .reduce<CustomerVersionRow | null>((b, x) => (!b || x.version > b.version ? x : b), null);
+      // Never guessed from the country: a customer without a chosen language is a visible blocker.
+      if (cv && cv.documentLanguage === null) gaps.push('CUSTOMER_LANGUAGE_MISSING');
       return {
         ...base,
         status: 'IN_EFFECT',
@@ -471,6 +538,7 @@ function customerData(c: BillingCustomerFields) {
     city: c.city,
     countryCode: c.countryCode,
     billingEmail: c.billingEmail,
+    documentLanguage: c.documentLanguage,
   };
 }
 
@@ -516,10 +584,32 @@ function customerVersion(v: CustomerVersionRow): BillingCustomerVersion {
       city: v.city,
       countryCode: v.countryCode,
       billingEmail: v.billingEmail,
+      documentLanguage:
+        v.documentLanguage as BillingCustomerVersion['customer']['documentLanguage'],
     },
     reason: v.reason,
     recordedAt: v.recordedAt.toISOString(),
     recordedByName: v.recordedByName,
+  };
+}
+
+function runSettings(r: {
+  revision: bigint;
+  issueDay: number;
+  advanceBilledMonth: string;
+  arrearsBilledMonth: string;
+  reason: string;
+  recordedAt: Date;
+  recordedByName: string;
+}): BillingRunSettings {
+  return {
+    revision: Number(r.revision),
+    issueDay: r.issueDay,
+    advanceBilledMonth: r.advanceBilledMonth as BillingRunSettings['advanceBilledMonth'],
+    arrearsBilledMonth: r.arrearsBilledMonth as BillingRunSettings['arrearsBilledMonth'],
+    reason: r.reason,
+    recordedAt: r.recordedAt.toISOString(),
+    recordedByName: r.recordedByName,
   };
 }
 

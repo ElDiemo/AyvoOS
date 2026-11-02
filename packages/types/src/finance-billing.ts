@@ -43,6 +43,11 @@ export type BillingTiming = z.infer<typeof billingTimingSchema>;
 
 // --- customers ------------------------------------------------------------------------------
 
+/** The language of a customer's PDF and invoice e-mail (doc 040 §12): chosen, never derived. */
+export const DOCUMENT_LANGUAGES = ['cs', 'en', 'de'] as const;
+export const documentLanguageSchema = z.enum(DOCUMENT_LANGUAGES);
+export type DocumentLanguage = z.infer<typeof documentLanguageSchema>;
+
 export const billingCustomerFieldsSchema = z
   .object({
     legalName: text(200),
@@ -58,6 +63,7 @@ export const billingCustomerFieldsSchema = z
       .trim()
       .regex(/^[A-Z]{2}$/, 'Země: dvě velká písmena (např. CZ).'),
     billingEmail: z.email('Neplatný e-mail pro faktury.').max(254),
+    documentLanguage: documentLanguageSchema,
   })
   .refine((c) => c.countryCode !== 'CZ' || c.companyId === null || /^\d{8}$/.test(c.companyId), {
     message: 'IČO v ČR má 8 číslic.',
@@ -99,6 +105,8 @@ export const billingCustomerVersionSchema = z.object({
     city: z.string(),
     countryCode: z.string(),
     billingEmail: z.string(),
+    /** null: a version recorded before the choice existed (blocks a new invoice). */
+    documentLanguage: documentLanguageSchema.nullable(),
   }),
   reason: z.string().nullable(),
   recordedAt: z.iso.datetime(),
@@ -249,6 +257,7 @@ export const BILLING_GAPS = [
   'NO_EFFECTIVE_VERSION',
   'PRICE_MISSING',
   'PARTIAL_PERIOD_RULE_MISSING',
+  'CUSTOMER_LANGUAGE_MISSING',
 ] as const;
 export const billingGapSchema = z.enum(BILLING_GAPS);
 export type BillingGap = z.infer<typeof billingGapSchema>;
@@ -275,6 +284,17 @@ export const effectiveTermsPageSchema = z.object({
 });
 export type EffectiveTermsPage = z.infer<typeof effectiveTermsPageSchema>;
 
+/**
+ * GET /api/admin/finance/billing/agreements/by-hotel/:hotelId (doc 044 U2): what applies to one hotel
+ * in the current month (Prague), from the same computation as `effective`. `terms` null: no agreement.
+ */
+export const hotelBillingTermsSchema = z.object({
+  month: billingMonthSchema,
+  asOf: z.iso.datetime(),
+  terms: effectiveTermsSchema.nullable(),
+});
+export type HotelBillingTerms = z.infer<typeof hotelBillingTermsSchema>;
+
 // --- the core's contract: hotels (read only) ---------------------------------------------------
 
 export const financeContractHotelSchema = z.object({
@@ -292,3 +312,41 @@ export type FinanceContractHotel = z.infer<typeof financeContractHotelSchema>;
 export const financeHotelLookupSchema = z.object({
   ids: z.array(z.uuid()).min(1).max(500),
 });
+
+/**
+ * The settings of the monthly invoicing run (owner 2026-11-02, doc 040 §11 and §13): the day an
+ * invoice is issued and which month it bills, relative to the month it is issued in, per the
+ * agreement's billing timing. Never a default — without a version the planned run is blocked. The
+ * due date is the agreement's payment terms. The newest revision applies.
+ */
+export const ADVANCE_BILLED_MONTHS = ['ISSUE_MONTH', 'NEXT_MONTH'] as const;
+export const ARREARS_BILLED_MONTHS = ['PREVIOUS_MONTH', 'ISSUE_MONTH'] as const;
+export const billingRunSettingsSchema = z.object({
+  revision: z.number().int(),
+  issueDay: z.number().int().min(1).max(28),
+  advanceBilledMonth: z.enum(ADVANCE_BILLED_MONTHS),
+  arrearsBilledMonth: z.enum(ARREARS_BILLED_MONTHS),
+  reason: z.string(),
+  recordedAt: z.iso.datetime(),
+  recordedByName: z.string(),
+});
+export type BillingRunSettings = z.infer<typeof billingRunSettingsSchema>;
+
+/** GET /api/admin/finance/billing/run-settings: the newest version (null = none yet) and history. */
+export const billingRunSettingsPageSchema = z.object({
+  current: billingRunSettingsSchema.nullable(),
+  versions: z.array(billingRunSettingsSchema),
+});
+export type BillingRunSettingsPage = z.infer<typeof billingRunSettingsPageSchema>;
+
+/** POST /api/admin/finance/billing/run-settings: a new version, made from the one the form saw. */
+export const newBillingRunSettingsSchema = z.strictObject({
+  requestId: z.uuid(),
+  /** The newest revision the form saw; null = none existed yet. */
+  expectedRevision: z.number().int().min(1).nullable(),
+  issueDay: z.number().int().min(1, 'Den 1–28.').max(28, 'Den 1–28.'),
+  advanceBilledMonth: z.enum(ADVANCE_BILLED_MONTHS),
+  arrearsBilledMonth: z.enum(ARREARS_BILLED_MONTHS),
+  reason: reasonSchema,
+});
+export type NewBillingRunSettingsRequest = z.infer<typeof newBillingRunSettingsSchema>;

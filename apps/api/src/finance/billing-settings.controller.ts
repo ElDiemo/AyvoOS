@@ -1,23 +1,27 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import {
   createBillingAgreementSchema,
   createBillingCustomerSchema,
   effectiveTermsQuerySchema,
   newBillingAgreementVersionSchema,
   newBillingCustomerVersionSchema,
+  newBillingRunSettingsSchema,
   newPriceListVersionSchema,
   type BillingAgreement,
   type BillingAgreementDetail,
   type BillingCustomer,
   type BillingCustomerDetail,
+  type BillingRunSettingsPage,
   type BillingSummary,
   type CreateBillingAgreementRequest,
   type CreateBillingCustomerRequest,
   type EffectiveTermsPage,
   type EffectiveTermsQuery,
   type FinanceContractHotel,
+  type HotelBillingTerms,
   type NewBillingAgreementVersionRequest,
   type NewBillingCustomerVersionRequest,
+  type NewBillingRunSettingsRequest,
   type NewPriceListVersionRequest,
   type PriceListVersion,
 } from '@ayvo/types';
@@ -44,6 +48,22 @@ export class BillingSettingsController {
     private readonly billing: BillingSettingsService,
     private readonly core: CoreClient,
   ) {}
+
+  /** The settings of the monthly invoicing run (doc 040 §11, §13). */
+  @RequirePermission('finance:billing_read')
+  @Get('run-settings')
+  runSettings(): Promise<BillingRunSettingsPage> {
+    return this.billing.runSettings();
+  }
+
+  @RequirePermission('finance:billing_manage')
+  @Post('run-settings')
+  newRunSettings(
+    @Body(new ZodValidationPipe(newBillingRunSettingsSchema)) body: NewBillingRunSettingsRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<BillingRunSettingsPage> {
+    return this.billing.newRunSettings(body, caller);
+  }
 
   /** The core's hotels to choose from (identity and address only). */
   @RequirePermission('finance:billing_read')
@@ -110,6 +130,13 @@ export class BillingSettingsController {
   @Get('agreements')
   agreements(): Promise<BillingAgreement[]> {
     return this.billing.listAgreements();
+  }
+
+  /** What applies to one hotel now (doc 044 U2): its card in Hotely reads this. */
+  @RequirePermission('finance:billing_read')
+  @Get('agreements/by-hotel/:hotelId')
+  hotelTerms(@Param('hotelId', ParseUUIDPipe) hotelId: string): Promise<HotelBillingTerms> {
+    return this.billing.hotelTerms(hotelId);
   }
 
   /** What applies to every agreement in a month, as known now or at `asOf` (no amounts). */

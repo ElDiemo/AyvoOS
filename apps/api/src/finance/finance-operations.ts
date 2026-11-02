@@ -20,9 +20,13 @@ export type FinanceOperationKind =
   | 'ISSUER_DEFAULT_ACCOUNT'
   | 'INVOICE_TEST_ISSUE'
   | 'INVOICE_TEST_CANCEL'
+  | 'INVOICE_TEST_RUN'
+  | 'INVOICE_DELIVERY_REQUEST'
+  | 'INVOICE_DELIVERY_RETRY'
   | 'PAYMENTS_SIMULATE'
   | 'PAYMENTS_IMPORT_BANK'
-  | 'PAYMENT_ALLOCATE';
+  | 'PAYMENT_ALLOCATE'
+  | 'BILLING_RUN_SETTINGS_VERSION';
 
 /**
  * The core's idempotency pattern (doc 018 §8) in Finance's own schema: one transaction inserts
