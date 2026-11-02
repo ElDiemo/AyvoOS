@@ -47,11 +47,17 @@ export type InvoiceSummary = z.infer<typeof invoiceSummarySchema>;
  * GET /api/admin/finance/invoices — an optional filter (doc 042 §3b): only the invoices with a line
  * of this hotel agreement (`invoice_lines.agreement_id`; at most one valid invoice per month).
  */
+export const INVOICES_OF_HOTEL_LIMIT = 20;
+
 export const invoiceListQuerySchema = z.object({
   agreement: z
     .string()
     .regex(/^BA-\d{6,}$/)
     .optional(),
+  /** Invoices with a line of exactly this hotel, newest first. */
+  hotelId: z.uuid().optional(),
+  /** The hotel's card asks for INVOICES_OF_HOTEL_LIMIT; the page of a hotel's invoices for all. */
+  limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 export type InvoiceListQuery = z.infer<typeof invoiceListQuerySchema>;
 

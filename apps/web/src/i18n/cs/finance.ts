@@ -240,8 +240,10 @@ export const financeCs = {
     create: 'Vystavit testovací fakturu',
     empty: 'Zatím žádné faktury.',
     ofAgreement: 'Faktury této smlouvy',
+    ofHotel: 'Zobrazeny jsou faktury jednoho hotelu.',
+    allOfCompany: 'Zobrazit všechny faktury',
     noneOfAgreement: 'Na tuto smlouvu zatím nebyla vystavena žádná faktura.',
-    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy a ceny',
+    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy',
     emptyFromAgreements:
       'Faktura vzniká ze smlouvy hotelu; smlouvy spravuje kolega s přístupem ke Smlouvám a cenám.',
     number: 'Číslo',
@@ -359,6 +361,7 @@ export const financeCs = {
       } as Record<string, string>,
     },
     newTitle: 'Testovací faktura',
+    technical: 'Technické údaje',
     language: 'Jazyk dokladu',
     languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
     languageLegacy: 'starší testovací doklad bez uloženého jazyka',
@@ -367,7 +370,7 @@ export const financeCs = {
     month: 'Fakturovaný měsíc',
     load: 'Načíst smlouvy',
     noAgreements: 'Pro tento měsíc nejsou žádné smlouvy v platnosti.',
-    toAgreements: 'Smlouvy a ceny →',
+    toAgreements: 'Smlouvy →',
     notInvoiceable: 'Nelze fakturovat',
     gaps: {
       PRICE_MISSING: 'chybí cena',

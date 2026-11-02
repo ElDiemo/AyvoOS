@@ -132,8 +132,17 @@ export class InvoicesService {
 
   async list(query: InvoiceListQuery = {}): Promise<InvoiceSummary[]> {
     const rows = await this.prisma.invoice.findMany({
-      where: query.agreement ? { lines: { some: { agreement: { code: query.agreement } } } } : {},
+      where: {
+        // Both filters at once: one object cannot hold `lines` twice, the second would replace the first.
+        AND: [
+          ...(query.agreement
+            ? [{ lines: { some: { agreement: { code: query.agreement } } } }]
+            : []),
+          ...(query.hotelId ? [{ lines: { some: { hotelId: query.hotelId } } }] : []),
+        ],
+      },
       orderBy: { serial: 'desc' },
+      ...(query.limit ? { take: query.limit } : {}),
       include: invoiceInclude,
     });
     return rows.map(summary);
