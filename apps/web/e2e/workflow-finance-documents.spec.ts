@@ -206,3 +206,59 @@ test.describe('without Finance permissions', () => {
     }
   });
 });
+
+test.describe('Doklad a dodavatel', () => {
+  test.use({ storageState: ADMIN_STATE });
+
+  for (const [width, height] of [
+    [1440, 900],
+    [390, 844],
+    [320, 700],
+  ] as const)
+    test(`a missing supplier at ${width}: its register opens beside the unfinished document; note and chosen PDF stay`, async ({
+      page,
+      context,
+    }) => {
+      await page.setViewportSize({ width, height });
+      await page.goto('/finance/documents/new');
+      const form = page.getByTestId('finance-receive');
+      const note = 'Rozepsaná poznámka (doc 044 U7)';
+      const field = form.locator('[name=number], input:not([type=file])').first();
+      await field.fill(note);
+      const file = form.locator('input[type=file]');
+      await file.setInputFiles({
+        name: 'synteticky-doklad.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from('%PDF-1.4 synteticky doklad'),
+      });
+      const chosen = () =>
+        file.evaluate((input: HTMLInputElement) => {
+          const f = input.files?.[0];
+          return f ? `${f.name}:${f.size}` : null;
+        });
+      const before = await chosen();
+      expect(before).toMatch(/^synteticky-doklad\.pdf:\d+$/);
+      const open = page.getByTestId('receive-open-suppliers');
+      await open.scrollIntoViewIfNeeded();
+      const [tab] = await Promise.all([context.waitForEvent('page'), open.click()]);
+      await tab.waitForLoadState();
+      expect(new URL(tab.url()).pathname).toBe('/warehouse/suppliers');
+      await tab.close();
+      await page.getByTestId('receive-refresh-suppliers').click();
+      await expect(field).toHaveValue(note);
+      expect(await chosen()).toBe(before);
+      // Nothing overflows sideways on a phone.
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        path: resolve(
+          import.meta.dirname,
+          `../../../docs/screenshots/finance/ux7-document-supplier-${width}.png`,
+        ),
+        fullPage: true,
+      });
+    });
+});
