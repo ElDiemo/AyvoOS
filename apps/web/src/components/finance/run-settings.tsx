@@ -10,7 +10,7 @@ import {
 } from '@ayvo/types';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAttempt } from '@/components/catalog/form-kit';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
@@ -143,27 +143,39 @@ export function RunSettingsForm({ current }: { current: BillingRunSettings | nul
 /**
  * The plan of an issue month by the settings: its issue date and, per billing timing, the billed
  * month — each a link that opens the run with them filled in. Nothing is issued here.
+ *
+ * A plan belongs to the month and the attempt it was asked for (review RUN112-R2): an answer or
+ * error of an earlier attempt is dropped and changing the month drops the shown plan.
  */
 export function RunPlanForm() {
   const [issueMonth, setIssueMonth] = useState('');
   const [plan, setPlan] = useState<TestRunPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The attempt whose answer may still be shown; any later attempt or change replaces it.
+  const attempt = useRef<object | null>(null);
+  const forget = () => {
+    attempt.current = null;
+    setPlan(null);
+    setError(null);
+  };
+  const current = plan && plan.issueMonth === issueMonth ? plan : null;
   return (
     <div className="flex flex-col gap-3" data-testid="run-plan">
       <form
         className="flex flex-wrap items-end gap-3"
         onSubmit={async (e) => {
           e.preventDefault();
-          setError(null);
+          forget();
+          const mine = {};
+          attempt.current = mine;
           try {
-            setPlan(
-              await apiGet(
-                `admin/finance/invoices/test-run/plan?issueMonth=${issueMonth}`,
-                testRunPlanSchema,
-              ),
+            const answer = await apiGet(
+              `admin/finance/invoices/test-run/plan?issueMonth=${issueMonth}`,
+              testRunPlanSchema,
             );
+            if (attempt.current === mine) setPlan(answer);
           } catch (err) {
-            setError(errorText(err));
+            if (attempt.current === mine) setError(errorText(err));
           }
         }}
       >
@@ -174,8 +186,8 @@ export function RunPlanForm() {
             required
             value={issueMonth}
             onChange={(e) => {
+              forget();
               setIssueMonth(e.target.value);
-              setPlan(null);
             }}
             className={inputClass}
             data-testid="run-plan-month"
@@ -185,25 +197,25 @@ export function RunPlanForm() {
           {t.plan}
         </button>
       </form>
-      {plan && plan.settingsRevision === null && (
+      {current && current.settingsRevision === null && (
         <p className="text-sm text-amber-800" data-testid="run-plan-missing">
           {t.missing}
         </p>
       )}
-      {plan && plan.issuedOn && (
+      {current && current.issuedOn && (
         <ul className="flex flex-col gap-1 text-sm" data-testid="run-plan-groups">
-          {plan.groups.map((g) => (
+          {current.groups.map((g) => (
             <li key={g.billingTiming}>
               <Link
                 href={`/finance/invoices/run?${new URLSearchParams({
                   month: g.billedMonth,
-                  issuedOn: plan.issuedOn!,
+                  issuedOn: current.issuedOn!,
                   timing: g.billingTiming,
                 }).toString()}`}
                 className="underline"
                 data-testid={`run-plan-${g.billingTiming}`}
               >
-                {t.group(t.timing[g.billingTiming]!, g.billedMonth, plan.issuedOn!)}
+                {t.group(t.timing[g.billingTiming]!, g.billedMonth, current.issuedOn!)}
               </Link>
             </li>
           ))}

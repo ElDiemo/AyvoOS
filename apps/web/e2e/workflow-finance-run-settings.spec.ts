@@ -63,4 +63,76 @@ test.describe('Nastavení měsíčního běhu', () => {
     if (await page.getByTestId('run-issued-on').isVisible())
       await expect(page.getByTestId('run-issued-on')).toHaveValue('2026-12-01');
   });
+
+  // --- reviews RUN112-R1, R2 (Codex 2026-11-02, reproductions taken over) ---------------------
+
+  test('RUN112-R2: a late plan or error of an earlier month is dropped', async ({ page }) => {
+    await page.goto('/finance/invoices/run');
+    let seen!: () => void, release!: () => void;
+    const arrived = new Promise<void>((r) => (seen = r));
+    const gate = new Promise<void>((r) => (release = r));
+    await page.route(
+      '**/api/admin/finance/invoices/test-run/plan?issueMonth=2026-12',
+      async (route) => {
+        seen();
+        await gate;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            issueMonth: '2026-12',
+            settingsRevision: 1,
+            issuedOn: '2026-12-01',
+            groups: [
+              { billingTiming: 'ADVANCE', billedMonth: '2026-12' },
+              { billingTiming: 'ARREARS', billedMonth: '2026-11' },
+            ],
+          }),
+        });
+      },
+    );
+    await page.getByTestId('run-plan-month').fill('2026-12');
+    await page.getByTestId('run-plan-load').click();
+    await arrived;
+    await page.getByTestId('run-plan-month').fill('2027-01');
+    const late = page.waitForResponse((r) => r.url().includes('issueMonth=2026-12'));
+    release();
+    await (await late).finished();
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    );
+    await expect(page.getByTestId('run-plan-ADVANCE')).toHaveCount(0);
+    await expect(page.getByTestId('run-plan-month')).toHaveValue('2027-01');
+
+    // A late error of an earlier attempt never replaces a newer plan.
+    let failSeen!: () => void, failRelease!: () => void;
+    const failArrived = new Promise<void>((r) => (failSeen = r));
+    const failGate = new Promise<void>((r) => (failRelease = r));
+    await page.route(
+      '**/api/admin/finance/invoices/test-run/plan?issueMonth=2027-02',
+      async (route) => {
+        failSeen();
+        await failGate;
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ statusCode: 503, code: 'X', message: 'pozdní chyba (test)' }),
+        });
+      },
+    );
+    await page.getByTestId('run-plan-month').fill('2027-02');
+    await page.getByTestId('run-plan-load').click();
+    await failArrived;
+    await page.getByTestId('run-plan-month').fill('2027-01');
+    await page.getByTestId('run-plan-load').click();
+    await expect(page.getByTestId('run-plan-ADVANCE')).toContainText('2027-01');
+    const lateError = page.waitForResponse((r) => r.url().includes('issueMonth=2027-02'));
+    failRelease();
+    await (await lateError).finished();
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    );
+    await expect(page.getByTestId('run-plan')).not.toContainText('pozdní chyba');
+    await expect(page.getByTestId('run-plan-ADVANCE')).toContainText('2027-01');
+  });
 });
