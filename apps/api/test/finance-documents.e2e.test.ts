@@ -503,6 +503,9 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
     const down = await createFinanceTestApp({ coreUrl: 'http://127.0.0.1:9' });
     try {
       await down.get('/api/admin/finance/health/live').expect(200);
+      expect((await down.get('/api/admin/finance/health/capabilities').expect(200)).body).toEqual({
+        documentLanguage: true,
+      });
       expect((await down.get('/api/admin/finance/health/ready').expect(503)).body.code).toBe(
         'FINANCE_DEPENDENCY_UNAVAILABLE',
       );
@@ -541,6 +544,7 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_read' },
         { roleCode: 'ADMIN', permissionCode: 'finance:exports_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:invoices_read' },
+        { roleCode: 'ADMIN', permissionCode: 'finance:invoices_send' },
         { roleCode: 'ADMIN', permissionCode: 'finance:invoices_test' },
         { roleCode: 'ADMIN', permissionCode: 'finance:issuer_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:payments_manage' },

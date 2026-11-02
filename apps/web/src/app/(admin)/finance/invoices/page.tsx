@@ -30,13 +30,22 @@ export default async function InvoicesPage() {
         subtitle={t.subtitle}
         actions={
           canIssue ? (
-            <Link
-              href="/finance/invoices/new"
-              className={buttonClass.primary}
-              data-testid="invoice-new"
-            >
-              {t.create}
-            </Link>
+            <>
+              <Link
+                href="/finance/invoices/run"
+                className={buttonClass.secondary}
+                data-testid="invoice-run"
+              >
+                {t.run.open}
+              </Link>
+              <Link
+                href="/finance/invoices/new"
+                className={buttonClass.primary}
+                data-testid="invoice-new"
+              >
+                {t.create}
+              </Link>
+            </>
           ) : undefined
         }
       />

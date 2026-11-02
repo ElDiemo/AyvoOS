@@ -43,6 +43,11 @@ export type BillingTiming = z.infer<typeof billingTimingSchema>;
 
 // --- customers ------------------------------------------------------------------------------
 
+/** The language of a customer's PDF and invoice e-mail (doc 040 §12): chosen, never derived. */
+export const DOCUMENT_LANGUAGES = ['cs', 'en', 'de'] as const;
+export const documentLanguageSchema = z.enum(DOCUMENT_LANGUAGES);
+export type DocumentLanguage = z.infer<typeof documentLanguageSchema>;
+
 export const billingCustomerFieldsSchema = z
   .object({
     legalName: text(200),
@@ -58,6 +63,7 @@ export const billingCustomerFieldsSchema = z
       .trim()
       .regex(/^[A-Z]{2}$/, 'Země: dvě velká písmena (např. CZ).'),
     billingEmail: z.email('Neplatný e-mail pro faktury.').max(254),
+    documentLanguage: documentLanguageSchema,
   })
   .refine((c) => c.countryCode !== 'CZ' || c.companyId === null || /^\d{8}$/.test(c.companyId), {
     message: 'IČO v ČR má 8 číslic.',
@@ -99,6 +105,8 @@ export const billingCustomerVersionSchema = z.object({
     city: z.string(),
     countryCode: z.string(),
     billingEmail: z.string(),
+    /** null: a version recorded before the choice existed (blocks a new invoice). */
+    documentLanguage: documentLanguageSchema.nullable(),
   }),
   reason: z.string().nullable(),
   recordedAt: z.iso.datetime(),
@@ -249,6 +257,7 @@ export const BILLING_GAPS = [
   'NO_EFFECTIVE_VERSION',
   'PRICE_MISSING',
   'PARTIAL_PERIOD_RULE_MISSING',
+  'CUSTOMER_LANGUAGE_MISSING',
 ] as const;
 export const billingGapSchema = z.enum(BILLING_GAPS);
 export type BillingGap = z.infer<typeof billingGapSchema>;

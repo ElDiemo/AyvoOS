@@ -111,6 +111,7 @@ test.describe('Testovací faktury', () => {
             city: 'Brno',
             countryCode: 'CZ',
             billingEmail: 'fakturace@hotely.test',
+            documentLanguage: 'cs',
           },
         },
       }),
@@ -241,6 +242,7 @@ test.describe('Testovací faktury', () => {
             city: 'Ostrava',
             countryCode: 'CZ',
             billingEmail: 'fakturace@platby.test',
+            documentLanguage: 'cs',
           },
         },
       }),
@@ -450,6 +452,7 @@ test.describe('Ukázka: řetězec fakturace', () => {
       await form.locator('[name=postalCode]').fill('110 00');
       await form.locator('[name=city]').fill('Praha');
       await form.locator('[name=billingEmail]').fill('fakturace@ukazka.test');
+      await form.locator('[name=documentLanguage]').selectOption('cs');
       await form.getByTestId('customer-save').click();
       await expect(form.getByRole('status')).toHaveText('Uloženo.');
       await expect(page.getByTestId('billing-customers')).toContainText(name);
