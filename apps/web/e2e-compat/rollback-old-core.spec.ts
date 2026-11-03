@@ -3,12 +3,19 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { e2eRows } from '../e2e/e2e-db';
 
 /**
  * A real return (doc 040 §12a), which also takes the API back: on this release's migrated database,
  * real processes of the earlier API and web, first with this Finance (after `--rollback`), then with
  * the earlier one (after `--finance-rollback`). Synthetic data; writes nothing but sign-in state.
+ * Only after the manual preflight of doc 041 §8b found nothing an earlier web does not know (the
+ * refused case: zz-rollback-refused.spec.ts).
  */
+const ROLLBACK_PREFLIGHT = readFileSync(
+  resolve(import.meta.dirname, '../../../scripts/sql/finance-payments-rollback-preflight.sql'),
+  'utf8',
+);
 const OLD_ROOT = process.env.AYVO_COMPAT_OLD_ROOT!;
 const OLD_API = 'http://localhost:4201';
 const OLD_WEB = 'http://localhost:3200';
@@ -71,6 +78,8 @@ async function pages(page: Page, state: string) {
 test('the earlier API and web run on the migrated database, with this and with the earlier Finance', async ({
   page,
 }) => {
+  // The manual preflight first: the return goes on only with no row.
+  expect(await e2eRows(ROLLBACK_PREFLIGHT)).toEqual([]);
   const apiEnv = envOf('dist/main.js');
   const financeEnv = envOf('dist/finance/main.js');
   try {
