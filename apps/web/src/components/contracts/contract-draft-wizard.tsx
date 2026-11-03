@@ -361,20 +361,23 @@ export function HotelMismatch({
   hotel,
   acknowledged,
   onAcknowledge,
+  signed = false,
 }: {
   draft: HotelIdentity;
   hotel: HotelIdentity;
   acknowledged: boolean;
   onAcknowledge: (v: boolean) => void;
+  /** Against a signed revision: never acknowledged, only refused (review SIGN122-R2). */
+  signed?: boolean;
 }) {
   return (
     <div
       className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
       data-testid="hotel-mismatch"
     >
-      <p className="font-semibold">{t.identity.title}</p>
+      <p className="font-semibold">{signed ? t.identity.signedTitle : t.identity.title}</p>
       <dl className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-[auto_1fr]">
-        <dt className="text-amber-800">{t.identity.draft}</dt>
+        <dt className="text-amber-800">{signed ? t.identity.signedDraft : t.identity.draft}</dt>
         <dd className="wrap-anywhere">
           {draft.name || '—'}, {draft.address || '—'}
         </dd>
@@ -383,16 +386,20 @@ export function HotelMismatch({
           {hotel.name}, {hotel.address}
         </dd>
       </dl>
-      <label className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          className="mt-1"
-          checked={acknowledged}
-          onChange={(e) => onAcknowledge(e.target.checked)}
-          data-testid="hotel-mismatch-ack"
-        />
-        <span>{t.identity.acknowledge}</span>
-      </label>
+      {signed ? (
+        <p data-testid="hotel-mismatch-signed">{t.identity.signedRefused}</p>
+      ) : (
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={acknowledged}
+            onChange={(e) => onAcknowledge(e.target.checked)}
+            data-testid="hotel-mismatch-ack"
+          />
+          <span>{t.identity.acknowledge}</span>
+        </label>
+      )}
     </div>
   );
 }

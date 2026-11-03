@@ -140,7 +140,13 @@ Proposed with the review of #121 (CD121-3); a separate draft PR.
 
 - **Upload:** `POST drafts/:code/signed`, multipart with `requestId`, `expectedVersion`,
   `revision`, `signedOn`, `confirm=true` and one `file`.
-  - Only a PDF, recognised by content (`%PDF-`), never by name or type.
+  - Only a **real, complete PDF with at least one page** (review SIGN122-R1), recognised by content,
+    never by name or type:
+    - the `%PDF-` header and `%%EOF` at the end (a truncated upload is refused);
+    - the runtime's existing `pdf-lib` (as for label artwork) parses a copy that is never saved, and
+      the PDF must have a page.
+    - The stored bytes and any signatures in them stay exactly as uploaded.
+    - No new dependency.
   - At most `SUPPLIER_DOCUMENT_MAX_BYTES` (the existing, verified limit of supplier documents);
     one file, held in memory.
   - Only for the **current** revision of a draft that is not removed, and only once per revision.
@@ -170,3 +176,10 @@ Proposed with the review of #121 (CD121-3); a separate draft PR.
   - A draft with a signed original is never removed and its hotel link never changes.
   - A change after signing is a new revision (an amendment proposal); its own signed original can
     be uploaded later.
+- **A draft signed without a hotel (review SIGN122-R2):**
+  - The first link to an existing hotel stays possible: `sales:manage` + `hotels:read`, with a
+    reason, audited (`from: null`, `to`, `signedRevisions`), under the same row lock.
+  - Only to the hotel every signed revision names (name and address). An acknowledgement never
+    overrides it (`HOTEL_NOT_SIGNED_HOTEL`), and a later amendment naming another hotel does not
+    count.
+  - After that, and for a draft signed with a hotel, the link never changes (API and DB).

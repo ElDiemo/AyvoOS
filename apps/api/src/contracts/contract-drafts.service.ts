@@ -272,7 +272,13 @@ export class ContractDraftsService {
         actorName: e.actor.displayName,
         reason: e.reason,
       })),
-      canLinkHotel: canUseHotels(p) && row.removedAt === null && signed.length === 0,
+      // After signing only the first link (to the hotel the signed revision names).
+      canLinkHotel:
+        canUseHotels(p) && row.removedAt === null && (signed.length === 0 || row.hotelId === null),
+      signedHotel:
+        signed.length > 0
+          ? draftIdentity(fieldsOf(revisions.find((r) => r.revision === signed[0]!.revision)!))
+          : null,
       hotelIdentity: linked && hotelIdentity(linked),
       signed: signed.map((x) => ({
         revision: x.revision,
@@ -487,16 +493,38 @@ export class ContractDraftsService {
         const hotel = await this.hotelByCode(tx, req.hotelCode, p);
         if (row.hotelId === hotel.id)
           throw domainError(409, 'HOTEL_ALREADY_LINKED', 'Návrh už k tomuto hotelu připojený je.');
-        if (await tx.contractSignedDocument.count({ where: { draftId: row.id } }))
-          throw signedLocked();
         const current = await tx.contractDraftRevision.findUniqueOrThrow({
           where: { draftId_revision: { draftId: row.id, revision: row.currentRevision } },
         });
-        assertSameHotel(
-          draftIdentity(current),
-          { code: hotel.code, ...hotelIdentity(hotel) },
-          req.acknowledgeMismatch,
-        );
+        const signed = await tx.contractSignedDocument.findMany({
+          where: { draftId: row.id },
+          include: { revisionRow: true },
+        });
+        if (signed.length > 0) {
+          // Signed: the existing link never changes; the FIRST link only to the hotel every signed
+          // revision names exactly — no acknowledgement overrides it (review SIGN122-R2).
+          if (row.hotelId) throw signedLocked();
+          for (const x of signed) {
+            const named = draftIdentity(x.revisionRow);
+            if (!hotelIdentityMatches(named, hotelIdentity(hotel)))
+              throw domainErrorWithDetails(
+                409,
+                'HOTEL_NOT_SIGNED_HOTEL',
+                'Podepsaná revize uvádí jiný hotel. Podepsaný návrh lze připojit jen k hotelu, který uvádí.',
+                {
+                  signedRevision: x.revision,
+                  draft: named,
+                  hotel: { code: hotel.code, ...hotelIdentity(hotel) },
+                },
+              );
+          }
+        } else {
+          assertSameHotel(
+            draftIdentity(current),
+            { code: hotel.code, ...hotelIdentity(hotel) },
+            req.acknowledgeMismatch,
+          );
+        }
         const previous = row.hotelId ? await this.hotels.byId(row.hotelId, tx) : null;
         await this.next(tx, row, p, { hotelId: hotel.id });
         await tx.contractDraftEvent.create({
@@ -508,6 +536,7 @@ export class ContractDraftsService {
             details: {
               from: previous?.code ?? null,
               to: hotel.code,
+              signedRevisions: signed.map((x) => x.revision),
               mismatchAcknowledged: !hotelIdentityMatches(
                 draftIdentity(current),
                 hotelIdentity(hotel),

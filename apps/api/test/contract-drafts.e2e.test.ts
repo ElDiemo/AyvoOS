@@ -395,6 +395,7 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
     expect(audit.details).toEqual({
       from: other.code,
       to: right.code,
+      signedRevisions: [],
       mismatchAcknowledged: false,
     });
     expect(
@@ -659,6 +660,95 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
     // Never both: signed and removed.
     expect(after.signed.length > 0 && after.removed).toBe(false);
     expect(after.signed.length > 0 || after.removed).toBe(true);
+  });
+
+  it('signed at a prospect without a hotel: the first link only to the hotel the signed revision names; then visible from the hotel; never changed after (SIGN122-R2)', async () => {
+    const p = await prospect(admin, `Akvizice Podepsaná ${tag}`);
+    const named = await hotel(`Hotel Podepsaný ${tag}`);
+    const other = await hotel(`Hotel Cizí Podpis ${tag}`);
+    let d = (
+      await post(admin, '', {
+        prospectCode: p.code,
+        hotelCode: null,
+        fields: fields({
+          hotelName: `Hotel Podepsaný ${tag}`,
+          hotelAddress: 'Hotelová 9, 602 00 Brno',
+        }),
+      })
+    ).body as ContractDraftDetail;
+    const pdf = await renderContractPdf(
+      contractDocument('cs-b2b-1', {
+        code: d.code,
+        revision: 1,
+        savedOn: '2026-11-02',
+        fields: fields(),
+      }),
+    );
+    d = (
+      await http()
+        .post(`${D}/${d.code}/signed`)
+        .set('Cookie', admin)
+        .field('requestId', randomUUID())
+        .field('expectedVersion', String(d.version))
+        .field('revision', '1')
+        .field('signedOn', '2026-11-02')
+        .field('confirm', 'true')
+        .attach('file', pdf, 'podepsano.pdf')
+        .expect(201)
+    ).body as ContractDraftDetail;
+    expect(d).toMatchObject({
+      hotel: null,
+      canLinkHotel: true,
+      signedHotel: { name: `Hotel Podepsaný ${tag}`, address: 'Hotelová 9, 602 00 Brno' },
+    });
+    // An amendment naming another hotel does not change what the signed revision names.
+    d = (
+      await post(admin, `/${d.code}/revisions`, {
+        expectedVersion: d.version,
+        reason: 'Dodatek (test)',
+        fields: fields({
+          hotelName: `Hotel Cizí Podpis ${tag}`,
+          hotelAddress: 'Hotelová 9, 602 00 Brno',
+        }),
+      }).expect(201)
+    ).body as ContractDraftDetail;
+    const link = (hotelCode: string, over: object = {}) =>
+      post(admin, `/${d.code}/hotel`, {
+        expectedVersion: d.version,
+        hotelCode,
+        reason: 'Akvizice je hotel (test)',
+        ...over,
+      });
+    // Not the signed hotel: refused, even acknowledged (the amendment names it — irrelevant).
+    for (const over of [{}, { acknowledgeMismatch: true }]) {
+      const r = await link(other.code, over);
+      expect([r.status, r.body.code]).toEqual([409, 'HOTEL_NOT_SIGNED_HOTEL']);
+      expect(r.body.details).toMatchObject({ signedRevision: 1, hotel: { code: other.code } });
+    }
+    // The signed hotel: linked by hand, audited.
+    d = (await link(named.code).expect(200)).body as ContractDraftDetail;
+    expect(d).toMatchObject({ hotel: { code: named.code }, canLinkHotel: false });
+    const audit = await t.prisma.contractDraftEvent.findFirstOrThrow({
+      where: { draft: { code: d.code }, kind: 'HOTEL_LINKED' },
+    });
+    expect(audit.details).toMatchObject({ from: null, to: named.code, signedRevisions: [1] });
+    // Visible from the hotel, with its signed original.
+    const atHotel = (await get(admin, `?hotel=${named.code}`).expect(200))
+      .body as ContractDraftSummary[];
+    expect(atHotel.map((x) => x.code)).toEqual([d.code]);
+    expect(
+      ((await get(admin, `/${d.code}`)).body as ContractDraftDetail).signed.map((x) => x.revision),
+    ).toEqual([1]);
+    await get(admin, `/${d.code}/signed/1`).expect(200);
+    // Never changed afterwards — by the API or directly in the database.
+    const again = await link(other.code, { acknowledgeMismatch: true });
+    expect([again.status, again.body.code]).toEqual([409, 'CONTRACT_DRAFT_SIGNED']);
+    const otherId = (await t.prisma.hotel.findFirstOrThrow({ where: { code: other.code } })).id;
+    await expect(
+      t.prisma.$executeRawUnsafe(
+        `UPDATE contract_drafts SET hotel_id = '${otherId}', version = version + 1 WHERE code = '${d.code}'`,
+      ),
+    ).rejects.toThrow();
   });
 });
 

@@ -219,6 +219,8 @@ export const contractDraftDetailSchema = contractDraftSummarySchema.extend({
   hotelMismatch: z.boolean(),
   /** Signed originals, newest revision first. Any of them: never removed, hotel link fixed. */
   signed: z.array(contractSignedDocumentSchema),
+  /** The hotel the newest signed revision names: a signed draft is linked only to it. */
+  signedHotel: z.object({ name: z.string(), address: z.string() }).nullable(),
   /** The current revision may take its signed original (not removed, not signed yet). */
   canUploadSigned: z.boolean(),
 });

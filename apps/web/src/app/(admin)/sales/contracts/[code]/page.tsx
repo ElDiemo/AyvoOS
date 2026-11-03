@@ -223,14 +223,19 @@ export default async function ContractDraftPage({
         )}
 
         {d.canLinkHotel && hotels.length > 0 && (
-          <Card title={d.hotel ? t.link.correct : t.link.open} testId="contract-link">
+          <Card
+            title={d.signedHotel ? t.link.signed : d.hotel ? t.link.correct : t.link.open}
+            testId="contract-link"
+          >
+            {d.signedHotel && <p className="mb-3 text-xs text-stone-500">{t.link.signedHelp}</p>}
             <LinkHotel
               key={d.version}
               code={d.code}
               version={d.version}
               hotels={hotels}
-              draft={{ name: f.hotelName, address: f.hotelAddress }}
+              draft={d.signedHotel ?? { name: f.hotelName, address: f.hotelAddress }}
               linked={d.hotel?.code ?? null}
+              signed={!!d.signedHotel}
             />
           </Card>
         )}

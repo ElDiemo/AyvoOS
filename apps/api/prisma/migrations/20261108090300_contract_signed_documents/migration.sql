@@ -1,7 +1,7 @@
 -- The signed original of a contract draft (ADR 0043 §6, doc 045 §7): a PDF signed outside AYVO and
 -- uploaded by hand, kept as it is in the private FileStorage. No signature is verified. One per
 -- draft revision; it locks that revision: never replaced or deleted, the draft never removed and
--- its hotel link never changed after it. A change after signing is a new revision (an amendment
+-- an existing hotel link never changed after it (a first link stays possible). A change after signing is a new revision (an amendment
 -- proposal); the signed one stays.
 CREATE TABLE "contract_signed_documents" (
     "id" UUID NOT NULL DEFAULT uuidv7(),
@@ -50,12 +50,15 @@ CREATE TRIGGER "contract_signed_documents_immutable" BEFORE UPDATE OR DELETE ON 
 CREATE TRIGGER "contract_signed_documents_no_truncate" BEFORE TRUNCATE ON "contract_signed_documents"
   FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
 
--- A draft with a signed original is never removed and its hotel link never changes.
+-- A draft with a signed original is never removed and an existing hotel link never changes; the
+-- first link of a draft signed without a hotel stays possible (the API requires the hotel the
+-- signed revision names, review SIGN122-R2).
 CREATE FUNCTION contract_drafts_signed_lock() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 BEGIN
-  IF (NEW."removed_at" IS NOT NULL OR NEW."hotel_id" IS DISTINCT FROM OLD."hotel_id")
+  IF (NEW."removed_at" IS NOT NULL
+      OR (OLD."hotel_id" IS NOT NULL AND NEW."hotel_id" IS DISTINCT FROM OLD."hotel_id"))
      AND EXISTS (SELECT 1 FROM "contract_signed_documents" WHERE "draft_id" = OLD."id") THEN
     RAISE EXCEPTION 'AYVO: a signed contract draft is never removed and its hotel never changes'
       USING ERRCODE = 'restrict_violation';

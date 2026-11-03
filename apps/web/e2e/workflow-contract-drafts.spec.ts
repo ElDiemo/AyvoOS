@@ -297,6 +297,107 @@ test.describe.serial('Návrhy smluv', () => {
     );
   });
 
+  test('signed at a prospect without a hotel → first link only to the signed hotel → the original visible from the hotel', async ({
+    page,
+  }) => {
+    const r = page.request;
+    const name = `Hotel Podpis ${run}`;
+    const hotelBody = (hotelName: string, phone: string) => ({
+      requestId: crypto.randomUUID(),
+      name: hotelName,
+      addressLine1: 'Podpisová 5',
+      addressLine2: null,
+      postalCode: '602 00',
+      city: 'Brno',
+      countryCode: 'CZ',
+      contactName: 'Recepce',
+      contactPhone: phone,
+      contactEmail: 'recepce@navrh.test',
+      fulfillmentSiteId: INITIAL_SITE_ID,
+    });
+    const signedHotel = (
+      await json<{ code: string }>(
+        await r.post('/api/admin/hotels', { data: hotelBody(name, '+420 500 000 049') }),
+      )
+    ).code;
+    const wrongHotel = (
+      await json<{ code: string }>(
+        await r.post('/api/admin/hotels', {
+          data: hotelBody(`Hotel Omyl ${run}`, '+420 500 000 050'),
+        }),
+      )
+    ).code;
+    const created = await json<{ code: string }>(
+      await r.post('/api/admin/contracts/drafts', {
+        data: {
+          requestId: crypto.randomUUID(),
+          prospectCode: prospect,
+          hotelCode: null,
+          fields: {
+            counterpartyName: `Podpisová společnost ${run} s.r.o.`,
+            counterpartyCompanyId: null,
+            counterpartyAddress: null,
+            representativeName: null,
+            representativeRole: null,
+            hotelName: name,
+            hotelAddress: 'Podpisová 5, 602 00 Brno',
+            rooms: 30,
+            pricePerRoomMonth: '100.00',
+            currency: 'CZK',
+            startOn: '2027-01-01',
+            billingTiming: 'ADVANCE',
+            paymentTermsDays: 14,
+            holders: 'WITH',
+            holdersOwnership: 'AYVO',
+          },
+        },
+      }),
+    );
+    const code = created.code;
+    // The signed original, uploaded in the browser (the printed PDF stands in for the scan).
+    await page.goto(`/sales/contracts/${code}`);
+    const signedPdf = await (
+      await r.get(`/api/admin/contracts/drafts/${code}/revisions/1/pdf`)
+    ).body();
+    const card = page.getByTestId('contract-signed');
+    await card.getByTestId('contract-upload-open').click();
+    const form = card.getByTestId('contract-upload-signed');
+    await form.locator('[name=file]').setInputFiles({
+      name: 'podepsano.pdf',
+      mimeType: 'application/pdf',
+      buffer: signedPdf,
+    });
+    await form.locator('[name=signedOn]').fill('2026-11-02');
+    await form.getByTestId('contract-upload-confirm').check();
+    await form.getByTestId('contract-upload-submit').click();
+    await expect(card.getByTestId('contract-signed-list')).toContainText('revize 1');
+
+    // The first link: another hotel is refused without any way to acknowledge it.
+    const link = page.getByTestId('contract-link');
+    await expect(link.getByRole('heading')).toHaveText('Připojit podepsaný návrh k hotelu');
+    await link.locator('[name=hotelCode]').selectOption(wrongHotel);
+    await link.locator('[name=reason]').fill('Akvizice je hotel (test)');
+    await expect(link.getByTestId('hotel-mismatch-signed')).toBeVisible();
+    await expect(link.getByTestId('hotel-mismatch-ack')).toHaveCount(0);
+    await expect(link.getByTestId('contract-link-submit')).toBeDisabled();
+    await link.locator('[name=hotelCode]').selectOption(signedHotel);
+    await expect(link.getByTestId('hotel-mismatch')).toHaveCount(0);
+    await link.getByTestId('contract-link-submit').click();
+    await expect(page.getByTestId('contract-hotel')).toHaveText(name);
+    await expect(page.getByTestId('contract-link')).toHaveCount(0);
+
+    // From the hotel's card to the draft and its signed original.
+    await page.goto(`/hotels/${signedHotel}`);
+    await page.getByTestId('contract-drafts').getByRole('link', { name: code }).click();
+    await expect(page.getByTestId('contract-signed-list')).toContainText('revize 1');
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId('contract-signed-download-1').click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(`${code}-r1-PODEPSANO.pdf`);
+    await shot(page, 'contract-signed-from-hotel', [1440]);
+  });
+
   test("another salesperson never sees the draft or the prospect's drafts", async ({
     page,
     browser,

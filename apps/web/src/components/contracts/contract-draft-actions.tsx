@@ -116,12 +116,15 @@ export function LinkHotel({
   hotels,
   draft,
   linked,
+  signed = false,
 }: {
   code: string;
   version: number;
   hotels: (HotelIdentity & { code: string })[];
+  /** The hotel the draft names — for a signed draft, the one its signed revision names. */
   draft: HotelIdentity;
   linked: string | null;
+  signed?: boolean;
 }) {
   const [hotel, setHotel] = useState('');
   const [reason, setReason] = useState('');
@@ -139,7 +142,7 @@ export function LinkHotel({
           expectedVersion: version,
           hotelCode: hotel,
           reason: reason.trim(),
-          acknowledgeMismatch: mismatch && ack,
+          acknowledgeMismatch: !signed && mismatch && ack,
         });
       }}
     >
@@ -168,7 +171,13 @@ export function LinkHotel({
         </select>
       </label>
       {mismatch && chosen && (
-        <HotelMismatch draft={draft} hotel={chosen} acknowledged={ack} onAcknowledge={setAck} />
+        <HotelMismatch
+          draft={draft}
+          hotel={chosen}
+          acknowledged={ack}
+          onAcknowledge={setAck}
+          signed={signed}
+        />
       )}
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t.link.reason}
@@ -187,7 +196,7 @@ export function LinkHotel({
         <button
           type="submit"
           className={buttonClass.secondary}
-          disabled={busy || !hotel || !reason.trim() || (mismatch && !ack)}
+          disabled={busy || !hotel || !reason.trim() || (mismatch && (signed || !ack))}
           data-testid="contract-link-submit"
         >
           {t.link.submit}
