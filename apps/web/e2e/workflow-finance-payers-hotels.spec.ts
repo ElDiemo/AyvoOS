@@ -126,6 +126,9 @@ test.describe.serial('Karta hotelu a Finance', () => {
     await form.locator('[name=effectiveFrom]').fill('2026-01');
     await form.locator('[name=validFrom]').fill('2026-01-01');
     await form.locator('[name=reason]').fill('Smlouva (syntetická)');
+    // Chosen explicitly: a new agreement preselects neither (review SMOKE-2).
+    await form.locator('[name=billingTiming]').selectOption('ARREARS');
+    await form.locator('[name=paymentTermsDays]').fill('14');
     await form.getByRole('button').first().click();
     await expect(form.getByRole('status')).toHaveText('Uloženo.');
 

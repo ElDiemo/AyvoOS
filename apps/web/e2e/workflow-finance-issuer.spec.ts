@@ -359,6 +359,10 @@ test.describe('Testovací faktury', () => {
     await page.getByTestId(`payment-${code}-open`).click();
     await expect(page.getByTestId(`payment-${code}-suggestions`)).toContainText(invoice.number);
     const allocate = page.getByTestId(`allocate-${code}`);
+    // The unallocated amount is offered as typed in Czech, and saved as such (review SMOKE-1).
+    await expect(allocate.locator('input[inputmode=decimal]')).toHaveValue(
+      /^\d{1,3}( \d{3})*,\d{2}$/,
+    );
     await allocate.getByTestId(`allocate-${code}-reason`).fill('Bez VS – ověřeno s hotelem (test)');
     await allocate.getByTestId(`allocate-${code}-submit`).click();
     await expect(page.getByTestId(`payment-${code}-state`)).toHaveText('přiřazeno');
@@ -482,6 +486,9 @@ test.describe('Ukázka: řetězec fakturace', () => {
       await form.locator('[name=billedRooms]').fill(rooms);
       await form.locator('[name=ownPrice]').fill(price);
       await form.locator('[name=reason]').fill('Smlouva podepsána (ukázka)');
+      // Chosen explicitly: a new agreement preselects neither (review SMOKE-2).
+      await form.locator('[name=billingTiming]').selectOption('ARREARS');
+      await form.locator('[name=paymentTermsDays]').fill('14');
       await form.getByTestId('agreement-save').click();
       return form;
     };
@@ -489,6 +496,9 @@ test.describe('Ukázka: řetězec fakturace', () => {
     const invalid = await newAgreement(sever, codes[0]!, `Alfa Hotely ${run}`, '0', '300.00');
     await expect(invalid.getByRole('alert')).toBeVisible();
     await invalid.locator('[name=billedRooms]').fill('10');
+    // Chosen explicitly: a new agreement preselects neither (review SMOKE-2).
+    await invalid.locator('[name=billingTiming]').selectOption('ARREARS');
+    await invalid.locator('[name=paymentTermsDays]').fill('14');
     await invalid.getByTestId('agreement-save').click();
     await expect(
       page.getByTestId('billing-agreements').locator('ul li', { hasText: sever }),
@@ -556,10 +566,16 @@ test.describe('Ukázka: řetězec fakturace', () => {
     // The DEV simulation is a closed block below the list (doc 042, UI-03).
     await page.getByTestId('payments-simulation').locator('summary').click();
     const statement = page.getByTestId('simulate-statement');
-    await statement.getByTestId('simulate-amount-1').fill('1000.00');
+    // Amounts typed in Czech; an unclear one is refused here and nothing is loaded (review SMOKE-1).
+    await statement.getByTestId('simulate-amount-1').fill('1.000,00');
     await statement.getByTestId('simulate-vs-1').fill(vs);
     await statement.getByTestId('simulate-add').click();
-    await statement.getByTestId('simulate-amount-2').fill('8172.80');
+    await statement.getByTestId('simulate-amount-2').fill('8 172,80');
+    await statement.getByTestId('simulate-submit').click();
+    await expect(statement.getByRole('alert')).toHaveText(
+      'Částku zadejte jako 1 500,50 (nejvýš 2 desetinná místa). Nic se neuložilo.',
+    );
+    await statement.getByTestId('simulate-amount-1').fill('1 000,00');
     await statement.getByTestId('simulate-submit').click();
     await expect(statement.getByTestId('simulate-result')).toHaveText(
       'Nově zaznamenáno 2, už dříve načteno 0 (nezapočteno znovu). Spárováno 1, k posouzení 0. Bez faktury podle VS 1 – zaznamenáno, k posouzení není.',
