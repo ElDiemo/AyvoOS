@@ -314,8 +314,38 @@ export const domesticVatRateSchema = z.object({
 export type DomesticVatRate = z.infer<typeof domesticVatRateSchema>;
 
 /**
+ * POST /api/admin/finance/issuer/vat-rates/withdrawals: cancels the rate of a start day that is
+ * still in the future (Europe/Prague, decided by the server when writing) — a new revision with a
+ * reason, never an edit or a deletion. The previous start day then applies, or none; an older
+ * revision of the same day never comes back. Explicitly confirmed.
+ */
+export const withdrawDomesticVatRateSchema = z.strictObject({
+  requestId: z.uuid(),
+  /** The newest revision the form saw (something exists to withdraw). */
+  expectedRevision: z.number().int().min(1),
+  validFrom: z.iso.date(),
+  reason: reasonSchema,
+  confirm: z.literal(true, 'Zrušení potvrďte.'),
+});
+export type WithdrawDomesticVatRateRequest = z.infer<typeof withdrawDomesticVatRateSchema>;
+
+export const VAT_RATE_REVISION_KINDS = ['RATE', 'WITHDRAWAL'] as const;
+
+/** One revision of the history: a rate from a day, or the withdrawal of a future one (no rate). */
+export const domesticVatRateRevisionSchema = z.object({
+  revision: z.number().int(),
+  validFrom: z.iso.date(),
+  kind: z.enum(VAT_RATE_REVISION_KINDS),
+  ratePercent: z.string().nullable(),
+  reason: z.string(),
+  recordedAt: z.iso.datetime(),
+  recordedByName: z.string(),
+});
+export type DomesticVatRateRevision = z.infer<typeof domesticVatRateRevisionSchema>;
+
+/**
  * GET /api/admin/finance/issuer/vat-rates. `effective`: one entry per start day (a later
- * revision of the same day corrects it), newest start first; `current` applies today (Prague),
+ * revision of the same day corrects it; a withdrawn day has none), newest start first; `current` applies today (Prague),
  * `null` = no rate — a live domestic invoice would be refused (DOMESTIC_VAT_RATE_MISSING). TEST
  * invoices compute no VAT and never wait for it.
  */
@@ -323,6 +353,6 @@ export const domesticVatRatePageSchema = z.object({
   today: z.iso.date(),
   current: domesticVatRateSchema.nullable(),
   effective: z.array(domesticVatRateSchema),
-  versions: z.array(domesticVatRateSchema),
+  versions: z.array(domesticVatRateRevisionSchema),
 });
 export type DomesticVatRatePage = z.infer<typeof domesticVatRatePageSchema>;

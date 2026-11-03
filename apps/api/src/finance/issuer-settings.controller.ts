@@ -5,6 +5,7 @@ import {
   newIssuerBankAccountVersionSchema,
   newIssuerVersionSchema,
   setDefaultAccountSchema,
+  withdrawDomesticVatRateSchema,
   type CreateIssuerBankAccountRequest,
   type DomesticVatRatePage,
   type NewDomesticVatRateRequest,
@@ -12,6 +13,7 @@ import {
   type NewIssuerBankAccountVersionRequest,
   type NewIssuerVersionRequest,
   type SetDefaultAccountRequest,
+  type WithdrawDomesticVatRateRequest,
 } from '@ayvo/types';
 import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
@@ -89,5 +91,15 @@ export class IssuerSettingsController {
     @Caller() caller: FinanceCaller,
   ): Promise<DomesticVatRatePage> {
     return this.issuer.newVatRate(body, caller);
+  }
+
+  @RequirePermission('finance:issuer_manage')
+  @Post('vat-rates/withdrawals')
+  withdrawVatRate(
+    @Body(new ZodValidationPipe(withdrawDomesticVatRateSchema))
+    body: WithdrawDomesticVatRateRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<DomesticVatRatePage> {
+    return this.issuer.withdrawVatRate(body, caller);
   }
 }

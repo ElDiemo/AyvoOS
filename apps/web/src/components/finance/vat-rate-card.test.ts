@@ -2,7 +2,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 // The form is a client component (router); here only whether it is offered.
-vi.mock('@/components/finance/issuer-forms', () => ({ VatRateForm: () => 'VAT-RATE-FORM' }));
+vi.mock('@/components/finance/issuer-forms', () => ({
+  VatRateForm: () => 'VAT-RATE-FORM',
+  WithdrawVatRateForm: ({ validFrom }: { validFrom: string }) => `WITHDRAW-${validFrom}`,
+}));
 const { VatRateCard } = await import('./vat-rate-card');
 
 const render = (panel: Parameters<typeof VatRateCard>[0]['panel']) =>
@@ -43,10 +46,36 @@ describe('the VAT-rate block of Naše firma a účty (doc 040 §17)', () => {
   it('an ordinary answer with a rate: today, by start day, the history', () => {
     const html = render({
       state: 'ok',
-      data: { today: '2026-11-03', current: rate, effective: [rate], versions: [rate] },
+      data: {
+        today: '2026-11-03',
+        current: rate,
+        effective: [rate],
+        versions: [{ ...rate, kind: 'RATE' }],
+      },
     });
     expect(html).toContain('Dnes platí 21,00 % (od 1. 1. 2026)');
     expect(html).toContain('vat-rate-history');
     expect(html).toContain('VAT-RATE-FORM');
+    // A rate that applies already cannot be withdrawn.
+    expect(html).not.toContain('WITHDRAW-');
+  });
+  it('only a future start day offers its withdrawal; a withdrawal shows in the history', () => {
+    const future = { ...rate, revision: 9, validFrom: '2099-01-01', ratePercent: '12.50' };
+    const html = render({
+      state: 'ok',
+      data: {
+        today: '2026-11-03',
+        current: rate,
+        effective: [future, rate],
+        versions: [
+          { ...future, kind: 'RATE' },
+          { ...rate, revision: 8, validFrom: '2098-01-01', kind: 'WITHDRAWAL', ratePercent: null },
+          { ...rate, kind: 'RATE' },
+        ],
+      },
+    });
+    expect(html).toContain('WITHDRAW-2099-01-01');
+    expect(html).not.toContain('WITHDRAW-2026-01-01');
+    expect(html).toContain('od 1. 1. 2098: sazba zrušena');
   });
 });

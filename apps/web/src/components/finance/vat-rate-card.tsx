@@ -1,5 +1,5 @@
 import type { DomesticVatRatePage } from '@ayvo/types';
-import { VatRateForm } from '@/components/finance/issuer-forms';
+import { VatRateForm, WithdrawVatRateForm } from '@/components/finance/issuer-forms';
 import { Card, Notice } from '@/components/ui';
 import { issuerCs as t } from '@/i18n/cs/finance-issuer';
 
@@ -57,7 +57,23 @@ export function VatRateCard({ panel }: { panel: VatRatePanel }) {
           <span className="font-medium">{t.vat.scheduled}</span>
           <ul className="mt-1" data-testid="vat-rate-effective">
             {vat.effective.map((r) => (
-              <li key={r.revision}>{t.vat.entry(percent(r.ratePercent), day(r.validFrom))}</li>
+              <li key={r.revision} data-testid="vat-rate-effective-entry">
+                {t.vat.entry(percent(r.ratePercent), day(r.validFrom))}
+                {/* Only a rate that has not started yet; the server decides again when writing. */}
+                {r.validFrom > vat.today && (
+                  <details className="mt-1 mb-2 ml-4">
+                    <summary className="cursor-pointer text-stone-600">{t.vat.withdraw}</summary>
+                    <div className="mt-2">
+                      <WithdrawVatRateForm
+                        key={vat.versions[0]?.revision ?? 0}
+                        validFrom={r.validFrom}
+                        from={day(r.validFrom)}
+                        revision={vat.versions[0]!.revision}
+                      />
+                    </div>
+                  </details>
+                )}
+              </li>
             ))}
           </ul>
         </div>
@@ -73,10 +89,12 @@ export function VatRateCard({ panel }: { panel: VatRatePanel }) {
             {vat.versions.map((v) => (
               <li key={v.revision} className="py-2 wrap-anywhere">
                 <span className="font-medium">
-                  {t.vat.entry(percent(v.ratePercent), day(v.validFrom))}
+                  {v.ratePercent === null
+                    ? t.vat.withdrawnEntry(day(v.validFrom))
+                    : t.vat.entry(percent(v.ratePercent), day(v.validFrom))}
                 </span>{' '}
                 · {when(v.recordedAt)} · {v.recordedByName} — {v.reason}
-                {!effective.has(v.revision) && (
+                {v.ratePercent !== null && !effective.has(v.revision) && (
                   <span className="block text-stone-500">{t.vat.corrected}</span>
                 )}
               </li>

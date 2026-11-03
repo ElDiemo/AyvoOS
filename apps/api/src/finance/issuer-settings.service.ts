@@ -13,13 +13,14 @@ import type {
   NewDomesticVatRateRequest,
   NewIssuerVersionRequest,
   SetDefaultAccountRequest,
+  WithdrawDomesticVatRateRequest,
 } from '@ayvo/types';
 import { domainError } from '../common/domain-error.js';
 import { Prisma } from '../generated/finance-prisma/client.js';
 import type { FinanceCaller } from './finance-access.guard.js';
 import { allocateFinanceSerial, FinanceOperations } from './finance-operations.js';
 import { FinancePrismaService } from './finance-prisma.service.js';
-import { effectiveVatRates, vatRateOn, vatRateView } from './vat-rates.js';
+import { effectiveVatRates, vatRateOn, vatRateRevisionView } from './vat-rates.js';
 
 type IssuerRow = Prisma.IssuerVersionGetPayload<object>;
 type AccountVersionRow = Prisma.IssuerBankAccountVersionGetPayload<object>;
@@ -295,7 +296,7 @@ export class IssuerSettingsService {
   /** Every revision, the rate per start day and the one that applies today (null = none). */
   async vatRates(): Promise<DomesticVatRatePage> {
     const rows = await this.prisma.domesticVatRate.findMany({ orderBy: { revision: 'desc' } });
-    const versions = rows.map(vatRateView);
+    const versions = rows.map(vatRateRevisionView);
     const effective = effectiveVatRates(versions);
     const today = pragueToday();
     return { today, current: vatRateOn(effective, today), effective, versions };
@@ -333,7 +334,75 @@ export class IssuerSettingsService {
           data: {
             revision,
             validFrom: new Date(`${req.validFrom}T00:00:00.000Z`),
+            kind: 'RATE',
             ratePercent: req.ratePercent,
+            reason: req.reason,
+            recordedBy: userId,
+            recordedByName: displayName,
+            requestId: req.requestId,
+          },
+        });
+        return { revision: Number(revision) };
+      },
+    );
+    return this.vatRates();
+  }
+
+  /**
+   * Cancels the rate of a start day still in the future (Europe/Prague, decided here at the write,
+   * from the database clock): a new WITHDRAWAL revision with a reason, made from the newest
+   * revision the form saw — never an UPDATE or DELETE. The previous start day then applies, or
+   * none; an older revision of the same day never comes back. No other back-dating rule.
+   */
+  async withdrawVatRate(
+    req: WithdrawDomesticVatRateRequest,
+    caller: FinanceCaller,
+  ): Promise<DomesticVatRatePage> {
+    const { userId, displayName } = caller.principal;
+    await this.operations.run(
+      'ISSUER_VAT_RATE_WITHDRAW',
+      req.requestId,
+      {
+        expectedRevision: req.expectedRevision,
+        validFrom: req.validFrom,
+        reason: req.reason,
+        actorId: userId,
+      },
+      async (tx) => {
+        // The counter row is locked until commit: the checks below see every committed revision.
+        const revision = await allocateFinanceSerial(tx, 'billing_revision');
+        const newest = await tx.domesticVatRate.findFirst({
+          orderBy: { revision: 'desc' },
+          select: { revision: true },
+        });
+        if ((newest ? Number(newest.revision) : null) !== req.expectedRevision)
+          throw concurrentChange();
+        const [{ today }] = await tx.$queryRaw<[{ today: string }]>`
+          SELECT ((clock_timestamp() AT TIME ZONE 'Europe/Prague')::date)::text AS "today"`;
+        if (req.validFrom <= today)
+          throw domainError(
+            409,
+            'VAT_RATE_NOT_FUTURE',
+            'Zrušit lze jen sazbu, která ještě nezačala platit. Platnou sazbu opravte novou sazbou.',
+          );
+        const day = new Date(`${req.validFrom}T00:00:00.000Z`);
+        const ofDay = await tx.domesticVatRate.findFirst({
+          where: { validFrom: day },
+          orderBy: { revision: 'desc' },
+          select: { kind: true },
+        });
+        if (ofDay?.kind !== 'RATE')
+          throw domainError(
+            409,
+            'VAT_RATE_NOTHING_TO_WITHDRAW',
+            'Od tohoto dne není naplánovaná žádná sazba, kterou by šlo zrušit.',
+          );
+        await tx.domesticVatRate.create({
+          data: {
+            revision,
+            validFrom: day,
+            kind: 'WITHDRAWAL',
+            ratePercent: null,
             reason: req.reason,
             recordedBy: userId,
             recordedByName: displayName,

@@ -7,7 +7,8 @@ const OPERATOR_STATE = 'e2e/.auth/operator.json';
 /**
  * Finance → Naše firma a účty → Výchozí sazba DPH pro tuzemské faktury (owner 2026-11-03, doc 040
  * §17) in the browser: nothing prefilled, an unclear rate refused, a rate valid from a day and a
- * later one, the history; refused without finance:issuer_manage. Synthetic values only.
+ * later one, the withdrawal of the later one (confirmed, with a reason), the history; refused
+ * without finance:issuer_manage. Synthetic values only.
  */
 const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/finance');
 
@@ -64,6 +65,47 @@ test.describe('Výchozí sazba DPH', () => {
       before.versions.length + 2,
     );
 
+    // The rate that applies already offers no withdrawal; the future one does — with a reason
+    // and an explicit confirmation. Afterwards the earlier day applies; the history keeps it all.
+    const entries = page.getByTestId('vat-rate-effective-entry');
+    await expect(entries.filter({ hasText: 'od 1. 1. 2026' }).getByText('Zrušit')).toHaveCount(0);
+    const planned = entries.filter({ hasText: 'od 1. 1. 2099' });
+    await planned.getByText('Zrušit tuto budoucí sazbu').click();
+    const withdraw = planned.getByTestId('vat-rate-withdraw-form');
+    await expect(withdraw.getByTestId('vat-rate-withdraw-save')).toBeDisabled();
+    await withdraw.locator('[name=reason]').fill('Naplánováno omylem (test)');
+    await withdraw.getByTestId('vat-rate-withdraw-confirm').check();
+    await withdraw.getByTestId('vat-rate-withdraw-save').click();
+    await expect(page.getByTestId('vat-rate-effective')).not.toContainText('2099');
+    await expect(page.getByTestId('vat-rate-current')).toContainText('Dnes platí 21,00 %');
+    // (The history may still be open from above; its text is checked either way.)
+    const history = page.getByTestId('vat-rate-history');
+    await expect(history.locator('li')).toHaveCount(before.versions.length + 3);
+    await expect(history).toContainText('od 1. 1. 2099: sazba zrušena');
+    // A day that applies already is refused by the server, whatever the page offers.
+    const now = (await (await r.get('/api/admin/finance/issuer/vat-rates')).json()) as {
+      versions: { revision: number }[];
+    };
+    const past = await r.post('/api/admin/finance/issuer/vat-rates/withdrawals', {
+      data: {
+        requestId: crypto.randomUUID(),
+        expectedRevision: now.versions[0]!.revision,
+        validFrom: '2026-01-01',
+        reason: 'test',
+        confirm: true,
+      },
+    });
+    expect([past.status(), ((await past.json()) as { code: string }).code]).toEqual([
+      409,
+      'VAT_RATE_NOT_FUTURE',
+    ]);
+    // A future rate again, for the pictures below.
+    await form.locator('[name=validFrom]').fill('2099-01-01');
+    await form.locator('[name=ratePercent]').fill('12,5');
+    await form.locator('[name=reason]').fill('Budoucí sazba (test)');
+    await form.getByTestId('vat-rate-save').click();
+    await expect(page.getByTestId('vat-rate-effective')).toContainText('od 1. 1. 2099: 12,50 %');
+
     await mkdir(screenshots, { recursive: true });
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
@@ -72,6 +114,7 @@ test.describe('Výchozí sazba DPH', () => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
+      await page.getByTestId('vat-rate-effective').getByText('Zrušit tuto budoucí sazbu').click();
       await page
         .getByTestId('issuer-vat-rate')
         .screenshot({ path: resolve(screenshots, `finance-vat-rate-${width}.png`) });
@@ -93,6 +136,19 @@ test.describe('Výchozí sazba DPH bez oprávnění', () => {
             validFrom: '2026-01-01',
             ratePercent: '21',
             reason: 'test',
+          },
+        })
+      ).status(),
+    ).toBe(403);
+    expect(
+      (
+        await page.request.post('/api/admin/finance/issuer/vat-rates/withdrawals', {
+          data: {
+            requestId: crypto.randomUUID(),
+            expectedRevision: 1,
+            validFrom: '2099-01-01',
+            reason: 'test',
+            confirm: true,
           },
         })
       ).status(),

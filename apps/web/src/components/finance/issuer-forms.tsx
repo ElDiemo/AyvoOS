@@ -415,3 +415,70 @@ export function VatRateForm({ revision }: { revision: number | null }) {
     </form>
   );
 }
+
+/**
+ * Cancels a rate planned for a day still in the future (doc 040 §17): a reason and an explicit
+ * confirmation; the server decides "future" (Europe/Prague) when writing and records a new
+ * revision — the previous day's rate then applies, or none.
+ */
+export function WithdrawVatRateForm({
+  validFrom,
+  from,
+  revision,
+}: {
+  validFrom: string;
+  from: string;
+  revision: number;
+}) {
+  const [reason, setReason] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
+  const { busy, error, send, fresh } = useSubmit();
+  return (
+    <form
+      className="flex flex-col gap-3"
+      data-testid="vat-rate-withdraw-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send(
+          'admin/finance/issuer/vat-rates/withdrawals',
+          { expectedRevision: revision, validFrom, reason: reason.trim(), confirm: true },
+          undefined,
+          domesticVatRatePageSchema,
+        );
+      }}
+    >
+      <TextField
+        name="reason"
+        text={t.vat.withdrawReason}
+        value={reason}
+        onChange={(v) => {
+          setReason(v);
+          fresh();
+        }}
+        required
+      />
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-1"
+          required
+          checked={confirmed}
+          onChange={(e) => setConfirmed(e.target.checked)}
+          data-testid="vat-rate-withdraw-confirm"
+        />
+        <span>{t.vat.withdrawConfirm(from)}</span>
+      </label>
+      <div>
+        <button
+          type="submit"
+          disabled={busy || !confirmed}
+          className={buttonClass.danger}
+          data-testid="vat-rate-withdraw-save"
+        >
+          {t.vat.withdrawSave}
+        </button>
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </form>
+  );
+}

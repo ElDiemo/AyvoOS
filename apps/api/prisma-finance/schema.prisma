@@ -401,12 +401,15 @@ model IssuerDefaultAccount {
 }
 
 /// The default VAT rate of domestic invoices (owner 2026-11-03, doc 040 §17): percent, valid from a
-/// tax point; a later revision of the same start day corrects it. No default. DB: append-only.
+/// tax point; a later revision of the same start day corrects it, a WITHDRAWAL cancels a future
+/// one. No default. DB: append-only.
 model DomesticVatRate {
   id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   revision       BigInt   @unique
   validFrom      DateTime @map("valid_from") @db.Date
-  ratePercent    Decimal  @map("rate_percent") @db.Decimal
+  /// RATE | WITHDRAWAL (DB CHECK): a withdrawal cancels a future start day, never revives an older revision.
+  kind           String
+  ratePercent    Decimal? @map("rate_percent") @db.Decimal
   reason         String
   recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
   recordedBy     String   @map("recorded_by") @db.Uuid
