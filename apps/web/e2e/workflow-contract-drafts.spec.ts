@@ -250,7 +250,10 @@ test.describe.serial('Návrhy smluv', () => {
     await expect(card).toContainText('Zatím žádný podepsaný originál');
     await card.getByTestId('contract-upload-open').click();
     const form = card.getByTestId('contract-upload-signed');
-    const signed = Buffer.from(`%PDF-1.4\n% podepsaný originál ${run}\n%%EOF\n`);
+    // A real PDF (the printed revision itself stands in for the signed scan).
+    const signed = await (
+      await page.request.get(`/api/admin/contracts/drafts/${draft}/revisions/2/pdf`)
+    ).body();
     await form.locator('[name=file]').setInputFiles({
       name: 'smlouva-podepsana.pdf',
       mimeType: 'application/pdf',

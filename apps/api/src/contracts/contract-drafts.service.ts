@@ -26,6 +26,7 @@ import type { Principal } from '../identity/principal.js';
 import { ProspectContextService } from '../sales/prospect-context.service.js';
 import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 import { contractDocument, UnknownContractTemplate } from './contract-template.js';
+import { InvalidSignedPdf, inspectSignedPdf } from './signed-pdf.js';
 import { renderContractPdf } from './contract-pdf.js';
 
 type Db = Prisma.TransactionClient;
@@ -40,7 +41,6 @@ const notFound = () => new NotFoundException('Contract draft not found');
 const concurrentChange = () =>
   domainError(409, 'CONCURRENT_CHANGE', 'Návrh mezitím změnil někdo jiný. Načtěte ho znovu.');
 const dateOnly = (d: Date) => d.toISOString().slice(0, 10);
-const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // %PDF-
 const safeFilename = (name: string) => {
   const cleaned = name
     .replace(/[^\w.\- ]+/g, '_')
@@ -569,8 +569,17 @@ export class ContractDraftsService {
     file: { buffer: Buffer; originalname: string },
     p: Principal,
   ): Promise<ContractDraftDetail> {
-    if (!PDF_MAGIC.every((b, i) => file.buffer[i] === b))
-      throw domainError(422, 'UNSUPPORTED_DOCUMENT', 'Nahrajte podepsaný originál jako PDF.');
+    // A real, complete PDF with a page (review SIGN122-R1); the bytes are kept as uploaded.
+    try {
+      await inspectSignedPdf(file.buffer);
+    } catch (e) {
+      if (!(e instanceof InvalidSignedPdf)) throw e;
+      throw domainError(
+        422,
+        'UNSUPPORTED_DOCUMENT',
+        'Soubor není úplné PDF s alespoň jednou stránkou. Nahrajte podepsaný originál jako PDF.',
+      );
+    }
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
     await this.operations.run(
       'CONTRACT_SIGNED_UPLOAD',

@@ -16,6 +16,10 @@ import {
   UnknownContractTemplate,
   type TemplateInput,
 } from '../src/contracts/contract-template.js';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { renderContractPdf } from '../src/contracts/contract-pdf.js';
+import { InvalidSignedPdf, inspectSignedPdf } from '../src/contracts/signed-pdf.js';
 import { openPdf, pageText } from './support/pdf-inspect.js';
 import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
@@ -513,7 +517,15 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
     let d = (await post(a, '', { prospectCode: p.code, hotelCode: null, fields: fields() }))
       .body as ContractDraftDetail;
     expect(d).toMatchObject({ signed: [], canUploadSigned: true });
-    const pdf = Buffer.from(`%PDF-1.4\n% podepsaný originál ${tag}\n%%EOF\n`);
+    // A real PDF with pages (as a scan or a signed export would be).
+    const pdf = await renderContractPdf(
+      contractDocument('cs-b2b-1', {
+        code: d.code,
+        revision: 1,
+        savedOn: '2026-11-02',
+        fields: fields(),
+      }),
+    );
     const upload = (over: Record<string, string> = {}, file: Buffer = pdf, cookie = a) => {
       const values = {
         requestId: randomUUID(),
@@ -528,8 +540,15 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
       return req.attach('file', file, 'Smlouva podepsaná.pdf');
     };
     const before = await t.prisma.contractSignedDocument.count();
-    const notPdf = await upload({}, Buffer.from('PNG? no'));
-    expect([notPdf.status, notPdf.body.code]).toEqual([422, 'UNSUPPORTED_DOCUMENT']);
+    // Never kept for good: not a PDF, only a PDF header, a truncated upload (review SIGN122-R1).
+    for (const bad of [
+      Buffer.from('PNG? no'),
+      Buffer.from(`%PDF-1.4\n% podepsaný originál ${tag}\n%%EOF\n`),
+      pdf.subarray(0, Math.floor(pdf.length / 2)),
+    ]) {
+      const r = await upload({}, bad);
+      expect([r.status, r.body.code]).toEqual([422, 'UNSUPPORTED_DOCUMENT']);
+    }
     await upload({ confirm: 'false' }).expect(400);
     const stale = await upload({ expectedVersion: String(d.version + 5) });
     expect([stale.status, stale.body.code]).toEqual([409, 'CONCURRENT_CHANGE']);
@@ -567,6 +586,17 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
     expect(got.headers['content-disposition']).toContain(`${d.code}-r1-PODEPSANO.pdf`);
     await get(people.b.cookie, `/${d.code}/signed/1`).expect(404);
     await get(a, `/${d.code}/signed/2`).expect(404);
+    // A stored file changed behind the application is never handed out as the original.
+    const stored = await t.prisma.contractSignedDocument.findFirstOrThrow({
+      where: { revisionRow: { draft: { code: d.code } } },
+    });
+    const path = join(t.storage.directory, stored.storageKey);
+    const kept = await readFile(path);
+    await writeFile(path, Buffer.concat([kept, Buffer.from('\n% pozměněno\n')]));
+    const changed = await get(a, `/${d.code}/signed/1`);
+    expect([changed.status, changed.body.code]).toEqual([500, 'STORED_FILE_CHANGED']);
+    await writeFile(path, kept);
+    await get(a, `/${d.code}/signed/1`).expect(200);
 
     // Never replaced; the draft never removed; a change is a new revision (an amendment).
     const again = await upload();
@@ -589,8 +619,10 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
     // A paper signed for revision 1 is never filed under revision 2.
     const old = await upload({ revision: '1' });
     expect([old.status, old.body.code]).toEqual([409, 'CONCURRENT_CHANGE']);
-    expect(d.events.map((e) => e.kind).slice(0, 3)).toEqual([
+    // Two downloads served; the refused one (changed file) is not recorded as served.
+    expect(d.events.map((e) => e.kind).slice(0, 4)).toEqual([
       'REVISED',
+      'SIGNED_DOWNLOADED',
       'SIGNED_DOWNLOADED',
       'SIGNED_UPLOADED',
     ]);
@@ -780,5 +812,52 @@ describe('the working template (cs-b2b-1)', () => {
     expect(() => contractDocument('cs-b2b-9', input)).toThrow(UnknownContractTemplate);
     // Never a prototype member taken for a template.
     expect(() => contractDocument('toString', input)).toThrow(UnknownContractTemplate);
+  });
+});
+
+describe('the signed original is a real, complete PDF (SIGN122-R1)', () => {
+  const real = () =>
+    renderContractPdf(
+      contractDocument('cs-b2b-1', {
+        code: 'SN-000009',
+        revision: 1,
+        savedOn: '2026-11-02',
+        fields: {
+          counterpartyName: 'Ukázka s.r.o.',
+          counterpartyCompanyId: null,
+          counterpartyAddress: null,
+          representativeName: null,
+          representativeRole: null,
+          hotelName: 'Hotel',
+          hotelAddress: 'Adresa',
+          rooms: 1,
+          pricePerRoomMonth: '10.00',
+          currency: 'CZK',
+          startOn: '2027-01-01',
+          billingTiming: 'ARREARS',
+          paymentTermsDays: 14,
+          holders: 'NONE',
+          holdersOwnership: null,
+        },
+      }),
+    );
+  it('a real PDF passes with its pages; the bytes are not touched', async () => {
+    const pdf = await real();
+    const copy = Buffer.from(pdf);
+    expect((await inspectSignedPdf(pdf)).pages).toBeGreaterThanOrEqual(1);
+    expect(Buffer.compare(pdf, copy)).toBe(0);
+  });
+  it('a header only, junk, a truncated file (also with %%EOF appended) and no page are refused', async () => {
+    const pdf = await real();
+    const half = pdf.subarray(0, Math.floor(pdf.length / 2));
+    for (const bad of [
+      Buffer.from('%PDF-1.4\n% jen hlavička\n%%EOF\n'),
+      Buffer.from('%PDF-1.7\n' + 'x'.repeat(4000) + '\n%%EOF\n'),
+      half,
+      Buffer.concat([half, Buffer.from('\n%%EOF\n')]),
+      pdf.subarray(0, pdf.length - 7),
+      Buffer.from('not a pdf at all, really'),
+    ])
+      await expect(inspectSignedPdf(bad)).rejects.toThrow(InvalidSignedPdf);
   });
 });
