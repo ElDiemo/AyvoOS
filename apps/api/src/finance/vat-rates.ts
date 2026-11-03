@@ -40,16 +40,11 @@ export async function domesticVatRateOn(
   tx: Prisma.TransactionClient,
   taxPointOn: string,
 ): Promise<DomesticVatRate | null> {
-  const day = new Date(`${taxPointOn}T00:00:00.000Z`);
-  const start = await tx.domesticVatRate.findFirst({
-    where: { validFrom: { lte: day } },
-    orderBy: { validFrom: 'desc' },
-    select: { validFrom: true },
+  // One query: the latest start day not after the tax point, and of that day the newest revision
+  // (its correction) — a later revision of another day never decides.
+  const row = await tx.domesticVatRate.findFirst({
+    where: { validFrom: { lte: new Date(`${taxPointOn}T00:00:00.000Z`) } },
+    orderBy: [{ validFrom: 'desc' }, { revision: 'desc' }],
   });
-  if (!start) return null;
-  const row = await tx.domesticVatRate.findFirstOrThrow({
-    where: { validFrom: start.validFrom },
-    orderBy: { revision: 'desc' },
-  });
-  return vatRateView(row);
+  return row ? vatRateView(row) : null;
 }

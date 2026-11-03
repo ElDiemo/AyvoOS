@@ -137,6 +137,42 @@ describe.skipIf(!hasDatabase)('finance default domestic VAT rate (doc 040 §17)'
     expect(p.current).toEqual(expected);
   });
 
+  it('the newest correction of the selected day wins over newer revisions of earlier or later days', async () => {
+    let p = await page();
+    const add = async (validFrom: string, ratePercent: string) =>
+      (p = (
+        await f
+          .post(S)
+          .send(
+            rate({
+              expectedRevision: p.versions[0]!.revision,
+              validFrom,
+              ratePercent,
+              reason: `Sazba od ${validFrom} (test)`,
+            }),
+          )
+          .expect(201)
+      ).body as DomesticVatRatePage);
+    // In revision order: 2028-01 10, 2028-07 11, a correction of 2028-07 11.5, then (newer still)
+    // a correction of the earlier 2028-01 and a later start 2029-01.
+    await add('2028-01-01', '10');
+    await add('2028-07-01', '11');
+    await add('2028-07-01', '11.5');
+    await add('2028-01-01', '10.5');
+    await add('2029-01-01', '13');
+    expect((await on('2028-08-01'))?.ratePercent).toBe('11.50');
+    expect((await on('2028-07-01'))?.ratePercent).toBe('11.50');
+    expect((await on('2028-06-30'))?.ratePercent).toBe('10.50');
+    expect((await on('2028-12-31'))?.ratePercent).toBe('11.50');
+    expect((await on('2029-01-01'))?.ratePercent).toBe('13.00');
+    // The page by the same rule.
+    expect(p.effective.slice(0, 3).map((v) => [v.validFrom, v.ratePercent])).toEqual([
+      ['2029-01-01', '13.00'],
+      ['2028-07-01', '11.50'],
+      ['2028-01-01', '10.50'],
+    ]);
+  });
+
   it('rates are append-only, also for the schema owner', async () => {
     const owner = new PrismaClient({
       adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
