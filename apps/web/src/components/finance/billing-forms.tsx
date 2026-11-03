@@ -20,7 +20,7 @@ import { billingCs as t } from '@/i18n/cs/finance-billing';
 import { apiSend, ClientApiError } from '@/lib/client-api';
 import { COUNTRY_OPTIONS } from '@/lib/country-options';
 import { CurrencyInput } from './currency-input';
-import { parseDecimalInput } from '@/lib/decimal-input';
+import { formatDecimalInput, parseDecimalInput } from '@/lib/decimal-input';
 
 const label = 'flex min-w-0 flex-col gap-1 text-sm font-medium';
 const blankToNull = (v: string) => (v.trim() === '' ? null : v.trim());
@@ -372,10 +372,12 @@ export function AgreementForm({
     customerId: from?.customer.id ?? '',
     contractNumber: from?.contractNumber ?? '',
     billedRooms: from ? String(from.billedRooms) : '',
-    ownPrice: from?.ownPricePerRoomMonth ?? '',
+    ownPrice: from?.ownPricePerRoomMonth ? formatDecimalInput(from.ownPricePerRoomMonth) : '',
     currency: from?.currency ?? 'CZK',
-    paymentTermsDays: from ? String(from.paymentTermsDays) : '14',
-    billingTiming: from?.billingTiming ?? 'ARREARS',
+    // Chosen by the person for a new agreement, never preselected: the timing decides the billed
+    // month of a run and the terms the due date (doc 040 §13, review SMOKE-2).
+    paymentTermsDays: from ? String(from.paymentTermsDays) : '',
+    billingTiming: from?.billingTiming ?? '',
     validFrom: from?.validFrom ?? `${thisMonth()}-01`,
     validTo: from?.validTo ?? '',
     reason: '',
@@ -509,10 +511,12 @@ export function AgreementForm({
           {t.fields.billingTiming}
           <select
             name="billingTiming"
+            required
             value={v.billingTiming}
             onChange={(e) => set('billingTiming')(e.target.value)}
             className={inputClass}
           >
+            <option value="">{t.chooseTiming}</option>
             {BILLING_TIMINGS.map((x) => (
               <option key={x} value={x}>
                 {t.timing[x]}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDecimalInput } from './decimal-input';
+import { formatDecimalInput, parseDecimalInput } from './decimal-input';
 
 describe('parseDecimalInput', () => {
   it('reads Czech and plain notation exactly', () => {
@@ -33,5 +33,19 @@ describe('parseDecimalInput', () => {
       '1,5 0',
     ])
       expect(parseDecimalInput(input), input).toBeNull();
+  });
+});
+
+describe('formatDecimalInput', () => {
+  it('shows a stored amount as typed, and reads back to the same value (review SMOKE-3)', () => {
+    for (const [stored, shown] of [
+      ['1000.50', '1 000,50'],
+      ['333.33', '333,33'],
+      ['1500000.05', '1 500 000,05'],
+      ['7', '7'],
+    ] as const) {
+      expect(formatDecimalInput(stored)).toBe(shown);
+      expect(parseDecimalInput(shown)).toBe(parseDecimalInput(stored));
+    }
   });
 });

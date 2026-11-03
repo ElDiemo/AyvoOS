@@ -73,6 +73,20 @@ test.describe('Smlouvy', () => {
     await agreement.locator('[name=billedRooms]').fill('12');
     await agreement.locator('[name=ownPrice]').fill('350.00');
     await agreement.locator('[name=reason]').fill('Smlouva podepsána (syntetická)');
+    // SMOKE-2: the billing timing and the payment terms are never preselected; without them the
+    // browser refuses to save and nothing is stored.
+    await expect(agreement.locator('[name=billingTiming]')).toHaveValue('');
+    await expect(agreement.locator('[name=paymentTermsDays]')).toHaveValue('');
+    await agreement.getByTestId('agreement-save').click();
+    expect(
+      await agreement
+        .locator('[name=billingTiming]')
+        .evaluate((e: HTMLSelectElement) => e.validity.valueMissing),
+    ).toBe(true);
+    await expect(agreement.getByRole('status')).toHaveCount(0);
+    // Chosen explicitly: a new agreement preselects neither (review SMOKE-2).
+    await agreement.locator('[name=billingTiming]').selectOption('ARREARS');
+    await agreement.locator('[name=paymentTermsDays]').fill('14');
     await agreement.getByTestId('agreement-save').click();
     const list = page.getByTestId('billing-agreements');
     const row = list.locator('li').filter({ hasText: 'Hotel Smlouva (E2E)' });
@@ -93,6 +107,8 @@ test.describe('Smlouvy', () => {
     await row.getByRole('link').click();
     await expect(page).toHaveURL(/\/finance\/billing\/agreements\/BA-\d{6}$/);
     const version = page.locator('[data-testid^="agreement-version-BA-"]');
+    // The own price is offered as typed in Czech, as the history shows it (review SMOKE-3).
+    await expect(version.locator('[name=ownPrice]')).toHaveValue('350,00');
     await version.locator('[name=billedRooms]').fill('14');
     await version.locator('[name=reason]').fill('Rozšíření o 2 pokoje (test)');
     await version.getByTestId('agreement-version-save').click();
@@ -201,7 +217,7 @@ test.describe('Smlouvy', () => {
     // Agreement: the first ADMIN has the form open (12 rooms, 350.00); a second one sets 777.00.
     await page.goto(`/finance/billing/agreements/${code}`);
     const form = page.getByTestId(`agreement-version-${code}`);
-    await expect(form.locator('[name=ownPrice]')).toHaveValue('350.00');
+    await expect(form.locator('[name=ownPrice]')).toHaveValue('350,00');
     const d = await json(request.get(`${B}/agreements/${code}`), 200);
     await json(
       request.post(`${B}/agreements/${code}/versions`, {
@@ -231,7 +247,7 @@ test.describe('Smlouvy', () => {
     await expect(form.getByTestId('stale-version')).toBeVisible();
     await expect(form.getByTestId('agreement-version-save')).toBeDisabled();
     await form.getByTestId('stale-version-load').click();
-    await expect(form.locator('[name=ownPrice]')).toHaveValue('777.00');
+    await expect(form.locator('[name=ownPrice]')).toHaveValue('777,00');
     await expect(form.locator('[name=billedRooms]')).toHaveValue('12');
     await form.locator('[name=billedRooms]').fill('14');
     await form.locator('[name=reason]').fill('Rozšíření o 2 pokoje nad aktuální cenou');

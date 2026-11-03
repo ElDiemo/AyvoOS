@@ -504,6 +504,7 @@ export const financeCs = {
     simulateTitle: 'DEV simulace: simulovaný výpis (jen mimo produkci)',
     reference: 'Reference',
     amount: 'Částka (CZK)',
+    amountInvalid: 'Částku zadejte jako 1 500,50 (nejvýš 2 desetinná místa). Nic se neuložilo.',
     variableSymbol: 'VS',
     message: 'Zpráva',
     addRow: 'Přidat řádek',

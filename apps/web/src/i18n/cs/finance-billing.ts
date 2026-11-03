@@ -86,6 +86,7 @@ export const billingCs = {
   pricesSubtitle:
     'Jediné místo výchozí ceny za pokoj a měsíc. Smlouva s vlastní cenou ji nepoužívá.',
   chooseLanguage: 'Vyberte jazyk',
+  chooseTiming: 'Vyberte',
   languages: { cs: 'čeština', en: 'angličtina', de: 'němčina' } as Record<string, string>,
   languageMissing: 'jazyk dokumentů nevybrán',
   timing: { ADVANCE: 'předem', ARREARS: 'zpětně' } as Record<string, string>,

@@ -12,3 +12,14 @@ export function parseDecimalInput(input: string, decimals = 2): string | null {
   if (fraction.length > decimals) return null;
   return `${m[1]!.replace(/ /g, '').replace(/^0+(?=\d)/, '')}.${fraction.padEnd(decimals, '0')}`;
 }
+
+/**
+ * An exact decimal string of the API ("1500.50") as a person types it ("1 500,50"): the inverse of
+ * parseDecimalInput for a form prefilled from a stored value. Anything else is returned unchanged.
+ */
+export function formatDecimalInput(value: string): string {
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!m) return value;
+  const whole = m[1]!.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return m[2] === undefined ? whole : `${whole},${m[2]}`;
+}

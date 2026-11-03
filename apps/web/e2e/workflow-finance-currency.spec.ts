@@ -68,10 +68,16 @@ test.describe('Jiná měna', () => {
     const currency = agreement.locator('[name=currency]');
     // Typed by hand, in lower case, not chosen from a closed list.
     await currency.fill('gb1');
+    // Chosen explicitly: a new agreement preselects neither (review SMOKE-2).
+    await agreement.locator('[name=billingTiming]').selectOption('ARREARS');
+    await agreement.locator('[name=paymentTermsDays]').fill('14');
     await agreement.getByTestId('agreement-save').click();
     expect(await currency.evaluate((i: HTMLInputElement) => i.validity.valid)).toBe(false);
     await currency.fill('gbp');
     await expect(currency).toHaveValue('GBP');
+    // Chosen explicitly: a new agreement preselects neither (review SMOKE-2).
+    await agreement.locator('[name=billingTiming]').selectOption('ARREARS');
+    await agreement.locator('[name=paymentTermsDays]').fill('14');
     await agreement.getByTestId('agreement-save').click();
     const row = page
       .getByTestId('billing-agreements')

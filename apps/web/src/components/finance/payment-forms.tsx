@@ -12,6 +12,7 @@ import { useAttempt } from '@/components/catalog/form-kit';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { apiSend, ClientApiError } from '@/lib/client-api';
+import { formatDecimalInput, parseDecimalInput } from '@/lib/decimal-input';
 
 const t = financeCs.payments;
 const errorText = (e: unknown) =>
@@ -56,9 +57,15 @@ export function SimulateStatementForm() {
         e.preventDefault();
         setError(null);
         setMessage(null);
-        const entries = rows.map((r) => ({
+        // Typed as elsewhere ("1 500,50"); anything unclear is refused here, never guessed (SMOKE-1).
+        const amounts = rows.map((r) => parseDecimalInput(r.amount));
+        if (amounts.some((a) => a === null)) {
+          setError(t.amountInvalid);
+          return;
+        }
+        const entries = rows.map((r, i) => ({
           reference: r.reference.trim(),
-          amount: r.amount.trim(),
+          amount: amounts[i]!,
           currency: 'CZK',
           bookedOn: new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(
             new Date(),
@@ -215,7 +222,7 @@ export function AllocatePaymentForm({
 }) {
   const router = useRouter();
   const [invoice, setInvoice] = useState(payment.suggestions[0] ?? '');
-  const [amount, setAmount] = useState(payment.unallocated);
+  const [amount, setAmount] = useState(formatDecimalInput(payment.unallocated));
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const attempt = useAttempt();
@@ -229,7 +236,12 @@ export function AllocatePaymentForm({
       onSubmit={async (e) => {
         e.preventDefault();
         setError(null);
-        const body = { invoiceNumber: invoice, amount: amount.trim(), reason: reason.trim() };
+        const parsed = parseDecimalInput(amount);
+        if (parsed === null) {
+          setError(t.amountInvalid);
+          return;
+        }
+        const body = { invoiceNumber: invoice, amount: parsed, reason: reason.trim() };
         const res = await attempt.run(`${path}:${JSON.stringify(body)}`, (requestId) =>
           apiSend('POST', path, incomingPaymentSchema, { requestId, ...body }),
         );
