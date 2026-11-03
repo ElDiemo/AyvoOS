@@ -40,7 +40,9 @@ test.describe('Smlouvy', () => {
     ).json()) as { code: string };
 
     await page.goto('/finance/billing');
-    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Fakturační podmínky' }),
+    ).toBeVisible();
     await page.getByTestId('customer-new-open').click();
     const customer = page.getByTestId('customer-new');
     await customer.locator('[name=legalName]').fill('Hotelová skupina Morava s.r.o. (E2E)');
@@ -85,7 +87,7 @@ test.describe('Smlouvy', () => {
       await expect(agreement.locator('[name=hotelId]')).toHaveValue('');
     } else {
       await expect(page.getByTestId('billing-agreements')).toContainText(
-        'Všechny hotely už smlouvu mají',
+        'Všechny hotely už fakturační podmínky mají',
       );
     }
 

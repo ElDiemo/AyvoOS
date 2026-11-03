@@ -38,7 +38,7 @@ export const shellCs = {
       scope: 'Finance platí pro celou firmu, nezávisle na zvolené provozovně.',
       views: {
         invoices: 'Faktury',
-        billing: 'Smlouvy',
+        billing: 'Fakturační podmínky',
         customers: 'Plátci',
         company: 'Naše firma a účty',
         prices: 'Výchozí ceník',
