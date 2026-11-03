@@ -1,9 +1,11 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PAYMENTS_DEFAULT_PAGE_SIZE } from '@ayvo/types';
 import type {
+  BankPaymentCandidate,
   PaymentOpenInvoices,
   PaymentsQuery,
   AllocatePaymentRequest,
+  AllocateBankTransactionRequest,
   IncomingPayment,
   InvoicePaymentState,
   PaymentLoadResult,
@@ -19,6 +21,11 @@ import { FinancePrismaService } from './finance-prisma.service.js';
 
 type Tx = Prisma.TransactionClient;
 type MatchResult = IncomingPayment['matchResult'];
+interface Match {
+  result: MatchResult;
+  invoiceId?: string;
+  amount?: Prisma.Decimal;
+}
 
 /** One entry to record as an incoming payment (from a bank transaction or a simulation). */
 interface Entry {
@@ -71,16 +78,44 @@ type PaymentRow = Prisma.IncomingPaymentGetPayload<{ include: typeof paymentIncl
 
 const likeEscape = (q: string) => q.replace(/[\\%_]/g, '\\$&');
 
+/**
+ * Results whose variable symbol names exactly one invoice of an allowed environment: the payment of
+ * a hotel invoice (owner 2026-11-02). A bank transaction without one is not recorded as a payment
+ * at all — it stays in Bankovní pohyby, where a person may still allocate it to an invoice.
+ */
+const INVOICE_PAYMENT_RESULTS: readonly MatchResult[] = [
+  'MATCHED',
+  'PARTIAL_OVERPAYMENT',
+  'INVOICE_ALREADY_PAID',
+  'INVOICE_CANCELLED',
+  'CURRENCY_MISMATCH',
+  'PAID_BEFORE_ISSUE',
+];
+
+/**
+ * A hotel invoice's payment: allocated to an invoice (automatically or by a person) or naming one
+ * by its exact VS. Only these are reviewed — a payment recorded earlier from any other income
+ * (before 2026-11-02, or a simulated one) stays listed and allocatable, never a task.
+ */
+const invoicePaymentSql = Prisma.sql`(EXISTS (SELECT 1 FROM "finance"."payment_allocations" a
+    WHERE a."payment_id" = p."id")
+  OR p."match_result" IN (${Prisma.join(INVOICE_PAYMENT_RESULTS)}))`;
+const allocatedSql = Prisma.sql`coalesce((SELECT sum(a."amount") FROM "finance"."payment_allocations" a WHERE a."payment_id" = p."id"), 0)`;
+
+/** To review (the overview's count and the list's REVIEW): an invoice payment's unallocated rest. */
+export const paymentToReviewSql = Prisma.sql`${invoicePaymentSql} AND p."amount" > ${allocatedSql}`;
+/** An invoice payment the bank changed after it was recorded (never applied; counted apart). */
+export const paymentChangedAtBankSql = Prisma.sql`${invoicePaymentSql}
+  AND p."bank_transaction_version" IS NOT NULL
+  AND (SELECT max(v."version") FROM "finance"."bank_transaction_versions" v
+       WHERE v."transaction_id" = p."bank_transaction_id") > p."bank_transaction_version"`;
+
 /** The list's filters; REVIEW and CHANGED are the same conditions as the overview's counts. */
 function paymentsWhere(query: PaymentsQuery): Prisma.Sql {
-  const allocated = Prisma.sql`coalesce((SELECT sum(a."amount") FROM "finance"."payment_allocations" a WHERE a."payment_id" = p."id"), 0)`;
   const parts: Prisma.Sql[] = [Prisma.sql`TRUE`];
-  if (query.filter === 'REVIEW') parts.push(Prisma.sql`p."amount" > ${allocated}`);
-  if (query.filter === 'ALLOCATED') parts.push(Prisma.sql`p."amount" = ${allocated}`);
-  if (query.filter === 'CHANGED')
-    parts.push(Prisma.sql`p."bank_transaction_version" IS NOT NULL
-      AND (SELECT max(v."version") FROM "finance"."bank_transaction_versions" v
-           WHERE v."transaction_id" = p."bank_transaction_id") > p."bank_transaction_version"`);
+  if (query.filter === 'REVIEW') parts.push(paymentToReviewSql);
+  if (query.filter === 'ALLOCATED') parts.push(Prisma.sql`p."amount" = ${allocatedSql}`);
+  if (query.filter === 'CHANGED') parts.push(paymentChangedAtBankSql);
   if (query.q) {
     const like = `%${likeEscape(query.q)}%`;
     const amount = /^\d{1,15}([.,]\d{1,2})?$/.test(query.q) ? query.q.replace(',', '.') : null;
@@ -92,11 +127,12 @@ function paymentsWhere(query: PaymentsQuery): Prisma.Sql {
 }
 
 /**
- * Incoming payments (N3B-2, doc 041 §8): recorded once per source entry (a credit bank
- * transaction already read, or a simulated statement entry outside production), matched
- * deterministically — automatically only on an exact variable symbol of one open invoice in the
- * same currency and an allowed environment — and otherwise left for a person with the reason. A
- * person allocates with a reason. Nothing is ever sent to a bank; the database refuses any
+ * Incoming payments of hotel invoices (N3B-2, doc 041 §8; scope owner 2026-11-02): recorded once
+ * per source entry (a credit bank transaction already read whose VS names an invoice, or a
+ * simulated statement entry outside production), matched deterministically — automatically only on
+ * an exact variable symbol of one open invoice in the same currency and an allowed environment —
+ * and otherwise left for a person with the reason. A person allocates with a reason, also an
+ * incoming bank transaction never recorded (a hotel's wrong VS). Other income is never a task. Nothing is ever sent to a bank; the database refuses any
  * allocation beyond the payment or the invoice.
  */
 @Injectable()
@@ -153,6 +189,44 @@ export class PaymentsService {
       select: { currency: true, environment: true },
     });
     if (!payment) throw new NotFoundException('Platba neexistuje.');
+    return this.openInvoicesFor(payment, q);
+  }
+
+  /**
+   * An incoming bank transaction a person may allocate to an invoice (a hotel paid with a wrong VS):
+   * its facts, the payment already recorded from it (then that one is used — never a second) and
+   * the invoices it may go to.
+   */
+  async bankCandidate(transactionId: string, q?: string): Promise<BankPaymentCandidate> {
+    const t = await this.prisma.bankTransaction.findUnique({
+      where: { id: transactionId },
+      include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
+    });
+    const entry = t && bankEntry(t);
+    if (!entry) throw new NotFoundException('Příchozí bankovní pohyb neexistuje.');
+    const recorded = await this.prisma.incomingPayment.findUnique({
+      where: { source_sourceKey: { source: 'BANK', sourceKey: entry.sourceKey } },
+      select: { code: true },
+    });
+    return {
+      transactionId: entry.sourceKey,
+      environment: entry.environment,
+      amount: entry.amount.toFixed(2),
+      currency: entry.currency,
+      bookedOn: entry.bookedOn,
+      variableSymbol: entry.variableSymbol,
+      counterpartyName: entry.counterpartyName,
+      counterpartyAccount: entry.counterpartyAccount,
+      message: entry.message,
+      paymentCode: recorded?.code ?? null,
+      ...(recorded ? { invoices: [], limited: false } : await this.openInvoicesFor(entry, q)),
+    };
+  }
+
+  private async openInvoicesFor(
+    payment: { currency: string; environment: string },
+    q?: string,
+  ): Promise<PaymentOpenInvoices> {
     const search = q ? Prisma.sql`AND i."number" ILIKE ${`%${likeEscape(q)}%`}` : Prisma.empty;
     const testAllowed =
       payment.environment === 'PRODUCTION' ? Prisma.sql`AND i."kind" <> 'TEST'` : Prisma.empty;
@@ -196,6 +270,9 @@ export class PaymentsService {
     return rows.map((p) => {
       const allocated = sum(p.allocations);
       const unallocated = p.amount.minus(allocated);
+      // The same rule as paymentToReviewSql.
+      const invoicePayment =
+        p.allocations.length > 0 || INVOICE_PAYMENT_RESULTS.includes(p.matchResult as MatchResult);
       return {
         code: p.code,
         source: p.source as IncomingPayment['source'],
@@ -216,6 +293,7 @@ export class PaymentsService {
             : 'PARTIALLY_ALLOCATED',
         allocated: allocated.toFixed(2),
         unallocated: unallocated.toFixed(2),
+        toReview: invoicePayment && !unallocated.isZero(),
         allocations: p.allocations.map((a) => ({
           invoiceNumber: a.invoice.number,
           paymentCode: p.code,
@@ -270,14 +348,17 @@ export class PaymentsService {
             message: e.message,
           })),
           caller,
+          { invoicePaymentsOnly: false },
         ),
     );
     return result;
   }
 
   /**
-   * Records the credit bank transactions already read from the bank (doc 041) that are not yet
-   * payments — each once (its newest version when first recorded). Never calls the bank.
+   * Records, from the credit bank transactions already read (doc 041), the payments of hotel
+   * invoices — a VS naming exactly one invoice (owner 2026-11-02) — each once (its newest version
+   * when first recorded). Any other income is not recorded: it stays in Bankovní pohyby, no task,
+   * and a person may still allocate it to an invoice (allocateBankTransaction). Never calls the bank.
    */
   async importBank(requestId: string, caller: FinanceCaller): Promise<PaymentLoadResult> {
     const { result } = await this.operations.run(
@@ -289,35 +370,8 @@ export class PaymentsService {
           include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
           orderBy: { firstSeenAt: 'asc' },
         });
-        const entries: Entry[] = [];
-        for (const t of rows) {
-          const v = t.versions[0];
-          if (!v || v.creditDebit !== 'CRDT' || v.amount.lte(0)) continue;
-          const booked = v.bookingDate ?? v.valueDate;
-          if (!booked) continue;
-          const account =
-            v.counterpartyAccountNumber && v.counterpartyBankCode
-              ? `${v.counterpartyAccountPrefix ? `${v.counterpartyAccountPrefix}-` : ''}${v.counterpartyAccountNumber}/${v.counterpartyBankCode}`
-              : (v.counterpartyIban ?? null);
-          entries.push({
-            source: 'BANK',
-            sourceKey: t.id,
-            environment: t.environment as Entry['environment'],
-            bankTransactionId: t.id,
-            bankTransactionVersion: v.version,
-            amount: v.amount,
-            currency: v.amountCurrency,
-            bookedOn: booked.toISOString().slice(0, 10),
-            variableSymbol:
-              v.variableSymbol && /^\d{1,10}$/.test(v.variableSymbol)
-                ? v.variableSymbol.replace(/^0+(?=\d)/, '')
-                : null,
-            counterpartyName: v.counterpartyName?.slice(0, 200) ?? null,
-            counterpartyAccount: account?.slice(0, 60) ?? null,
-            message: v.message?.slice(0, 500) ?? null,
-          });
-        }
-        return this.load(tx, entries, caller);
+        const entries = rows.map(bankEntry).filter((e): e is Entry => e !== null);
+        return this.load(tx, entries, caller, { invoicePaymentsOnly: true });
       },
     );
     return result;
@@ -329,74 +383,147 @@ export class PaymentsService {
     req: AllocatePaymentRequest,
     caller: FinanceCaller,
   ): Promise<IncomingPayment> {
-    const { userId, displayName } = caller.principal;
     await this.operations.run(
       'PAYMENT_ALLOCATE',
       req.requestId,
-      { code, ...req, actorId: userId },
+      { code, ...req, actorId: caller.principal.userId },
       async (tx) => {
         const payment = await tx.incomingPayment.findUnique({ where: { code } });
         if (!payment) throw new NotFoundException('Platba neexistuje.');
-        const invoice = await tx.invoice.findUnique({
-          where: { number: req.invoiceNumber },
-          include: { cancellation: true },
-        });
-        if (!invoice) throw domainError(422, 'INVOICE_NOT_FOUND', 'Faktura neexistuje.');
-        await lock(tx, payment.id, invoice.id);
-        const amount = new Prisma.Decimal(req.amount);
-        const refuse = (c: string, m: string) => domainError(422, c, m);
-        if (invoice.cancellation)
-          throw refuse('INVOICE_CANCELLED', 'Zrušená faktura platbu nepřijímá.');
-        if (invoice.currency !== payment.currency)
-          throw refuse('CURRENCY_MISMATCH', 'Platba je v jiné měně než faktura.');
-        if (invoice.kind === 'TEST' && payment.environment === 'PRODUCTION')
-          throw refuse('ENVIRONMENT_MISMATCH', 'Ostrou platbu nelze přiřadit testovací faktuře.');
-        const [byPayment, byInvoice] = await Promise.all([
-          tx.paymentAllocation.findMany({ where: { paymentId: payment.id } }),
-          tx.paymentAllocation.findMany({ where: { invoiceId: invoice.id } }),
-        ]);
-        if (amount.greaterThan(payment.amount.minus(sum(byPayment))))
-          throw refuse('EXCEEDS_PAYMENT', 'Přiřazení přesahuje nepřiřazenou část platby.');
-        if (amount.greaterThan(invoice.total.minus(sum(byInvoice))))
-          throw refuse('EXCEEDS_INVOICE', 'Přiřazení přesahuje zbývající částku faktury.');
-        await tx.paymentAllocation.create({
-          data: {
-            paymentId: payment.id,
-            invoiceId: invoice.id,
-            amount,
-            kind: 'MANUAL',
-            reason: req.reason,
-            recordedBy: userId,
-            recordedByName: displayName,
-            requestId: req.requestId,
-          },
-        });
+        await this.allocateTo(tx, payment, req, caller);
         return { code };
       },
     );
-    return (await this.page()).payments.find((p) => p.code === code)!;
+    return this.detail(code);
   }
 
-  /** Records new entries once each and matches them; entries recorded before are only counted. */
-  private async load(tx: Tx, entries: Entry[], caller: FinanceCaller): Promise<PaymentLoadResult> {
+  /**
+   * A person allocates an incoming bank transaction to an invoice (a hotel paid with a wrong VS), in
+   * one transaction: the payment recorded from it before is used (never a second one), otherwise it
+   * is recorded now — with the newest version, the caller and the reason as any other — and kept
+   * only if the allocation succeeds. A transaction naming an invoice by its VS is recorded by the
+   * import first (with its automatic allocation), then allocated on the payment.
+   */
+  async allocateBankTransaction(
+    transactionId: string,
+    req: AllocateBankTransactionRequest,
+    caller: FinanceCaller,
+  ): Promise<IncomingPayment> {
+    const { result } = await this.operations.run(
+      'PAYMENT_ALLOCATE',
+      req.requestId,
+      { bankTransactionId: transactionId, ...req, actorId: caller.principal.userId },
+      async (tx) => {
+        // The same lock as a load: an import or another person never records it at the same time.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finance:payments-load'))`;
+        let payment = await tx.incomingPayment.findUnique({
+          where: { source_sourceKey: { source: 'BANK', sourceKey: transactionId } },
+        });
+        if (!payment) {
+          const t = await tx.bankTransaction.findUnique({
+            where: { id: transactionId },
+            include: { versions: { orderBy: { version: 'desc' }, take: 1 } },
+          });
+          const entry = t && bankEntry(t);
+          if (!entry) throw new NotFoundException('Příchozí bankovní pohyb neexistuje.');
+          const match = await this.match(tx, entry);
+          if (INVOICE_PAYMENT_RESULTS.includes(match.result))
+            throw domainError(
+              409,
+              'IMPORT_FIRST',
+              'Pohyb nese variabilní symbol faktury: nejdřív načtěte platby z bankovních pohybů.',
+            );
+          payment = await this.record(tx, entry, match, caller);
+        }
+        await this.allocateTo(tx, payment, req, caller);
+        return { code: payment.code };
+      },
+    );
+    return this.detail(result.code);
+  }
+
+  /** The checks and the MANUAL allocation, inside the caller's transaction. */
+  private async allocateTo(
+    tx: Tx,
+    payment: { id: string; amount: Prisma.Decimal; currency: string; environment: string },
+    req: AllocatePaymentRequest,
+    caller: FinanceCaller,
+  ): Promise<void> {
+    const { userId, displayName } = caller.principal;
+    const invoice = await tx.invoice.findUnique({
+      where: { number: req.invoiceNumber },
+      include: { cancellation: true },
+    });
+    if (!invoice) throw domainError(422, 'INVOICE_NOT_FOUND', 'Faktura neexistuje.');
+    await lock(tx, payment.id, invoice.id);
+    const amount = new Prisma.Decimal(req.amount);
+    const refuse = (c: string, m: string) => domainError(422, c, m);
+    if (invoice.cancellation)
+      throw refuse('INVOICE_CANCELLED', 'Zrušená faktura platbu nepřijímá.');
+    if (invoice.currency !== payment.currency)
+      throw refuse('CURRENCY_MISMATCH', 'Platba je v jiné měně než faktura.');
+    if (invoice.kind === 'TEST' && payment.environment === 'PRODUCTION')
+      throw refuse('ENVIRONMENT_MISMATCH', 'Ostrou platbu nelze přiřadit testovací faktuře.');
+    const [byPayment, byInvoice] = await Promise.all([
+      tx.paymentAllocation.findMany({ where: { paymentId: payment.id } }),
+      tx.paymentAllocation.findMany({ where: { invoiceId: invoice.id } }),
+    ]);
+    if (amount.greaterThan(payment.amount.minus(sum(byPayment))))
+      throw refuse('EXCEEDS_PAYMENT', 'Přiřazení přesahuje nepřiřazenou část platby.');
+    if (amount.greaterThan(invoice.total.minus(sum(byInvoice))))
+      throw refuse('EXCEEDS_INVOICE', 'Přiřazení přesahuje zbývající částku faktury.');
+    await tx.paymentAllocation.create({
+      data: {
+        paymentId: payment.id,
+        invoiceId: invoice.id,
+        amount,
+        kind: 'MANUAL',
+        reason: req.reason,
+        recordedBy: userId,
+        recordedByName: displayName,
+        requestId: req.requestId,
+      },
+    });
+  }
+
+  /**
+   * Records new entries once each and matches them; entries recorded before are only counted. From
+   * the bank only invoice payments are recorded; a simulated statement records every entry (a person
+   * typed each one), but only an invoice payment's rest is to review.
+   */
+  private async load(
+    tx: Tx,
+    entries: Entry[],
+    caller: FinanceCaller,
+    { invoicePaymentsOnly }: { invoicePaymentsOnly: boolean },
+  ): Promise<PaymentLoadResult> {
     // One load at a time: two loads of the same statement never both record an entry.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finance:payments-load'))`;
-    const result: PaymentLoadResult = {
+    const result: Required<PaymentLoadResult> = {
       created: [],
       alreadyLoaded: 0,
       matched: 0,
       toReview: 0,
+      otherIncome: 0,
       changedAtBank: 0,
     };
     for (const e of [...entries].sort((a, b) => a.sourceKey.localeCompare(b.sourceKey))) {
       const known = await tx.incomingPayment.findUnique({
         where: { source_sourceKey: { source: e.source, sourceKey: e.sourceKey } },
-        select: { id: true, bankTransactionVersion: true },
+        select: {
+          id: true,
+          bankTransactionVersion: true,
+          matchResult: true,
+          _count: { select: { allocations: true } },
+        },
       });
       if (known) {
         result.alreadyLoaded += 1;
-        // Changed at the bank since: reported (and shown on the payment), never applied.
+        // Changed at the bank since: reported (and shown on the payment), never applied — for an
+        // invoice payment only, the same rule as the overview (review RB110-R2).
         if (
+          (known._count.allocations > 0 ||
+            INVOICE_PAYMENT_RESULTS.includes(known.matchResult as MatchResult)) &&
           known.bankTransactionVersion !== null &&
           e.bankTransactionVersion !== null &&
           e.bankTransactionVersion > known.bankTransactionVersion
@@ -405,63 +532,77 @@ export class PaymentsService {
         continue;
       }
       const match = await this.match(tx, e);
-      const serial = await allocateFinanceSerial(tx, 'incoming_payment');
-      const code = `PP-${String(serial).padStart(6, '0')}`;
-      const payment = await tx.incomingPayment.create({
-        data: {
-          serial,
-          code,
-          source: e.source,
-          sourceKey: e.sourceKey,
-          environment: e.environment,
-          bankTransactionId: e.bankTransactionId,
-          bankTransactionVersion: e.bankTransactionVersion,
-          amount: e.amount,
-          currency: e.currency,
-          bookedOn: new Date(`${e.bookedOn}T00:00:00.000Z`),
-          variableSymbol: e.variableSymbol,
-          counterpartyName: e.counterpartyName,
-          counterpartyAccount: e.counterpartyAccount,
-          message: e.message,
-          matchResult: match.result,
-          recordedBy: caller.principal.userId,
-          recordedByName: caller.principal.displayName,
-        },
-      });
-      if (match.invoiceId && match.amount) {
-        await tx.paymentAllocation.create({
-          data: {
-            paymentId: payment.id,
-            invoiceId: match.invoiceId,
-            amount: match.amount,
-            kind: 'AUTO',
-            recordedBy: caller.principal.userId,
-            recordedByName: caller.principal.displayName,
-          },
-        });
+      const invoicePayment = INVOICE_PAYMENT_RESULTS.includes(match.result);
+      if (!invoicePayment) {
+        result.otherIncome += 1;
+        if (invoicePaymentsOnly) continue;
       }
-      result.created.push(code);
+      const payment = await this.record(tx, e, match, caller);
+      result.created.push(payment.code);
       if (match.result === 'MATCHED') result.matched += 1;
-      else result.toReview += 1;
+      else if (invoicePayment) result.toReview += 1;
     }
     return result;
   }
 
+  /** Records one entry as a payment, with its automatic allocation when it matched an invoice. */
+  private async record(tx: Tx, e: Entry, match: Match, caller: FinanceCaller) {
+    const serial = await allocateFinanceSerial(tx, 'incoming_payment');
+    const payment = await tx.incomingPayment.create({
+      data: {
+        serial,
+        code: `PP-${String(serial).padStart(6, '0')}`,
+        source: e.source,
+        sourceKey: e.sourceKey,
+        environment: e.environment,
+        bankTransactionId: e.bankTransactionId,
+        bankTransactionVersion: e.bankTransactionVersion,
+        amount: e.amount,
+        currency: e.currency,
+        bookedOn: new Date(`${e.bookedOn}T00:00:00.000Z`),
+        variableSymbol: e.variableSymbol,
+        counterpartyName: e.counterpartyName,
+        counterpartyAccount: e.counterpartyAccount,
+        message: e.message,
+        matchResult: match.result,
+        recordedBy: caller.principal.userId,
+        recordedByName: caller.principal.displayName,
+      },
+    });
+    if (match.invoiceId && match.amount) {
+      await tx.paymentAllocation.create({
+        data: {
+          paymentId: payment.id,
+          invoiceId: match.invoiceId,
+          amount: match.amount,
+          kind: 'AUTO',
+          recordedBy: caller.principal.userId,
+          recordedByName: caller.principal.displayName,
+        },
+      });
+    }
+    return payment;
+  }
+
   /** The deterministic matching of one new entry (no guessing by amount or name). */
-  private async match(
-    tx: Tx,
-    e: Entry,
-  ): Promise<{ result: MatchResult; invoiceId?: string; amount?: Prisma.Decimal }> {
+  private async match(tx: Tx, e: Entry): Promise<Match> {
     if (!e.variableSymbol) return { result: 'NO_VARIABLE_SYMBOL' };
     const invoice = await tx.invoice.findUnique({
       where: { variableSymbol: e.variableSymbol },
       include: { cancellation: true },
     });
     if (!invoice) return { result: 'UNKNOWN_VARIABLE_SYMBOL' };
-    if (invoice.cancellation) return { result: 'INVOICE_CANCELLED' };
-    if (invoice.currency !== e.currency) return { result: 'CURRENCY_MISMATCH' };
+    // The environment first (review RB110-R1): a production payment naming a TEST invoice is no
+    // invoice payment at all, whatever else differs — never recorded from the bank, never a task.
     if (invoice.kind === 'TEST' && e.environment === 'PRODUCTION')
       return { result: 'ENVIRONMENT_MISMATCH' };
+    if (invoice.cancellation) return { result: 'INVOICE_CANCELLED' };
+    if (invoice.currency !== e.currency) return { result: 'CURRENCY_MISMATCH' };
+    // Money received before the invoice was issued is never silently an ordinary later payment: a
+    // person decides (doc 040 §13). A TEST invoice has no tax point of its own; a live invoice must
+    // compare with its tax point wherever it differs from the issue date (doc 041 §8b).
+    if (e.bookedOn < invoice.issuedOn.toISOString().slice(0, 10))
+      return { result: 'PAID_BEFORE_ISSUE' };
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice-payments:${invoice.id}`}))`;
     const paid = sum(await tx.paymentAllocation.findMany({ where: { invoiceId: invoice.id } }));
     const remaining = invoice.total.minus(paid);
@@ -472,6 +613,39 @@ export class PaymentsService {
       ? { result: 'PARTIAL_OVERPAYMENT', invoiceId: invoice.id, amount: remaining }
       : { result: 'MATCHED', invoiceId: invoice.id, amount: e.amount };
   }
+}
+
+type BankTransactionRow = Prisma.BankTransactionGetPayload<{
+  include: { versions: true };
+}>;
+
+/** A bank transaction as an entry: only an incoming one (credit, > 0, with a date), else null. */
+function bankEntry(t: BankTransactionRow): Entry | null {
+  const v = t.versions[0];
+  if (!v || v.creditDebit !== 'CRDT' || v.amount.lte(0)) return null;
+  const booked = v.bookingDate ?? v.valueDate;
+  if (!booked) return null;
+  const account =
+    v.counterpartyAccountNumber && v.counterpartyBankCode
+      ? `${v.counterpartyAccountPrefix ? `${v.counterpartyAccountPrefix}-` : ''}${v.counterpartyAccountNumber}/${v.counterpartyBankCode}`
+      : (v.counterpartyIban ?? null);
+  return {
+    source: 'BANK',
+    sourceKey: t.id,
+    environment: t.environment as Entry['environment'],
+    bankTransactionId: t.id,
+    bankTransactionVersion: v.version,
+    amount: v.amount,
+    currency: v.amountCurrency,
+    bookedOn: booked.toISOString().slice(0, 10),
+    variableSymbol:
+      v.variableSymbol && /^\d{1,10}$/.test(v.variableSymbol)
+        ? v.variableSymbol.replace(/^0+(?=\d)/, '')
+        : null,
+    counterpartyName: v.counterpartyName?.slice(0, 200) ?? null,
+    counterpartyAccount: account?.slice(0, 60) ?? null,
+    message: v.message?.slice(0, 500) ?? null,
+  };
 }
 
 /** The same lock order as the database trigger: the payment, then the invoice. */

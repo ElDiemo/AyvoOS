@@ -29,7 +29,11 @@ import {
   type InvoicePdfSnapshot,
 } from './invoice-pdf.js';
 import { INVOICE_TEMPLATE_VERSION, invoiceTexts } from './invoice-texts.js';
-import { invoicePaymentState } from './payments.service.js';
+import {
+  invoicePaymentState,
+  paymentChangedAtBankSql,
+  paymentToReviewSql,
+} from './payments.service.js';
 import { InvalidPaymentInstruction } from './spayd.js';
 
 const pad = (n: bigint, width: number) => n.toString().padStart(width, '0');
@@ -152,8 +156,8 @@ export class InvoicesService {
   /**
    * The Finance overview's sums (doc 042 §3a), aggregated in the database: valid invoices with a
    * remaining amount per currency (overdue = due before today in Prague, as `invoicePaymentState`)
-   * and two separate counts of incoming payments a person has to look at: with an amount not yet
-   * allocated, and changed by the bank after they were recorded (`bankChangedSinceRecorded`, also
+   * and two separate counts of hotel invoices' payments a person has to look at (doc 041 §8; never
+   * other income): with an amount not yet allocated, and changed by the bank after they were recorded (`bankChangedSinceRecorded`, also
    * when fully allocated — review FIN90-R1; nothing is re-allocated). Reads only.
    */
   async overview(): Promise<InvoicesOverview> {
@@ -178,13 +182,10 @@ export class InvoicesService {
         GROUP BY "currency" ORDER BY "currency"`,
       this.prisma.$queryRaw<{ count: number }[]>`
         SELECT count(*)::int AS "count" FROM "finance"."incoming_payments" p
-        WHERE p."amount" > coalesce((SELECT sum(a."amount") FROM "finance"."payment_allocations" a
-                                     WHERE a."payment_id" = p."id"), 0)`,
+        WHERE ${paymentToReviewSql}`,
       this.prisma.$queryRaw<{ count: number }[]>`
         SELECT count(*)::int AS "count" FROM "finance"."incoming_payments" p
-        WHERE p."bank_transaction_version" IS NOT NULL
-          AND (SELECT max(v."version") FROM "finance"."bank_transaction_versions" v
-               WHERE v."transaction_id" = p."bank_transaction_id") > p."bank_transaction_version"`,
+        WHERE ${paymentChangedAtBankSql}`,
     ]);
     const money = (v: string) => new Prisma.Decimal(v).toFixed(2);
     return {

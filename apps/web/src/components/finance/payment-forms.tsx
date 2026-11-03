@@ -20,8 +20,10 @@ const errorText = (e: unknown) =>
     : e instanceof Error
       ? e.message
       : String(e);
-const loadedText = (r: PaymentLoadResult) =>
+/** `recorded`: a simulation records other income too; the bank import leaves it in the bank. */
+const loadedText = (r: PaymentLoadResult, recorded: boolean) =>
   t.loaded(r.created.length, r.alreadyLoaded, r.matched, r.toReview) +
+  (r.otherIncome ? ` ${t.otherIncome(r.otherIncome, recorded)}` : '') +
   (r.changedAtBank > 0 ? ` ${t.changedAtBank(r.changedAtBank)}` : '');
 
 interface Row {
@@ -73,7 +75,7 @@ export function SimulateStatementForm() {
           }),
         );
         if (res.ok) {
-          setMessage(loadedText(res.value));
+          setMessage(loadedText(res.value, true));
           router.refresh();
         } else if (res.error) setError(errorText(res.error));
       }}
@@ -180,7 +182,7 @@ export function ImportBankButton() {
               }),
             );
             if (res.ok) {
-              setMessage(loadedText(res.value));
+              setMessage(loadedText(res.value, false));
               router.refresh();
             } else if (res.error) setError(errorText(res.error));
           }}
@@ -198,12 +200,17 @@ export function ImportBankButton() {
   );
 }
 
-/** A person allocates (a part of) a payment to an invoice, with a reason. */
+/**
+ * A person allocates (a part of) a payment to an invoice, with a reason — or an incoming bank
+ * transaction (`bankTransactionId`): recorded as a payment and allocated in one step.
+ */
 export function AllocatePaymentForm({
   payment,
+  bankTransactionId,
   openInvoices,
 }: {
-  payment: IncomingPayment;
+  payment: Pick<IncomingPayment, 'code' | 'suggestions' | 'unallocated'>;
+  bankTransactionId?: string;
   openInvoices: string[];
 }) {
   const router = useRouter();
@@ -212,6 +219,9 @@ export function AllocatePaymentForm({
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const attempt = useAttempt();
+  const path = bankTransactionId
+    ? `admin/finance/payments/bank/${bankTransactionId}/allocations`
+    : `admin/finance/payments/${payment.code}/allocations`;
   return (
     <form
       className="grid grid-cols-1 gap-2 sm:grid-cols-4"
@@ -220,16 +230,13 @@ export function AllocatePaymentForm({
         e.preventDefault();
         setError(null);
         const body = { invoiceNumber: invoice, amount: amount.trim(), reason: reason.trim() };
-        const res = await attempt.run(`${payment.code}:${JSON.stringify(body)}`, (requestId) =>
-          apiSend(
-            'POST',
-            `admin/finance/payments/${payment.code}/allocations`,
-            incomingPaymentSchema,
-            { requestId, ...body },
-          ),
+        const res = await attempt.run(`${path}:${JSON.stringify(body)}`, (requestId) =>
+          apiSend('POST', path, incomingPaymentSchema, { requestId, ...body }),
         );
-        if (res.ok) router.refresh();
-        else if (res.error) setError(errorText(res.error));
+        if (res.ok) {
+          if (bankTransactionId) router.push(`/finance/payments/${res.value.code}`);
+          else router.refresh();
+        } else if (res.error) setError(errorText(res.error));
       }}
     >
       <label className="flex min-w-0 flex-col gap-1 text-xs font-medium">

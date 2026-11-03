@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type AddressInfo } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
+  BankPaymentCandidate,
   PaymentOpenInvoices,
   HotelBillingTerms,
   InvoiceDeliveries,
@@ -850,12 +852,16 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
   // --- Incoming payments and the payment state (N3B-2, doc 041 §8): after the invoices above.
 
   const PAY = '/api/admin/finance/payments';
+  // Payments are booked on or after the invoices' issue day (today in Prague): money received
+  // before the issue is its own case (PAID_BEFORE_ISSUE, doc 040 §13).
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  const bookedLater = tomorrow.toISOString().slice(0, 10);
   const simulate = (entries: Record<string, unknown>[], requestId = randomUUID()) =>
     f.post(`${PAY}/simulate`).send({
       requestId,
       entries: entries.map((e) => ({
         currency: 'CZK',
-        bookedOn: '2026-10-20',
+        bookedOn: bookedLater,
         variableSymbol: null,
         counterpartyName: 'Testovací hotely s.r.o.',
         message: null,
@@ -885,9 +891,14 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       { reference: unknownVs, amount: '3200.00', variableSymbol: '1234' },
     ];
     const first = (await simulate(statement).expect(200)).body as PaymentLoadResult;
-    expect([first.created.length, first.alreadyLoaded, first.matched, first.toReview]).toEqual([
-      3, 0, 1, 2,
-    ]);
+    // A simulation records every entry; only an invoice payment's rest is to review (2026-11-02).
+    expect([
+      first.created.length,
+      first.alreadyLoaded,
+      first.matched,
+      first.toReview,
+      first.otherIncome,
+    ]).toEqual([3, 0, 1, 0, 2]);
     expect((await invoiceOf(inv.number)).paymentState).toMatchObject({
       state: 'PARTIALLY_PAID',
       paid: '1000.00',
@@ -908,7 +919,10 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       matchResult: 'NO_VARIABLE_SYMBOL',
       state: 'UNALLOCATED',
       allocations: [],
+      toReview: false,
     });
+    // A partial payment allocated in full is not to review: the invoice keeps its rest.
+    expect((await payment(partial)).toReview).toBe(false);
     const unclear = await payment(unknownVs);
     expect(unclear).toMatchObject({ matchResult: 'UNKNOWN_VARIABLE_SYMBOL', state: 'UNALLOCATED' });
     expect(unclear.suggestions).toContain(inv.number);
@@ -965,105 +979,149 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       { reference: eur, amount: '170.00', currency: 'EUR', variableSymbol: inv.variableSymbol },
       { reference: gone, amount: '4200.00', variableSymbol: cancelled.variableSymbol },
     ]).expect(200);
+    // The rest of an invoice payment is to review — refunding or offsetting it is not decided.
     expect(await payment(over)).toMatchObject({
       matchResult: 'PARTIAL_OVERPAYMENT',
       state: 'PARTIALLY_ALLOCATED',
       allocated: '4200.00',
       unallocated: '800.00',
+      toReview: true,
     });
     expect((await invoiceOf(inv.number)).paymentState.state).toBe('PAID');
-    expect((await payment(eur)).matchResult).toBe('CURRENCY_MISMATCH');
-    expect((await payment(gone)).matchResult).toBe('INVOICE_CANCELLED');
+    // Naming an invoice by its VS: a hotel's payment, to review although nothing is allocated.
+    expect(await payment(eur)).toMatchObject({ matchResult: 'CURRENCY_MISMATCH', toReview: true });
+    expect(await payment(gone)).toMatchObject({ matchResult: 'INVOICE_CANCELLED', toReview: true });
     expect((await invoiceOf(cancelled.number)).paymentState.paid).toBe('0.00');
   });
+
+  // Bank transactions as RB would have stored them (written with the Finance owner: fixtures).
+  const ownerDb = () =>
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }) });
+  const bankTransaction = async (
+    owner: PrismaClient,
+    environment: string,
+    amount: string,
+    vs: string | null,
+    creditDebit: 'CRDT' | 'DBIT' = 'CRDT',
+    bookingDate = tomorrow,
+    currency = 'CZK',
+  ) => {
+    const account = String(Date.now()).slice(-10);
+    const run = await owner.bankSyncRun.create({
+      data: {
+        provider: 'RB_PREMIUM',
+        environment,
+        accountNumber: account,
+        currency,
+        fromDate: new Date('2026-10-01'),
+        toDate: new Date('2026-10-27'),
+        startedBy: randomUUID(),
+        startedByName: 'test',
+      },
+    });
+    const t = await owner.bankTransaction.create({
+      data: {
+        environment,
+        accountNumber: account,
+        currency,
+        entryReference: randomUUID(),
+        firstRunId: run.id,
+      },
+    });
+    await owner.bankTransactionVersion.create({
+      data: {
+        transactionId: t.id,
+        version: 1,
+        runId: run.id,
+        contentSha256: 'a'.repeat(64),
+        amount,
+        amountCurrency: currency,
+        creditDebit,
+        bookingDate,
+        bankTransactionCode: 'PMNT',
+        variableSymbol: vs,
+        counterpartyName: 'Testovací hotely s.r.o.',
+        raw: '{}',
+      },
+    });
+    return t.id;
+  };
+  /** A payment recorded from any income before 2026-11-02 (as on PROD): a fixture. */
+  const historicalPayment = (
+    owner: PrismaClient,
+    transactionId: string,
+    amount: string,
+    environment = 'TEST',
+  ) => {
+    const serial = 9_000_000_000n + BigInt(Math.floor(Math.random() * 1_000_000_000));
+    return owner.incomingPayment.create({
+      data: {
+        serial,
+        code: `PP-${serial}`,
+        source: 'BANK',
+        sourceKey: transactionId,
+        environment,
+        bankTransactionId: transactionId,
+        bankTransactionVersion: 1,
+        amount,
+        currency: 'CZK',
+        bookedOn: new Date('2026-10-21T00:00:00Z'),
+        variableSymbol: '777',
+        matchResult: 'UNKNOWN_VARIABLE_SYMBOL',
+        recordedBy: randomUUID(),
+        recordedByName: 'před 2. 11.',
+      },
+    });
+  };
+  const byTx = async (id: string) => (await payments()).payments.find((p) => p.reference === id);
+  const paymentsOf = (owner: PrismaClient, id: string) =>
+    owner.incomingPayment.count({ where: { source: 'BANK', sourceKey: id } });
+  const importBank = async () =>
+    (await f.post(`${PAY}/import-bank`).send({ requestId: randomUUID() }).expect(200))
+      .body as PaymentLoadResult;
+  const fromBank = (id: string, invoiceNumber: string, amount: string, requestId = randomUUID()) =>
+    f.post(`${PAY}/bank/${id}/allocations`).send({
+      requestId,
+      invoiceNumber,
+      amount,
+      reason: 'Hotel uvedl chybný VS (ověřeno)',
+    });
+  const overviewNow = async () =>
+    (await f.get(`${INV}/overview`).expect(200)).body as InvoicesOverview;
 
   it('payments from read bank transactions: recorded once each; a production payment never pays a TEST invoice', async () => {
     await ensureCzkDefault();
     const inv = await freshInvoice();
-    const owner = new PrismaClient({
-      adapter: new PrismaPg({ connectionString: financeOwnerDatabaseUrl! }),
-    });
-    const account = String(Date.now()).slice(-10);
+    const owner = ownerDb();
     try {
-      const transaction = async (environment: string, amount: string, vs: string) => {
-        const run = await owner.bankSyncRun.create({
-          data: {
-            provider: 'RB_PREMIUM',
-            environment,
-            accountNumber: account,
-            currency: 'CZK',
-            fromDate: new Date('2026-10-01'),
-            toDate: new Date('2026-10-27'),
-            startedBy: randomUUID(),
-            startedByName: 'test',
-          },
-        });
-        const t = await owner.bankTransaction.create({
-          data: {
-            environment,
-            accountNumber: account,
-            currency: 'CZK',
-            entryReference: randomUUID(),
-            firstRunId: run.id,
-          },
-        });
-        await owner.bankTransactionVersion.create({
-          data: {
-            transactionId: t.id,
-            version: 1,
-            runId: run.id,
-            contentSha256: 'a'.repeat(64),
-            amount,
-            amountCurrency: 'CZK',
-            creditDebit: 'CRDT',
-            bookingDate: new Date('2026-10-21T09:00:00Z'),
-            bankTransactionCode: 'PMNT',
-            variableSymbol: vs,
-            counterpartyName: 'Testovací hotely s.r.o.',
-            raw: '{}',
-          },
-        });
-        return t.id;
-      };
-      const testTx = await transaction('TEST', '4200.00', `00${inv.variableSymbol}`.slice(-10));
-      const prodTx = await transaction('PRODUCTION', '4200.00', inv.variableSymbol);
-      const first = (
-        await f.post(`${PAY}/import-bank`).send({ requestId: randomUUID() }).expect(200)
-      ).body as PaymentLoadResult;
-      expect(first.created.length).toBeGreaterThanOrEqual(2);
-      const again = (
-        await f.post(`${PAY}/import-bank`).send({ requestId: randomUUID() }).expect(200)
-      ).body as PaymentLoadResult;
+      const testTx = await bankTransaction(
+        owner,
+        'TEST',
+        '4200.00',
+        `00${inv.variableSymbol}`.slice(-10),
+      );
+      const prodTx = await bankTransaction(owner, 'PRODUCTION', '4200.00', inv.variableSymbol);
+      const first = await importBank();
+      expect(first.created).toContain((await byTx(testTx))!.code);
+      const again = await importBank();
       expect(again.created).toEqual([]);
-      const byTx = async (id: string) =>
-        (await payments()).payments.find((p) => p.reference === id)!;
       expect(await byTx(testTx)).toMatchObject({
         source: 'BANK',
         environment: 'TEST',
         matchResult: 'MATCHED',
         state: 'ALLOCATED',
       });
-      expect(await byTx(prodTx)).toMatchObject({
-        environment: 'PRODUCTION',
-        matchResult: 'ENVIRONMENT_MISMATCH',
-        state: 'UNALLOCATED',
-      });
+      // A production payment naming a TEST invoice is no invoice payment: not recorded at all.
+      expect(await paymentsOf(owner, prodTx)).toBe(0);
       expect((await invoiceOf(inv.number)).paymentState.state).toBe('PAID');
-      // A person may not allocate the production payment to the TEST invoice either.
+      // A person may not allocate it to a TEST invoice either — and nothing is recorded.
       const target = await freshInvoice();
-      const prodCode = (await byTx(prodTx)).code;
-      const manual = await f.post(`${PAY}/${prodCode}/allocations`).send({
-        requestId: randomUUID(),
-        invoiceNumber: target.number,
-        amount: '1.00',
-        reason: 'pokus o spojení ostré platby s testovací fakturou',
-      });
+      const manual = await fromBank(prodTx, target.number, '1.00');
       expect([manual.status, manual.body.code]).toEqual([422, 'ENVIRONMENT_MISMATCH']);
+      expect(await paymentsOf(owner, prodTx)).toBe(0);
       // The bank changes the recorded transaction later (a new version): nothing recorded or
       // allocated is overwritten — it is reported and flagged for a person (also on the Finance
       // overview, although the payment is fully allocated: review FIN90-R1).
-      const overviewNow = async () =>
-        (await f.get(`${INV}/overview`).expect(200)).body as InvoicesOverview;
       const before = await overviewNow();
       const v1 = await owner.bankTransactionVersion.findFirstOrThrow({
         where: { transactionId: testTx, version: 1 },
@@ -1077,9 +1135,7 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
           recordedAt: undefined,
         },
       });
-      const changed = (
-        await f.post(`${PAY}/import-bank`).send({ requestId: randomUUID() }).expect(200)
-      ).body as PaymentLoadResult;
+      const changed = await importBank();
       expect([changed.created, changed.changedAtBank]).toEqual([[], 1]);
       expect(await byTx(testTx)).toMatchObject({
         amount: '4200.00',
@@ -1090,14 +1146,13 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         state: 'PAID',
         paid: '4200.00',
       });
-      expect((await byTx(prodTx)).bankChangedSinceRecorded).toBe(false);
       // Counted apart from the unallocated ones (it is fully allocated): never lost (FIN90-R1).
       const after = await overviewNow();
       expect(after.paymentsChangedAtBank).toBe(before.paymentsChangedAtBank + 1);
       expect(after.paymentsToReview).toBe(before.paymentsToReview);
       // The database refuses what the API refuses: a production payment for a TEST invoice, more
       // than the payment or the invoice, a change of a payment.
-      const prod = await owner.incomingPayment.findFirstOrThrow({ where: { sourceKey: prodTx } });
+      const prod = await historicalPayment(owner, prodTx, '4200.00', 'PRODUCTION');
       const invRow = await owner.invoice.findUniqueOrThrow({ where: { number: inv.number } });
       const alloc = (paymentId: string, invoiceId: string, amount: string) =>
         owner.paymentAllocation.create({
@@ -1121,20 +1176,250 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       );
       await expect(
         owner.$executeRawUnsafe(
-          `UPDATE finance.incoming_payments SET amount = 1 WHERE id = '${prod.id}'`,
+          `UPDATE finance.incoming_payments SET amount = 1 WHERE id = '${testPay.id}'`,
         ),
       ).rejects.toThrow();
+      // The same bank transaction is never a second payment (UNIQUE (source, source_key)).
       await expect(
         owner.incomingPayment.create({
           data: {
             ...prod,
             id: undefined,
-            serial: prod.serial + 1000000n,
-            code: `PP-9${prod.serial}`,
+            serial: prod.serial + 1n,
+            code: `PP-${prod.serial + 1n}`,
           },
         }),
       ).rejects.toThrow();
     } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('payments from the bank (owner 2026-11-02): only hotel invoice payments are recorded; other income stays in the bank, never a task', async () => {
+    await ensureCzkDefault();
+    const [inv, inv2] = [await freshInvoice(), await freshInvoice()];
+    const owner = ownerDb();
+    try {
+      const before = await overviewNow();
+      const partial = await bankTransaction(owner, 'TEST', '1000.00', inv.variableSymbol);
+      const unknownVs = await bankTransaction(owner, 'TEST', '300.00', '777');
+      const noVs = await bankTransaction(owner, 'TEST', '50.00', null);
+      const debit = await bankTransaction(owner, 'TEST', '-80.00', inv.variableSymbol, 'DBIT');
+      const over = await bankTransaction(owner, 'TEST', '5000.00', inv2.variableSymbol);
+      const loaded = await importBank();
+      const [p, o] = [(await byTx(partial))!, (await byTx(over))!];
+      expect(loaded.created).toEqual(expect.arrayContaining([p.code, o.code]));
+      expect(loaded.otherIncome).toBeGreaterThanOrEqual(2);
+      for (const id of [unknownVs, noVs, debit]) expect(await paymentsOf(owner, id)).toBe(0);
+      // A partial payment allocated in full: not to review — the invoice is partially paid.
+      expect(p).toMatchObject({ matchResult: 'MATCHED', state: 'ALLOCATED', toReview: false });
+      expect((await invoiceOf(inv.number)).paymentState).toMatchObject({
+        state: 'PARTIALLY_PAID',
+        remaining: '3200.00',
+      });
+      // The rest of an overpayment is to review (what happens to it is not decided).
+      expect(o).toMatchObject({ matchResult: 'PARTIAL_OVERPAYMENT', toReview: true });
+      expect((await overviewNow()).paymentsToReview).toBe(before.paymentsToReview + 1);
+      // Money received before the invoice was issued (doc 040 §13): recorded, never allocated by
+      // itself, to review — not a silent ordinary payment.
+      const early = await bankTransaction(
+        owner,
+        'TEST',
+        '4200.00',
+        inv2.variableSymbol,
+        'CRDT',
+        new Date(Date.now() - 30 * 86_400_000),
+      );
+      await importBank();
+      expect(await byTx(early)).toMatchObject({
+        matchResult: 'PAID_BEFORE_ISSUE',
+        state: 'UNALLOCATED',
+        toReview: true,
+      });
+      expect((await invoiceOf(inv2.number)).paymentState.paid).toBe('4200.00');
+      expect((await overviewNow()).paymentsToReview).toBe(before.paymentsToReview + 2);
+      // The rollback preflight (doc 041 §8b) finds it: an image older than #110 does not know it.
+      const preflight = readFileSync(
+        resolve(
+          import.meta.dirname,
+          '../../../scripts/sql/finance-payments-rollback-preflight.sql',
+        ),
+        'utf8',
+      );
+      const unknown = await owner.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
+        return tx.$queryRawUnsafe<{ match_result: string; payments: number }[]>(preflight);
+      });
+      expect(unknown).toEqual([
+        {
+          match_result: 'PAID_BEFORE_ISSUE',
+          payments: await owner.incomingPayment.count({
+            where: { matchResult: 'PAID_BEFORE_ISSUE' },
+          }),
+        },
+      ]);
+      // Loaded again: other income is still not recorded, nothing twice.
+      expect((await importBank()).created).toEqual([]);
+      for (const id of [unknownVs, noVs]) expect(await paymentsOf(owner, id)).toBe(0);
+
+      // A hotel paid with a wrong VS: found in the bank, allocated by hand — recorded and
+      // allocated in one step, with the bank's version, the person and the reason.
+      const candidate = (await f.get(`${PAY}/bank/${unknownVs}?q=${inv.number}`).expect(200))
+        .body as BankPaymentCandidate;
+      expect(candidate).toMatchObject({
+        transactionId: unknownVs,
+        amount: '300.00',
+        paymentCode: null,
+        invoices: [{ number: inv.number, remaining: '3200.00' }],
+      });
+      const requestId = randomUUID();
+      const manual = (await fromBank(unknownVs, inv.number, '300.00', requestId).expect(200))
+        .body as IncomingPayment;
+      expect(manual).toMatchObject({
+        source: 'BANK',
+        reference: unknownVs,
+        matchResult: 'UNKNOWN_VARIABLE_SYMBOL',
+        state: 'ALLOCATED',
+        toReview: false,
+        allocations: [{ invoiceNumber: inv.number, kind: 'MANUAL', amount: '300.00' }],
+      });
+      const row = await owner.incomingPayment.findFirstOrThrow({ where: { sourceKey: unknownVs } });
+      expect(row.bankTransactionVersion).toBe(1);
+      const allocation = await owner.paymentAllocation.findFirstOrThrow({
+        where: { paymentId: row.id },
+      });
+      expect([allocation.requestId, allocation.reason, allocation.recordedBy]).toEqual([
+        requestId,
+        'Hotel uvedl chybný VS (ověřeno)',
+        row.recordedBy,
+      ]);
+      // Replayed: the same payment, nothing twice; the bank now names it.
+      expect((await fromBank(unknownVs, inv.number, '300.00', requestId).expect(200)).body).toEqual(
+        manual,
+      );
+      expect(await owner.paymentAllocation.count({ where: { paymentId: row.id } })).toBe(1);
+      expect(
+        ((await f.get(`${PAY}/bank/${unknownVs}`).expect(200)).body as BankPaymentCandidate)
+          .paymentCode,
+      ).toBe(manual.code);
+      // Refused by the existing rules: nothing recorded — no orphaned payment.
+      const tooMuch = await fromBank(noVs, inv.number, '60.00');
+      expect([tooMuch.status, tooMuch.body.code]).toEqual([422, 'EXCEEDS_PAYMENT']);
+      const unknownInvoice = await fromBank(noVs, 'T2099-99999', '50.00');
+      expect([unknownInvoice.status, unknownInvoice.body.code]).toEqual([422, 'INVOICE_NOT_FOUND']);
+      expect(await paymentsOf(owner, noVs)).toBe(0);
+      // Naming an invoice by its VS: the import records it (with its automatic allocation) first.
+      const pending = await bankTransaction(owner, 'TEST', '10.00', inv.variableSymbol);
+      const first = await fromBank(pending, inv.number, '10.00');
+      expect([first.status, first.body.code]).toEqual([409, 'IMPORT_FIRST']);
+      expect(await paymentsOf(owner, pending)).toBe(0);
+      // Not an incoming transaction / none at all.
+      await f.get(`${PAY}/bank/${debit}`).expect(404);
+      await fromBank(debit, inv.number, '1.00').expect(404);
+      await f.get(`${PAY}/bank/${randomUUID()}`).expect(404);
+      await f.get(`${PAY}/bank/x`).expect(400);
+      expect((await invoiceOf(inv.number)).paymentState).toMatchObject({
+        state: 'PARTIALLY_PAID',
+        paid: '1300.00',
+      });
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('payments: a payment recorded earlier from other income is reused, never a second one, and is no task until allocated', async () => {
+    await ensureCzkDefault();
+    const inv = await freshInvoice();
+    const owner = ownerDb();
+    try {
+      const tx = await bankTransaction(owner, 'TEST', '200.00', '777');
+      const old = await historicalPayment(owner, tx, '200.00');
+      const reviewed = async () =>
+        ((await f.get(`${PAY}?filter=REVIEW&q=${old.code}`).expect(200)).body as PaymentsPage)
+          .payments;
+      // Listed and findable, not to review; loading the bank again leaves it alone.
+      expect(await byTx(tx)).toMatchObject({ code: old.code, toReview: false });
+      expect(await reviewed()).toEqual([]);
+      // (Other tests' transactions may be recorded by it; this one is left as it is.)
+      expect((await importBank()).created).not.toContain(old.code);
+      expect(await paymentsOf(owner, tx)).toBe(1);
+      expect(await byTx(tx)).toMatchObject({ code: old.code, state: 'UNALLOCATED' });
+      const candidate = (await f.get(`${PAY}/bank/${tx}`).expect(200)).body as BankPaymentCandidate;
+      expect([candidate.paymentCode, candidate.invoices]).toEqual([old.code, []]);
+      // Allocated from the bank transaction: the same payment — partly, so its rest is now the
+      // rest of a hotel's payment, to review.
+      const partly = (await fromBank(tx, inv.number, '150.00').expect(200)).body as IncomingPayment;
+      expect(partly).toMatchObject({
+        code: old.code,
+        state: 'PARTIALLY_ALLOCATED',
+        unallocated: '50.00',
+        toReview: true,
+      });
+      expect(await paymentsOf(owner, tx)).toBe(1);
+      expect((await reviewed()).map((p) => p.code)).toEqual([old.code]);
+      // The rest on the payment itself, as before.
+      const rest = (
+        await f
+          .post(`${PAY}/${old.code}/allocations`)
+          .send({
+            requestId: randomUUID(),
+            invoiceNumber: inv.number,
+            amount: '50.00',
+            reason: 'zbytek',
+          })
+          .expect(200)
+      ).body as IncomingPayment;
+      expect(rest).toMatchObject({ code: old.code, state: 'ALLOCATED', toReview: false });
+      expect(await paymentsOf(owner, tx)).toBe(1);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('payments: two people allocating the same bank transaction at once record one payment and allocate it once', async () => {
+    await ensureCzkDefault();
+    const [one, two] = [await freshInvoice(), await freshInvoice()];
+    const owner = ownerDb();
+    try {
+      const tx = await bankTransaction(owner, 'TEST', '4200.00', '778');
+      const both = await Promise.all([
+        fromBank(tx, one.number, '4200.00'),
+        fromBank(tx, two.number, '4200.00'),
+      ]);
+      expect(both.map((r) => r.status).sort()).toEqual([200, 422]);
+      expect(both.find((r) => r.status === 422)!.body.code).toBe('EXCEEDS_PAYMENT');
+      expect(await paymentsOf(owner, tx)).toBe(1);
+      expect((await byTx(tx))!).toMatchObject({ allocated: '4200.00', state: 'ALLOCATED' });
+      const paid = [await invoiceOf(one.number), await invoiceOf(two.number)].map(
+        (i) => i.paymentState.paid,
+      );
+      expect(paid.sort()).toEqual(['0.00', '4200.00']);
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('payments: a failure between recording and allocating rolls both back; the same request then succeeds', async () => {
+    await ensureCzkDefault();
+    const inv = await freshInvoice();
+    const owner = ownerDb();
+    const service = f.app.get(PaymentsService);
+    const spy = vi
+      .spyOn(service as unknown as { allocateTo: () => Promise<void> }, 'allocateTo')
+      .mockRejectedValueOnce(new Error('výpadek mezi zaznamenáním a přiřazením'));
+    try {
+      const tx = await bankTransaction(owner, 'TEST', '100.00', '779');
+      const requestId = randomUUID();
+      await fromBank(tx, inv.number, '100.00', requestId).expect(500);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(await paymentsOf(owner, tx)).toBe(0);
+      expect(await owner.operationRequest.count({ where: { requestId } })).toBe(0);
+      const done = (await fromBank(tx, inv.number, '100.00', requestId).expect(200))
+        .body as IncomingPayment;
+      expect(done).toMatchObject({ state: 'ALLOCATED', reference: tx });
+      expect(await paymentsOf(owner, tx)).toBe(1);
+    } finally {
+      spy.mockRestore();
       await owner.$disconnect();
     }
   });
@@ -1274,12 +1559,25 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         })),
     );
     expect(overview.invoices.find((x) => x.currency === 'CZK')!.overdue.count).toBeGreaterThan(0);
-    // To review: an unallocated amount; changed at the bank: counted apart (FIN90-R1).
+    // To review: an invoice payment's unallocated rest, never other income (owner 2026-11-02);
+    // changed at the bank: counted apart (FIN90-R1).
     const page = (await payments()).payments;
     expect(page.some((p) => p.state === 'ALLOCATED' && p.bankChangedSinceRecorded)).toBe(true);
-    expect(overview.paymentsToReview).toBe(page.filter((p) => p.state !== 'ALLOCATED').length);
+    expect(overview.paymentsToReview).toBe(page.filter((p) => p.toReview).length);
+    expect(page.some((p) => p.state !== 'ALLOCATED' && !p.toReview)).toBe(true);
+    // Changed at the bank: of an invoice payment (allocated or naming an invoice) only.
+    const invoicePayment = (p: IncomingPayment) =>
+      p.allocations.length > 0 ||
+      [
+        'MATCHED',
+        'PARTIAL_OVERPAYMENT',
+        'INVOICE_ALREADY_PAID',
+        'INVOICE_CANCELLED',
+        'CURRENCY_MISMATCH',
+        'PAID_BEFORE_ISSUE',
+      ].includes(p.matchResult);
     expect(overview.paymentsChangedAtBank).toBe(
-      page.filter((p) => p.bankChangedSinceRecorded).length,
+      page.filter((p) => p.bankChangedSinceRecorded && invoicePayment(p)).length,
     );
   });
 
@@ -1439,6 +1737,88 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
       reason: 'Víc než platba',
     });
     expect(refused.status).toBeGreaterThanOrEqual(400);
+  });
+
+  // --- reviews RB110-R1, R2 (Codex 2026-11-02, reproductions taken over) ---------------------
+
+  it('RB110-R1: a production payment naming a TEST invoice is no invoice payment, also when cancelled or in another currency', async () => {
+    await ensureCzkDefault();
+    const [cancelled, other] = [await freshInvoice(), await freshInvoice()];
+    await f
+      .post(`${INV}/${cancelled.number}/cancel`)
+      .send({ requestId: randomUUID(), reason: 'synthetic review' })
+      .expect(200);
+    const owner = ownerDb();
+    try {
+      const before = await overviewNow();
+      const toCancelled = await bankTransaction(
+        owner,
+        'PRODUCTION',
+        '100.00',
+        cancelled.variableSymbol,
+      );
+      const eur = await bankTransaction(
+        owner,
+        'PRODUCTION',
+        '100.00',
+        other.variableSymbol,
+        'CRDT',
+        tomorrow,
+        'EUR',
+      );
+      await importBank();
+      expect(await paymentsOf(owner, toCancelled)).toBe(0);
+      expect(await paymentsOf(owner, eur)).toBe(0);
+      expect((await overviewNow()).paymentsToReview).toBe(before.paymentsToReview);
+      // The same in a TEST environment stays a hotel's payment to review (control).
+      const testEnv = await bankTransaction(owner, 'TEST', '100.00', cancelled.variableSymbol);
+      await importBank();
+      expect(await byTx(testEnv)).toMatchObject({
+        matchResult: 'INVOICE_CANCELLED',
+        toReview: true,
+      });
+    } finally {
+      await owner.$disconnect();
+    }
+  });
+
+  it('RB110-R2: a change at the bank warns only for invoice payments, also fully allocated ones', async () => {
+    await ensureCzkDefault();
+    const inv = await freshInvoice();
+    const owner = ownerDb();
+    const newVersion = async (id: string) => {
+      const v = await owner.bankTransactionVersion.findFirstOrThrow({
+        where: { transactionId: id, version: 1 },
+      });
+      await owner.bankTransactionVersion.create({
+        data: {
+          ...v,
+          version: 2,
+          contentSha256: 'b'.repeat(64),
+          message: 'synthetic update',
+          recordedAt: undefined,
+        },
+      });
+    };
+    try {
+      const unrelated = await bankTransaction(owner, 'TEST', '100.00', null);
+      await historicalPayment(owner, unrelated, '100.00');
+      const paid = await bankTransaction(owner, 'TEST', '4200.00', inv.variableSymbol);
+      await importBank();
+      expect(await byTx(paid)).toMatchObject({ state: 'ALLOCATED', matchResult: 'MATCHED' });
+      // (Other tests' payments changed at the bank are counted on every import: a baseline.)
+      const base = (await importBank()).changedAtBank;
+      const before = await overviewNow();
+      await newVersion(unrelated);
+      expect((await importBank()).changedAtBank).toBe(base);
+      expect((await overviewNow()).paymentsChangedAtBank).toBe(before.paymentsChangedAtBank);
+      await newVersion(paid);
+      expect((await importBank()).changedAtBank).toBe(base + 1);
+      expect((await overviewNow()).paymentsChangedAtBank).toBe(before.paymentsChangedAtBank + 1);
+      expect((await byTx(paid))!.bankChangedSinceRecorded).toBe(true);
+    } finally {
+      await owner.$disconnect();
+    }
   });
 
   // --- a hotel's card reads Finance (doc 044 U2) ----------------------------------------------

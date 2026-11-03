@@ -214,7 +214,10 @@ test.describe.serial('Karta hotelu a Finance', () => {
               amount: '1000.00',
               currency: 'CZK',
               variableSymbol: vs,
-              bookedOn: '2026-06-20',
+              // On or after the issue day: money before it is never paired by itself (#110).
+              bookedOn: new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(
+                new Date(),
+              ),
               counterpartyName: 'Společný plátce (syntetický)',
               message: null,
             },

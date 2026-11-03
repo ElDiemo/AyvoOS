@@ -24,6 +24,8 @@ export const PAYMENT_MATCH_RESULTS = [
   'ENVIRONMENT_MISMATCH',
   'INVOICE_CANCELLED',
   'INVOICE_ALREADY_PAID',
+  /** Booked before the issue date of the invoice its VS names (doc 040 §13): never automatic. */
+  'PAID_BEFORE_ISSUE',
 ] as const;
 export const paymentMatchResultSchema = z.enum(PAYMENT_MATCH_RESULTS);
 
@@ -65,6 +67,12 @@ export const incomingPaymentSchema = z.object({
   state: paymentStateSchema,
   allocated: z.string(),
   unallocated: z.string(),
+  /**
+   * The unallocated rest of a hotel invoice's payment (allocated to an invoice or naming one by its
+   * VS): what the overview counts. A payment recorded from any other income is never to review.
+   * Missing from a Finance before 2026-11-02 (rollout, return): then any rest.
+   */
+  toReview: z.boolean().optional(),
   allocations: z.array(paymentAllocationSchema),
   /** Open invoices of the same currency whose remaining amount equals the unallocated amount —
    * a hint for a person, never applied automatically. */
@@ -160,6 +168,11 @@ export const paymentLoadResultSchema = z.object({
   alreadyLoaded: z.number().int(),
   matched: z.number().int(),
   toReview: z.number().int(),
+  /**
+   * Income naming no invoice by its VS: from the bank not recorded (it stays in Bankovní pohyby,
+   * never a task); from a simulation recorded, but not to review. Missing from an older Finance.
+   */
+  otherIncome: z.number().int().optional(),
   /** Already recorded bank payments the bank has changed since — flagged, never overwritten. */
   changedAtBank: z.number().int(),
 });
@@ -182,3 +195,26 @@ export const paymentOpenInvoicesSchema = z.object({
   limited: z.boolean(),
 });
 export type PaymentOpenInvoices = z.infer<typeof paymentOpenInvoicesSchema>;
+
+/** POST /api/admin/finance/payments/bank/:transactionId/allocations — by hand, with a reason. */
+export const allocateBankTransactionSchema = allocatePaymentSchema;
+export type AllocateBankTransactionRequest = AllocatePaymentRequest;
+
+/**
+ * GET /api/admin/finance/payments/bank/:transactionId: an incoming bank transaction a person may
+ * allocate to an invoice. When a payment was recorded from it, `paymentCode` names it (allocate
+ * there, never a second payment) and no invoices are listed.
+ */
+export const bankPaymentCandidateSchema = paymentOpenInvoicesSchema.extend({
+  transactionId: z.uuid(),
+  environment: z.enum(['PRODUCTION', 'SANDBOX', 'TEST', 'SIMULATION']),
+  amount: z.string(),
+  currency: z.string(),
+  bookedOn: z.string(),
+  variableSymbol: z.string().nullable(),
+  counterpartyName: z.string().nullable(),
+  counterpartyAccount: z.string().nullable(),
+  message: z.string().nullable(),
+  paymentCode: z.string().nullable(),
+});
+export type BankPaymentCandidate = z.infer<typeof bankPaymentCandidateSchema>;

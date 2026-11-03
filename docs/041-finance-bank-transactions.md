@@ -137,7 +137,8 @@ the bank: payments are made from what was already read, or simulated outside pro
 
 - **Sources, each recorded once** (`incoming_payments`, UNIQUE (source, source_key)):
   - `BANK` — a credit bank transaction already read (key = the transaction; its newest version
-    when first recorded): Finance → Platby → "Načíst platby z bankovních pohybů";
+    when first recorded) that pays a hotel invoice (§8b): Finance → Platby → "Načíst platby z
+    bankovních pohybů", or by hand from Pohyby z banky;
   - `SIMULATION` — a simulated statement outside production (`APP_ENV≠production`), each entry
     with its own reference.
 
@@ -165,6 +166,63 @@ the bank: payments are made from what was already read, or simulated outside pro
   (`changedAtBank`) and the payment shows "Banka tento pohyb po zaznamenání změnila". **What to do
   then is an open owner/accountant decision** (not invented).
 - Not covered: refunds or offsetting an overpayment (an open decision), live invoices.
+
+### 8b. Only hotel invoices' payments (owner 2026-11-02)
+
+Bank pairing is only for incoming payments of hotel invoices. Other bank income needs no pairing
+of its own, no closing by hand, and never fills the queue; pairing costs with the bank is the
+accountant's work (received documents are only archived and exported, doc 039).
+
+- **Import from the bank** records a payment only when the variable symbol names exactly one
+  invoice of an allowed environment (`MATCHED`, `PARTIAL_OVERPAYMENT`, `INVOICE_ALREADY_PAID`,
+  `INVOICE_CANCELLED`, `CURRENCY_MISMATCH`, `PAID_BEFORE_ISSUE`). Any other credit transaction is not recorded: it
+  stays findable in Pohyby z banky, and the result counts it as `otherIncome`. Its matching is
+  evaluated again on each import (no new rule: the same exact VS).
+- **A hotel's wrong VS, by hand:** Pohyby z banky → "Přiřadit k faktuře" →
+  `POST /api/admin/finance/payments/bank/:transactionId/allocations` (`finance:payments_manage`,
+  invoice, amount, reason; `GET …/bank/:transactionId` shows the transaction and the open
+  invoices). One transaction under the load lock: the payment already recorded from that
+  transaction is used (never a second one: UNIQUE (source, source_key)), otherwise it is recorded
+  now (newest bank version, the person) and kept only if the allocation passes every check of §8.
+  Idempotent per `requestId`. A transaction whose VS names an invoice answers 409 `IMPORT_FIRST`
+  (the import records it with its automatic allocation).
+- **Money received before the invoice was issued** (doc 040 §13: the tax point does not wait for
+  the payment, and a payment before it is never a silent ordinary payment): booked before the
+  issue date of the invoice its VS names → `PAID_BEFORE_ISSUE`, recorded, never allocated
+  automatically, to review; a person decides with UOL's rule. A TEST invoice has no tax point of
+  its own, so its issue date is the bound. **A live invoice must compare with its tax point (DUZP)
+  wherever it differs from the issue date** — part of the live model (doc 040 §13 step 6), not
+  decided here. Migration `20261106100000_payment_before_issue` only widens the `match_result`
+  CHECK.
+- **The environment first** (review RB110-R1): a production payment naming a TEST invoice is
+  `ENVIRONMENT_MISMATCH` whatever else differs (cancelled, another currency) — never recorded from
+  the bank, never a task.
+- **To review** (the overview's count, the list's REVIEW): the unallocated rest of an invoice
+  payment, i.e. a payment allocated to an invoice or naming one by its VS — an overpayment, or a
+  payment of a cancelled / paid / other-currency invoice. A partial payment allocated in full is not
+  to review (the invoice stays partially paid). Refunds or offsetting are not decided. **Changed at
+  the bank** counts the same payments only.
+- **Payments recorded earlier from other income** (before this change, or from a DEV simulation,
+  which still records every typed entry) are never deleted or rewritten: they stay in the list
+  (state "nepřiřazeno"), are no task, and are reused when a person allocates their bank
+  transaction. A change at the bank warns (import result, overview, list) only for invoice
+  payments (review RB110-R2).
+- **Return to an earlier image.** The rules of reading change and one migration widens a CHECK;
+  no row is rewritten. An earlier image shows payments recorded from other income as "to review"
+  again. **The return is not unconditional once a `PAID_BEFORE_ISSUE` payment exists:** a web
+  older than this change (e.g. `b060802`) parses the result strictly, and its payment pages fail
+  (no data is lost; the rows are append-only and never deleted). Before `deploy-dev.sh --rollback`
+  or `deploy-prod.sh --rollback` / `--finance-rollback` to such an image, run
+  `scripts/sql/finance-payments-rollback-preflight.sql` in a `BEGIN READ ONLY` transaction on that
+  environment's database:
+  - no row → the return is safe;
+  - any row → do not return the web to that image; return only to an image that knows the value,
+    or decide with the owner (the Platby pages would fail until the next deployment).
+
+  On PROD no such payment can exist before live invoices: TEST invoices are refused there, a
+  production payment never names a TEST invoice (environment first), and the simulation is
+  refused in production. On DEV it appears with a simulated or bank payment booked before an
+  invoice's issue date.
 
 ### 8a. Bounded payment list: rollout and return (reviews PAY103-R1, LANG96-R2)
 

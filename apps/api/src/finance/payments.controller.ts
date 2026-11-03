@@ -1,10 +1,13 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import {
+  allocateBankTransactionSchema,
   allocatePaymentSchema,
   paymentCodeSchema,
   paymentsQuerySchema,
   simulateStatementSchema,
+  type AllocateBankTransactionRequest,
   type AllocatePaymentRequest,
+  type BankPaymentCandidate,
   type IncomingPayment,
   type PaymentLoadResult,
   type PaymentOpenInvoices,
@@ -20,12 +23,14 @@ import { Caller, type FinanceCaller } from './finance-access.guard.js';
 import { PaymentsService } from './payments.service.js';
 
 const CODE = new ZodValidationPipe(paymentCodeSchema);
+const TRANSACTION = new ZodValidationPipe(z.uuid());
 const requestOnly = z.strictObject({ requestId: z.uuid() });
 
 /**
  * Incoming payments (N3B-2, doc 041 §8): reading with finance:invoices_read; recording payments
- * from read bank transactions, a simulated statement (outside production) and allocating by hand
- * with finance:payments_manage (ADMIN only). Nothing here ever calls the bank.
+ * from read bank transactions, a simulated statement (outside production) and allocating by hand —
+ * a payment, or an incoming bank transaction never recorded (a hotel's wrong VS) — with
+ * finance:payments_manage (ADMIN only). Nothing here ever calls the bank.
  */
 @Controller(`${ADMIN_PREFIX}/finance/payments`)
 export class PaymentsController {
@@ -52,6 +57,27 @@ export class PaymentsController {
     @Query('q') q?: string,
   ): Promise<PaymentOpenInvoices> {
     return this.payments.openInvoices(code, q?.trim().slice(0, 40));
+  }
+
+  @RequirePermission('finance:payments_manage')
+  @Get('bank/:transactionId')
+  bankCandidate(
+    @Param('transactionId', TRANSACTION) transactionId: string,
+    @Query('q') q?: string,
+  ): Promise<BankPaymentCandidate> {
+    return this.payments.bankCandidate(transactionId, q?.trim().slice(0, 40));
+  }
+
+  @RequirePermission('finance:payments_manage')
+  @Post('bank/:transactionId/allocations')
+  @HttpCode(200)
+  allocateBankTransaction(
+    @Param('transactionId', TRANSACTION) transactionId: string,
+    @Body(new ZodValidationPipe(allocateBankTransactionSchema))
+    body: AllocateBankTransactionRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<IncomingPayment> {
+    return this.payments.allocateBankTransaction(transactionId, body, caller);
   }
 
   @RequirePermission('finance:payments_manage')
