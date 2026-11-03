@@ -1,6 +1,8 @@
 # ADR 0043: Contract drafts — a manual generator in the core, kept apart from billing
 
-- **Status:** Proposed — for review. Requested and scoped by the owner on 2026-11-03 (manual
+- **Status:** Accepted — the owner approved the model on 2026-11-03 (merged with #120);
+  implementation in delivery 2 (#121) and 3 (#122), each under independent review. Requested and
+  scoped by the owner on 2026-11-03 (manual
   generator of a contract proposal; saving at a prospect or a hotel, editing, removing an unsigned
   proposal, uploading the already signed PDF). Details in doc 045.
 - **Date:** 2026-11-03
