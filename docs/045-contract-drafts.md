@@ -1,0 +1,127 @@
+# 045 — Návrhy smluv (ruční generátor)
+
+Status: proposed for review (owner 2026-11-03). Architecture: ADR 0043. Not deployed.
+
+## 1. Scope
+
+A salesperson or an administrator prepares a **contract proposal** by hand from a prospect or from a
+hotel's card, saves it, downloads a printable PDF, edits it or removes it while unsigned, and
+uploads the already signed PDF. The PDF is generated from one versioned **Czech B2B working
+template**, marked "NÁVRH – K PRÁVNÍ KONTROLE" on every page.
+
+Not in scope:
+
+- automatic generation of any kind;
+- creating a hotel;
+- any change of billing terms or anything else in Finance;
+- sending, e-signatures and signature verification;
+- a legally approved template;
+- other languages.
+
+## 2. Flow
+
+1. **Připravit návrh smlouvy**:
+   - from a prospect's detail (`/sales/prospects/AKV-…`, only within the prospect's scope);
+   - from a hotel's card (`/hotels/HT-…`, `sales:manage` + `hotels:read`).
+
+   Nothing is written until **Uložit návrh**.
+
+2. **Prefill:**
+   - from the prospect: name, address, rooms estimate;
+   - from the hotel: name and delivery address.
+
+   Everything stays editable. Empty means not filled in; nothing is assumed.
+
+3. **Wizard fields:**
+   - counterparty: legal name, IČO, registered address, representative (name and role);
+   - hotel: name and address;
+   - rooms;
+   - price per room and month **without VAT** (exact, at most 2 decimals) and the currency;
+   - start date;
+   - billing (`ADVANCE` / `ARREARS`, as in Finance);
+   - payment terms in days;
+   - holders: **Bez držáků** / **S držáky**.
+     - With holders, a separate required choice: **Zůstávají ve vlastnictví AYVO** / **Přejdou do
+       vlastnictví zákazníka**.
+     - Without holders the choice is hidden, and a value picked before is cleared.
+     - The server refuses a mismatch (`HOLDERS_OWNERSHIP_MISMATCH`); the database holds it too.
+   - hotel link: optional. It is chosen by hand from existing hotels (`sales:manage` +
+     `hotels:read`), prefilled when opened from a hotel and written only on save.
+   - a reason for each change after the first save.
+4. **Check before saving:** the wizard shows a summary of all fields and the template version.
+   Missing required fields are named.
+5. **After saving:** the draft page shows:
+   - the current revision and the download of its PDF;
+   - the history of revisions and events;
+   - Upravit (a new revision);
+   - Odstranit nepodepsaný návrh (confirmation and a reason; restorable);
+   - Připojit k hotelu.
+6. **The signed original:**
+   - Upload of the already signed PDF to the current revision, with the signed date. That
+     revision is then locked.
+   - The original can be downloaded through the API, with the access check and an event.
+   - It cannot be removed or replaced.
+   - A later change is a new revision (an amendment proposal); the signed one stays as it was.
+
+## 3. Data (core schema, module `contracts`)
+
+| Table                       | Kind                         | Content                                                                                                                        |
+| --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `contract_drafts`           | current state (+ `revision`) | code `SN-000001`, prospect (nullable), hotel (nullable; at least one), template version, removed at/by/reason, created/updated |
+| `contract_draft_revisions`  | append-only                  | draft, revision, every wizard field, template version, reason, author, time                                                    |
+| `contract_draft_events`     | append-only                  | draft, kind, revision, actor, time, reason, details (JSON, no file content)                                                    |
+| `contract_signed_documents` | append-only                  | draft, revision (unique per draft and revision), storage key, SHA-256, size, original name, signed date, uploader, time        |
+
+Rules held by the database:
+
+- Revisions, events and signed documents are never updated or deleted.
+- A draft always has a prospect or a hotel.
+- The holder ownership is set exactly when the holders are `WITH`.
+- The price is `> 0` with `scale <= 2`, a numeric without typmod, so a third decimal is refused,
+  not rounded.
+- Rooms are 1–100000.
+- A removed draft takes no new revision, hotel link or upload until restored.
+- A draft with a signed original is never removed.
+- A signed revision is never superseded silently: a new revision after signing is allowed and
+  recorded as an amendment proposal.
+
+## 4. Access (ADR 0043 §3)
+
+| Action                                                  | Rule                                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| prepare, save, read, PDF, edit, remove, restore, upload | the draft's prospect is in the caller's sales scope; or `sales:manage` + `hotels:read` for a hotel-only draft |
+| link a hotel, the block on a hotel's card               | `sales:manage` + `hotels:read`                                                                                |
+
+Out of scope it is 404, never "forbidden for this draft".
+
+## 5. API (`/api/admin/contracts`)
+
+- `GET drafts?prospect=AKV-…|hotel=HT-…` lists the drafts in scope.
+- `POST drafts` creates a draft (requestId, prospect or hotel, fields).
+- `GET drafts/:code` returns the current state, revisions, events and the signed original's
+  metadata.
+- `POST drafts/:code/revisions` saves a new revision (`expectedRevision`, reason, fields).
+- `POST drafts/:code/remove` and `POST drafts/:code/restore` need `expectedRevision`, a reason and
+  `confirm: true`.
+- `POST drafts/:code/hotel` links a hotel (`expectedRevision`, hotel, reason).
+- `GET drafts/:code/revisions/:revision/pdf` returns the generated PDF (`Content-Disposition:
+attachment`) and records an event.
+- `POST drafts/:code/signed` uploads the signed PDF: multipart `file`, `revision`, `signedOn`,
+  `requestId`.
+- `GET drafts/:code/signed/:revision` downloads the signed original and records an event.
+
+Every write is idempotent per `requestId`. A stale `expectedRevision` gets `409 CONCURRENT_CHANGE`.
+
+## 6. Template `cs-b2b-1` (working text)
+
+- Header: "NÁVRH – K PRÁVNÍ KONTROLE", the draft code, revision, template version and generation
+  date.
+- Parties:
+  - the supplier is a marked placeholder "[identifikace dodavatele – doplní právní kontrola]".
+    The module never reads Finance's issuer, so nothing is guessed;
+  - the customer is from the wizard.
+- Subject: the service for the hotel and its address. Rooms, price per room and month without VAT
+  and the currency, the start, billing and payment terms — exactly the entered values.
+- Holders: the variant's working paragraph, marked "[pracovní text k právní kontrole]". It states
+  no moment of transfer, no loan, no equipment price and no liability.
+- Footer on every page: the draft marking and the page number.
