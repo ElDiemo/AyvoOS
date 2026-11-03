@@ -183,3 +183,14 @@ Proposed with the review of #121 (CD121-3); a separate draft PR.
     overrides it (`HOTEL_NOT_SIGNED_HOTEL`), and a later amendment naming another hotel does not
     count.
   - After that, and for a draft signed with a hotel, the link never changes (API and DB).
+- **The order "link first, sign later" (review SIGN122-R3):**
+  - A draft may be linked to another hotel knowingly (acknowledged) while unsigned, and an amendment
+    may name another hotel. Neither acknowledgement carries over to signing.
+  - `uploadSigned` checks, under the same row lock and before any file is written, that a linked
+    hotel is exactly the one the revision being signed names (name and address). Otherwise
+    `409 HOTEL_NOT_SIGNED_REVISION`: no object is stored and no record is made, so the link stays
+    correctable.
+  - The error names both identities only to callers with `sales:manage` + `hotels:read`. A
+    salesperson gets no data from the hotel register, only the way out: the sales administrator
+    corrects the link.
+  - The draft page warns before the upload when the linked hotel and the current revision differ.

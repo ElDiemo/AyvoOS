@@ -627,6 +627,33 @@ export class ContractDraftsService {
             'CONTRACT_REVISION_SIGNED',
             'Tato revize už podepsaný originál má; nelze ho nahradit.',
           );
+        // The linked hotel must be exactly the one the revision being signed names — checked here,
+        // under the lock and before any file is written; an acknowledgement given while it was a
+        // draft never carries over (review SIGN122-R3). Without hotels:read nothing of the hotel
+        // record is revealed: the way out goes through the sales administrator.
+        if (row.hotelId) {
+          const signing = await tx.contractDraftRevision.findUniqueOrThrow({
+            where: { draftId_revision: { draftId: row.id, revision: row.currentRevision } },
+          });
+          const linked = (await this.hotels.byId(row.hotelId, tx))!;
+          if (!hotelIdentityMatches(draftIdentity(signing), hotelIdentity(linked)))
+            throw canUseHotels(p)
+              ? domainErrorWithDetails(
+                  409,
+                  'HOTEL_NOT_SIGNED_REVISION',
+                  'Připojený hotel neodpovídá hotelu v podepisované revizi. Opravte vazbu, nebo upravte návrh; originál se neuložil.',
+                  {
+                    revision: signing.revision,
+                    draft: draftIdentity(signing),
+                    hotel: { code: linked.code, ...hotelIdentity(linked) },
+                  },
+                )
+              : domainError(
+                  409,
+                  'HOTEL_NOT_SIGNED_REVISION',
+                  'Připojený hotel neodpovídá hotelu v podepisované revizi. Požádejte správce obchodu o opravu vazby; originál se neuložil.',
+                );
+        }
         const storageKey = newStorageKey('contract-documents', 'pdf');
         await this.storage.put(storageKey, file.buffer);
         try {

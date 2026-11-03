@@ -16,7 +16,7 @@ import {
   UnknownContractTemplate,
   type TemplateInput,
 } from '../src/contracts/contract-template.js';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { renderContractPdf } from '../src/contracts/contract-pdf.js';
 import { InvalidSignedPdf, inspectSignedPdf } from '../src/contracts/signed-pdf.js';
@@ -749,6 +749,97 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
         `UPDATE contract_drafts SET hotel_id = '${otherId}', version = version + 1 WHERE code = '${d.code}'`,
       ),
     ).rejects.toThrow();
+  });
+
+  it('the linked hotel must be the one the revision being signed names; a draft acknowledgement never carries over (SIGN122-R3)', async () => {
+    const files = async () =>
+      (await readdir(t.storage.directory, { recursive: true, withFileTypes: true })).filter((e) =>
+        e.isFile(),
+      ).length;
+    const p = await prospect(people.a.cookie, `Akvizice Pořadí ${tag}`);
+    const right = await hotel(`Hotel Správný ${tag}`);
+    const wrong = await hotel(`Hotel Chybný ${tag}`);
+    const named = fields({
+      hotelName: `Hotel Správný ${tag}`,
+      hotelAddress: 'Hotelová 9, 602 00 Brno',
+    });
+    let d = (
+      await post(people.a.cookie, '', { prospectCode: p.code, hotelCode: null, fields: named })
+    ).body as ContractDraftDetail;
+    // While a draft, the wrong hotel linked knowingly (acknowledged).
+    d = (
+      await post(admin, `/${d.code}/hotel`, {
+        expectedVersion: d.version,
+        hotelCode: wrong.code,
+        reason: 'Omyl (test)',
+        acknowledgeMismatch: true,
+      }).expect(200)
+    ).body as ContractDraftDetail;
+    const pdf = await renderContractPdf(
+      contractDocument('cs-b2b-1', {
+        code: d.code,
+        revision: 1,
+        savedOn: '2026-11-02',
+        fields: named,
+      }),
+    );
+    const upload = (cookie: string, revision: number) =>
+      http()
+        .post(`${D}/${d.code}/signed`)
+        .set('Cookie', cookie)
+        .field('requestId', randomUUID())
+        .field('expectedVersion', String(d.version))
+        .field('revision', String(revision))
+        .field('signedOn', '2026-11-02')
+        .field('confirm', 'true')
+        .attach('file', pdf, 'podepsano.pdf');
+    const filesBefore = await files();
+    const signedBefore = await t.prisma.contractSignedDocument.count();
+    // The salesperson (no hotels:read): refused, nothing of the hotel record revealed.
+    const bySales = await upload(people.a.cookie, 1);
+    expect([bySales.status, bySales.body.code]).toEqual([409, 'HOTEL_NOT_SIGNED_REVISION']);
+    expect(bySales.body.details).toBeUndefined();
+    expect(JSON.stringify(bySales.body)).not.toContain('Chybný');
+    expect(bySales.body.message).toContain('správce');
+    // The administrator: refused, both identities named.
+    const byAdmin = await upload(admin, 1);
+    expect([byAdmin.status, byAdmin.body.code]).toEqual([409, 'HOTEL_NOT_SIGNED_REVISION']);
+    expect(byAdmin.body.details).toMatchObject({
+      revision: 1,
+      draft: { name: `Hotel Správný ${tag}` },
+      hotel: { code: wrong.code },
+    });
+    // No object stored, no record, the link not locked.
+    expect(await files()).toBe(filesBefore);
+    expect(await t.prisma.contractSignedDocument.count()).toBe(signedBefore);
+    d = (await get(admin, `/${d.code}`).expect(200)).body as ContractDraftDetail;
+    expect(d).toMatchObject({ signed: [], canLinkHotel: true, hotel: { code: wrong.code } });
+    // Corrected, then the upload passes.
+    d = (
+      await post(admin, `/${d.code}/hotel`, {
+        expectedVersion: d.version,
+        hotelCode: right.code,
+        reason: 'Oprava vazby (test)',
+      }).expect(200)
+    ).body as ContractDraftDetail;
+    d = (await upload(people.a.cookie, 1).expect(201)).body as ContractDraftDetail;
+    expect(d.signed.map((x) => x.revision)).toEqual([1]);
+    expect(await files()).toBe(filesBefore + 1);
+
+    // An amendment naming another hotel (acknowledged as a draft) is never signed under this hotel.
+    d = (
+      await post(admin, `/${d.code}/revisions`, {
+        expectedVersion: d.version,
+        reason: 'Dodatek s jiným hotelem (test)',
+        fields: fields({ hotelName: 'Úplně jiný hotel', hotelAddress: 'Jinde 1, 100 00 Praha' }),
+        acknowledgeHotelMismatch: true,
+      }).expect(201)
+    ).body as ContractDraftDetail;
+    const amendment = await upload(admin, 2);
+    expect([amendment.status, amendment.body.code]).toEqual([409, 'HOTEL_NOT_SIGNED_REVISION']);
+    expect(await files()).toBe(filesBefore + 1);
+    d = (await get(admin, `/${d.code}`)).body as ContractDraftDetail;
+    expect(d.signed.map((x) => x.revision)).toEqual([1]);
   });
 });
 

@@ -111,6 +111,8 @@ export const contractsCs = {
       `Rozumím: nahrávám už podepsaný originál revize ${revision}. Revize se tím uzamkne; originál nepůjde smazat ani nahradit a návrh nepůjde odstranit. Pozdější změna bude nová revize.`,
     submit: 'Nahrát originál',
     lockedRemoval: 'Návrh s podepsaným originálem nelze odstranit.',
+    hotelBlocks:
+      'Připojený hotel neodpovídá hotelu v aktuální revizi, proto originál nepůjde nahrát. Nejdřív opravte vazbu nebo upravte návrh.',
     amendment:
       'Revize je podepsaná. Uložením změny vznikne nová revize (návrh dodatku); podepsaná zůstává beze změny.',
   },

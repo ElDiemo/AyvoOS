@@ -189,6 +189,13 @@ export default async function ContractDraftPage({
                 {t.signed.upload(d.currentRevision)}
               </summary>
               <div className="mt-3">
+                {d.hotelMismatch && (
+                  <div className="mb-3">
+                    <Notice tone="warning">
+                      <span data-testid="contract-upload-hotel-blocks">{t.signed.hotelBlocks}</span>
+                    </Notice>
+                  </div>
+                )}
                 <UploadSigned code={d.code} version={d.version} revision={d.currentRevision} />
               </div>
             </details>
