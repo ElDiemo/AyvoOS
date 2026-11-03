@@ -32,7 +32,9 @@ test.describe('Pravdivé texty', () => {
 
   test('new hotel, readiness and export say what the system does', async ({ page }) => {
     await page.goto('/hotels/new');
-    await expect(page.getByRole('main')).toContainText('smlouvu a fakturaci k němu vede Finance');
+    await expect(page.getByRole('main')).toContainText(
+      'fakturační podmínky a fakturaci k němu vede Finance',
+    );
     await expect(page.getByRole('main')).not.toContainText('Smlouvy, fakturace ani');
     await shots(page, 'ux1-hotel-new');
 
