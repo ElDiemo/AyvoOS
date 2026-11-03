@@ -85,6 +85,9 @@ export const issuerCs = {
     save: 'Uložit sazbu',
     invalid:
       'Sazbu zadejte v procentech jako číslo s nejvýš 2 desetinnými místy (víc než 0, méně než 100). Nic se neuložilo.',
+    unavailable:
+      'Sazbu DPH teď nelze načíst (Finance ji nenabízí nebo je dočasně nedostupná). Nezobrazuje se ani se nedá změnit; neznamená to, že sazba není zadaná. Ostatní údaje na stránce platí.',
+    forbidden: 'Na sazbu DPH nemáte oprávnění.',
   },
   errors: {
     CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný. Stránka se načte znovu.',
