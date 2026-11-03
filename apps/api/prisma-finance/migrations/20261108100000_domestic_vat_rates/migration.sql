@@ -21,8 +21,10 @@ CREATE TABLE "finance"."domestic_vat_rates" (
   "revision" bigint NOT NULL UNIQUE,
   -- The first tax point (a Prague calendar day) the rate applies to.
   "valid_from" date NOT NULL,
-  -- Percent, exact; more than 0 and less than 100 (no default).
-  "rate_percent" numeric(5, 2) NOT NULL CHECK ("rate_percent" > 0 AND "rate_percent" < 100),
+  -- Percent, exact; more than 0 and less than 100 (no default). No typmod: numeric(5,2) would
+  -- round 21.123 to 21.12 before any CHECK — here more than two decimals are refused, never rounded.
+  "rate_percent" numeric NOT NULL
+    CHECK ("rate_percent" > 0 AND "rate_percent" < 100 AND scale("rate_percent") <= 2),
   "reason" text NOT NULL CHECK (length(btrim("reason")) BETWEEN 1 AND 500),
   "recorded_at" timestamptz(3) NOT NULL DEFAULT clock_timestamp(),
   "recorded_by" uuid NOT NULL,

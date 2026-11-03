@@ -187,14 +187,35 @@ describe.skipIf(!hasDatabase)('finance default domestic VAT rate (doc 040 §17)'
       await expect(
         owner.$executeRawUnsafe(`TRUNCATE finance.domestic_vat_rates`),
       ).rejects.toThrow();
-      // The DB bounds hold without the API as well.
-      for (const bad of ['0', '100', '-1'])
+      // The DB bounds hold without the API as well — and more than two decimals are refused,
+      // never rounded first (no typmod: numeric(5,2) would store 21.123 as 21.12).
+      const insert = (db: Pick<PrismaClient, '$executeRawUnsafe'>, value: string) =>
+        db.$executeRawUnsafe(
+          `INSERT INTO finance.domestic_vat_rates (revision, valid_from, rate_percent, reason, recorded_by, recorded_by_name, request_id)
+           VALUES (999999, '2030-01-01', ${value}, 'x', '${randomUUID()}', 'x', '${randomUUID()}')`,
+        );
+      for (const bad of ['0', '100', '-1', '21.123', '21.005', '21.100', `'21.999'`, '99.995'])
+        await expect(insert(owner, bad)).rejects.toThrow();
+      for (const bad of ['21.123', '21.100']) await expect(insert(runtime, bad)).rejects.toThrow();
+      // The same statement with two decimals is stored exactly as given, by both roles (inside a
+      // transaction that is rolled back): the refusals above are the value's, nothing else.
+      const rollback = new Error('rollback');
+      for (const db of [owner, runtime])
         await expect(
-          owner.$executeRawUnsafe(
-            `INSERT INTO finance.domestic_vat_rates (revision, valid_from, rate_percent, reason, recorded_by, recorded_by_name, request_id)
-             VALUES (999999, '2030-01-01', ${bad}, 'x', '${randomUUID()}', 'x', '${randomUUID()}')`,
-          ),
-        ).rejects.toThrow();
+          db.$transaction(async (tx) => {
+            await insert(tx, '21.5');
+            const [row] = await tx.$queryRawUnsafe<{ v: string }[]>(
+              `SELECT rate_percent::text AS v FROM finance.domestic_vat_rates WHERE revision = 999999`,
+            );
+            expect(row?.v).toBe('21.5');
+            throw rollback;
+          }),
+        ).rejects.toBe(rollback);
+      const [column] = await owner.$queryRawUnsafe<{ p: number | null; s: number | null }[]>(
+        `SELECT numeric_precision AS p, numeric_scale AS s FROM information_schema.columns
+          WHERE table_schema = 'finance' AND table_name = 'domestic_vat_rates' AND column_name = 'rate_percent'`,
+      );
+      expect(column).toEqual({ p: null, s: null });
     } finally {
       await owner.$disconnect();
     }

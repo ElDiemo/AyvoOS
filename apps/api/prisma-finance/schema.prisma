@@ -406,7 +406,7 @@ model DomesticVatRate {
   id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   revision       BigInt   @unique
   validFrom      DateTime @map("valid_from") @db.Date
-  ratePercent    Decimal  @map("rate_percent") @db.Decimal(5, 2)
+  ratePercent    Decimal  @map("rate_percent") @db.Decimal
   reason         String
   recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
   recordedBy     String   @map("recorded_by") @db.Uuid
