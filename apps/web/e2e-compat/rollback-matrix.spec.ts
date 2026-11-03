@@ -229,7 +229,11 @@ test('upgrade and return: old and new web and Finance on one migrated database',
             amount: invoice.total,
             currency: 'CZK',
             variableSymbol: invoice.variableSymbol,
-            bookedOn: '2026-06-20',
+            // An ordinary payment: on the issue day (money before it is PAID_BEFORE_ISSUE, #110,
+            // and refuses the return — zz-rollback-refused.spec.ts).
+            bookedOn: new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(
+              new Date(),
+            ),
             counterpartyName: `Návrat ${run}`,
             message: null,
           },
