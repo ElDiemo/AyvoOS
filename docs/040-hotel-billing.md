@@ -416,16 +416,40 @@ Numbered §17 because §15 (#114) and §16 (#117) are open on their own PRs.
 **Built in this step (setting only):**
 
 - `finance.domestic_vat_rates`, append-only: a revision (from the `billing_revision` counter), the
-  start day `valid_from`, `rate_percent` exactly `numeric(5,2)` with `0 < rate < 100` (DB CHECK),
-  reason, author, time, request id. A later revision with the same start day **corrects** that day.
-  The history keeps every revision.
+  start day `valid_from`, `kind` (`RATE` | `WITHDRAWAL`), reason, author, time, request id.
+  - `rate_percent` only for a rate. It is a `numeric` **without typmod** with the CHECK
+    `0 < rate < 100` and `scale <= 2`. More than two decimals are refused, also by a direct write;
+    `numeric(5,2)` would round 21.123 to 21.12 before the CHECK.
+  - A later revision with the same start day **corrects** that day. The history keeps every
+    revision.
 - `GET / POST /api/admin/finance/issuer/vat-rates`, `finance:issuer_manage` for both (ADMIN only, as
   the rest of the page). A save names the newest revision the form saw (otherwise
   `409 CONCURRENT_CHANGE`) and is idempotent per `requestId`.
+- **Withdrawal of a future rate entered by mistake (review #118-4):**
+  `POST /api/admin/finance/issuer/vat-rates/withdrawals`.
+  - Same permission, expected revision and idempotence as a save; it needs a reason and
+    `confirm: true`.
+  - It writes a new `WITHDRAWAL` revision of that start day, never an UPDATE or DELETE.
+  - It is allowed only for a start day still **in the future** in Europe/Prague. The server decides
+    this in the write transaction from the database clock (`409 VAT_RATE_NOT_FUTURE`).
+  - The day's newest revision must be a rate (`409 VAT_RATE_NOTHING_TO_WITHDRAW`).
+  - A `BEFORE INSERT` trigger holds both conditions without the API.
+  - After it the day has no rate: the previous start day applies, or none. An older revision of the
+    same day never comes back.
+  - A new rate for that day afterwards is a new revision.
+  - No other back-dating rule is introduced: a rate (or a correction) may still be entered for a
+    past start day, as before.
 - The page block shows the rate valid today (Europe/Prague), the rates by start day and the
-  history. Without a rate it says that live domestic issuing would be blocked.
-- `domesticVatRateOn(tx, taxPointOn)`: the rate of the latest start day not after the tax point;
-  `null` = none.
+  history. Only a future start day offers its withdrawal (a reason and a confirmation). Without a
+  rate it says that live domestic issuing would be blocked.
+  - The block is its own panel (doc 044 U2). An older Finance without the endpoint (404), an outage
+    or an answer outside the contract says the rate is out of reach and offers no form; it never
+    says "no rate". The issuer, accounts and defaults keep working.
+- `domesticVatRateOn(tx, taxPointOn)` reads the rate in **one query**.
+  - Of the start days not after the tax point, it takes the newest revision of each, ordered by
+    `valid_from DESC, revision DESC`. Then it takes the latest day whose newest revision is a rate.
+  - `null` = none.
+  - A newer revision of another day never decides.
 
 **Binding contract for live issuing (not built; the gate of §5 stays closed):**
 
@@ -453,6 +477,5 @@ Numbered §17 because §15 (#114) and §16 (#117) are open on their own PRs.
 - The bounds `0 < rate < 100` with at most two decimals. A zero rate or exemption is a special
   regime, not this setting.
 - Whether a start day in the past may be entered or corrected once live invoices exist. Today it
-  may; issued documents are frozen either way.
-- Removing a future rate entered by mistake: today only a correction of that day exists, no
-  withdrawal.
+  may; issued documents are frozen either way. The withdrawal deliberately adds no rule here: it
+  exists only for the future.
