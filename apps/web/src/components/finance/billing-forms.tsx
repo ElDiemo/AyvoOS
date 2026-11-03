@@ -423,10 +423,19 @@ export function AgreementForm({
             : 'admin/finance/billing/agreements',
           code ? { expectedRevision: base, terms } : { hotelId, terms },
           (r) => {
-            // A new agreement: the form starts empty for the next hotel (never the same one again).
+            // A new agreement: the form starts empty for the next hotel (never the same one again);
+            // the timing and terms are chosen again, never carried over (review SMOKE-2).
             if (!code) {
               setHotelId('');
-              setV({ ...v, billedRooms: '', ownPrice: '', contractNumber: '', reason: '' });
+              setV({
+                ...v,
+                billedRooms: '',
+                ownPrice: '',
+                contractNumber: '',
+                paymentTermsDays: '',
+                billingTiming: '',
+                reason: '',
+              });
             } else {
               setV({ ...v, reason: '' });
               setBase(Math.max(...(r as BillingAgreementDetail).versions.map((x) => x.revision)));

@@ -38,6 +38,24 @@ test.describe('Smlouvy', () => {
         },
       })
     ).json()) as { code: string };
+    // A second hotel without an agreement: the general form stays for it after the first save.
+    const second = (await (
+      await request.post('/api/admin/hotels', {
+        data: {
+          requestId: crypto.randomUUID(),
+          name: 'Hotel Druhá smlouva (E2E)',
+          addressLine1: 'Smluvní 4',
+          addressLine2: null,
+          postalCode: '779 00',
+          city: 'Olomouc',
+          countryCode: 'CZ',
+          contactName: 'Recepce',
+          contactPhone: '+420 500 000 004',
+          contactEmail: 'recepce@druha-smlouva.test',
+          fulfillmentSiteId: me.sites.find((s) => s.code === 'CZ-PREROV-01')!.id,
+        },
+      })
+    ).json()) as { code: string };
 
     await page.goto('/finance/billing');
     await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy' })).toBeVisible();
@@ -92,16 +110,42 @@ test.describe('Smlouvy', () => {
     const row = list.locator('li').filter({ hasText: 'Hotel Smlouva (E2E)' });
     await expect(row).toContainText('12 pokojů · 350,00 CZK (vlastní cena)');
     await expect(row).toContainText('Hotelová skupina Morava s.r.o. (E2E)');
-    // The form starts empty again (the hotel cannot be chosen twice by mistake) — or, with no
-    // hotel left without an agreement, it is replaced by that notice.
-    if ((await agreement.count()) > 0) {
-      await expect(agreement.locator('[name=billedRooms]')).toHaveValue('');
-      await expect(agreement.locator('[name=hotelId]')).toHaveValue('');
-    } else {
-      await expect(page.getByTestId('billing-agreements')).toContainText(
-        'Všechny hotely už smlouvu mají',
-      );
-    }
+    // The form starts empty again (the hotel cannot be chosen twice by mistake); the timing and
+    // the terms are not carried over to the next agreement (review SMOKE-2).
+    await expect(agreement.locator('[name=billedRooms]')).toHaveValue('');
+    await expect(agreement.locator('[name=hotelId]')).toHaveValue('');
+    await expect(agreement.locator('[name=billingTiming]')).toHaveValue('');
+    await expect(agreement.locator('[name=paymentTermsDays]')).toHaveValue('');
+    // The second agreement in a row requires both choices again; nothing is stored without them.
+    await agreement
+      .locator('[name=hotelId]')
+      .selectOption({ label: `Hotel Druhá smlouva (E2E) (${second.code})` });
+    await agreement.locator('[name=customerId]').selectOption(customerOption!);
+    await agreement.locator('[name=billedRooms]').fill('8');
+    await agreement.locator('[name=ownPrice]').fill('400,00');
+    await agreement.locator('[name=reason]').fill('Druhá smlouva (syntetická)');
+    await agreement.getByTestId('agreement-save').click();
+    expect(
+      await agreement
+        .locator('[name=billingTiming]')
+        .evaluate((e: HTMLSelectElement) => e.validity.valueMissing),
+    ).toBe(true);
+    await agreement.locator('[name=billingTiming]').selectOption('ADVANCE');
+    await agreement.getByTestId('agreement-save').click();
+    expect(
+      await agreement
+        .locator('[name=paymentTermsDays]')
+        .evaluate((e: HTMLInputElement) => e.validity.valueMissing),
+    ).toBe(true);
+    await expect(agreement.getByRole('status')).toHaveCount(0);
+    await expect(list.locator('li').filter({ hasText: 'Hotel Druhá smlouva (E2E)' })).toHaveCount(
+      0,
+    );
+    await agreement.locator('[name=paymentTermsDays]').fill('30');
+    await agreement.getByTestId('agreement-save').click();
+    await expect(list.locator('li').filter({ hasText: 'Hotel Druhá smlouva (E2E)' })).toContainText(
+      '8 pokojů · 400,00 CZK (vlastní cena)',
+    );
 
     // A new version of the terms (a reason; the history keeps both).
     await row.getByRole('link').click();
@@ -109,11 +153,16 @@ test.describe('Smlouvy', () => {
     const version = page.locator('[data-testid^="agreement-version-BA-"]');
     // The own price is offered as typed in Czech, as the history shows it (review SMOKE-3).
     await expect(version.locator('[name=ownPrice]')).toHaveValue('350,00');
+    // Editing an existing agreement keeps its timing and terms (only a new one starts empty).
+    await expect(version.locator('[name=billingTiming]')).toHaveValue('ARREARS');
+    await expect(version.locator('[name=paymentTermsDays]')).toHaveValue('14');
     await version.locator('[name=billedRooms]').fill('14');
     await version.locator('[name=reason]').fill('Rozšíření o 2 pokoje (test)');
     await version.getByTestId('agreement-version-save').click();
     const history = page.getByTestId('agreement-history');
     await expect(history.locator('li')).toHaveCount(2);
+    await expect(version.locator('[name=billingTiming]')).toHaveValue('ARREARS');
+    await expect(version.locator('[name=paymentTermsDays]')).toHaveValue('14');
     await expect(history.locator('li').first()).toContainText('14 pokojů');
     await expect(history).toContainText('Rozšíření o 2 pokoje (test)');
 
