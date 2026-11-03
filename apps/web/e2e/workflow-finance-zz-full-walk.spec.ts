@@ -273,7 +273,7 @@ test.describe('Celý průchod', () => {
         await page.goto(`/hotels/${hotel.code}`);
         await expect(page.getByRole('heading', { level: 1 })).toContainText(hotelName);
         await expect(panel).toContainText('Fakturace dočasně nedostupná');
-        await expect(panel).not.toContainText('nemá smlouvu');
+        await expect(panel).not.toContainText('nemá fakturační podmínky');
       } finally {
         process.kill(serverPid(), 'SIGUSR1');
         await expect.poll(() => financeReady(request), { timeout: 30_000 }).toBe(200);

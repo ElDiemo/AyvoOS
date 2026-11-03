@@ -436,8 +436,10 @@ test.describe('Ukázka: řetězec fakturace', () => {
     const finance = page.getByRole('navigation', { name: 'Finance' });
     const views = page.getByRole('navigation', { name: 'Zobrazení' });
     await finance.getByRole('link', { name: 'Faktury hotelům', exact: true }).click();
-    await views.getByRole('link', { name: 'Smlouvy', exact: true }).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy' })).toBeVisible();
+    await views.getByRole('link', { name: 'Fakturační podmínky', exact: true }).click();
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Fakturační podmínky' }),
+    ).toBeVisible();
     /** Opens a collapsible section unless it is open already (it stays open after a save). */
     const ensureOpen = async (summaryTestId: string) => {
       const details = page.locator('details', { has: page.getByTestId(summaryTestId) });

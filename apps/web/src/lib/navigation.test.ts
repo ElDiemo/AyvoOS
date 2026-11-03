@@ -235,7 +235,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     ]);
     expect(all.pages.find((p) => p.id === 'invoices')!.views!.map((v) => v.label)).toEqual([
       'Faktury',
-      'Smlouvy',
+      'Fakturační podmínky',
       'Plátci',
     ]);
     expect(all.pages.find((p) => p.id === 'bank')!.views!.map((v) => v.label)).toEqual([
