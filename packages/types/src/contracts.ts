@@ -70,7 +70,12 @@ export interface HotelIdentity {
   address: string;
 }
 const identityKey = (v: string) =>
-  v.normalize('NFC').toLocaleLowerCase('cs').replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ').trim();
+  v
+    .normalize('NFC')
+    .toLocaleLowerCase('cs')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .trim();
 /**
  * Whether the hotel written in a draft (and so in its PDF) is the linked hotel record: the same
  * name and address, ignoring case and spacing only. A mismatch is never saved unobserved — the
