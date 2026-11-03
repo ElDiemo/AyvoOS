@@ -15,8 +15,10 @@ const t = hotelsCs.detail.billing;
 const inv = financeCs.invoices;
 
 /**
- * "Smlouva a fakturace" on a hotel's card (doc 044 U2): what Finance says, through its own API and
- * permissions, nothing computed here. Contract and invoices are judged separately. A failure says
+ * "Fakturace" on a hotel's card (doc 044 U2): what Finance says, through its own API and
+ * permissions, nothing computed here. The record is the hotel's billing terms, not a legal contract
+ * (owner 2026-11-03). Editing opens the existing new-version form of these terms (only with
+ * finance:billing_manage now; the API decides again). Contract and invoices are judged separately. A failure says
  * the data is unavailable, never that there is no agreement, and never takes the page down.
  */
 export async function HotelBillingPanel({
@@ -113,7 +115,21 @@ export async function HotelBillingPanel({
                       {terms.price.perRoomMonth
                         ? financeAmount(terms.price.perRoomMonth, v.currency)
                         : '—'}{' '}
-                      ({t.priceSource[terms.price.source]})
+                      {terms.price.source === 'DEFAULT' ? (
+                        <>
+                          (
+                          <Link
+                            href="/finance/settings/prices"
+                            className="underline"
+                            data-testid="hotel-billing-price-list"
+                          >
+                            {t.priceSource.DEFAULT}
+                          </Link>
+                          )
+                        </>
+                      ) : (
+                        `(${t.priceSource[terms.price.source]})`
+                      )}
                     </span>
                   </Field>
                   <Field label={t.paymentTerms}>{t.days(v.paymentTermsDays)}</Field>
@@ -126,6 +142,15 @@ export async function HotelBillingPanel({
                 </>
               )}
             </FieldList>
+            {canManage && (
+              <Link
+                href={`/finance/billing/agreements/${terms.agreement.code}?from=hotel#nova-verze`}
+                className={`${buttonClass.secondary} mt-3`}
+                data-testid="hotel-billing-edit"
+              >
+                {t.editAgreement}
+              </Link>
+            )}
           </div>
         )}
         {noInvoices && (

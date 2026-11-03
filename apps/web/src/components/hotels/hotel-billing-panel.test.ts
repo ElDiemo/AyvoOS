@@ -39,7 +39,7 @@ describe('the hotel card names the part out of reach, never an empty card', () =
     answer(noAgreement, null);
     const html = await render(true, false);
     expect(html).toContain('hotel-billing-forbidden-invoices');
-    expect(html).toContain('Hotel zatím nemá smlouvu');
+    expect(html).toContain('Hotel zatím nemá fakturační podmínky');
   });
   it('unavailable stays its own answer, not missing rights', async () => {
     answer({ state: 'unavailable' }, { state: 'unavailable' });
