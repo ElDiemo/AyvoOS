@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   CURRENT_CONTRACT_TEMPLATE,
   holdersConsistent,
@@ -12,6 +13,7 @@ import {
   type LinkContractHotelRequest,
   type RemoveContractDraftRequest,
   type ReviseContractDraftRequest,
+  type UploadSignedContractFields,
 } from '@ayvo/types';
 import { CODE_PREFIX, formatCode } from '../common/codes.js';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
@@ -22,6 +24,7 @@ import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import type { Principal } from '../identity/principal.js';
 import { ProspectContextService } from '../sales/prospect-context.service.js';
+import { FILE_STORAGE, newStorageKey, type FileStorage } from '../storage/file-storage.js';
 import { contractDocument, UnknownContractTemplate } from './contract-template.js';
 import { renderContractPdf } from './contract-pdf.js';
 
@@ -37,6 +40,20 @@ const notFound = () => new NotFoundException('Contract draft not found');
 const concurrentChange = () =>
   domainError(409, 'CONCURRENT_CHANGE', 'Návrh mezitím změnil někdo jiný. Načtěte ho znovu.');
 const dateOnly = (d: Date) => d.toISOString().slice(0, 10);
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // %PDF-
+const safeFilename = (name: string) => {
+  const cleaned = name
+    .replace(/[^\w.\- ]+/g, '_')
+    .trim()
+    .slice(0, 200);
+  return cleaned.length > 0 ? cleaned : 'podepsano.pdf';
+};
+const signedLocked = () =>
+  domainError(
+    409,
+    'CONTRACT_DRAFT_SIGNED',
+    'Návrh má podepsaný originál: nelze ho odstranit ani změnit vazbu na hotel. Změna = nová revize.',
+  );
 
 function assertHolders(f: ContractDraftFields) {
   if (!holdersConsistent(f))
@@ -131,11 +148,14 @@ function assertSameHotel(
  */
 @Injectable()
 export class ContractDraftsService {
+  private readonly logger = new Logger(ContractDraftsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly operations: OperationRequestsService,
     private readonly prospects: ProspectContextService,
     private readonly hotels: HotelsService,
+    @Inject(FILE_STORAGE) private readonly storage: FileStorage,
   ) {}
 
   // --- access --------------------------------------------------------------------------------
@@ -216,7 +236,7 @@ export class ContractDraftsService {
     const db = this.prisma;
     const row = await this.visible(db, code, p);
     const linked = row.hotelId && canUseHotels(p) ? await this.hotels.byId(row.hotelId, db) : null;
-    const [revisions, events] = await Promise.all([
+    const [revisions, events, signed] = await Promise.all([
       db.contractDraftRevision.findMany({
         where: { draftId: row.id },
         orderBy: { revision: 'desc' },
@@ -226,6 +246,11 @@ export class ContractDraftsService {
         where: { draftId: row.id },
         orderBy: { at: 'desc' },
         include: { actor: { select: { displayName: true } } },
+      }),
+      db.contractSignedDocument.findMany({
+        where: { draftId: row.id },
+        orderBy: { revision: 'desc' },
+        include: { uploader: { select: { displayName: true } } },
       }),
     ]);
     return {
@@ -247,8 +272,19 @@ export class ContractDraftsService {
         actorName: e.actor.displayName,
         reason: e.reason,
       })),
-      canLinkHotel: canUseHotels(p) && row.removedAt === null,
+      canLinkHotel: canUseHotels(p) && row.removedAt === null && signed.length === 0,
       hotelIdentity: linked && hotelIdentity(linked),
+      signed: signed.map((x) => ({
+        revision: x.revision,
+        signedOn: dateOnly(x.signedOn),
+        originalFilename: x.originalFilename,
+        byteSize: x.byteSize,
+        sha256: x.sha256,
+        uploadedAt: x.uploadedAt.toISOString(),
+        uploadedByName: x.uploader.displayName,
+      })),
+      canUploadSigned:
+        row.removedAt === null && !signed.some((x) => x.revision === row.currentRevision),
       hotelMismatch:
         !!linked &&
         !hotelIdentityMatches(draftIdentity(fieldsOf(revisions[0]!)), hotelIdentity(linked)),
@@ -392,6 +428,8 @@ export class ContractDraftsService {
       { code, ...req, actorId: p.userId },
       async (tx) => {
         const row = await this.writable(tx, code, req.expectedVersion, p);
+        if (await tx.contractSignedDocument.count({ where: { draftId: row.id } }))
+          throw signedLocked();
         await this.next(tx, row, p, {
           removedAt: new Date(),
           removedBy: p.userId,
@@ -449,6 +487,8 @@ export class ContractDraftsService {
         const hotel = await this.hotelByCode(tx, req.hotelCode, p);
         if (row.hotelId === hotel.id)
           throw domainError(409, 'HOTEL_ALREADY_LINKED', 'Návrh už k tomuto hotelu připojený je.');
+        if (await tx.contractSignedDocument.count({ where: { draftId: row.id } }))
+          throw signedLocked();
         const current = await tx.contractDraftRevision.findUniqueOrThrow({
           where: { draftId_revision: { draftId: row.id, revision: row.currentRevision } },
         });
@@ -512,6 +552,98 @@ export class ContractDraftsService {
         data: { draftId: row.id, kind: 'PDF_DOWNLOADED', revision, actorId: p.userId },
       });
       return { file, name: `${code}-r${revision}-NAVRH.pdf` };
+    });
+  }
+
+  /**
+   * The already signed original of the CURRENT revision, uploaded by hand (doc 045 §7). Like every
+   * write it locks the draft row first and names the version seen, so it serialises with editing,
+   * removal and hotel links: whichever commits first wins, the other gets CONCURRENT_CHANGE — a
+   * paper signed for revision r is never filed under r+1. The file is written after the request
+   * row (a replay never stores a second file) and before the record: a failure in between leaves
+   * an unreferenced file (logged), never a record without its file. Recognised as PDF by content.
+   */
+  async uploadSigned(
+    code: string,
+    fields: UploadSignedContractFields,
+    file: { buffer: Buffer; originalname: string },
+    p: Principal,
+  ): Promise<ContractDraftDetail> {
+    if (!PDF_MAGIC.every((b, i) => file.buffer[i] === b))
+      throw domainError(422, 'UNSUPPORTED_DOCUMENT', 'Nahrajte podepsaný originál jako PDF.');
+    const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+    await this.operations.run(
+      'CONTRACT_SIGNED_UPLOAD',
+      fields.requestId,
+      { code, ...fields, sha256, actorId: p.userId },
+      async (tx) => {
+        const row = await this.writable(tx, code, fields.expectedVersion, p);
+        if (fields.revision !== row.currentRevision) throw concurrentChange();
+        if (
+          await tx.contractSignedDocument.count({
+            where: { draftId: row.id, revision: row.currentRevision },
+          })
+        )
+          throw domainError(
+            409,
+            'CONTRACT_REVISION_SIGNED',
+            'Tato revize už podepsaný originál má; nelze ho nahradit.',
+          );
+        const storageKey = newStorageKey('contract-documents', 'pdf');
+        await this.storage.put(storageKey, file.buffer);
+        try {
+          await tx.contractSignedDocument.create({
+            data: {
+              draftId: row.id,
+              revision: row.currentRevision,
+              storageKey,
+              sha256,
+              byteSize: file.buffer.length,
+              originalFilename: safeFilename(file.originalname),
+              signedOn: new Date(`${fields.signedOn}T00:00:00Z`),
+              uploadedBy: p.userId,
+              requestId: fields.requestId,
+            },
+          });
+        } catch (error) {
+          this.logger.warn(`Unreferenced signed contract file after failed insert: ${storageKey}`);
+          throw error;
+        }
+        await this.next(tx, row, p, {});
+        await tx.contractDraftEvent.create({
+          data: {
+            draftId: row.id,
+            kind: 'SIGNED_UPLOADED',
+            revision: row.currentRevision,
+            actorId: p.userId,
+            details: { sha256, byteSize: file.buffer.length, signedOn: fields.signedOn },
+          },
+        });
+        return { revision: row.currentRevision };
+      },
+    );
+    return this.detail(code, p);
+  }
+
+  /** The signed original as kept (its hash checked), with the same access check; recorded. */
+  async signedFile(
+    code: string,
+    revision: number,
+    p: Principal,
+  ): Promise<{ file: Buffer; name: string }> {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await this.visible(tx, code, p);
+      const doc = await tx.contractSignedDocument.findUnique({
+        where: { draftId_revision: { draftId: row.id, revision } },
+      });
+      if (!doc) throw notFound();
+      const file = await this.storage.get(doc.storageKey);
+      if (createHash('sha256').update(file).digest('hex') !== doc.sha256)
+        throw domainError(500, 'STORED_FILE_CHANGED', 'Uložený originál neodpovídá svému otisku.');
+      await tx.contractDraftEvent.create({
+        data: { draftId: row.id, kind: 'SIGNED_DOWNLOADED', revision, actorId: p.userId },
+      });
+      return { file, name: `${code}-r${revision}-PODEPSANO.pdf` };
     });
   }
 

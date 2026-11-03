@@ -980,6 +980,7 @@ enum OperationKind {
   CONTRACT_DRAFT_REMOVE
   CONTRACT_DRAFT_RESTORE
   CONTRACT_DRAFT_HOTEL
+  CONTRACT_SIGNED_UPLOAD
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1153,6 +1154,7 @@ model User {
   contractDraftsRemoved  ContractDraft[]         @relation("ContractDraftRemovedBy")
   contractRevisions      ContractDraftRevision[] @relation("ContractDraftRevisionCreatedBy")
   contractDraftEvents    ContractDraftEvent[]    @relation("ContractDraftEventActor")
+  contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
 
   @@map("users")
 }
@@ -3659,8 +3661,9 @@ model ContractDraftRevision {
   createdBy             String   @map("created_by") @db.Uuid
   requestId             String   @unique @map("request_id") @db.Uuid
 
-  draft   ContractDraft @relation(fields: [draftId], references: [id], onDelete: Restrict)
-  creator User          @relation("ContractDraftRevisionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  draft   ContractDraft           @relation(fields: [draftId], references: [id], onDelete: Restrict)
+  creator User                    @relation("ContractDraftRevisionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  signed  ContractSignedDocument?
 
   @@unique([draftId, revision])
   @@map("contract_draft_revisions")
@@ -3683,4 +3686,27 @@ model ContractDraftEvent {
 
   @@index([draftId, at])
   @@map("contract_draft_events")
+}
+
+/// The signed original of one draft revision (ADR 0043 §6, doc 045 §7): a PDF uploaded by hand,
+/// kept in the private FileStorage; signatures are not verified. Append-only; it locks the revision
+/// (never replaced) and the draft (never removed, hotel never changed) — DB triggers.
+model ContractSignedDocument {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  draftId          String   @map("draft_id") @db.Uuid
+  revision         Int
+  storageKey       String   @unique @map("storage_key")
+  sha256           String
+  byteSize         Int      @map("byte_size")
+  originalFilename String   @map("original_filename")
+  signedOn         DateTime @map("signed_on") @db.Date
+  uploadedAt       DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(3)
+  uploadedBy       String   @map("uploaded_by") @db.Uuid
+  requestId        String   @unique @map("request_id") @db.Uuid
+
+  revisionRow ContractDraftRevision @relation(fields: [draftId, revision], references: [draftId, revision], onDelete: Restrict)
+  uploader    User                  @relation("ContractSignedDocumentUploadedBy", fields: [uploadedBy], references: [id], onDelete: Restrict)
+
+  @@unique([draftId, revision])
+  @@map("contract_signed_documents")
 }

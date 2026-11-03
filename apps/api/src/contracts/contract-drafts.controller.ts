@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -9,7 +10,10 @@ import {
   Post,
   Query,
   StreamableFile,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   contractDraftCodeSchema,
   createContractDraftSchema,
@@ -18,6 +22,7 @@ import {
   prospectCodeSchema,
   removeContractDraftSchema,
   reviseContractDraftSchema,
+  uploadSignedContractFieldsSchema,
   type ContractDraftDetail,
   type ContractDraftPrefill,
   type ContractDraftSummary,
@@ -25,6 +30,7 @@ import {
   type LinkContractHotelRequest,
   type RemoveContractDraftRequest,
   type ReviseContractDraftRequest,
+  type UploadSignedContractFields,
 } from '@ayvo/types';
 import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
@@ -141,6 +147,38 @@ export class ContractDraftsController {
     @CurrentPrincipal() p: Principal,
   ): Promise<StreamableFile> {
     const { file, name } = await this.drafts.pdf(code, revision, p);
+    return new StreamableFile(file, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${name}"`,
+    });
+  }
+
+  /** multipart/form-data: uploadSignedContractFieldsSchema + one `file` (a PDF, checked by content). */
+  @RequirePermission('sales:work')
+  @Post(':code/signed')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadSigned(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(uploadSignedContractFieldsSchema))
+    fields: UploadSignedContractFields,
+    @UploadedFile() file: { buffer: Buffer; originalname: string } | undefined,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<ContractDraftDetail> {
+    if (!file) throw new BadRequestException('Attach the signed PDF as the "file" field');
+    return this.drafts.uploadSigned(code, fields, file, p);
+  }
+
+  @RequirePermission('sales:work')
+  @Get(':code/signed/:revision')
+  @Header('Cache-Control', 'private, no-store')
+  @Header('Content-Security-Policy', "default-src 'none'; sandbox")
+  @Header('X-Content-Type-Options', 'nosniff')
+  async signed(
+    @Param('code', CODE) code: string,
+    @Param('revision', ParseIntPipe) revision: number,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<StreamableFile> {
+    const { file, name } = await this.drafts.signedFile(code, revision, p);
     return new StreamableFile(file, {
       type: 'application/pdf',
       disposition: `attachment; filename="${name}"`,

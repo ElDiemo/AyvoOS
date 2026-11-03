@@ -8,8 +8,9 @@ const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
  * Návrhy smluv (ADR 0043, doc 045) in the browser, synthetic data, standalone: a prospect →
  * "Připravit návrh smlouvy" (nothing written by opening it) → the wizard with the holder rule →
  * saved → the printable PDF → edited (a new revision) → linked to an existing hotel by hand →
- * opened from the hotel's card → removed with confirmation and restored. Another salesperson never
- * sees it. Desktop and phone.
+ * opened from the hotel's card → removed with confirmation and restored → the already signed PDF
+ * uploaded and locked, a later change an amendment. Another salesperson never sees it. Desktop and
+ * phone.
  */
 const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/contracts');
 
@@ -239,6 +240,58 @@ test.describe.serial('Návrhy smluv', () => {
     await restore.getByTestId('contract-confirm-submit').click();
     await expect(page.getByTestId('contract-removed')).toHaveCount(0);
     await expect(page.getByTestId('contract-events')).toContainText('obnoven');
+  });
+
+  test('the already signed PDF: uploaded with confirmation, kept, downloadable; the draft locked; a change is an amendment', async ({
+    page,
+  }) => {
+    await page.goto(`/sales/contracts/${draft}`);
+    const card = page.getByTestId('contract-signed');
+    await expect(card).toContainText('Zatím žádný podepsaný originál');
+    await card.getByTestId('contract-upload-open').click();
+    const form = card.getByTestId('contract-upload-signed');
+    const signed = Buffer.from(`%PDF-1.4\n% podepsaný originál ${run}\n%%EOF\n`);
+    await form.locator('[name=file]').setInputFiles({
+      name: 'smlouva-podepsana.pdf',
+      mimeType: 'application/pdf',
+      buffer: signed,
+    });
+    await form.locator('[name=signedOn]').fill('2026-11-02');
+    await expect(form.getByTestId('contract-upload-submit')).toBeDisabled();
+    await form.getByTestId('contract-upload-confirm').check();
+    await form.getByTestId('contract-upload-submit').click();
+    await expect(card.getByTestId('contract-signed-list')).toContainText(
+      'revize 2 · podepsáno 2. 11. 2026',
+    );
+    // Downloaded exactly as uploaded.
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      card.getByTestId('contract-signed-download-2').click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(`${draft}-r2-PODEPSANO.pdf`);
+    const bytes = await (
+      await page.request.get(`/api/admin/contracts/drafts/${draft}/signed/2`)
+    ).body();
+    expect(Buffer.compare(bytes, signed)).toBe(0);
+    // Locked: no removal, no hotel correction, no second upload of this revision.
+    await expect(page.getByTestId('contract-removal-locked')).toBeVisible();
+    await expect(page.getByTestId('contract-removal')).toHaveCount(0);
+    await expect(page.getByTestId('contract-link')).toHaveCount(0);
+    await expect(card.getByTestId('contract-upload-open')).toHaveCount(0);
+    await shot(page, 'contract-signed');
+    // A change after signing: a new revision (an amendment proposal); the signed one stays.
+    await page.getByTestId('contract-edit-open').click();
+    const edit = page.getByTestId('contract-edit');
+    await expect(edit).toContainText('Revize je podepsaná');
+    await edit.locator('[name=rooms]').fill('55');
+    await edit.locator('[name=reason]').fill('Dodatek po podpisu (test)');
+    await edit.getByTestId('contract-checked').check();
+    await edit.getByTestId('contract-save').click();
+    await expect(page.getByTestId('contract-current')).toContainText('Aktuální revize 3');
+    await expect(card.getByTestId('contract-signed-list')).toContainText('revize 2');
+    await expect(card.getByTestId('contract-upload-open')).toHaveText(
+      'Nahrát podepsaný originál revize 3',
+    );
   });
 
   test("another salesperson never sees the draft or the prospect's drafts", async ({

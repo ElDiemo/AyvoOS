@@ -133,3 +133,40 @@ Every write is idempotent per `requestId`. A stale `expectedVersion` (the draft'
 - Holders: the variant's working paragraph, marked "[pracovní text k právní kontrole]". It states
   no moment of transfer, no loan, no equipment price and no liability.
 - Footer on every page: the draft marking and the page number.
+
+## 7. The signed original (delivery 3) — concurrency and storage
+
+Proposed with the review of #121 (CD121-3); a separate draft PR.
+
+- **Upload:** `POST drafts/:code/signed`, multipart with `requestId`, `expectedVersion`,
+  `revision`, `signedOn`, `confirm=true` and one `file`.
+  - Only a PDF, recognised by content (`%PDF-`), never by name or type.
+  - At most `SUPPLIER_DOCUMENT_MAX_BYTES` (the existing, verified limit of supplier documents);
+    one file, held in memory.
+  - Only for the **current** revision of a draft that is not removed, and only once per revision.
+  - Signatures are not checked. The page says "evidence of a hand-uploaded signed PDF".
+- **Concurrency with editing, removal and hotel links:** every write on a draft takes the same
+  row lock (`SELECT … FOR UPDATE` on `contract_drafts`) first, then checks `expectedVersion`.
+  - Uploading also checks that `revision` is still the current one, and bumps the version.
+  - Of an upload and an edit, removal or link sent from the same version, exactly one commits.
+    The other gets `409 CONCURRENT_CHANGE` and stores nothing (tested with an upload and a
+    removal at the same moment).
+  - A paper signed for revision r is never filed under r+1.
+- **Storage:** the private `FileStorage` (local on DEV, S3 where configured), namespace
+  `contract-documents/yyyy/mm/<uuid>.pdf`, a server-generated key with no user input.
+  - The file is written inside the request's transaction, after its idempotency row (a replay
+    never stores a second file) and before the record.
+  - A failure in between leaves an unreferenced file, which is logged. There is never a record
+    without its file.
+  - The storage has no delete. Objects are never replaced.
+  - SHA-256 and size are recorded. A download recomputes the hash and refuses a changed file
+    (`STORED_FILE_CHANGED`).
+- **Download:** `GET drafts/:code/signed/:revision` with the same access check (404 out of scope),
+  `Cache-Control: private, no-store`, `Content-Disposition: attachment`, CSP sandbox, `nosniff`.
+  Recorded as `SIGNED_DOWNLOADED`.
+- **Lock, held by the database:**
+  - `contract_signed_documents` is append-only, unique per draft and revision, and accepted only
+    for the current revision of a draft that is not removed.
+  - A draft with a signed original is never removed and its hotel link never changes.
+  - A change after signing is a new revision (an amendment proposal); its own signed original can
+    be uploaded later.

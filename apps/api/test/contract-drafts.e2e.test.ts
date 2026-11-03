@@ -506,6 +506,128 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
     expect(events.map((e) => e.kind)).toEqual(['PDF_DOWNLOADED', 'CREATED']);
     await get(people.a.cookie, `/${d.code}/revisions/9/pdf`).expect(404);
   });
+
+  it('the signed original: uploaded by hand to the current revision, kept unchanged, locking the draft; concurrent with removal one wins', async () => {
+    const p = await prospect(people.a.cookie, `Akvizice Podpis ${tag}`);
+    const a = people.a.cookie;
+    let d = (await post(a, '', { prospectCode: p.code, hotelCode: null, fields: fields() }))
+      .body as ContractDraftDetail;
+    expect(d).toMatchObject({ signed: [], canUploadSigned: true });
+    const pdf = Buffer.from(`%PDF-1.4\n% podepsaný originál ${tag}\n%%EOF\n`);
+    const upload = (over: Record<string, string> = {}, file: Buffer = pdf, cookie = a) => {
+      const values = {
+        requestId: randomUUID(),
+        expectedVersion: String(d.version),
+        revision: String(d.currentRevision),
+        signedOn: '2026-11-02',
+        confirm: 'true',
+        ...over,
+      };
+      let req = http().post(`${D}/${d.code}/signed`).set('Cookie', cookie);
+      for (const [k, v] of Object.entries(values)) req = req.field(k, v);
+      return req.attach('file', file, 'Smlouva podepsaná.pdf');
+    };
+    const before = await t.prisma.contractSignedDocument.count();
+    const notPdf = await upload({}, Buffer.from('PNG? no'));
+    expect([notPdf.status, notPdf.body.code]).toEqual([422, 'UNSUPPORTED_DOCUMENT']);
+    await upload({ confirm: 'false' }).expect(400);
+    const stale = await upload({ expectedVersion: String(d.version + 5) });
+    expect([stale.status, stale.body.code]).toEqual([409, 'CONCURRENT_CHANGE']);
+    await upload({}, pdf, people.b.cookie).expect(404);
+    expect(await t.prisma.contractSignedDocument.count()).toBe(before);
+
+    const requestId = randomUUID();
+    const first = await upload({ requestId });
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    // Replayed: the same answer, one record (and one stored file).
+    expect((await upload({ requestId })).body).toEqual(first.body);
+    d = first.body as ContractDraftDetail;
+    expect(d.signed).toMatchObject([
+      {
+        revision: 1,
+        signedOn: '2026-11-02',
+        originalFilename: 'Smlouva podepsan_.pdf',
+        byteSize: pdf.length,
+      },
+    ]);
+    expect(d.canUploadSigned).toBe(false);
+    expect(await t.prisma.contractSignedDocument.count()).toBe(before + 1);
+
+    // Downloaded exactly as uploaded, with the access check; recorded.
+    const got = await get(a, `/${d.code}/signed/1`)
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks: Buffer[] = [];
+        r.on('data', (c: Buffer) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    expect(Buffer.compare(got.body as Buffer, pdf)).toBe(0);
+    expect(got.headers['cache-control']).toContain('no-store');
+    expect(got.headers['content-disposition']).toContain(`${d.code}-r1-PODEPSANO.pdf`);
+    await get(people.b.cookie, `/${d.code}/signed/1`).expect(404);
+    await get(a, `/${d.code}/signed/2`).expect(404);
+
+    // Never replaced; the draft never removed; a change is a new revision (an amendment).
+    const again = await upload();
+    expect([again.status, again.body.code]).toEqual([409, 'CONTRACT_REVISION_SIGNED']);
+    const remove = await post(a, `/${d.code}/remove`, {
+      expectedVersion: d.version,
+      reason: 'x',
+      confirm: true,
+    });
+    expect([remove.status, remove.body.code]).toEqual([409, 'CONTRACT_DRAFT_SIGNED']);
+    d = (
+      await post(a, `/${d.code}/revisions`, {
+        expectedVersion: d.version,
+        reason: 'Dodatek po podpisu (test)',
+        fields: fields({ rooms: 60 }),
+      }).expect(201)
+    ).body as ContractDraftDetail;
+    expect(d).toMatchObject({ currentRevision: 2, canUploadSigned: true });
+    expect(d.signed.map((x) => x.revision)).toEqual([1]);
+    // A paper signed for revision 1 is never filed under revision 2.
+    const old = await upload({ revision: '1' });
+    expect([old.status, old.body.code]).toEqual([409, 'CONCURRENT_CHANGE']);
+    expect(d.events.map((e) => e.kind).slice(0, 3)).toEqual([
+      'REVISED',
+      'SIGNED_DOWNLOADED',
+      'SIGNED_UPLOADED',
+    ]);
+
+    // The database holds it without the API.
+    const signedRow = await t.prisma.contractSignedDocument.findFirstOrThrow({
+      where: { revisionRow: { draft: { code: d.code } } },
+    });
+    for (const sql of [
+      `UPDATE contract_signed_documents SET sha256 = repeat('0', 64) WHERE id = '${signedRow.id}'`,
+      `DELETE FROM contract_signed_documents WHERE id = '${signedRow.id}'`,
+      `UPDATE contract_drafts SET removed_at = now(), removed_by = created_by, remove_reason = 'x', version = version + 1 WHERE code = '${d.code}'`,
+      `INSERT INTO contract_signed_documents (draft_id, revision, storage_key, sha256, byte_size, original_filename, signed_on, uploaded_by, request_id)
+         VALUES ('${signedRow.draftId}', 1, 'contract-documents/2026/11/${randomUUID()}.pdf', repeat('a', 64), 1, 'x.pdf', '2026-11-02', '${people.a.id}', '${randomUUID()}')`,
+    ])
+      await expect(t.prisma.$executeRawUnsafe(sql)).rejects.toThrow();
+
+    // Upload and removal at the same moment, from the same version: exactly one wins.
+    const race = (await post(a, '', { prospectCode: p.code, hotelCode: null, fields: fields() }))
+      .body as ContractDraftDetail;
+    d = race;
+    const [up, rm] = await Promise.all([
+      upload(),
+      post(a, `/${race.code}/remove`, {
+        expectedVersion: race.version,
+        reason: 'souběh',
+        confirm: true,
+      }),
+    ]);
+    const lost = [up, rm].filter((r) => r.status === 409);
+    expect(lost.map((r) => r.body.code)).toEqual(['CONCURRENT_CHANGE']);
+    expect([up, rm].filter((r) => r.status === 200 || r.status === 201)).toHaveLength(1);
+    const after = (await get(a, `/${race.code}`)).body as ContractDraftDetail;
+    // Never both: signed and removed.
+    expect(after.signed.length > 0 && after.removed).toBe(false);
+    expect(after.signed.length > 0 || after.removed).toBe(true);
+  });
 });
 
 describe('the working template (cs-b2b-1)', () => {

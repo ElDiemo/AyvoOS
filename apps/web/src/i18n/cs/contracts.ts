@@ -92,6 +92,24 @@ export const contractsCs = {
     detailMismatch:
       'Hotel v aktuální revizi se liší od připojeného hotelu. Upravte návrh, nebo opravte vazbu.',
   },
+  signed: {
+    title: 'Podepsaný originál',
+    state:
+      'Evidence ručně nahraného podepsaného PDF. Podpisy se automaticky neověřují; soubor se uchovává beze změny a nelze ho smazat ani nahradit.',
+    none: 'Zatím žádný podepsaný originál.',
+    entry: (revision: number, signedOn: string) => `revize ${revision} · podepsáno ${signedOn}`,
+    uploaded: (at: string, by: string) => `nahrál(a) ${by}, ${at}`,
+    download: 'Stáhnout originál',
+    upload: (revision: number) => `Nahrát podepsaný originál revize ${revision}`,
+    file: 'Podepsané PDF',
+    signedOn: 'Datum podpisu',
+    confirm: (revision: number) =>
+      `Rozumím: nahrávám už podepsaný originál revize ${revision}. Revize se tím uzamkne; originál nepůjde smazat ani nahradit a návrh nepůjde odstranit. Pozdější změna bude nová revize.`,
+    submit: 'Nahrát originál',
+    lockedRemoval: 'Návrh s podepsaným originálem nelze odstranit.',
+    amendment:
+      'Revize je podepsaná. Uložením změny vznikne nová revize (návrh dodatku); podepsaná zůstává beze změny.',
+  },
   link: {
     open: 'Připojit k hotelu',
     correct: 'Opravit vazbu na hotel',
@@ -116,5 +134,8 @@ export const contractsCs = {
     HOTEL_IDENTITY_MISMATCH:
       'Hotel v návrhu se liší od zvoleného hotelu. Upravte návrh, nebo rozdíl výslovně potvrďte.',
     HOTEL_ALREADY_LINKED: 'Návrh už k tomuto hotelu připojený je.',
+    UNSUPPORTED_DOCUMENT: 'Nahrajte podepsaný originál jako PDF.',
+    CONTRACT_REVISION_SIGNED: 'Tato revize už podepsaný originál má; nelze ho nahradit.',
+    CONTRACT_DRAFT_SIGNED: 'Návrh má podepsaný originál; nelze ho odstranit ani změnit vazbu.',
   } as Record<string, string>,
 };

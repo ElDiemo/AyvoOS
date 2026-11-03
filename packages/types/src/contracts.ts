@@ -70,7 +70,12 @@ export interface HotelIdentity {
   address: string;
 }
 const identityKey = (v: string) =>
-  v.normalize('NFC').toLocaleLowerCase('cs').replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ').trim();
+  v
+    .normalize('NFC')
+    .toLocaleLowerCase('cs')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .trim();
 /**
  * Whether the hotel written in a draft (and so in its PDF) is the linked hotel record: the same
  * name and address, ignoring case and spacing only. A mismatch is never saved unobserved — the
@@ -134,6 +139,31 @@ export const linkContractHotelSchema = z.strictObject({
 });
 export type LinkContractHotelRequest = z.infer<typeof linkContractHotelSchema>;
 
+/**
+ * POST drafts/:code/signed (multipart: these fields + one PDF `file`): the already signed original
+ * of the CURRENT revision, from the version seen; explicitly confirmed. Kept as it is; signatures
+ * are not verified. It locks the revision and the draft (doc 045 §7).
+ */
+export const uploadSignedContractFieldsSchema = z.strictObject({
+  requestId: z.uuid(),
+  expectedVersion: z.coerce.number().int().min(1),
+  revision: z.coerce.number().int().min(1),
+  signedOn: isoDateSchema,
+  confirm: z.literal('true', 'Potvrďte.'),
+});
+export type UploadSignedContractFields = z.infer<typeof uploadSignedContractFieldsSchema>;
+
+export const contractSignedDocumentSchema = z.object({
+  revision: z.number().int(),
+  signedOn: isoDateSchema,
+  originalFilename: z.string(),
+  byteSize: z.number().int(),
+  sha256: z.string(),
+  uploadedAt: z.iso.datetime(),
+  uploadedByName: z.string(),
+});
+export type ContractSignedDocument = z.infer<typeof contractSignedDocumentSchema>;
+
 export const CONTRACT_EVENT_KINDS = [
   'CREATED',
   'REVISED',
@@ -187,6 +217,10 @@ export const contractDraftDetailSchema = contractDraftSummarySchema.extend({
   hotelIdentity: z.object({ name: z.string(), address: z.string() }).nullable(),
   /** The current revision names another hotel than the linked one (acknowledged when saved). */
   hotelMismatch: z.boolean(),
+  /** Signed originals, newest revision first. Any of them: never removed, hotel link fixed. */
+  signed: z.array(contractSignedDocumentSchema),
+  /** The current revision may take its signed original (not removed, not signed yet). */
+  canUploadSigned: z.boolean(),
 });
 export type ContractDraftDetail = z.infer<typeof contractDraftDetailSchema>;
 
