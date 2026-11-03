@@ -168,12 +168,51 @@ test.describe.serial('Návrhy smluv', () => {
     await expect(page.getByTestId('contract-holders')).toHaveText('Bez držáků');
     await expect(page.getByTestId('contract-revisions').locator('li')).toHaveCount(2);
 
-    // Linked to the existing hotel by hand.
+    // Linked by hand to a hotel that is NOT the one the draft names: both identities shown, the
+    // link only after an explicit acknowledgement; the page then says so (review CD121-1).
     const link = page.getByTestId('contract-link-hotel');
     await link.locator('[name=hotelCode]').selectOption(hotel);
     await link.locator('[name=reason]').fill('Akvizice je hotel (test)');
+    const mismatch = link.getByTestId('hotel-mismatch');
+    await expect(mismatch).toContainText(`Hotel Akvizice ${run}, Akviziční 3, 602 00 Brno`);
+    await expect(mismatch).toContainText(`Hotel Smlouva ${run}, Hotelová 9, 602 00 Brno`);
+    await expect(link.getByTestId('contract-link-submit')).toBeDisabled();
+    await shot(page, 'contract-link-mismatch', [1440]);
+    await mismatch.getByTestId('hotel-mismatch-ack').check();
     await link.getByTestId('contract-link-submit').click();
     await expect(page.getByTestId('contract-hotel')).toHaveText(`Hotel Smlouva ${run}`);
+    await expect(page.getByTestId('contract-hotel-mismatch')).toBeVisible();
+
+    // The wrong link corrected (audited) to the hotel the draft really names: no mismatch left.
+    const named = (
+      await json<{ code: string }>(
+        await r.post('/api/admin/hotels', {
+          data: {
+            requestId: crypto.randomUUID(),
+            name: `Hotel Akvizice ${run}`,
+            addressLine1: 'Akviziční 3',
+            addressLine2: null,
+            postalCode: '602 00',
+            city: 'Brno',
+            countryCode: 'CZ',
+            contactName: 'Recepce',
+            contactPhone: '+420 500 000 048',
+            contactEmail: 'recepce@navrh.test',
+            fulfillmentSiteId: INITIAL_SITE_ID,
+          },
+        }),
+      )
+    ).code;
+    await page.reload();
+    const correct = page.getByTestId('contract-link');
+    await expect(correct.getByRole('heading')).toHaveText('Opravit vazbu na hotel');
+    await correct.locator('[name=hotelCode]').selectOption(named);
+    await expect(correct.getByTestId('hotel-mismatch')).toHaveCount(0);
+    await correct.locator('[name=reason]').fill('Oprava chybné vazby (test)');
+    await correct.getByTestId('contract-link-submit').click();
+    await expect(page.getByTestId('contract-hotel')).toHaveText(`Hotel Akvizice ${run}`);
+    await expect(page.getByTestId('contract-hotel-mismatch')).toHaveCount(0);
+    hotel = named;
     await shot(page, 'contract-detail');
 
     // Opened from the hotel's card.

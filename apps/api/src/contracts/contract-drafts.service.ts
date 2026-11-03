@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   CURRENT_CONTRACT_TEMPLATE,
   holdersConsistent,
+  hotelIdentityMatches,
+  type HotelIdentity,
   type ContractDraftDetail,
   type ContractDraftFields,
   type ContractDraftPrefill,
@@ -12,7 +14,7 @@ import {
   type ReviseContractDraftRequest,
 } from '@ayvo/types';
 import { CODE_PREFIX, formatCode } from '../common/codes.js';
-import { domainError } from '../common/domain-error.js';
+import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { HotelsService } from '../customers/hotels.service.js';
 import { allocateSerials } from '../database/code-counters.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
@@ -92,6 +94,35 @@ const address = (h: {
     .filter((x) => x && x.trim() !== '')
     .join(', ') || null;
 
+const hotelIdentity = (h: Parameters<typeof address>[0] & { name: string }): HotelIdentity => ({
+  name: h.name,
+  address: address(h) ?? '',
+});
+const draftIdentity = (
+  f: Pick<ContractDraftFields, 'hotelName' | 'hotelAddress'>,
+): HotelIdentity => ({
+  name: f.hotelName,
+  address: f.hotelAddress,
+});
+
+/**
+ * The hotel written in the draft (and its PDF) must be the linked hotel, or the difference is
+ * acknowledged explicitly — never saved unobserved (review CD121-1). The refusal names both.
+ */
+function assertSameHotel(
+  draft: HotelIdentity,
+  hotel: HotelIdentity & { code: string },
+  acknowledged: boolean,
+) {
+  if (acknowledged || hotelIdentityMatches(draft, hotel)) return;
+  throw domainErrorWithDetails(
+    409,
+    'HOTEL_IDENTITY_MISMATCH',
+    'Hotel v návrhu se liší od zvoleného hotelu. Upravte návrh, nebo rozdíl výslovně potvrďte.',
+    { draft, hotel },
+  );
+}
+
 /**
  * Contract drafts (ADR 0043, doc 045): written only by the explicit calls below, each checking
  * access again — the prospect through Obchod's scope, hotels with sales:manage + hotels:read. Out
@@ -145,7 +176,10 @@ export class ContractDraftsService {
     const prospect = q.prospect ? await this.prospects.visibleByCode(db, q.prospect, p) : null;
     const hotel = q.hotel ? await this.hotelByCode(db, q.hotel, p) : null;
     const hotels = canUseHotels(p)
-      ? (await this.hotels.list()).map((h) => ({ code: h.code, name: h.name }))
+      ? (await this.hotels.identities()).map((h) => ({
+          code: h.code,
+          ...hotelIdentity(h),
+        }))
       : [];
     return {
       prospect: prospect && { code: prospect.code, name: prospect.name },
@@ -181,6 +215,7 @@ export class ContractDraftsService {
   async detail(code: string, p: Principal): Promise<ContractDraftDetail> {
     const db = this.prisma;
     const row = await this.visible(db, code, p);
+    const linked = row.hotelId && canUseHotels(p) ? await this.hotels.byId(row.hotelId, db) : null;
     const [revisions, events] = await Promise.all([
       db.contractDraftRevision.findMany({
         where: { draftId: row.id },
@@ -212,7 +247,11 @@ export class ContractDraftsService {
         actorName: e.actor.displayName,
         reason: e.reason,
       })),
-      canLinkHotel: canUseHotels(p) && row.hotelId === null && row.removedAt === null,
+      canLinkHotel: canUseHotels(p) && row.removedAt === null,
+      hotelIdentity: linked && hotelIdentity(linked),
+      hotelMismatch:
+        !!linked &&
+        !hotelIdentityMatches(draftIdentity(fieldsOf(revisions[0]!)), hotelIdentity(linked)),
     };
   }
 
@@ -252,6 +291,12 @@ export class ContractDraftsService {
           : null;
         if (prospect) this.prospects.assertActive(prospect);
         const hotel = req.hotelCode ? await this.hotelByCode(tx, req.hotelCode, p) : null;
+        if (hotel)
+          assertSameHotel(
+            draftIdentity(req.fields),
+            { code: hotel.code, ...hotelIdentity(hotel) },
+            req.acknowledgeHotelMismatch,
+          );
         const { first } = await allocateSerials(tx, 'contract_draft', 1);
         const draft = await tx.contractDraft.create({
           data: {
@@ -300,6 +345,14 @@ export class ContractDraftsService {
       { code, ...req, actorId: p.userId },
       async (tx) => {
         const row = await this.writable(tx, code, req.expectedVersion, p);
+        if (row.hotelId) {
+          const linked = (await this.hotels.byId(row.hotelId, tx))!;
+          assertSameHotel(
+            draftIdentity(req.fields),
+            { code: linked.code, ...hotelIdentity(linked) },
+            req.acknowledgeHotelMismatch,
+          );
+        }
         const revision = row.currentRevision + 1;
         await tx.contractDraftRevision.create({
           data: {
@@ -377,7 +430,11 @@ export class ContractDraftsService {
     return this.detail(code, p);
   }
 
-  /** Links an existing hotel by hand; never creates one, never unlinks or replaces one. */
+  /**
+   * Links an existing hotel by hand, or corrects a wrong link of an unsigned draft (a new event
+   * with the reason, from → to); never creates or unlinks a hotel. The hotel must be the one the
+   * draft names, or the difference is acknowledged (review CD121-1).
+   */
   async linkHotel(
     code: string,
     req: LinkContractHotelRequest,
@@ -390,8 +447,17 @@ export class ContractDraftsService {
       async (tx) => {
         const row = await this.writable(tx, code, req.expectedVersion, p);
         const hotel = await this.hotelByCode(tx, req.hotelCode, p);
-        if (row.hotelId)
-          throw domainError(409, 'HOTEL_ALREADY_LINKED', 'Návrh už k hotelu připojený je.');
+        if (row.hotelId === hotel.id)
+          throw domainError(409, 'HOTEL_ALREADY_LINKED', 'Návrh už k tomuto hotelu připojený je.');
+        const current = await tx.contractDraftRevision.findUniqueOrThrow({
+          where: { draftId_revision: { draftId: row.id, revision: row.currentRevision } },
+        });
+        assertSameHotel(
+          draftIdentity(current),
+          { code: hotel.code, ...hotelIdentity(hotel) },
+          req.acknowledgeMismatch,
+        );
+        const previous = row.hotelId ? await this.hotels.byId(row.hotelId, tx) : null;
         await this.next(tx, row, p, { hotelId: hotel.id });
         await tx.contractDraftEvent.create({
           data: {
@@ -399,7 +465,14 @@ export class ContractDraftsService {
             kind: 'HOTEL_LINKED',
             actorId: p.userId,
             reason: req.reason,
-            details: { hotel: hotel.code },
+            details: {
+              from: previous?.code ?? null,
+              to: hotel.code,
+              mismatchAcknowledged: !hotelIdentityMatches(
+                draftIdentity(current),
+                hotelIdentity(hotel),
+              ),
+            },
           },
         });
         return { hotel: hotel.code };

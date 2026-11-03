@@ -64,6 +64,22 @@ export const contractDraftFieldsSchema = z.strictObject({
 });
 export type ContractDraftFields = z.infer<typeof contractDraftFieldsSchema>;
 
+/** A hotel as the draft names it and as the hotel record has it (name, one-line address). */
+export interface HotelIdentity {
+  name: string;
+  address: string;
+}
+const identityKey = (v: string) =>
+  v.normalize('NFC').toLocaleLowerCase('cs').replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ').trim();
+/**
+ * Whether the hotel written in a draft (and so in its PDF) is the linked hotel record: the same
+ * name and address, ignoring case and spacing only. A mismatch is never saved unobserved — the
+ * caller must acknowledge it (HOTEL_IDENTITY_MISMATCH otherwise).
+ */
+export const hotelIdentityMatches = (draft: HotelIdentity, hotel: HotelIdentity) =>
+  identityKey(draft.name) === identityKey(hotel.name) &&
+  identityKey(draft.address) === identityKey(hotel.address);
+
 /** True when the holder choice is consistent (the rule the server and the DB hold). */
 export const holdersConsistent = (f: Pick<ContractDraftFields, 'holders' | 'holdersOwnership'>) =>
   (f.holders === 'WITH') === (f.holdersOwnership !== null);
@@ -76,6 +92,8 @@ export const createContractDraftSchema = z
     /** The hotel chosen by hand (sales:manage + hotels:read); prefilled from a hotel's card. */
     hotelCode: hotelCodeSchema.nullable(),
     fields: contractDraftFieldsSchema,
+    /** Saving a hotel name/address that differs from the linked hotel's, knowingly. */
+    acknowledgeHotelMismatch: z.boolean().default(false),
   })
   .refine((r) => r.prospectCode !== null || r.hotelCode !== null, {
     message: 'Návrh patří k akvizici nebo k hotelu.',
@@ -89,6 +107,7 @@ export const reviseContractDraftSchema = z.strictObject({
   expectedVersion: z.number().int().min(1),
   reason: text(500),
   fields: contractDraftFieldsSchema,
+  acknowledgeHotelMismatch: z.boolean().default(false),
 });
 export type ReviseContractDraftRequest = z.infer<typeof reviseContractDraftSchema>;
 
@@ -101,12 +120,17 @@ export const removeContractDraftSchema = z.strictObject({
 });
 export type RemoveContractDraftRequest = z.infer<typeof removeContractDraftSchema>;
 
-/** POST drafts/:code/hotel — link an existing hotel by hand (sales:manage + hotels:read). */
+/**
+ * POST drafts/:code/hotel — link an existing hotel by hand (sales:manage + hotels:read), or correct
+ * a wrong link of an unsigned draft (audited, with a reason). A hotel whose name/address differs
+ * from the draft's is refused unless acknowledged — or edit the draft first.
+ */
 export const linkContractHotelSchema = z.strictObject({
   requestId: z.uuid(),
   expectedVersion: z.number().int().min(1),
   hotelCode: hotelCodeSchema,
   reason: text(500),
+  acknowledgeMismatch: z.boolean().default(false),
 });
 export type LinkContractHotelRequest = z.infer<typeof linkContractHotelSchema>;
 
@@ -157,8 +181,12 @@ export const contractDraftDetailSchema = contractDraftSummarySchema.extend({
       reason: z.string().nullable(),
     }),
   ),
-  /** Whether the caller may link a hotel here (sales:manage + hotels:read). */
+  /** Whether the caller may link a hotel, or correct the link, here (sales:manage + hotels:read). */
   canLinkHotel: z.boolean(),
+  /** The linked hotel's own record (for those who may see hotels) beside the draft's text. */
+  hotelIdentity: z.object({ name: z.string(), address: z.string() }).nullable(),
+  /** The current revision names another hotel than the linked one (acknowledged when saved). */
+  hotelMismatch: z.boolean(),
 });
 export type ContractDraftDetail = z.infer<typeof contractDraftDetailSchema>;
 
@@ -173,6 +201,6 @@ export const contractDraftPrefillSchema = z.object({
     rooms: z.number().int().nullable(),
   }),
   /** Hotels the caller may link by hand (empty without sales:manage + hotels:read). */
-  hotels: z.array(z.object({ code: z.string(), name: z.string() })),
+  hotels: z.array(z.object({ code: z.string(), name: z.string(), address: z.string() })),
 });
 export type ContractDraftPrefill = z.infer<typeof contractDraftPrefillSchema>;

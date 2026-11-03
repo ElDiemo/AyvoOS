@@ -331,42 +331,116 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
     await expect(t.prisma.$executeRawUnsafe(`DELETE FROM contract_draft_events`)).rejects.toThrow();
   });
 
-  it('a hotel is linked only by hand (sales:manage + hotels:read); a hotel-only draft too', async () => {
+  it('a hotel is linked by hand; another hotel than the draft names is never linked unobserved; a wrong link is corrected with an audit', async () => {
     const p = await prospect(admin, `Akvizice Hotel ${tag}`);
-    const h = await hotel(`Hotel Připojený ${tag}`);
-    let d = (await post(admin, '', { prospectCode: p.code, hotelCode: null, fields: fields() }))
-      .body as ContractDraftDetail;
-    expect(d).toMatchObject({ hotel: null, canLinkHotel: true });
-    // Before the explicit link the hotel has no draft.
-    expect((await get(admin, `?hotel=${h.code}`).expect(200)).body).toEqual([]);
-    d = (
-      await post(admin, `/${d.code}/hotel`, {
-        expectedVersion: d.version,
-        hotelCode: h.code,
-        reason: 'Akvizice se stala hotelem (test)',
-      }).expect(200)
-    ).body as ContractDraftDetail;
-    expect(d.hotel?.code).toBe(h.code);
-    expect(d.canLinkHotel).toBe(false);
-    const again = await post(admin, `/${d.code}/hotel`, {
-      expectedVersion: d.version,
-      hotelCode: h.code,
-      reason: 'znovu',
+    const right = await hotel(`Hotel Připojený ${tag}`);
+    const other = await hotel(`Hotel Jiný ${tag}`);
+    // The draft names the hotel exactly as its record (address "Hotelová 9, 602 00 Brno").
+    const named = fields({
+      hotelName: `hotel připojený ${tag}`,
+      hotelAddress: 'Hotelová 9,  602 00 Brno',
     });
+    let d = (await post(admin, '', { prospectCode: p.code, hotelCode: null, fields: named }))
+      .body as ContractDraftDetail;
+    expect(d).toMatchObject({ hotel: null, canLinkHotel: true, hotelMismatch: false });
+    expect((await get(admin, `?hotel=${right.code}`).expect(200)).body).toEqual([]);
+    const link = (hotelCode: string, over: object = {}) =>
+      post(admin, `/${d.code}/hotel`, {
+        expectedVersion: d.version,
+        hotelCode,
+        reason: 'Akvizice se stala hotelem (test)',
+        ...over,
+      });
+    // Wrongly the other hotel: refused, naming both identities; nothing changes.
+    const refused = await link(other.code);
+    expect([refused.status, refused.body.code]).toEqual([409, 'HOTEL_IDENTITY_MISMATCH']);
+    expect(refused.body.details).toMatchObject({
+      draft: { name: `hotel připojený ${tag}` },
+      hotel: { code: other.code, name: `Hotel Jiný ${tag}`, address: 'Hotelová 9, 602 00 Brno' },
+    });
+    expect(((await get(admin, `/${d.code}`)).body as ContractDraftDetail).hotel).toBeNull();
+    // Knowingly anyway (acknowledged): linked, the page shows the mismatch.
+    d = (await link(other.code, { acknowledgeMismatch: true }).expect(200))
+      .body as ContractDraftDetail;
+    expect(d).toMatchObject({ hotel: { code: other.code }, hotelMismatch: true });
+    // The same hotel again: nothing to do.
+    const again = await link(other.code, { acknowledgeMismatch: true });
     expect([again.status, again.body.code]).toEqual([409, 'HOTEL_ALREADY_LINKED']);
-    const list = (await get(admin, `?hotel=${h.code}`).expect(200)).body as ContractDraftSummary[];
-    expect(list.map((x) => x.code)).toEqual([d.code]);
-    // From the hotel's card: prefilled from the hotel, written only by the save.
-    const prefill = (await get(admin, `/prefill?hotel=${h.code}`).expect(200))
+    // The correction of the wrong link: to the hotel the draft names (case/spacing ignored).
+    d = (await link(right.code, { reason: 'Oprava chybné vazby (test)' }).expect(200))
+      .body as ContractDraftDetail;
+    expect(d).toMatchObject({
+      hotel: { code: right.code },
+      hotelIdentity: { name: `Hotel Připojený ${tag}`, address: 'Hotelová 9, 602 00 Brno' },
+      hotelMismatch: false,
+    });
+    expect(d.events.slice(0, 2).map((e) => [e.kind, e.reason])).toEqual([
+      ['HOTEL_LINKED', 'Oprava chybné vazby (test)'],
+      ['HOTEL_LINKED', 'Akvizice se stala hotelem (test)'],
+    ]);
+    const audit = await t.prisma.contractDraftEvent.findFirstOrThrow({
+      where: { draft: { code: d.code }, kind: 'HOTEL_LINKED' },
+      orderBy: { at: 'desc' },
+    });
+    expect(audit.details).toEqual({
+      from: other.code,
+      to: right.code,
+      mismatchAcknowledged: false,
+    });
+    expect(
+      ((await get(admin, `?hotel=${right.code}`)).body as ContractDraftSummary[]).map(
+        (x) => x.code,
+      ),
+    ).toEqual([d.code]);
+    expect((await get(admin, `?hotel=${other.code}`)).body).toEqual([]);
+    // An edit that names another hotel than the linked one: refused unless acknowledged.
+    const edit = (over: object) =>
+      post(admin, `/${d.code}/revisions`, {
+        expectedVersion: d.version,
+        reason: 'Jiný název hotelu (test)',
+        fields: fields({ hotelName: 'Úplně jiný hotel' }),
+        ...over,
+      });
+    const unobserved = await edit({});
+    expect([unobserved.status, unobserved.body.code]).toEqual([409, 'HOTEL_IDENTITY_MISMATCH']);
+    d = (await edit({ acknowledgeHotelMismatch: true }).expect(201)).body as ContractDraftDetail;
+    expect(d.hotelMismatch).toBe(true);
+    // Never unlinked, also in the database.
+    await expect(
+      t.prisma.$executeRawUnsafe(
+        `UPDATE contract_drafts SET hotel_id = NULL, version = version + 1 WHERE code = '${d.code}'`,
+      ),
+    ).rejects.toThrow();
+
+    // From the hotel's card: prefilled from the hotel; a hotel-only draft as it names the hotel.
+    const prefill = (await get(admin, `/prefill?hotel=${right.code}`).expect(200))
       .body as ContractDraftPrefill;
     expect(prefill.fields).toMatchObject({
       hotelName: `Hotel Připojený ${tag}`,
       hotelAddress: 'Hotelová 9, 602 00 Brno',
     });
-    expect(prefill.hotels.some((x) => x.code === h.code)).toBe(true);
-    const only = await post(admin, '', { prospectCode: null, hotelCode: h.code, fields: fields() });
-    expect(only.status).toBe(201);
+    expect(prefill.hotels.find((x) => x.code === right.code)).toEqual({
+      code: right.code,
+      name: `Hotel Připojený ${tag}`,
+      address: 'Hotelová 9, 602 00 Brno',
+    });
+    const asHotel = fields({
+      hotelName: prefill.fields.hotelName!,
+      hotelAddress: prefill.fields.hotelAddress!,
+    });
+    const only = await post(admin, '', {
+      prospectCode: null,
+      hotelCode: right.code,
+      fields: asHotel,
+    });
+    expect(only.status, JSON.stringify(only.body)).toBe(201);
     expect((only.body as ContractDraftDetail).prospect).toBeNull();
+    const differs = await post(admin, '', {
+      prospectCode: null,
+      hotelCode: right.code,
+      fields: fields(),
+    });
+    expect([differs.status, differs.body.code]).toEqual([409, 'HOTEL_IDENTITY_MISMATCH']);
     // A missing hotel is refused, never created.
     const hotels = await t.prisma.hotel.count();
     const missing = await post(admin, '', {

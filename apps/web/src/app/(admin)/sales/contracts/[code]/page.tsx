@@ -46,14 +46,15 @@ export default async function ContractDraftPage({
   const d = await apiGet(`admin/contracts/drafts/${code}`, contractDraftDetailSchema);
   const current = d.revisions[0]!;
   const f = current.fields;
-  const hotels =
-    d.canLinkHotel && d.prospect
-      ? (
-          await apiGet('admin/contracts/drafts/prefill', contractDraftPrefillSchema, {
-            prospect: d.prospect.code,
-          })
-        ).hotels
-      : [];
+  const hotels = d.canLinkHotel
+    ? (
+        await apiGet(
+          'admin/contracts/drafts/prefill',
+          contractDraftPrefillSchema,
+          d.prospect ? { prospect: d.prospect.code } : { hotel: d.hotel!.code },
+        )
+      ).hotels
+    : [];
   const pdf = (revision: number) => `/api/admin/contracts/drafts/${code}/revisions/${revision}/pdf`;
   const back = d.prospect
     ? { href: `/sales/prospects/${d.prospect.code}`, label: d.prospect.name }
@@ -90,6 +91,11 @@ export default async function ContractDraftPage({
         {d.removed && (
           <Notice tone="info">
             <span data-testid="contract-removed">{t.detail.removed(d.removeReason ?? '')}</span>
+          </Notice>
+        )}
+        {d.hotelMismatch && (
+          <Notice tone="warning">
+            <span data-testid="contract-hotel-mismatch">{t.identity.detailMismatch}</span>
           </Notice>
         )}
         <Card title={t.detail.current(d.currentRevision)} testId="contract-current">
@@ -161,14 +167,22 @@ export default async function ContractDraftPage({
                 code={d.code}
                 version={d.version}
                 current={f}
+                linkedHotel={d.hotelIdentity}
               />
             </details>
           </Card>
         )}
 
         {d.canLinkHotel && hotels.length > 0 && (
-          <Card title={t.link.open} testId="contract-link">
-            <LinkHotel key={d.version} code={d.code} version={d.version} hotels={hotels} />
+          <Card title={d.hotel ? t.link.correct : t.link.open} testId="contract-link">
+            <LinkHotel
+              key={d.version}
+              code={d.code}
+              version={d.version}
+              hotels={hotels}
+              draft={{ name: f.hotelName, address: f.hotelAddress }}
+              linked={d.hotel?.code ?? null}
+            />
           </Card>
         )}
 

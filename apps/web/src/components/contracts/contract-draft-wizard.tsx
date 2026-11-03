@@ -2,8 +2,10 @@
 
 import {
   contractDraftDetailSchema,
+  hotelIdentityMatches,
   type ContractDraftFields,
   type ContractDraftPrefill,
+  type HotelIdentity,
 } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
@@ -61,7 +63,14 @@ const fromFields = (f: ContractDraftFields): Partial<Values> => ({
 export function ContractDraftWizard(
   props:
     | { mode: 'create'; prefill: ContractDraftPrefill }
-    | { mode: 'revise'; code: string; version: number; current: ContractDraftFields },
+    | {
+        mode: 'revise';
+        code: string;
+        version: number;
+        current: ContractDraftFields;
+        /** The linked hotel's record, if any (the draft must name it, or say it knowingly). */
+        linkedHotel: HotelIdentity | null;
+      },
 ) {
   const router = useRouter();
   const pre = props.mode === 'create' ? props.prefill : null;
@@ -86,6 +95,7 @@ export function ContractDraftWizard(
     ...(props.mode === 'revise' ? fromFields(props.current) : {}),
   });
   const [checked, setChecked] = useState(false);
+  const [ackHotel, setAckHotel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(crypto.randomUUID());
@@ -97,9 +107,18 @@ export function ContractDraftWizard(
       ...(k === 'holders' && value !== 'WITH' ? { holdersOwnership: '' } : {}),
     }));
     setChecked(false);
+    setAckHotel(false);
     setError(null);
     requestId.current = crypto.randomUUID();
   };
+  // The hotel this draft is (or will be) linked to: written in the draft as it is, or knowingly not.
+  const chosenHotel: HotelIdentity | null =
+    props.mode === 'revise'
+      ? props.linkedHotel
+      : (pre?.hotels.find((h) => h.code === v.hotelCode) ?? null);
+  const hotelMismatch =
+    !!chosenHotel &&
+    !hotelIdentityMatches({ name: v.hotelName, address: v.hotelAddress }, chosenHotel);
 
   const price = parseDecimalInput(v.price);
   const missing = [
@@ -115,6 +134,7 @@ export function ContractDraftWizard(
     !v.holders && t.fields.holders,
     v.holders === 'WITH' && !v.holdersOwnership && t.fields.holdersOwnership,
     props.mode === 'revise' && !v.reason.trim() && t.fields.reason,
+    hotelMismatch && !ackHotel && t.identity.title,
   ].filter(Boolean) as string[];
 
   async function save() {
@@ -148,6 +168,7 @@ export function ContractDraftWizard(
           prospectCode: props.prefill.prospect?.code ?? null,
           hotelCode: v.hotelCode || null,
           fields,
+          acknowledgeHotelMismatch: hotelMismatch && ackHotel,
         });
         router.push(`/sales/contracts/${d.code}?saved=1`);
       } else {
@@ -160,6 +181,7 @@ export function ContractDraftWizard(
             expectedVersion: props.version,
             reason: v.reason.trim(),
             fields,
+            acknowledgeHotelMismatch: hotelMismatch && ackHotel,
           },
         );
         requestId.current = crypto.randomUUID();
@@ -248,6 +270,16 @@ export function ContractDraftWizard(
               </select>
             </label>
           )}
+          {hotelMismatch && chosenHotel && (
+            <div className="sm:col-span-2">
+              <HotelMismatch
+                draft={{ name: v.hotelName, address: v.hotelAddress }}
+                hotel={chosenHotel}
+                acknowledged={ackHotel}
+                onAcknowledge={setAckHotel}
+              />
+            </div>
+          )}
         </>,
       )}
       {section(
@@ -320,5 +352,47 @@ export function ContractDraftWizard(
       </div>
       {error && <ErrorNote>{error}</ErrorNote>}
     </form>
+  );
+}
+
+/** Both identities side by side; saving needs an explicit acknowledgement (review CD121-1). */
+export function HotelMismatch({
+  draft,
+  hotel,
+  acknowledged,
+  onAcknowledge,
+}: {
+  draft: HotelIdentity;
+  hotel: HotelIdentity;
+  acknowledged: boolean;
+  onAcknowledge: (v: boolean) => void;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+      data-testid="hotel-mismatch"
+    >
+      <p className="font-semibold">{t.identity.title}</p>
+      <dl className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-[auto_1fr]">
+        <dt className="text-amber-800">{t.identity.draft}</dt>
+        <dd className="wrap-anywhere">
+          {draft.name || '—'}, {draft.address || '—'}
+        </dd>
+        <dt className="text-amber-800">{t.identity.hotel}</dt>
+        <dd className="wrap-anywhere">
+          {hotel.name}, {hotel.address}
+        </dd>
+      </dl>
+      <label className="flex items-start gap-2">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={acknowledged}
+          onChange={(e) => onAcknowledge(e.target.checked)}
+          data-testid="hotel-mismatch-ack"
+        />
+        <span>{t.identity.acknowledge}</span>
+      </label>
+    </div>
   );
 }

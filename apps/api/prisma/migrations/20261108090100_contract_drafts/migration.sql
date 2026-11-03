@@ -46,7 +46,8 @@ ALTER TABLE "contract_drafts"
 INSERT INTO "code_counters" ("name", "last_value") VALUES ('contract_draft', 0);
 
 -- Never deleted; identity and context fixed; each change is the next version; a removed draft
--- takes nothing but its restore; the prospect never changes (a hotel is linked, never unlinked).
+-- takes nothing but its restore; the prospect never changes; a hotel is linked or its link
+-- corrected (an event with the reason), never unlinked.
 CREATE FUNCTION contract_drafts_guard() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
@@ -57,7 +58,7 @@ BEGIN
   IF NEW."id" <> OLD."id" OR NEW."serial" <> OLD."serial" OR NEW."code" <> OLD."code"
      OR NEW."created_at" <> OLD."created_at" OR NEW."created_by" <> OLD."created_by"
      OR NEW."prospect_id" IS DISTINCT FROM OLD."prospect_id"
-     OR (OLD."hotel_id" IS NOT NULL AND NEW."hotel_id" IS DISTINCT FROM OLD."hotel_id")
+     OR (OLD."hotel_id" IS NOT NULL AND NEW."hotel_id" IS NULL)
      OR NEW."version" <> OLD."version" + 1
      OR NEW."current_revision" < OLD."current_revision" THEN
     RAISE EXCEPTION 'AYVO: a contract draft changes only to its next version' USING ERRCODE = 'restrict_violation';

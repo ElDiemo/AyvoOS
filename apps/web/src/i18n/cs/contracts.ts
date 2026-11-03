@@ -83,12 +83,22 @@ export const contractsCs = {
     restoreReason: 'Důvod obnovení (povinný)',
     restoreConfirm: 'Rozumím: návrh se vrátí do běžné práce.',
   },
+  identity: {
+    title: 'Hotel v návrhu a zvolený hotel se liší',
+    draft: 'V návrhu (a v PDF)',
+    hotel: 'Zvolený hotel',
+    acknowledge:
+      'Vím o rozdílu a chci to tak uložit. (Jinak nejdřív upravte název nebo adresu hotelu v návrhu.)',
+    detailMismatch:
+      'Hotel v aktuální revizi se liší od připojeného hotelu. Upravte návrh, nebo opravte vazbu.',
+  },
   link: {
     open: 'Připojit k hotelu',
+    correct: 'Opravit vazbu na hotel',
     hotel: 'Hotel',
     reason: 'Důvod (povinný)',
     submit: 'Připojit',
-    help: 'Připojí existující hotel. Hotel se nezakládá a fakturační podmínky se nemění.',
+    help: 'Připojí existující hotel, nebo opraví chybnou vazbu nepodepsaného návrhu (zapíše se do historie). Hotel se nezakládá a fakturační podmínky se nemění.',
   },
   events: {
     CREATED: 'založen',
@@ -103,5 +113,8 @@ export const contractsCs = {
   errors: {
     CONCURRENT_CHANGE: 'Návrh mezitím změnil někdo jiný. Načtěte ho znovu; nic se neuložilo.',
     HOLDERS_OWNERSHIP_MISMATCH: 'S držáky zvolte jejich vlastnictví; bez držáků se nevyplňuje.',
+    HOTEL_IDENTITY_MISMATCH:
+      'Hotel v návrhu se liší od zvoleného hotelu. Upravte návrh, nebo rozdíl výslovně potvrďte.',
+    HOTEL_ALREADY_LINKED: 'Návrh už k tomuto hotelu připojený je.',
   } as Record<string, string>,
 };

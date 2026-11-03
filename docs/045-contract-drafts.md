@@ -55,7 +55,8 @@ Not in scope:
    - the history of revisions and events;
    - Upravit (a new revision);
    - Odstranit nepodepsaný návrh (confirmation and a reason; restorable);
-   - Připojit k hotelu.
+   - Připojit k hotelu, or Opravit vazbu na hotel for an unsigned draft (an audited event with
+     the reason, from → to; never unlinked).
 6. **The signed original:**
    - Upload of the already signed PDF to the current revision, with the signed date. That
      revision is then locked.
@@ -81,6 +82,12 @@ Rules held by the database:
   not rounded.
 - Rooms are 1–100000.
 - A removed draft takes no new revision, hotel link or upload until restored.
+- A linked hotel is never removed; its link is corrected only to another existing hotel.
+- **The hotel written in the draft (and its PDF) is the linked hotel** — the same name and
+  address, ignoring case and spacing. Otherwise linking, creating at a hotel or a new revision is
+  refused (`HOTEL_IDENTITY_MISMATCH`, naming both) unless the difference is acknowledged
+  explicitly. The UI shows both identities side by side, and the draft page says when the current
+  revision differs from the linked hotel.
 - A draft with a signed original is never removed.
 - A signed revision is never superseded silently: a new revision after signing is allowed and
   recorded as an amendment proposal.
@@ -103,7 +110,8 @@ Out of scope it is 404, never "forbidden for this draft".
 - `POST drafts/:code/revisions` saves a new revision (`expectedVersion`, reason, fields).
 - `POST drafts/:code/remove` and `POST drafts/:code/restore` need `expectedVersion`, a reason and
   `confirm: true`.
-- `POST drafts/:code/hotel` links a hotel (`expectedVersion`, hotel, reason).
+- `POST drafts/:code/hotel` links a hotel or corrects the link (`expectedVersion`, hotel, reason,
+  `acknowledgeMismatch`).
 - `GET drafts/:code/revisions/:revision/pdf` returns the generated PDF (`Content-Disposition:
 attachment`) and records an event.
 - `POST drafts/:code/signed` uploads the signed PDF: multipart `file`, `revision`, `signedOn`,

@@ -1,6 +1,7 @@
 'use client';
 
-import { contractDraftDetailSchema } from '@ayvo/types';
+import { contractDraftDetailSchema, hotelIdentityMatches, type HotelIdentity } from '@ayvo/types';
+import { HotelMismatch } from '@/components/contracts/contract-draft-wizard';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
@@ -104,18 +105,29 @@ export function RemoveOrRestore({
   );
 }
 
-/** Link an existing hotel by hand (sales:manage + hotels:read); never creates one. */
+/**
+ * Link an existing hotel by hand, or correct a wrong link (sales:manage + hotels:read); never
+ * creates one. The draft's hotel and the chosen one are shown side by side; a difference needs an
+ * explicit acknowledgement — or the draft is edited first (review CD121-1).
+ */
 export function LinkHotel({
   code,
   version,
   hotels,
+  draft,
+  linked,
 }: {
   code: string;
   version: number;
-  hotels: { code: string; name: string }[];
+  hotels: (HotelIdentity & { code: string })[];
+  draft: HotelIdentity;
+  linked: string | null;
 }) {
   const [hotel, setHotel] = useState('');
   const [reason, setReason] = useState('');
+  const [ack, setAck] = useState(false);
+  const chosen = hotels.find((h) => h.code === hotel) ?? null;
+  const mismatch = !!chosen && !hotelIdentityMatches(draft, chosen);
   const { busy, error, send, fresh } = useSend();
   return (
     <form
@@ -127,6 +139,7 @@ export function LinkHotel({
           expectedVersion: version,
           hotelCode: hotel,
           reason: reason.trim(),
+          acknowledgeMismatch: mismatch && ack,
         });
       }}
     >
@@ -140,17 +153,23 @@ export function LinkHotel({
           value={hotel}
           onChange={(e) => {
             setHotel(e.target.value);
+            setAck(false);
             fresh();
           }}
         >
           <option value="">{t.choose}</option>
-          {hotels.map((h) => (
-            <option key={h.code} value={h.code}>
-              {h.name} ({h.code})
-            </option>
-          ))}
+          {hotels
+            .filter((h) => h.code !== linked)
+            .map((h) => (
+              <option key={h.code} value={h.code}>
+                {h.name} ({h.code})
+              </option>
+            ))}
         </select>
       </label>
+      {mismatch && chosen && (
+        <HotelMismatch draft={draft} hotel={chosen} acknowledged={ack} onAcknowledge={setAck} />
+      )}
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t.link.reason}
         <input
@@ -168,7 +187,7 @@ export function LinkHotel({
         <button
           type="submit"
           className={buttonClass.secondary}
-          disabled={busy || !hotel || !reason.trim()}
+          disabled={busy || !hotel || !reason.trim() || (mismatch && !ack)}
           data-testid="contract-link-submit"
         >
           {t.link.submit}
