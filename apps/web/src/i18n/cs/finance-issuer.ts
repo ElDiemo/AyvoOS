@@ -67,6 +67,25 @@ export const issuerCs = {
     choose: 'Zvolit výchozí',
     reason: 'Důvod (povinný)',
   },
+  vat: {
+    title: 'Výchozí sazba DPH pro tuzemské faktury',
+    intro:
+      'Ceny za pokoj a měsíc (vlastní i z ceníku) jsou bez DPH. Sazbu zadává správce v procentech s platností od data; nic se nepředvyplňuje. Ostrá tuzemská faktura použije sazbu platnou ke dni zdanitelného plnění a zmrazí ji v dokladu. Zahraniční a zvláštní daňové režimy ji nikdy nepoužijí automaticky. Testovací faktury DPH nepočítají.',
+    none: 'Sazba DPH není zadaná. Ostré vystavení tuzemské faktury by bylo zablokované.',
+    noneToday: (today: string) =>
+      `Ke dni ${today} neplatí žádná sazba. Ostré vystavení tuzemské faktury s tímto dnem zdanitelného plnění by bylo zablokované.`,
+    current: (rate: string, from: string) => `Dnes platí ${rate} % (od ${from}).`,
+    scheduled: 'Sazby podle data platnosti',
+    entry: (rate: string, from: string) => `od ${from}: ${rate} %`,
+    history: 'Historie změn',
+    corrected: 'opraveno pozdější změnou',
+    validFrom: 'Platí od (den zdanitelného plnění)',
+    rate: 'Sazba DPH v %',
+    reason: 'Důvod (povinný)',
+    save: 'Uložit sazbu',
+    invalid:
+      'Sazbu zadejte v procentech jako číslo s nejvýš 2 desetinnými místy (víc než 0, méně než 100). Nic se neuložilo.',
+  },
   errors: {
     CONCURRENT_CHANGE: 'Údaje mezitím změnil někdo jiný. Stránka se načte znovu.',
   },

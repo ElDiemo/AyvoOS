@@ -1,5 +1,14 @@
-import { issuerSettingsSchema, type IssuerBankAccount } from '@ayvo/types';
-import { AccountForm, DefaultAccountForm, IssuerForm } from '@/components/finance/issuer-forms';
+import {
+  domesticVatRatePageSchema,
+  issuerSettingsSchema,
+  type IssuerBankAccount,
+} from '@ayvo/types';
+import {
+  AccountForm,
+  DefaultAccountForm,
+  IssuerForm,
+  VatRateForm,
+} from '@/components/finance/issuer-forms';
 import { Card, EmptyState, Notice } from '@/components/ui';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { issuerCs as t } from '@/i18n/cs/finance-issuer';
@@ -18,6 +27,12 @@ const when = (iso: string) =>
     minute: '2-digit',
   }).format(new Date(iso));
 
+const day = (iso: string) => {
+  const [y, m, d] = iso.split('-');
+  return `${Number(d)}. ${Number(m)}. ${y}`;
+};
+const percent = (v: string) => v.replace('.', ',');
+
 const domestic = (a: IssuerBankAccount['current']['account']) =>
   a.accountNumber && a.bankCode
     ? `${a.accountPrefix ? `${a.accountPrefix.replace(/^0+/, '')}-` : ''}${a.accountNumber}/${a.bankCode}`
@@ -31,7 +46,11 @@ const domestic = (a: IssuerBankAccount['current']['account']) =>
  */
 export default async function CompanySettingsPage() {
   await requirePermission('finance:issuer_manage');
-  const s = await apiGet('admin/finance/issuer', issuerSettingsSchema);
+  const [s, vat] = await Promise.all([
+    apiGet('admin/finance/issuer', issuerSettingsSchema),
+    apiGet('admin/finance/issuer/vat-rates', domesticVatRatePageSchema),
+  ]);
+  const effective = new Set(vat.effective.map((r) => r.revision));
   return (
     <>
       <FinanceHeader active="settings" view="company" title={t.title} subtitle={t.subtitle} />
@@ -113,6 +132,51 @@ export default async function CompanySettingsPage() {
               <AccountForm />
             </div>
           </details>
+        </Card>
+
+        <Card title={t.vat.title} testId="issuer-vat-rate">
+          <p className="mb-3 text-sm text-stone-600">{t.vat.intro}</p>
+          <div className="mb-3 text-sm" data-testid="vat-rate-current">
+            {vat.current ? (
+              t.vat.current(percent(vat.current.ratePercent), day(vat.current.validFrom))
+            ) : (
+              <Notice>
+                {vat.versions.length === 0 ? t.vat.none : t.vat.noneToday(day(vat.today))}
+              </Notice>
+            )}
+          </div>
+          {vat.effective.length > 0 && (
+            <div className="mb-3 text-sm">
+              <span className="font-medium">{t.vat.scheduled}</span>
+              <ul className="mt-1" data-testid="vat-rate-effective">
+                {vat.effective.map((r) => (
+                  <li key={r.revision}>{t.vat.entry(percent(r.ratePercent), day(r.validFrom))}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <VatRateForm
+            key={vat.versions[0]?.revision ?? 0}
+            revision={vat.versions[0]?.revision ?? null}
+          />
+          {vat.versions.length > 0 && (
+            <details className="mt-4 text-sm">
+              <summary className="cursor-pointer text-stone-600">{t.vat.history}</summary>
+              <ul className="mt-2 divide-y divide-stone-100" data-testid="vat-rate-history">
+                {vat.versions.map((v) => (
+                  <li key={v.revision} className="py-2 wrap-anywhere">
+                    <span className="font-medium">
+                      {t.vat.entry(percent(v.ratePercent), day(v.validFrom))}
+                    </span>{' '}
+                    · {when(v.recordedAt)} · {v.recordedByName} — {v.reason}
+                    {!effective.has(v.revision) && (
+                      <span className="block text-stone-500">{t.vat.corrected}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </Card>
 
         <Card title={t.defaults.title} testId="issuer-defaults">

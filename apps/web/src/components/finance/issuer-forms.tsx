@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  domesticVatRatePageSchema,
   issuerSettingsSchema,
   VAT_STATUSES,
   type IssuerBankAccount,
@@ -11,6 +12,7 @@ import { useRef, useState } from 'react';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { issuerCs as t } from '@/i18n/cs/finance-issuer';
 import { apiSend, ClientApiError } from '@/lib/client-api';
+import { parseDecimalInput } from '@/lib/decimal-input';
 
 /** One request id per attempt (a retry of the same attempt replays); a new one after any edit. */
 function useSubmit() {
@@ -19,11 +21,16 @@ function useSubmit() {
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(crypto.randomUUID());
   const fresh = () => (requestId.current = crypto.randomUUID());
-  async function send(path: string, body: Record<string, unknown>, done?: () => void) {
+  async function send(
+    path: string,
+    body: Record<string, unknown>,
+    done?: () => void,
+    schema: typeof issuerSettingsSchema | typeof domesticVatRatePageSchema = issuerSettingsSchema,
+  ) {
     setBusy(true);
     setError(null);
     try {
-      await apiSend('POST', path, issuerSettingsSchema, { requestId: requestId.current, ...body });
+      await apiSend('POST', path, schema, { requestId: requestId.current, ...body });
       fresh();
       done?.();
       router.refresh();
@@ -325,6 +332,86 @@ export function DefaultAccountForm({
         {t.defaults.choose}
       </button>
       {error && <ErrorNote>{error}</ErrorNote>}
+    </form>
+  );
+}
+
+/**
+ * The default VAT rate of domestic invoices, valid from a day (doc 040 §17): typed by the
+ * administrator in percent ("21" or "12,5"), never prefilled; a rate of a start day already set is
+ * corrected by saving that day again (the history keeps both). An unclear value is refused here.
+ */
+export function VatRateForm({ revision }: { revision: number | null }) {
+  const [validFrom, setValidFrom] = useState('');
+  const [rate, setRate] = useState('');
+  const [reason, setReason] = useState('');
+  const [inputError, setInputError] = useState<string | null>(null);
+  const { busy, error, send, fresh } = useSubmit();
+  const change = (set: (v: string) => void) => (v: string) => {
+    set(v);
+    setInputError(null);
+    fresh();
+  };
+  return (
+    <form
+      className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+      data-testid="vat-rate-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const ratePercent = parseDecimalInput(rate);
+        if (ratePercent === null || Number(ratePercent) <= 0 || Number(ratePercent) >= 100) {
+          setInputError(t.vat.invalid);
+          return;
+        }
+        void send(
+          'admin/finance/issuer/vat-rates',
+          { expectedRevision: revision, validFrom, ratePercent, reason: reason.trim() },
+          () => {
+            setValidFrom('');
+            setRate('');
+            setReason('');
+          },
+          domesticVatRatePageSchema,
+        );
+      }}
+    >
+      <TextField
+        name="validFrom"
+        text={t.vat.validFrom}
+        type="date"
+        value={validFrom}
+        onChange={change(setValidFrom)}
+        required
+      />
+      <TextField
+        name="ratePercent"
+        text={t.vat.rate}
+        value={rate}
+        onChange={change(setRate)}
+        required
+      />
+      <TextField
+        name="reason"
+        text={t.vat.reason}
+        value={reason}
+        onChange={change(setReason)}
+        required
+      />
+      <div className="sm:col-span-3">
+        <button
+          type="submit"
+          disabled={busy}
+          className={buttonClass.primary}
+          data-testid="vat-rate-save"
+        >
+          {t.vat.save}
+        </button>
+      </div>
+      {(inputError ?? error) && (
+        <div className="sm:col-span-3">
+          <ErrorNote>{inputError ?? error}</ErrorNote>
+        </div>
+      )}
     </form>
   );
 }

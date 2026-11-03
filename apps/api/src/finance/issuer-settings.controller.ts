@@ -1,10 +1,13 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import {
   createIssuerBankAccountSchema,
+  newDomesticVatRateSchema,
   newIssuerBankAccountVersionSchema,
   newIssuerVersionSchema,
   setDefaultAccountSchema,
   type CreateIssuerBankAccountRequest,
+  type DomesticVatRatePage,
+  type NewDomesticVatRateRequest,
   type IssuerSettings,
   type NewIssuerBankAccountVersionRequest,
   type NewIssuerVersionRequest,
@@ -71,5 +74,20 @@ export class IssuerSettingsController {
     @Caller() caller: FinanceCaller,
   ): Promise<IssuerSettings> {
     return this.issuer.setDefault(body, caller);
+  }
+
+  @RequirePermission('finance:issuer_manage')
+  @Get('vat-rates')
+  vatRates(): Promise<DomesticVatRatePage> {
+    return this.issuer.vatRates();
+  }
+
+  @RequirePermission('finance:issuer_manage')
+  @Post('vat-rates')
+  newVatRate(
+    @Body(new ZodValidationPipe(newDomesticVatRateSchema)) body: NewDomesticVatRateRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<DomesticVatRatePage> {
+    return this.issuer.newVatRate(body, caller);
   }
 }

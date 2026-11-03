@@ -338,7 +338,7 @@ UOL's rule (doc 041 §8b, PR #110).
 | 1. In advance or in arrears, issuing window    | decided as a setting (above); the setting itself is still to be proposed |
 | 2. Partial months, mid-month room changes      | open                                                                     |
 | 3. Number series                               | UOL                                                                      |
-| 4. VAT, tax point, rounding, foreign customers | UOL (law above)                                                          |
+| 4. VAT, tax point, rounding, foreign customers | UOL (law above); prices without VAT and the default rate setting: §17    |
 | 5. PDF contents, QR payment                    | done for TEST invoices (§9); tax-document contents with UOL              |
 | 6. Corrections (credit note)                   | open                                                                     |
 | 7. Summary invoices                            | one invoice per agreement (above); summary invoices not now              |
@@ -398,3 +398,61 @@ infrastructure, DNS or the edge):
    Finance never reads core tables; whether the portal is part of the shared web app or its own
    app is an architecture decision.
 5. **Payment-state wording** shown to a customer, and whether overdue is shown.
+
+## 17. Default VAT rate of domestic invoices (owner 2026-11-03; setting built, live use not)
+
+Numbered §17 because §15 (#114) and §16 (#117) are open on their own PRs.
+
+**Decided by the owner on 2026-11-03:**
+
+- The price per room and month — the agreement's own price and the default price list (§3) — is
+  **without VAT**.
+- A **default VAT rate for domestic invoices** is a setting of Finance → Nastavení Financí → Naše
+  firma a účty, next to the accounts. The administrator enters it as a **percentage**, never
+  prefilled and never hard-coded in the code. The administrator sets the value in AYVO; it is not
+  copied from anywhere.
+- Tax point (DUZP) and rounding remain separate questions (§7 item 4, UOL).
+
+**Built in this step (setting only):**
+
+- `finance.domestic_vat_rates`, append-only: a revision (from the `billing_revision` counter), the
+  start day `valid_from`, `rate_percent` exactly `numeric(5,2)` with `0 < rate < 100` (DB CHECK),
+  reason, author, time, request id. A later revision with the same start day **corrects** that day.
+  The history keeps every revision.
+- `GET / POST /api/admin/finance/issuer/vat-rates`, `finance:issuer_manage` for both (ADMIN only, as
+  the rest of the page). A save names the newest revision the form saw (otherwise
+  `409 CONCURRENT_CHANGE`) and is idempotent per `requestId`.
+- The page block shows the rate valid today (Europe/Prague), the rates by start day and the
+  history. Without a rate it says that live domestic issuing would be blocked.
+- `domesticVatRateOn(tx, taxPointOn)`: the rate of the latest start day not after the tax point;
+  `null` = none.
+
+**Binding contract for live issuing (not built; the gate of §5 stays closed):**
+
+1. **Selection by the tax point (DUZP):** a live domestic invoice uses `domesticVatRateOn` for its
+   own tax point, inside the issuing transaction. How the tax point is set is UOL's question.
+2. **Missing rate blocks:** no rate for that tax point → that live invoice is refused
+   (`DOMESTIC_VAT_RATE_MISSING`); nothing is assumed.
+3. **Only the domestic regime:** a foreign customer, reverse charge or any other special tax regime
+   never uses this rate automatically. Their treatment waits for UOL (§7 item 4).
+4. **Frozen in the document:** the rate (value and revision), the base, the VAT and the total are
+   written into the issued invoice's snapshot. A later change of the setting never changes an
+   issued document.
+5. **The future live PDF** shows:
+   - the unit price and the base without VAT;
+   - the VAT rate and the VAT amount;
+   - the total including VAT; the same amount is in QR Platba;
+   - the identity of the supplier REvolaris with IČO, DIČ and VAT-payer status (the issuer's data,
+     §8).
+     Rounding of VAT and of the total follows UOL's answer.
+6. **TEST invoices stay as they are:** no VAT computed (`totals.base/vat = null`, TEST note, §9).
+   TEST issuing never waits for the rate.
+
+**Open for review:**
+
+- The bounds `0 < rate < 100` with at most two decimals. A zero rate or exemption is a special
+  regime, not this setting.
+- Whether a start day in the past may be entered or corrected once live invoices exist. Today it
+  may; issued documents are frozen either way.
+- Removing a future rate entered by mistake: today only a correction of that day exists, no
+  withdrawal.

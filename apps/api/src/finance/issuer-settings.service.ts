@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type {
   CreateIssuerBankAccountRequest,
   DefaultAccount,
+  DomesticVatRatePage,
   IssuerBankAccount,
   IssuerBankAccountFields,
   IssuerBankAccountVersion,
@@ -9,6 +10,7 @@ import type {
   IssuerSettings,
   IssuerVersion,
   NewIssuerBankAccountVersionRequest,
+  NewDomesticVatRateRequest,
   NewIssuerVersionRequest,
   SetDefaultAccountRequest,
 } from '@ayvo/types';
@@ -17,6 +19,7 @@ import { Prisma } from '../generated/finance-prisma/client.js';
 import type { FinanceCaller } from './finance-access.guard.js';
 import { allocateFinanceSerial, FinanceOperations } from './finance-operations.js';
 import { FinancePrismaService } from './finance-prisma.service.js';
+import { effectiveVatRates, vatRateOn, vatRateView } from './vat-rates.js';
 
 type IssuerRow = Prisma.IssuerVersionGetPayload<object>;
 type AccountVersionRow = Prisma.IssuerBankAccountVersionGetPayload<object>;
@@ -24,6 +27,8 @@ type DefaultRow = Prisma.IssuerDefaultAccountGetPayload<{ include: { account: tr
 
 const isUnique = (e: unknown) =>
   e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
+const pragueToday = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(new Date());
 const concurrentChange = () =>
   domainError(409, 'CONCURRENT_CHANGE', 'Údaje mezitím změnil někdo jiný. Načtěte je znovu.');
 
@@ -283,6 +288,62 @@ export class IssuerSettingsService {
       },
     );
     return this.settings();
+  }
+
+  // --- the default VAT rate of domestic invoices (doc 040 §17) ------------------------------
+
+  /** Every revision, the rate per start day and the one that applies today (null = none). */
+  async vatRates(): Promise<DomesticVatRatePage> {
+    const rows = await this.prisma.domesticVatRate.findMany({ orderBy: { revision: 'desc' } });
+    const versions = rows.map(vatRateView);
+    const effective = effectiveVatRates(versions);
+    const today = pragueToday();
+    return { today, current: vatRateOn(effective, today), effective, versions };
+  }
+
+  /**
+   * A rate valid from a day, entered by the administrator (never a default). Made from the newest
+   * revision the form saw; the same start day again is a correction (a new revision, history kept).
+   */
+  async newVatRate(
+    req: NewDomesticVatRateRequest,
+    caller: FinanceCaller,
+  ): Promise<DomesticVatRatePage> {
+    const { userId, displayName } = caller.principal;
+    await this.operations.run(
+      'ISSUER_VAT_RATE',
+      req.requestId,
+      {
+        expectedRevision: req.expectedRevision,
+        validFrom: req.validFrom,
+        ratePercent: req.ratePercent,
+        reason: req.reason,
+        actorId: userId,
+      },
+      async (tx) => {
+        // The counter row is locked until commit: the check below sees every committed revision.
+        const revision = await allocateFinanceSerial(tx, 'billing_revision');
+        const newest = await tx.domesticVatRate.findFirst({
+          orderBy: { revision: 'desc' },
+          select: { revision: true },
+        });
+        if ((newest ? Number(newest.revision) : null) !== req.expectedRevision)
+          throw concurrentChange();
+        await tx.domesticVatRate.create({
+          data: {
+            revision,
+            validFrom: new Date(`${req.validFrom}T00:00:00.000Z`),
+            ratePercent: req.ratePercent,
+            reason: req.reason,
+            recordedBy: userId,
+            recordedByName: displayName,
+            requestId: req.requestId,
+          },
+        });
+        return { revision: Number(revision) };
+      },
+    );
+    return this.vatRates();
   }
 }
 
