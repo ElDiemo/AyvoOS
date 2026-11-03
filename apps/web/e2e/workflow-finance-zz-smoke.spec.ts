@@ -49,6 +49,88 @@ async function shots(page: Page, name: string) {
   await page.setViewportSize({ width: 1440, height: 900 });
 }
 
+type IssuerSettings = {
+  current: { version: number; issuer: { vatStatus: string } } | null;
+  accounts: { code: string; current: { status: string; account: { iban: string } } }[];
+  defaults: { currency: string; accountCode: string }[];
+};
+
+/**
+ * The issuer and its CZK default account, through the same API as the settings page: filled only
+ * when missing (a clean database, the spec on its own), never changed when present. Returns the
+ * IBAN of the CZK default account, which every CZK invoice must carry in its payment details.
+ */
+async function ensureIssuer(r: APIRequestContext): Promise<string> {
+  const B = '/api/admin/finance/issuer';
+  let settings = await json<IssuerSettings>(await r.get(B));
+  if (settings.current === null) {
+    await json(
+      await r.post(`${B}/versions`, {
+        data: {
+          requestId: crypto.randomUUID(),
+          expectedVersion: 0,
+          issuer: {
+            legalName: `${LABEL} Vystavitel s.r.o. (syntetický)`,
+            addressLine1: 'Syntetická 1',
+            addressLine2: null,
+            postalCode: '110 00',
+            city: 'Praha',
+            countryCode: 'CZ',
+            companyId: '12345678',
+            vatStatus: 'VAT_PAYER',
+            vatId: 'CZ12345678',
+            registration: null,
+            email: 'fakturace@smoke.test',
+            phone: null,
+            web: null,
+          },
+          reason: `${LABEL} (laboratoř)`,
+        },
+      }),
+    );
+  }
+  settings = await json<IssuerSettings>(await r.get(B));
+  if (!settings.defaults.some((d) => d.currency === 'CZK')) {
+    // Answered with the whole settings; the new account is the one with this IBAN.
+    const withAccount = await json<IssuerSettings>(
+      await r.post(`${B}/bank-accounts`, {
+        data: {
+          requestId: crypto.randomUUID(),
+          account: {
+            label: `${LABEL} účet CZK (syntetický)`,
+            currency: 'CZK',
+            accountPrefix: '19',
+            accountNumber: '2000145399',
+            bankCode: '0800',
+            iban: 'CZ65 0800 0000 1920 0014 5399',
+            bic: null,
+          },
+          reason: `${LABEL} (laboratoř)`,
+        },
+      }),
+    );
+    await json(
+      await r.post(`${B}/default-accounts`, {
+        data: {
+          requestId: crypto.randomUUID(),
+          currency: 'CZK',
+          accountCode: withAccount.accounts.find(
+            (a) => a.current.account.iban === 'CZ6508000000192000145399',
+          )!.code,
+          expectedRevision: null,
+          reason: `${LABEL} (laboratoř)`,
+        },
+      }),
+    );
+    settings = await json<IssuerSettings>(await r.get(B));
+  }
+  expect(settings.current?.issuer.vatStatus, 'the issuer is a VAT payer').toBe('VAT_PAYER');
+  const code = settings.defaults.find((d) => d.currency === 'CZK')!.accountCode;
+  const account = settings.accounts.find((a) => a.code === code)!;
+  expect(account.current.status).toBe('ACTIVE');
+  return account.current.account.iban;
+}
+
 type Invoice = {
   number: string;
   variableSymbol: string;
@@ -98,15 +180,11 @@ test.describe(LABEL, () => {
     const run = crypto.randomUUID().slice(0, 4).toUpperCase();
     const tag = `${LABEL} ${run}`;
 
-    // --- the issuer: the e2e issuer fixture (workflow-finance-issuer) is a VAT payer; TEST invoices
-    // print no VAT and a TEST note — the real VAT document stays blocked (doc 040 §5, §13).
-    const issuer = await json<{ current: { issuer: { vatStatus: string } } | null }>(
-      await r.get('/api/admin/finance/issuer'),
-    );
-    expect(
-      issuer.current?.issuer.vatStatus,
-      'the issuer fixture must exist (run after the issuer spec)',
-    ).toBe('VAT_PAYER');
+    // --- the issuer: standalone on a clean database it is filled here (a VAT payer, synthetic) with a
+    // CZK default account; after other specs the existing one is used and nothing is overwritten.
+    // TEST invoices print no VAT and a TEST note — the real VAT document stays blocked (doc 040 §5,
+    // §13); nothing pretends AYVO is not a VAT payer.
+    const czkIban = await ensureIssuer(r);
 
     // --- four hotels in the core
     const me = await json<{ sites: { id: string; code: string }[] }>(await r.get('/api/auth/me'));
@@ -354,7 +432,7 @@ test.describe(LABEL, () => {
       expect(inv.payment.amount).toBe(inv.total);
       expect(inv.payment.variableSymbol).toBe(inv.variableSymbol);
       expect(inv.payment.dueOn).toBe(inv.dueOn);
-      expect(inv.payment.iban).toMatch(/^CZ\d{22}$/);
+      expect(inv.payment.iban).toBe(czkIban);
       const pdf = await r.get(`/api/admin/finance/invoices/${inv.number}/pdf`);
       expect(pdf.headers()['content-disposition']).toContain(
         `${pdfName[inv.documentLanguage]}-${inv.number}.pdf`,
