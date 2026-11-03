@@ -100,17 +100,17 @@ Out of scope it is 404, never "forbidden for this draft".
 - `POST drafts` creates a draft (requestId, prospect or hotel, fields).
 - `GET drafts/:code` returns the current state, revisions, events and the signed original's
   metadata.
-- `POST drafts/:code/revisions` saves a new revision (`expectedRevision`, reason, fields).
-- `POST drafts/:code/remove` and `POST drafts/:code/restore` need `expectedRevision`, a reason and
+- `POST drafts/:code/revisions` saves a new revision (`expectedVersion`, reason, fields).
+- `POST drafts/:code/remove` and `POST drafts/:code/restore` need `expectedVersion`, a reason and
   `confirm: true`.
-- `POST drafts/:code/hotel` links a hotel (`expectedRevision`, hotel, reason).
+- `POST drafts/:code/hotel` links a hotel (`expectedVersion`, hotel, reason).
 - `GET drafts/:code/revisions/:revision/pdf` returns the generated PDF (`Content-Disposition:
 attachment`) and records an event.
 - `POST drafts/:code/signed` uploads the signed PDF: multipart `file`, `revision`, `signedOn`,
   `requestId`.
 - `GET drafts/:code/signed/:revision` downloads the signed original and records an event.
 
-Every write is idempotent per `requestId`. A stale `expectedRevision` gets `409 CONCURRENT_CHANGE`.
+Every write is idempotent per `requestId`. A stale `expectedVersion` (the draft's row version) gets `409 CONCURRENT_CHANGE`.
 
 ## 6. Template `cs-b2b-1` (working text)
 

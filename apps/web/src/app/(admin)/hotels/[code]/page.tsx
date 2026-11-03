@@ -20,6 +20,7 @@ import { hotelsCs } from '@/i18n/cs/hotels';
 import { supplyPlansCs } from '@/i18n/cs/supply-plans';
 import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
+import { ContractDraftsCard } from '@/components/contracts/contract-drafts-card';
 import { HotelBillingPanel } from '@/components/hotels/hotel-billing-panel';
 
 export const dynamic = 'force-dynamic';
@@ -154,6 +155,12 @@ export default async function HotelPage({
             canInvoices={canInvoices}
             canManage={hasPermission(me, 'finance:billing_manage')}
           />
+        </div>
+      )}
+      {/* Contract drafts (ADR 0043): sales:manage + hotels:read; only an explicit click prepares one. */}
+      {hasPermission(me, 'sales:manage') && (
+        <div className="mb-6 scroll-mt-4" id="navrhy-smluv">
+          <ContractDraftsCard hotel={hotel.code} canPrepare />
         </div>
       )}
       {canSeeOrders && (

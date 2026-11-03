@@ -975,6 +975,11 @@ enum OperationKind {
   SALES_IMPORT
   /// A manual issue of a consumable to consumption (stock_issues).
   STOCK_ISSUE
+  CONTRACT_DRAFT_CREATE
+  CONTRACT_DRAFT_REVISE
+  CONTRACT_DRAFT_REMOVE
+  CONTRACT_DRAFT_RESTORE
+  CONTRACT_DRAFT_HOTEL
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1143,6 +1148,11 @@ model User {
   salesTasksUpdated      SalesTask[]     @relation("SalesTaskUpdatedBy")
   salesTasksClosed       SalesTask[]     @relation("SalesTaskClosedBy")
   salesEvents            SalesEvent[]    @relation("SalesEventActor")
+  contractDraftsCreated  ContractDraft[]         @relation("ContractDraftCreatedBy")
+  contractDraftsUpdated  ContractDraft[]         @relation("ContractDraftUpdatedBy")
+  contractDraftsRemoved  ContractDraft[]         @relation("ContractDraftRemovedBy")
+  contractRevisions      ContractDraftRevision[] @relation("ContractDraftRevisionCreatedBy")
+  contractDraftEvents    ContractDraftEvent[]    @relation("ContractDraftEventActor")
 
   @@map("users")
 }
@@ -2354,6 +2364,7 @@ model Hotel {
   operation       OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   orders          Order[]
   supplyPlan      SupplyPlan?
+  contractDrafts  ContractDraft[]
 
   @@index([fulfillmentSiteId])
   @@map("hotels")
@@ -3430,6 +3441,7 @@ model SalesProspect {
   activities SalesActivity[]
   tasks      SalesTask[]
   events     SalesEvent[]
+  contractDrafts ContractDraft[]
 
   @@unique([importId, importRow])
   @@index([ownerId])
@@ -3582,4 +3594,93 @@ model SalesEvent {
   @@index([prospectId, occurredAt])
   @@index([taskId])
   @@map("sales_events")
+}
+
+/// A contract proposal prepared by hand (ADR 0043, doc 045): at a prospect or a hotel (at least one),
+/// printed from a versioned working template. Current state; every change is an event in the same
+/// transaction. DB: never deleted, each change the next version, removed = restorable only.
+model ContractDraft {
+  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial          BigInt    @unique
+  code            String    @unique
+  prospectId      String?   @map("prospect_id") @db.Uuid
+  hotelId         String?   @map("hotel_id") @db.Uuid
+  version         Int       @default(1)
+  currentRevision Int       @default(1) @map("current_revision")
+  removedAt       DateTime? @map("removed_at") @db.Timestamptz(3)
+  removedBy       String?   @map("removed_by") @db.Uuid
+  removeReason    String?   @map("remove_reason")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy       String    @map("created_by") @db.Uuid
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy       String    @map("updated_by") @db.Uuid
+
+  prospect  SalesProspect?          @relation(fields: [prospectId], references: [id], onDelete: Restrict)
+  hotel     Hotel?                  @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  remover   User?                   @relation("ContractDraftRemovedBy", fields: [removedBy], references: [id], onDelete: Restrict)
+  creator   User                    @relation("ContractDraftCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater   User                    @relation("ContractDraftUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  revisions ContractDraftRevision[]
+  events    ContractDraftEvent[]
+
+  @@index([prospectId])
+  @@index([hotelId])
+  @@map("contract_drafts")
+}
+
+/// The full content of one saved revision (append-only); the PDF is rendered from it and its
+/// template version. Holders: the ownership is set exactly when holders are WITH (DB CHECK).
+model ContractDraftRevision {
+  id                    String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  draftId               String   @map("draft_id") @db.Uuid
+  revision              Int
+  templateVersion       String   @map("template_version")
+  counterpartyName      String   @map("counterparty_name")
+  counterpartyCompanyId String?  @map("counterparty_company_id")
+  counterpartyAddress   String?  @map("counterparty_address")
+  representativeName    String?  @map("representative_name")
+  representativeRole    String?  @map("representative_role")
+  hotelName             String   @map("hotel_name")
+  hotelAddress          String   @map("hotel_address")
+  rooms                 Int
+  /// Without VAT; exact (numeric without typmod, scale <= 2: never rounded).
+  pricePerRoomMonth     Decimal  @map("price_per_room_month") @db.Decimal
+  currency              String   @db.Char(3)
+  startOn               DateTime @map("start_on") @db.Date
+  /// ADVANCE | ARREARS
+  billingTiming         String   @map("billing_timing")
+  paymentTermsDays      Int      @map("payment_terms_days")
+  /// NONE | WITH
+  holders               String
+  /// AYVO | CUSTOMER, exactly when holders = WITH
+  holdersOwnership      String?  @map("holders_ownership")
+  reason                String?
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy             String   @map("created_by") @db.Uuid
+  requestId             String   @unique @map("request_id") @db.Uuid
+
+  draft   ContractDraft @relation(fields: [draftId], references: [id], onDelete: Restrict)
+  creator User          @relation("ContractDraftRevisionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@unique([draftId, revision])
+  @@map("contract_draft_revisions")
+}
+
+/// The audit of a contract draft (append-only): created, revised, removed, restored, hotel linked,
+/// PDF downloaded; later the signed original.
+model ContractDraftEvent {
+  id       String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  draftId  String   @map("draft_id") @db.Uuid
+  kind     String
+  revision Int?
+  actorId  String   @map("actor_id") @db.Uuid
+  at       DateTime @default(now()) @db.Timestamptz(3)
+  reason   String?
+  details  Json?
+
+  draft ContractDraft @relation(fields: [draftId], references: [id], onDelete: Restrict)
+  actor User          @relation("ContractDraftEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([draftId, at])
+  @@map("contract_draft_events")
 }

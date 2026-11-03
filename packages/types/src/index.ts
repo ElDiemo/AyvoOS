@@ -1,6 +1,7 @@
 export * from './api.js';
 export * from './bottles.js';
 export * from './carriers.js';
+export * from './contracts.js';
 export * from './catalog.js';
 export * from './crates.js';
 export * from './dispatch-printing.js';
