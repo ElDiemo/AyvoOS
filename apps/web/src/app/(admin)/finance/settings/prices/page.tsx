@@ -25,7 +25,7 @@ export default async function PricesPage() {
         title={t.pricesTitle}
         subtitle={t.pricesSubtitle}
       />
-      <Card testId="billing-prices">
+      <Card title={t.fields.price} testId="billing-prices">
         <p className="mb-3 text-xs text-stone-500">{t.priceListHelp}</p>
         {prices.length === 0 ? (
           <p className="text-sm text-stone-500">{t.noPrices}</p>

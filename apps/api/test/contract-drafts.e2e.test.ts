@@ -227,7 +227,9 @@ describe.skipIf(!hasDatabase)('contract drafts', () => {
       }).expect(400);
     expect(await counts()).toEqual(before);
     // The same rules in the database, without the API.
-    const draft = await t.prisma.contractDraft.findFirstOrThrow({ where: { prospectId: p.id } });
+    const draft = await t.prisma.contractDraft.findFirstOrThrow({
+      where: { prospect: { code: p.code } },
+    });
     const raw = (holders: string, ownership: string | null, price = '10') =>
       t.prisma.$executeRawUnsafe(
         `INSERT INTO contract_draft_revisions (draft_id, revision, template_version, counterparty_name,

@@ -223,13 +223,13 @@ export const financeCs = {
     steps: {
       issuer: 'Naše firma a výchozí účet',
       customer: 'Odběratel (firma, které se fakturuje)',
-      agreement: 'Smlouva hotelu',
+      agreement: 'Fakturační podmínky hotelu',
       invoice: 'Náhled a testovací faktura',
     },
     stepLinks: {
       issuer: 'Nastavení Financí',
       customer: 'Založit odběratele',
-      agreement: 'Založit smlouvu',
+      agreement: 'Založit fakturační podmínky',
       invoice: 'Otevřít náhled',
     },
   },
@@ -245,9 +245,9 @@ export const financeCs = {
     ofHotel: 'Zobrazeny jsou faktury jednoho hotelu.',
     allOfCompany: 'Zobrazit všechny faktury',
     noneOfAgreement: 'Na tuto smlouvu zatím nebyla vystavena žádná faktura.',
-    emptyToBilling: 'Faktura vzniká ze smlouvy hotelu – Smlouvy',
+    emptyToBilling: 'Faktura vzniká z fakturačních podmínek hotelu – Fakturační podmínky',
     emptyFromAgreements:
-      'Faktura vzniká ze smlouvy hotelu; smlouvy spravuje kolega s přístupem ke Smlouvám a cenám.',
+      'Faktura vzniká z fakturačních podmínek hotelu; spravuje je kolega s přístupem k fakturačním podmínkám a cenám.',
     number: 'Číslo',
     customer: 'Odběratel',
     period: 'Období',
@@ -404,7 +404,7 @@ export const financeCs = {
     month: 'Fakturovaný měsíc',
     load: 'Načíst smlouvy',
     noAgreements: 'Pro tento měsíc nejsou žádné smlouvy v platnosti.',
-    toAgreements: 'Smlouvy →',
+    toAgreements: 'Fakturační podmínky →',
     notInvoiceable: 'Nelze fakturovat',
     gaps: {
       PRICE_MISSING: 'chybí cena',

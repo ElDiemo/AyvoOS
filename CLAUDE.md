@@ -151,6 +151,14 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   hotel invoices (doc 041 §8, §8b, owner 2026-11-02): automatic only on an exact VS; other income
   stays in the bank list, no task; a wrong VS allocated by hand with a reason; money before an
   invoice's issue is never paired by itself. No scheduled read on DEV/PROD (#94 off).
+  Contract drafts (owner 2026-11-03, ADR 0043, doc 045; model approved, implementation under
+  review): module `contracts` in the core — `contract_drafts` (at a prospect and/or a hotel,
+  version, restorable removal), append-only `contract_draft_revisions` (every wizard field,
+  template version) and `contract_draft_events`. Only by an explicit save; access from the
+  prospect's sales scope (404 otherwise), hotels with `sales:manage` + `hotels:read`; a hotel
+  linked by hand must be the one the draft names (or knowingly acknowledged). One versioned Czech
+  working template, "NÁVRH – K PRÁVNÍ KONTROLE", never an approved legal model. Never creates a
+  hotel, touches Finance, sends or signs anything.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
   `identity:users_manage` only. Deactivation hides atomically; reactivation never republishes.

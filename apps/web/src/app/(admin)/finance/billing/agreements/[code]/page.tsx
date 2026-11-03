@@ -22,11 +22,20 @@ export const dynamic = 'force-dynamic';
 /**
  * One hotel agreement: every version (newest revision first), a new version of its terms and —
  * with finance:invoices_read — the invoices with a line of this agreement (the exact link
- * invoice_lines.agreement_id, doc 042 §3b; never guessed).
+ * invoice_lines.agreement_id, doc 042 §3b; never guessed). Shown as the hotel's billing terms, not a
+ * legal contract (owner 2026-11-03). `?from=hotel` (the hotel card's "Upravit fakturační podmínky")
+ * only changes the way back; the form and its authorization stay the same.
  */
-export default async function AgreementPage({ params }: { params: Promise<{ code: string }> }) {
+export default async function AgreementPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ code: string }>;
+  searchParams: Promise<{ from?: string }>;
+}) {
   const me = await requirePermission('finance:billing_read');
   const { code } = await params;
+  const { from } = await searchParams;
   if (!/^BA-\d{6,}$/.test(code)) notFound();
   const canInvoices = hasPermission(me, 'finance:invoices_read');
   const [a, customers, invoices] = await Promise.all([
@@ -41,6 +50,7 @@ export default async function AgreementPage({ params }: { params: Promise<{ code
       ? apiGet('admin/finance/invoices', z.array(invoiceSummarySchema), { agreement: code })
       : null,
   ]);
+  const toHotel = hasPermission(me, 'hotels:read') ? `/hotels/${a.hotel.code}#fakturace` : null;
   const name = (id: string) => customers.find((c) => c.id === id)?.current.customer.legalName ?? id;
   return (
     <>
@@ -49,17 +59,17 @@ export default async function AgreementPage({ params }: { params: Promise<{ code
         title={a.hotel.name}
         subtitle={`${a.code} · ${a.hotel.code}`}
         actions={
-          hasPermission(me, 'hotels:read') && (
-            <Link
-              href={`/hotels/${a.hotel.code}#fakturace`}
-              className={buttonClass.secondary}
-              data-testid="agreement-hotel"
-            >
+          toHotel && (
+            <Link href={toHotel} className={buttonClass.secondary} data-testid="agreement-hotel">
               {t.toHotel}
             </Link>
           )
         }
-        back={{ href: '/finance/billing', label: t.back }}
+        back={
+          from === 'hotel' && toHotel
+            ? { href: toHotel, label: t.backToHotel }
+            : { href: '/finance/billing', label: t.back }
+        }
       />
       <div className="flex flex-col gap-6">
         <Card title={t.history} testId="agreement-history">
@@ -68,9 +78,21 @@ export default async function AgreementPage({ params }: { params: Promise<{ code
               <li key={v.revision} className="flex flex-col gap-1 py-2">
                 <span className="font-medium">
                   {financeMonth(v.effectiveFrom)}: {v.billedRooms} pokojů ·{' '}
-                  {v.ownPricePerRoomMonth
-                    ? financeAmount(v.ownPricePerRoomMonth, v.currency)
-                    : `${t.defaultPrice} (${v.currency})`}{' '}
+                  {v.ownPricePerRoomMonth ? (
+                    financeAmount(v.ownPricePerRoomMonth, v.currency)
+                  ) : (
+                    <>
+                      {t.defaultPrice} (
+                      <Link
+                        href="/finance/settings/prices"
+                        className="underline"
+                        data-testid="agreement-price-list"
+                      >
+                        {t.defaultPriceLink}
+                      </Link>
+                      , {v.currency})
+                    </>
+                  )}{' '}
                   · {name(v.customer.id)}
                 </span>
                 <span className="text-stone-600">
@@ -96,8 +118,17 @@ export default async function AgreementPage({ params }: { params: Promise<{ code
           </Card>
         )}
         {hasPermission(me, 'finance:billing_manage') && a.versions[0] && (
-          <Card title={t.newVersion}>
+          <Card title={t.newVersion} id="nova-verze" testId="agreement-new-version">
             <AgreementForm code={a.code} current={a.versions[0]} customers={customers} />
+            {from === 'hotel' && toHotel && (
+              <Link
+                href={toHotel}
+                className="mt-4 inline-block text-sm underline"
+                data-testid="agreement-back-to-hotel"
+              >
+                {t.backToHotel}
+              </Link>
+            )}
           </Card>
         )}
       </div>

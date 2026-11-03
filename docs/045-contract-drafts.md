@@ -1,6 +1,7 @@
 # 045 — Návrhy smluv (ruční generátor)
 
-Status: proposed for review (owner 2026-11-03). Architecture: ADR 0043. Not deployed.
+Status: model approved by the owner 2026-11-03 (ADR 0043); implementation for review (#121 drafts,
+#122 signed original). Not deployed.
 
 ## 1. Scope
 

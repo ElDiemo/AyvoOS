@@ -92,7 +92,9 @@ test.describe.serial('Karta hotelu a Finance', () => {
 
     await page.goto(`/hotels/${hotelA}`);
     const panel = page.getByTestId('hotel-billing');
-    await expect(panel.getByTestId('hotel-billing-none')).toContainText('Hotel zatím nemá smlouvu');
+    await expect(panel.getByTestId('hotel-billing-none')).toContainText(
+      'Hotel zatím nemá fakturační podmínky',
+    );
     await shots(page, 'ux2-hotel-no-agreement');
 
     // By the keyboard from the card to the form, with this hotel already chosen.
@@ -283,7 +285,7 @@ test.describe.serial('Karta hotelu a Finance', () => {
       await expect(page.getByTestId('hotel-address')).toBeVisible();
       const panel = page.getByTestId('hotel-billing');
       await expect(panel).toContainText('Fakturace dočasně nedostupná');
-      await expect(panel).not.toContainText('nemá smlouvu');
+      await expect(panel).not.toContainText('nemá fakturační podmínky');
       await expect(panel).not.toContainText('žádnou fakturu');
       await expect(panel.getByTestId('hotel-billing-rooms')).toHaveCount(0);
       await shots(page, 'ux2-hotel-finance-down');
