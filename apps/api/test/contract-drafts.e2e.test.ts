@@ -9,7 +9,13 @@ import type {
 } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { contractDocument, holdersText } from '../src/contracts/contract-template.js';
+import {
+  CONTRACT_TEMPLATES,
+  contractDocument,
+  holdersText,
+  UnknownContractTemplate,
+  type TemplateInput,
+} from '../src/contracts/contract-template.js';
 import { openPdf, pageText } from './support/pdf-inspect.js';
 import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
@@ -526,7 +532,7 @@ describe('the working template (cs-b2b-1)', () => {
       expect(holdersText(v)[0]).toMatch(/^\[pracovní text k právní kontrole\]/);
   });
   it('missing optional party data stay blank lines to complete by hand', () => {
-    const doc = contractDocument({
+    const doc = contractDocument('cs-b2b-1', {
       ...base,
       fields: {
         counterpartyName: 'Firma',
@@ -550,5 +556,107 @@ describe('the working template (cs-b2b-1)', () => {
     expect(parties).toContain('IČO: ……');
     expect(parties).toContain('Zastoupen: ……');
     expect(doc.sections[2]!.paragraphs).toContain('Fakturace: předem');
+  });
+
+  // A revision is printed with the version it was saved with (review CD121-2).
+  const input: TemplateInput = {
+    code: 'SN-000007',
+    revision: 3,
+    savedOn: '2026-11-03',
+    fields: {
+      counterpartyName: 'Ukázka s.r.o.',
+      counterpartyCompanyId: '12345678',
+      counterpartyAddress: 'Ukázková 1, 602 00 Brno',
+      representativeName: 'Jana Ukázková',
+      representativeRole: 'jednatelka',
+      hotelName: 'Hotel Ukázka',
+      hotelAddress: 'Hotelová 2, 602 00 Brno',
+      rooms: 40,
+      pricePerRoomMonth: '1200.50',
+      currency: 'CZK',
+      startOn: '2027-01-01',
+      billingTiming: 'ARREARS',
+      paymentTermsDays: 14,
+      holders: 'WITH',
+      holdersOwnership: 'CUSTOMER',
+    },
+  };
+  it('cs-b2b-1 is frozen: the same revision always gives this document', () => {
+    expect(contractDocument('cs-b2b-1', input)).toMatchInlineSnapshot(`
+      {
+        "meta": [
+          "SN-000007 · revize 3 · šablona cs-b2b-1",
+          "Revize uložena 3. 11. 2026",
+        ],
+        "notice": "Pracovní návrh připravený v AYVO OS. Není to schválený právní vzor ani uzavřená smlouva. Znění a chybějící ujednání doplní a schválí právní kontrola.",
+        "sections": [
+          {
+            "heading": "1. Smluvní strany",
+            "paragraphs": [
+              "Dodavatel: [identifikace dodavatele – doplní právní kontrola]",
+              "Odběratel: Ukázka s.r.o.",
+              "IČO: 12345678",
+              "Sídlo: Ukázková 1, 602 00 Brno",
+              "Zastoupen: Jana Ukázková, jednatelka",
+            ],
+          },
+          {
+            "heading": "2. Předmět",
+            "paragraphs": [
+              "Služba AYVO pro hotel Hotel Ukázka, Hotelová 2, 602 00 Brno.",
+              "[Přesný rozsah služby – doplní právní kontrola]",
+            ],
+          },
+          {
+            "heading": "3. Cena a fakturace",
+            "paragraphs": [
+              "Počet pokojů: 40",
+              "Cena za pokoj a měsíc bez DPH: 1\u00a0200,50 CZK",
+              "Začátek: 1. 1. 2027",
+              "Fakturace: zpětně",
+              "Splatnost: 14 dní",
+              "Ceny jsou uvedeny bez DPH.",
+            ],
+          },
+          {
+            "heading": "4. Držáky",
+            "paragraphs": [
+              "[pracovní text k právní kontrole] Součástí služby jsou držáky. Držáky přejdou do vlastnictví zákazníka.",
+              "[Okamžik a podmínky převodu vlastnictví, cena držáků a odpovědnost – doplní právní kontrola]",
+            ],
+          },
+          {
+            "heading": "5. Ostatní ujednání",
+            "paragraphs": [
+              "[Doba trvání, ukončení a další ujednání – doplní právní kontrola]",
+            ],
+          },
+        ],
+        "signatures": [
+          "Za dodavatele: …………………………………………   Datum: ……………",
+          "Za odběratele: …………………………………………   Datum: ……………",
+        ],
+        "title": "Smlouva o poskytování služby AYVO",
+      }
+    `);
+  });
+  it('a second version never changes an older revision; each is printed with its own; unknown is refused', () => {
+    const second = {
+      ...CONTRACT_TEMPLATES,
+      'cs-b2b-2': () => ({
+        title: 'Druhá verze',
+        meta: [],
+        notice: '',
+        sections: [],
+        signatures: [],
+      }),
+    };
+    expect(contractDocument('cs-b2b-1', input, second)).toEqual(
+      contractDocument('cs-b2b-1', input),
+    );
+    expect(contractDocument('cs-b2b-2', input, second).title).toBe('Druhá verze');
+    expect(() => contractDocument('cs-b2b-9', input)).toThrow(UnknownContractTemplate);
+    // Never a prototype member taken for a template.
+    expect(() => contractDocument('toString', input)).toThrow(UnknownContractTemplate);
   });
 });

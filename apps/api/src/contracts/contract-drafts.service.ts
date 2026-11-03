@@ -22,7 +22,7 @@ import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import type { Principal } from '../identity/principal.js';
 import { ProspectContextService } from '../sales/prospect-context.service.js';
-import { contractDocument } from './contract-template.js';
+import { contractDocument, UnknownContractTemplate } from './contract-template.js';
 import { renderContractPdf } from './contract-pdf.js';
 
 type Db = Prisma.TransactionClient;
@@ -489,9 +489,25 @@ export class ContractDraftsService {
         where: { draftId_revision: { draftId: row.id, revision } },
       });
       if (!r) throw notFound();
-      const file = await renderContractPdf(
-        contractDocument({ code, revision, savedOn: dateOnly(r.createdAt), fields: fieldsOf(r) }),
-      );
+      // Printed with the template version this revision was saved with (review CD121-2).
+      let document;
+      try {
+        document = contractDocument(r.templateVersion, {
+          code,
+          revision,
+          savedOn: dateOnly(r.createdAt),
+          fields: fieldsOf(r),
+        });
+      } catch (e) {
+        if (e instanceof UnknownContractTemplate)
+          throw domainError(
+            409,
+            'CONTRACT_TEMPLATE_UNKNOWN',
+            'Tato revize byla uložena s verzí šablony, kterou tato verze aplikace nezná.',
+          );
+        throw e;
+      }
+      const file = await renderContractPdf(document);
       await tx.contractDraftEvent.create({
         data: { draftId: row.id, kind: 'PDF_DOWNLOADED', revision, actorId: p.userId },
       });

@@ -62,7 +62,8 @@ export function holdersText(
   ];
 }
 
-export function contractDocument(input: TemplateInput): ContractDocument {
+/** cs-b2b-1 — frozen: saved revisions are printed with it as they were (a new wording = cs-b2b-2). */
+function csB2b1(input: TemplateInput): ContractDocument {
   const f = input.fields;
   const representative = f.representativeName
     ? `${f.representativeName}${f.representativeRole ? `, ${f.representativeRole}` : ''}`
@@ -116,4 +117,34 @@ export function contractDocument(input: TemplateInput): ContractDocument {
       `Za odběratele: ${BLANK}   Datum: ……………`,
     ],
   };
+}
+
+/**
+ * Every template version ever saved with a revision, by its stored name. A revision is always
+ * printed with ITS version (review CD121-2): adding cs-b2b-2 adds an entry here and never changes
+ * cs-b2b-1. An unknown version is refused, never printed with another one.
+ */
+export const CONTRACT_TEMPLATES: Readonly<
+  Record<string, (input: TemplateInput) => ContractDocument>
+> = { 'cs-b2b-1': csB2b1 };
+
+export class UnknownContractTemplate extends Error {
+  constructor(readonly version: string) {
+    super(`Unknown contract template version: ${version}`);
+  }
+}
+
+/** The document of a revision in the template version it was saved with. */
+export function contractDocument(
+  templateVersion: string,
+  input: TemplateInput,
+  templates: Readonly<
+    Record<string, (input: TemplateInput) => ContractDocument>
+  > = CONTRACT_TEMPLATES,
+): ContractDocument {
+  const template = Object.hasOwn(templates, templateVersion)
+    ? templates[templateVersion]
+    : undefined;
+  if (!template) throw new UnknownContractTemplate(templateVersion);
+  return template(input);
 }
