@@ -159,6 +159,11 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   linked by hand must be the one the draft names (or knowingly acknowledged). One versioned Czech
   working template, "NÁVRH – K PRÁVNÍ KONTROLE", never an approved legal model. Never creates a
   hotel, touches Finance, sends or signs anything.
+  Signed originals (doc 045 §7, #122, under review): append-only `contract_signed_documents`, one
+  per draft revision and only for the current one (DB trigger); a PDF checked by content, kept in
+  `FileStorage` (`contract-documents`) with its SHA-256, downloaded only through the API. A signed
+  draft is never removed and its hotel link never changed (DB); the signing revision's hotel must
+  match the linked one, a first link the signed hotel. Signatures are never verified.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
   `identity:users_manage` only. Deactivation hides atomically; reactivation never republishes.
