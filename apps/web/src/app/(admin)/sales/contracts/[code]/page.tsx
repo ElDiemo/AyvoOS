@@ -5,7 +5,11 @@ import {
 } from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { LinkHotel, RemoveOrRestore } from '@/components/contracts/contract-draft-actions';
+import {
+  LinkHotel,
+  RemoveOrRestore,
+  UploadSigned,
+} from '@/components/contracts/contract-draft-actions';
 import { ContractDraftWizard } from '@/components/contracts/contract-draft-wizard';
 import { SuccessNote } from '@/components/catalog/form-kit';
 import { SalesHeader } from '@/components/sales/sales-header';
@@ -150,6 +154,54 @@ export default async function ContractDraftPage({
           </FieldList>
         </Card>
 
+        <Card title={t.signed.title} testId="contract-signed">
+          <p className="mb-3 text-xs text-stone-500">{t.signed.state}</p>
+          {d.signed.length === 0 ? (
+            <p className="text-sm text-stone-600">{t.signed.none}</p>
+          ) : (
+            <ul className="divide-y divide-stone-100 text-sm" data-testid="contract-signed-list">
+              {d.signed.map((x) => (
+                <li key={x.revision} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2">
+                  <span className="font-medium">
+                    {t.signed.entry(x.revision, czDate(x.signedOn))}
+                  </span>
+                  <span className="text-stone-600 wrap-anywhere">
+                    {x.originalFilename} ·{' '}
+                    {t.signed.uploaded(formatDateTimeCs(x.uploadedAt), x.uploadedByName)}
+                  </span>
+                  <a
+                    href={`/api/admin/contracts/drafts/${code}/signed/${x.revision}`}
+                    className="underline"
+                    data-testid={`contract-signed-download-${x.revision}`}
+                  >
+                    {t.signed.download}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+          {d.canUploadSigned && (
+            <details key={`upload-${d.version}`} className="mt-4">
+              <summary
+                className="cursor-pointer text-sm font-medium"
+                data-testid="contract-upload-open"
+              >
+                {t.signed.upload(d.currentRevision)}
+              </summary>
+              <div className="mt-3">
+                {d.hotelMismatch && (
+                  <div className="mb-3">
+                    <Notice tone="warning">
+                      <span data-testid="contract-upload-hotel-blocks">{t.signed.hotelBlocks}</span>
+                    </Notice>
+                  </div>
+                )}
+                <UploadSigned code={d.code} version={d.version} revision={d.currentRevision} />
+              </div>
+            </details>
+          )}
+        </Card>
+
         {!d.removed && (
           <Card title={t.detail.edit} testId="contract-edit">
             {/* Closed again after each saved revision (keyed by the version). */}
@@ -160,7 +212,11 @@ export default async function ContractDraftPage({
               >
                 {t.detail.edit}
               </summary>
-              <p className="my-3 text-xs text-stone-500">{t.detail.editHelp}</p>
+              <p className="my-3 text-xs text-stone-500">
+                {d.signed.some((x) => x.revision === d.currentRevision)
+                  ? t.signed.amendment
+                  : t.detail.editHelp}
+              </p>
               <ContractDraftWizard
                 key={d.version}
                 mode="revise"
@@ -174,14 +230,19 @@ export default async function ContractDraftPage({
         )}
 
         {d.canLinkHotel && hotels.length > 0 && (
-          <Card title={d.hotel ? t.link.correct : t.link.open} testId="contract-link">
+          <Card
+            title={d.signedHotel ? t.link.signed : d.hotel ? t.link.correct : t.link.open}
+            testId="contract-link"
+          >
+            {d.signedHotel && <p className="mb-3 text-xs text-stone-500">{t.link.signedHelp}</p>}
             <LinkHotel
               key={d.version}
               code={d.code}
               version={d.version}
               hotels={hotels}
-              draft={{ name: f.hotelName, address: f.hotelAddress }}
+              draft={d.signedHotel ?? { name: f.hotelName, address: f.hotelAddress }}
               linked={d.hotel?.code ?? null}
+              signed={!!d.signedHotel}
             />
           </Card>
         )}
@@ -215,25 +276,31 @@ export default async function ContractDraftPage({
           </ul>
         </Card>
 
-        <Card title={d.removed ? t.remove.restore : t.remove.open} testId="contract-removal">
-          {/* A new state starts closed (removing opens "restore" as a new step, never pre-opened). */}
-          <details key={String(d.removed)}>
-            <summary
-              className="cursor-pointer text-sm font-medium"
-              data-testid="contract-removal-open"
-            >
-              {d.removed ? t.remove.restore : t.remove.open}
-            </summary>
-            <div className="mt-3">
-              <RemoveOrRestore
-                key={d.version}
-                code={d.code}
-                version={d.version}
-                removed={d.removed}
-              />
-            </div>
-          </details>
-        </Card>
+        {d.signed.length > 0 ? (
+          <Notice tone="info">
+            <span data-testid="contract-removal-locked">{t.signed.lockedRemoval}</span>
+          </Notice>
+        ) : (
+          <Card title={d.removed ? t.remove.restore : t.remove.open} testId="contract-removal">
+            {/* A new state starts closed (removing opens "restore" as a new step, never pre-opened). */}
+            <details key={String(d.removed)}>
+              <summary
+                className="cursor-pointer text-sm font-medium"
+                data-testid="contract-removal-open"
+              >
+                {d.removed ? t.remove.restore : t.remove.open}
+              </summary>
+              <div className="mt-3">
+                <RemoveOrRestore
+                  key={d.version}
+                  code={d.code}
+                  version={d.version}
+                  removed={d.removed}
+                />
+              </div>
+            </details>
+          </Card>
+        )}
       </div>
     </>
   );

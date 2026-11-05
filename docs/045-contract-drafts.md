@@ -134,3 +134,64 @@ Every write is idempotent per `requestId`. A stale `expectedVersion` (the draft'
 - Holders: the variant's working paragraph, marked "[pracovní text k právní kontrole]". It states
   no moment of transfer, no loan, no equipment price and no liability.
 - Footer on every page: the draft marking and the page number.
+
+## 7. The signed original (delivery 3) — concurrency and storage
+
+Proposed with the review of #121 (CD121-3); a separate draft PR.
+
+- **Upload:** `POST drafts/:code/signed`, multipart with `requestId`, `expectedVersion`,
+  `revision`, `signedOn`, `confirm=true` and one `file`.
+  - Only a **real, complete PDF with at least one page** (review SIGN122-R1), recognised by content,
+    never by name or type:
+    - the `%PDF-` header and `%%EOF` at the end (a truncated upload is refused);
+    - the runtime's existing `pdf-lib` (as for label artwork) parses a copy that is never saved, and
+      the PDF must have a page.
+    - The stored bytes and any signatures in them stay exactly as uploaded.
+    - No new dependency.
+  - At most `SUPPLIER_DOCUMENT_MAX_BYTES` (the existing, verified limit of supplier documents);
+    one file, held in memory.
+  - Only for the **current** revision of a draft that is not removed, and only once per revision.
+  - Signatures are not checked. The page says "evidence of a hand-uploaded signed PDF".
+- **Concurrency with editing, removal and hotel links:** every write on a draft takes the same
+  row lock (`SELECT … FOR UPDATE` on `contract_drafts`) first, then checks `expectedVersion`.
+  - Uploading also checks that `revision` is still the current one, and bumps the version.
+  - Of an upload and an edit, removal or link sent from the same version, exactly one commits.
+    The other gets `409 CONCURRENT_CHANGE` and stores nothing (tested with an upload and a
+    removal at the same moment).
+  - A paper signed for revision r is never filed under r+1.
+- **Storage:** the private `FileStorage` (local on DEV, S3 where configured), namespace
+  `contract-documents/yyyy/mm/<uuid>.pdf`, a server-generated key with no user input.
+  - The file is written inside the request's transaction, after its idempotency row (a replay
+    never stores a second file) and before the record.
+  - A failure in between leaves an unreferenced file, which is logged. There is never a record
+    without its file.
+  - The storage has no delete. Objects are never replaced.
+  - SHA-256 and size are recorded. A download recomputes the hash and refuses a changed file
+    (`STORED_FILE_CHANGED`).
+- **Download:** `GET drafts/:code/signed/:revision` with the same access check (404 out of scope),
+  `Cache-Control: private, no-store`, `Content-Disposition: attachment`, CSP sandbox, `nosniff`.
+  Recorded as `SIGNED_DOWNLOADED`.
+- **Lock, held by the database:**
+  - `contract_signed_documents` is append-only, unique per draft and revision, and accepted only
+    for the current revision of a draft that is not removed.
+  - A draft with a signed original is never removed and its hotel link never changes.
+  - A change after signing is a new revision (an amendment proposal); its own signed original can
+    be uploaded later.
+- **A draft signed without a hotel (review SIGN122-R2):**
+  - The first link to an existing hotel stays possible: `sales:manage` + `hotels:read`, with a
+    reason, audited (`from: null`, `to`, `signedRevisions`), under the same row lock.
+  - Only to the hotel every signed revision names (name and address). An acknowledgement never
+    overrides it (`HOTEL_NOT_SIGNED_HOTEL`), and a later amendment naming another hotel does not
+    count.
+  - After that, and for a draft signed with a hotel, the link never changes (API and DB).
+- **The order "link first, sign later" (review SIGN122-R3):**
+  - A draft may be linked to another hotel knowingly (acknowledged) while unsigned, and an amendment
+    may name another hotel. Neither acknowledgement carries over to signing.
+  - `uploadSigned` checks, under the same row lock and before any file is written, that a linked
+    hotel is exactly the one the revision being signed names (name and address). Otherwise
+    `409 HOTEL_NOT_SIGNED_REVISION`: no object is stored and no record is made, so the link stays
+    correctable.
+  - The error names both identities only to callers with `sales:manage` + `hotels:read`. A
+    salesperson gets no data from the hotel register, only the way out: the sales administrator
+    corrects the link.
+  - The draft page warns before the upload when the linked hotel and the current revision differ.

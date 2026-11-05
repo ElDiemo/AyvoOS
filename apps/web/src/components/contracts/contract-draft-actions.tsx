@@ -116,12 +116,15 @@ export function LinkHotel({
   hotels,
   draft,
   linked,
+  signed = false,
 }: {
   code: string;
   version: number;
   hotels: (HotelIdentity & { code: string })[];
+  /** The hotel the draft names — for a signed draft, the one its signed revision names. */
   draft: HotelIdentity;
   linked: string | null;
+  signed?: boolean;
 }) {
   const [hotel, setHotel] = useState('');
   const [reason, setReason] = useState('');
@@ -139,7 +142,7 @@ export function LinkHotel({
           expectedVersion: version,
           hotelCode: hotel,
           reason: reason.trim(),
-          acknowledgeMismatch: mismatch && ack,
+          acknowledgeMismatch: !signed && mismatch && ack,
         });
       }}
     >
@@ -168,7 +171,13 @@ export function LinkHotel({
         </select>
       </label>
       {mismatch && chosen && (
-        <HotelMismatch draft={draft} hotel={chosen} acknowledged={ack} onAcknowledge={setAck} />
+        <HotelMismatch
+          draft={draft}
+          hotel={chosen}
+          acknowledged={ack}
+          onAcknowledge={setAck}
+          signed={signed}
+        />
       )}
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t.link.reason}
@@ -187,10 +196,119 @@ export function LinkHotel({
         <button
           type="submit"
           className={buttonClass.secondary}
-          disabled={busy || !hotel || !reason.trim() || (mismatch && !ack)}
+          disabled={busy || !hotel || !reason.trim() || (mismatch && (signed || !ack))}
           data-testid="contract-link-submit"
         >
           {t.link.submit}
+        </button>
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </form>
+  );
+}
+
+/**
+ * Upload the already signed PDF of the CURRENT revision (doc 045 §7): a file, the signed day and an
+ * explicit confirmation that it locks the revision. The server checks the version seen and that the
+ * revision is still the current one (a concurrent edit or removal wins → nothing stored).
+ */
+export function UploadSigned({
+  code,
+  version,
+  revision,
+}: {
+  code: string;
+  version: number;
+  revision: number;
+}) {
+  const router = useRouter();
+  const [file, setFile] = useState<File | null>(null);
+  const [signedOn, setSignedOn] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestId = useRef(crypto.randomUUID());
+  const fresh = () => (requestId.current = crypto.randomUUID());
+  return (
+    <form
+      className="flex flex-col gap-3"
+      data-testid="contract-upload-signed"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!file) return;
+        const body = new FormData();
+        body.set('requestId', requestId.current);
+        body.set('expectedVersion', String(version));
+        body.set('revision', String(revision));
+        body.set('signedOn', signedOn);
+        body.set('confirm', 'true');
+        body.set('file', file);
+        setBusy(true);
+        setError(null);
+        try {
+          await apiSend(
+            'POST',
+            `admin/contracts/drafts/${code}/signed`,
+            contractDraftDetailSchema,
+            body,
+          );
+          fresh();
+          router.refresh();
+        } catch (err) {
+          const c = err instanceof ClientApiError ? err.code : null;
+          setError((c && t.errors[c]) ?? (err instanceof Error ? err.message : String(err)));
+          if (c === 'CONCURRENT_CHANGE') router.refresh();
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <label className="flex flex-col gap-1 text-sm font-medium">
+        {t.signed.file}
+        <input
+          type="file"
+          name="file"
+          accept="application/pdf,.pdf"
+          required
+          className="text-sm"
+          onChange={(e) => {
+            setFile(e.target.files?.[0] ?? null);
+            fresh();
+          }}
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-sm font-medium">
+        {t.signed.signedOn}
+        <input
+          type="date"
+          name="signedOn"
+          required
+          className={inputClass}
+          value={signedOn}
+          onChange={(e) => {
+            setSignedOn(e.target.value);
+            fresh();
+          }}
+        />
+      </label>
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={confirmed}
+          onChange={(e) => setConfirmed(e.target.checked)}
+          data-testid="contract-upload-confirm"
+        />
+        <span>{t.signed.confirm(revision)}</span>
+      </label>
+      <div>
+        <button
+          type="submit"
+          className={buttonClass.primary}
+          disabled={busy || !file || !signedOn || !confirmed}
+          data-testid="contract-upload-submit"
+        >
+          {t.signed.submit}
         </button>
       </div>
       {error && <ErrorNote>{error}</ErrorNote>}
