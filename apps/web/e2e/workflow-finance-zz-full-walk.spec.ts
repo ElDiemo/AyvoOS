@@ -1,8 +1,7 @@
-import { readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { startFinance, withFinanceDown } from './finance-control';
 
 const ADMIN_STATE = 'e2e/.auth/admin.json';
 const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
@@ -14,8 +13,6 @@ const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
  * by the keyboard where the path leads through them.
  */
 const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/finance');
-const serverPid = () =>
-  Number(readFileSync(join(tmpdir(), 'ayvo-e2e-server-4100.pid'), 'utf8').trim());
 const financeReady = async (request: APIRequestContext) =>
   (await request.get('/api/admin/finance/health/ready').catch(() => null))?.status() ?? 0;
 
@@ -78,6 +75,8 @@ const LANGUAGES = [
 
 test.describe('Celý průchod', () => {
   test.use({ storageState: ADMIN_STATE });
+  // Each language starts with a running Finance, whatever happened in the one before.
+  test.beforeEach(startFinance);
 
   for (const language of LANGUAGES) {
     test(`hotel → payer and contract → ${language.code} TEST PDF → simulated sending → payment and back; PDF unchanged; Finance down`, async ({
@@ -266,18 +265,15 @@ test.describe('Celý průchod', () => {
       await expect(page.getByTestId('invoice-language')).toHaveText(language.shown);
 
       // Finance down: the hotel works and says only that billing is unavailable.
-      await expect.poll(() => financeReady(request), { timeout: 30_000 }).toBe(200);
-      process.kill(serverPid(), 'SIGUSR2');
-      try {
-        await expect.poll(() => financeReady(request), { timeout: 15_000 }).not.toBe(200);
+      expect(await financeReady(request)).toBe(200);
+      await withFinanceDown(async () => {
+        expect(await financeReady(request)).not.toBe(200);
         await page.goto(`/hotels/${hotel.code}`);
         await expect(page.getByRole('heading', { level: 1 })).toContainText(hotelName);
         await expect(panel).toContainText('Fakturace dočasně nedostupná');
         await expect(panel).not.toContainText('nemá fakturační podmínky');
-      } finally {
-        process.kill(serverPid(), 'SIGUSR1');
-        await expect.poll(() => financeReady(request), { timeout: 30_000 }).toBe(200);
-      }
+      });
+      expect(await financeReady(request)).toBe(200);
       await page.goto(`/hotels/${hotel.code}`);
       await expect(panel.getByTestId('hotel-billing-rooms')).toHaveText('12');
     });
