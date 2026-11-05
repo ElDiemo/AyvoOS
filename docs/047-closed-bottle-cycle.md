@@ -108,6 +108,22 @@ Still open from the accepted docs, not decided here:
 
 ## 4. Proposed model (for review — not implemented)
 
+**Boundary (owner 2026-11-05, issue #125 and #126):** a crate with unknown contents exists **only
+in the return intake**. Everything up to delivery keeps its current meaning and is not changed by
+this proposal:
+
+- assembly, filling, picking, dispatch and delivery;
+- the concrete cycle with its concrete verified bottles;
+- product, recipe and label;
+- capacity and the "full" rule;
+- the transactional consumption.
+
+A finished crate is still scanned and handled whole with known contents. There are **no new
+mandatory per-bottle scans at dispatch**. At a return, the original membership or count is never
+assumed. The historical shipped assignments are never rewritten. The next circulation of the same
+physical crate is a **new cycle** with the newly and actually found contents (assembly scans as
+today).
+
 Two operator situations: **intake** (the dirty side) and **ready for filling** (the clean side,
 after washing).
 
@@ -120,7 +136,7 @@ return_receipt_crates     receipt, crate (by its QR), the DELIVERED cycle it ret
                           returned_at/by, emptied_at/by ("Vyprázdněno")
 return_pump_counts        receipt, +n removed / −n defective, actor, reason (append-only lines;
                           a correction is a new line)
-CrateCycleStatus         += RETURNED (crate scanned back) → CLOSED (emptied, released)
+CrateCycleStatus         += RETURNED (crate scanned back) → CLOSED (emptied; the crate is free)
 crate_cycles_one_open_per_crate   excludes CLOSED as well as ABORTED (the crate circulates again)
 ```
 
@@ -147,9 +163,16 @@ crate_cycles_one_open_per_crate   excludes CLOSED as well as ABORTED (the crate 
 - **"Vyprázdněno" — releasing the emptied crate (proposed, not yet approved by the owner).**
   - It is one confirmation per crate after its intake, by the operator who emptied it, with no
     scan of good bottles. In one transaction:
-    - the delivered cycle → `CLOSED`;
-    - every open assignment of that cycle ends with reason `CRATE_EMPTIED`;
-    - the crate is free for a new cycle.
+    - the returned cycle → `CLOSED`;
+    - the crate is free for a **new** cycle.
+  - **The shipped assignments are not touched.**
+    - The membership of the closed cycle stays as it was shipped: the historical fact, not a claim
+      that those bottles came back.
+    - A bottle's open assignment ends only at its own individual scan (§4.2), additively
+      (`released_at/by/reason` set once; the original fields never change).
+    - The unique "one active assignment per bottle" index
+      (`migrations/20261014160100_labeling_into_crates/migration.sql:424`) therefore still
+      protects the bottle until it is identified.
   - The bottles' status does not change. Which of them really came back is not known yet.
   - **It is safe even if a bottle stayed in the crate:** the next assembly accepts only a bottle
     that is `READY_FOR_REUSE` (§4.4), so an unwashed bottle is refused at its scan.
@@ -162,8 +185,12 @@ crate_cycles_one_open_per_crate   excludes CLOSED as well as ABORTED (the crate 
 - One transaction:
   - the event `SORTED` with outcome `READY`; this is the reuse-cycle moment (ADR 0011);
   - the status → `READY_FOR_REUSE` (new: empty, label on, washed and inspected, eligible);
-  - if an open assignment still exists (its crate not yet emptied), it ends with reason
-    `IDENTIFIED_AFTER_RETURN`.
+  - the bottle's open assignment to its delivered cycle ends, additively, with reason
+    `IDENTIFIED_AFTER_RETURN`. Its crate may be returned, emptied, or not back yet (a mixed
+    return).
+  - Today's guard forbids that release while the cycle is `DELIVERED`
+    (`migrations/20261021090100_order_tracking/migration.sql:484`). It would allow exactly this
+    one reason, from the return-identification path only. For review.
 - **Checked against the bottle's history, regardless of the crate it came back in:**
   - a `DELIVERED_TO_HOTEL` after its last filling, and no `SORTED` since; otherwise the scan is
     refused with the reason (not delivered yet, already sorted, on a hold, retired, disposed);
@@ -243,5 +270,24 @@ It must then show reuse cycle 1 in its history and on the passport. Required alo
 - two operators work concurrently;
 - recovery after an interrupted request;
 - every count, event and movement is transactional and audited.
+
+**Regression acceptance — the existing production and dispatch walk, unchanged.** The same
+existing API e2e and Playwright tests stay green without changed expectations:
+
+- labelling into a crate, filling, Hotovo;
+- picking whole crates, the shipment, labels, handover;
+- carrier tracking to `DELIVERED`.
+
+In particular:
+
+- a finished crate is picked and dispatched by its crate scan with its known contents;
+- no per-bottle scan is added at picking or dispatch;
+- capacity, the category/recipe/label rules and the FILL consumption of a **new** bottle are as
+  today;
+- the refusals already tested stay refusals: `CRATE_DELIVERED` for a delivered crate's cycle, and
+  labelling only `CREATED`, filling only `LABELED_EMPTY` for a new bottle.
+
+A new test adds the next circulation of one physical crate: a new cycle with new contents, while
+the closed cycle's shipped membership is unchanged.
 
 Single screens of R1–R2 are intermediate states, not a finished cycle.
