@@ -1,9 +1,13 @@
 # 047 — Closed bottle cycle: inventory on main and proposed model (issue #125, part 1)
 
-Status: **inventory and model proposal for review** (owner priority 2026-11-05, issue #125; §3–§5
-revised for the owner's physical process in the issue comment of 2026-11-05). No
-table, enum or migration in this document is approved or implemented. Each delivery below needs
-the owner's approval of its model in a PR before any migration is written.
+Status: **approved workflow + R1 model for review** (owner priority 2026-11-05, issue #125).
+
+- §3 is the **workflow the owner approved** on 2026-11-05 ("no to by melo jit tak sup jedem").
+- §4 is the **concrete R1 model, for review**. Per CLAUDE.md, a new domain model needs the owner's
+  approval of that model; the approved workflow does not approve these tables, enums or
+  migrations.
+- §5 marks how R2 and R3 connect.
+- Nothing here is implemented.
 
 ## 1. Inventory against main `bcdd926` (verified 2026-11-05)
 
@@ -77,28 +81,29 @@ only**. None of them is a returned or completed cycle.
 - **Stock.** It follows physical truth through the append-only ledger. The bottle body and a label
   that are not physically replaced are never consumed again (issue #125).
 
-## 3. The owner's physical process (issue #125 comment, 2026-11-05)
+## 3. Approved workflow (owner 2026-11-05)
 
-This replaces the earlier working idea that every dirty bottle is scanned before washing.
+Three individual scans of the bottle, never fewer:
 
-1. **Intake.** The returned crate (or box) is scanned. This records **the crate's return only**.
-   It never confirms the identities, or the return, of the bottles originally shipped in it.
-2. **Unpacking.** The bottles are taken out and the pumps unscrewed.
-   - Pumps are **washed and reused**.
-   - Pumps have no individual codes, and no lasting link of one pump to one bottle is claimed.
-3. **Defective bottles.** A defective or cracked bottle is scanned at intake into **"ke
-   skartaci"** (for shredding).
-   - It can then never be washed or filled as a good bottle.
-   - This is not yet the irreversible disposal: confirming `DISPOSED` stays a separate step under
-     ADR 0011.
-4. **Defective pumps.** They are counted ("Vadná pumpička −1"), never scanned. Audit and
-   corrections keep the physical truth.
-5. **Good bottles are not scanned before washing.** The reader has no place in the dirty, wet
-   area. After washing and inspection, the bottles ready for the next filling are scanned one by
-   one. Their identity and history continue.
-6. **No blanket batch approval.** Washing without scans is not a blanket approval of every piece
-   in a batch. Intake, washing without a scan, and individual identification afterwards are
-   separate steps.
+1. **Intake, on the dry workplace.**
+   - The scan of the returned crate (or box) opens the **intake context only**. Its original
+     contents are never assumed.
+   - **Every returned bottle is scanned individually.**
+     - A good bottle → "Vrácená, čeká na mytí".
+     - A defective one → "Ke skartaci".
+   - From that moment the intake shows that this concrete bottle is no longer at the hotel.
+   - The first verified return after a delivery closes the reuse cycle **once** (ADR 0011). This
+     includes a defective bottle.
+   - Pumps are washed and reused, counted without identity. Defective pumps are counted (−1).
+2. **After washing and inspection.** The second scan → "Připravená k plnění · Po mytí". If the
+   operator directly places the bottle into a prepared crate, the same scan also assigns it to
+   that new crate.
+3. **Filling.** The confirmation of filling is the third scan (the existing filling scan).
+
+Unchanged and outside the return:
+
+- **The boundary (§4.0).** A crate of unknown contents exists only in the return intake. Picking
+  and dispatch use the whole verified contents of a crate, as today.
 
 Still open from the accepted docs, not decided here:
 
@@ -106,188 +111,236 @@ Still open from the accepted docs, not decided here:
 - Whether `DISPOSED` and `DESTROYED` are one state or two, and who may reverse a retirement (ADR
   0011).
 
-## 4. Proposed model (for review — not implemented)
+## 4. R1 — the intake: concrete model for review (not implemented)
 
-**Boundary (owner 2026-11-05, issue #125 and #126):** a crate with unknown contents exists **only
-in the return intake**. Everything up to delivery keeps its current meaning and is not changed by
-this proposal:
+### 4.0 Boundary (owner 2026-11-05, issue #125 and #126)
+
+Up to delivery, nothing changes:
 
 - assembly, filling, picking, dispatch and delivery;
 - the concrete cycle with its concrete verified bottles;
-- product, recipe and label;
+- product, recipe and label snapshots;
 - capacity and the "full" rule;
 - the transactional consumption.
 
-A finished crate is still scanned and handled whole with known contents. There are **no new
-mandatory per-bottle scans at dispatch**. At a return, the original membership or count is never
-assumed. The historical shipped assignments are never rewritten. The next circulation of the same
-physical crate is a **new cycle** with the newly and actually found contents (assembly scans as
-today).
+A finished crate is still handled whole with known contents. **No new per-bottle scan at
+dispatch, and no new write in the delivery transaction.** At a return, the original membership or
+count is never assumed. The shipped assignments and snapshots are never rewritten; a release only
+adds its own fields. The next circulation of the same physical crate is a **new cycle** with its
+own verified contents.
 
-Two operator situations: **intake** (the dirty side) and **ready for filling** (the clean side,
-after washing).
-
-### 4.1 Intake: the crate's return, defective bottles, defective pumps
+### 4.1 Data
 
 ```
-return_receipts           RR-000001; site; hotel (nullable: unknown sender); opened_at/by;
-                          state OPEN → CLOSED
-return_receipt_crates     receipt, crate (by its QR), the DELIVERED cycle it returns,
-                          returned_at/by, emptied_at/by ("Vyprázdněno")
-return_pump_counts        receipt, +n removed / −n defective, actor, reason (append-only lines;
-                          a correction is a new line)
-CrateCycleStatus         += RETURNED (crate scanned back) → CLOSED (emptied; the crate is free)
-crate_cycles_one_open_per_crate   excludes CLOSED as well as ABORTED (the crate circulates again)
+return_receipts          RR-000001; site (@OperationalSite); hotel (nullable: unknown sender);
+                         opened_at/by; closed_at/by; state OPEN → CLOSED
+return_receipt_crates    receipt; crate (by its QR); returned_cycle (its DELIVERED cycle);
+                         scanned_at/by; emptied_at/by (§4.4)
+                         UNIQUE (returned_cycle) — a cycle is returned once
+return_receipt_issues    receipt; kind UNREADABLE | NOT_DELIVERED | NOT_IN_CIRCULATION |
+                         COUNT_MISMATCH; bottle (nullable); details; recorded_at/by;
+                         resolved_at/by/resolution (once)   — append-only except the resolution
+return_pump_counts       receipt; defective n > 0; actor; reason; a correction is a new line
+                         with its own sign — append-only
+BottleStatus            += RETURNED ("Vrácená, čeká na mytí"), RETIRED, DISPOSED
+                           (READY_FOR_REUSE comes in R2)
+BottleEventType         += SORTED, RETIRED, DISPOSED, CORRECTION
+CrateCycleStatus        += RETURNED → CLOSED
+CrateEventType          += RETURNED, EMPTIED
+crate_assignments        + released_event_id (FK bottle_events), set only together with the
+                           release
+Permissions              returns:receive, returns:correct (ADMIN, granted in the same migration)
 ```
 
-- **Crate scan.**
-  - It is accepted only for a crate whose cycle is `DELIVERED`. Anything else is refused with
-    the reason.
-  - A second scan answers with the existing line.
-  - It writes the crate event `RETURNED` and moves the cycle to `RETURNED`.
-  - **No bottle event is written. Nothing changes for any bottle.**
-- **"Ke skartaci" scan** of a defective bottle:
-  - The event `SORTED` is written with outcome `SCRAP`, and the bottle gets an active hold of
-    kind `SCRAP` (doc 020's approved hold overlay, of a new kind). The hold refuses washing,
-    readiness, assembly and filling.
-  - Disposal is confirmed later as `DISPOSED` (irreversible, ADR 0011). Releasing a mistaken
-    hold is an audited correction.
-  - The bottle must have a `DELIVERED_TO_HOTEL` after its last filling (§4.3). If not, the scan
-    is refused with the reason, never guessed.
-  - **For review:** under ADR 0011 this individual identification after a return completes the
-    cycle. The alternative is to count only bottles that become ready again. The owner decides.
-- **Pumps.**
-  - The intake records the counted pumps removed and the counted defective pumps (−1 button).
-  - They are a counted pool with no identity, no lot and no supplier lot, and **never a movement
-    of the new-pump stock item** (§4.4).
-- **"Vyprázdněno" — releasing the emptied crate (proposed, not yet approved by the owner).**
-  - It is one confirmation per crate after its intake, by the operator who emptied it, with no
-    scan of good bottles. In one transaction:
-    - the returned cycle → `CLOSED`;
-    - the crate is free for a **new** cycle.
-  - **The shipped assignments are not touched.**
-    - The membership of the closed cycle stays as it was shipped: the historical fact, not a claim
-      that those bottles came back.
-    - A bottle's open assignment ends only at its own individual scan (§4.2), additively
-      (`released_at/by/reason` set once; the original fields never change).
-    - The unique "one active assignment per bottle" index
-      (`migrations/20261014160100_labeling_into_crates/migration.sql:424`) therefore still
-      protects the bottle until it is identified.
-  - The bottles' status does not change. Which of them really came back is not known yet.
-  - **It is safe even if a bottle stayed in the crate:** the next assembly accepts only a bottle
-    that is `READY_FOR_REUSE` (§4.4), so an unwashed bottle is refused at its scan.
-- The receipt closes when all its crates are emptied.
+- "Ke skartaci" is `RETIRED` with reason `DEFECTIVE_AT_RETURN`.
+  - It is the approved, operationally terminal state of ADR 0011, reversible only by an audited
+    `CORRECTION`.
+  - The real shredding is the later, irreversible `DISPOSED`, with a DB guard.
+- Hotel in the receipt: it is taken from the scanned crate's order, or chosen. It is never
+  inferred from bottles.
 
-### 4.2 Clean side: individual scan of a bottle ready for filling
+### 4.2 What each operation writes (each one transaction, idempotent per `requestId`)
 
-- The scan comes after washing and inspection (neither is controlled by the system: no washer
-  control, no hygiene parameters).
-- One transaction:
-  - the event `SORTED` with outcome `READY`; this is the reuse-cycle moment (ADR 0011);
-  - the status → `READY_FOR_REUSE` (new: empty, label on, washed and inspected, eligible);
-  - the bottle's open assignment to its delivered cycle ends, additively, with reason
-    `IDENTIFIED_AFTER_RETURN`. Its crate may be returned, emptied, or not back yet (a mixed
-    return).
-  - Today's guard forbids that release while the cycle is `DELIVERED`
-    (`migrations/20261021090100_order_tracking/migration.sql:484`). It would allow exactly this
-    one reason, from the return-identification path only. For review.
-- **Checked against the bottle's history, regardless of the crate it came back in:**
-  - a `DELIVERED_TO_HOTEL` after its last filling, and no `SORTED` since; otherwise the scan is
-    refused with the reason (not delivered yet, already sorted, on a hold, retired, disposed);
-  - a duplicate scan answers with the first result;
-  - a QR of another environment or a foreign QR is refused (`classifyScannedQr`).
-- A bottle found defective here goes to "ke skartaci", as at intake.
-- **Discrepancies are resolved, never silently merged.** Example: a bottle whose last cycle was
-  not delivered. The bottle gets an active hold with the reason and the scan details. An
-  authorized user resolves it by an audited correction. History is never rewritten.
-- A delivered bottle that is never scanned stays "delivered, not returned" and completes no
-  cycle (ADR 0011: intentional).
+| Operation              | Precondition (else refused, nothing written)        | Writes                                                                                                                                                                                                                            |
+| ---------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Open receipt           | `returns:receive`, active site                      | `return_receipts` OPEN                                                                                                                                                                                                            |
+| Crate scan             | crate QR of this environment; its cycle `DELIVERED` | receipt crate line; cycle → `RETURNED`; crate event `RETURNED`. **No bottle row or event changes.**                                                                                                                               |
+| Bottle scan, good      | §4.3 history check passes                           | `SORTED` (cycle = the delivered cycle, receipt, crate line if any, outcome `RETURNED`); status `FILLED → RETURNED`; the bottle's open assignment to that cycle released (`RETURN_IDENTIFIED`, `released_event_id` = the `SORTED`) |
+| Bottle scan, defective | same                                                | as above with outcome `RETIRED`; plus a `RETIRED` event, reason `DEFECTIVE_AT_RETURN`; status `FILLED → RETIRED`                                                                                                                  |
+| Unreadable bottle      | —                                                   | issue `UNREADABLE` (count 1, note). No bottle touched                                                                                                                                                                             |
+| Defective pump −1      | receipt OPEN                                        | `return_pump_counts` line. **No inventory movement** (see R3)                                                                                                                                                                     |
+| Vyprázdněno            | crate line of this receipt                          | §4.4                                                                                                                                                                                                                              |
+| Close receipt          | every crate line emptied                            | state CLOSED                                                                                                                                                                                                                      |
 
-### 4.3 Delivery writes the bottle history
+**Reuse cycle (ADR 0011).**
 
-- In the same transaction as cycle `DELIVERED`, write one `DELIVERED_TO_HOTEL` bottle event per
-  bottle of the cycle, with source CARRIER (doc 031).
-- This is the historical fact "shipped to this hotel". It is distinct from the real returned
-  pieces, which are known only from the scans of §4.1–4.2.
+- It is counted from `SORTED` events that name a **delivered cycle**.
+- `UNIQUE (bottle_id, crate_cycle_id) WHERE type = 'SORTED'` makes it exactly once per delivery,
+  for good and defective bottles alike.
+- A crate scan, a duplicate scan, a foreign QR or an unreadable bottle never counts.
+- `countCompletedReuseCycles` (`apps/api/src/assets/reuse-cycles.ts:7`) changes to count these
+  `SORTED` events.
+- **For review:** ADR 0011 names `SORTED` after `DELIVERED_TO_HOTEL`. R1 takes the delivery from
+  the delivered cycle the `SORTED` names instead of a new bottle event. The rule is the same, the
+  delivery transaction stays untouched (§4.0), and old deliveries are covered. ADR 0011 then gets
+  an addendum, not a rewrite.
+- The passport and the bottle detail show the result at once.
 
-### 4.4 Into the next production cycle: no repeated consumption
+### 4.3 History check of a bottle scan — and the edge cases
 
-- **Assembly.** The labelling station accepts a `READY_FOR_REUSE` bottle as an assembly scan.
-  - It writes only `ASSIGNED_TO_CRATE`, with no `LABEL_APPLIED` and no `NEW_BOTTLE` consumption.
-  - The cycle rules (category, label version, recipe version, crate type) apply against the
-    bottle's bound category.
-- **Today's filling.** It always consumes the recipe's FILL BOM, including the `PUMP` line
-  (`apps/api/src/production/filling.service.ts:254-305`). It requires a PUMP line
-  (`:461-464`) and opens a PUMP attachment (`apps/api/src/assets/bottles.service.ts:418-452`).
-  Stock issues allow only `CONSUMABLE` items
-  (`apps/api/src/inventory/stock-issues.service.ts:36`).
-- **Proposed for review:**
-  - the filling of a reused bottle consumes the liquid as today;
-  - its pump comes from the counted pool of washed pumps, not from the new-pump stock;
-  - it consumes a new pump only when the operator states that a new one was really used.
-  - Two options for the pool:
-    - **A** — a separate inventory item "washed returned pump", with its own ledger movements:
-      intake + / defective − / refill −. It never shares a balance with new pumps. A defective
-      returned pump never decreases the new-pump stock, which was already consumed at the first
-      fitting.
-    - **B** — a counter outside the inventory ledger.
-  - A is recommended: one ledger, negative balances refused, and the existing audit.
-  - The PUMP attachment of a refill records "reused pump (no identity)", or the new item.
-- The status trigger gains exactly `FILLED → READY_FOR_REUSE` (only through §4.2) and
-  `READY_FOR_REUSE → FILLED` (only through a cycle), and nothing else.
+The check is made under `SELECT … FOR UPDATE` of the bottle row, then of its open assignment and
+cycle, always in that lock order.
 
-### 4.5 Permissions (ADMIN, by migration)
+- **Delivered.** The bottle has an open assignment whose cycle is `DELIVERED`, `RETURNED` or
+  `CLOSED`. That is the verified delivery fact recorded by the carrier (doc 031).
+- **Old deliveries.** Deliveries from before R1 are covered by the same check, with no backfill
+  and no new event at delivery. No `DELIVERED_TO_HOTEL` event is introduced; the cycle is the
+  record.
+- **Mixed return.** A bottle scanned in the context of crate Y whose delivered cycle belongs to
+  crate X is accepted. Its own cycle decides. The receipt records the crate it was found in.
+- **Concurrency.** Two operators scan the same bottle. The row lock makes the second wait; it
+  then sees the `SORTED` and gets the **first result** (the same answer, no second event, no
+  error).
+  - A different `requestId` with the same bottle and cycle → the existing result.
+  - The same `requestId` → the stored response (`OperationRequestsService`).
+- **Repeated scan.** It answers with the first result. A scan with the other outcome
+  (good ↔ defective) is refused with `ALREADY_RECEIVED`. A change is an audited `CORRECTION`, not
+  a rescan.
+- **Not delivered yet.** The cycle is `DISPATCHED`/`ALLOCATED`/… (for example, the carrier has not
+  reported it).
+  - Refused with `NOT_DELIVERED`, plus an issue `NOT_DELIVERED` with the bottle.
+  - It is resolved after the tracking update by scanning again, or by an authorized decision.
+- **Not in circulation.** The bottle has no open assignment, or its status is not `FILLED`.
+  - Refused with `NOT_IN_CIRCULATION`, plus an issue with the bottle and its current state.
+  - This covers `CREATED`, `LABELED_EMPTY`, already `RETURNED`, `RETIRED` and `DISPOSED`.
+- **Foreign or other-environment QR.** Refused (`classifyScannedQr`). Nothing is written.
+- **Unreadable code.** Only an issue `UNREADABLE`.
+  - The piece is set aside and never matched by guessing (doc 018 §16).
+  - Resolution: the bottle code read by hand → an ordinary bottle scan, then the issue is
+    resolved with a reference to it. Otherwise the issue is resolved as "nelze identifikovat",
+    with a note.
+- **Count mismatch.** The confirmation "Vyprázdněno" shows:
+  - shipped in that cycle: N;
+  - identified from it, in any receipt: M;
+  - still at the hotel by the records: N − M.
+  - If the operator states that more pieces came out than were identified, an issue
+    `COUNT_MISMATCH` records the numbers.
+  - Nothing is inferred and nothing blocks the crate.
 
-- `returns:receive` — intake: crate, scrap scan, pump counts, Vyprázdněno.
-- `returns:ready` — the clean-side scan.
-- `returns:correct` — releasing a hold, corrections of counts, `DISPOSED`.
-- Site-scoped like production; every operation is idempotent per `requestId`.
+### 4.4 Releasing the historical assignment and the crate
 
-## 5. Deliveries (each its own PR; the model PR first)
+- **The bottle's assignment ends at its own intake scan.**
+  - `released_at/by`, `release_reason = 'RETURN_IDENTIFIED'` and `released_event_id` are set once.
+    The original fields never change.
+  - Today's guard forbids a release while the cycle is `DELIVERED`
+    (`apps/api/prisma/migrations/20261021090100_order_tracking/migration.sql:484`).
+    - R1 adds one exception: reason `RETURN_IDENTIFIED` with a `SORTED` event of the same bottle
+      and cycle in the same transaction, checked by the trigger.
+    - Every other release of a shipped cycle stays refused.
+  - The unique "one active assignment per bottle" index
+    (`apps/api/prisma/migrations/20261014160100_labeling_into_crates/migration.sql:424`) thus
+    protects a bottle until it is identified.
+  - The shipped membership stays readable as history (`assigned_*`, the cycle, the order
+    allocation).
+- **"Vyprázdněno"** is one confirmation per crate line, after the crate is really empty.
+  - Cycle `RETURNED → CLOSED`; crate event `EMPTIED`, with the N / M / N − M numbers in its data.
+  - The cycle's remaining open assignments stay open. Those bottles are still "at the hotel" by
+    the records until they are identified, possibly later and in another crate. The guard allows
+    their identification release also for `CLOSED`.
+- **A new cycle of the crate.**
+  - `crate_cycles_one_open_per_crate`
+    (`apps/api/prisma/migrations/20261014160100_labeling_into_crates/migration.sql:292`)
+    excludes `CLOSED` as well as `ABORTED`.
+  - The crate then opens a new `OPEN_ASSEMBLY` cycle through the existing assembly, with newly
+    scanned contents.
+  - A crate whose cycle is `DELIVERED` or `RETURNED` still cannot open a cycle or be picked
+    (`CRATE_DELIVERED`, unchanged).
 
-| #   | Delivery                                                                                              | Usable result                                                                |
-| --- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| R0  | This document (model for approval)                                                                    | —                                                                            |
-| R1  | Intake: crate return, "ke skartaci", pump counts, "Vyprázdněno"; `DELIVERED_TO_HOTEL` at delivery     | Sklad → "Příjem vratek"; the crate is free again                             |
-| R2  | Clean-side scan → `READY_FOR_REUSE`; history check, discrepancy holds; reuse counter from real events | Station mode "Připraveno k plnění"                                           |
-| R3  | Reuse in assembly and filling; pump pool (A)                                                          | The existing station accepts the bottle; no new body, label or pump consumed |
+### 4.5 Status transitions (DB allow-list)
 
-**Acceptance (issue #125).** The flow counts as done only when a **specific returned bottle**
-passes, on DEV and through the real UI:
+| From → to            | Only by                                                                   |
+| -------------------- | ------------------------------------------------------------------------- |
+| `FILLED → RETURNED`  | intake scan (with `SORTED`)                                               |
+| `FILLED → RETIRED`   | intake scan, defective (with `SORTED` + `RETIRED`)                        |
+| `RETURNED → RETIRED` | a defect found later (`RETIRED`, reason)                                  |
+| `RETIRED → DISPOSED` | confirmed shredding (`DISPOSED`). Irreversible: no later event (DB guard) |
+| `RETIRED → RETURNED` | `CORRECTION` (`returns:correct`)                                          |
 
-- delivery;
-- a partial and mixed return: the crate scan, one defective bottle "ke skartaci", one defective
-  pump −1, and "Vyprázdněno";
-- washing without a scan;
-- the individual scan on the clean side;
-- assembly into a new cycle, refilling with a reused pump, and dispatch.
+All existing transitions are unchanged. Where a corrected retirement returns to (ADR 0011 open
+question) is proposed as `RETURNED`.
 
-It must then show reuse cycle 1 in its history and on the passport. Required along the way:
+### 4.6 R1 UI
 
-- the counter is not raised by a crate scan, a duplicate scan, a wrong or other-environment QR,
-  or an unreadable bottle;
-- no new body, label or pump is consumed;
-- two operators work concurrently;
-- recovery after an interrupted request;
-- every count, event and movement is transactional and audited.
+Sklad → "Příjem vratek":
 
-**Regression acceptance — the existing production and dispatch walk, unchanged.** The same
-existing API e2e and Playwright tests stay green without changed expectations:
+- open a receipt;
+- scan a crate;
+- scan bottles, with a "Vadná → ke skartaci" switch for the next scan;
+- "Nečitelná lahev +1" and "Vadná pumpička −1";
+- "Vyprázdněno" per crate, with N / M / N − M;
+- close the receipt.
 
-- labelling into a crate, filling, Hotovo;
+Overview:
+
+- bottles "Vrácená, čeká na mytí" and since when, for each site;
+- open issues.
+
+The bottle detail shows the receipt. The hotel's delivery view no longer counts identified bottles
+as at the hotel.
+
+### 4.7 R1 tests
+
+- **API e2e, real DB:**
+  - every row of §4.2 and every case of §4.3;
+  - two concurrent scans of one bottle (one `SORTED`);
+  - a replay of a lost response;
+  - a mixed return;
+  - a delivery from before R1;
+  - the trigger refusals: release without `SORTED`, release of a shipped cycle for another reason,
+    `DISPOSED → anything`, a second `SORTED` of the same cycle;
+  - the reuse counter is 1 after a good or a defective return and unchanged by crate, duplicate
+    or foreign scans.
+- **Playwright:** the intake at 390 px and 1440 px, including Vyprázdněno and a new cycle of the
+  crate.
+- **Regression:** see §5.
+
+## 5. Connections and acceptance
+
+| #   | Delivery                                                                                                                                                                                                                                                                       | Connects to                                   |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| R1  | Intake (§4)                                                                                                                                                                                                                                                                    | —                                             |
+| R2  | Second scan: `RETURNED → READY_FOR_REUSE` ("Připravená k plnění · Po mytí"). Optionally, in the same transaction, `ASSIGNED_TO_CRATE` into an `OPEN_ASSEMBLY` cycle of the bottle's bound category: no `LABEL_APPLIED`, no `NEW_BOTTLE` consumption, the cycle rules unchanged | R1's `RETURNED`; the existing assembly cycle  |
+| R3  | Third scan, filling a `READY_FOR_REUSE` bottle: liquid as today, a washed pump from the counted pool (option A, a separate inventory item), a new pump only when stated; no body or label consumed. The defective pumps of R1 never touch the new-pump stock                   | R2's assignment; `filling.service.ts:254-305` |
+
+Each of R2 and R3 gets its own model PR, as R1.
+
+**Acceptance (issue #125)** on DEV, through the real UI:
+
+- a specific bottle is delivered, then returned in a partial and mixed return;
+- intake scan: it is no longer at the hotel, and reuse cycle 1;
+- a defective neighbour goes "ke skartaci" and a defective pump −1;
+- Vyprázdněno, and the crate opens a new cycle;
+- washing without a scan, then the second scan (with direct placement);
+- the third scan (filling with a washed pump), then dispatch;
+- along the way: an unreadable bottle, a duplicate and a foreign scan, two operators, recovery
+  after an interrupted request.
+
+The single screens of R1 and R2 are intermediate states, not a finished cycle.
+
+**Regression acceptance — the existing production and dispatch walk, unchanged.** The existing
+API e2e and Playwright tests stay green without changed expectations:
+
+- labelling, filling, Hotovo;
 - picking whole crates, the shipment, labels, handover;
-- carrier tracking to `DELIVERED`.
+- tracking to `DELIVERED`.
 
 In particular:
 
 - a finished crate is picked and dispatched by its crate scan with its known contents;
 - no per-bottle scan is added at picking or dispatch;
+- delivery writes nothing new;
 - capacity, the category/recipe/label rules and the FILL consumption of a **new** bottle are as
   today;
-- the refusals already tested stay refusals: `CRATE_DELIVERED` for a delivered crate's cycle, and
-  labelling only `CREATED`, filling only `LABELED_EMPTY` for a new bottle.
-
-A new test adds the next circulation of one physical crate: a new cycle with new contents, while
-the closed cycle's shipped membership is unchanged.
-
-Single screens of R1–R2 are intermediate states, not a finished cycle.
+- `CRATE_DELIVERED`, labelling only `CREATED` and filling only `LABELED_EMPTY` stay refusals for a
+  new bottle;
+- the closed cycle's shipped membership is unchanged after the crate's next cycle.
