@@ -230,6 +230,16 @@ export class HotelsService implements OnModuleInit {
     if (serial === null) return Promise.resolve(null);
     return db.hotel.findUnique({ where: { serial }, include: hotelInclude });
   }
+
+  /** Identity and address of hotels (contract drafts, ADR 0043) — the same narrow view as Finance's. */
+  identities(ids?: readonly string[]): Promise<FinanceContractHotel[]> {
+    return this.financeContractHotels(ids);
+  }
+
+  /** One hotel by its id (for modules that keep a reference to it, e.g. contract drafts). */
+  byId(id: string, db: Prisma.TransactionClient = this.prisma): Promise<HotelRecord | null> {
+    return db.hotel.findUnique({ where: { id }, include: hotelInclude });
+  }
 }
 
 function toSummary(row: HotelRecord): HotelSummary {

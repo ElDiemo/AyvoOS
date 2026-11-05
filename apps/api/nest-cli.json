@@ -9,6 +9,10 @@
       {
         "include": "finance/fonts/*",
         "outDir": "dist"
+      },
+      {
+        "include": "contracts/fonts/*",
+        "outDir": "dist"
       }
     ]
   }

@@ -3,6 +3,7 @@ import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
+import { ContractDraftsCard } from '@/components/contracts/contract-drafts-card';
 import { ContactsCard } from '@/components/sales/contacts-card';
 import { HistoryCard } from '@/components/sales/history-card';
 import { ProspectActions, RestoreButton } from '@/components/sales/prospect-actions';
@@ -218,6 +219,8 @@ export default async function ProspectPage({
           </div>
           <div className="flex min-w-0 flex-col gap-6">
             <ContactsCard code={p.code} contacts={p.contacts} readOnly={!!archived} />
+            {/* Contract drafts (ADR 0043): only by an explicit click; none for an archived one. */}
+            <ContractDraftsCard prospect={p.code} canPrepare={!archived} />
             <Card
               title={d.profile}
               testId="prospect-profile"
