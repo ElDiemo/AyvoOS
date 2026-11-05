@@ -89,12 +89,39 @@ export const contractsCs = {
     hotel: 'Zvolený hotel',
     acknowledge:
       'Vím o rozdílu a chci to tak uložit. (Jinak nejdřív upravte název nebo adresu hotelu v návrhu.)',
+    signedTitle: 'Podepsaná revize uvádí jiný hotel',
+    signedDraft: 'V podepsané revizi',
+    signedRefused:
+      'Podepsaný návrh lze připojit jen k hotelu, který podepsaná revize uvádí. Vyberte ten hotel.',
     detailMismatch:
       'Hotel v aktuální revizi se liší od připojeného hotelu. Upravte návrh, nebo opravte vazbu.',
+  },
+  signed: {
+    title: 'Podepsaný originál',
+    state:
+      'Evidence ručně nahraného podepsaného PDF. Podpisy se automaticky neověřují; soubor se uchovává beze změny a nelze ho smazat ani nahradit.',
+    none: 'Zatím žádný podepsaný originál.',
+    entry: (revision: number, signedOn: string) => `revize ${revision} · podepsáno ${signedOn}`,
+    uploaded: (at: string, by: string) => `nahrál(a) ${by}, ${at}`,
+    download: 'Stáhnout originál',
+    upload: (revision: number) => `Nahrát podepsaný originál revize ${revision}`,
+    file: 'Podepsané PDF',
+    signedOn: 'Datum podpisu',
+    confirm: (revision: number) =>
+      `Rozumím: nahrávám už podepsaný originál revize ${revision}. Revize se tím uzamkne; originál nepůjde smazat ani nahradit a návrh nepůjde odstranit. Pozdější změna bude nová revize.`,
+    submit: 'Nahrát originál',
+    lockedRemoval: 'Návrh s podepsaným originálem nelze odstranit.',
+    hotelBlocks:
+      'Připojený hotel neodpovídá hotelu v aktuální revizi, proto originál nepůjde nahrát. Nejdřív opravte vazbu nebo upravte návrh.',
+    amendment:
+      'Revize je podepsaná. Uložením změny vznikne nová revize (návrh dodatku); podepsaná zůstává beze změny.',
   },
   link: {
     open: 'Připojit k hotelu',
     correct: 'Opravit vazbu na hotel',
+    signed: 'Připojit podepsaný návrh k hotelu',
+    signedHelp:
+      'Návrh je podepsaný bez vazby na hotel. Připojit ho lze jednou, jen k hotelu se stejným názvem a adresou jako v podepsané revizi; vazbu pak nelze změnit.',
     hotel: 'Hotel',
     reason: 'Důvod (povinný)',
     submit: 'Připojit',
@@ -116,5 +143,10 @@ export const contractsCs = {
     HOTEL_IDENTITY_MISMATCH:
       'Hotel v návrhu se liší od zvoleného hotelu. Upravte návrh, nebo rozdíl výslovně potvrďte.',
     HOTEL_ALREADY_LINKED: 'Návrh už k tomuto hotelu připojený je.',
+    UNSUPPORTED_DOCUMENT: 'Nahrajte podepsaný originál jako PDF.',
+    CONTRACT_REVISION_SIGNED: 'Tato revize už podepsaný originál má; nelze ho nahradit.',
+    CONTRACT_DRAFT_SIGNED: 'Návrh má podepsaný originál; nelze ho odstranit ani změnit vazbu.',
+    HOTEL_NOT_SIGNED_HOTEL:
+      'Podepsaná revize uvádí jiný hotel. Podepsaný návrh lze připojit jen k hotelu, který uvádí.',
   } as Record<string, string>,
 };

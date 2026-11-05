@@ -42,6 +42,7 @@ export type StorageNamespace =
   | 'shipment-labels'
   | 'employee-card-photos'
   | 'finance-documents'
+  | 'contract-documents'
   | 'accounting-exports';
 
 /** `namespace/yyyy/mm/<uuid>.<ext>` — lowercase ASCII only, no user-controlled parts. */
