@@ -18,6 +18,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -201,16 +202,17 @@ const child = spawn(process.execPath, ['dist/main.js'], {
     PUBLIC_QR_BASE_URL: process.env.E2E_PUBLIC_QR_BASE_URL ?? 'http://localhost:3100/q',
   },
 });
+const financePort = process.env.E2E_FINANCE_PORT ?? '4110';
 // The Finance unit: its own process, DB role (schema finance only) and storage directory; it
 // reaches the core only through the internal contract with the service token.
-const startFinance = () =>
+const launchFinance = () =>
   spawn(process.execPath, ['dist/finance/main.js'], {
     cwd: apiRoot,
     stdio: 'inherit',
     env: {
       PATH: process.env.PATH,
       APP_ENV: 'test',
-      FINANCE_PORT: process.env.E2E_FINANCE_PORT ?? '4110',
+      FINANCE_PORT: financePort,
       FINANCE_DATABASE_URL: asRole(finance.runtimeRole, finance.runtimePassword),
       CORE_INTERNAL_URL: `http://localhost:${port}`,
       FINANCE_SERVICE_TOKEN: serviceToken,
@@ -220,39 +222,112 @@ const startFinance = () =>
       ...fakeRb.env(`${e2eBankAccount}:CZK`),
     },
   });
-let financeChild = startFinance();
-// Test-only outage control (e2e/workflow-finance-outage.spec.ts): SIGUSR2 stops the Finance process
-// on purpose, SIGUSR1 starts it again; the core keeps running. The pid file names this server.
-let financeStopped = false;
+// Test-only outage control of the Finance process; the core keeps running. A stop or a start is
+// answered only when it has happened: stopped = the process has exited, started = a new process
+// answers ready. The Finance HTTP server keeps serving keep-alive connections that were busy at
+// SIGTERM for as long as a client reuses them (Node's server.close), so a SIGTERM alone does not
+// end it: like `docker stop`, it gets FINANCE_STOP_GRACE_MS and is then killed.
+const FINANCE_STOP_GRACE_MS = 5_000;
+const FINANCE_START_DEADLINE_MS = 30_000;
+const spawnFinance = () => {
+  const proc = launchFinance();
+  const exited = new Promise((done) => proc.once('exit', (code, signal) => done({ code, signal })));
+  const unit = { proc, exited, stopping: false };
+  // An unexpected Finance exit ends the run (a broken unit must fail the tests); a requested stop does not.
+  exited.then(({ code }) => {
+    if (unit.stopping) return;
+    child.kill('SIGTERM');
+    shutdown(code ?? 1);
+  });
+  return unit;
+};
+let financeUnit = spawnFinance();
+let financeDown = false;
+async function stopFinance() {
+  if (financeDown) return { state: 'stopped', forced: false };
+  financeUnit.stopping = true;
+  financeUnit.proc.kill('SIGTERM');
+  let grace;
+  const inTime = await Promise.race([
+    financeUnit.exited.then(() => true),
+    new Promise((done) => (grace = setTimeout(() => done(false), FINANCE_STOP_GRACE_MS))),
+  ]);
+  clearTimeout(grace);
+  if (!inTime) financeUnit.proc.kill('SIGKILL');
+  await financeUnit.exited;
+  financeDown = true;
+  return { state: 'stopped', forced: !inTime };
+}
+const financeAnswersReady = async () =>
+  (
+    await fetch(`http://127.0.0.1:${financePort}/api/admin/finance/health/ready`, {
+      signal: AbortSignal.timeout(2_000),
+    }).catch(() => null)
+  )?.status === 200;
+async function startFinance() {
+  if (financeDown) {
+    financeUnit = spawnFinance();
+    financeDown = false;
+  }
+  const deadline = Date.now() + FINANCE_START_DEADLINE_MS;
+  while (!(await financeAnswersReady())) {
+    if (financeUnit.proc.exitCode !== null || financeUnit.proc.signalCode !== null)
+      throw new Error('Finance exited while starting');
+    if (Date.now() > deadline) throw new Error('Finance not ready in time');
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  return { state: 'ready' };
+}
+// One control operation at a time, in the order asked.
+let controlQueue = Promise.resolve();
+const control = (operation) => {
+  const result = controlQueue.then(operation);
+  controlQueue = result.catch(() => undefined);
+  return result;
+};
+// The specs reach the control on 127.0.0.1 with a per-run token, both in a file only this user reads.
+const controlToken = randomBytes(24).toString('base64url');
+const controlServer = createServer((req, res) => {
+  const operation = { '/finance/stop': stopFinance, '/finance/start': startFinance }[req.url];
+  if (
+    req.method !== 'POST' ||
+    !operation ||
+    req.headers.authorization !== `Bearer ${controlToken}`
+  ) {
+    res.writeHead(404).end();
+    return;
+  }
+  control(operation).then(
+    (body) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body)),
+    (error) => res.writeHead(500).end(String(error?.message ?? error)),
+  );
+});
+await new Promise((done) => controlServer.listen(0, '127.0.0.1', done));
+const controlFile = join(tmpdir(), `ayvo-e2e-control-${port}.json`);
+writeFileSync(
+  controlFile,
+  JSON.stringify({ port: controlServer.address().port, token: controlToken }),
+  { mode: 0o600 },
+);
+controlServer.unref();
+// The pid file names this server (e2e-compat still sends SIGUSR2 = stop, SIGUSR1 = start).
 const pidFile = join(tmpdir(), `ayvo-e2e-server-${port}.pid`);
 writeFileSync(pidFile, String(process.pid), { mode: 0o600 });
-process.on('SIGUSR2', () => {
-  financeStopped = true;
-  financeChild.kill('SIGTERM');
-});
-process.on('SIGUSR1', () => {
-  if (financeChild.exitCode === null && financeChild.signalCode === null) return;
-  financeStopped = false;
-  financeChild = startFinance();
-  financeChild.on('exit', onFinanceExit);
-});
+process.on('SIGUSR2', () => void control(stopFinance));
+process.on('SIGUSR1', () => void control(startFinance).catch(() => undefined));
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.on(signal, () => {
     child.kill(signal);
-    financeChild.kill(signal);
+    financeUnit.stopping = true;
+    financeUnit.proc.kill(signal);
   });
-const shutdown = (code) => {
+function shutdown(code) {
   rmSync(pidFile, { force: true });
+  rmSync(controlFile, { force: true });
   process.exit(code);
-};
+}
 child.on('exit', (code) => {
-  financeChild.kill('SIGTERM');
+  financeUnit.stopping = true;
+  financeUnit.proc.kill('SIGTERM');
   shutdown(code ?? 0);
 });
-// An unexpected Finance exit ends the run (a broken unit must fail the tests); a requested stop does not.
-function onFinanceExit(code) {
-  if (financeStopped) return;
-  child.kill('SIGTERM');
-  shutdown(code ?? 1);
-}
-financeChild.on('exit', onFinanceExit);
