@@ -924,13 +924,12 @@ export class ReturnReceiptsService {
     // The same foreign piece scanned again on this line is the same piece (a one-way digest,
     // never shown, so nothing of the other site is exposed).
     const piece = createHash('sha256').update(token).digest('hex');
+    // Concurrent scans of the same piece on the same line hold only the shared receipt lock:
+    // serialise them on (line, piece), then the second sees the first's issue (unique in the DB).
+    const key = `${lineId}:${piece}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}::text, 0))`;
     const existing = await tx.returnReceiptIssue.findFirst({
-      where: {
-        lineId,
-        kind: 'OTHER_SITE',
-        resolvedAt: null,
-        details: { path: ['piece'], equals: piece },
-      },
+      where: { lineId, kind: 'OTHER_SITE', details: { path: ['piece'], equals: piece } },
       select: { code: true, kind: true },
     });
     const issue =

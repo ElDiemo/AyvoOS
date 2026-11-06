@@ -6,7 +6,7 @@ import { testCarrierControl } from '../src/carriers/test-carrier.js';
 import { crateFactory, createHotel, hotelBody, type MadeCrate } from './support/order-fixtures.js';
 import { deliver, RETURN_ENV, shipCrates } from './support/return-fixtures.js';
 import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 
 /**
  * Return intake (doc 047 §4.6 "The site boundary") through REAL sign-in: only ADMIN holds
@@ -249,6 +249,33 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
     expect(
       await ra.prisma.bottleEvent.count({ where: { bottleId: bottle.id, type: 'SORTED' } }),
     ).toBe(0);
+    // Two operators scan the same foreign piece on the same line at once (different request
+    // ids): both held on the receipt, then released together — one piece, one issue.
+    const box2 = await container(there.code);
+    const receiptRow = await ra.prisma.returnReceipt.findUniqueOrThrow({
+      where: { code: there.code },
+    });
+    const [pending] = await withPrivileged((db) =>
+      db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT 1 FROM "return_receipts" WHERE "id" = ${receiptRow.id}::uuid FOR UPDATE`;
+        const scans = [0, 1, 2].map(() =>
+          as(admin)
+            .post(`/api/admin/returns/receipts/${there.code}/lines/${box2}/bottles`, {
+              scannedValue: crate.bottleUrls[0]!,
+              outcome: 'GOOD',
+            })
+            .then((r) => r),
+        );
+        await new Promise((r) => setTimeout(r, 500));
+        return [scans] as const;
+      }),
+    );
+    const raced = await Promise.all(pending);
+    expect(raced.map((r) => r.status)).toEqual([200, 200, 200]);
+    expect(new Set(raced.map((r) => r.body.issue.code)).size).toBe(1);
+    expect(
+      await ra.prisma.returnReceiptIssue.count({ where: { lineId: box2, kind: 'OTHER_SITE' } }),
+    ).toBe(1);
     // OTHER_SITE is closed only as written off.
     const notAyvo = await as(admin).post(`/api/admin/returns/issues/${row.code}/close-out`, {
       resolution: 'NOT_AYVO',

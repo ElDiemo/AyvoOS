@@ -286,6 +286,14 @@ CREATE UNIQUE INDEX "bottle_events_one_sorted_per_cycle"
   ON "bottle_events" ("bottle_id", "crate_cycle_id") WHERE "type" = 'SORTED';
 CREATE UNIQUE INDEX "return_receipt_issues_one_open_per_bottle"
   ON "return_receipt_issues" ("bottle_id") WHERE "resolved_at" IS NULL AND "bottle_id" IS NOT NULL;
+-- One OTHER_SITE issue per foreign piece and line, keyed by a one-way digest of its QR token
+-- (never a link to the other site's bottle, doc 047 §4.6).
+CREATE UNIQUE INDEX "return_receipt_issues_one_other_site_piece"
+  ON "return_receipt_issues" ("line_id", ("details"->>'piece')) WHERE "kind" = 'OTHER_SITE';
+ALTER TABLE "return_receipt_issues"
+  ADD CONSTRAINT "return_receipt_issues_piece_check" CHECK (
+    ("kind" = 'OTHER_SITE') = ("details" ? 'piece')
+    AND ("kind" <> 'OTHER_SITE' OR "details"->>'piece' ~ '^[0-9a-f]{64}$'));
 CREATE INDEX "bottle_events_return_line_idx" ON "bottle_events" ("return_line_id") WHERE "return_line_id" IS NOT NULL;
 
 -- =============================================================================================
