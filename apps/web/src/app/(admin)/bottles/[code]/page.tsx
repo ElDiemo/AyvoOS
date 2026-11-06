@@ -48,6 +48,13 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
                   {bottle.reuseCycles}
                 </span>
               </Field>
+              {bottle.returnReceipt && (
+                <Field label={t.returnReceipt}>
+                  <Link className="underline" href={`/warehouse/returns/${bottle.returnReceipt}`}>
+                    {bottle.returnReceipt}
+                  </Link>
+                </Field>
+              )}
               <Field label={t.createdAt}>{formatDateTimeCs(bottle.createdAt)}</Field>
               <Field label={t.label}>{bottle.labelTemplate.label}</Field>
               <Field label={t.series}>

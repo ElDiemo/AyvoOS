@@ -215,7 +215,7 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'warehouse',
     section: 'operations',
-    permissions: ['inventory:read', 'inventory:stock_summary'],
+    permissions: ['inventory:read', 'inventory:stock_summary', 'returns:receive'],
     label: w.label,
     href: '/warehouse',
     description: w.description,
@@ -257,6 +257,12 @@ export const MODULES: readonly NavModule[] = [
         href: '/warehouse/suppliers',
         label: w.pages.suppliers,
         permission: 'inventory:read',
+      },
+      {
+        id: 'returns',
+        href: '/warehouse/returns',
+        label: w.pages.returns,
+        permission: 'returns:receive',
       },
     ],
   },
@@ -408,7 +414,14 @@ export const MODULES: readonly NavModule[] = [
 ];
 
 export type WarehousePageId =
-  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
+  | 'overview'
+  | 'new-receipt'
+  | 'receipts'
+  | 'stock'
+  | 'availability'
+  | 'movements'
+  | 'suppliers'
+  | 'returns';
 export type ProductionPageId =
   | 'overview'
   | 'bottles'

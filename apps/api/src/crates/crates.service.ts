@@ -131,7 +131,7 @@ export class CratesService {
     if (query.state) {
       where.cycles =
         query.state === 'EMPTY'
-          ? { none: { status: { not: 'ABORTED' } } }
+          ? { none: { status: { notIn: ['ABORTED', 'CLOSED'] } } }
           : { some: { status: query.state } };
     }
     const [total, rows, stateCounts] = await Promise.all([
@@ -161,7 +161,7 @@ export class CratesService {
       this.prisma.crate.count({ where: { siteId } }),
       this.prisma.crateCycle.groupBy({
         by: ['status'],
-        where: { siteId, status: { not: 'ABORTED' } },
+        where: { siteId, status: { notIn: ['ABORTED', 'CLOSED'] } },
         _count: { _all: true },
       }),
     ]);
@@ -174,9 +174,11 @@ export class CratesService {
       ALLOCATED: 0,
       DISPATCHED: 0,
       DELIVERED: 0,
+      RETURNED: 0,
     };
     for (const row of open) {
-      if (row.status === 'ABORTED') continue;
+      // A closed cycle is history: the crate is empty again (doc 047 §4.4).
+      if (row.status === 'ABORTED' || row.status === 'CLOSED') continue;
       counts[row.status] = row._count._all;
       counts.EMPTY -= row._count._all;
     }
@@ -254,7 +256,7 @@ export class CratesService {
         select: { crateId: true, location: { select: { code: true, name: true } } },
       }),
       this.prisma.crateCycle.findMany({
-        where: { crateId: { in: crateIds }, status: { not: 'ABORTED' } },
+        where: { crateId: { in: crateIds }, status: { notIn: ['ABORTED', 'CLOSED'] } },
         select: {
           crateId: true,
           status: true,

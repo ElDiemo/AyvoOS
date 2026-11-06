@@ -1,0 +1,22 @@
+-- Return intake R1 (doc 047 §4, owner 2026-11-06): new enum values in their own migration
+-- (PostgreSQL cannot use a value added in the same transaction). Additive only.
+ALTER TYPE "BottleEventType" ADD VALUE 'SORTED';
+ALTER TYPE "BottleEventType" ADD VALUE 'RETIRED';
+ALTER TYPE "BottleEventType" ADD VALUE 'DISPOSED';
+ALTER TYPE "BottleEventType" ADD VALUE 'CORRECTION';
+ALTER TYPE "BottleStatus" ADD VALUE 'RETURNED';
+ALTER TYPE "BottleStatus" ADD VALUE 'RETIRED';
+ALTER TYPE "BottleStatus" ADD VALUE 'DISPOSED';
+ALTER TYPE "CrateCycleStatus" ADD VALUE 'RETURNED';
+ALTER TYPE "CrateCycleStatus" ADD VALUE 'CLOSED';
+ALTER TYPE "CrateEventType" ADD VALUE 'RETURNED';
+ALTER TYPE "CrateEventType" ADD VALUE 'EMPTIED';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_RECEIPT_OPEN';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_CRATE_SCAN';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_CONTAINER_ADD';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_BOTTLE_SCAN';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_UNREADABLE';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_PUMP_COUNT';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_LINE_EMPTY';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_RECEIPT_CLOSE';
+ALTER TYPE "OperationKind" ADD VALUE 'RETURN_ISSUE_RESOLVE';

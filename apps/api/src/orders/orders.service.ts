@@ -718,11 +718,19 @@ export class OrdersService implements OnModuleInit {
             { crate: crate.code },
           );
         }
+        if (cycle.status === 'RETURNED') {
+          throw domainErrorWithDetails(
+            409,
+            'CRATE_RETURNED',
+            'This crate was returned: empty it first (Vyprázdněno)',
+            { crate: crate.code },
+          );
+        }
         if (cycle.status === 'DELIVERED') {
           throw domainErrorWithDetails(
             409,
             'CRATE_DELIVERED',
-            'This crate was delivered with another order (returns are not recorded yet)',
+            'This crate was delivered with another order and is not returned yet',
             { crate: crate.code },
           );
         }

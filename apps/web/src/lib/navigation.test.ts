@@ -109,6 +109,7 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Dostupnost',
       'Pohyby',
       'Dodavatelé',
+      'Příjem vratek',
     ]);
     expect(production.pages.map((p) => p.label)).toEqual([
       'Přehled výroby',

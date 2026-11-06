@@ -68,6 +68,9 @@ export const identityCs = {
     'orders:read': 'Zobrazit objednávky provozovny a jejich načtené bedny',
     'orders:manage': 'Zakládat a stornovat objednávky provozovny',
     'orders:pick': 'Kompletovat objednávky – načítat a odebírat hotové bedny, dokončit kompletaci',
+    'returns:receive':
+      'Přijímat vratky provozovny – příjem, sken vrácených beden a lahví, Vyprázdněno, dořešení neshody identifikací',
+    'returns:correct': 'Uzavírat neshody vratek jako „není AYVO“ nebo odepsané (s důvodem)',
     'orders:plan_manage':
       'Spravovat plány zásobování hotelů provozovny – pravidla, náhled, zapnutí a pozastavení',
     'shipments:read': 'Vidět přepravu objednávky – balíky, hmotnosti, štítky a přepravní čísla',
@@ -122,6 +125,7 @@ export const identityCs = {
     sites: 'Provozovny',
     carriers: 'Připojení dopravců',
     printing: 'Tisk štítků',
+    returns: 'Příjem vratek',
     sales: 'Obchod',
     finance: 'Finance',
   } as Record<string, string>,

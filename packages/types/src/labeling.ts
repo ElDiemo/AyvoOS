@@ -20,6 +20,10 @@ export const crateCycleStatusSchema = z.enum([
   'DISPATCHED',
   /** Its parcel was delivered, per the carrier (doc 031). */
   'DELIVERED',
+  /** Scanned back in at a return intake, not yet emptied (doc 047). */
+  'RETURNED',
+  /** Emptied at the intake; history only — the crate's next circulation is a new cycle. */
+  'CLOSED',
 ]);
 export type CrateCycleStatus = z.infer<typeof crateCycleStatusSchema>;
 

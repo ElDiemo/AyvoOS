@@ -16,7 +16,16 @@ export const bottleCreationBatchCodeSchema = z
 /** Opaque public QR token: 128 random bits, base64url without padding (22 characters). */
 export const publicTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
 
-export const bottleStatusSchema = z.enum(['CREATED', 'LABELED_EMPTY', 'FILLED']);
+export const bottleStatusSchema = z.enum([
+  'CREATED',
+  'LABELED_EMPTY',
+  'FILLED',
+  /** "Vrácená, čeká na mytí" (doc 047). */
+  'RETURNED',
+  /** "Ke skartaci" (doc 047, ADR 0011). */
+  'RETIRED',
+  'DISPOSED',
+]);
 export type BottleStatus = z.infer<typeof bottleStatusSchema>;
 
 export const bottleEventTypeSchema = z.enum([
@@ -25,6 +34,10 @@ export const bottleEventTypeSchema = z.enum([
   'ASSIGNED_TO_CRATE',
   'FILLED',
   'REMOVED_FROM_CRATE',
+  'SORTED',
+  'RETIRED',
+  'DISPOSED',
+  'CORRECTION',
 ]);
 export type BottleEventType = z.infer<typeof bottleEventTypeSchema>;
 
@@ -74,6 +87,8 @@ export const bottleDetailSchema = bottleSummarySchema.extend({
   reuseCycles: z.number().int().nonnegative(),
   /** When the printed QR label was physically applied (null: identity/label only). */
   labelAppliedAt: z.iso.datetime().nullable(),
+  /** The return receipt of its latest identification after a return (doc 047 §4.9), or null. */
+  returnReceipt: z.string().nullable(),
   /** Oldest first. */
   events: z.array(bottleEventSchema),
 });

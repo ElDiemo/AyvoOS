@@ -164,6 +164,17 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   `FileStorage` (`contract-documents`) with its SHA-256, downloaded only through the API. A signed
   draft is never removed and its hotel link never changed (DB); the signing revision's hotel must
   match the linked one, a first link the signed hotel. Signatures are never verified.
+  Return intake R1 (owner approved the model 2026-11-06 on doc 047 `69d90c8`, PR #126;
+  implementation under review): module `returns` — `return_receipts` (site, OPEN → CLOSED),
+  `return_receipt_lines` (one physical container: CRATE completes its delivered cycle's allocation,
+  CONTAINER = a box without a QR; `scanned_at` is the scan's time anchor), `return_receipt_issues`
+  (piece issues count once, one open per bottle, resolved once — also after the close) and
+  `return_pump_counts` (never a stock movement); bottle `RETURNED`/`RETIRED`/`DISPOSED`, events
+  `SORTED` (once per bottle and delivered cycle) / `RETIRED` / `DISPOSED` / `CORRECTION`, cycle
+  `DELIVERED → RETURNED → CLOSED` (only through a real line; the next circulation is a new cycle),
+  allocation `completed_*` (still the order's history), assignment `released_event_id`
+  (`RETURN_IDENTIFIED` only); `returns:receive|correct` (ADMIN). A refusal that records an issue
+  commits with its result. No washing (R2), refilling (R3) or stock change.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
   `identity:users_manage` only. Deactivation hides atomically; reactivation never republishes.

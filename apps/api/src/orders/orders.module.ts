@@ -7,6 +7,7 @@ import { SitesModule } from '../sites/sites.module.js';
 import { CarriersModule } from '../carriers/carriers.module.js';
 import { PrintingModule } from '../printing/printing.module.js';
 import { OrdersController } from './orders.controller.js';
+import { OrderReturnsService } from './order-returns.service.js';
 import { OrdersService } from './orders.service.js';
 import { ShipmentsController } from './shipments.controller.js';
 import { ShipmentCarrierFlow } from './shipment-carrier-flow.service.js';
@@ -45,6 +46,8 @@ import { SupplyPlansService } from './supply-plans.service.js';
     ShipmentTrackingService,
     SupplyPlansService,
     SupplyPlanRunner,
+    OrderReturnsService,
   ],
+  exports: [OrderReturnsService],
 })
 export class OrdersModule {}
