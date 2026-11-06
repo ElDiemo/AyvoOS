@@ -5,6 +5,6 @@ import { requireAnyPermission } from '@/lib/session';
  * page below checks its own permission again; the API enforces every permission on its own.
  */
 export default async function GuardedLayout({ children }: { children: React.ReactNode }) {
-  await requireAnyPermission(['inventory:read', 'inventory:stock_summary']);
+  await requireAnyPermission(['inventory:read', 'inventory:stock_summary', 'returns:receive']);
   return children;
 }

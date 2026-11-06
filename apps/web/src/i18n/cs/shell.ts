@@ -63,6 +63,7 @@ export const shellCs = {
         availability: 'Dostupnost',
         movements: 'Pohyby',
         suppliers: 'Dodavatelé',
+        returns: 'Příjem vratek',
       },
     },
     production: {
