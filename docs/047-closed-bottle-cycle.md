@@ -165,7 +165,7 @@ return_receipt_lines     receipt; kind CRATE | CONTAINER (a box without a crate 
                          UNIQUE (returned_cycle)        — a cycle is returned once
                          guard: never deleted; only emptied_at/by + physical_count, set once
 return_receipt_issues    code RI-000001; receipt; line; kind UNREADABLE | NOT_DELIVERED |
-                         NOT_IN_CIRCULATION | COUNT_MISMATCH; bottle (nullable); details;
+                         NOT_IN_CIRCULATION | OTHER_SITE (no bottle link) | COUNT_MISMATCH; bottle (nullable); details;
                          recorded_at/by; resolved_at/by, resolution IDENTIFIED | NOT_AYVO |
                          WRITTEN_OFF, resolution_reason, resolving_event (once, UNIQUE)
                          UNIQUE (bottle) WHERE resolved_at IS NULL AND bottle IS NOT NULL
@@ -314,12 +314,24 @@ not at the statement), including the negative tests in §4.10.
 **Lock order.** It is the existing `crate → cycle → bottle` (`apps/api/src/production/filling.service.ts:216-233`,
 `apps/api/src/crates/crate-cycles.service.ts:50`), with the receipt in front:
 
-- **Bottle scan.**
+In every operation the `operation_requests` row comes first (the existing contract,
+`apps/api/src/database/operation-requests.service.ts:29-61`), then:
+
+- **Bottle scan, and resolving an issue as `IDENTIFIED`: one path, one order.**
   1. The receipt is locked `FOR SHARE`, so scans in one receipt run concurrently.
   2. The bottle's open assignment is read **without a lock**. It names its cycle X and crate X.
-  3. Crate X → cycle X → bottle are locked `FOR UPDATE`.
+  3. Crate X → cycle X → bottle are locked `FOR UPDATE` (only the bottle when it has no open
+     assignment).
   4. The assignment is checked again. If it changed meanwhile, the scan is refused with
      `CONCURRENT_CHANGE` and nothing is written.
+  5. **Last**, the issue the scan would resolve is locked `FOR UPDATE`: for a resolution the named
+     issue; for a rescan on L the open piece issue of this bottle on L, if any. Its state is read
+     again after this lock: already resolved → the first result if it was resolved by the same
+     bottle and outcome, else `ISSUE_RESOLVED`; nothing written.
+  - The rescan of check 4 on L and the `IDENTIFIED` of §4.8a are therefore **the same code path**
+    with the same order (receipt → crate → cycle → bottle → issue). Neither ever holds the issue
+    while waiting for a crate, so they cannot deadlock; the one that commits second sees the
+    resolved issue and the released assignment.
   - The context line (crate Y of the receipt) is never locked. It is protected by the receipt
     lock, so **one transaction never locks two crates**.
 - **Crate scan and Vyprázdněno.** Receipt `FOR UPDATE` → crate → cycle.
@@ -329,8 +341,32 @@ not at the statement), including the negative tests in §4.10.
   is refused (`RECEIPT_CLOSED`). A late piece goes into a new receipt; an existing issue is
   resolved by its own operation (§4.8a).
 - The pump counts and issue records lock only the receipt (`FOR SHARE`).
-- **Resolving an issue.** Receipt `FOR SHARE` → the issue `FOR UPDATE` → crate X → cycle X →
-  bottle, with the same re-check of the assignment.
+- **Resolving an issue as `NOT_AYVO` or `WRITTEN_OFF`.** Receipt `FOR SHARE` → the issue
+  `FOR UPDATE`; no crate, cycle or bottle is locked, so nothing can wait in the other direction.
+
+**The site boundary (R1).** Every receipt operation acts on the session's validated active site
+(`@OperationalSite()`, doc 022), never on a site named in the request:
+
+- The receipt, its lines, its issues and its pump counts belong to the receipt's site, which is
+  the active site. A receipt, line or issue of another site answers **404**, as if it did not
+  exist; this lookup is read-only and runs **before** the request row and any replay.
+- The rows a scan changes must belong to that site: the crate (`crates.site_id`), its cycle
+  (`crate_cycles.site_id`), the bottle (`bottles.site_id`) and the order of the delivered
+  allocation. Otherwise → `CRATE_OF_ANOTHER_SITE` / `BOTTLE_OF_ANOTHER_SITE` (as picking does
+  today, `apps/api/src/orders/orders.service.ts:681-688`), nothing changed on the foreign rows.
+  For a bottle this is checked right after `classifyScannedQr`, before checks 1–8, and the line
+  gets an issue `OTHER_SITE` **without** a link to the bottle, so the piece is counted (§4.8)
+  without exposing anything of the other site. It is resolved only `WRITTEN_OFF` with a reason
+  (a transfer between sites is not part of R1).
+- **Error details** (`ALREADY_RECEIVED_ELSEWHERE`, `OPEN_ISSUE`, `ALREADY_RECEIVED`) name only
+  receipts, lines and issues of the active site. Since a bottle is identified only in receipts of
+  its own site, nothing of another site can be named; a refusal across sites carries no details.
+- **Replay.** The payload under the `requestId` is the operation's kind plus `{ actorId, siteId,
+receiptId, lineId | issueId, token, outcome }` (for a resolution also `resolution`). A stored
+  response is returned only for the same id, kind and payload; the same id with another line,
+  receipt, issue, outcome, site or kind → `IDEMPOTENCY_CONFLICT`, nothing written. Since the
+  receipt is resolved within the active site first, a replay never returns a response of
+  another site.
 
 **The anchor of a scan.** A scan is always made **on one line L** (the context line, or the line
 of the issue being resolved), and it identifies at most one concrete delivered cycle X. "The
@@ -350,7 +386,10 @@ bottle lock.
 **Checks, in this exact order** (after the locks; the first that applies decides, and nothing
 after it runs):
 
-0. **Same `requestId`** → the stored response (`OperationRequestsService`), before anything else.
+0. **Same `requestId`** with the same kind and payload (including the receipt and the line or
+   issue, see the site boundary) → the stored response (`OperationRequestsService`), before
+   anything but the read-only lookup of the receipt in the active site; the same id with another
+   kind or payload → `IDEMPOTENCY_CONFLICT`.
 1. **Receipt or line closed.** Receipt CLOSED → `RECEIPT_CLOSED`; L emptied → `LINE_EMPTIED`.
    Nothing written. (Not for resolving an issue, which works on a closed line, §4.8a.)
 2. **Already identified on this line.** The bottle has a `SORTED` found in **L**:
@@ -413,7 +452,7 @@ Counted per receipt line (one physical container), never from the shipment:
 
 - **Physical** = `physical_count`, entered when the line is emptied.
 - **Recorded on the line** = this line's piece issues (`UNREADABLE`, `NOT_DELIVERED`,
-  `NOT_IN_CIRCULATION`), **resolved or not**, plus the `SORTED` events found in this line
+  `NOT_IN_CIRCULATION`, `OTHER_SITE`), **resolved or not**, plus the `SORTED` events found in this line
   (good and defective) **without** `resolves_issue`.
 - A piece is counted once: either as its issue or as its own `SORTED`. A `SORTED` that resolves an
   issue is the same piece and is not counted again. A later resolution therefore never changes
@@ -526,7 +565,26 @@ the hotel.
     other `OPEN_ISSUE` or `CONCURRENT_CHANGE`;
   - an `UNREADABLE` piece scanned on another line first → its resolution answers
     `ALREADY_RECEIVED_ELSEWHERE`, closed `WRITTEN_OFF` with the reference, one `SORTED`;
-  - `WRONG_BOTTLE`, and a resolution refused while still not delivered (the issue stays open).
+  - `WRONG_BOTTLE`, and a resolution refused while still not delivered (the issue stays open);
+  - **on the same line**: a rescan of the issue's bottle on L (check 4) and an `IDENTIFIED` of the
+    same issue, started concurrently (both transactions held open until each has taken its first
+    lock, then released) → both finish without a deadlock or a timeout, exactly one `SORTED` with
+    `resolves_issue`, the other gets the first result or `ISSUE_RESOLVED`; repeated in both start
+    orders. (The test with a scan on another line takes the `OPEN_ISSUE` branch and does not
+    cover this.)
+- **The site boundary (§4.6), with a second site and its own crate, cycle, bottle and receipt:**
+  - a bottle scan of the other site's bottle on our line → `BOTTLE_OF_ANOTHER_SITE`, an
+    `OTHER_SITE` issue without a bottle link, the foreign bottle, assignment, cycle and events
+    unchanged;
+  - a crate scan of the other site's delivered crate → `CRATE_OF_ANOTHER_SITE`, no line, the
+    foreign allocation and cycle unchanged;
+  - a scan, an issue record and Vyprázdněno on the other site's receipt or line, and a resolution
+    of its issue → 404, nothing written, no detail in the answer;
+  - error details of `ALREADY_RECEIVED_ELSEWHERE` / `OPEN_ISSUE` never name a receipt, line or
+    issue of another site;
+  - **replay**: the same `requestId` with another line, receipt, issue, outcome or kind →
+    `IDEMPOTENCY_CONFLICT` and nothing written; the same `requestId` and payload with the session
+    switched to the other site → 404 before the replay, the stored response not returned.
 - **Two deliveries of the same bottle** (needs R2 and R3 to deliver a bottle twice, so it runs in
   R3's PR and in the acceptance; R1 covers the parts it can create):
   - bottle b is accepted on line A while line B of the same receipt stays open; b is washed,
