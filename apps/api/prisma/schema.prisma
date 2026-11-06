@@ -152,6 +152,13 @@ enum BottleStatus {
   LABELED_EMPTY
   /// Filled and pump installed (doc 025 A4); never set back to empty.
   FILLED
+  /// "Vrácená, čeká na mytí": identified at a return intake (SORTED, doc 047 §4).
+  RETURNED
+  /// "Ke skartaci": operationally terminal; reversed only by a CORRECTION of a retirement
+  /// documented at the return (ADR 0011, doc 047 §4.7).
+  RETIRED
+  /// Shredded. Irreversible: no later event (DB).
+  DISPOSED
 }
 
 /// Lifecycle event types. FILLED, ASSIGNED_TO_CRATE, … are added in later phases.
@@ -163,6 +170,13 @@ enum BottleEventType {
   ASSIGNED_TO_CRATE
   FILLED
   REMOVED_FROM_CRATE
+  /// The individual identification at a return (ADR 0011): once per (bottle, delivered cycle),
+  /// with the receipt line it was found in (doc 047 §4.6).
+  SORTED
+  RETIRED
+  DISPOSED
+  /// RETIRED → RETURNED, only for a retirement documented at the return (doc 047 §4.7).
+  CORRECTION
 }
 
 /// A group of physical bottle identities registered in one operation (NOT a fill batch).
@@ -207,6 +221,7 @@ model Bottle {
   orderAllocations OrderAllocationBottle[]
   assignments      CrateAssignment[]
   binding          BottleProductBinding?
+  returnIssues     ReturnReceiptIssue[]
   id               String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
   serial           BigInt                  @unique
   /// Human-readable, sequential: "AYV-B-000001". Not a security token.
@@ -244,6 +259,14 @@ model BottleEvent {
   operation            OperationRequest?     @relation("BottleEventOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   assignment           CrateAssignment?      @relation("AssignmentEvent")
   binding              BottleProductBinding?
+  /// SORTED: the return receipt line the bottle was found in (doc 047 §4.2).
+  returnLineId         String?               @map("return_line_id") @db.Uuid
+  returnLine           ReturnReceiptLine?    @relation(fields: [returnLineId], references: [id], onDelete: Restrict)
+  /// SORTED: the piece issue of that same line it identifies (doc 047 §4.8a).
+  resolvesIssueId      String?               @unique @map("resolves_issue_id") @db.Uuid
+  resolvesIssue        ReturnReceiptIssue?   @relation("SortedResolvesIssue", fields: [resolvesIssueId], references: [id], onDelete: Restrict)
+  resolvedIssue        ReturnReceiptIssue?   @relation("IssueResolvingEvent")
+  releasedAssignment   CrateAssignment?      @relation("AssignmentReleaseEvent")
   id                   String                @id @default(dbgenerated("uuidv7()")) @db.Uuid
   bottleId             String                @map("bottle_id") @db.Uuid
   type                 BottleEventType
@@ -981,32 +1004,48 @@ enum OperationKind {
   CONTRACT_DRAFT_RESTORE
   CONTRACT_DRAFT_HOTEL
   CONTRACT_SIGNED_UPLOAD
+  RETURN_RECEIPT_OPEN
+  RETURN_CRATE_SCAN
+  RETURN_CONTAINER_ADD
+  RETURN_BOTTLE_SCAN
+  RETURN_UNREADABLE
+  RETURN_PUMP_COUNT
+  RETURN_LINE_EMPTY
+  RETURN_RECEIPT_CLOSE
+  RETURN_ISSUE_RESOLVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
 /// different payload → conflict. DB: insert-only except setting `result` once (NULL → value).
 model OperationRequest {
-  itemWeights        ItemReferenceWeight[]
-  productWeights     ProductReferenceWeight[]
-  tareWeights        CrateTypeTareWeight[]
-  crateDimensions    CrateTypeDimension[]
-  hotels             Hotel[]
-  orders             Order[]
-  allocations        OrderCrateAllocation[]   @relation("AllocateOperation")
-  allocationReleases OrderCrateAllocation[]   @relation("AllocationReleaseOperation")
-  orderEvents        OrderEvent[]
-  bottleEvents       BottleEvent[]            @relation("BottleEventOperation")
-  labelApprovals     ProductLabelApproval[]   @relation("ApproveOperation")
-  labelRevocations   ProductLabelApproval[]   @relation("RevokeOperation")
-  cyclesOpened       CrateCycle[]             @relation("CycleOpenOperation")
-  assignments        CrateAssignment[]        @relation("AssignOperation")
-  releases           CrateAssignment[]        @relation("ReleaseOperation")
-  bindings           BottleProductBinding[]
-  requestId          String                   @id @map("request_id") @db.Uuid
-  kind               OperationKind
-  payloadSha256      String                   @map("payload_sha256") @db.Char(64)
-  result             Json?
-  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  returnReceiptsOpened ReturnReceipt[]          @relation("ReturnReceiptOpenOperation")
+  returnReceiptsClosed ReturnReceipt[]          @relation("ReturnReceiptCloseOperation")
+  returnLinesScanned   ReturnReceiptLine[]      @relation("ReturnLineScanOperation")
+  returnLinesEmptied   ReturnReceiptLine[]      @relation("ReturnLineEmptyOperation")
+  returnIssuesRecorded ReturnReceiptIssue[]     @relation("ReturnIssueRecordOperation")
+  returnIssuesResolved ReturnReceiptIssue[]     @relation("ReturnIssueResolveOperation")
+  returnPumpCounts     ReturnPumpCount[]
+  itemWeights          ItemReferenceWeight[]
+  productWeights       ProductReferenceWeight[]
+  tareWeights          CrateTypeTareWeight[]
+  crateDimensions      CrateTypeDimension[]
+  hotels               Hotel[]
+  orders               Order[]
+  allocations          OrderCrateAllocation[]   @relation("AllocateOperation")
+  allocationReleases   OrderCrateAllocation[]   @relation("AllocationReleaseOperation")
+  orderEvents          OrderEvent[]
+  bottleEvents         BottleEvent[]            @relation("BottleEventOperation")
+  labelApprovals       ProductLabelApproval[]   @relation("ApproveOperation")
+  labelRevocations     ProductLabelApproval[]   @relation("RevokeOperation")
+  cyclesOpened         CrateCycle[]             @relation("CycleOpenOperation")
+  assignments          CrateAssignment[]        @relation("AssignOperation")
+  releases             CrateAssignment[]        @relation("ReleaseOperation")
+  bindings             BottleProductBinding[]
+  requestId            String                   @id @map("request_id") @db.Uuid
+  kind                 OperationKind
+  payloadSha256        String                   @map("payload_sha256") @db.Char(64)
+  result               Json?
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
 
   catalogComponents        CatalogComponent[]
   crateTypes               CrateType[]
@@ -1042,6 +1081,14 @@ enum UserStatus {
 /// An AYVO user. Never deleted; deactivation revokes access immediately.
 /// DB: email lower-case and unique; deactivation fields all-or-none; DELETE rejected.
 model User {
+  returnReceiptsOpened ReturnReceipt[]          @relation("ReturnReceiptOpenedBy")
+  returnReceiptsClosed ReturnReceipt[]          @relation("ReturnReceiptClosedBy")
+  returnLinesScanned   ReturnReceiptLine[]      @relation("ReturnLineScannedBy")
+  returnLinesEmptied   ReturnReceiptLine[]      @relation("ReturnLineEmptiedBy")
+  returnIssuesRecorded ReturnReceiptIssue[]     @relation("ReturnIssueRecordedBy")
+  returnIssuesResolved ReturnReceiptIssue[]     @relation("ReturnIssueResolvedBy")
+  returnPumpCounts     ReturnPumpCount[]
+  allocationsCompleted OrderCrateAllocation[]   @relation("AllocationCompletedBy")
   stockIssues          StockIssue[]
   nativeCredential     NativeCredential?
   nativeTokens         NativeAuthToken[]
@@ -1134,26 +1181,26 @@ model User {
   printRequests             PrintRequest[]       @relation("PrintRequestedBy")
   printJobEvents            PrintJobEvent[]      @relation("PrintJobEventBy")
 
-  salesProspectsOwned    SalesProspect[] @relation("SalesProspectOwner")
-  salesProspectsCreated  SalesProspect[] @relation("SalesProspectCreatedBy")
-  salesProspectsUpdated  SalesProspect[] @relation("SalesProspectUpdatedBy")
-  salesProspectsArchived SalesProspect[] @relation("SalesProspectArchivedBy")
-  salesImportsOwned      SalesImport[]   @relation("SalesImportOwner")
-  salesImportsCreated    SalesImport[]   @relation("SalesImportCreatedBy")
-  salesContactsCreated   SalesContact[]  @relation("SalesContactCreatedBy")
-  salesContactsUpdated   SalesContact[]  @relation("SalesContactUpdatedBy")
-  salesContactsRetired   SalesContact[]  @relation("SalesContactRetiredBy")
-  salesActivities        SalesActivity[] @relation("SalesActivityAuthor")
-  salesTasksAssigned     SalesTask[]     @relation("SalesTaskAssignee")
-  salesTasksCreated      SalesTask[]     @relation("SalesTaskCreatedBy")
-  salesTasksUpdated      SalesTask[]     @relation("SalesTaskUpdatedBy")
-  salesTasksClosed       SalesTask[]     @relation("SalesTaskClosedBy")
-  salesEvents            SalesEvent[]    @relation("SalesEventActor")
-  contractDraftsCreated  ContractDraft[]         @relation("ContractDraftCreatedBy")
-  contractDraftsUpdated  ContractDraft[]         @relation("ContractDraftUpdatedBy")
-  contractDraftsRemoved  ContractDraft[]         @relation("ContractDraftRemovedBy")
-  contractRevisions      ContractDraftRevision[] @relation("ContractDraftRevisionCreatedBy")
-  contractDraftEvents    ContractDraftEvent[]    @relation("ContractDraftEventActor")
+  salesProspectsOwned    SalesProspect[]          @relation("SalesProspectOwner")
+  salesProspectsCreated  SalesProspect[]          @relation("SalesProspectCreatedBy")
+  salesProspectsUpdated  SalesProspect[]          @relation("SalesProspectUpdatedBy")
+  salesProspectsArchived SalesProspect[]          @relation("SalesProspectArchivedBy")
+  salesImportsOwned      SalesImport[]            @relation("SalesImportOwner")
+  salesImportsCreated    SalesImport[]            @relation("SalesImportCreatedBy")
+  salesContactsCreated   SalesContact[]           @relation("SalesContactCreatedBy")
+  salesContactsUpdated   SalesContact[]           @relation("SalesContactUpdatedBy")
+  salesContactsRetired   SalesContact[]           @relation("SalesContactRetiredBy")
+  salesActivities        SalesActivity[]          @relation("SalesActivityAuthor")
+  salesTasksAssigned     SalesTask[]              @relation("SalesTaskAssignee")
+  salesTasksCreated      SalesTask[]              @relation("SalesTaskCreatedBy")
+  salesTasksUpdated      SalesTask[]              @relation("SalesTaskUpdatedBy")
+  salesTasksClosed       SalesTask[]              @relation("SalesTaskClosedBy")
+  salesEvents            SalesEvent[]             @relation("SalesEventActor")
+  contractDraftsCreated  ContractDraft[]          @relation("ContractDraftCreatedBy")
+  contractDraftsUpdated  ContractDraft[]          @relation("ContractDraftUpdatedBy")
+  contractDraftsRemoved  ContractDraft[]          @relation("ContractDraftRemovedBy")
+  contractRevisions      ContractDraftRevision[]  @relation("ContractDraftRevisionCreatedBy")
+  contractDraftEvents    ContractDraftEvent[]     @relation("ContractDraftEventActor")
   contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
 
   @@map("users")
@@ -1483,6 +1530,7 @@ enum SiteCapability {
 /// country and not a legal entity. DB: code unique and immutable; never deleted; a valid IANA
 /// time zone; deactivation keeps history and blocks new operational changes.
 model Site {
+  returnReceipts  ReturnReceipt[]
   hotels          Hotel[]
   orders          Order[]
   crateCycles     CrateCycle[]
@@ -1880,6 +1928,7 @@ model CrateRegistration {
 /// circulations are crate cycles (later PR). site_id = the site it belongs to (doc 022).
 /// DB: identity columns immutable; DELETE rejected; token registered as kind CRATE.
 model Crate {
+  returnLines      ReturnReceiptLine[]
   orderAllocations OrderCrateAllocation[]
   cycles           CrateCycle[]
   sessions         WorkstationSession[]
@@ -1982,6 +2031,10 @@ enum CrateEventType {
   DISPATCHED
   /// Its parcel was delivered, per the carrier (doc 031).
   DELIVERED
+  /// Scanned back in at a return intake (doc 047 §4.5).
+  RETURNED
+  /// Emptied ("Vyprázdněno") at the intake: the cycle is CLOSED.
+  EMPTIED
 }
 
 /// Append-only crate history (ADR 0006). location_id = last recorded physical location, NULL when
@@ -2210,9 +2263,14 @@ enum CrateCycleStatus {
   ALLOCATED
   /// Its parcel is with the carrier (doc 029, doc 031). Not at the hotel.
   DISPATCHED
-  /// Its parcel was delivered, per the carrier (doc 031). Terminal until returns exist; the
-  /// bottles' reuse cycle is not completed by it (ADR 0011).
+  /// Its parcel was delivered, per the carrier (doc 031). The bottles' reuse cycle is not
+  /// completed by it (ADR 0011).
   DELIVERED
+  /// Scanned back in at a return intake; its order allocation is completed (doc 047 §4.3).
+  RETURNED
+  /// Emptied by "Vyprázdněno" of its receipt line. Never changes again; the crate's next
+  /// circulation is a new cycle (doc 047 §4.4).
+  CLOSED
 }
 
 /// One circulation of one crate (ADR 0021, ADR 0025): an immutable snapshot (crate type,
@@ -2221,6 +2279,7 @@ enum CrateCycleStatus {
 /// (A3 uses OPEN_ASSEMBLY → READY_TO_FILL); member_count = active assignments; OPEN_ASSEMBLY ⇒
 /// fewer than capacity, READY_TO_FILL ⇒ exactly capacity (commit-time).
 model CrateCycle {
+  returnLine             ReturnReceiptLine?
   weightSnapshots        CrateCycleWeightSnapshot[]
   orderAllocations       OrderCrateAllocation[]
   id                     String                     @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -2293,8 +2352,11 @@ model CrateAssignment {
   releasedBy         String?                 @map("released_by") @db.Uuid
   releaseReason      String?                 @map("release_reason")
   releaseOperationId String?                 @map("release_operation_id") @db.Uuid
+  /// RETURN_IDENTIFIED: the bottle's SORTED of this cycle (doc 047 §4.3).
+  releasedEventId    String?                 @unique @map("released_event_id") @db.Uuid
 
   cycle            CrateCycle        @relation(fields: [cycleId, cycleCapacity], references: [id, capacity], onDelete: Restrict)
+  releasedEvent    BottleEvent?      @relation("AssignmentReleaseEvent", fields: [releasedEventId], references: [id], onDelete: Restrict)
   bottle           Bottle            @relation(fields: [bottleId], references: [id], onDelete: Restrict)
   assigner         User              @relation("AssignedBy", fields: [assignedBy], references: [id], onDelete: Restrict)
   releaser         User?             @relation("ReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
@@ -2339,27 +2401,28 @@ model BottleProductBinding {
 /// explicitly, never derived from the country (doc 022 §7). DB: code and site immutable; never
 /// deleted.
 model Hotel {
-  id                    String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  serial                BigInt   @unique
-  code                  String   @unique
+  returnReceipts        ReturnReceipt[]
+  id                    String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial                BigInt          @unique
+  code                  String          @unique
   name                  String
-  addressLine1          String   @map("address_line1")
-  addressLine2          String?  @map("address_line2")
-  postalCode            String   @map("postal_code")
+  addressLine1          String          @map("address_line1")
+  addressLine2          String?         @map("address_line2")
+  postalCode            String          @map("postal_code")
   city                  String
-  countryCode           String   @map("country_code") @db.Char(2)
-  contactName           String   @map("contact_name")
-  contactPhone          String   @map("contact_phone")
-  contactEmail          String   @map("contact_email")
-  fulfillmentSiteId     String   @map("fulfillment_site_id") @db.Uuid
-  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy             String   @map("created_by") @db.Uuid
-  operationRequestId    String   @unique @map("operation_request_id") @db.Uuid
+  countryCode           String          @map("country_code") @db.Char(2)
+  contactName           String          @map("contact_name")
+  contactPhone          String          @map("contact_phone")
+  contactEmail          String          @map("contact_email")
+  fulfillmentSiteId     String          @map("fulfillment_site_id") @db.Uuid
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy             String          @map("created_by") @db.Uuid
+  operationRequestId    String          @unique @map("operation_request_id") @db.Uuid
   /// Optional practical details (doc 032): goods receipt hours, entrance, …; a receiving contact.
-  deliveryNote          String?  @map("delivery_note")
-  receivingContactName  String?  @map("receiving_contact_name")
-  receivingContactPhone String?  @map("receiving_contact_phone")
-  receivingContactEmail String?  @map("receiving_contact_email")
+  deliveryNote          String?         @map("delivery_note")
+  receivingContactName  String?         @map("receiving_contact_name")
+  receivingContactPhone String?         @map("receiving_contact_phone")
+  receivingContactEmail String?         @map("receiving_contact_email")
 
   fulfillmentSite Site             @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
   creator         User             @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
@@ -2486,8 +2549,16 @@ model OrderCrateAllocation {
   releasedBy         String?   @map("released_by") @db.Uuid
   releaseReason      String?   @map("release_reason")
   releaseOperationId String?   @map("release_operation_id") @db.Uuid
+  /// Set once when its delivered crate is scanned back (doc 047 §4.3): the allocation stays the
+  /// order's history but no longer holds the crate.
+  completedAt        DateTime? @map("completed_at") @db.Timestamptz(3)
+  completedBy        String?   @map("completed_by") @db.Uuid
+  completedLineId    String?   @unique @map("completed_line_id") @db.Uuid
 
   order            Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  completer        User?                   @relation("AllocationCompletedBy", fields: [completedBy], references: [id], onDelete: Restrict)
+  completedLine    ReturnReceiptLine?      @relation("AllocationCompletedLine", fields: [completedLineId], references: [id], onDelete: Restrict)
+  returnLine       ReturnReceiptLine?      @relation("ReturnLineAllocation")
   line             OrderLine               @relation(fields: [lineId], references: [id], onDelete: Restrict)
   cycle            CrateCycle              @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   crate            Crate                   @relation(fields: [crateId], references: [id], onDelete: Restrict)
@@ -3434,15 +3505,15 @@ model SalesProspect {
   importId          String?   @map("import_id") @db.Uuid
   importRow         Int?      @map("import_row")
 
-  owner      User            @relation("SalesProspectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  archiver   User?           @relation("SalesProspectArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
-  import     SalesImport?    @relation(fields: [importId], references: [id], onDelete: Restrict)
-  creator    User            @relation("SalesProspectCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  updater    User            @relation("SalesProspectUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
-  contacts   SalesContact[]
-  activities SalesActivity[]
-  tasks      SalesTask[]
-  events     SalesEvent[]
+  owner          User            @relation("SalesProspectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  archiver       User?           @relation("SalesProspectArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  import         SalesImport?    @relation(fields: [importId], references: [id], onDelete: Restrict)
+  creator        User            @relation("SalesProspectCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater        User            @relation("SalesProspectUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  contacts       SalesContact[]
+  activities     SalesActivity[]
+  tasks          SalesTask[]
+  events         SalesEvent[]
   contractDrafts ContractDraft[]
 
   @@unique([importId, importRow])
@@ -3709,4 +3780,157 @@ model ContractSignedDocument {
 
   @@unique([draftId, revision])
   @@map("contract_signed_documents")
+}
+
+// ---------------------------------------------------------------------------------------------
+// returns module — the return intake R1 (doc 047 §4, owner 2026-11-06)
+// ---------------------------------------------------------------------------------------------
+
+enum ReturnReceiptState {
+  OPEN
+  CLOSED
+}
+
+enum ReturnLineKind {
+  /// A returned crate scanned by its QR: completes its delivered cycle's allocation.
+  CRATE
+  /// A box without a crate QR ("krabice bez kódu").
+  CONTAINER
+}
+
+enum ReturnIssueKind {
+  UNREADABLE
+  NOT_DELIVERED
+  NOT_IN_CIRCULATION
+  /// A bottle of another site: recorded without a link to it (doc 047 §4.6).
+  OTHER_SITE
+  COUNT_MISMATCH
+}
+
+enum ReturnIssueResolution {
+  IDENTIFIED
+  NOT_AYVO
+  WRITTEN_OFF
+}
+
+/// One return intake at a site (RR-000001). The receipt's hotel is chosen, never inferred from
+/// bottles. DB: OPEN → CLOSED once, only with every line emptied; never deleted.
+model ReturnReceipt {
+  id               String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial           BigInt             @unique
+  code             String             @unique
+  siteId           String             @map("site_id") @db.Uuid
+  hotelId          String?            @map("hotel_id") @db.Uuid
+  state            ReturnReceiptState @default(OPEN)
+  openedAt         DateTime           @default(now()) @map("opened_at") @db.Timestamptz(3)
+  openedBy         String             @map("opened_by") @db.Uuid
+  openOperationId  String             @map("open_operation_id") @db.Uuid
+  closedAt         DateTime?          @map("closed_at") @db.Timestamptz(3)
+  closedBy         String?            @map("closed_by") @db.Uuid
+  closeOperationId String?            @map("close_operation_id") @db.Uuid
+
+  site           Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  hotel          Hotel?               @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  opener         User                 @relation("ReturnReceiptOpenedBy", fields: [openedBy], references: [id], onDelete: Restrict)
+  closer         User?                @relation("ReturnReceiptClosedBy", fields: [closedBy], references: [id], onDelete: Restrict)
+  openOperation  OperationRequest     @relation("ReturnReceiptOpenOperation", fields: [openOperationId], references: [requestId], onDelete: Restrict)
+  closeOperation OperationRequest?    @relation("ReturnReceiptCloseOperation", fields: [closeOperationId], references: [requestId], onDelete: Restrict)
+  lines          ReturnReceiptLine[]
+  issues         ReturnReceiptIssue[]
+  pumpCounts     ReturnPumpCount[]
+
+  @@index([siteId, serial])
+  @@map("return_receipts")
+}
+
+/// One physical container of a receipt. scanned_at is the line's time anchor (doc 047 §4.6).
+/// DB: a cycle is returned once; only emptied_at/by/operation + physical_count change, once; a
+/// CRATE line ⇔ its cycle RETURNED or CLOSED, emptied ⇔ CLOSED (commit-time).
+model ReturnReceiptLine {
+  id               String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  receiptId        String         @map("receipt_id") @db.Uuid
+  kind             ReturnLineKind
+  crateId          String?        @map("crate_id") @db.Uuid
+  returnedCycleId  String?        @unique @map("returned_cycle_id") @db.Uuid
+  allocationId     String?        @unique @map("allocation_id") @db.Uuid
+  scannedAt        DateTime       @default(now()) @map("scanned_at") @db.Timestamptz(3)
+  scannedBy        String         @map("scanned_by") @db.Uuid
+  scanOperationId  String         @map("scan_operation_id") @db.Uuid
+  emptiedAt        DateTime?      @map("emptied_at") @db.Timestamptz(3)
+  emptiedBy        String?        @map("emptied_by") @db.Uuid
+  emptyOperationId String?        @map("empty_operation_id") @db.Uuid
+  /// Pieces actually taken out of THIS container, entered when it is emptied (doc 047 §4.8).
+  physicalCount    Int?           @map("physical_count")
+
+  receipt             ReturnReceipt         @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  crate               Crate?                @relation(fields: [crateId], references: [id], onDelete: Restrict)
+  returnedCycle       CrateCycle?           @relation(fields: [returnedCycleId], references: [id], onDelete: Restrict)
+  allocation          OrderCrateAllocation? @relation("ReturnLineAllocation", fields: [allocationId], references: [id], onDelete: Restrict)
+  completedAllocation OrderCrateAllocation? @relation("AllocationCompletedLine")
+  scanner             User                  @relation("ReturnLineScannedBy", fields: [scannedBy], references: [id], onDelete: Restrict)
+  emptier             User?                 @relation("ReturnLineEmptiedBy", fields: [emptiedBy], references: [id], onDelete: Restrict)
+  scanOperation       OperationRequest      @relation("ReturnLineScanOperation", fields: [scanOperationId], references: [requestId], onDelete: Restrict)
+  emptyOperation      OperationRequest?     @relation("ReturnLineEmptyOperation", fields: [emptyOperationId], references: [requestId], onDelete: Restrict)
+  sortedEvents        BottleEvent[]
+  issues              ReturnReceiptIssue[]
+
+  @@index([receiptId])
+  @@index([crateId])
+  @@map("return_receipt_lines")
+}
+
+/// A discrepancy of one line (RI-000001). Piece issues count as pieces of their line, resolved or
+/// not (doc 047 §4.8). DB: at most one open issue per bottle; only the resolution changes, once.
+model ReturnReceiptIssue {
+  id                 String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt                 @unique
+  code               String                 @unique
+  receiptId          String                 @map("receipt_id") @db.Uuid
+  lineId             String                 @map("line_id") @db.Uuid
+  kind               ReturnIssueKind
+  bottleId           String?                @map("bottle_id") @db.Uuid
+  details            Json                   @default("{}")
+  recordedAt         DateTime               @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String                 @map("recorded_by") @db.Uuid
+  recordOperationId  String                 @map("record_operation_id") @db.Uuid
+  resolvedAt         DateTime?              @map("resolved_at") @db.Timestamptz(3)
+  resolvedBy         String?                @map("resolved_by") @db.Uuid
+  resolution         ReturnIssueResolution?
+  resolutionReason   String?                @map("resolution_reason")
+  resolveOperationId String?                @map("resolve_operation_id") @db.Uuid
+  resolvingEventId   String?                @unique @map("resolving_event_id") @db.Uuid
+
+  receipt          ReturnReceipt     @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  line             ReturnReceiptLine @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  bottle           Bottle?           @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  recorder         User              @relation("ReturnIssueRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+  resolver         User?             @relation("ReturnIssueResolvedBy", fields: [resolvedBy], references: [id], onDelete: Restrict)
+  recordOperation  OperationRequest  @relation("ReturnIssueRecordOperation", fields: [recordOperationId], references: [requestId], onDelete: Restrict)
+  resolveOperation OperationRequest? @relation("ReturnIssueResolveOperation", fields: [resolveOperationId], references: [requestId], onDelete: Restrict)
+  resolvingEvent   BottleEvent?      @relation("IssueResolvingEvent", fields: [resolvingEventId], references: [id], onDelete: Restrict)
+  resolvingSorted  BottleEvent?      @relation("SortedResolvesIssue")
+
+  @@index([receiptId])
+  @@index([lineId])
+  @@index([bottleId])
+  @@map("return_receipt_issues")
+}
+
+/// Defective pumps counted at the intake, without identity (signed; a correction is a new row
+/// with a reason). Never an inventory movement (doc 047 §4.5). DB: insert-only.
+model ReturnPumpCount {
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  receiptId   String   @map("receipt_id") @db.Uuid
+  defective   Int
+  reason      String?
+  recordedAt  DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy  String   @map("recorded_by") @db.Uuid
+  operationId String   @map("operation_id") @db.Uuid
+
+  receipt   ReturnReceipt    @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  recorder  User             @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation(fields: [operationId], references: [requestId], onDelete: Restrict)
+
+  @@index([receiptId])
+  @@map("return_pump_counts")
 }
