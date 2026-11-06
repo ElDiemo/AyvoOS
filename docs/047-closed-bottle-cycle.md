@@ -159,22 +159,29 @@ return_receipts          RR-000001; site (@OperationalSite); hotel (nullable: un
                          opened_at/by; closed_at/by; state OPEN → CLOSED
 return_receipt_lines     receipt; kind CRATE | CONTAINER (a box without a crate QR);
                          crate (CRATE only); returned_cycle (CRATE only, its DELIVERED cycle);
-                         scanned_at/by; emptied_at/by; physical_count (entered at Vyprázdněno /
-                         line close: pieces actually taken out of THIS container)
+                         scanned_at/by (the line's time anchor, §4.6); emptied_at/by;
+                         physical_count (entered at Vyprázdněno / line close: pieces actually
+                         taken out of THIS container)
                          UNIQUE (returned_cycle)        — a cycle is returned once
-return_receipt_issues    receipt; line; kind UNREADABLE | NOT_DELIVERED | NOT_IN_CIRCULATION |
-                         COUNT_MISMATCH; bottle (nullable); details; recorded_at/by;
-                         resolved_at/by/resolution, resolving_event (once)
+                         guard: never deleted; only emptied_at/by + physical_count, set once
+return_receipt_issues    code RI-000001; receipt; line; kind UNREADABLE | NOT_DELIVERED |
+                         NOT_IN_CIRCULATION | COUNT_MISMATCH; bottle (nullable); details;
+                         recorded_at/by; resolved_at/by, resolution IDENTIFIED | NOT_AYVO |
+                         WRITTEN_OFF, resolution_reason, resolving_event (once, UNIQUE)
+                         UNIQUE (bottle) WHERE resolved_at IS NULL AND bottle IS NOT NULL
+                         guard: never deleted; only the resolution fields, set once
 return_pump_counts       receipt; defective n (signed; a correction is a new line); actor; reason
-order_crate_allocations  + completed_at/by/operation (set once, when its crate is scanned back):
+order_crate_allocations  + completed_at/by/line (set once, when its crate is scanned back):
                            the allocation stays the order's history but no longer reserves
                            the crate
 crate_assignments        + released_event_id (FK bottle_events; only with the release)
 BottleStatus            += RETURNED ("Vrácená, čeká na mytí"), RETIRED, DISPOSED
 BottleEventType         += SORTED, RETIRED, DISPOSED, CORRECTION
-bottle_events            SORTED carries crate_cycle_id = the bottle's delivered cycle and the
-                         receipt line it was found in
+bottle_events            SORTED carries crate_cycle_id = the bottle's delivered cycle, the
+                         receipt line it was found in, and resolves_issue (nullable; the
+                         piece issue of that same line it identifies, §4.8a)
                          UNIQUE (bottle_id, crate_cycle_id) WHERE type = 'SORTED'
+                         UNIQUE (resolves_issue) WHERE resolves_issue IS NOT NULL
 CrateCycleStatus        += RETURNED → CLOSED
 CrateEventType          += RETURNED, EMPTIED
 Permissions              returns:receive, returns:correct (ADMIN, in the same migration)
@@ -205,8 +212,9 @@ Proposed changes, each limited to the post-delivery states:
      - the parcel progress decides `ALLOCATED`/`DISPATCHED`/`DELIVERED`.
    - `RETURNED` and `CLOSED` require **no** live hold, and **exactly one completed** allocation
      whose parcel was delivered (`delivered_at IS NOT NULL`).
-   - The crate scan sets `completed_at` (once; the allocation guard allows exactly this field,
-     and only for a delivered parcel) and the cycle → `RETURNED`, in one transaction.
+   - The crate scan sets `completed_at`/`completed_by`/`completed_line` (once; the allocation
+     guard allows exactly these fields, and only for a delivered parcel) and the cycle →
+     `RETURNED`, in one transaction.
 2. **Members after delivery.**
    - For `FILLED`/`ALLOCATED`/`DISPATCHED`, the rule stays "active = filled = capacity".
    - For `DELIVERED`, `RETURNED` and `CLOSED`:
@@ -234,9 +242,38 @@ Proposed changes, each limited to the post-delivery states:
 6. **One open cycle per crate.** `crate_cycles_one_open_per_crate`
    (`migrations/20261014160100_labeling_into_crates/migration.sql:292`) excludes `CLOSED` as well
    as `ABORTED`.
+7. **The cycle's own guards** (`crate_cycles_guard` and `crate_cycles_filled_at_check`,
+   `migrations/20261021090100_order_tracking/migration.sql:355-406`). Today the guard refuses
+   every change of a `DELIVERED` cycle ("does not change yet"), and the check requires
+   `filled_at IS NULL` outside `FILLED`/`ALLOCATED`/`DISPATCHED`/`DELIVERED`. Both change:
+   - **`crate_cycles_filled_at_check`** becomes
+     `(status IN ('FILLED','ALLOCATED','DISPATCHED','DELIVERED','RETURNED','CLOSED')) = (filled_at IS NOT NULL)`.
+     The date of filling stays on the cycle after the return.
+   - **`crate_cycles_guard`**, the "does not change yet" refusal is replaced by:
+     - `DELIVERED` changes only to `RETURNED`; `RETURNED` only to `CLOSED`; `CLOSED` never
+       changes (like `ABORTED`).
+     - In these steps only `status` changes. `member_count`, `filled_count`, `filled_at` and
+       `ready_to_fill_at` stay as they were: the existing "an allocated crate keeps its members"
+       clause is extended to `OLD.status IN ('DELIVERED','RETURNED')` and
+       `NEW.status IN ('RETURNED','CLOSED')`. The snapshot columns stay immutable as today.
+     - No other new transition. In particular `DELIVERED → CLOSED`, `RETURNED → DELIVERED` and
+       anything out of `CLOSED` are refused.
+   - **The proof of each step**, in `ayvo_assert_crate_cycle` (deferred, at commit):
+     - `RETURNED` or `CLOSED` ⇒ exactly one `return_receipt_lines` row of kind `CRATE` with
+       `returned_cycle` = this cycle and `crate` = the cycle's crate, a crate event `RETURNED`
+       of this cycle, and the completed allocation of point 1 (completed by that line).
+     - `CLOSED` ⇒ that line has `emptied_at` set, and a crate event `EMPTIED` of this cycle
+       exists.
+     - The other way round, in a new deferred check on the lines: a `CRATE` line whose
+       `emptied_at` is set ⇒ its cycle is `CLOSED`; a `CRATE` line ⇒ its cycle is `RETURNED` or
+       `CLOSED`.
+   - So a cycle reaches `CLOSED` only through a real line, scanned and then emptied by the
+     confirmed Vyprázdněno. An SQL `UPDATE` of the status alone fails, and while the cycle is
+     `RETURNED` no new cycle of the crate can be opened (point 6), so the crate never returns to
+     production without the emptying.
 
 All of these are verified by tests that **commit** (deferred constraint triggers run at commit,
-not at the statement).
+not at the statement), including the negative tests in §4.10.
 
 ### 4.4 The cycle in use: `openCycle()` and the next circulation
 
@@ -263,13 +300,14 @@ not at the statement).
 | Open receipt             | `returns:receive`, active site                                                                                     | receipt OPEN                                                                                                                                                  |
 | Crate scan               | receipt OPEN; crate QR of this environment; its cycle `DELIVERED` with a live allocation whose parcel is delivered | line CRATE; allocation `completed_at`; cycle → `RETURNED`; crate event `RETURNED`. **No bottle row or event changes**                                         |
 | Container without QR     | receipt OPEN                                                                                                       | line CONTAINER                                                                                                                                                |
-| Bottle scan, good        | receipt OPEN; the context line not emptied; §4.6 check                                                             | `SORTED` (delivered cycle, found-in line, outcome `RETURNED`); status `FILLED → RETURNED`; the assignment released (`RETURN_IDENTIFIED`, `released_event_id`) |
+| Bottle scan, good        | receipt OPEN; the context line not emptied; §4.6 checks, in their order                                            | `SORTED` (delivered cycle, found-in line, outcome `RETURNED`); status `FILLED → RETURNED`; the assignment released (`RETURN_IDENTIFIED`, `released_event_id`) |
 | Bottle scan, defective   | same                                                                                                               | as above with outcome `RETIRED`, plus `RETIRED` (`DEFECTIVE_AT_RETURN`); status `FILLED → RETIRED`                                                            |
 | Unreadable piece         | receipt OPEN; line not emptied                                                                                     | issue `UNREADABLE` for that line                                                                                                                              |
 | Defective pump −1        | receipt OPEN                                                                                                       | pump-count line; **no inventory movement** (R3)                                                                                                               |
 | Vyprázdněno (CRATE line) | receipt OPEN; line not emptied; `physical_count` entered                                                           | line `emptied_at`; cycle `RETURNED → CLOSED`; crate event `EMPTIED`; a `COUNT_MISMATCH` issue if §4.8 differs                                                 |
 | Line done (CONTAINER)    | as Vyprázdněno, without the cycle                                                                                  | line `emptied_at`; §4.8                                                                                                                                       |
 | Close receipt            | every line emptied                                                                                                 | receipt CLOSED                                                                                                                                                |
+| Resolve an issue (§4.8a) | the issue open; receipt and line in **any** state; for `IDENTIFIED` the §4.6 checks against the issue's line       | issue resolved (once); for `IDENTIFIED` the bottle writes of a good/defective scan, the `SORTED` found in the issue's line with `resolves_issue`              |
 
 ### 4.6 History check, repeated and late scans, and the lock order
 
@@ -288,35 +326,74 @@ not at the statement).
 - **Closing the receipt.** Receipt `FOR UPDATE`.
 - So Vyprázdněno and closing wait for running scans, and a scan waits for them. A scan committed
   after Vyprázdněno of its context line is refused (`LINE_EMPTIED`), and a scan after the close
-  is refused (`RECEIPT_CLOSED`). A late piece goes into a new receipt.
-- The pump counts and issues lock only the receipt (`FOR SHARE`).
+  is refused (`RECEIPT_CLOSED`). A late piece goes into a new receipt; an existing issue is
+  resolved by its own operation (§4.8a).
+- The pump counts and issue records lock only the receipt (`FOR SHARE`).
+- **Resolving an issue.** Receipt `FOR SHARE` → the issue `FOR UPDATE` → crate X → cycle X →
+  bottle, with the same re-check of the assignment.
 
-**Checks** (made after the locks):
+**The anchor of a scan.** A scan is always made **on one line L** (the context line, or the line
+of the issue being resolved), and it identifies at most one concrete delivered cycle X. "The
+bottle's last `SORTED`" or "its current assignment" alone is not enough: a stale request from a
+line that stayed open could meet the bottle's _next_ delivery. The anchor is the line's
+`scanned_at`, written by the database when the container was scanned in:
 
-- **Delivered.** The bottle has an open assignment of cycle X, X has a delivered allocation
-  (§4.1), and the bottle is in its `order_allocation_bottles`.
-  - The status of X may be `DELIVERED` (crate X not back, a mixed return), `RETURNED` or `CLOSED`.
-  - Deliveries from before R1 are covered: no backfill, and no new event at delivery.
-- **The first result of a repeated scan.** After a first success, the assignment no longer
-  exists. The result is found by the unique `SORTED (bottle, X)` instead. The lookup follows the
-  bottle's **last** `SORTED`:
-  - Its receipt is OPEN, and the bottle has not moved on since (still `RETURNED`, or `RETIRED`
-    from it) → the **first result** is returned: the same answer, no write, no counter change. A
-    scan with the other outcome is refused (`ALREADY_RECEIVED`); a change is a `CORRECTION`.
-  - Its receipt is CLOSED, or the bottle has moved on (`READY_FOR_REUSE`, a new cycle,
-    dispatched again) → refused with `ALREADY_RECEIVED` and the reference. It is never a second
-    `SORTED` for the old cycle (the unique index), and never a write into the closed receipt.
-  - The same `requestId` returns the stored response (`OperationRequestsService`).
-- **Two operators, one bottle.** The second waits on the bottle lock. After the first commits,
-  the second either sees the `SORTED` (→ the first result) or a changed assignment
-  (→ `CONCURRENT_CHANGE`, then a rescan gives the first result).
-- **Not delivered yet.** X is `ALLOCATED`/`DISPATCHED`. Refused with `NOT_DELIVERED`, plus an
-  issue on the line. It is resolved after the tracking update by a scan, which links the issue to
-  the `SORTED`.
-- **Not in circulation.** No open assignment, or a status other than `FILLED`. Refused with
-  `NOT_IN_CIRCULATION`, plus an issue.
-- **Foreign or other-environment QR.** Refused (`classifyScannedQr`). Nothing is written and no
-  issue is recorded, because it is not an AYVO bottle.
+- a piece physically in L's container was delivered and assigned to its cycle **before** L
+  existed, so a valid identification on L needs X's assignment `assigned_at < L.scanned_at`;
+- a bottle identified anywhere **after** L existed cannot also be in L's container, since it would
+  have to go back to a hotel and return in a container that was already at AYVO.
+
+Between those events lie washing, filling, a dispatch and a delivery (hours to weeks), so the
+comparison of database times is not a race; two scans of the same bottle are ordered by the
+bottle lock.
+
+**Checks, in this exact order** (after the locks; the first that applies decides, and nothing
+after it runs):
+
+0. **Same `requestId`** → the stored response (`OperationRequestsService`), before anything else.
+1. **Receipt or line closed.** Receipt CLOSED → `RECEIPT_CLOSED`; L emptied → `LINE_EMPTIED`.
+   Nothing written. (Not for resolving an issue, which works on a closed line, §4.8a.)
+2. **Already identified on this line.** The bottle has a `SORTED` found in **L**:
+   - it is the bottle's last `SORTED` and the bottle has not moved on (still `RETURNED`, or
+     `RETIRED` from it) and the outcome is the same → the **first result**: the same answer, no
+     write, no counter change;
+   - another outcome → `ALREADY_RECEIVED` (a change is a `CORRECTION`);
+   - the bottle has moved on → `ALREADY_RECEIVED` with the reference.
+3. **Identified elsewhere, and not in circulation again before L.** The bottle's last `SORTED`
+   is in another line, and the bottle has no open assignment that is both younger than that
+   `SORTED` and older than `L.scanned_at` → `ALREADY_RECEIVED_ELSEWHERE` with that line's receipt
+   and code. It is a refusal for L, never a success: nothing written, nothing counted on L, and
+   the UI shows it as "přijata jinde", not as a scanned piece. This covers the stale request of
+   review 5803984774: the bottle accepted on A while B stayed open, then washed, filled and
+   delivered a second time, then the old request of B arrives. Its open assignment (cycle 2) is
+   younger than `B.scanned_at`, so it is refused here, before any use of the current assignment.
+   The same holds while the bottle is still `RETURNED` or `READY_FOR_REUSE`.
+4. **An open piece issue of this bottle on another line** → `OPEN_ISSUE` with its code; the issue
+   is resolved by §4.8a, never by a second identification. (An open issue of this bottle on L
+   itself is resolved by this scan: the `SORTED` gets `resolves_issue`.)
+5. **The delivered cycle.** The bottle has an open assignment of cycle X with
+   `assigned_at < L.scanned_at`, X has a delivered allocation (§4.1), and the bottle is in its
+   `order_allocation_bottles` → the identification (`SORTED` for X, found in L).
+   - X may be `DELIVERED` (crate X not back, a mixed return), `RETURNED` or `CLOSED`.
+   - A genuine **second** return passes here: it is scanned on a line C opened after the second
+     delivery, and the assignment of cycle 2 is younger than the first `SORTED` and older than
+     `C.scanned_at`, so check 3 does not apply.
+   - Deliveries from before R1 are covered: no backfill, and no new event at delivery.
+6. **Not delivered yet.** The same assignment, X `ALLOCATED`/`DISPATCHED` → `NOT_DELIVERED`, plus
+   an issue on L. After the tracking update it is resolved by a rescan on L (check 4) or by
+   §4.8a.
+7. **Assigned after L was opened.** An open assignment with `assigned_at ≥ L.scanned_at` →
+   `NOT_IN_THIS_LINE`. Nothing written and no issue: the bottle cannot be in this container.
+8. **Not in circulation.** No open assignment, or a status other than `FILLED` → `NOT_IN_CIRCULATION`,
+   plus an issue.
+
+A foreign or other-environment QR is refused before the checks (`classifyScannedQr`). Nothing is
+written and no issue is recorded, because it is not an AYVO bottle.
+
+**Two operators, one bottle.** The second waits on the bottle lock. After the first commits, the
+second runs the checks again from 1: on the same line it gets the first result (2), on another
+line `ALREADY_RECEIVED_ELSEWHERE` (3), or `CONCURRENT_CHANGE` when the assignment changed
+between its read and its lock (then a rescan decides as above).
 
 ### 4.7 Status transitions (DB allow-list)
 
@@ -335,13 +412,48 @@ All existing transitions are unchanged.
 Counted per receipt line (one physical container), never from the shipment:
 
 - **Physical** = `physical_count`, entered when the line is emptied.
-- **Recorded on the line** = `SORTED` events found in this line (good and defective), plus this
-  line's issues that stand for a piece (`UNREADABLE`, `NOT_DELIVERED`, `NOT_IN_CIRCULATION`) and
-  are **not resolved by a `SORTED`**.
-- A piece is counted once. When an unreadable or undelivered piece is later identified, the
-  resolving `SORTED` records the issue's line as its found-in line. The issue then stops counting,
-  and the `SORTED` counts instead.
+- **Recorded on the line** = this line's piece issues (`UNREADABLE`, `NOT_DELIVERED`,
+  `NOT_IN_CIRCULATION`), **resolved or not**, plus the `SORTED` events found in this line
+  (good and defective) **without** `resolves_issue`.
+- A piece is counted once: either as its issue or as its own `SORTED`. A `SORTED` that resolves an
+  issue is the same piece and is not counted again. A later resolution therefore never changes
+  the line's recorded count, and the `COUNT_MISMATCH` stated at Vyprázdněno stays true.
 - Physical ≠ recorded → an issue `COUNT_MISMATCH` with both numbers. It never blocks the crate.
+
+### 4.8a Resolving a concrete issue after the line or the receipt is closed
+
+Typically the carrier's delivery confirmation, or a readable code, appears only after the line was
+emptied or the receipt closed. Scans into a closed line stay refused (§4.6). The piece is resolved
+by its own operation on the **concrete issue**, never by a scan into another receipt:
+
+- **Who and where.** Sklad → "Příjem vratek" → open issues → the issue (code `RI-…`).
+  `returns:receive` for `IDENTIFIED`; `returns:correct` for `NOT_AYVO` and `WRITTEN_OFF`, with a
+  reason. Every resolution is audited and written once (the issue guard). Its receipt and line
+  rows are not written, and a closed receipt stays closed.
+- **`IDENTIFIED`.** The operator scans the bottle (and chooses good / defective). It runs the
+  §4.6 checks **against the issue's line** (its `scanned_at` is the anchor; check 1 is skipped):
+  - for a `NOT_DELIVERED` or `NOT_IN_CIRCULATION` issue, the scanned bottle must be the issue's
+    bottle (else `WRONG_BOTTLE`);
+  - the `SORTED` is found in the issue's line, with `resolves_issue` = the issue; the status and
+    the release are those of a normal scan (§4.5);
+  - when a check refuses (still not delivered, identified elsewhere), nothing is written and the
+    issue stays open.
+- **`NOT_AYVO`** (a foreign object was counted) and **`WRITTEN_OFF`** (the piece cannot be
+  identified) write no bottle event.
+- **Exactly once, also with two operators.**
+  - The issue lock serializes two resolutions of the same issue. The second sees it resolved and
+    gets the first result if it is the same bottle and outcome; otherwise `ISSUE_RESOLVED`.
+  - A normal scan of the issue's bottle elsewhere is refused with `OPEN_ISSUE` (§4.6 check 4), and
+    the index "one open issue per bottle" prevents two open issues for the same bottle.
+  - In the DB: `resolving_event` and `resolves_issue` are unique, a resolving `SORTED` must have the
+    issue's line as its found-in line, and `(bottle, cycle)` is identified at most once.
+  - An `UNREADABLE` issue has no bottle, so nothing can stop a scan of that piece elsewhere. The
+    piece is set aside with its issue code (doc 018 §16 quarantine). If it was still scanned on
+    another line, its resolution answers `ALREADY_RECEIVED_ELSEWHERE`, and the issue is closed
+    `WRITTEN_OFF` with that `SORTED` as its reference. The bottle's identification stays the one
+    `SORTED`, and each line's count stays that of its own container.
+- **Counts.** Unchanged for the line (§4.8). The reuse counter rises by one for a resolving
+  `SORTED`, like any other identification.
 
 **Shown separately, as information only.** For a CRATE line, the cycle's history:
 
@@ -380,13 +492,47 @@ the hotel.
   - the trigger refusals: a release without `SORTED`, a release for another reason, a release of
     an `ALLOCATED`/`DISPATCHED` cycle, a `completed_at` on an undelivered parcel, a second
     `SORTED` of a cycle, `DISPOSED → anything`.
+- **The cycle guards (§4.3 point 7), as direct SQL that commits:**
+  - `filled_at`, `member_count` and `filled_count` are unchanged after `RETURNED` and `CLOSED`;
+    changing any of them in `DELIVERED`/`RETURNED`/`CLOSED` is refused;
+  - `DELIVERED → CLOSED` directly is refused;
+  - `DELIVERED → RETURNED` without a `CRATE` line of that cycle fails at commit;
+  - `RETURNED → CLOSED` without the line's `emptied_at` and the `EMPTIED` event fails at commit;
+  - setting a `CRATE` line's `emptied_at` without closing its cycle fails at commit;
+  - while the cycle is `RETURNED`, opening a new cycle of the crate (labelling, or an `INSERT`) is
+    refused, so the crate cannot go back to production without Vyprázdněno;
+  - `CLOSED → anything` is refused;
+  - the positive path on a real receipt line: crate scan → `RETURNED` → Vyprázdněno → `CLOSED`,
+    with the line, both crate events and the original `filled_at`.
 - **Every case of §4.5, §4.6 and §4.8:**
+  - each check of §4.6 in its order, including that an earlier check wins (e.g. a closed line
+    before `ALREADY_RECEIVED_ELSEWHERE`);
   - concurrency of two scans, and of a scan with Vyprázdněno or with the close;
-  - repeated scans in an open and in a closed receipt;
+  - repeated scans on the same line (first result), and on another line of the same and of
+    another receipt (`ALREADY_RECEIVED_ELSEWHERE`, nothing counted on that line);
+  - a stale scan on a line opened before the bottle's identification elsewhere;
   - a replay;
   - an old delivery;
   - the counts of a mixed return, including an unreadable piece identified later and counted
     once.
+- **Resolution after the close (§4.8a):**
+  - a `NOT_DELIVERED` piece: the receipt is closed, then the tracking update arrives, then the
+    issue is resolved → one `SORTED` on the issue's line, reuse counter 1, the line's recorded
+    count unchanged, the receipt still CLOSED;
+  - an `UNREADABLE` piece resolved after the close in the same way;
+  - two operators resolving the same issue at once → one `SORTED`, the other gets the first
+    result or `ISSUE_RESOLVED`;
+  - a resolution racing a normal scan of the same bottle elsewhere → one identification, the
+    other `OPEN_ISSUE` or `CONCURRENT_CHANGE`;
+  - an `UNREADABLE` piece scanned on another line first → its resolution answers
+    `ALREADY_RECEIVED_ELSEWHERE`, closed `WRITTEN_OFF` with the reference, one `SORTED`;
+  - `WRONG_BOTTLE`, and a resolution refused while still not delivered (the issue stays open).
+- **Two deliveries of the same bottle** (needs R2 and R3 to deliver a bottle twice, so it runs in
+  R3's PR and in the acceptance; R1 covers the parts it can create):
+  - bottle b is accepted on line A while line B of the same receipt stays open; b is washed,
+    filled and delivered again; the stale request from B (new `requestId`) arrives →
+    `ALREADY_RECEIVED_ELSEWHERE`, nothing written, reuse counter still 1;
+  - the genuine second return of b on a new line C → `SORTED` for cycle 2, reuse counter 2.
 - **The reuse counter:** 1 after a good or a defective return; unchanged by a crate,
   duplicate, foreign or late scan.
 - **Playwright:** the intake at 390 px and 1440 px.
@@ -421,7 +567,13 @@ Each of R2 and R3 gets its own model PR, as R1.
 - Along the way:
   - a duplicate scan, a late scan after the close, and a foreign scan;
   - two operators;
-  - recovery after an interrupted request.
+  - recovery after an interrupted request;
+  - an attempt to put crate K back into production before its Vyprázdněno is refused;
+  - a piece whose delivery the carrier confirms only after the receipt is closed, resolved on its
+    issue and counted once.
+- **The same bottle twice.** The returned bottle, once delivered again (in O2 or another order),
+  comes back a second time and is identified on a new line (reuse cycle 2). A stale scan of it
+  from a line opened before its first identification is refused as "přijata jinde".
 
 The single screens of R1 and R2 are intermediate states, not a finished cycle.
 
