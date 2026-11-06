@@ -195,6 +195,16 @@ for (const width of [390, 1440] as const) {
       await expect(page.getByTestId('receipt-state')).toContainText('Uzavřený');
       // The unreadable piece stays an open issue that can still be resolved after the close.
       await expect(card.getByTestId('line-issues')).toContainText('Nečitelná lahev');
+      // Read later: it is K's cracked second bottle — resolved on the closed receipt as defective.
+      const issue = card.getByTestId('line-issues').locator('li').filter({ hasText: 'Nečitelná' });
+      await issue.getByLabel('Vadná → ke skartaci').check();
+      await issue.getByRole('textbox', { name: /Dořešit naskenováním lahve/ }).fill(k.bottles[1]!);
+      await issue.getByRole('button', { name: 'Dořešit' }).click();
+      await expect(page.getByTestId('return-message')).toContainText('Ke skartaci');
+      await expect(card.getByTestId('line-issues')).toContainText('Dořešeno identifikací');
+      await expect(card.getByTestId('line-bottles')).toContainText('Ke skartaci');
+      await expect(card.getByTestId('line-recorded')).toContainText('Zaznamenáno kusů: 3');
+      await expect(page.getByTestId('receipt-state')).toContainText('Uzavřený');
     } else {
       // Crate L (still delivered, one bottle already identified in K): its other bottle, a
       // container without a code, the count that differs → COUNT_MISMATCH, never a block.
@@ -218,8 +228,71 @@ for (const width of [390, 1440] as const) {
       // The overview: K's and L's good bottles wait for washing.
       await page.goto('/warehouse/returns');
       await expect(page.getByTestId('waiting-for-wash').locator('li')).toHaveCount(2);
-      await expect(page.getByTestId('open-issues')).toContainText('Nečitelná lahev');
+      // The unreadable piece was resolved (defective); COUNT_MISMATCH is information, not open work.
+      await expect(page.getByText('Žádná otevřená neshoda.')).toBeVisible();
       await noOverflow(page);
     }
   });
 }
+
+test('a confirmed write whose refresh fails is never sent again: "Obnovit" only reads', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/warehouse/returns');
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  await expect(page).toHaveURL(/\/warehouse\/returns\/RR-\d{6}$/);
+  const code = page.url().split('/').pop()!;
+  const posts: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().includes(`/api/admin/returns/receipts/${code}/`)) {
+      posts.push(new URL(r.url()).pathname.split('/').pop()!);
+    }
+  });
+  // The next GET of the detail fails (after the POST really committed).
+  let failGets = 0;
+  await page.route(`**/api/admin/returns/receipts/${code}`, async (route) => {
+    if (route.request().method() === 'GET' && failGets > 0) {
+      failGets -= 1;
+      await route.fulfill({ status: 503, body: '{"statusCode":503}' });
+    } else {
+      await route.continue();
+    }
+  });
+  failGets = 1;
+  await page.getByRole('button', { name: 'Krabice bez kódu' }).click();
+  await expect(page.getByTestId('refresh-failed')).toBeVisible();
+  // While it is not refreshed, no action can be sent again.
+  await expect(page.getByRole('button', { name: 'Krabice bez kódu' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Vadná pumpička −1' })).toBeDisabled();
+  await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
+  await expect(page.getByTestId('refresh-failed')).toHaveCount(0);
+  await expect(page.getByTestId('return-line-box-1')).toBeVisible();
+  await expect(page.getByTestId('return-line-box-2')).toHaveCount(0);
+
+  failGets = 1;
+  await page.getByRole('button', { name: 'Vadná pumpička −1' }).click();
+  await expect(page.getByTestId('refresh-failed')).toBeVisible();
+  await expect(page.getByTestId('pump-count')).toHaveText('Vadné pumpičky: 0');
+  await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
+  await expect(page.getByTestId('pump-count')).toHaveText('Vadné pumpičky: 1');
+
+  failGets = 1;
+  await page
+    .getByTestId('return-line-box-1')
+    .getByRole('button', { name: 'Nečitelná lahev +1' })
+    .click();
+  await expect(page.getByTestId('refresh-failed')).toBeVisible();
+  await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
+  await expect(page.getByTestId('return-line-box-1').getByTestId('line-recorded')).toHaveText(
+    'Zaznamenáno kusů: 1',
+  );
+  // Each committed once — the server agrees.
+  expect(posts).toEqual(['containers', 'pumps', 'unreadable']);
+  const detail = await (await page.request.get(`/api/admin/returns/receipts/${code}`)).json();
+  expect([
+    detail.lineDetails.length,
+    detail.defectivePumps,
+    detail.lineDetails[0].recordedCount,
+  ]).toEqual([1, 1, 1]);
+});

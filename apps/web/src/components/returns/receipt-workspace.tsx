@@ -42,20 +42,35 @@ export function ReceiptWorkspace({
   const open = receipt.state === 'OPEN';
   const base = `admin/returns/receipts/${receipt.code}`;
 
+  // A confirmed write and the refresh of the detail are separate: when only the refresh fails,
+  // the write stays done and the page offers "Obnovit" (a GET only) — never the action again.
+  const [stale, setStale] = useState(false);
+  const refresh = async () => {
+    try {
+      setReceipt(await apiGet(base, returnReceiptDetailSchema));
+      setStale(false);
+    } catch {
+      setStale(true);
+    }
+  };
   const run: Run = async (key, action) => {
     setBusy(true);
     try {
-      const text = await send(key, action);
-      setMessage(text ? { tone: 'ok', text } : null);
-      setReceipt(await apiGet(base, returnReceiptDetailSchema));
+      let text: string | null;
+      try {
+        text = await send(key, action);
+      } catch (err) {
+        setMessage({ tone: 'error', text: errorText(err) });
+        return false;
+      }
+      setMessage({ tone: 'ok', text: text ?? t.saved });
+      await refresh();
       return true;
-    } catch (err) {
-      setMessage({ tone: 'error', text: errorText(err) });
-      return false;
     } finally {
       setBusy(false);
     }
   };
+  const locked = busy || stale;
 
   const [crateValue, setCrateValue] = useState('');
   const allEmptied = receipt.lineDetails.every((l) => l.emptiedAt);
@@ -70,6 +85,23 @@ export function ReceiptWorkspace({
           <span data-testid="pump-count">{t.receipt.pumpsCount(receipt.defectivePumps)}</span>
         </div>
         {!open && <p className="mt-2 text-sm text-stone-600">{t.receipt.closed}</p>}
+        {stale && (
+          <div
+            role="alert"
+            data-testid="refresh-failed"
+            className="mt-3 flex flex-col gap-2 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <span>{t.refreshFailed}</span>
+            <button
+              type="button"
+              className={buttonClass.secondary}
+              disabled={busy}
+              onClick={refresh}
+            >
+              {t.refresh}
+            </button>
+          </div>
+        )}
         {message && (
           <p
             role={message.tone === 'error' ? 'alert' : 'status'}
@@ -110,13 +142,13 @@ export function ReceiptWorkspace({
               autoComplete="off"
               name="crate"
             />
-            <button type="submit" className={buttonClass.primary} disabled={busy}>
+            <button type="submit" className={buttonClass.primary} disabled={locked}>
               {t.receipt.addCrate}
             </button>
             <button
               type="button"
               className={buttonClass.secondary}
-              disabled={busy}
+              disabled={locked}
               onClick={() =>
                 run(`container:${receipt.lineDetails.length}`, async (requestId) => {
                   await apiSend('POST', `${base}/containers`, returnLineResultSchema, {
@@ -138,7 +170,7 @@ export function ReceiptWorkspace({
           line={line}
           index={index}
           open={open}
-          busy={busy}
+          busy={locked}
           base={base}
           run={run}
           canCorrect={canCorrect}
@@ -151,7 +183,7 @@ export function ReceiptWorkspace({
             <button
               type="button"
               className={buttonClass.secondary}
-              disabled={busy}
+              disabled={locked}
               onClick={() =>
                 run(`pump:${receipt.defectivePumps}`, async (requestId) => {
                   await apiSend('POST', `${base}/pumps`, returnReceiptDetailSchema, {
@@ -169,7 +201,7 @@ export function ReceiptWorkspace({
               <button
                 type="button"
                 className={buttonClass.primary}
-                disabled={busy || !allEmptied}
+                disabled={locked || !allEmptied}
                 onClick={() =>
                   run('close', async (requestId) => {
                     await apiSend('POST', `${base}/close`, returnReceiptDetailSchema, {
@@ -390,6 +422,7 @@ function IssueRow({
   canCorrect: boolean;
 }) {
   const [value, setValue] = useState('');
+  const [outcome, setOutcome] = useState<'GOOD' | 'DEFECTIVE'>('GOOD');
   const [reason, setReason] = useState('');
   const path = `admin/returns/issues/${issue.code}`;
   const mismatch = issue.kind === 'COUNT_MISMATCH';
@@ -419,14 +452,17 @@ function IssueRow({
             e.preventDefault();
             const scanned = value.trim();
             if (!scanned) return;
-            const done = await run(`identify:${issue.code}:${scanned}`, async (requestId) => {
-              const r = await apiSend('POST', `${path}/identify`, returnBottleScanResultSchema, {
-                requestId,
-                scannedValue: scanned,
-                outcome: 'GOOD',
-              });
-              return t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? '');
-            });
+            const done = await run(
+              `identify:${issue.code}:${scanned}:${outcome}`,
+              async (requestId) => {
+                const r = await apiSend('POST', `${path}/identify`, returnBottleScanResultSchema, {
+                  requestId,
+                  scannedValue: scanned,
+                  outcome,
+                });
+                return t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? '');
+              },
+            );
             if (done) setValue('');
           }}
         >
@@ -438,6 +474,19 @@ function IssueRow({
             aria-label={`${t.issue.identify} ${issue.code}`}
             autoComplete="off"
           />
+          <fieldset className="flex flex-wrap items-center gap-4">
+            {(['GOOD', 'DEFECTIVE'] as const).map((o) => (
+              <label key={o} className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name={`issue-outcome-${issue.code}`}
+                  checked={outcome === o}
+                  onChange={() => setOutcome(o)}
+                />
+                {o === 'GOOD' ? t.line.good : t.line.defective}
+              </label>
+            ))}
+          </fieldset>
           <button type="submit" className={buttonClass.secondary} disabled={busy}>
             {t.issue.identifySubmit}
           </button>
