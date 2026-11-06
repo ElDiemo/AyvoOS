@@ -511,6 +511,108 @@ describe.skipIf(!hasDatabase)('return intake R1 (doc 047)', () => {
       expect(events.map((e) => e.type)).toEqual(['RETURNED', 'EMPTIED']);
     });
 
+    it('a SORTED commits only as a complete identification: its release, its status, a defective one RETIRED', async () => {
+      const { crates } = await delivered();
+      const [k] = crates as [MadeCrate];
+      const receipt = await api.open();
+      const kLine = (await scanned(receipt.code, k.crateUrl)).lineId;
+      const line = await t.prisma.returnReceiptLine.findUniqueOrThrow({ where: { id: kLine } });
+      const cycle = await cycleOf(k.crateCode);
+      const [good, bad] = k.bottleIds as [string, string];
+      const sorted = (
+        tx: { $executeRaw: typeof t.prisma.$executeRaw },
+        bottleId: string,
+        outcome: string,
+      ) =>
+        tx.$executeRaw`INSERT INTO "bottle_events" ("bottle_id", "type", "occurred_at", "actor_id", "crate_cycle_id",
+            "return_line_id", "operation_request_id", "payload")
+          VALUES (${bottleId}::uuid, 'SORTED', now(), ${line.scannedBy}::uuid, ${cycle.id}::uuid, ${kLine}::uuid,
+            ${line.scanOperationId}::uuid, ${JSON.stringify({ outcome, receipt: receipt.code, crate: k.crateCode })}::jsonb)`;
+      const release = (tx: { $executeRaw: typeof t.prisma.$executeRaw }, bottleId: string) =>
+        tx.$executeRaw`UPDATE "crate_assignments" a SET "released_at" = now(), "released_by" = ${line.scannedBy}::uuid,
+            "release_reason" = 'RETURN_IDENTIFIED', "release_operation_id" = ${line.scanOperationId}::uuid,
+            "released_event_id" = (SELECT e."id" FROM "bottle_events" e WHERE e."bottle_id" = a."bottle_id" AND e."type" = 'SORTED')
+          WHERE a."bottle_id" = ${bottleId}::uuid AND a."cycle_id" = ${cycle.id}::uuid AND a."released_at" IS NULL`;
+      const status = (
+        tx: { $executeRaw: typeof t.prisma.$executeRaw },
+        bottleId: string,
+        to: string,
+      ) =>
+        tx.$executeRaw`UPDATE "bottles" SET "status" = ${to}::"BottleStatus" WHERE "id" = ${bottleId}::uuid`;
+      const retired = (tx: { $executeRaw: typeof t.prisma.$executeRaw }, bottleId: string) =>
+        tx.$executeRaw`INSERT INTO "bottle_events" ("bottle_id", "type", "occurred_at", "actor_id", "operation_request_id", "payload")
+          VALUES (${bottleId}::uuid, 'RETIRED', now(), ${line.scannedBy}::uuid, ${line.scanOperationId}::uuid,
+            '{"reason":"DEFECTIVE_AT_RETURN"}')`;
+      await withPrivileged(async (db) => {
+        // The event alone; the event + release without the status; the event + status without the release.
+        await fails(
+          db.$transaction(async (tx) => {
+            await sorted(tx, good, 'RETURNED');
+          }),
+          /SORTED releases its assignment of that cycle/,
+        );
+        await fails(
+          db.$transaction(async (tx) => {
+            await sorted(tx, good, 'RETURNED');
+            await release(tx, good);
+          }),
+          /SORTED leaves the bottle RETURNED/,
+        );
+        await fails(
+          db.$transaction(async (tx) => {
+            await sorted(tx, good, 'RETURNED');
+            await status(tx, good, 'RETURNED');
+          }),
+          /SORTED releases its assignment|in no crate/,
+        );
+        // Defective: without RETIRED, or RETIRED status with a RETURNED outcome.
+        await fails(
+          db.$transaction(async (tx) => {
+            await sorted(tx, bad, 'RETIRED');
+            await release(tx, bad);
+            await status(tx, bad, 'RETIRED');
+          }),
+          /SORTED leaves the bottle RETIRED|needs its event/,
+        );
+        await fails(
+          db.$transaction(async (tx) => {
+            await sorted(tx, bad, 'RETURNED');
+            await release(tx, bad);
+            await retired(tx, bad);
+            await status(tx, bad, 'RETIRED');
+          }),
+          /SORTED leaves the bottle RETURNED|DEFECTIVE_AT_RETURN comes with its SORTED/,
+        );
+      });
+      // Nothing of it committed: no SORTED, both bottles still members of the delivered cycle.
+      expect(await sortedOf(good)).toEqual([]);
+      expect(await sortedOf(bad)).toEqual([]);
+      expect(
+        await t.prisma.crateAssignment.count({ where: { cycleId: cycle.id, releasedAt: null } }),
+      ).toBe(2);
+      // The complete writes commit: good → RETURNED, defective → SORTED + RETIRED.
+      await withPrivileged((db) =>
+        db.$transaction(async (tx) => {
+          await sorted(tx, good, 'RETURNED');
+          await release(tx, good);
+          await status(tx, good, 'RETURNED');
+        }),
+      );
+      await withPrivileged((db) =>
+        db.$transaction(async (tx) => {
+          await sorted(tx, bad, 'RETIRED');
+          await retired(tx, bad);
+          await release(tx, bad);
+          await status(tx, bad, 'RETIRED');
+        }),
+      );
+      expect([(await bottle(good)).status, (await bottle(bad)).status]).toEqual([
+        'RETURNED',
+        'RETIRED',
+      ]);
+      expect(lineOf(await api.detail(receipt.code), k.crateCode).recordedCount).toBe(2);
+    });
+
     it('SORTED once per cycle; a disposed bottle never changes; a correction only for a retirement at the return', async () => {
       const { crates } = await delivered();
       const [k] = crates as [MadeCrate];

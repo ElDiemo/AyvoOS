@@ -548,11 +548,36 @@ $$;
 CREATE TRIGGER "bottle_events_return_rules" BEFORE INSERT ON "bottle_events"
   FOR EACH ROW EXECUTE FUNCTION bottle_events_return_rules();
 
--- At commit: a resolving SORTED is the issue's resolving event (both directions, doc 047 §4.8a).
-CREATE FUNCTION bottle_events_resolution_complete() RETURNS trigger
+-- At commit: every SORTED is a complete identification (doc 047 §4.5): it released exactly its
+-- assignment of that cycle (RETURN_IDENTIFIED, released_event_id), the bottle is in its outcome
+-- status (a defective one also RETIRED by the same operation), and a resolving SORTED is its
+-- issue's resolving event (§4.8a).
+CREATE FUNCTION bottle_events_sorted_complete() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
+DECLARE
+  outcome text;
+  retired boolean;
 BEGIN
+  IF NEW."type" <> 'SORTED' THEN
+    RETURN NULL;
+  END IF;
+  outcome := NEW."payload"->>'outcome';
+  IF (SELECT count(*) FROM "crate_assignments" a
+       WHERE a."released_event_id" = NEW."id" AND a."bottle_id" = NEW."bottle_id"
+         AND a."cycle_id" = NEW."crate_cycle_id" AND a."release_reason" = 'RETURN_IDENTIFIED'
+         AND a."released_at" IS NOT NULL) <> 1 THEN
+    RAISE EXCEPTION 'AYVO: a SORTED releases its assignment of that cycle' USING ERRCODE = 'check_violation';
+  END IF;
+  retired := EXISTS (SELECT 1 FROM "bottle_events" e
+                      WHERE e."bottle_id" = NEW."bottle_id" AND e."type" = 'RETIRED'
+                        AND e."operation_request_id" = NEW."operation_request_id"
+                        AND e."payload"->>'reason' = 'DEFECTIVE_AT_RETURN');
+  IF (outcome = 'RETIRED') <> retired
+     OR (SELECT "status"::text FROM "bottles" WHERE "id" = NEW."bottle_id") <> outcome THEN
+    RAISE EXCEPTION 'AYVO: a SORTED leaves the bottle % (a defective one RETIRED by the same operation)', outcome
+      USING ERRCODE = 'check_violation';
+  END IF;
   IF NEW."resolves_issue_id" IS NOT NULL AND NOT EXISTS (
        SELECT 1 FROM "return_receipt_issues" i
         WHERE i."id" = NEW."resolves_issue_id" AND i."resolving_event_id" = NEW."id") THEN
@@ -562,8 +587,8 @@ BEGIN
 END
 $$;
 
-CREATE CONSTRAINT TRIGGER "bottle_events_resolution_complete" AFTER INSERT ON "bottle_events"
-  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION bottle_events_resolution_complete();
+CREATE CONSTRAINT TRIGGER "bottle_events_sorted_complete" AFTER INSERT ON "bottle_events"
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION bottle_events_sorted_complete();
 
 -- Statuses: the existing path plus the return (doc 047 §4.7). DISPOSED never changes.
 CREATE OR REPLACE FUNCTION bottles_status_transition() RETURNS trigger
