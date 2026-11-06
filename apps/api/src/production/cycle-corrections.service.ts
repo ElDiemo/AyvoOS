@@ -141,6 +141,16 @@ export class CycleCorrectionsService {
         if (status === 'CREATED') {
           throw domainError(409, 'BOTTLE_NOT_LABELED', 'This bottle has no label yet');
         }
+        // Only an empty labelled or a filled bottle takes a place (checked under the bottle lock):
+        // a returned, retired or disposed one would make the crate unfillable (#129 follow-up).
+        if (status !== 'LABELED_EMPTY' && status !== 'FILLED') {
+          throw domainErrorWithDetails(
+            409,
+            'BOTTLE_NOT_PLACEABLE',
+            'Only an empty labelled or a filled bottle goes into a crate',
+            { bottle: bottle.code, status },
+          );
+        }
         const binding = await this.bottles.productBinding(tx, bottle.id);
         if (!binding) {
           throw domainError(
