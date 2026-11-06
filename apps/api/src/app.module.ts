@@ -20,6 +20,7 @@ import { LabelProductionModule } from './label-production/label-production.modul
 import { LabelsModule } from './labels/labels.module.js';
 import { ProcurementModule } from './procurement/procurement.module.js';
 import { RedisModule } from './redis/redis.module.js';
+import { ReturnsModule } from './returns/returns.module.js';
 import { SitesModule } from './sites/sites.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { WarehouseModule } from './warehouse/warehouse.module.js';
@@ -59,6 +60,7 @@ import { WarehouseModule } from './warehouse/warehouse.module.js';
     FinanceContractModule,
     PrintingModule,
     OrdersModule,
+    ReturnsModule,
   ],
 })
 export class AppModule {}

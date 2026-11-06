@@ -43,6 +43,10 @@ export const crateEventTypeSchema = z.enum([
   'DISPATCHED',
   /** Its parcel was delivered, per the carrier (doc 031). */
   'DELIVERED',
+  /** Scanned back in at a return intake (doc 047). */
+  'RETURNED',
+  /** Emptied at the intake (Vyprázdněno): the cycle is closed. */
+  'EMPTIED',
 ]);
 export type CrateEventType = z.infer<typeof crateEventTypeSchema>;
 
@@ -92,6 +96,8 @@ export const crateSummarySchema = z.object({
         'ALLOCATED',
         'DISPATCHED',
         'DELIVERED',
+        'RETURNED',
+        'CLOSED',
       ]),
       memberCount: z.number().int(),
       /** "Naplněno" (doc 025 §3.2), shown beside "Obsah" (memberCount). */
@@ -124,6 +130,7 @@ export const crateListQuerySchema = z.object({
       'ALLOCATED',
       'DISPATCHED',
       'DELIVERED',
+      'RETURNED',
     ])
     .optional(),
 });

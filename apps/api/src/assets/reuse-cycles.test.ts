@@ -1,28 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { countCompletedReuseCycles } from './reuse-cycles.js';
 
+/**
+ * A delivery writes no bottle event (doc 047 §4.0); that a SORTED exists only for a bottle of a
+ * delivered cycle, once per cycle, is enforced by the database and tested in returns.e2e.test.ts.
+ */
 describe('countCompletedReuseCycles (ADR 0011)', () => {
-  it('is 0 for a newly created bottle', () => {
+  it('is 0 for a newly created, labelled, filled or shipped bottle', () => {
     expect(countCompletedReuseCycles(['CREATED'])).toBe(0);
-  });
-
-  it('counts a cycle only when a delivered bottle is individually identified (SORTED)', () => {
-    expect(countCompletedReuseCycles(['CREATED', 'DELIVERED_TO_HOTEL'])).toBe(0);
-    expect(countCompletedReuseCycles(['CREATED', 'DELIVERED_TO_HOTEL', 'RETURNED'])).toBe(0);
-    expect(countCompletedReuseCycles(['CREATED', 'DELIVERED_TO_HOTEL', 'SORTED'])).toBe(1);
-  });
-
-  it('counts each delivery once, and ignores SORTED without a prior delivery', () => {
     expect(
-      countCompletedReuseCycles([
-        'CREATED',
-        'SORTED',
-        'DELIVERED_TO_HOTEL',
-        'SORTED',
-        'SORTED',
-        'DELIVERED_TO_HOTEL',
-        'SORTED',
-      ]),
-    ).toBe(2);
+      countCompletedReuseCycles(['CREATED', 'LABEL_APPLIED', 'ASSIGNED_TO_CRATE', 'FILLED']),
+    ).toBe(0);
+  });
+
+  it('counts each identification after a return (SORTED), good or defective', () => {
+    expect(countCompletedReuseCycles(['CREATED', 'LABEL_APPLIED', 'FILLED', 'SORTED'])).toBe(1);
+    expect(countCompletedReuseCycles(['CREATED', 'FILLED', 'SORTED', 'RETIRED'])).toBe(1);
+    expect(countCompletedReuseCycles(['CREATED', 'FILLED', 'SORTED', 'FILLED', 'SORTED'])).toBe(2);
+  });
+
+  it('never counts a retirement, a correction or a disposal', () => {
+    expect(
+      countCompletedReuseCycles(['SORTED', 'RETIRED', 'CORRECTION', 'RETIRED', 'DISPOSED']),
+    ).toBe(1);
   });
 });

@@ -12,10 +12,14 @@ export type CycleRecord = Prisma.CrateCycleGetPayload<{ include: typeof cycleInc
 
 /**
  * Held by an order — loaded (ALLOCATED, doc 028), with the carrier (DISPATCHED, doc 029) or
- * delivered (DELIVERED, doc 031): no labelling, filling, correction, refill or repack touches it.
+ * delivered (DELIVERED, doc 031) — or returned and not yet emptied (RETURNED, doc 047): no
+ * labelling, filling, correction, refill or repack touches it.
  */
 export const isHeldByOrder = (status: string): boolean =>
-  status === 'ALLOCATED' || status === 'DISPATCHED' || status === 'DELIVERED';
+  status === 'ALLOCATED' ||
+  status === 'DISPATCHED' ||
+  status === 'DELIVERED' ||
+  status === 'RETURNED';
 
 /**
  * Crate cycles and their members (ADR 0021, ADR 0025 proposed, doc 025 §3.2): one circulation of
@@ -52,14 +56,18 @@ export class CrateCyclesService {
     await tx.$executeRaw`SELECT 1 FROM "crates" WHERE "id" = ${crateId}::uuid FOR UPDATE`;
   }
 
-  /** The crate's open (not aborted) cycle, locked when a transaction asks for it. */
+  /**
+   * The crate's cycle in use (neither aborted nor closed — the set of the one-open index), locked
+   * when a transaction asks for it. A CLOSED cycle is history: the crate's next circulation opens
+   * a new cycle (doc 047 §4.4). History reads never use this.
+   */
   async openCycle(
     db: Prisma.TransactionClient,
     crateId: string,
     lock = false,
   ): Promise<CycleRecord | null> {
     const found = await db.crateCycle.findFirst({
-      where: { crateId, status: { not: 'ABORTED' } },
+      where: { crateId, status: { notIn: ['ABORTED', 'CLOSED'] } },
       select: { id: true },
     });
     if (!found) return null;
@@ -350,6 +358,66 @@ export class CrateCyclesService {
     );
   }
 
+  /**
+   * Scanned back in at a return intake (doc 047 §4.5): DELIVERED → RETURNED with its crate event.
+   * The members, counters and filling date stay; the caller completes the allocation.
+   */
+  async returnFromHotel(
+    tx: Prisma.TransactionClient,
+    cycle: Pick<CycleRecord, 'id' | 'crateId' | 'siteId'>,
+    input: {
+      actorId: string;
+      operationId: string;
+      occurredAt: Date;
+      receipt: string;
+      order: string;
+    },
+  ): Promise<void> {
+    await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'RETURNED' } });
+    await this.event(tx, cycle, 'RETURNED', input, { receipt: input.receipt, order: input.order });
+  }
+
+  /** "Vyprázdněno": RETURNED → CLOSED with its EMPTIED event; the cycle never changes again. */
+  async closeEmptied(
+    tx: Prisma.TransactionClient,
+    cycle: Pick<CycleRecord, 'id' | 'crateId' | 'siteId'>,
+    input: { actorId: string; operationId: string; occurredAt: Date; receipt: string },
+  ): Promise<void> {
+    await tx.crateCycle.update({ where: { id: cycle.id }, data: { status: 'CLOSED' } });
+    await this.event(tx, cycle, 'EMPTIED', input, { receipt: input.receipt });
+  }
+
+  /**
+   * A bottle of a delivered cycle identified at a return (doc 047 §4.3 3): its assignment is
+   * released with RETURN_IDENTIFIED and its SORTED; the cycle's frozen counters stay.
+   */
+  async releaseByReturn(
+    tx: Prisma.TransactionClient,
+    input: {
+      assignmentId: string;
+      sortedEventId: string;
+      actorId: string;
+      operationId: string;
+      occurredAt: Date;
+    },
+  ): Promise<void> {
+    await tx.crateAssignment.update({
+      where: { id: input.assignmentId },
+      data: {
+        releasedAt: input.occurredAt,
+        releasedBy: input.actorId,
+        releaseReason: 'RETURN_IDENTIFIED',
+        releaseOperationId: input.operationId,
+        releasedEventId: input.sortedEventId,
+      },
+    });
+  }
+
+  /** Locks a cycle row (lock order: … → crate → cycle → bottle). */
+  async lockCycle(tx: Prisma.TransactionClient, cycleId: string): Promise<void> {
+    await tx.$executeRaw`SELECT 1 FROM "crate_cycles" WHERE "id" = ${cycleId}::uuid FOR UPDATE`;
+  }
+
   /** The cycle's active assignments, in ordinal order, with their bottles. */
   activeMembers(db: Prisma.TransactionClient, cycleId: string) {
     return db.crateAssignment.findMany({
@@ -430,6 +498,8 @@ export class CrateCyclesService {
       | 'ALLOCATED_TO_ORDER'
       | 'RELEASED_FROM_ORDER'
       | 'DISPATCHED'
+      | 'RETURNED'
+      | 'EMPTIED'
       | 'DELIVERED',
     /** actorId null: recorded from the carrier (source CARRIER, ADR 0029). */
     input: { actorId: string | null; operationId: string; occurredAt: Date },

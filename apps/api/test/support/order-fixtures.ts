@@ -57,9 +57,11 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
     await approveDesign(t, kit.productCode, versionId);
   }
 
+  /** `existingCrateUrl`: the next circulation of that (emptied) crate instead of a new crate. */
   async function make(
     state: 'READY_TO_FILL' | 'FILLING' | 'FILLED' = 'FILLED',
     lot: string = liquidLot,
+    existingCrateUrl?: string,
   ): Promise<MadeCrate> {
     if (pool.length < capacity) await refill();
     const bottles = pool.splice(0, capacity);
@@ -70,7 +72,7 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
       sourceLotId: bottleLot,
     });
     expect(ctx.status, JSON.stringify(ctx.body)).toBe(200);
-    const crateUrl = await registerCrate(t, kit.crateTypeCode);
+    const crateUrl = existingCrateUrl ?? (await registerCrate(t, kit.crateTypeCode));
     expect((await loadCrate(t, ls, crateUrl)).status).toBe(200);
     for (const b of bottles) {
       const r = await labelScan(t, ls, b.url);

@@ -26,6 +26,9 @@ export const productionCs = {
     CREATED: 'Vytvořená identita',
     LABELED_EMPTY: 'Etiketa nalepena – prázdná lahev',
     FILLED: 'Naplněná – hotová',
+    RETURNED: 'Vrácená, čeká na mytí',
+    RETIRED: 'Ke skartaci',
+    DISPOSED: 'Skartovaná',
   } as Record<string, string>,
   eventType: {
     CREATED: 'Identita vytvořena',
@@ -33,6 +36,10 @@ export const productionCs = {
     ASSIGNED_TO_CRATE: 'Vložena do bedny',
     FILLED: 'Naplněna, pumpička nasazena',
     REMOVED_FROM_CRATE: 'Vyjmuta z bedny',
+    SORTED: 'Přijata z vratky (identifikována)',
+    RETIRED: 'Vyřazena ke skartaci',
+    DISPOSED: 'Skartována',
+    CORRECTION: 'Oprava vyřazení',
   } as Record<string, string>,
   printJobStatus: {
     PENDING: 'Čeká na vygenerování',
@@ -117,6 +124,7 @@ export const productionCs = {
     overview: 'Základní údaje',
     status: 'Stav',
     reuseCycles: 'Dokončené cykly použití',
+    returnReceipt: 'Příjem vratky',
     createdAt: 'Vytvořeno',
     label: 'Etiketa',
     series: 'Vytvořena v sérii',

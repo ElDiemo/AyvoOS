@@ -255,6 +255,10 @@ export class BottlesService {
       reuseCycles: countCompletedReuseCycles(bottle.events.map((e) => e.type)),
       labelAppliedAt:
         bottle.events.find((e) => e.type === 'LABEL_APPLIED')?.occurredAt.toISOString() ?? null,
+      returnReceipt:
+        ((
+          bottle.events.findLast((e) => e.type === 'SORTED')?.payload as { receipt?: string } | null
+        )?.receipt as string | undefined) ?? null,
       events: bottle.events.map((e) => ({
         type: e.type,
         occurredAt: e.occurredAt.toISOString(),
@@ -411,6 +415,58 @@ export class BottlesService {
         payload: { crate: input.crateCode, reason: input.reason },
       },
     });
+  }
+
+  /**
+   * The individual identification at a return (doc 047 §4.5, ADR 0011): the SORTED event for the
+   * bottle's delivered cycle, found in the receipt line (and resolving its issue, if any); a
+   * defective bottle also gets RETIRED (DEFECTIVE_AT_RETURN). FILLED → RETURNED / RETIRED. The
+   * caller releases the assignment in the same transaction; the database refuses the commit
+   * otherwise. Returns the SORTED event id.
+   */
+  async identifyAtReturn(
+    tx: Prisma.TransactionClient,
+    input: {
+      bottleId: string;
+      crateCycleId: string;
+      returnLineId: string;
+      resolvesIssueId: string | null;
+      outcome: 'RETURNED' | 'RETIRED';
+      actorId: string;
+      operationRequestId: string;
+      occurredAt: Date;
+      receipt: string;
+      crateCode: string;
+    },
+  ): Promise<string> {
+    const sorted = await tx.bottleEvent.create({
+      data: {
+        bottleId: input.bottleId,
+        type: 'SORTED',
+        occurredAt: input.occurredAt,
+        actorId: input.actorId,
+        crateCycleId: input.crateCycleId,
+        returnLineId: input.returnLineId,
+        resolvesIssueId: input.resolvesIssueId,
+        operationRequestId: input.operationRequestId,
+        payload: { outcome: input.outcome, receipt: input.receipt, crate: input.crateCode },
+      },
+      select: { id: true },
+    });
+    if (input.outcome === 'RETIRED') {
+      await tx.bottleEvent.create({
+        data: {
+          bottleId: input.bottleId,
+          type: 'RETIRED',
+          occurredAt: input.occurredAt,
+          actorId: input.actorId,
+          operationRequestId: input.operationRequestId,
+          payload: { reason: 'DEFECTIVE_AT_RETURN', receipt: input.receipt },
+        },
+      });
+    }
+    await tx.bottle.update({ where: { id: input.bottleId }, data: { status: input.outcome } });
+    return sorted.id;
   }
 
   /**

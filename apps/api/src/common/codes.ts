@@ -17,6 +17,8 @@ export const CODE_PREFIX = {
   salesProspect: 'AKV-',
   salesImport: 'IMP-',
   contractDraft: 'SN-',
+  returnReceipt: 'RR-',
+  returnIssue: 'RI-',
 } as const;
 
 export function formatCode(prefix: string, serial: bigint): string {

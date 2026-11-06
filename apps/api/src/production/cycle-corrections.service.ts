@@ -26,11 +26,17 @@ export const crateAllocated = (status?: string) =>
     ? domainError(409, 'CRATE_DISPATCHED', 'This crate was handed to the carrier with its order')
     : status === 'DELIVERED'
       ? domainError(409, 'CRATE_DELIVERED', 'This crate was delivered with its order')
-      : domainError(
-          409,
-          'CRATE_ALLOCATED',
-          'This crate is loaded into an order: remove it from the order first',
-        );
+      : status === 'RETURNED'
+        ? domainError(
+            409,
+            'CRATE_RETURNED',
+            'This crate was returned: empty it first (Vyprázdněno)',
+          )
+        : domainError(
+            409,
+            'CRATE_ALLOCATED',
+            'This crate is loaded into an order: remove it from the order first',
+          );
 
 const crateReady = () =>
   domainError(
