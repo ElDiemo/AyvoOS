@@ -191,6 +191,9 @@ describe.skipIf(!hasDatabase)('product catalogue and recipes', () => {
       data: { userId: user.id, roleCode: 'ADMIN', grantReason: 'test administrator' },
     });
     admin = await sessionCookie(t, user.email);
+    // Test files share one database and other files add sites: choose the active site
+    // explicitly instead of relying on there being only one (CLAUDE.md).
+    await as(admin).post('/api/auth/active-site', { siteId: INITIAL_SITE_ID }).expect(200);
     stockBefore = await stockFingerprint();
   });
 
