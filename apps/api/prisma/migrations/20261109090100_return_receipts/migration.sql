@@ -531,6 +531,12 @@ BEGIN
     IF bottle."status" NOT IN ('FILLED', 'RETURNED') OR coalesce(NEW."payload"->>'reason', '') = '' THEN
       RAISE EXCEPTION 'AYVO: a returned bottle is retired with a reason' USING ERRCODE = 'check_violation';
     END IF;
+    -- A FILLED bottle is retired only by its identification at a return as defective; a later
+    -- defect of an already RETURNED bottle may give any reason (doc 047 §4.7).
+    IF bottle."status" = 'FILLED' AND NEW."payload"->>'reason' IS DISTINCT FROM 'DEFECTIVE_AT_RETURN' THEN
+      RAISE EXCEPTION 'AYVO: a filled bottle is retired only at a return (DEFECTIVE_AT_RETURN with its SORTED)'
+        USING ERRCODE = 'check_violation';
+    END IF;
     IF NEW."payload"->>'reason' = 'DEFECTIVE_AT_RETURN' AND NOT EXISTS (
          SELECT 1 FROM "bottle_events" e WHERE e."bottle_id" = NEW."bottle_id" AND e."type" = 'SORTED'
             AND e."payload"->>'outcome' = 'RETIRED' AND e."operation_request_id" = NEW."operation_request_id") THEN
@@ -623,6 +629,7 @@ CREATE OR REPLACE FUNCTION bottles_labeled_has_event() RETURNS trigger
 DECLARE
   member_cycle uuid;
   last_event record;
+  backed boolean;
 BEGIN
   IF NEW."status" = 'LABELED_EMPTY' AND NOT EXISTS (
        SELECT 1 FROM "bottle_events" WHERE "bottle_id" = NEW."id" AND "type" = 'LABEL_APPLIED') THEN
@@ -642,11 +649,23 @@ BEGIN
     SELECT "type", "payload" INTO last_event FROM "bottle_events"
      WHERE "bottle_id" = NEW."id" AND "type" IN ('SORTED', 'RETIRED', 'DISPOSED', 'CORRECTION')
      ORDER BY "id" DESC LIMIT 1;
-    IF NOT ((NEW."status" = 'RETURNED' AND (last_event."type" = 'CORRECTION'
-               OR (last_event."type" = 'SORTED' AND last_event."payload"->>'outcome' = 'RETURNED')))
-         OR (NEW."status" = 'RETIRED' AND last_event."type" = 'RETIRED')
-         OR (NEW."status" = 'DISPOSED' AND last_event."type" = 'DISPOSED')) THEN
+    -- A positive match only: no such event at all (a loose filled bottle) is never enough.
+    backed := coalesce(
+         (NEW."status" = 'RETURNED' AND (last_event."type" = 'CORRECTION'
+            OR (last_event."type" = 'SORTED' AND last_event."payload"->>'outcome' = 'RETURNED')))
+      OR (NEW."status" = 'RETIRED' AND last_event."type" = 'RETIRED')
+      OR (NEW."status" = 'DISPOSED' AND last_event."type" = 'DISPOSED'), false);
+    IF NOT backed THEN
       RAISE EXCEPTION 'AYVO: bottle status % needs its event', NEW."status" USING ERRCODE = 'check_violation';
+    END IF;
+    -- …and the bottle came back by an identification: its latest crate membership was ended by
+    -- its SORTED (a bottle taken out of a crate in production was never returned).
+    IF NOT EXISTS (
+         SELECT 1 FROM "crate_assignments" a JOIN "bottle_events" e ON e."id" = a."released_event_id"
+          WHERE a."bottle_id" = NEW."id" AND e."type" = 'SORTED'
+            AND a."assigned_at" = (SELECT max(x."assigned_at") FROM "crate_assignments" x WHERE x."bottle_id" = NEW."id")) THEN
+      RAISE EXCEPTION 'AYVO: a % bottle was identified at a return from its latest crate', NEW."status"
+        USING ERRCODE = 'check_violation';
     END IF;
     IF EXISTS (SELECT 1 FROM "crate_assignments" WHERE "bottle_id" = NEW."id" AND "released_at" IS NULL) THEN
       RAISE EXCEPTION 'AYVO: a % bottle is in no crate', NEW."status" USING ERRCODE = 'check_violation';

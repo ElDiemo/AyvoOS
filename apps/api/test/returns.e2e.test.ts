@@ -9,7 +9,7 @@ import type {
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testCarrierControl } from '../src/carriers/test-carrier.js';
-import { fillingSession, fillLoadCrate } from './support/labeling-fixtures.js';
+import { correctCrate, fillingSession, fillLoadCrate } from './support/labeling-fixtures.js';
 import { crateFactory, createHotel, type MadeCrate } from './support/order-fixtures.js';
 import {
   deliver,
@@ -611,6 +611,57 @@ describe.skipIf(!hasDatabase)('return intake R1 (doc 047)', () => {
         'RETIRED',
       ]);
       expect(lineOf(await api.detail(receipt.code), k.crateCode).recordedCount).toBe(2);
+    });
+
+    it('a loose filled bottle (taken out of its crate) never becomes RETURNED or RETIRED without its identification', async () => {
+      // Legitimate: a FILLING crate, its filled bottle removed by a supervised correction.
+      const made = await factory.make('FILLING');
+      const loose = made.bottleIds[0]!;
+      const code = (await bottle(loose)).code;
+      const removed = await correctCrate(t, made.crateCode, 'remove-bottle', { bottle: code });
+      expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+      expect((await bottle(loose)).status).toBe('FILLED');
+      expect(
+        await t.prisma.crateAssignment.count({ where: { bottleId: loose, releasedAt: null } }),
+      ).toBe(0);
+      const op = await t.prisma.bottleEvent.findFirstOrThrow({
+        where: { bottleId: loose, type: 'FILLED' },
+        select: { operationRequestId: true, actorId: true },
+      });
+      await withPrivileged(async (db) => {
+        // No return event at all (the bottle has no SORTED, RETIRED or CORRECTION).
+        await fails(
+          db.$executeRaw`UPDATE "bottles" SET "status" = 'RETURNED' WHERE "id" = ${loose}::uuid`,
+          /needs its event/,
+        );
+        await fails(
+          db.$executeRaw`UPDATE "bottles" SET "status" = 'RETIRED' WHERE "id" = ${loose}::uuid`,
+          /needs its event/,
+        );
+        // An ordinary RETIRED event does not retire a filled bottle: only DEFECTIVE_AT_RETURN with SORTED.
+        await fails(
+          db.$transaction(async (tx) => {
+            await tx.$executeRaw`INSERT INTO "bottle_events" ("bottle_id", "type", "occurred_at", "actor_id", "operation_request_id", "payload")
+              VALUES (${loose}::uuid, 'RETIRED', now(), ${op.actorId}::uuid, ${op.operationRequestId}::uuid, '{"reason":"prasklina"}')`;
+            await tx.$executeRaw`UPDATE "bottles" SET "status" = 'RETIRED' WHERE "id" = ${loose}::uuid`;
+          }),
+          /filled bottle is retired only at a return|needs its event/,
+        );
+        await fails(
+          db.$transaction(async (tx) => {
+            await tx.$executeRaw`INSERT INTO "bottle_events" ("bottle_id", "type", "occurred_at", "actor_id", "operation_request_id", "payload")
+              VALUES (${loose}::uuid, 'RETIRED', now(), ${op.actorId}::uuid, ${op.operationRequestId}::uuid, '{"reason":"DEFECTIVE_AT_RETURN"}')`;
+            await tx.$executeRaw`UPDATE "bottles" SET "status" = 'RETIRED' WHERE "id" = ${loose}::uuid`;
+          }),
+          /comes with its SORTED|filled bottle is retired only at a return/,
+        );
+      });
+      expect((await bottle(loose)).status).toBe('FILLED');
+      expect(
+        await t.prisma.bottleEvent.count({
+          where: { bottleId: loose, type: { in: ['SORTED', 'RETIRED'] } },
+        }),
+      ).toBe(0);
     });
 
     it('SORTED once per cycle; a disposed bottle never changes; a correction only for a retirement at the return', async () => {
