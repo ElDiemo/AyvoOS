@@ -14,11 +14,26 @@ nothing here is a migration.
 
 ## 1. Dependencies and the release boundary
 
-| Step | Needs, before its implementation starts                                                      |
-| ---- | -------------------------------------------------------------------------------------------- |
-| R1   | done (#129, merged)                                                                          |
-| R2   | R1 on DEV; this model                                                                        |
-| R3   | R2 released; this model; D1 (§4). It contains the placement into a crate **and** the filling |
+| Step | Needs, before its implementation starts                                                             |
+| ---- | --------------------------------------------------------------------------------------------------- |
+| R1   | done (#129, merged)                                                                                 |
+| R2   | R1 on DEV (done, `e8e71d3`); the R1 fix below; this model — **decided on its own**                  |
+| R3   | R2 released; this model; D1 (§4); §3.3c. It contains the placement into a crate **and** the filling |
+
+**R2 and R3 are separate decisions.** R2 (§2) needs only the approval of its own small model and
+can be released alone. Nothing in R3's open questions (D1, the compatible migration §3.3c, the
+separate proposal §7) blocks R2.
+
+**A prerequisite fix of R1, found while checking this (reproduced 2026-11-06 on `e8e71d3`, local
+test database).** The supervised "Doplnit lahev" (`cycle-corrections.service.ts:127-143`) refuses
+only `CREATED`. It put a `RETURNED` (unwashed) bottle into an assembling crate of the same
+product, design and recipe, and the crate became `READY_TO_FILL`, which the filling never accepts
+(it takes only `LABELED_EMPTY`): a stuck crate. A `RETIRED` bottle passes the same checks (only
+a full crate refused it in the reproduction). The DB does not check the member's status either
+(`crate_assignments_insert_check` checks the source against the cycle status only). Proposed as
+its own small fix PR before R2: the API and the DB accept a new member only in `LABELED_EMPTY`
+(labelling, `REPLACEMENT`) or `FILLED` (`REPACKED`), unchanged for today's walk; `RETURNED`,
+`RETIRED`, `DISPOSED` → `BOTTLE_NOT_PLACEABLE`; test with a returned and a retired bottle.
 
 **No crate that cannot be finished, between R2 and R3 (review 5806384095).** Today the filling
 scan accepts only `LABELED_EMPTY` (`apps/api/src/production/filling.service.ts:250`). If R2 put a
@@ -26,13 +41,17 @@ washed bottle into an ordinary crate, that crate would reach `READY_TO_FILL` and
 filled until R3 — a stuck crate in the normal production. Therefore:
 
 - **R2 releases only "Po mytí" on its own** (§2): `RETURNED → READY_FOR_REUSE`, no crate, no
-  station change. A `READY_FOR_REUSE` bottle can enter no crate in R2: the assignment insert check
-  stays `LABELED_EMPTY` only, and the labelling station refuses it (`NOT_PLACEABLE_YET`).
+  station change. A `READY_FOR_REUSE` bottle can enter no crate in R2. Today's memberships stay
+  exactly as they are: labelling (`LABELING`) and `REPLACEMENT` of a `LABELED_EMPTY` bottle and
+  the audited `REPACKED` of a `FILLED` one (`cycle-corrections.service.ts:121-232`) — R2 only
+  adds `READY_FOR_REUSE` to the statuses that are refused (`NOT_PLACEABLE_YET`), at the station,
+  in the corrections and in the DB.
 - **R3 releases the placement into an ordinary crate (§3.0) together with its filling (§3.1)**
   in one migration and one deploy, so every crate that can take a washed bottle can also fill it.
 - **Compatibility between releases** (as doc 049):
   - R2 on R1's data and R3 on R2's data add states only; the previous release runs on the new
-    schema until the first new write (the first `REUSE_READY`, the first `REUSE` assignment).
+    schema until the first new write. For R2 that is the first `REUSE_READY`; for R3 it is **any**
+    of its new writes (§3.3c), not only the first `REUSE` assignment.
   - After that, the previous release cannot read the new status values (Prisma enum, P2023 —
     the R1 finding of doc 049 §3): fix forward only; the release notes record the first write.
   - Tests in each release: the unchanged walk of a new bottle (labelling → filling → Hotovo →
@@ -72,7 +91,8 @@ BottleEventType        += REUSE_READY
 status trigger           RETURNED → READY_FOR_REUSE only with a REUSE_READY in the transaction
 commit check             READY_FOR_REUSE ⇔ the bottle's last return event is a REUSE_READY
                          younger than its last SORTED (positive match, as doc 049's R1 fix)
-assignment insert check  unchanged in R2: LABELED_EMPTY only
+assignment insert check  unchanged sources; the member's status LABELED_EMPTY or FILLED (the
+                         R1 fix above), never READY_FOR_REUSE in R2
 inventory ledger         unchanged: no movement may reference REUSE_READY
 ```
 
@@ -167,13 +187,11 @@ workflow, doc 047 §3):
 inventory_items          + reuse_of_item_id (only kind PUMP, → a PUMP item without it)
 washed_pump_entries      new, append-only (above)
 InventoryMovementType   += WASHED_PUMP_ENTRY, WASHED_PUMP_CORRECTION
-bottle_events            + circulation_event_id (FILLED only): the bottle's LABEL_APPLIED or
-                         REUSE_READY that opened this circulation (§3.3b)
-                         bottle_events_one_filled_per_bottle → UNIQUE (circulation_event_id)
-                         WHERE type = 'FILLED'
-                         (today UNIQUE (bottle) WHERE FILLED,
-                         migrations/20261016090100_filling_and_crate_corrections/migration.sql:67;
-                         backfill: each existing FILLED gets its bottle's LABEL_APPLIED)
+bottle_fill_circulations new, insert-only: filled_event_id PK, circulation_event_id UNIQUE
+                         (§3.3b, §3.3c); bottle_events keeps every row and payload unchanged
+                         bottle_events_one_filled_per_bottle (UNIQUE (bottle) WHERE FILLED,
+                         migrations/20261016090100_filling_and_crate_corrections/migration.sql:67)
+                         is dropped at the end of the same migration, after the backfill (§3.3c)
 commit checks            FILLED ⇔ a FILLED event of the bottle's current circulation (after its
                          last SORTED, or since labelling) with its open PUMP attachment; one open
                          PUMP attachment per bottle. NOT "of its active cycle": see §3.3a
@@ -218,24 +236,63 @@ filling. The circulation therefore gets an explicit identity:
 
 - **The circulation is the event that made the bottle fillable:** its `LABEL_APPLIED` (first
   circulation) or a `REUSE_READY` (each later one, after a real return, §2.1).
-- **Each `FILLED` names it** (`circulation_event_id`), and the database checks at the insert,
-  with the bottle row locked (`SELECT … FOR UPDATE` in the trigger, which also serialises a
-  concurrent second filling):
-  - the named event is the bottle's **latest** `LABEL_APPLIED`/`REUSE_READY`;
+- **Each `FILLED` is anchored to it** in an insert-only side table
+  `bottle_fill_circulations (filled_event_id PK → bottle_events, circulation_event_id UNIQUE)`,
+  written by the database (§3.3c says why not a column), at the insert of the `FILLED`, with the
+  bottle row locked (`SELECT … FOR UPDATE` in the trigger, which also serialises a concurrent
+  second filling):
+  - the anchor is the bottle's **latest** `LABEL_APPLIED`/`REUSE_READY`;
   - the bottle is `LABELED_EMPTY` or `READY_FOR_REUSE` at that moment (never `FILLED`);
-  - `UNIQUE (circulation_event_id) WHERE type = 'FILLED'`: one filling per circulation, whatever
-    the crate, through the API, direct SQL or two concurrent requests.
+  - `circulation_event_id` is unique: one filling per circulation, whatever the crate, through the
+    API, direct SQL or two concurrent requests.
 - **One consumption per circulation follows:** `FILL` movements need their `FILLED` event and stay
   one per (event, BOM line) (existing unique index), so a second write-off of body, liquid or pump
   in the same circulation has nothing to attach to.
 - A genuine next circulation (`SORTED` → `REUSE_READY`) gives a new event, so the next filling
   passes.
 
+### 3.3c A migration that the R2 code survives (review 5806760233)
+
+The deploy migrates **before** the API is switched, so for a while the R2 code writes on the R3
+schema. The R2 filling knows no circulation anchor; R3 must not require one from it. And
+`bottle_events` is append-only (`bottle_events_append_only`, no UPDATE): no backfill may rewrite an
+event or its payload.
+
+- **Why a side table, not a column:** a new column would need either the R2 code to fill it
+  (it cannot) or an UPDATE of existing `FILLED` rows (refused by `bottle_events_append_only`). The
+  side table is written by the database itself, so the R2 code's `FILLED` gets its anchor too.
+- **One compatible migration, no transitional release needed:**
+  - create `bottle_fill_circulations`; **backfill by INSERT**: each existing `FILLED` → its bottle's
+    `LABEL_APPLIED` (today at most one `FILLED` per bottle, enforced by
+    `bottle_events_one_filled_per_bottle`, so the backfill is unique by construction); no event row
+    or payload is touched;
+  - the insert trigger of `FILLED` derives the anchor from the locked bottle: `LABELED_EMPTY` →
+    its `LABEL_APPLIED`, `READY_FOR_REUSE` → its latest `REUSE_READY` (which only R3's code fills);
+    the API passes nothing, so the R2 code's fillings of new bottles get their anchor as well;
+  - only then, in the same migration, `bottle_events_one_filled_per_bottle` is dropped: the side
+    table's unique anchor is the stronger rule (one filling per circulation), and it already holds
+    for every backfilled and every new `FILLED`.
+- **If the review prefers the API to name the anchor explicitly** (as the earlier draft said): that
+  needs a transitional release that derives it when absent, and a second migration that makes it
+  required after R3 runs everywhere. The side table avoids both steps; it is the proposal.
+- **Test plan before any R3 write** (as doc 049 §2, a throwaway worktree of the R2 release and the
+  R3 migrations applied before each file): the R2 API tests of labelling, filling, Hotovo, picking,
+  dispatch, delivery, the R1 intake and R2 "Po mytí" pass unchanged; each new `FILLED` of a new
+  bottle gets its `LABEL_APPLIED` anchor; no `bottle_events` row changed (count and a hash of
+  `payload` before/after).
+- **Rollback after R3's first writes** — decided on **all** new writes, any of them non-zero
+  means fix forward only:
+  - `crate_assignments` with source `REUSE`;
+  - `FILLED` anchored to a `REUSE_READY` (`bottle_fill_circulations` join `bottle_events`);
+  - `washed_pump_entries` and the ledger types `WASHED_PUMP_ENTRY`/`WASHED_PUMP_CORRECTION`;
+  - `FILL` movements of the washed pump item;
+  - the read-only query and the preflight follow doc 049 §1 and §4, with these tables.
+
 ### 3.4 Tests (API e2e on a real DB, committed)
 
 - **One filling per circulation (review 5806384095), commit tests by direct SQL:** a bottle filled
   in X, repacked into Y (`REPACKED`) → a second `FILLED` naming the same circulation for Y fails
-  (unique); one naming an older `LABEL_APPLIED`/`REUSE_READY` or none fails (trigger); a second
+  (side-table unique); a side row naming an older `LABEL_APPLIED`/`REUSE_READY` fails (trigger); a second
   `FILL` movement for the first `FILLED` fails (existing unique); a `FILLED` while the bottle is
   `FILLED` fails; two concurrent filling requests → one `FILLED`, one refusal. Positive: after a
   real return and `REUSE_READY` the next `FILLED` commits, with exactly one new set of `FILL`.
