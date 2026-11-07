@@ -470,6 +470,47 @@ export class BottlesService {
   }
 
   /**
+   * "Po mytí" (doc 048 §2): RETURNED → READY_FOR_REUSE with its REUSE_READY event, and the open
+   * pump attachment closed for cleaning (CLEANING_REQUIRED) — in the caller's transaction, with the
+   * bottle locked. Nothing is consumed: the body and the label are physically the same, the
+   * binding stays. The database refuses the commit otherwise.
+   */
+  async readyAfterWash(
+    tx: Prisma.TransactionClient,
+    input: {
+      bottleId: string;
+      actorId: string;
+      operationRequestId: string;
+      occurredAt: Date;
+      receipt: string | null;
+    },
+  ): Promise<{ eventId: string; pumpClosed: boolean }> {
+    const event = await tx.bottleEvent.create({
+      data: {
+        bottleId: input.bottleId,
+        type: 'REUSE_READY',
+        occurredAt: input.occurredAt,
+        actorId: input.actorId,
+        operationRequestId: input.operationRequestId,
+        payload: { receipt: input.receipt },
+      },
+      select: { id: true },
+    });
+    const pumps = await tx.bottleComponentAttachment.updateMany({
+      where: { bottleId: input.bottleId, componentType: 'PUMP', removedAt: null },
+      data: {
+        removedAt: input.occurredAt,
+        removedBy: input.actorId,
+        removalReason: 'AFTER_WASH',
+        disposition: 'CLEANING_REQUIRED',
+        removalEventId: event.id,
+      },
+    });
+    await tx.bottle.update({ where: { id: input.bottleId }, data: { status: 'READY_FOR_REUSE' } });
+    return { eventId: event.id, pumpClosed: pumps.count > 0 };
+  }
+
+  /**
    * Filled and pump installed (doc 025 A4): LABELED_EMPTY → FILLED, the FILLED event with the one
    * liquid lot (owner B5) and the open PUMP attachment, in the caller's transaction (which must
    * also post the FILL consumption — the database refuses the commit otherwise).

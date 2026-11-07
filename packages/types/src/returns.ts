@@ -197,3 +197,46 @@ export const returnsOverviewSchema = z.object({
   openIssues: z.array(returnIssueSummarySchema),
 });
 export type ReturnsOverview = z.infer<typeof returnsOverviewSchema>;
+
+// --- R2 "Po mytí" (doc 048 §2) ---------------------------------------------------------------
+
+/** The product and label design a returned bottle is bound to (its binding, never changed). */
+const afterWashBindingSchema = z.object({
+  product: z.object({ code: z.string(), name: z.string() }).nullable(),
+  /** The label design: template name and version. */
+  design: z.string().nullable(),
+});
+
+/** POST /api/admin/returns/after-wash: one washed and inspected bottle, RETURNED → READY_FOR_REUSE. */
+export const afterWashScanResultSchema = afterWashBindingSchema.extend({
+  outcome: z.literal('READY_FOR_REUSE'),
+  /** The first result of a repeated scan of a bottle already "Po mytí" — nothing written again. */
+  repeated: z.boolean(),
+  bottleCode: z.string(),
+  readyAt: z.string(),
+});
+export type AfterWashScanResult = z.infer<typeof afterWashScanResultSchema>;
+
+export const afterWashBottleSchema = afterWashBindingSchema.extend({
+  bottleCode: z.string(),
+  /** RETURNED: identified at the return; READY_FOR_REUSE: "Po mytí". */
+  since: z.string(),
+  receipt: z.string().nullable(),
+});
+export type AfterWashBottle = z.infer<typeof afterWashBottleSchema>;
+
+/** GET /api/admin/returns/after-wash: the queue of the active site. */
+export const afterWashQueueSchema = z.object({
+  /** RETURNED, design still approved: waiting for washing and the "Po mytí" scan. */
+  waiting: z.array(afterWashBottleSchema),
+  /** RETURNED, design approval revoked: "Vyčleněno – odvolaná etiketa", the scan is refused. */
+  withdrawn: z.array(afterWashBottleSchema),
+  /** READY_FOR_REUSE, latest first. In R2 they enter no crate. */
+  ready: z.array(afterWashBottleSchema),
+  counts: z.object({
+    waiting: z.number().int(),
+    withdrawn: z.number().int(),
+    ready: z.number().int(),
+  }),
+});
+export type AfterWashQueue = z.infer<typeof afterWashQueueSchema>;

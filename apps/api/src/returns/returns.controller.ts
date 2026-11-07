@@ -1,4 +1,6 @@
 import {
+  type AfterWashQueue,
+  type AfterWashScanResult,
   closeOutReturnIssueRequestSchema,
   emptyReturnLineRequestSchema,
   identifyReturnIssueRequestSchema,
@@ -34,6 +36,7 @@ import { RequirePermission } from '../identity/access.decorators.js';
 import { CurrentPrincipal, OperationalSite } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import type { SiteContext } from '../inventory/warehouse-context.js';
+import { AfterWashService } from './after-wash.service.js';
 import { ReturnReceiptsService } from './return-receipts.service.js';
 
 const CODE = new ZodValidationPipe(returnReceiptCodeSchema);
@@ -45,7 +48,10 @@ const ISSUE = new ZodValidationPipe(returnIssueCodeSchema);
  */
 @Controller(`${ADMIN_PREFIX}/returns`)
 export class ReturnsController {
-  constructor(private readonly returns: ReturnReceiptsService) {}
+  constructor(
+    private readonly returns: ReturnReceiptsService,
+    private readonly afterWash: AfterWashService,
+  ) {}
 
   @RequirePermission('returns:receive')
   @Get('receipts')
@@ -193,5 +199,24 @@ export class ReturnsController {
     @OperationalSite() site: SiteContext,
   ): Promise<ReturnIssueSummary> {
     return this.returns.closeOutIssue(principal, site, code, body);
+  }
+
+  /** R2 "Po mytí" (doc 048 §2): the queue of the active site. */
+  @RequirePermission('returns:receive')
+  @Get('after-wash')
+  afterWashQueue(@OperationalSite() site: SiteContext): Promise<AfterWashQueue> {
+    return this.afterWash.queue(site);
+  }
+
+  /** R2 "Po mytí": RETURNED → READY_FOR_REUSE of one washed and inspected bottle. */
+  @RequirePermission('returns:receive')
+  @Post('after-wash')
+  @HttpCode(200)
+  afterWashScan(
+    @Body(new ZodValidationPipe(returnScanRequestSchema)) body: ReturnScanRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<AfterWashScanResult> {
+    return this.afterWash.scan(principal, site, body);
   }
 }
