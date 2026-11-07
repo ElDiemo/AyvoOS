@@ -16,12 +16,19 @@ import { Card, buttonClass, inputClass } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { returnsCs } from '@/i18n/cs/returns';
 import { apiGet, apiSend } from '@/lib/client-api';
-import { FailedScan, useScanField } from './scan-field';
-import { errorText, useStableRequests } from './stable-requests';
+import { UnconfirmedScan, useScanField } from './scan-field';
+import { errorText, isUncertain, useStableRequests } from './stable-requests';
 
 const t = returnsCs;
 type Message = { tone: 'ok' | 'error'; text: string } | null;
-type Run = (key: string, action: (requestId: string) => Promise<string | null>) => Promise<boolean>;
+/** How an action ended: saved, refused (definite, nothing saved) or uncertain (maybe saved). */
+export type RunResult = 'done' | 'refused' | 'uncertain';
+type Run = (
+  key: string,
+  action: (requestId: string) => Promise<string | null>,
+  /** Named in a refusal or an uncertain answer (e.g. the scanned code). */
+  subject?: string,
+) => Promise<RunResult>;
 
 /**
  * Příjem vratek (doc 047 §4.9): scan a returned crate or add a box, scan each bottle (good or
@@ -54,19 +61,20 @@ export function ReceiptWorkspace({
       setStale(true);
     }
   };
-  const run: Run = async (key, action) => {
+  const run: Run = async (key, action, subject) => {
     setBusy(true);
     try {
       let text: string | null;
       try {
         text = await send(key, action);
       } catch (err) {
-        setMessage({ tone: 'error', text: errorText(err) });
-        return false;
+        const reason = errorText(err);
+        setMessage({ tone: 'error', text: subject ? `${subject}: ${reason}` : reason });
+        return isUncertain(err) ? 'uncertain' : 'refused';
       }
       setMessage({ tone: 'ok', text: text ?? t.saved });
       await refresh();
-      return true;
+      return 'done';
     } finally {
       setBusy(false);
     }
@@ -75,15 +83,19 @@ export function ReceiptWorkspace({
 
   const crateField = useScanField<{ scanned: string }>();
   const sendCrate = ({ scanned }: { scanned: string }) =>
-    run(`crate:${scanned}`, async (requestId) => {
-      const r = await apiSend('POST', `${base}/crates`, returnCrateScanResultSchema, {
-        requestId,
-        scannedValue: scanned,
-      });
-      return r.outcome === 'CRATE_RETURNED'
-        ? t.result.crate(r.crateCode, r.orderCode)
-        : t.result.crateAgain(r.crateCode);
-    });
+    run(
+      `crate:${scanned}`,
+      async (requestId) => {
+        const r = await apiSend('POST', `${base}/crates`, returnCrateScanResultSchema, {
+          requestId,
+          scannedValue: scanned,
+        });
+        return r.outcome === 'CRATE_RETURNED'
+          ? t.result.crate(r.crateCode, r.orderCode)
+          : t.result.crateAgain(r.crateCode);
+      },
+      scanned,
+    );
   const allEmptied = receipt.lineDetails.every((l) => l.emptiedAt);
 
   return (
@@ -163,10 +175,11 @@ export function ReceiptWorkspace({
               {t.receipt.addContainer}
             </button>
           </form>
-          {crateField.failed && (
+          {crateField.unconfirmed && (
             <div className="mt-3">
-              <FailedScan
-                scanned={crateField.failed.scanned}
+              <UnconfirmedScan
+                label={crateField.unconfirmed.scanned}
+                held={crateField.held}
                 busy={locked}
                 onRetry={() => crateField.retry(sendCrate)}
                 onDismiss={crateField.dismiss}
@@ -258,19 +271,23 @@ function LineCard({
   const title = line.crateCode ? t.line.crate(line.crateCode) : `${t.line.container} ${index + 1}`;
   const path = `${base}/lines/${line.id}`;
   const sendBottle = (a: { scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }) =>
-    run(`bottle:${line.id}:${a.scanned}:${a.outcome}`, async (requestId) => {
-      const r = await apiSend('POST', `${path}/bottles`, returnBottleScanResultSchema, {
-        requestId,
-        scannedValue: a.scanned,
-        outcome: a.outcome,
-      });
-      if (r.outcome === 'ISSUE_RECORDED') {
-        return t.result.issue(t.issue.kind[r.issue!.kind] ?? r.issue!.kind, r.issue!.code);
-      }
-      return r.repeated
-        ? t.result.repeated(r.bottleCode!)
-        : t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? r.result!);
-    });
+    run(
+      `bottle:${line.id}:${a.scanned}:${a.outcome}`,
+      async (requestId) => {
+        const r = await apiSend('POST', `${path}/bottles`, returnBottleScanResultSchema, {
+          requestId,
+          scannedValue: a.scanned,
+          outcome: a.outcome,
+        });
+        if (r.outcome === 'ISSUE_RECORDED') {
+          return t.result.issue(t.issue.kind[r.issue!.kind] ?? r.issue!.kind, r.issue!.code);
+        }
+        return r.repeated
+          ? t.result.repeated(r.bottleCode!)
+          : t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? r.result!);
+      },
+      a.scanned,
+    );
 
   return (
     <Card title={title} testId={`return-line-${line.crateCode ?? `box-${index + 1}`}`}>
@@ -344,9 +361,10 @@ function LineCard({
                 {t.line.unreadable}
               </button>
             </div>
-            {field.failed && (
-              <FailedScan
-                scanned={field.failed.scanned}
+            {field.unconfirmed && (
+              <UnconfirmedScan
+                label={`${field.unconfirmed.scanned} · ${t.line[field.unconfirmed.outcome === 'GOOD' ? 'good' : 'defective']}`}
+                held={field.held}
                 busy={busy}
                 onRetry={() => field.retry(sendBottle)}
                 onDismiss={field.dismiss}
@@ -441,14 +459,18 @@ function IssueRow({
   const [reason, setReason] = useState('');
   const path = `admin/returns/issues/${issue.code}`;
   const sendIdentify = (a: { scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }) =>
-    run(`identify:${issue.code}:${a.scanned}:${a.outcome}`, async (requestId) => {
-      const r = await apiSend('POST', `${path}/identify`, returnBottleScanResultSchema, {
-        requestId,
-        scannedValue: a.scanned,
-        outcome: a.outcome,
-      });
-      return t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? '');
-    });
+    run(
+      `identify:${issue.code}:${a.scanned}:${a.outcome}`,
+      async (requestId) => {
+        const r = await apiSend('POST', `${path}/identify`, returnBottleScanResultSchema, {
+          requestId,
+          scannedValue: a.scanned,
+          outcome: a.outcome,
+        });
+        return t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? '');
+      },
+      a.scanned,
+    );
   const mismatch = issue.kind === 'COUNT_MISMATCH';
   const identifiable =
     !issue.resolution && ['UNREADABLE', 'NOT_DELIVERED', 'NOT_IN_CIRCULATION'].includes(issue.kind);
@@ -505,10 +527,11 @@ function IssueRow({
           </button>
         </form>
       )}
-      {identifiable && field.failed && (
+      {identifiable && field.unconfirmed && (
         <div className="mt-2">
-          <FailedScan
-            scanned={field.failed.scanned}
+          <UnconfirmedScan
+            label={`${field.unconfirmed.scanned} · ${t.line[field.unconfirmed.outcome === 'GOOD' ? 'good' : 'defective']}`}
+            held={field.held}
             busy={busy}
             onRetry={() => field.retry(sendIdentify)}
             onDismiss={field.dismiss}
