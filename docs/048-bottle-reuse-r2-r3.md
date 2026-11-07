@@ -1,7 +1,9 @@
 # 048 — Returned bottle back into circulation: R2 (after washing), R3 (refilling), R1 order
 
-Status: **draft for review** (issue #125, priority 1; doc 047 §5). Nothing here is implemented, and
-nothing here is a migration.
+Status: **draft for review** (issue #125, priority 1; doc 047 §5). State on `main` `5650409`
+(2026-11-07): R1 is merged and on DEV (#129, with the fixes #131, #133); **R2 (§2) is implemented**
+(#132, doc 050) and on DEV with no R2 data yet. **R3 (§3) is not implemented**; §8 is its concrete
+delivery plan for the owner's decision.
 
 - R2 and R3 are the second and third scan of the workflow the owner approved on 2026-11-05 (doc 047
   §3). This document proposes their concrete models. As for R1, the approved workflow does not
@@ -16,8 +18,8 @@ nothing here is a migration.
 
 | Step | Needs, before its implementation starts                                                             |
 | ---- | --------------------------------------------------------------------------------------------------- |
-| R1   | done (#129, merged)                                                                                 |
-| R2   | R1 on DEV (done, `e8e71d3`); the R1 fix below; this model — **decided on its own**                  |
+| R1   | done (#129, merged; on DEV)                                                                         |
+| R2   | done: #132 (`main` `5650409`, doc 050), on DEV since 2026-11-07, no R2 write yet                    |
 | R3   | R2 released; this model; D1 (§4); §3.3c. It contains the placement into a crate **and** the filling |
 
 **R2 and R3 are separate decisions.** R2 (§2) needs only the approval of its own small model and
@@ -25,8 +27,8 @@ can be released alone. Nothing in R3's open questions (D1, the compatible migrat
 separate proposal §7) blocks R2.
 
 **A prerequisite fix of R1, found while checking this (reproduced 2026-11-06 on `e8e71d3`, local
-test database).** The supervised "Doplnit lahev" (`cycle-corrections.service.ts:127-143`) refuses
-only `CREATED`. It put a `RETURNED` (unwashed) bottle into an assembling crate of the same
+test database) — done in #131 (`crate_assignments_member_placeable`).** The supervised "Doplnit
+lahev" (`cycle-corrections.service.ts:127-143`) refused only `CREATED`. It put a `RETURNED` (unwashed) bottle into an assembling crate of the same
 product, design and recipe, and the crate became `READY_TO_FILL`, which the filling never accepts
 (it takes only `LABELED_EMPTY`): a stuck crate. A `RETIRED` bottle passes the same checks (only
 a full crate refused it in the reproduction). The DB does not check the member's status either
@@ -62,6 +64,10 @@ Only R3 can deliver one bottle twice, so the tests "two deliveries of the same b
 §4.10) and the end-to-end matrix (§5) run complete only from R3 on.
 
 ## 2. R2 — the second scan, after washing and inspection ("Po mytí" only)
+
+Implemented as below in #132 (`main` `5650409`); the release, rollback and DEV acceptance are in
+doc 050. Codes as built: `NOT_RETURNED` (any status but `RETURNED`), `DESIGN_WITHDRAWN`,
+`NOT_PLACEABLE_YET` (station and "Doplnit lahev"); permission `returns:receive` (no new one).
 
 ### 2.1 What it does
 
@@ -316,6 +322,14 @@ event or its payload.
 
 ## 4. Decisions needed
 
+**Already decided — not reopened** (owner 2026-11-05, issue #125 comment 6665848743): pumps are
+washed and reused, without individual codes; a defective pump is counted, never scanned; good
+bottles are not scanned before washing, each is identified once after washing and inspection;
+the bottle keeps its identity, body and label are not consumed again; a refilling consumes new
+material only for what was really replaced. The reuse counter counts `SORTED` (R1). Still open,
+with their effect on R3 in §8.4: D1 (where washed pumps are counted), D2 (what a revoked design
+means), D3 (new and washed bottles in one crate).
+
 For the owner (recommendations after review 5806384095):
 
 - **D1 — Where washed pumps enter stock.** Recommended: **one entry per washing batch with the
@@ -426,3 +440,139 @@ it is its own change of dispatch, with its own model PR:
 - tests of each step, and that nothing changes while no approval is revoked.
 
 Until then R2/R3 change nothing in dispatch.
+
+## 8. R3 — concrete delivery plan (2026-11-07, on `main` `5650409`; for the owner's decision)
+
+Nothing of R3 is implemented; no step below is covered by an approval yet (the R3 model has the
+technical APPROVE 5806877670 on `3499c83`, the owner's approval and D1/D3 are open). The plan
+names what each step needs.
+
+### 8.1 What `main` has today (verified)
+
+- Placement: `crate_assignments_member_placeable` (#131) admits only `LABELED_EMPTY`/`FILLED`
+  members; R2's `bottles_labeled_has_event` requires a `READY_FOR_REUSE` bottle to be in no
+  crate; the station and "Doplnit lahev" answer `NOT_PLACEABLE_YET`. Sources are `LABELING`,
+  `REPACKED`, `REPLACEMENT` (no `REUSE`).
+- Filling: only `LABELED_EMPTY` (`filling.service.ts:250`); one `FILLED` per bottle
+  (`bottle_events_one_filled_per_bottle`, `20261016090100`); `ayvo_assert_fill_complete` requires
+  the complete FILL BOM of the cycle's recipe, pump line included, and a new `PUMP` attachment.
+- **To be fixed with R3 (found 2026-11-07):** `BottlesService.filledLot` reads the bottle's
+  `FILLED` event with `findFirst` and no order. With one `FILLED` per bottle that is exact today.
+  After a second filling its one caller, the filling's duplicate scan (`ALREADY_FILLED`,
+  `filling.service.ts:239`), may show the first circulation's liquid lot. R3-b reads the
+  `FILLED` of the bottle's current circulation (`bottle_fill_circulations`) and tests a
+  duplicate scan after the second filling.
+- The second return already works: R1's identification accepts a bottle that is in circulation
+  again after its last `SORTED` (`return-receipts.service.ts:779`), `SORTED` is unique per
+  (bottle, cycle), and the reuse counter is the number of `SORTED`.
+
+### 8.2 The smallest safe order (each its own PR; release of 2–3 together)
+
+1. **R3-a — circulation anchor and placement guards (DB only; D1- and D3-independent).**
+   - Migration 1 (enum values only): `CrateAssignmentSource += REUSE`.
+   - Migration 2, in one transaction, first takes
+     `LOCK TABLE bottle_events IN SHARE ROW EXCLUSIVE MODE`, so that no `FILLED` is written
+     during it (the APPROVE condition "atomic backfill and switch"):
+     - `bottle_fill_circulations` (§3.3b): insert-only, its own trigger refusing UPDATE, DELETE and
+       a row whose events are of another bottle or of the wrong type;
+     - backfill by INSERT (each `FILLED` → its bottle's `LABEL_APPLIED`), and the FILLED insert
+       trigger deriving the anchor;
+     - then drop `bottle_events_one_filled_per_bottle`;
+     - a `READY_FOR_REUSE` member is allowed only with source `REUSE` into `OPEN_ASSEMBLY`. R2's
+       "in no crate" becomes "in no crate, or in exactly its `REUSE` assignment made after its
+       `REUSE_READY`". Every other rule is unchanged.
+   - Safe to deploy alone: the R2 API still refuses placement (`NOT_PLACEABLE_YET`), so no washed
+     bottle reaches a crate and no crate gets stuck.
+   - Tests:
+     - DB tests that commit, as `ayvo_core`: the §3.4 circulation cases, and a direct SQL `REUSE`
+       of a `RETURNED` or `LABELED_EMPTY` bottle refused;
+     - the doc 049/050 compatibility runs: the R2 release's API tests on the R3 schema;
+     - a `FILLED` of the R2 API written while migration 2 runs: it waits for the lock and then
+       gets its anchor.
+2. **R3-b — placement and filling API (needs D3, and D1 for the pump).**
+   - Station switch `afterWash`, source `REUSE` (§3.0). The `NOT_PLACEABLE_YET` of the station
+     becomes the placement; "Doplnit lahev" keeps refusing.
+   - Filling of `READY_FOR_REUSE` with `pump: WASHED | NEW` (§3.1). The consumption of `WASHED`
+     follows D1:
+     - D1 = A: one piece of "Pumpička umytá" (§3.2, its own migration with the ledger types and
+       the permission);
+     - D1 = B: no pump movement, the choice recorded on the `FILLED` payload only.
+   - The fill check of §3.3 accepts exactly that case.
+3. **R3-c — UI.** The switch at the station and the pump choice at the filling station, 390 px
+   and 1440 px. With D1 = A also the washed-pump entry.
+
+R3-b and R3-c are released together: a crate that can take a washed bottle can also fill it
+(§1). Rollback: before the first R3 write the R2 release runs on the R3 schema (verified by the
+compatibility runs). After it, fix forward only. The first write is any of the §3.3c list.
+
+### 8.3 The test of a second circulation (API e2e, existing fixtures)
+
+`crateFactory(t, { capacity: 2 })`, `shipCrates`, `deliver` (FAKE carrier, `RETURN_ENV`),
+`returnsApi`, the R2 scan `POST /api/admin/returns/after-wash`, `factory.openStation()`, and
+the filling fixtures (`fillingSession`, `fillLoadCrate`, `chooseLiquidLot`, `fillScan`,
+`finishCrate`).
+
+1. **First circulation.** Crates K (b1, b2) and L (b3, b4) are made and Hotovo, shipped in O1 and
+   delivered.
+2. **Mixed return, double scans.**
+   - Receipt R: crate scan of K; b1 GOOD; b3 GOOD (from L, still `DELIVERED` — the mixed case);
+     b2 DEFECTIVE.
+   - b1 scanned again: `repeated`, still one `SORTED`.
+   - Vyprázdněno of K with 3 pieces. L is never scanned and its history shows b4 "bez
+     potvrzeného návratu".
+3. **After washing.** "Po mytí" b1 and b3, then b1 again (`repeated`, one `REUSE_READY`).
+4. **Placement (R3).**
+   - The station opens P and design V with crate K: K2, a new cycle (K1 is `CLOSED`).
+   - `afterWash` scans of b1 and b3 make `REUSE` members and K2 `READY_TO_FILL`.
+   - b1 scanned again at that station: the existing `ALREADY_APPLIED`.
+   - b2 (`RETIRED`): refused.
+5. **Filling.**
+   - b1 and b3 are filled with the D1 pump choice, then Hotovo.
+   - A second `fillScan` of b1: `ALREADY_FILLED` with circulation 2's liquid lot (§8.1).
+   - Two concurrent fills of b3 from two requests: one `FILLED`.
+6. **Second circulation.** K2 is shipped in O2 and delivered. Receipt R′: crate scan of K, b1
+   GOOD.
+7. **Asserted throughout:**
+   - **Identity:** b1's code and `public_token` (the same QR URL) never change. Its events are
+     `CREATED, LABEL_APPLIED, ASSIGNED_TO_CRATE, FILLED, SORTED, REUSE_READY, ASSIGNED_TO_CRATE
+(REUSE), FILLED, SORTED`, with exactly one `LABEL_APPLIED`.
+   - **Anchors:** `bottle_fill_circulations` holds two rows for b1, anchored on its
+     `LABEL_APPLIED` and on its `REUSE_READY`.
+   - **Stock in circulation 2:** `NEW_BOTTLE` and label unchanged, liquid −1 portion per bottle,
+     pump per D1, and no movement for any repeat or refusal.
+   - **Reuse counter:** b1 = 2 (detail and passport).
+   - **Order history:** O1 still lists b1, b2, b3, b4 and its parcel and delivery; O2 lists b1
+     and b3.
+
+### 8.4 Open decisions and their effect
+
+- **D1** (open; the physical rule is decided, the place of counting is not):
+  - it decides the pump consumption of a reused filling, the inventory model of §3.2 and the
+    fill check;
+  - it does not touch R3-a;
+  - until it is decided, a reused bottle cannot be filled without either wrongly consuming a
+    new pump or recording nothing.
+- **D3** (open):
+  - "allowed" (recommended) is §3.0 as written;
+  - "not allowed" adds one rule to the placement: a cycle takes `REUSE` members only when it
+    has no `LABELING` member, and the reverse;
+  - it changes R3-b only.
+- **D2** (open):
+  - no effect on R3: a set-aside bottle never becomes `READY_FOR_REUSE`, so it never reaches
+    placement or filling;
+  - (a) or (b) is its own small change on the "Po mytí" side.
+
+### 8.5 Operational acceptance without a carrier and without DEV writes
+
+- **Available today, no new infrastructure:**
+  - the Playwright walk on the isolated `ayvo_e2e` database, with SIMULATED carrier events (PPL
+    code 450) written only into that database (`workflow-returns.spec.ts` already does it for R1
+    and R2);
+  - screenshots at 390 px and 1440 px for the owner to look at (as the R1 visual proof of
+    2026-11-07);
+  - for R3, the same spec gets the §8.3 walk: placement, filling, Hotovo, picking, a second
+    delivery and a second return. No carrier is called and DEV is not written.
+- **A real DEV acceptance** still needs a delivered crate on DEV. That needs the owner's choice of
+  the R1 acceptance path (a live test carrier, or a documented manual delivery decision); R3 adds
+  nothing to that choice. Until then DEV checks stay read-only: the pages render and the counts
+  are 0 (as the R2 release on 2026-11-07).
