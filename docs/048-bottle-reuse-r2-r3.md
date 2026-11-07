@@ -77,8 +77,8 @@ doc 050. Codes as built: `NOT_RETURNED` (any status but `RETURNED`), `DESIGN_WIT
 
 - Sklad → "Po mytí": scan a `RETURNED` bottle of the active site → `RETURNED → READY_FOR_REUSE`
   ("Připravená k plnění · Po mytí"), with a new bottle event `REUSE_READY`. The operator scans
-  only a bottle that was physically washed and inspected; there is no scan before washing (doc
-  047 §3).
+  only a bottle that was physically washed and inspected; between the intake scan (`SORTED`, R1)
+  and the washing there is no scan (doc 047 §3).
 - The bottle keeps its **identity** (the same row, QR and code) and its **product binding**
   (`bottle_product_bindings` is written once and immutable,
   `migrations/20261014160100_labeling_into_crates/migration.sql:503-529`), so its category
@@ -178,7 +178,9 @@ and nothing is stored for them.
 2. **Current crate binding:** the active assignment (crate code and cycle status), or "bez
    bedny". It is independent of the readiness.
 3. **Location derived from dispatch:**
-   - "na provozovně" (no shipped cycle open);
+   - "—" for `CREATED`: a printed code is not yet a physical bottle, so printed codes never look
+     like physical stock;
+   - "na provozovně" from the first label application on, while no shipped cycle is open;
    - "u dopravce" (its cycle `DISPATCHED`);
    - "u hotelu" (its cycle `DELIVERED` and the bottle not yet identified at a return);
    - back "na provozovně" from its own `SORTED`. The return from the hotel is derived from the
@@ -361,9 +363,10 @@ event or its payload.
 ## 4. Decisions needed
 
 **Already decided — not reopened** (owner 2026-11-05, issue #125 comment 6665848743): pumps are
-washed and reused, without individual codes; a defective pump is counted, never scanned; good
-bottles are not scanned before washing, each is identified once after washing and inspection;
-the bottle keeps its identity, body and label are not consumed again; a refilling consumes new
+washed and reused, without individual codes; a defective pump is counted, never scanned. A good
+bottle is scanned individually at the intake (`SORTED`, R1), then washed and inspected with no
+scan in between, and scanned a second time after that (`REUSE_READY`, R2). The bottle keeps its
+identity, body and label are not consumed again; a refilling consumes new
 material only for what was really replaced. The reuse counter counts `SORTED` (R1). Still open,
 with their effect on R3 in §8.4: D1 (where washed pumps are counted), D2 (what a revoked design
 means), D3 (new and washed bottles in one crate).
@@ -405,7 +408,8 @@ is for the accountant. R3 records pieces only.
 
 Crate K; stock columns: N = `NEW_BOTTLE`, P = new pump, W = washed pump. "—" = no change.
 
-Operating view of b (§3.0a): steps 1–2 "Čistá · k plnění · Nová", then the filling;
+Operating view of b (§3.0a): before step 1 "Kód čekající na nalepení", location "—"; steps 1–2
+"Čistá · k plnění · Nová", then the filling;
 step 3 "u dopravce", then "u hotelu"; step 4 back "na provozovně" (from b's own `SORTED`); step 8
 "Čistá · k plnění · Po mytí", "bez bedny"; step 8b the same, crate K2.
 
@@ -578,28 +582,38 @@ the filling fixtures (`fillingSession`, `fillLoadCrate`, `chooseLiquidLot`, `fil
 `finishCrate`).
 
 1. **First circulation.**
-   - Crates K (b1, b2) and L (b3, b4) are made and Hotovo, shipped in O1 and delivered.
+   - Crates K (b1, b2), L (b3, b4) and M (b7, b8) of design V are made and Hotovo, shipped in O1
+     and delivered.
    - Crate J (b5, b6) carries another approved design V′ (`factory.refill()`). It goes in its own
      order O1′, because an order line pins one design (§4 D3), and is delivered too.
 2. **Mixed return, double scans.**
    - Receipt R: crate scan of K; b1 GOOD; b3 GOOD (from L, still `DELIVERED` — the mixed case);
      b2 DEFECTIVE.
    - b1 scanned again: `repeated`, still one `SORTED`.
-   - Crate scan of J; b5 GOOD (a bottle of design V′, for the refusal in step 4).
+   - Crate scan of J; b5 GOOD (a bottle of design V′, for the refusals in step 4).
+   - Crate scan of M; b7 GOOD, b8 GOOD (for the full-crate refusals in step 4).
    - Vyprázdněno of K with 3 pieces. L is never scanned and its history shows b4 "bez
      potvrzeného návratu".
-3. **After washing.** "Po mytí" b1, then b1 again (`repeated`, one `REUSE_READY`).
+3. **After washing.** "Po mytí" b1 and b7, then b1 again (`repeated`, one `REUSE_READY`). b3, b5
+   and b8 stay `RETURNED`.
 4. **Placement (R3-b).**
    - The station opens P and design V with crate K: K2, a new cycle (K1 is `CLOSED`).
-   - b1 (already "Po mytí"): the assignment only.
-   - b3 is placed by the single scan instead: b3 is first left `RETURNED` in step 3, then
-     scanned with `afterWash: true`. `REUSE_READY`, the pump closed and the `REUSE` member are
-     written in one transaction, and K2 becomes `READY_TO_FILL`.
-   - The combined scan refused: b5 (`RETURNED`, design V′) at K2 gives `BINDING_MISMATCH`. It
-     stays `RETURNED`, with no `REUSE_READY`, its pump attached and no assignment. The same
-     bottle without `afterWash` gives `NOT_WASHED`.
+   - b1 (already "Po mytí"): the assignment only. K2 has 1 of 2 places taken.
+   - **Refusals while K2 still has a free place**, so a design or confirmation refusal is never
+     mistaken for a full crate:
+     - b5 (`RETURNED`, design V′) with `afterWash: true`: `BINDING_MISMATCH`;
+     - b5 without `afterWash`: `NOT_WASHED`.
+   - b3 is placed by the single scan: `RETURNED` with `afterWash: true`. `REUSE_READY`, the pump
+     closed and the `REUSE` member are written in one transaction, and K2 becomes `READY_TO_FILL`.
    - b1 scanned again at that station: the existing `ALREADY_APPLIED`.
    - b2 (`RETIRED`): refused.
+   - **The full crate, separately:** at K2 (`READY_TO_FILL`, 2 of 2) b7 (`READY_FOR_REUSE`) and b8
+     (`RETURNED`, with `afterWash: true`) are refused by the existing full-crate refusal.
+   - **Zero writes for every refusal in this step,** checked against a snapshot taken before each
+     scan:
+     - b5 and b8 stay `RETURNED` with the pump attached and no `REUSE_READY`;
+     - b7 stays `READY_FOR_REUSE` and in no crate;
+     - no event, assignment, crate counter, attachment or stock movement is added.
 5. **Filling.**
    - b1 and b3 are filled with the D1 pump choice, then Hotovo.
    - A second `fillScan` of b1: `ALREADY_FILLED` with circulation 2's liquid lot (§8.1).
@@ -617,8 +631,8 @@ the filling fixtures (`fillingSession`, `fillLoadCrate`, `chooseLiquidLot`, `fil
    - **Stock in circulation 2:** `NEW_BOTTLE` and label unchanged, liquid −1 portion per bottle,
      pump per D1, and no movement for any repeat or refusal.
    - **Reuse counter:** b1 = 2 (detail and passport).
-   - **Order history:** O1 still lists b1, b2, b3, b4 and its parcel and delivery; O2 lists b1
-     and b3.
+   - **Order history:** O1 still lists b1, b2, b3, b4, b7, b8 and its parcels and delivery; O2
+     lists b1 and b3.
    - **Operating view (§3.0a)** of b1 at each step as in the §5 note: readiness, crate and
      location apart, the location "u hotelu" until b1's own `SORTED`.
 8. **On the R3-a schema alone** (before R3-b): the same walk up to step 3, then a direct
