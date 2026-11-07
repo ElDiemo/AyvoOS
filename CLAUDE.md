@@ -175,6 +175,13 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   allocation `completed_*` (still the order's history), assignment `released_event_id`
   (`RETURN_IDENTIFIED` only); `returns:receive|correct` (ADMIN). A refusal that records an issue
   commits with its result. No washing (R2), refilling (R3) or stock change.
+  R2 "Po mytí" (owner asked for its implementation 2026-11-07 on doc 048 §1–§2 `3499c83`, PR #128
+  draft; implementation under review, doc 050): bottle `READY_FOR_REUSE`, event `REUSE_READY`
+  (only from `RETURNED`, once per return, the open pump attachment closed `CLEANING_REQUIRED` in
+  the same transaction, nothing consumed, the binding kept); a revoked design is refused
+  (`DESIGN_WITHDRAWN`) and listed as set aside — never retired automatically (D2 open). In R2 a
+  `READY_FOR_REUSE` bottle enters no crate (`NOT_PLACEABLE_YET`, DB); no washed pumps, placement
+  or refilling (R3), no dispatch change.
   Employee public business cards (owner 2026-10-23; ADR 0036, docs/employee-business-cards.md): one optional card per existing user, explicit public
   fields, stable slug, separate versioned draft/publication and private normalized photos;
   `identity:users_manage` only. Deactivation hides atomically; reactivation never republishes.
