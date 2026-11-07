@@ -13,14 +13,17 @@ import { ENV, type Env } from '../config/env.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { QrRegistryService } from '../database/qr-registry.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { Prisma } from '../generated/prisma/client.js';
 import type { Principal } from '../identity/principal.js';
 import type { SiteContext } from '../inventory/warehouse-context.js';
 
 type Tx = Prisma.TransactionClient;
 
-const QUEUE_LIMIT = 500;
-const READY_LIMIT = 100;
+/**
+ * Rows per list of the queue, applied in the database (the counts are exact and separate). Tests
+ * lower them to exercise a queue longer than a list.
+ */
+export const AFTER_WASH_LIMITS = { list: 500, ready: 100 };
 
 /** The binding as shown: product and label design (template name and version). */
 const bindingSelect = {
@@ -58,10 +61,68 @@ export class AfterWashService {
     @Inject(ENV) private readonly env: Env,
   ) {}
 
-  /** The queue of the active site: waiting, set aside (revoked design) and ready. */
+  /**
+   * The queue of the active site: waiting, set aside (revoked design) and ready. Each list is
+   * limited in the database by its own condition, so a long first group never hides the second;
+   * the counts are separate aggregates.
+   */
   async queue(site: SiteContext): Promise<AfterWashQueue> {
-    const returned = await this.prisma.bottle.findMany({
-      where: { siteId: site.siteId, status: 'RETURNED' },
+    // RETURNED bottles of the site, each with "is its design still approved for its product?"
+    // (a bottle without a binding cannot be set aside for its design: it waits, and its scan says
+    // why it is refused).
+    const groups = Prisma.sql`
+      SELECT b."id", b."serial",
+             (pb."bottle_id" IS NULL OR EXISTS (
+                SELECT 1 FROM "product_label_approvals" a
+                 WHERE a."product_id" = pb."product_id"
+                   AND a."label_template_version_id" = pb."label_template_version_id"
+                   AND a."revoked_at" IS NULL)) AS "approved"
+        FROM "bottles" b LEFT JOIN "bottle_product_bindings" pb ON pb."bottle_id" = b."id"
+       WHERE b."site_id" = ${site.siteId}::uuid AND b."status" = 'RETURNED'`;
+    const limit = AFTER_WASH_LIMITS.list;
+    const [counts, waitingIds, withdrawnIds] = await Promise.all([
+      this.prisma.$queryRaw<{ approved: boolean; n: bigint }[]>`
+        SELECT g."approved", count(*) AS "n" FROM (${groups}) g GROUP BY g."approved"`,
+      this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT g."id" FROM (${groups}) g WHERE g."approved" ORDER BY g."serial" LIMIT ${limit}`,
+      this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT g."id" FROM (${groups}) g WHERE NOT g."approved" ORDER BY g."serial" LIMIT ${limit}`,
+    ]);
+    const count = (approved: boolean) =>
+      Number(counts.find((c) => c.approved === approved)?.n ?? 0);
+    const [waiting, withdrawn, readyCount, ready] = await Promise.all([
+      this.returnedRows(waitingIds.map((r) => r.id)),
+      this.returnedRows(withdrawnIds.map((r) => r.id)),
+      this.prisma.bottle.count({ where: { siteId: site.siteId, status: 'READY_FOR_REUSE' } }),
+      this.prisma.bottleEvent.findMany({
+        where: { type: 'REUSE_READY', bottle: { siteId: site.siteId, status: 'READY_FOR_REUSE' } },
+        orderBy: { id: 'desc' },
+        take: AFTER_WASH_LIMITS.ready,
+        select: {
+          occurredAt: true,
+          payload: true,
+          bottle: { select: { code: true, binding: { select: bindingSelect } } },
+        },
+      }),
+    ]);
+    return {
+      waiting,
+      withdrawn,
+      ready: ready.map((e) => ({
+        bottleCode: e.bottle.code,
+        ...shown(e.bottle.binding),
+        since: e.occurredAt.toISOString(),
+        receipt: (e.payload as { receipt?: string | null } | null)?.receipt ?? null,
+      })),
+      counts: { waiting: count(true), withdrawn: count(false), ready: readyCount },
+    };
+  }
+
+  /** The shown rows of these (already limited) RETURNED bottles, in serial order. */
+  private async returnedRows(ids: string[]): Promise<AfterWashBottle[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.prisma.bottle.findMany({
+      where: { id: { in: ids } },
       orderBy: { serial: 'asc' },
       select: {
         code: true,
@@ -77,47 +138,12 @@ export class AfterWashService {
         },
       },
     });
-    const open = await this.approvals.openDesigns([
-      ...new Set(returned.flatMap((b) => (b.binding ? [b.binding.productId] : []))),
-    ]);
-    const waiting: AfterWashBottle[] = [];
-    const withdrawn: AfterWashBottle[] = [];
-    for (const b of returned) {
-      const row: AfterWashBottle = {
-        bottleCode: b.code,
-        ...shown(b.binding),
-        since: b.events[0]?.occurredAt.toISOString() ?? '',
-        receipt: b.events[0]?.returnLine?.receipt.code ?? null,
-      };
-      const approved =
-        !b.binding ||
-        (open.get(b.binding.productId) ?? []).includes(b.binding.labelTemplateVersionId);
-      (approved ? waiting : withdrawn).push(row);
-    }
-    const [readyCount, ready] = await Promise.all([
-      this.prisma.bottle.count({ where: { siteId: site.siteId, status: 'READY_FOR_REUSE' } }),
-      this.prisma.bottleEvent.findMany({
-        where: { type: 'REUSE_READY', bottle: { siteId: site.siteId, status: 'READY_FOR_REUSE' } },
-        orderBy: { id: 'desc' },
-        take: READY_LIMIT,
-        select: {
-          occurredAt: true,
-          payload: true,
-          bottle: { select: { code: true, binding: { select: bindingSelect } } },
-        },
-      }),
-    ]);
-    return {
-      waiting: waiting.slice(0, QUEUE_LIMIT),
-      withdrawn: withdrawn.slice(0, QUEUE_LIMIT),
-      ready: ready.map((e) => ({
-        bottleCode: e.bottle.code,
-        ...shown(e.bottle.binding),
-        since: e.occurredAt.toISOString(),
-        receipt: (e.payload as { receipt?: string | null } | null)?.receipt ?? null,
-      })),
-      counts: { waiting: waiting.length, withdrawn: withdrawn.length, ready: readyCount },
-    };
+    return rows.map((b) => ({
+      bottleCode: b.code,
+      ...shown(b.binding),
+      since: b.events[0]?.occurredAt.toISOString() ?? '',
+      receipt: b.events[0]?.returnLine?.receipt.code ?? null,
+    }));
   }
 
   /** "Po mytí": one scan of one washed and inspected bottle of the active site. */

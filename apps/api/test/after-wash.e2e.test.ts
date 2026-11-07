@@ -8,6 +8,7 @@ import type {
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testCarrierControl } from '../src/carriers/test-carrier.js';
+import { AFTER_WASH_LIMITS } from '../src/returns/after-wash.service.js';
 import { correctCrate, labelScan } from './support/labeling-fixtures.js';
 import { crateFactory, createHotel, type MadeCrate } from './support/order-fixtures.js';
 import { deliver, RETURN_ENV, returnsApi, shipCrates } from './support/return-fixtures.js';
@@ -383,6 +384,71 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     expect((await t.prisma.bottle.findUniqueOrThrow({ where: { id: b!.id } })).status).toBe(
       'READY_FOR_REUSE',
     );
+  });
+
+  it('the queue is limited per group in the database, with exact counts — also when the first group fills the limit before the second appears', async () => {
+    // A second revoked design: two more bottles set aside (serials after the approved ones).
+    await returned([['GOOD', 'GOOD']]);
+    await factory.refill();
+    const [y] = await returned([['GOOD', 'GOOD']]);
+    const revoked = factory.designVersion();
+    const approval = await t.prisma.productLabelApproval.findFirstOrThrow({
+      where: { labelTemplateVersionId: revoked, revokedAt: null },
+    });
+    await http()
+      .post(
+        `/api/admin/catalog/products/${factory.kit.productCode}/label-approvals/${approval.id}/revoke`,
+      )
+      .send({ requestId: randomUUID(), reason: 'druhý stažený design' })
+      .expect(200);
+    await factory.refill();
+
+    // The truth, computed here without any limit: RETURNED bottles of the site in serial order.
+    const site = (await t.prisma.bottle.findUniqueOrThrow({ where: { id: y!.bottleIds[0]! } }))
+      .siteId;
+    const all = await t.prisma.bottle.findMany({
+      where: { siteId: site, status: 'RETURNED' },
+      orderBy: { serial: 'asc' },
+      select: {
+        code: true,
+        binding: { select: { productId: true, labelTemplateVersionId: true } },
+      },
+    });
+    const open = await t.prisma.productLabelApproval.findMany({
+      where: { revokedAt: null },
+      select: { productId: true, labelTemplateVersionId: true },
+    });
+    const approved = (b: (typeof all)[number]) =>
+      !b.binding ||
+      open.some(
+        (a) =>
+          a.productId === b.binding!.productId &&
+          a.labelTemplateVersionId === b.binding!.labelTemplateVersionId,
+      );
+    const waiting = all.filter(approved).map((b) => b.code);
+    const withdrawn = all.filter((b) => !approved(b)).map((b) => b.code);
+    const limit = 2;
+    // Both groups are longer than the limit, and the first `limit` bottles in serial order are
+    // all waiting: a limit applied before the split would show no set-aside bottle at all.
+    expect(waiting.length).toBeGreaterThan(limit);
+    expect(withdrawn.length).toBeGreaterThan(limit);
+    expect(all.slice(0, limit).every(approved)).toBe(true);
+
+    AFTER_WASH_LIMITS.list = limit;
+    try {
+      const q = await queue();
+      expect(q.waiting.map((b) => b.bottleCode)).toEqual(waiting.slice(0, limit));
+      expect(q.withdrawn.map((b) => b.bottleCode)).toEqual(withdrawn.slice(0, limit));
+      expect(q.counts).toMatchObject({ waiting: waiting.length, withdrawn: withdrawn.length });
+      expect(q.withdrawn[0]).toMatchObject({ product: { code: factory.kit.productCode } });
+      expect(q.withdrawn[0]!.receipt).toMatch(/^RR-\d{6}$/);
+    } finally {
+      AFTER_WASH_LIMITS.list = 500;
+    }
+    // Unlimited again: every bottle listed.
+    const q = await queue();
+    expect(q.waiting.map((b) => b.bottleCode)).toEqual(waiting);
+    expect(q.withdrawn.map((b) => b.bottleCode)).toEqual(withdrawn);
   });
 
   describe('database guards (direct SQL by the running core role, committed)', () => {
