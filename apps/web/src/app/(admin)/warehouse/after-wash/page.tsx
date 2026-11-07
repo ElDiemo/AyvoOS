@@ -3,6 +3,7 @@ import { AfterWashWorkspace } from '@/components/returns/after-wash-workspace';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { returnsCs } from '@/i18n/cs/returns';
 import { apiGet } from '@/lib/api';
+import { afterWashStorageKey } from '@/lib/site-storage';
 import { requirePermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ export default async function AfterWashPage() {
       <WarehouseHeader active="after-wash" title={t.title} subtitle={t.subtitle} />
       <AfterWashWorkspace
         initial={queue}
-        storageKey={`ayvo:after-wash:${user.user.id}:${user.activeSiteId ?? 'none'}`}
+        storageKey={afterWashStorageKey(user.user.id, user.activeSiteId)}
       />
     </>
   );

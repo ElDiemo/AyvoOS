@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiSend } from '@/lib/client-api';
 import { confirmLeave } from '@/lib/leave-guard';
+import { clearForSiteChange } from '@/lib/site-storage';
 import { z } from 'zod';
 
 const t = identityCs.shell;
@@ -13,7 +14,8 @@ const t = identityCs.shell;
 /**
  * Chooses the site this session works at (doc 022). Always visible in the shell. The server
  * validates the choice; afterwards the page reloads completely and browser-held station state is
- * cleared, so nothing of the previous site stays on screen. Unsaved form changes are confirmed
+ * cleared, so nothing of the previous site stays on screen (only state keyed by user and site,
+ * the unsent "Po mytí" scans, is kept — `clearForSiteChange`). Unsaved form changes are confirmed
  * first (the reload would lose them).
  */
 export async function selectSite(siteId: string, next?: string): Promise<boolean> {
@@ -21,7 +23,7 @@ export async function selectSite(siteId: string, next?: string): Promise<boolean
   if (!(await confirmLeave())) return false;
   await apiSend('POST', 'auth/active-site', z.object({ activeSiteId: z.uuid() }), { siteId });
   try {
-    sessionStorage.clear();
+    clearForSiteChange(sessionStorage);
   } catch {
     // storage unavailable: nothing to clear
   }

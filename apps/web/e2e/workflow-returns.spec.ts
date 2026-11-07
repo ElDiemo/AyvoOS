@@ -16,9 +16,8 @@ import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from
 test.use({ storageState: 'e2e/.auth/admin.json', timezoneId: 'Europe/Prague' });
 test.describe.configure({ mode: 'serial' });
 
-/** The migrated initial site and the fictional second site of the e2e server (auth.setup.ts). */
+/** The migrated initial site of the e2e server (auth.setup.ts). */
 const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
-const E2E_DE_SITE_ID = '01990000-0000-7000-8000-0000000000e2';
 const SHOTS = resolve(import.meta.dirname, '../../../docs/screenshots/returns');
 let orderCode = '';
 let productCode = '';
@@ -723,15 +722,26 @@ test('"Po mytí": the end of the session stops the series and keeps the unsent s
   await expect(page).toHaveURL(/\/warehouse\/after-wash$/);
   await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
   await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
-  // The same administrator at another site: nothing either.
-  await page.goto('/api/auth/login?next=/&login_hint=e2e-admin@ayvo.test');
-  await page.request.post('/api/auth/active-site', { data: { siteId: E2E_DE_SITE_ID } });
-  await page.goto('/warehouse/after-wash');
+  // The same administrator signs in again and, as an account with several sites, chooses the
+  // site in the UI — first the other one: nothing of the series there.
+  await page.goto('/api/auth/login?next=/warehouse/after-wash&login_hint=e2e-admin@ayvo.test');
+  await expect(page).toHaveURL(/\/select-site\?next=/);
+  await page
+    .getByTestId('site-choices')
+    .locator('li')
+    .filter({ hasText: 'E2E-DE' })
+    .getByRole('button', { name: 'Pracovat zde' })
+    .click();
+  await expect(page).toHaveURL(/\/warehouse\/after-wash$/);
   await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
   await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
-  // Back at the site of the series: both scans restored, stopped until "Zkusit znovu".
-  await page.request.post('/api/auth/active-site', { data: { siteId: INITIAL_SITE_ID } });
-  await page.goto('/warehouse/after-wash');
+  // Back at the site of the series through the site switcher: both scans restored, stopped.
+  // (the switch reloads the page; checked only once the new page has loaded)
+  await Promise.all([
+    page.waitForEvent('load'),
+    page.getByTestId('site-switcher').selectOption(INITIAL_SITE_ID),
+  ]);
+  await expect(page.getByTestId('site-switcher')).toHaveValue(INITIAL_SITE_ID);
   const unresolved = page.getByTestId('after-wash-scans-unresolved');
   await expect(unresolved).toContainText('Výsledek posledního skenu není jistý');
   await expect(page.getByTestId('after-wash-scans-waiting')).toHaveText('Čeká na odeslání: 1');
