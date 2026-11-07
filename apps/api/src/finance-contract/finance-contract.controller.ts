@@ -15,12 +15,17 @@ import {
   financeHotelLookupSchema,
   financePrincipalRequestSchema,
   financeSupplierLookupSchema,
+  portalGrantIssueRequestSchema,
+  portalGrantReplaceRequestSchema,
   type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
   type FinancePrincipal,
   type FinancePrincipalRequest,
   type PermissionCode,
+  type PortalGrant,
+  type PortalGrantIssueRequest,
+  type PortalGrantReplaceRequest,
 } from '@ayvo/types';
 import { z } from 'zod';
 import { domainError } from '../common/domain-error.js';
@@ -30,6 +35,7 @@ import { ServiceAccess } from '../identity/access.decorators.js';
 import { CurrentPrincipal, forbidden, sameOriginRequest } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import { HotelsService } from '../customers/hotels.service.js';
+import { PortalGrantsService } from '../portal-grants/portal-grants.service.js';
 import { ProcurementService } from '../procurement/procurement.service.js';
 
 const require = (p: Principal, ...codes: PermissionCode[]) => {
@@ -51,6 +57,7 @@ export class FinanceContractController {
   constructor(
     private readonly procurement: ProcurementService,
     private readonly hotels: HotelsService,
+    private readonly portalGrants: PortalGrantsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -158,5 +165,33 @@ export class FinanceContractController {
   ): Promise<FinanceContractHotel[]> {
     require(p, 'finance:billing_read');
     return this.hotels.financeContractHotels(body.ids);
+  }
+
+  // --- hotel portal grants (ADR 0045 §4) ---------------------------------------------------
+  // Finance has checked, in its own transaction, that the hotels belong to the payer; the core
+  // re-checks the admin's permissions on the forwarded session, the account (PORTAL, active) and
+  // the hotels, and stores the grant. The core never calls Finance.
+
+  /** A new grant for a hotel portal account. */
+  @ServiceAccess('finance')
+  @Post('portal-grants')
+  issuePortalGrant(
+    @Body(new ZodValidationPipe(portalGrantIssueRequestSchema)) body: PortalGrantIssueRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalGrant> {
+    require(p, 'finance:billing_read', 'identity:portal_grants_manage');
+    return this.portalGrants.issue(p.userId, body);
+  }
+
+  /** The active grant replaced by one with the given hotels (also when narrowed). */
+  @ServiceAccess('finance')
+  @Post('portal-grants/:id/replace')
+  replacePortalGrant(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(portalGrantReplaceRequestSchema)) body: PortalGrantReplaceRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalGrant> {
+    require(p, 'finance:billing_read', 'identity:portal_grants_manage');
+    return this.portalGrants.replace(p.userId, id, body);
   }
 }

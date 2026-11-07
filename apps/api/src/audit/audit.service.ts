@@ -79,7 +79,10 @@ export type AuditType =
   | 'PRINT_AGENT_CREATED'
   | 'PRINT_AGENT_TOKEN_ROTATED'
   | 'PRINT_AGENT_REVOKED'
-  | 'PRINTER_SAVED';
+  | 'PRINTER_SAVED'
+  | 'PORTAL_GRANT_ISSUED'
+  | 'PORTAL_GRANT_REPLACED'
+  | 'PORTAL_GRANT_REVOKED';
 
 export interface AuditInput {
   type: AuditType;
