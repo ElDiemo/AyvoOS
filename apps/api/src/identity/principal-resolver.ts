@@ -31,7 +31,9 @@ export class PrincipalResolver {
    * internal routes whose service token was verified first (AccessGuard).
    */
   async resolveToken(token: string | null): Promise<Resolution> {
-    const lookup = await this.sessions.lookup(token);
+    // The internal OS and its internal contract accept only internal (STAFF) sessions; a hotel
+    // portal session is no session here (ADR 0045 §2).
+    const lookup = await this.sessions.lookup(token, 'STAFF');
     if (lookup.kind === 'none') return { kind: 'anonymous' };
     if (lookup.kind === 'expired') return { kind: 'expired' };
     if (lookup.kind === 'inactive') return { kind: 'inactive' };

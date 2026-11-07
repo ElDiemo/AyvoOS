@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { labelQrSettings, loadEnv } from './env.js';
+import { labelQrSettings, loadEnv, portalOriginProblem } from './env.js';
 
 const valid = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/ayvo_test',
@@ -300,6 +300,66 @@ describe('loadEnv', () => {
         SESSION_IDLE_MINUTES: 720,
         SESSION_ABSOLUTE_HOURS: 24,
       });
+    });
+  });
+
+  describe('PORTAL_PUBLIC_ORIGIN (hotel portal, ADR 0045 §7)', () => {
+    it('is optional and leaves the staff configuration as it is', () => {
+      const plain = loadEnv(valid);
+      expect(plain.PORTAL_PUBLIC_ORIGIN).toBeUndefined();
+      expect(plain.APP_PUBLIC_ORIGIN).toBe('http://localhost:3000');
+      expect(
+        loadEnv({ ...valid, PORTAL_PUBLIC_ORIGIN: '  ' }).PORTAL_PUBLIC_ORIGIN,
+      ).toBeUndefined();
+      const prod = loadEnv({
+        ...valid,
+        APP_PUBLIC_ORIGIN: 'https://app.ayvo.example',
+        PORTAL_PUBLIC_ORIGIN: 'https://portal.ayvo.example',
+      });
+      expect([prod.APP_PUBLIC_ORIGIN, prod.PORTAL_PUBLIC_ORIGIN]).toEqual([
+        'https://app.ayvo.example',
+        'https://portal.ayvo.example',
+      ]);
+    });
+
+    it('accepts only a canonical https origin on another host than the internal app', () => {
+      const app = 'https://app.ayvo.example';
+      expect(portalOriginProblem('https://portal.ayvo.example', app)).toBeNull();
+      expect(portalOriginProblem('https://portal.ayvo.example:8443', app)).toBeNull();
+      for (const [value, reason] of [
+        ['http://portal.ayvo.example', /https/],
+        ['https://user:pw@portal.ayvo.example', /user info/],
+        ['https://user@portal.ayvo.example', /user info/],
+        ['https://portal.ayvo.example/', /canonical origin/],
+        ['https://portal.ayvo.example/portal', /canonical origin/],
+        ['https://portal.ayvo.example?x=1', /canonical origin/],
+        ['https://portal.ayvo.example#x', /canonical origin/],
+        ['https://PORTAL.ayvo.example', /canonical origin/],
+        ['https://portal.ayvo.example:443', /canonical origin/],
+        ['portal.ayvo.example', /https origin/],
+        // The same host on another port shares the cookies: refused.
+        ['https://app.ayvo.example:8443', /another host/],
+        ['https://app.ayvo.example', /another host/],
+      ] as const) {
+        expect(portalOriginProblem(value, app), value).toMatch(reason);
+      }
+      // Also against the staff default of a local configuration.
+      expect(portalOriginProblem('https://localhost:3443', 'http://localhost:3000')).toMatch(
+        /another host/,
+      );
+    });
+
+    it('refuses to start with an unacceptable portal origin', () => {
+      expect(() =>
+        loadEnv({
+          ...valid,
+          APP_PUBLIC_ORIGIN: 'https://app.ayvo.example',
+          PORTAL_PUBLIC_ORIGIN: 'https://app.ayvo.example:8443',
+        }),
+      ).toThrow(/PORTAL_PUBLIC_ORIGIN.*another host/);
+      expect(() =>
+        loadEnv({ ...valid, PORTAL_PUBLIC_ORIGIN: 'http://portal.example.test' }),
+      ).toThrow(/PORTAL_PUBLIC_ORIGIN/);
     });
   });
 });

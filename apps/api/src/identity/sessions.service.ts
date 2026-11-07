@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import type { AccountAudience, Prisma } from '../generated/prisma/client.js';
 import { randomToken, sha256Hex } from './crypto.js';
 
 export type SessionLookup =
@@ -33,7 +33,13 @@ export class SessionsService {
 
   async create(
     tx: Prisma.TransactionClient,
-    input: { userId: string; identityId: string; providerSessionId: string | null },
+    input: {
+      userId: string;
+      identityId: string;
+      providerSessionId: string | null;
+      /** The side the session is for; must be the user's audience (DB). */
+      audience: AccountAudience;
+    },
   ): Promise<{ token: string; sessionId: string; maxAgeSeconds: number }> {
     const token = randomToken();
     const now = Date.now();
@@ -47,6 +53,7 @@ export class SessionsService {
         userId: input.userId,
         identityId: input.identityId,
         providerSessionId: input.providerSessionId,
+        audience: input.audience,
         idleExpiresAt: idle,
         absoluteExpiresAt: absolute,
       },
@@ -54,13 +61,17 @@ export class SessionsService {
     return { token, sessionId: session.id, maxAgeSeconds: (absolute.getTime() - now) / 1000 };
   }
 
-  async lookup(token: string | null): Promise<SessionLookup> {
+  /**
+   * The session of this token **for one audience** (ADR 0045 §2): a session of the other side is
+   * no session here (and is left as it is — it may be valid there).
+   */
+  async lookup(token: string | null, audience: AccountAudience = 'STAFF'): Promise<SessionLookup> {
     if (!token) return { kind: 'none' };
     const session = await this.prisma.userSession.findUnique({
       where: { tokenSha256: sha256Hex(token) },
       include: { user: { select: { id: true, email: true, displayName: true, status: true } } },
     });
-    if (!session) return { kind: 'none' };
+    if (!session || session.audience !== audience) return { kind: 'none' };
     if (session.revokedAt) {
       if (session.revokeReason === 'LOGOUT') return { kind: 'none' };
       // A deactivated user learns why access ended, not merely that the session is gone.

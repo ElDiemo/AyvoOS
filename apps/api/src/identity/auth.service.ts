@@ -152,9 +152,12 @@ export class AuthService {
           );
           return { kind: 'denied', reason: 'ACCOUNT_INACTIVE' } as const;
         }
+        // A hotel portal account is never linked to an internal identity (ADR 0045 §2).
+        const staff = user.audience === 'STAFF';
         const accepted =
-          candidate.invitationId === null ||
-          (await this.invitations.markAccepted(tx, candidate.invitationId, identity));
+          staff &&
+          (candidate.invitationId === null ||
+            (await this.invitations.markAccepted(tx, candidate.invitationId, identity)));
         if (!alreadyLinked && accepted) {
           const created = await tx.userIdentity.create({
             data: {
@@ -175,8 +178,18 @@ export class AuthService {
             tx,
           );
         } else {
-          denial = alreadyLinked ? 'ALREADY_LINKED' : 'INVITATION_CLOSED';
+          denial = !staff
+            ? 'OTHER_AUDIENCE'
+            : alreadyLinked
+              ? 'ALREADY_LINKED'
+              : 'INVITATION_CLOSED';
         }
+      }
+      // A hotel portal account never signs in to the internal OS (ADR 0045 §2): the same answer as
+      // an unknown identity.
+      if (link && link.user.audience !== 'STAFF') {
+        denial = 'OTHER_AUDIENCE';
+        link = null;
       }
       if (!link) {
         // The same answer for unknown, uninvited and mismatching identities (no enumeration).
@@ -209,6 +222,7 @@ export class AuthService {
         userId: link.userId,
         identityId: link.id,
         providerSessionId: identity.providerSessionId,
+        audience: 'STAFF',
       });
       await tx.user.update({ where: { id: link.userId }, data: { lastLoginAt: new Date() } });
       await this.audit.record(

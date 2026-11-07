@@ -485,6 +485,19 @@ export class UsersService {
     });
     if (!role) throw domainError(422, 'UNKNOWN_ROLE', 'No such role');
     if (!role.active) throw domainError(409, 'ROLE_INACTIVE', 'An inactive role cannot be granted');
+    // An internal role never goes to a hotel portal account, nor the reverse (ADR 0045 §2; the
+    // database refuses it too, with the user row locked).
+    const account = await tx.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { audience: true },
+    });
+    if (account.audience !== role.audience) {
+      throw domainError(
+        409,
+        'ROLE_AUDIENCE_MISMATCH',
+        'This role belongs to another kind of account (internal vs hotel portal)',
+      );
+    }
     assertCanGrant(
       actor,
       role.permissions.map((p) => p.permissionCode as PermissionCode),

@@ -1,7 +1,7 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import type { AccountAudience, Prisma } from '../generated/prisma/client.js';
 import {
   NativePasswords,
   NativeSecretBox,
@@ -35,7 +35,12 @@ export type NativeLoginResult =
       recoveryCodes?: string[];
     };
 
-/** All authentication state is PostgreSQL-owned. Never creates a user or changes their access. */
+/**
+ * All authentication state is PostgreSQL-owned. Never creates a user or changes their access.
+ * Every step serves one audience (ADR 0045 §2): the internal native routes call it as STAFF, the
+ * hotel portal's contract as PORTAL. An account, token or challenge of the other audience is
+ * treated exactly like an unknown one — nothing consumed, created or sent.
+ */
 @Injectable()
 export class NativeAuthService implements OnModuleInit {
   constructor(
@@ -55,6 +60,7 @@ export class NativeAuthService implements OnModuleInit {
     email: string,
     password: string,
     next: unknown,
+    audience: AccountAudience = 'STAFF',
   ): Promise<{ token: string } | null> {
     const snapshot = await this.prisma.user.findUnique({
       where: { email },
@@ -64,7 +70,12 @@ export class NativeAuthService implements OnModuleInit {
       password,
       snapshot?.nativeCredential?.passwordHash ?? null,
     );
-    if (!matched || snapshot?.status !== 'ACTIVE' || !snapshot.nativeCredential) {
+    if (
+      !matched ||
+      snapshot?.status !== 'ACTIVE' ||
+      !snapshot.nativeCredential ||
+      snapshot.audience !== audience
+    ) {
       await this.audit.record({
         type: 'LOGIN_DENIED',
         payload: { reason: 'INVALID_NATIVE_LOGIN' },
@@ -86,6 +97,7 @@ export class NativeAuthService implements OnModuleInit {
       await tx.nativeAuthChallenge.create({
         data: {
           userId: user.id,
+          audience: user.audience,
           kind: 'LOGIN',
           tokenSha256: nativeTokenHash('CHALLENGE', token)!,
           credentialRevision: user.nativeCredential.revision,
@@ -98,12 +110,14 @@ export class NativeAuthService implements OnModuleInit {
   }
 
   /** Generic public response is supplied by the controller; an email never removes MFA. */
-  async requestPasswordReset(email: string): Promise<void> {
+  async requestPasswordReset(email: string, audience: AccountAudience = 'STAFF'): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { email },
       include: { nativeCredential: true },
     });
-    if (!user || user.status !== 'ACTIVE' || !user.nativeCredential) return;
+    // Another audience's account: no token, no mail (the controller's answer is the same).
+    if (!user || user.audience !== audience || user.status !== 'ACTIVE' || !user.nativeCredential)
+      return;
     await this.prisma.$transaction(async (tx) => {
       await this.lockUser(tx, user.id);
       const current = await tx.user.findUniqueOrThrow({
@@ -138,6 +152,7 @@ export class NativeAuthService implements OnModuleInit {
     purpose: 'ENROLL' | 'RESET_PASSWORD',
     rawToken: string,
     password: string,
+    audience: AccountAudience = 'STAFF',
   ): Promise<{ token: string; enrollmentUri?: string } | null> {
     const digest = nativeTokenHash(purpose, rawToken);
     if (!digest) return null;
@@ -146,6 +161,7 @@ export class NativeAuthService implements OnModuleInit {
     });
     if (
       !snapshot ||
+      snapshot.audience !== audience ||
       snapshot.purpose !== purpose ||
       snapshot.usedAt ||
       snapshot.revokedAt ||
@@ -195,6 +211,7 @@ export class NativeAuthService implements OnModuleInit {
       await tx.nativeAuthChallenge.create({
         data: {
           userId: user.id,
+          audience: action.audience,
           kind: purpose,
           tokenSha256: nativeTokenHash('CHALLENGE', token)!,
           credentialRevision: action.credentialRevision,
@@ -217,24 +234,32 @@ export class NativeAuthService implements OnModuleInit {
   }
 
   /** Used only for per-account rate limiting; never sends an identifier to the browser. */
-  async challengeAccount(rawToken: string | null): Promise<string | null> {
+  async challengeAccount(
+    rawToken: string | null,
+    audience: AccountAudience = 'STAFF',
+  ): Promise<string | null> {
     const hash = rawToken && nativeTokenHash('CHALLENGE', rawToken);
     const challenge = hash
       ? await this.prisma.nativeAuthChallenge.findUnique({
           where: { tokenSha256: hash },
-          select: { userId: true },
+          select: { userId: true, audience: true },
         })
       : null;
     // No shared bucket for unknown challenges: they cannot reach an account, the IP limit applies.
-    return challenge?.userId ?? null;
+    return challenge?.audience === audience ? challenge.userId : null;
   }
 
-  async complete(rawToken: string | null, code: string): Promise<NativeLoginResult> {
+  async complete(
+    rawToken: string | null,
+    code: string,
+    audience: AccountAudience = 'STAFF',
+  ): Promise<NativeLoginResult> {
     const digest = rawToken && nativeTokenHash('CHALLENGE', rawToken);
     const snapshot = digest
       ? await this.prisma.nativeAuthChallenge.findUnique({ where: { tokenSha256: digest } })
       : null;
-    if (!snapshot) return { kind: 'denied' };
+    // A challenge of the other audience is not even counted as an attempt.
+    if (!snapshot || snapshot.audience !== audience) return { kind: 'denied' };
     return this.prisma.$transaction(async (tx): Promise<NativeLoginResult> => {
       // Lock order is always user -> credential/challenge/token. Also used by deactivation and
       // invitation management: no session can slip past a committed revocation.
@@ -447,6 +472,7 @@ export class NativeAuthService implements OnModuleInit {
         userId: user.id,
         identityId: identity.id,
         providerSessionId: null,
+        audience: challenge.audience,
       });
       await tx.user.update({ where: { id: user.id }, data: { lastLoginAt: now } });
       await this.audit.record(
@@ -517,6 +543,7 @@ export class NativeAuthService implements OnModuleInit {
       await tx.nativeAuthChallenge.create({
         data: {
           userId,
+          audience: user.audience,
           kind: 'REPLACE_MFA',
           tokenSha256: nativeTokenHash('CHALLENGE', token)!,
           credentialRevision: credential.revision,
