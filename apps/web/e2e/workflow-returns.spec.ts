@@ -300,7 +300,15 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
   ]).toEqual([1, 1, 1]);
 });
 
-test('a bottle scanned while the detail is still refreshing stays in the field and is sent next', async ({
+/** A keyboard scanner: the code typed after whatever the field holds, then Enter. */
+async function scannerTypes(page: Page, field: ReturnType<Page['getByRole']>, code: string) {
+  await field.focus();
+  await field.press('End');
+  await field.pressSequentially(code);
+  await field.press('Enter');
+}
+
+test('a scanner typing the next bottle while the detail refreshes: two exact codes, never glued; an uncertain one is repeated as the same request', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 900 });
@@ -311,30 +319,66 @@ test('a bottle scanned while the detail is still refreshing stays in the field a
   await page.getByRole('button', { name: 'Krabice bez kódu' }).click();
   const card = page.getByTestId('return-line-box-1');
   await expect(card).toBeVisible();
-  // The next read of the detail is held until the following scan is typed.
-  let release!: () => void;
-  const held = new Promise<void>((r) => (release = r));
-  let hold = true;
-  await page.route(`**/api/admin/returns/receipts/${code}`, async (route) => {
-    if (route.request().method() === 'GET' && hold) {
-      hold = false;
-      await held;
-    }
-    await route.continue();
-  });
   const field = card.getByRole('textbox', { name: /Naskenujte lahev/ });
-  await field.fill(spare[0]!);
-  await card.getByRole('button', { name: 'Zapsat lahev' }).click();
-  // The write is confirmed (a piece not in circulation) while the detail is still loading…
+  // Every bottle POST as sent: its code and request id.
+  const sent: { code: string; requestId: string }[] = [];
+  let holdGet = false;
+  let releaseGet!: () => void;
+  let holdPost: 'none' | 'uncertain' = 'none';
+  let releasePost!: () => void;
+  await page.route(`**/api/admin/returns/receipts/${code}**`, async (route) => {
+    const req = route.request();
+    if (req.method() === 'POST' && req.url().endsWith('/bottles')) {
+      const body = JSON.parse(req.postData()!) as { scannedValue: string; requestId: string };
+      sent.push({ code: body.scannedValue, requestId: body.requestId });
+      if (holdPost === 'uncertain') {
+        holdPost = 'none';
+        // Committed by the server, the answer lost on the way back — after the next code is typed.
+        const committed = await route.fetch();
+        expect(committed.status()).toBe(200);
+        await new Promise<void>((r) => (releasePost = r));
+        return route.fulfill({ status: 503, body: '{"statusCode":503}' });
+      }
+      return route.continue();
+    }
+    if (req.method() === 'GET' && holdGet) {
+      holdGet = false;
+      await new Promise<void>((r) => (releaseGet = r));
+    }
+    return route.continue();
+  });
+
+  // 1. A confirmed scan; the scanner types B (and Enter) while the detail is still loading.
+  holdGet = true;
+  await scannerTypes(page, field, spare[0]!);
   await expect(page.getByTestId('return-message')).toContainText('Lahev není v oběhu u hotelu');
-  await field.fill(spare[1]!);
-  release();
-  // …and the refresh does not clear the bottle scanned meanwhile.
+  await scannerTypes(page, field, spare[1]!);
+  releaseGet();
   await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 1');
+  // B alone in the field — never A+B; its Enter during the refresh sent nothing.
   await expect(field).toHaveValue(spare[1]!);
-  await card.getByRole('button', { name: 'Zapsat lahev' }).click();
+  expect(sent.map((x) => x.code)).toEqual([spare[0]]);
+  await field.press('Enter');
   await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 2');
   await expect(field).toHaveValue('');
+
+  // 2. An uncertain answer while the next code is already typed: it stays, the failed one is
+  // offered and repeated as the SAME request (the server replays it, no third piece).
+  holdPost = 'uncertain';
+  await scannerTypes(page, field, spare[0]!);
+  await expect.poll(() => sent.length).toBe(3);
+  await scannerTypes(page, field, spare[1]!);
+  releasePost();
+  await expect(card.getByTestId('failed-scan')).toContainText(spare[0]!);
+  await expect(field).toHaveValue(spare[1]!);
+  await card.getByTestId('failed-scan').getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(card.getByTestId('failed-scan')).toHaveCount(0);
+  await expect(field).toHaveValue(spare[1]!);
+  expect(sent[3]).toEqual(sent[2]);
+  await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 2');
+
+  // Exactly these codes went out, each whole.
+  expect(sent.map((x) => x.code)).toEqual([spare[0], spare[1], spare[0], spare[0]]);
   const detail = await (await page.request.get(`/api/admin/returns/receipts/${code}`)).json();
   expect(detail.lineDetails[0].issues.map((i: { kind: string }) => i.kind)).toEqual([
     'NOT_IN_CIRCULATION',

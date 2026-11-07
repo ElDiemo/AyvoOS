@@ -16,6 +16,7 @@ import { Card, buttonClass, inputClass } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { returnsCs } from '@/i18n/cs/returns';
 import { apiGet, apiSend } from '@/lib/client-api';
+import { FailedScan, useScanField } from './scan-field';
 import { errorText, useStableRequests } from './stable-requests';
 
 const t = returnsCs;
@@ -72,7 +73,17 @@ export function ReceiptWorkspace({
   };
   const locked = busy || stale;
 
-  const [crateValue, setCrateValue] = useState('');
+  const crateField = useScanField<{ scanned: string }>();
+  const sendCrate = ({ scanned }: { scanned: string }) =>
+    run(`crate:${scanned}`, async (requestId) => {
+      const r = await apiSend('POST', `${base}/crates`, returnCrateScanResultSchema, {
+        requestId,
+        scannedValue: scanned,
+      });
+      return r.outcome === 'CRATE_RETURNED'
+        ? t.result.crate(r.crateCode, r.orderCode)
+        : t.result.crateAgain(r.crateCode);
+    });
   const allEmptied = receipt.lineDetails.every((l) => l.emptiedAt);
 
   return (
@@ -119,25 +130,15 @@ export function ReceiptWorkspace({
             className="flex flex-col gap-3 sm:flex-row"
             onSubmit={async (e) => {
               e.preventDefault();
-              const value = crateValue.trim();
-              if (!value) return;
-              const done = await run(`crate:${value}`, async (requestId) => {
-                const r = await apiSend('POST', `${base}/crates`, returnCrateScanResultSchema, {
-                  requestId,
-                  scannedValue: value,
-                });
-                return r.outcome === 'CRATE_RETURNED'
-                  ? t.result.crate(r.crateCode, r.orderCode)
-                  : t.result.crateAgain(r.crateCode);
-              });
-              // Only the value sent: a code scanned while the detail was refreshing stays.
-              if (done) setCrateValue((v) => (v.trim() === value ? '' : v));
+              const scanned = crateField.value.trim();
+              if (!scanned) return;
+              await crateField.submit({ scanned }, sendCrate);
             }}
           >
             <input
               className={inputClass}
-              value={crateValue}
-              onChange={(e) => setCrateValue(e.target.value)}
+              value={crateField.value}
+              onChange={(e) => crateField.setValue(e.target.value)}
               placeholder={t.receipt.scanCratePlaceholder}
               aria-label={t.receipt.scanCrate}
               autoComplete="off"
@@ -162,6 +163,16 @@ export function ReceiptWorkspace({
               {t.receipt.addContainer}
             </button>
           </form>
+          {crateField.failed && (
+            <div className="mt-3">
+              <FailedScan
+                scanned={crateField.failed.scanned}
+                busy={locked}
+                onRetry={() => crateField.retry(sendCrate)}
+                onDismiss={crateField.dismiss}
+              />
+            </div>
+          )}
         </Card>
       )}
 
@@ -240,12 +251,26 @@ function LineCard({
   run: Run;
   canCorrect: boolean;
 }) {
-  const [value, setValue] = useState('');
+  const field = useScanField<{ scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }>();
   const [outcome, setOutcome] = useState<'GOOD' | 'DEFECTIVE'>('GOOD');
   const [count, setCount] = useState('');
   const active = open && !line.emptiedAt;
   const title = line.crateCode ? t.line.crate(line.crateCode) : `${t.line.container} ${index + 1}`;
   const path = `${base}/lines/${line.id}`;
+  const sendBottle = (a: { scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }) =>
+    run(`bottle:${line.id}:${a.scanned}:${a.outcome}`, async (requestId) => {
+      const r = await apiSend('POST', `${path}/bottles`, returnBottleScanResultSchema, {
+        requestId,
+        scannedValue: a.scanned,
+        outcome: a.outcome,
+      });
+      if (r.outcome === 'ISSUE_RECORDED') {
+        return t.result.issue(t.issue.kind[r.issue!.kind] ?? r.issue!.kind, r.issue!.code);
+      }
+      return r.repeated
+        ? t.result.repeated(r.bottleCode!)
+        : t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? r.result!);
+    });
 
   return (
     <Card title={title} testId={`return-line-${line.crateCode ?? `box-${index + 1}`}`}>
@@ -272,34 +297,15 @@ function LineCard({
             className="flex flex-col gap-3"
             onSubmit={async (e) => {
               e.preventDefault();
-              const scanned = value.trim();
+              const scanned = field.value.trim();
               if (!scanned) return;
-              const done = await run(
-                `bottle:${line.id}:${scanned}:${outcome}`,
-                async (requestId) => {
-                  const r = await apiSend('POST', `${path}/bottles`, returnBottleScanResultSchema, {
-                    requestId,
-                    scannedValue: scanned,
-                    outcome,
-                  });
-                  if (r.outcome === 'ISSUE_RECORDED') {
-                    return t.result.issue(
-                      t.issue.kind[r.issue!.kind] ?? r.issue!.kind,
-                      r.issue!.code,
-                    );
-                  }
-                  return r.repeated
-                    ? t.result.repeated(r.bottleCode!)
-                    : t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? r.result!);
-                },
-              );
-              if (done) setValue((v) => (v.trim() === scanned ? '' : v));
+              await field.submit({ scanned, outcome }, sendBottle);
             }}
           >
             <input
               className={inputClass}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
+              value={field.value}
+              onChange={(e) => field.setValue(e.target.value)}
               placeholder={t.line.scanBottlePlaceholder}
               aria-label={`${t.line.scanBottle} – ${title}`}
               autoComplete="off"
@@ -338,6 +344,14 @@ function LineCard({
                 {t.line.unreadable}
               </button>
             </div>
+            {field.failed && (
+              <FailedScan
+                scanned={field.failed.scanned}
+                busy={busy}
+                onRetry={() => field.retry(sendBottle)}
+                onDismiss={field.dismiss}
+              />
+            )}
           </form>
         )}
 
@@ -422,10 +436,19 @@ function IssueRow({
   run: Run;
   canCorrect: boolean;
 }) {
-  const [value, setValue] = useState('');
+  const field = useScanField<{ scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }>();
   const [outcome, setOutcome] = useState<'GOOD' | 'DEFECTIVE'>('GOOD');
   const [reason, setReason] = useState('');
   const path = `admin/returns/issues/${issue.code}`;
+  const sendIdentify = (a: { scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }) =>
+    run(`identify:${issue.code}:${a.scanned}:${a.outcome}`, async (requestId) => {
+      const r = await apiSend('POST', `${path}/identify`, returnBottleScanResultSchema, {
+        requestId,
+        scannedValue: a.scanned,
+        outcome: a.outcome,
+      });
+      return t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? '');
+    });
   const mismatch = issue.kind === 'COUNT_MISMATCH';
   const identifiable =
     !issue.resolution && ['UNREADABLE', 'NOT_DELIVERED', 'NOT_IN_CIRCULATION'].includes(issue.kind);
@@ -451,26 +474,15 @@ function IssueRow({
           className="mt-2 flex flex-col gap-2 sm:flex-row"
           onSubmit={async (e) => {
             e.preventDefault();
-            const scanned = value.trim();
+            const scanned = field.value.trim();
             if (!scanned) return;
-            const done = await run(
-              `identify:${issue.code}:${scanned}:${outcome}`,
-              async (requestId) => {
-                const r = await apiSend('POST', `${path}/identify`, returnBottleScanResultSchema, {
-                  requestId,
-                  scannedValue: scanned,
-                  outcome,
-                });
-                return t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? '');
-              },
-            );
-            if (done) setValue((v) => (v.trim() === scanned ? '' : v));
+            await field.submit({ scanned, outcome }, sendIdentify);
           }}
         >
           <input
             className={inputClass}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
+            value={field.value}
+            onChange={(e) => field.setValue(e.target.value)}
             placeholder={t.line.scanBottlePlaceholder}
             aria-label={`${t.issue.identify} ${issue.code}`}
             autoComplete="off"
@@ -492,6 +504,16 @@ function IssueRow({
             {t.issue.identifySubmit}
           </button>
         </form>
+      )}
+      {identifiable && field.failed && (
+        <div className="mt-2">
+          <FailedScan
+            scanned={field.failed.scanned}
+            busy={busy}
+            onRetry={() => field.retry(sendIdentify)}
+            onDismiss={field.dismiss}
+          />
+        </div>
       )}
       {closable && (
         <form className="mt-2 flex flex-col gap-2 sm:flex-row" onSubmit={(e) => e.preventDefault()}>

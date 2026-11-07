@@ -127,6 +127,8 @@ export const returnsCs = {
   } as Record<string, string>,
   uncertain: 'Spojení selhalo – výsledek není jistý. „Zkusit znovu“ pošle stejný požadavek.',
   retry: 'Zkusit znovu',
+  failedScan: (code: string) => `Neuloženo: ${code} – v poli už je další kód.`,
+  dismissFailed: 'Zahodit',
   saved: 'Uloženo.',
   refreshFailed:
     'Zápis je uložený, ale přehled se nepodařilo načíst. Obnovte ho – nic se znovu neodešle.',
