@@ -13,7 +13,8 @@ Commit `6150408` is `main` `5650409` plus a test-only change in `apps/web/e2e`. 
 - `finance-issuer-settings.e2e.test.ts`, `finance-billing-settings.e2e.test.ts`,
   `finance-run-settings.e2e.test.ts` (Finance).
 
-**Result:** 8 files, **133 tests passed**, 0 failed (78.6 s). No DEV or PROD database and no
+**Result:** 8 files, **133 tests passed**, 0 failed (78.6 s). This is the regression baseline of
+the existing code only; **no portal scenario runs yet**, because none is implemented. No DEV or PROD database and no
 external call; mail uses the test transport.
 
 ## 2. What exists and is reused
@@ -88,10 +89,26 @@ external call; mail uses the test transport.
    - an empty invoice line set (forced by SQL in the test DB) → not visible;
    - a TEST invoice with `APP_ENV=production` → not visible;
    - a timeout of `introspect-portal` → 503.
-9. **Auth endpoints:**
-   - each portal auth route is rate limited (Redis real) and fails closed without Redis;
-   - a cross-origin `POST` → 403;
-   - answers are alike for unknown and known accounts.
+9. **Issuing grants on the server** (ADR 0045 §4):
+   - a direct call of the core grant contract without the Finance token, or without an admin
+     session → 401/403;
+   - through Finance: a hotel of another payer, an invented payer, an archived payer → refused,
+     nothing at the core;
+   - a replacement racing a revocation, in both orders: one wins, the other is refused.
+10. **Audience before the session** (ADR 0045 §2):
+    - invitation and reset tokens and the password → MFA challenge are refused across audiences;
+    - forgot-password across audiences: the same answer, no token row and no mail;
+    - portal links always use `PORTAL_PUBLIC_ORIGIN`.
+11. **Load** (ADR 0045 §8):
+    - with the portal's request limit saturated, staff requests on the core and Finance complete
+      in their usual time;
+    - a PDF cut off by a disconnect or the timeout frees its slot and connection;
+    - no leak after 100 aborted requests.
+12. **Auth endpoints:**
+
+- each portal auth route is rate limited (Redis real) and fails closed without Redis;
+- a cross-origin `POST` → 403;
+- answers are alike for unknown and known accounts.
 
 Playwright (PR 5): the ADR §11 walk on the isolated `ayvo_e2e` database at 390 px and 1440 px,
 with the TOTP code computed from the enrolment secret (`otpauth`, as `native-auth.e2e`

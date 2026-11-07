@@ -80,10 +80,34 @@
   - the portal contract accepts only `PORTAL` sessions;
   - Finance's staff path (`/api/internal/v1/finance/*` introspection) refuses a `PORTAL` session;
   - Finance's portal path refuses a `STAFF` one.
+- **The audience holds before a session exists too** (re-review 5814256150):
+  - the one-time tokens `native_auth_tokens` (invitation, reset) and the pre-session step
+    password → MFA `native_auth_challenges` get `audience`, copied from the user when written;
+  - a trigger refuses a row whose audience differs from its user's;
+  - the internal native routes (`/api/auth/native/*`) accept only `STAFF` tokens and challenges;
+  - the portal auth contract (§3) accepts only `PORTAL` ones;
+  - a token of the other audience is answered like an unknown one, and nothing is consumed.
+- **The link origin comes from the configuration, never from a request header:**
+  - `STAFF` → `APP_PUBLIC_ORIGIN` (as today, `native-tokens.service.ts:115`);
+  - `PORTAL` → the new `PORTAL_PUBLIC_ORIGIN`, required as soon as portal accounts exist;
+  - the mail delivery takes the origin from the token's audience;
+  - the pre-session cookie on the portal host is `__Host-ayvo_portal_pre`.
+- **Wrong audience sends nothing.** A portal "forgot password" for a staff e-mail, or a staff one
+  for a portal e-mail:
+  - is answered exactly like an unknown e-mail;
+  - creates no token and sends no e-mail;
+  - the same holds for the password step: no challenge.
 - **Tests:**
   - a portal session on every internal API route and on Finance's staff routes → 401;
   - a staff session on every portal contract route → 401;
-  - the role and invitation races above.
+  - the role and invitation races above;
+  - a staff invitation or reset token on the portal contract, and a portal one on
+    `/api/auth/native/*` → refused, the token still unused;
+  - a staff challenge on the portal MFA step, and the reverse → refused;
+  - forgot-password across audiences → the same answer, no token row, no mail in the test
+    transport;
+  - every portal link in the test mail starts with `PORTAL_PUBLIC_ORIGIN`, whatever `Host` or
+    `Origin` the request carried.
 
 ### 3. Public authentication endpoints (through `portal-web` only)
 
@@ -111,35 +135,74 @@ contract (`/api/internal/v1/portal/auth/*`, portal service token), never the int
 - **No account enumeration.** Activation, password, reset and forgot-password answer the same way
   for an unknown and a known account.
 
-### 4. Grants: owned by the core, issued without a Core → Finance call
+### 4. Grants: issued on the server through Finance, stored by the core, no Core → Finance call
 
 ```
 portal_grants        id, user (audience PORTAL), payer_customer_id (Finance customer id, opaque to
-                     the core — no FK across units), granted_at/by, reason, revoked_at/by/reason
+                     the core — no FK across units), granted_at/by, reason, finance_check (what
+                     Finance confirmed: payer version, hotel ids), revoked_at/by/reason,
+                     replaces (the grant it replaced, nullable)
 portal_grant_hotels  grant, hotel (FK hotels), UNIQUE (grant, hotel)
+                     at most one active grant per (user, payer) — partial unique index
 ```
 
-- **The issuing flow** (the core never depends on Finance at runtime):
-  1. **The control layer** is the internal web's server side, under an AYVO ADMIN's staff session.
-     - It reads the payer from **Finance** (`finance:billing_read`): the customer, its state and
-       the hotels of its billing agreements.
-     - The admin chooses the hotels.
-     - It is the authority for nothing; it shows Finance's answer.
-  2. **The core writes the grant** (`POST /api/admin/identity/portal-grants`, new permission
-     `identity:portal_grants_manage`, ADMIN only). The hotels must exist and the user must be
-     `PORTAL`. The payer id is stored as given. The core is the authority on who may see which
-     hotels, under which payer id.
-  3. **Finance decides at every read** whether that payer id matches an invoice (§5). An unknown,
-     archived or wrong payer id matches nothing, so the read fails closed.
-- **Revocation (the core):**
+- **The server-side issuing path** (re-review 5814256150). The pair of payer and hotels is
+  checked on the server, and the core has **no** route that accepts a pair on its own:
+  1. **An AYVO ADMIN calls Finance:** `POST /api/admin/finance/portal-grants`, staff session.
+     The permissions are checked by the core through Finance's existing `principal` call:
+     `finance:billing_read` **and** `identity:portal_grants_manage` (new, ADMIN only).
+  2. **Finance checks the pair against its own data,** in its transaction:
+     - the payer exists and is not archived;
+     - every hotel has a billing agreement **of that payer** valid today, or the hotel is listed
+       on an invoice already issued to that payer;
+     - otherwise `PAYER_NOT_FOUND`, `PAYER_ARCHIVED` or `HOTEL_NOT_OF_PAYER`, and nothing is
+       sent to the core.
+  3. **Finance calls the core's protected contract:**
+     `POST /api/internal/v1/finance/portal-grants`. This is the existing Finance → core direction,
+     with the Finance service token **and** the admin's forwarded session.
+  4. **The core re-checks the admin's permission** on that session, the user's audience `PORTAL`
+     and that the hotels exist. It stores the grant with `finance_check`, writes it to the audit
+     log, and is the authority from then on.
+  - The admin UI is a payer page in Finance ("Přístup do portálu"); it only shows and sends.
+  - **Authorities:** Finance for "these hotels belong to this payer", the core for "this user
+    may see them".
+  - The calls are `admin → Finance → core`. There is **never** a `core → Finance` call.
+- **Changing the scope** is an atomic, audited **replacement**, never an edit in place:
+  - It goes through the same Finance path, re-checked, also when the scope is narrowed.
+  - In one core transaction, with the lock order user row → the old grant row:
+    - a new grant with the new hotel set and `replaces` = the old one;
+    - the old one revoked with the reason "nahrazen";
+    - one audit event naming both.
+  - **A concurrent revocation of the same grant:**
+    - both take the old grant's row lock;
+    - if the revocation commits first, the replacement finds it revoked and is refused
+      `GRANT_REVOKED`, with nothing written;
+    - if the replacement commits first, the revocation finds the old grant already revoked and
+      answers `GRANT_REPLACED` with the new grant's id, so the admin decides again;
+    - a revocation is never silently lost and never applied to the wrong row.
+  - The scope is still **never composed from several grants**: one active grant per (user,
+    payer), and an invoice must be covered by that one (§5).
+- **Revocation** is core only: `POST /api/admin/identity/portal-grants/:id/revoke` (narrowing to
+  nothing needs no Finance check).
   - `revoked_*` is set;
   - it takes effect on the next request, because Finance and `portal-web` introspect per request;
-  - when the user has no active grant left, or is deactivated, every portal session of the user is
-    ended in the same transaction.
-- **Refusals:**
-  - a grant for a `STAFF` user, a missing hotel or an empty hotel list → 4xx, nothing written;
+  - when the user has no active grant left, or is deactivated, every portal session of the user
+    is ended in the same transaction.
+- **Refusals** (nothing is written):
+  - a grant for a `STAFF` user, a missing hotel or an empty hotel list;
+  - a second active grant for the same (user, payer);
   - a revoked grant is never revived; a new grant is a new row.
-- **Calls go one way only:**
+- **Tests:**
+  - a direct call of the core contract without the Finance token, or with it but without an
+    admin session → 401/403;
+  - through Finance:
+    - a hotel of another payer → `HOTEL_NOT_OF_PAYER`;
+    - an invented payer → `PAYER_NOT_FOUND`;
+    - an archived payer → `PAYER_ARCHIVED`;
+  - a replacement and a revocation at once (both orders): one wins, the other is refused, and
+    the user sees exactly one scope;
+  - an extended scope is visible on the next request, a narrowed one hides on the next request.
+- **The calls between units go one way:**
   - `portal-web → core`, `portal-web → Finance`, `Finance → core`;
   - the internal web → core and → Finance, for staff;
   - never `core → Finance`.
@@ -161,11 +224,18 @@ AND EXISTS grant g OF this user, not revoked:
 ```
 
 - **One grant covers the whole invoice.** Hotels of two grants are never combined.
-- **History:**
+- **History — an explicit policy** (proposed for the owner's approval):
+  - visible are the issued invoices of the granted payer whose lines' hotels are within the grant,
+    **from any time**, also those issued before the grant;
   - the predicate uses only what is stored on the invoice and its lines when issued, never today's
     agreements or a hotel's current payer;
   - a hotel that moved to another payer keeps its old invoices visible only under the old payer's
-    grant.
+    grant;
+  - **the payer's archiving is not evaluated by the predicate.** It is checked when a grant is
+    issued or replaced (§4). A payer archived later keeps its granted history visible until AYVO
+    revokes the grant;
+  - the alternative, "only invoices issued since the grant" (a `visible_from` on the grant), is an
+    owner choice (open below).
 - **The same SQL predicate is in the `WHERE` of:**
   - the list, before ordering and pagination, so counts and pages never reveal other invoices;
   - the detail and the PDF, by id.
@@ -197,6 +267,7 @@ browser ──HTTPS── reverse proxy (portal host) ──► portal-web
 portal-web ──(PORTAL_CORE_TOKEN)──► core     /api/internal/v1/portal/*        auth, introspection, hotels
 portal-web ──(PORTAL_FINANCE_TOKEN)──► Finance /api/internal/v1/portal/invoices* + forwarded portal session
 Finance ──(FINANCE_SERVICE_TOKEN, existing)──► core /api/internal/v1/finance/introspect-portal
+Finance ──(FINANCE_SERVICE_TOKEN + admin session)──► core /api/internal/v1/finance/portal-grants   issue, replace
 ```
 
 - **Each token is separate.** The receiver stores it only as its SHA-256, like the existing
@@ -237,15 +308,31 @@ Finance ──(FINANCE_SERVICE_TOKEN, existing)──► core /api/internal/v1/f
 
 ### 8. Budgets, timeouts and fail-closed behaviour
 
-| Item                         | Budget / timeout                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- |
-| `portal-web` container       | 256 MB, 0.5 CPU, 128 pids (DEV and PROD); read-only root, unprivileged                            |
-| `portal-web` → core          | keep-alive pool 8; 3 s per call                                                                   |
-| `portal-web` → Finance       | pool 4; 5 s for list/detail, 20 s and 10 MB for a PDF (streamed)                                  |
-| Finance → core introspection | 2 s                                                                                               |
-| core, portal routes          | at most 8 concurrent portal requests (the rest 503); the core's DB pool is shared (pg default 10) |
-| Finance, portal routes       | at most 2 concurrent (its DB pool is 4: staff keeps 2)                                            |
+Two kinds of limit, named apart (re-review 5814256150). A **request limit** only caps work. A
+**reserved resource** is a real boundary, so the portal can never use what staff work needs.
 
+| Item                            | Kind              | Budget / timeout                                                                                                                |
+| ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `portal-web` container          | reserved          | 256 MB, 0.5 CPU, 128 pids (DEV and PROD); read-only root, unprivileged                                                          |
+| core, portal contract DB access | **reserved**      | its own Prisma client and pg pool, `max: 2`. Portal routes never use the staff pool (pg default 10)                             |
+| core, portal routes             | request limit     | at most 8 in flight per process (a semaphore before the pool); the rest 503 at once                                             |
+| Finance, portal reads DB access | **reserved**      | its own pool, `max: 1`, beside the existing staff pool `max: 4`, which stays whole                                              |
+| Finance, portal routes          | request limit     | at most 2 in flight; the rest 503                                                                                               |
+| Finance, PDF                    | request limit     | the predicate runs on the portal pool, and the connection is released **before** the file is streamed from storage; 20 s, 10 MB |
+| `portal-web` → core / → Finance | request limit     | keep-alive 8 / 4; 3 s per call / 5 s (20 s for a PDF)                                                                           |
+| Finance → core introspection    | timeout           | 2 s                                                                                                                             |
+| PostgreSQL connections in total | checked at deploy | core 10 + 2, Finance 4 + 1, migrations: within the server's `max_connections` (checked by `--check`)                            |
+
+- **Tests under load:**
+  - **Saturation:** the portal's request limit is held by slow portal requests (a held
+    introspection and held PDF streams). Meanwhile a staff request on the core (e.g. a bottle
+    list) and on Finance (the invoice list) completes within its usual time, and the extra
+    portal requests get 503 at once.
+  - **A PDF cut off:** the client disconnects in the middle, or the 20 s timeout passes. The
+    storage stream is closed, the request slot is released, no DB connection is held, and the
+    next PDF request is served.
+  - **No leak:** after 100 aborted portal requests, the portal pools are idle and the slots are
+    free.
 - **Fail closed:**
   - every timeout or error on introspection, grants or the predicate gives no data (401/503),
     never a fallback to a cached or broader answer;
@@ -279,20 +366,22 @@ Finance ──(FINANCE_SERVICE_TOKEN, existing)──► core /api/internal/v1/f
 
 ### 10. Order of delivery — small PRs, each reviewed on its own
 
-| #   | PR (draft, after the approval of this ADR) | Scope                                                                                                     | Deploy            |
-| --- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------- | ----------------- |
-| 1   | core: account audience                     | `users/roles/user_sessions.audience`, role and invitation triggers, the audience in the guards; tests §2  | DEV with approval |
-| 2   | core: portal grants                        | `portal_grants(+hotels)`, `identity:portal_grants_manage`, the admin API and its UI in Správa systému     | DEV with approval |
-| 3   | core: portal contract                      | `/api/internal/v1/portal/{auth/*,session,hotels}`, the portal token, rate limits, concurrency cap         | DEV with approval |
-| 4   | Finance: portal invoices                   | `introspect-portal` on the core contract, `/api/internal/v1/portal/invoices*`, the §5 predicate and tests | DEV with approval |
-| 5   | `apps/portal` (portal-web)                 | the BFF and pages of P1, the `__Host-` cookie, CSRF, Playwright at 390/1440 px                            | not yet           |
-| 6   | DEV host `dev-portal.ayvo.co`              | the compose service, the Caddy site, private DNS — the infrastructure part for Codex                      | owner + Codex     |
-| 7   | DEV verification (§11)                     | synthetic payers, the walk, a written result                                                              | —                 |
-| 8   | PROD activation                            | `portal-edge`, `portal.ayvo.co`, its own ADR addendum and approval                                        | owner + Codex     |
+| #   | PR (draft, after the approval of this ADR) | Scope                                                                                                                                                                       | Deploy            |
+| --- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| 1   | core: account audience                     | `users/roles/user_sessions.audience`, `native_auth_tokens/challenges.audience`, triggers, the audience in guards and native routes, `PORTAL_PUBLIC_ORIGIN`; tests §2        | DEV with approval |
+| 2   | core: portal grants                        | `portal_grants(+hotels)`, one active per (user, payer), `identity:portal_grants_manage`, the Finance → core grant contract (issue, replace), revoke API; tests §4           | DEV with approval |
+| 3   | core: portal contract                      | `/api/internal/v1/portal/{auth/*,session,hotels}`, the portal token, rate limits, its own pool and request limit; tests §3, §8                                              | DEV with approval |
+| 4   | Finance: grants and portal invoices        | the grant issuing path (§4) with its admin UI on the payer page, `introspect-portal`, `/api/internal/v1/portal/invoices*`, the §5 predicate, its own pool; tests §4, §5, §8 | DEV with approval |
+| 5   | `apps/portal` (portal-web)                 | the BFF and pages of P1, the `__Host-` cookie, CSRF, Playwright at 390/1440 px                                                                                              | not yet           |
+| 6   | DEV host `dev-portal.ayvo.co`              | the compose service, the Caddy site, private DNS — the infrastructure part for Codex                                                                                        | owner + Codex     |
+| 7   | DEV verification (§11)                     | synthetic payers, the walk, a written result                                                                                                                                | —                 |
+| 8   | PROD activation                            | `portal-edge`, `portal.ayvo.co`, its own ADR addendum and approval                                                                                                          | owner + Codex     |
 
 - PRs 1–4 change nothing for staff beyond the audience check.
-- PRs 1–3 and 4 can be reviewed in parallel.
-- PR 5 needs 3 and 4. PRs 6–8 follow in order.
+- PR 2 needs 1; PR 4 needs 2 (the grant contract) and 3 (`introspect-portal` uses the portal
+  session). PR 5 needs 3 and 4. PRs 6–8 follow in order.
+- **The public host is approved separately** (PR 8, owner preference). This ADR asks for the
+  first batch: the model, the contracts and the DEV host.
 - **One joint approval is asked for:** this ADR as a whole. That covers the model of §2 and §4,
   the contracts of §5 and §6, and the hosts and budgets of §7 and §8. Every PR, merge and deploy
   is then approved on its own as usual.
@@ -314,7 +403,8 @@ Finance ──(FINANCE_SERVICE_TOKEN, existing)──► core /api/internal/v1/f
    - sees H3 and B1 only;
    - A's invoice id in B's PDF URL gives 404.
 5. **The ADMIN changes access:**
-   - extends A's grant with H2: A2 appears on A's next request;
+   - replaces A's grant with {payer A: H1, H2} through the Finance path (§4): A2 appears on A's
+     next request;
    - revokes A's grant: A's next request gives 401 and the session is gone. Signing in again
      shows no hotels and no invoices.
 6. **Failure checks:**
@@ -326,7 +416,9 @@ Finance ──(FINANCE_SERVICE_TOKEN, existing)──► core /api/internal/v1/f
 - **The core migration:**
   - `users.audience`, `roles.audience` and `user_sessions.audience`, with the role-grant and
     invitation triggers;
-  - `portal_grants`/`portal_grant_hotels`;
+  - `portal_grants`/`portal_grant_hotels` (one active per user and payer, `replaces`,
+    `finance_check`);
+  - `native_auth_tokens.audience`, `native_auth_challenges.audience`;
   - `identity:portal_grants_manage` (ADMIN, catalogue migration);
   - `HOTEL_USER` becomes assignable, only to `PORTAL` users.
 - **Code:**
@@ -339,4 +431,6 @@ Finance ──(FINANCE_SERVICE_TOKEN, existing)──► core /api/internal/v1/f
   - the DEV and PROD host names (`dev-portal.ayvo.co` and `portal.ayvo.co` proposed);
   - whether a cancelled invoice is shown (proposed: yes, labelled "stornovaná", since the payer
     received it);
+  - the history policy (§5): all the payer's invoices of the granted hotels (proposed), or only
+    those issued since the grant;
   - for the later contact step: a direct change, or a proposal AYVO confirms.
