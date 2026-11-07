@@ -127,6 +127,12 @@ export const returnsCs = {
   } as Record<string, string>,
   uncertain: 'Spojení selhalo – výsledek není jistý. „Zkusit znovu“ pošle stejný požadavek.',
   retry: 'Zkusit znovu',
+  unconfirmed: {
+    title: 'Výsledek nepotvrzený',
+    text: 'Server mohl zápis provést. „Zkusit znovu“ pošle tentýž požadavek se stejnou volbou – nic se nezapíše dvakrát.',
+    held: 'Další naskenovaný kód zůstává v poli a odešle se až po vyřešení tohoto skenu.',
+    dismiss: 'Zahodit (výsledek zůstane neověřený)',
+  },
   saved: 'Uloženo.',
   refreshFailed:
     'Zápis je uložený, ale přehled se nepodařilo načíst. Obnovte ho – nic se znovu neodešle.',
