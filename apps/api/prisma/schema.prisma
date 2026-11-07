@@ -159,6 +159,9 @@ enum BottleStatus {
   RETIRED
   /// Shredded. Irreversible: no later event (DB).
   DISPOSED
+  /// "Připravená k plnění · Po mytí": washed and inspected after a return (REUSE_READY, doc 048
+  /// §2). In R2 it enters no crate (DB).
+  READY_FOR_REUSE
 }
 
 /// Lifecycle event types. FILLED, ASSIGNED_TO_CRATE, … are added in later phases.
@@ -177,6 +180,9 @@ enum BottleEventType {
   DISPOSED
   /// RETIRED → RETURNED, only for a retirement documented at the return (doc 047 §4.7).
   CORRECTION
+  /// "Po mytí" (doc 048 §2): RETURNED → READY_FOR_REUSE, once per return; it closes the open pump
+  /// attachment (CLEANING_REQUIRED) and opens the bottle's next circulation. Consumes nothing.
+  REUSE_READY
 }
 
 /// A group of physical bottle identities registered in one operation (NOT a fill batch).
@@ -1013,6 +1019,7 @@ enum OperationKind {
   RETURN_LINE_EMPTY
   RETURN_RECEIPT_CLOSE
   RETURN_ISSUE_RESOLVE
+  REUSE_READY_SCAN
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
