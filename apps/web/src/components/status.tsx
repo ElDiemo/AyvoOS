@@ -24,6 +24,7 @@ const bottleTone: Record<BottleStatus, StatusTone> = {
   RETURNED: 'warning',
   RETIRED: 'error',
   DISPOSED: 'neutral',
+  READY_FOR_REUSE: 'ok',
 };
 
 export function BottleStatusBadge({ status }: { status: BottleStatus }) {

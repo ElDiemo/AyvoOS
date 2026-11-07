@@ -29,6 +29,7 @@ export const productionCs = {
     RETURNED: 'Vrácená, čeká na mytí',
     RETIRED: 'Ke skartaci',
     DISPOSED: 'Skartovaná',
+    READY_FOR_REUSE: 'Připravená k plnění · Po mytí',
   } as Record<string, string>,
   eventType: {
     CREATED: 'Identita vytvořena',
@@ -40,6 +41,7 @@ export const productionCs = {
     RETIRED: 'Vyřazena ke skartaci',
     DISPOSED: 'Skartována',
     CORRECTION: 'Oprava vyřazení',
+    REUSE_READY: 'Po mytí – připravena k dalšímu plnění',
   } as Record<string, string>,
   printJobStatus: {
     PENDING: 'Čeká na vygenerování',

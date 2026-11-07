@@ -59,6 +59,8 @@ export const fillingCs = {
     NOT_IN_THIS_CRATE: 'Lahev není v žádné bedně. Odložte ji a řekněte vedoucímu.',
     IN_ANOTHER_CRATE: 'Lahev patří do jiné bedny – nic se nezapsalo. Vraťte ji do správné bedny.',
     BOTTLE_NOT_LABELED: 'Lahev ještě nemá nalepenou etiketu.',
+    NOT_PLACEABLE_YET:
+      'Lahev je po mytí – do bedny ji zatím vložit nelze (přijde s dalším plněním), nic se nezapsalo.',
     BOTTLE_NOT_PLACEABLE:
       'Lahev je vrácená, vyřazená nebo skartovaná – do bedny nepatří, nic se nezapsalo.',
     BOTTLE_NOT_BOUND:
