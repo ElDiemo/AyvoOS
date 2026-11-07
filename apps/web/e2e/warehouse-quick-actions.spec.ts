@@ -106,6 +106,8 @@ test('by role: a warehouse supervisor without returns:receive sees only "Přijmo
   await page.getByTestId('quick-goods').click();
   await expect(page).toHaveURL(/\/warehouse\/receipts\/new$/);
   await page.goto('/warehouse');
+  await expect(page.getByTestId('quick-goods')).toBeVisible();
+  await expect(page.getByTestId('overview-stock')).toBeVisible();
   await noOverflow(page);
   await page.screenshot({ path: `${SHOTS}/quick-actions-operator-390.png`, fullPage: true });
   await context.close();
