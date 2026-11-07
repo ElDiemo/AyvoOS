@@ -16,6 +16,9 @@ import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from
 test.use({ storageState: 'e2e/.auth/admin.json', timezoneId: 'Europe/Prague' });
 test.describe.configure({ mode: 'serial' });
 
+/** The migrated initial site and the fictional second site of the e2e server (auth.setup.ts). */
+const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
+const E2E_DE_SITE_ID = '01990000-0000-7000-8000-0000000000e2';
 const SHOTS = resolve(import.meta.dirname, '../../../docs/screenshots/returns');
 let orderCode = '';
 let productCode = '';
@@ -25,7 +28,7 @@ const crates: { url: string; code: string; bottles: string[] }[] = [];
 test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
   const request = context.request;
-  const printed = await printedBottles(request, `returns-mydlo-${Date.now()}`, 8);
+  const printed = await printedBottles(request, `returns-mydlo-${Date.now()}`, 10);
   const kit = await labelingSetup(request, {
     versionId: printed.versionId,
     capacity: 2,
@@ -59,15 +62,16 @@ test.beforeAll(async ({ browser }) => {
   );
   productCode = kit.productCode;
   versionId = printed.versionId;
-  const bottleLot = (await receiveStock(request, 'NEW_BOTTLE', '10'))!;
-  await receiveStock(request, kit.pumpCode, '10');
+  const bottleLot = (await receiveStock(request, 'NEW_BOTTLE', '12'))!;
+  await receiveStock(request, kit.pumpCode, '12');
   const liquid = await lotIdOf(
     request,
     kit.liquidCode,
-    (await receiveStock(request, kit.liquidCode, '3000'))!,
+    (await receiveStock(request, kit.liquidCode, '4000'))!,
   );
-  // K and L for the intake; M and N come back later for the scan series of "Po mytí".
-  for (let i = 0; i < 4; i++) {
+  // K and L for the intake; M and N come back later for the scan series of "Po mytí", O for the
+  // end of the session.
+  for (let i = 0; i < 5; i++) {
     const urls = printed.urls.slice(i * 2, i * 2 + 2);
     const crate = await labelledCrate(request, kit, {
       versionId: printed.versionId,
@@ -306,6 +310,46 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
   ]).toEqual([1, 1, 1]);
 });
 
+type Crate = (typeof crates)[number];
+
+/** Crates received back through the intake API, every bottle good (RETURNED). */
+async function receiveBack(page: Page, back: Crate[]) {
+  const receipt = await json<{ code: string }>(
+    await page.request.post('/api/admin/returns/receipts', {
+      data: { requestId: crypto.randomUUID(), hotelCode: null },
+    }),
+  );
+  for (const c of back) {
+    const { lineId } = await json<{ lineId: string }>(
+      await page.request.post(`/api/admin/returns/receipts/${receipt.code}/crates`, {
+        data: { requestId: crypto.randomUUID(), scannedValue: c.url },
+      }),
+    );
+    for (const url of c.bottles) {
+      await json(
+        await page.request.post(
+          `/api/admin/returns/receipts/${receipt.code}/lines/${lineId}/bottles`,
+          { data: { requestId: crypto.randomUUID(), scannedValue: url, outcome: 'GOOD' } },
+        ),
+      );
+    }
+  }
+}
+
+/** Status and number of REUSE_READY events of each bottle (by its QR URL), from the database. */
+async function reuseState(urls: string[]) {
+  const tokens = urls.map((u) => u.split('/').pop()!);
+  const rows = await e2eRows<{ token: string; status: string; events: number }>(
+    `SELECT b."public_token" AS "token", b."status"::text AS "status",
+            (SELECT count(*)::int FROM "bottle_events" e WHERE e."bottle_id" = b."id" AND e."type" = 'REUSE_READY') AS "events"
+       FROM "bottles" b WHERE b."public_token" IN (${tokens.map((x) => `'${x}'`).join(',')})`,
+  );
+  return urls.map((u) => {
+    const r = rows.find((x) => x.token === u.split('/').pop())!;
+    return [r.status, r.events];
+  });
+}
+
 async function wash(page: Page, url: string) {
   await page.getByRole('textbox', { name: /umytou a zkontrolovanou lahev/ }).fill(url);
   await page.getByRole('button', { name: 'Po mytí – připravit k plnění' }).click();
@@ -499,4 +543,207 @@ test('"Po mytí": a bottle scanned while an answer is pending is kept; an uncert
   const after = await reuseReady();
   for (const token of tokens) expect(after[token]).toEqual(['READY_FOR_REUSE', 1]);
   await noOverflow(page);
+});
+
+test('"Po mytí": a refused bottle stays visible with its reason when the next scan of the series succeeds (409 → 200)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  const [k, l] = crates as [Crate, Crate];
+  // K's second bottle was defective (Ke skartaci); L's second one waits (its design approved again).
+  expect(await reuseState([k.bottles[1]!, l.bottles[1]!])).toEqual([
+    ['RETIRED', 0],
+    ['RETURNED', 0],
+  ]);
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let first = true;
+  await page.route('**/api/admin/returns/after-wash', async (route) => {
+    if (route.request().method() === 'POST' && first) {
+      first = false;
+      await held;
+    }
+    await route.continue();
+  });
+  await page.goto('/warehouse/after-wash');
+  const field = page.getByRole('textbox', { name: /umytou a zkontrolovanou lahev/ });
+  await field.fill(k.bottles[1]!);
+  await field.press('Enter');
+  await field.fill(l.bottles[1]!);
+  await field.press('Enter');
+  release();
+  await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
+  // The last answer (200) is the current message; the refusal (409) is still listed.
+  await expect(page.getByTestId('after-wash-message')).toContainText(
+    'Připravená k plnění · Po mytí',
+  );
+  const refusals = page.getByTestId('after-wash-refusals');
+  await expect(refusals.locator('li')).toHaveCount(1);
+  await expect(refusals.locator('li')).toContainText(/AYV-B-\d{6}: Lahev nečeká na mytí/);
+  expect(await reuseState([k.bottles[1]!, l.bottles[1]!])).toEqual([
+    ['RETIRED', 0],
+    ['READY_FOR_REUSE', 1],
+  ]);
+  await noOverflow(page);
+  await page.screenshot({ path: `${SHOTS}/after-wash-refusal-kept-390.png`, fullPage: true });
+});
+
+test('"Po mytí": reads of the queue are merged — at most one at a time, one more after the series', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const [, , m, n] = crates as [Crate, Crate, Crate, Crate];
+  const log: string[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let releaseReads!: () => void;
+  let reads = new Promise<void>((r) => (releaseReads = r));
+  let holding = false;
+  await page.goto('/warehouse/after-wash');
+  await page.route('**/api/admin/returns/after-wash', async (route) => {
+    const req = route.request();
+    if (req.method() === 'GET') {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      log.push('GET');
+      if (holding) await reads;
+      const r = await route.fetch();
+      inFlight -= 1;
+      return route.fulfill({ response: r });
+    }
+    const r = await route.fetch();
+    log.push('POST');
+    return route.fulfill({ response: r });
+  });
+  // Six confirmed scans (already "Po mytí": each answers 200 with the first result) while the
+  // first read is held.
+  holding = true;
+  const field = page.getByRole('textbox', { name: /umytou a zkontrolovanou lahev/ });
+  const six = [...m.bottles, ...n.bottles, m.bottles[0]!, n.bottles[0]!];
+  for (const url of six) {
+    await field.fill(url);
+    await field.press('Enter');
+  }
+  await expect.poll(() => log.filter((x) => x === 'POST').length).toBe(6);
+  expect(inFlight).toBe(1);
+  holding = false;
+  releaseReads();
+  await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
+  await expect.poll(() => inFlight).toBe(0);
+  // One read held during the series, exactly one more after it; never two at once.
+  expect(maxInFlight).toBe(1);
+  expect(log.filter((x) => x === 'GET')).toHaveLength(2);
+  expect(log.at(-1)).toBe('GET');
+  await expect(page.getByTestId('after-wash-message')).toContainText('už je po mytí');
+  reads = Promise.resolve();
+});
+
+test('"Po mytí": the end of the session stops the series and keeps the unsent scans for the same user at the same site only', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  const o = crates[4]!;
+  await receiveBack(page, [o]);
+  expect(await reuseState(o.bottles)).toEqual([
+    ['RETURNED', 0],
+    ['RETURNED', 0],
+  ]);
+  // Another user with "Po mytí" at the same site (a custom role granted by the administrator).
+  const washerEmail = `e2e-washer-${Date.now()}@ayvo.test`;
+  await json(
+    await page.request.post('/api/admin/identity/roles', {
+      data: {
+        code: `E2E_WASH_${Date.now() % 100000}`,
+        name: 'Myčka (E2E)',
+        description: 'Po mytí',
+        permissions: ['returns:receive'],
+        copiedFrom: null,
+        reason: 'end-to-end washer',
+      },
+    }),
+  ).then(async (role) => {
+    const user = await json<{ id: string }>(
+      await page.request.post('/api/admin/identity/users', {
+        data: {
+          email: washerEmail,
+          displayName: 'E2E Myčka',
+          roles: ['WAREHOUSE_SUPERVISOR'],
+          siteIds: [INITIAL_SITE_ID],
+          warehouseCodes: [],
+          reason: 'end-to-end washer',
+        },
+      }),
+    );
+    await json(
+      await page.request.post(`/api/admin/identity/users/${user.id}/roles/grant`, {
+        data: { role: (role as { code: string }).code, reason: 'end-to-end washer' },
+      }),
+    );
+  });
+
+  const posts: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let expire = true;
+  await page.route('**/api/admin/returns/after-wash', async (route) => {
+    const req = route.request();
+    if (req.method() !== 'POST') return route.continue();
+    posts.push((JSON.parse(req.postData()!) as { requestId: string }).requestId);
+    if (expire) {
+      // The session ends while the first scan is under way (nothing reaches the server).
+      expire = false;
+      await held;
+      return route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ statusCode: 401, code: 'SESSION_EXPIRED', message: 'expired' }),
+      });
+    }
+    return route.continue();
+  });
+  // Leaving after the end of the session is confirmed (the scans are kept, see below).
+  page.on('dialog', (d) => void d.accept());
+  await page.goto('/warehouse/after-wash');
+  const field = page.getByRole('textbox', { name: /umytou a zkontrolovanou lahev/ });
+  await field.fill(o.bottles[0]!);
+  await field.press('Enter');
+  await field.fill(o.bottles[1]!);
+  await field.press('Enter');
+  release();
+  await expect(page).toHaveURL(/\/session-expired\?next=/);
+  // Only the first scan was attempted; nothing was written.
+  expect(posts).toHaveLength(1);
+  expect(await reuseState(o.bottles)).toEqual([
+    ['RETURNED', 0],
+    ['RETURNED', 0],
+  ]);
+
+  // Another user in this tab: nothing of the administrator's series.
+  await page.goto(`/api/auth/login?next=/warehouse/after-wash&login_hint=${washerEmail}`);
+  await expect(page).toHaveURL(/\/warehouse\/after-wash$/);
+  await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
+  await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
+  // The same administrator at another site: nothing either.
+  await page.goto('/api/auth/login?next=/&login_hint=e2e-admin@ayvo.test');
+  await page.request.post('/api/auth/active-site', { data: { siteId: E2E_DE_SITE_ID } });
+  await page.goto('/warehouse/after-wash');
+  await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
+  await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
+  // Back at the site of the series: both scans restored, stopped until "Zkusit znovu".
+  await page.request.post('/api/auth/active-site', { data: { siteId: INITIAL_SITE_ID } });
+  await page.goto('/warehouse/after-wash');
+  const unresolved = page.getByTestId('after-wash-scans-unresolved');
+  await expect(unresolved).toContainText('Výsledek posledního skenu není jistý');
+  await expect(page.getByTestId('after-wash-scans-waiting')).toHaveText('Čeká na odeslání: 1');
+  await page.screenshot({ path: `${SHOTS}/after-wash-session-restored-390.png`, fullPage: true });
+  await unresolved.getByRole('button', { name: 'Zkusit znovu' }).click();
+  await expect(unresolved).toHaveCount(0);
+  // The first scan again with ITS request id, then the second; each bottle once.
+  expect(posts).toHaveLength(3);
+  expect(posts[1]).toBe(posts[0]);
+  expect(posts[2]).not.toBe(posts[0]);
+  expect(await reuseState(o.bottles)).toEqual([
+    ['READY_FOR_REUSE', 1],
+    ['READY_FOR_REUSE', 1],
+  ]);
 });

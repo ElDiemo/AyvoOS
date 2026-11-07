@@ -118,6 +118,10 @@ export const returnsCs = {
     count: (shown: number, total: number) => (shown < total ? `${shown} z ${total}` : `${total}`),
     since: 'od',
     noProduct: 'bez vazby na produkt',
+    sessionEnded:
+      'Přihlášení skončilo. Neodeslané skeny zůstávají uložené v tomto okně – po novém přihlášení stejného uživatele na stejné provozovně je odešlete tlačítkem „Zkusit znovu“.',
+    refusals: (n: number) => `Odmítnuté skeny této série (${n}) – lahve odložte stranou`,
+    refusalsHide: 'Skrýt',
     refreshFailed:
       'Sken je zapsaný, ale přehled se nepodařilo načíst. Obnovte ho – nic se znovu neodešle.',
     queue: {
