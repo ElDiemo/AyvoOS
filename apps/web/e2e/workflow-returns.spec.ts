@@ -15,11 +15,13 @@ test.describe.configure({ mode: 'serial' });
 
 let orderCode = '';
 const crates: { url: string; code: string; bottles: string[] }[] = [];
+/** Printed, never labelled: "not in circulation" pieces (a scan that records an issue). */
+let spare: string[] = [];
 
 test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
   const request = context.request;
-  const printed = await printedBottles(request, `returns-mydlo-${Date.now()}`, 4);
+  const printed = await printedBottles(request, `returns-mydlo-${Date.now()}`, 6);
   const kit = await labelingSetup(request, {
     versionId: printed.versionId,
     capacity: 2,
@@ -58,6 +60,7 @@ test.beforeAll(async ({ browser }) => {
     kit.liquidCode,
     (await receiveStock(request, kit.liquidCode, '3000'))!,
   );
+  spare = printed.urls.slice(4);
   for (let i = 0; i < 2; i++) {
     const urls = printed.urls.slice(i * 2, i * 2 + 2);
     const crate = await labelledCrate(request, kit, {
@@ -295,4 +298,46 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
     detail.defectivePumps,
     detail.lineDetails[0].recordedCount,
   ]).toEqual([1, 1, 1]);
+});
+
+test('a bottle scanned while the detail is still refreshing stays in the field and is sent next', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/warehouse/returns');
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  await expect(page).toHaveURL(/\/warehouse\/returns\/RR-\d{6}$/);
+  const code = page.url().split('/').pop()!;
+  await page.getByRole('button', { name: 'Krabice bez kódu' }).click();
+  const card = page.getByTestId('return-line-box-1');
+  await expect(card).toBeVisible();
+  // The next read of the detail is held until the following scan is typed.
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let hold = true;
+  await page.route(`**/api/admin/returns/receipts/${code}`, async (route) => {
+    if (route.request().method() === 'GET' && hold) {
+      hold = false;
+      await held;
+    }
+    await route.continue();
+  });
+  const field = card.getByRole('textbox', { name: /Naskenujte lahev/ });
+  await field.fill(spare[0]!);
+  await card.getByRole('button', { name: 'Zapsat lahev' }).click();
+  // The write is confirmed (a piece not in circulation) while the detail is still loading…
+  await expect(page.getByTestId('return-message')).toContainText('Lahev není v oběhu u hotelu');
+  await field.fill(spare[1]!);
+  release();
+  // …and the refresh does not clear the bottle scanned meanwhile.
+  await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 1');
+  await expect(field).toHaveValue(spare[1]!);
+  await card.getByRole('button', { name: 'Zapsat lahev' }).click();
+  await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 2');
+  await expect(field).toHaveValue('');
+  const detail = await (await page.request.get(`/api/admin/returns/receipts/${code}`)).json();
+  expect(detail.lineDetails[0].issues.map((i: { kind: string }) => i.kind)).toEqual([
+    'NOT_IN_CIRCULATION',
+    'NOT_IN_CIRCULATION',
+  ]);
 });

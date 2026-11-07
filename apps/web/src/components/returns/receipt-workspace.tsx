@@ -130,7 +130,8 @@ export function ReceiptWorkspace({
                   ? t.result.crate(r.crateCode, r.orderCode)
                   : t.result.crateAgain(r.crateCode);
               });
-              if (done) setCrateValue('');
+              // Only the value sent: a code scanned while the detail was refreshing stays.
+              if (done) setCrateValue((v) => (v.trim() === value ? '' : v));
             }}
           >
             <input
@@ -292,7 +293,7 @@ function LineCard({
                     : t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? r.result!);
                 },
               );
-              if (done) setValue('');
+              if (done) setValue((v) => (v.trim() === scanned ? '' : v));
             }}
           >
             <input
@@ -463,7 +464,7 @@ function IssueRow({
                 return t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? '');
               },
             );
-            if (done) setValue('');
+            if (done) setValue((v) => (v.trim() === scanned ? '' : v));
           }}
         >
           <input
