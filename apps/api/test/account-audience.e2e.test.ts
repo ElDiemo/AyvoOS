@@ -34,6 +34,8 @@ const tokenOf = (url: string) => new URLSearchParams(new URL(url).hash.slice(1))
 describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', () => {
   let t: TestApp;
   let su: TestApp;
+  /** An administrator's app (superuser principal) with a configured portal origin. */
+  let adm: TestApp;
   const http = () => request(t.app.getHttpServer());
   const post = (path: string) =>
     http().post(`/api/auth/native/${path}`).set('Origin', TEST_APP_ORIGIN);
@@ -55,7 +57,7 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
     });
     await t.app
       .get(InvitationsService)
-      .send(null, user.id, randomUUID(), 'synthetic audience test');
+      .send(null, user.id, randomUUID(), 'synthetic audience test', audience);
     const mail = await lastMail(user.email);
     expect(mail, user.email).toBeTruthy();
     return { user, link: mail!.url, token: tokenOf(mail!.url) };
@@ -79,10 +81,16 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
       { auth: 'real', redis: 'real' },
     );
     su = await createTestApp();
+    adm = await createTestApp({
+      AUTH_PROVIDER: 'local',
+      AUTH_MAIL_DRIVER: 'memory',
+      PORTAL_PUBLIC_ORIGIN: PORTAL_ORIGIN,
+    });
   });
   afterAll(async () => {
     await t?.close();
     await su?.close();
+    await adm?.close();
   });
 
   describe('the catalogue and the accounts (database)', () => {
@@ -395,6 +403,72 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
     });
   });
 
+  it('the internal invitation routes refuse a portal account: no request, invitation, token or mail', async () => {
+    // A PORTAL account with an open invitation of its own side (issued as the portal path will).
+    const { user } = await invited('PORTAL');
+    const state = async () => ({
+      invitations: await adm.prisma.userInvitation.findMany({
+        where: { userId: user.id },
+        orderBy: { id: 'asc' },
+      }),
+      requests: await adm.prisma.userInvitationRequest.count({
+        where: { invitation: { userId: user.id } },
+      }),
+      tokens: await adm.prisma.nativeAuthToken.findMany({
+        where: { userId: user.id },
+        select: { id: true, tokenSha256: true, revision: true, sentAt: true, revokedAt: true },
+        orderBy: { id: 'asc' },
+      }),
+    });
+    const before = await state();
+    expect(before.tokens).toHaveLength(1);
+    const mailsTo = () =>
+      adm.app
+        .get(NativeTokensService)
+        .deliveriesForTest()
+        .filter((m) => m.to === user.email).length;
+    const http = request(adm.app.getHttpServer());
+    for (const action of ['', '/resend', '/revoke']) {
+      const res = await http
+        .post(`/api/admin/identity/users/${user.id}/invitations${action}`)
+        .send({ requestId: randomUUID(), reason: 'internal invitation of a portal account' });
+      expect([res.status, res.body.code], `invitations${action}`).toEqual([
+        409,
+        'ACCOUNT_AUDIENCE_MISMATCH',
+      ]);
+    }
+    await adm.app.get(NativeTokensService).deliverPending();
+    await t.app.get(NativeTokensService).deliverPending();
+    expect(await state()).toEqual(before);
+    expect(mailsTo()).toBe(0);
+
+    // A request id first used on the portal side (a SEND) is not resumed by the internal SEND route.
+    const portalRequest = await adm.prisma.userInvitationRequest.findFirstOrThrow({
+      where: { invitation: { userId: user.id } },
+    });
+    const replay = await http
+      .post(`/api/admin/identity/users/${user.id}/invitations`)
+      .send({ requestId: portalRequest.requestId, reason: 'replay of a portal request id' });
+    expect(portalRequest.kind).toBe('SEND');
+    expect([replay.status, replay.body.code]).toEqual([409, 'ACCOUNT_AUDIENCE_MISMATCH']);
+    expect(await state()).toEqual(before);
+
+    // An ordinary STAFF invitation through the same route goes through, to the staff origin.
+    const staff = await adm.prisma.user.create({
+      data: { email: `inv-${randomUUID().slice(0, 8)}@ayvo.test`, displayName: 'Staff invite' },
+    });
+    await http
+      .post(`/api/admin/identity/users/${staff.id}/invitations`)
+      .send({ requestId: randomUUID(), reason: 'staff invitation' })
+      .expect(200);
+    await adm.app.get(NativeTokensService).deliverPending();
+    const sent = adm.app
+      .get(NativeTokensService)
+      .deliveriesForTest()
+      .findLast((m) => m.to === staff.email);
+    expect(sent?.url.startsWith(`${TEST_APP_ORIGIN}/activate#token=`)).toBe(true);
+  });
+
   it('without a configured portal origin no portal link is issued (fail closed)', async () => {
     // The superuser app has no PORTAL_PUBLIC_ORIGIN.
     const portal = await su.prisma.user.create({
@@ -406,7 +480,7 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
     });
     await su.app
       .get(InvitationsService)
-      .send(null, portal.id, randomUUID(), 'no portal origin')
+      .send(null, portal.id, randomUUID(), 'no portal origin', 'PORTAL')
       .catch(() => undefined);
     expect(await su.prisma.nativeAuthToken.count({ where: { userId: portal.id } })).toBe(0);
   });

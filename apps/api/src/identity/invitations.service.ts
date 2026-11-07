@@ -3,7 +3,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { domainError } from '../common/domain-error.js';
 import { PrismaService } from '../database/prisma.service.js';
-import { Prisma, type UserInvitation } from '../generated/prisma/client.js';
+import { Prisma, type AccountAudience, type UserInvitation } from '../generated/prisma/client.js';
 import {
   IDENTITY_PROVIDER,
   IdentityProviderError,
@@ -17,6 +17,17 @@ export const INVITATION_EXPIRES_IN_DAYS = 7;
 
 type Kind = 'SEND' | 'RESEND' | 'REVOKE';
 type Outcome = 'SENT' | 'RESENT' | 'REVOKED' | 'FAILED' | 'SKIPPED_ACCEPTED' | 'SKIPPED_CLOSED';
+
+/**
+ * An invitation is sent only on the side of its account (ADR 0045 §2): the internal routes invite
+ * STAFF accounts; a hotel portal account is invited only through its own path.
+ */
+const otherAudience = () =>
+  domainError(
+    409,
+    'ACCOUNT_AUDIENCE_MISMATCH',
+    'This account belongs to another side and is not invited here',
+  );
 
 const inProgress = () =>
   domainError(409, 'INVITATION_IN_PROGRESS', 'The same action is running; retry shortly');
@@ -89,18 +100,27 @@ export class InvitationsService {
     userId: string,
     requestId: string,
     reason: string,
+    audience: AccountAudience = 'STAFF',
   ): Promise<void> {
-    if (await this.resume(actorId, userId, requestId, 'SEND', reason)) return;
-    const invitationId = await this.start(actorId, userId, requestId, 'SEND', reason, (latest) => {
-      if (latest && (latest.state === 'SENDING' || latest.state === 'PENDING')) {
-        throw domainError(
-          409,
-          'INVITATION_OPEN',
-          'An invitation is already open; resend or revoke it',
-        );
-      }
-      return 'new';
-    });
+    if (await this.resume(actorId, userId, requestId, 'SEND', reason, audience)) return;
+    const invitationId = await this.start(
+      audience,
+      actorId,
+      userId,
+      requestId,
+      'SEND',
+      reason,
+      (latest) => {
+        if (latest && (latest.state === 'SENDING' || latest.state === 'PENDING')) {
+          throw domainError(
+            409,
+            'INVITATION_OPEN',
+            'An invitation is already open; resend or revoke it',
+          );
+        }
+        return 'new';
+      },
+    );
     await this.deliver(actorId, invitationId, requestId, reason, 'SEND');
   }
 
@@ -113,10 +133,12 @@ export class InvitationsService {
     userId: string,
     requestId: string,
     reason: string,
+    audience: AccountAudience = 'STAFF',
   ): Promise<void> {
-    if (await this.resume(actorId, userId, requestId, 'RESEND', reason)) return;
+    if (await this.resume(actorId, userId, requestId, 'RESEND', reason, audience)) return;
     let mode: 'new' | 'existing' = 'new';
     const invitationId = await this.start(
+      audience,
       actorId,
       userId,
       requestId,
@@ -135,9 +157,16 @@ export class InvitationsService {
   }
 
   /** Cancels the open invitation at the provider and in AYVO (idempotent). */
-  async revoke(actorId: string, userId: string, requestId: string, reason: string): Promise<void> {
-    if (await this.resume(actorId, userId, requestId, 'REVOKE', reason)) return;
+  async revoke(
+    actorId: string,
+    userId: string,
+    requestId: string,
+    reason: string,
+    audience: AccountAudience = 'STAFF',
+  ): Promise<void> {
+    if (await this.resume(actorId, userId, requestId, 'REVOKE', reason, audience)) return;
     const invitationId = await this.start(
+      audience,
       actorId,
       userId,
       requestId,
@@ -242,15 +271,18 @@ export class InvitationsService {
     requestId: string,
     kind: Kind,
     reason: string,
+    audience: AccountAudience,
   ): Promise<boolean> {
     const prior = await this.prisma.userInvitationRequest.findUnique({
       where: { requestId },
-      include: { invitation: true },
+      include: { invitation: { include: { user: { select: { audience: true } } } } },
     });
     if (!prior) return false;
     if (prior.kind !== kind || prior.invitation.userId !== userId) {
       throw domainError(409, 'IDEMPOTENCY_CONFLICT', 'This request id was used for another action');
     }
+    // An account's audience never changes (DB), so this holds for every later step of the request.
+    if (prior.invitation.user.audience !== audience) throw otherAudience();
     if (prior.status === 'DONE') {
       // The same answer as the first time.
       throwForOutcome(prior.outcome as Outcome);
@@ -266,6 +298,7 @@ export class InvitationsService {
    * the user's row lock; the partial unique indexes stop concurrent duplicate invitations.
    */
   private async start(
+    audience: AccountAudience,
     actorId: string | null,
     userId: string,
     requestId: string,
@@ -276,11 +309,15 @@ export class InvitationsService {
   ): Promise<string> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const rows = await tx.$queryRaw<{ id: string; email: string; status: string }[]>`
-          SELECT "id", "email", "status"::text AS "status" FROM "users"
-          WHERE "id" = ${userId}::uuid FOR UPDATE`;
+        const rows = await tx.$queryRaw<
+          { id: string; email: string; status: string; audience: AccountAudience }[]
+        >`
+          SELECT "id", "email", "status"::text AS "status", "audience"::text AS "audience"
+          FROM "users" WHERE "id" = ${userId}::uuid FOR UPDATE`;
         const user = rows[0];
         if (!user) throw domainError(404, 'USER_NOT_FOUND', 'No such user');
+        // Under the user's lock, before any request, invitation or token exists.
+        if (user.audience !== audience) throw otherAudience();
         if (user.status !== 'ACTIVE') {
           throw domainError(409, 'USER_INACTIVE', 'A deactivated user cannot be invited');
         }
