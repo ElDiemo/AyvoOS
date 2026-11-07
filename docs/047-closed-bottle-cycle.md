@@ -678,105 +678,203 @@ and its effect on existing data go to review first.
 | Mixed return         | A bottle of crate L found in K's line is identified for **L** (its own assignment)                                                                                                                          | The same                                                                                                                              |
 | Pumps                | `RETURN_PUMP_COUNT`: one row per entry in an **open receipt**, `defective` −1000…1000 ≠ 0 (negative = correction with a reason), idempotent per `requestId`, never a stock movement; the UI sends only `+1` | "Odepsat pumpičky": one count X, linked to no bottle, crate, washing or filling; written-off used pieces counted apart from new stock |
 
-### 6.2 Step P — "Odepsat pumpičky" X (smallest; reuses `RETURN_PUMP_COUNT`)
+### 6.2 Pumps — two separate things: the UI step P, and an independent write-off (a model)
 
-- **Smallest solution (variant A, no migration):**
-  - **UI:** the button "Vadná pumpička −1" becomes a number field "Odepsat pumpičky" (whole
-    pieces, X ≥ 1) and one confirmation.
-  - **API and data:** unchanged. `POST /api/admin/returns/receipts/:code/pumps` with
-    `defective = X`, one `return_pump_counts` row, no stock movement, the existing correction (a
-    negative count with a reason) kept.
-  - **Site scope:** the receipt's site (404 for another site, before a replay).
-  - **Duplicate protection:** `requestId` through `OperationRequestsService`. The UI keeps one id
-    per intended entry while the answer is uncertain (stable key: receipt, current total and X),
-    so a repeat never writes X twice.
-- **Counted apart from new stock:** already true, since `return_pump_counts` never touches the
-  ledger and the new-pump balance changes only by receipts and `FILL`. A read adds the site's
-  total of written-off used pumps (the sum of `defective`) to the overview of Příjem vratek.
-- **The one limit of variant A:** the write-off goes into an **open** receipt (DB trigger
-  `return_pump_counts_insert_check`).
-- **Variant B,** only if the owner wants a write-off without opening a receipt (a model change, its
-  own migration): `return_pump_counts.receipt_id` nullable plus `site_id` NOT NULL, the same
-  idempotency and the site from the active site.
-- **Recommendation:** A. It needs no model change and the intake is where the pumps are counted.
-- Tests: X = 5 once, one row, sum 5. A repeat with the same `requestId` gives one row. An
-  uncertain answer and its retry give one row. Another site gets 404. A negative count without a
-  reason is refused. No ledger row.
+**Step P — only UI, inside an open receipt (no migration, no new server read).**
+
+- The button "Vadná pumpička −1" becomes a number field "Odepsat pumpičky" (whole pieces, X ≥ 1)
+  and one confirmation.
+- **API and data are unchanged:**
+  - `POST /api/admin/returns/receipts/:code/pumps` with `defective = X` writes one
+    `return_pump_counts` row and no stock movement;
+  - the correction (a negative count with a reason) stays;
+  - the site scope is the receipt's site (404 for another site, before a replay).
+- **Only the existing per-receipt sum is shown:** `defectivePumps` of the receipt detail. A total
+  per site is a new server read, so it is not part of step P (below).
+- **Duplicate protection:**
+  - the server: `requestId` through `OperationRequestsService`;
+  - the UI: one id per **intended entry**, made when the operator confirms X and kept until a
+    definite answer, like the scan fields of #133;
+  - the id never depends on the shown total, so a retry after an uncertain answer sends the same
+    id even if the total changed meanwhile (another operator, or the refresh after a commit);
+  - while the entry is unconfirmed it is shown apart ("Výsledek nepotvrzený: X") with "Zkusit
+    znovu" and "Zahodit".
+- **Tests:**
+  - X = 5: one row, the receipt total +5;
+  - a retry with the same id: one row;
+  - an uncertain answer, the total changed by another entry, then the retry: one row of 5;
+  - another site: 404;
+  - a negative count without a reason: refused;
+  - no ledger row.
+
+**Read step P-sum (separate, a new server read):** the site's total of written-off used pumps in
+Příjem vratek, as the sum of `return_pump_counts` over the site's receipts. It is a new field of
+the overview contract, read-only.
+
+**Model proposal P-free — "Odepsat pumpičky" without an open receipt** (the target variant, if the
+write-off is to be independent of the receipt as well; for review, its own migration):
+
+- **A new insert-only table** `pump_write_offs`:
+  - site, whole pieces ≠ 0 (a negative one is a correction with a reason), recorded at and by;
+  - `operation_id` unique (idempotency);
+  - an optional `receipt_id` of the same site, for information only;
+  - immutable and no TRUNCATE, like `return_pump_counts`.
+- **Not an extension of `return_pump_counts`:** its rows are immutable, so adding `site_id NOT
+NULL` there would need an UPDATE of history.
+- **API:** `POST /api/admin/returns/pump-write-offs` (`returns:receive`, the active site; the same
+  site boundary and replay rules); never a ledger movement.
+- **Site total:** `return_pump_counts` of the site's receipts plus `pump_write_offs`. The old
+  rows stay as they are.
+- **Tests:** the same as step P, without a receipt, plus a `receipt_id` of another site refused.
 
 ### 6.3 Step R1.1 — the crate scan frees the crate; the bottle scan stands on its own (model change)
 
-1. **Crate scan** (in an open receipt, one transaction, idempotent):
-   - the delivered allocation is completed (as today);
-   - the cycle goes `DELIVERED → RETURNED → CLOSED` with its `RETURNED` and `EMPTIED` crate events
-     (the existing allow-list);
-   - **every still active assignment of that cycle is released** with the new reason
-     `CRATE_RETURNED`, naming the crate's `RETURNED` event. No bottle event is written: the crate
-     says nothing about its bottles;
-   - the crate is free for its next cycle at once.
-   - A repeat gives the first result (`ALREADY_SCANNED`). A crate already `CLOSED` gives
-     `CRATE_ALREADY_RETURNED` with its receipt, nothing written. A crate scanned in R1 and still
-     `RETURNED` (not emptied) is closed and released by this scan.
-2. **Bottle scan** (in an open receipt, with **no crate scan or choice**):
-   - the scan goes to the receipt's one bottle line (new line kind `BOTTLES`, created with the
-     first bottle scan of the receipt);
-   - the bottle's circulation is found from the bottle itself: its **latest** assignment, active
-     or released `CRATE_RETURNED`, in a cycle whose delivered allocation recorded it
-     (`order_allocation_bottles`, parcel delivered);
-   - `SORTED` once per (bottle, cycle), as today. It releases the assignment if that is still
-     active (a bottle scanned before its crate); otherwise there is nothing to release.
-   - Outcomes and issues are as today, on the bottle line: `NOT_DELIVERED`, `NOT_IN_CIRCULATION`,
-     `OTHER_SITE` committed with their issue; `ALREADY_RECEIVED_ELSEWHERE` / repeat as today;
-     unreadable +1 on the bottle line.
-   - The check "assigned before the line was opened" (`NOT_IN_THIS_LINE`) disappears: the bottle
-     line names no container.
-3. **No physical count per container.** "Vyprázdněno" and `COUNT_MISMATCH` leave the flow, and
-   the receipt closes without them.
-   - **Open for the owner:** whether a count per receipt is wanted at all. It is not assumed.
-4. **Database changes** (one migration; for review):
-   - the release reason `CRATE_RETURNED` (only for a cycle the crate scan returned, with that
-     crate event);
-   - `crate_assignments_guard`: a shipped crate releases a bottle by its `SORTED` **or** by its
-     crate's return;
-   - the `SORTED` anchor: the bottle's latest assignment, active or `CRATE_RETURNED`, recorded in
-     that cycle's delivered allocation (instead of "active and assigned before its line");
-   - `bottle_events_sorted_complete`: the assignment is released by this `SORTED` or was already
-     released `CRATE_RETURNED`;
-   - `bottles_labeled_has_event`: a `RETURNED`/`RETIRED` bottle's latest assignment's cycle has
-     its `SORTED` (instead of "ended by its `SORTED`");
-   - `ReturnLineKind += BOTTLES` (one per receipt);
-   - a `CRATE` line is emptied at its scan (its physical count may stay empty);
-   - the receipt closes when its crate lines are closed. `CONTAINER` lines are only history.
-5. **Existing data** (no automatic correction):
-   - old `SORTED` events, released assignments, `CLOSED` cycles, `COUNT_MISMATCH` issues and
-     emptied lines stay as they are, and every new rule accepts them;
-   - an R1 cycle `CLOSED` with still active assignments (bottles never scanned) keeps them, and a
-     later bottle scan still identifies them through the same anchor;
-   - read-only preflight before the release, expected 0 on DEV:
-     - active assignments of `RETURNED`/`CLOSED` cycles;
-     - `RETURNED` cycles not emptied;
-     - open receipts.
-   - Any non-zero count goes to the owner before the deploy.
-6. **Tests** (API e2e on a real DB; DB guards committed as `ayvo_core`):
-   - an **empty return:** a crate scan only frees K, every member is released `CRATE_RETURNED`,
-     with no `SORTED`, no reuse and the bottles still "u hotelu";
-   - a **partial return:** one bottle of K identified days later in another receipt, after K was
-     reused for K2;
-   - a **mixed return:** a bottle of L (L never scanned) is identified for L1 and releases its
-     active assignment; L stays `DELIVERED`;
-   - a **bottle before its crate:** `SORTED` releases the active assignment, and the later crate
-     scan releases only the rest;
-   - **double scans** of the crate and of the bottle, in the same receipt and in another one;
-   - the **crate's next circulation** K2 (new bottles, O2, delivery): O1's content, parcel and
-     delivery unchanged, an old K1 bottle gets `SORTED` for K1 and a K2 bottle for K2;
-   - **negatives committed by SQL:**
-     - a `CRATE_RETURNED` release without the crate event;
-     - a `SORTED` for a cycle that is not the bottle's latest;
-     - `SORTED` without a delivered allocation of the bottle.
+**Recommendation kept** (re-review 5814139882): a simple walk with **no mandatory physical count**.
+The receipt shows the counts derived from the scans (crates, bottles identified, defective,
+unreadable pieces) and the unreadable pieces as today.
+
+1. **Crate scan** (in an open receipt, one transaction, idempotent per `requestId`):
+   - **Which cycle is checked:** the crate's current cycle, the one open cycle per crate. Only that
+     one is considered, never an older one.
+   - It is accepted only if it is `DELIVERED` and its parcel was delivered **before the receipt
+     was opened** (the receipt anchor, below).
+   - Otherwise it is refused and nothing is written:
+     - `CRATE_NOT_DELIVERED` (not delivered);
+     - `CRATE_DELIVERED_AFTER_RECEIPT` (delivered after the receipt opened; use a new receipt);
+     - `CRATE_ALREADY_RETURNED` (already `CLOSED`).
+   - The writes:
+     - the `CRATE` line;
+     - the delivered allocation is completed (as today);
+     - the cycle goes `DELIVERED → RETURNED → CLOSED` with its `RETURNED` and `EMPTIED` crate
+       events;
+     - the line is emptied at once, with no physical count;
+     - every still active assignment of that cycle is released `CRATE_RETURNED` by that line
+       (point 3). No bottle event is written.
+   - A repeat with the same `requestId` returns the stored result. A new `requestId` for the same
+     crate in the same receipt returns `ALREADY_SCANNED`, nothing written.
+   - **An old crate scan after the crate's second delivery:** in receipt R, opened before K2 was
+     delivered, the scan of K is refused `CRATE_DELIVERED_AFTER_RECEIPT`. The open cycle K2 is
+     never taken for K1, and K1 (`CLOSED`) is never opened again.
+2. **Bottle scan** (in an open receipt, **no crate scan or choice**). It goes to the receipt's one
+   `BOTTLES` line, made with the receipt's first bottle scan.
+   - **First the bottle's current circulation, globally:** its **latest** assignment, of any
+     cycle, active or released.
+     - Its cycle not shipped or not delivered (`OPEN_ASSEMBLY` … `ALLOCATED`, `DISPATCHED`):
+       `NOT_DELIVERED` or `NOT_IN_CIRCULATION`, committed with its issue as today. **There is no
+       falling back to an older delivered cycle** when a newer, undelivered one exists.
+     - Its cycle delivered: it must be recorded in that cycle's delivered allocation
+       (`order_allocation_bottles`, parcel delivered).
+   - **The receipt anchor** (it replaces "assigned before its line", re-review 5814139882):
+     - the delivery of that cycle (the parcel's `delivered_at`) is **before the receipt was
+       opened** (`return_receipts.opened_at`);
+     - otherwise `DELIVERED_AFTER_RECEIPT`, nothing written. A scan made in a receipt opened
+       earlier never closes a later circulation, also when it is replayed with a new
+       `requestId`;
+     - the same anchor holds for resolving an issue (`identify`): the issue's receipt;
+     - for an issue on an old R1 line, the line's own `scanned_at` as today.
+   - `SORTED` once per (bottle, cycle), as today:
+     - an assignment still active (the bottle scanned before its crate) is released
+       `RETURN_IDENTIFIED` by this `SORTED`, as today;
+     - an assignment already released `CRATE_RETURNED` stays as it is: the `SORTED` names that
+       cycle and needs no release.
+   - Outcomes and issues are as today, on the `BOTTLES` line: `ALREADY_RECEIVED_ELSEWHERE`, a
+     repeat, `OTHER_SITE`, unreadable +1. `NOT_IN_THIS_LINE` disappears.
+3. **Release by the crate scan in the database** (re-review 5814139882): today `released_event_id`
+   names a **bottle** event and is unique, so one event cannot release several members.
+   - **New column** `crate_assignments.released_by_line_id` → the `CRATE` line of the receipt,
+     not unique: one line releases every remaining member.
+     - A composite foreign key `(released_by_line_id, cycle_id)` →
+       `return_receipt_lines (id, returned_cycle_id)`, with a new unique key on that pair, binds
+       it to **the same cycle**: a reference to another cycle's line is impossible.
+   - **Exactly one reason per release:**
+     - `release_reason = 'CRATE_RETURNED'` ⇔ `released_by_line_id IS NOT NULL` ⇔
+       `released_event_id IS NULL`;
+     - `RETURN_IDENTIFIED` keeps its `released_event_id` → `SORTED` unchanged.
+   - `crate_assignments_guard`: a shipped crate releases a member only by its `SORTED`
+     (`RETURN_IDENTIFIED`) or by its crate's line (`CRATE_RETURNED`).
+   - **The balance at commit** (a deferred check per shipped cycle):
+     - active + released `RETURN_IDENTIFIED` + released `CRATE_RETURNED` = the members the
+       delivered allocation recorded (the cycle's capacity for a full crate);
+     - no other release of a shipped member;
+     - a `CLOSED` cycle has no active member (R1.1 cycles).
+4. **The other database conditions:**
+   - **The `SORTED` anchor:**
+     - the bottle's latest assignment, active or `CRATE_RETURNED`, in that cycle;
+     - recorded in its delivered allocation;
+     - the parcel delivered before the receipt's `opened_at`.
+   - **`bottle_events_sorted_complete`:** the assignment is released by this `SORTED`, or was
+     already released `CRATE_RETURNED`.
+   - **`bottles_labeled_has_event`:** a `RETURNED`/`RETIRED` bottle's latest assignment's cycle
+     has its `SORTED` (instead of "ended by its `SORTED`").
+5. **Lines, emptying and closing** (re-review 5814139882; today's CHECK ties `emptied_at` to a
+   filled `physical_count`, and `return_receipts_guard` wants every line emptied). The rule by
+   line kind:
+
+   | Kind                  | `emptied_*`                                    | `physical_count`                    |
+   | --------------------- | ---------------------------------------------- | ----------------------------------- |
+   | `CRATE` (R1.1)        | set at its scan (the crate is closed with it)  | NULL                                |
+   | `CRATE` (R1, history) | set by Vyprázdněno                             | as recorded, readable               |
+   | `CONTAINER` (history) | set by Vyprázdněno                             | as recorded; R1.1 makes no new ones |
+   | `BOTTLES` (new)       | never; open for scans until the receipt closes | always NULL                         |
+   - **CHECK:**
+     - `emptied_at`, `emptied_by` and `empty_operation_id` stay all or none;
+     - `physical_count` only with `emptied_at`;
+     - `physical_count` required for `CONTAINER`;
+     - always NULL for `BOTTLES`.
+   - **`return_receipts_guard`:**
+     - a receipt closes when every `CRATE` and `CONTAINER` line is emptied;
+     - a `BOTTLES` line is exempt;
+     - scans and issues go only into an open receipt (unchanged), so the closed receipt's
+       `BOTTLES` line takes nothing more.
+   - **`return_receipt_lines_consistent`** (CLOSED ⇔ emptied for `CRATE`) holds for both kinds.
+   - **Vyprázdněno stays only for R1 lines** that are not yet emptied (the compatibility below);
+     R1.1 makes no new ones.
+
+6. **Existing data and compatibility:**
+
+   | Situation at the R1.1 deploy                                                      | Under R1.1                                                                                                                                                                                  |
+   | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Closed R1 receipts, emptied lines, `COUNT_MISMATCH`, R1 `SORTED`                  | Unchanged and readable; every new rule accepts them                                                                                                                                         |
+   | R1 `CLOSED` cycle with still active members (bottles never scanned)               | Kept active; a later bottle scan identifies them through the same anchor (latest assignment, delivered before the receipt). No automatic release                                            |
+   | **Open** R1 receipt with a `RETURNED` (not emptied) `CRATE` or a `CONTAINER` line | Its lines keep R1's Vyprázdněno with the count until emptied. Its bottle scans go to its new `BOTTLES` line; it closes when its R1 lines are emptied                                        |
+   | Preflight (read-only, before the deploy)                                          | Open receipts; `RETURNED` cycles; active members of `RETURNED`/`CLOSED` cycles. The expected value on DEV is 0, and any other value goes to the owner                                       |
+   | **First R1.1 write**                                                              | A `BOTTLES` line, a `CRATE_RETURNED` release or a `CRATE` line emptied without a count. After it, the R1 release cannot read the new values (Prisma enums): fix forward only, as doc 049 §3 |
+
+7. **Tests** (API e2e on a real DB; DB guards committed as `ayvo_core`):
+   - **Release by one crate scan:**
+     - two bottles of K released `CRATE_RETURNED` by the one line;
+     - the balance active + individually returned + crate-released = members holds at commit;
+     - a direct SQL release naming another cycle's line fails (composite key);
+     - `CRATE_RETURNED` without a line, or with a `released_event_id`, fails;
+     - an old `RETURN_IDENTIFIED` still names its `SORTED`.
+   - **Returns:**
+     - **empty** (crate scan only): no `SORTED`, reuse 0, "u hotelu";
+     - **partial:** one bottle of K identified days later in a new receipt after K was reused for
+       K2, `SORTED` for K1;
+     - **mixed:** a bottle of L (L never scanned) identified for L1, its active assignment
+       released `RETURN_IDENTIFIED`;
+     - **bottle before its crate.**
+   - **Late scans** (the receipt anchor):
+     - in receipt R opened before K2's delivery: b of K2 → `DELIVERED_AFTER_RECEIPT`, also with a
+       new `requestId`; the crate K → `CRATE_DELIVERED_AFTER_RECEIPT`;
+     - b back in production (K3 assembling) is scanned → `NOT_IN_CIRCULATION`/`NOT_DELIVERED`,
+       never K2's or K1's `SORTED`;
+     - an issue resolved by `identify` with the same anchor.
+   - **Double scans** of the crate and the bottle, in the same receipt and in another.
+   - **The crate's next circulation:** O1's content, parcel and delivery unchanged; an old K1
+     bottle gets K1, a K2 bottle K2.
+   - **Lines and closing:**
+     - a new receipt with a `CRATE` (auto-emptied) and a `BOTTLES` line closes;
+     - an open R1 receipt with a not emptied R1 line does not close until Vyprázdněno;
+     - partial SQL writes fail: `emptied_at` without `empty_operation_id`, a `BOTTLES` line with
+       a count, a `CONTAINER` emptied without a count, an R1.1 `CRATE` line not emptied while its
+       cycle is `CLOSED`.
    - The R2 tests ("Po mytí") pass unchanged.
-7. **Effect on R2:** none in the data. "Po mytí" lists and scans `RETURNED` bottles as today. Its
-   shown status becomes "K plnění" (owner: the same QR and "K plnění"), a text change only.
+8. **Effect on R2:** none in the data. "Po mytí" lists and scans `RETURNED` bottles as today. Its
+   shown status becomes "K plnění", a text change only.
 
 ### 6.4 Order of the separate steps
 
 P (UI only) → R1.1 (DB + API + UI, its own release with the §6.3 preflight) → the R3 steps of
-doc 048 §8. The R2 text "K plnění" can go with P or on its own.
+doc 048 §8. Separately, whenever wanted: P-sum (a read), P-free (a model), and the R2 text "K
+plnění" (with P or on its own).
