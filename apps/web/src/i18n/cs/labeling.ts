@@ -67,6 +67,8 @@ export const labelingCs = {
     WRONG_LABEL_DESIGN: 'Etiketa má jiný design, než je zvolený. Lahev odložte stranou.',
     DESIGN_NOT_APPROVED: 'Design etikety není (už) schválený pro tento produkt.',
     IN_ANOTHER_CRATE: 'Lahev už je v jiné bedně – nic se nepřesunulo.',
+    NOT_PLACEABLE_YET:
+      'Lahev je po mytí – do bedny ji zatím vložit nelze (přijde s dalším plněním). Odložte ji stranou.',
     ALREADY_LABELED:
       'Lahev už má etiketu (nalepenou dříve, mimo tento postup). Odložte ji stranou.',
     NOT_APPLICABLE: 'Tuto lahev nelze nalepit.',

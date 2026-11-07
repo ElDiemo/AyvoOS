@@ -264,6 +264,12 @@ export const MODULES: readonly NavModule[] = [
         label: w.pages.returns,
         permission: 'returns:receive',
       },
+      {
+        id: 'after-wash',
+        href: '/warehouse/after-wash',
+        label: w.pages.afterWash,
+        permission: 'returns:receive',
+      },
     ],
   },
   {
@@ -421,7 +427,8 @@ export type WarehousePageId =
   | 'availability'
   | 'movements'
   | 'suppliers'
-  | 'returns';
+  | 'returns'
+  | 'after-wash';
 export type ProductionPageId =
   | 'overview'
   | 'bottles'

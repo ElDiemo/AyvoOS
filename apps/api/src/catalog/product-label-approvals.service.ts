@@ -152,6 +152,24 @@ export class ProductLabelApprovalsService {
     );
   }
 
+  /**
+   * Is the design approved for the product right now — with the open approval row share-locked
+   * until the caller's transaction ends, so a concurrent revocation waits for it (or wins first).
+   */
+  async lockOpen(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    labelTemplateVersionId: string,
+  ): Promise<boolean> {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "product_label_approvals"
+       WHERE "product_id" = ${productId}::uuid
+         AND "label_template_version_id" = ${labelTemplateVersionId}::uuid
+         AND "revoked_at" IS NULL
+       FOR SHARE`;
+    return rows.length > 0;
+  }
+
   /** Open approvals of the given products: productId → design version ids. */
   async openDesigns(productIds: readonly string[]): Promise<Map<string, string[]>> {
     const rows = await this.prisma.productLabelApproval.findMany({

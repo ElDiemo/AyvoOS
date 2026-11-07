@@ -25,6 +25,8 @@ export const bottleStatusSchema = z.enum([
   /** "Ke skartaci" (doc 047, ADR 0011). */
   'RETIRED',
   'DISPOSED',
+  /** "Připravená k plnění · Po mytí" (doc 048 §2): washed and inspected; in R2 in no crate. */
+  'READY_FOR_REUSE',
 ]);
 export type BottleStatus = z.infer<typeof bottleStatusSchema>;
 
@@ -38,6 +40,7 @@ export const bottleEventTypeSchema = z.enum([
   'RETIRED',
   'DISPOSED',
   'CORRECTION',
+  'REUSE_READY',
 ]);
 export type BottleEventType = z.infer<typeof bottleEventTypeSchema>;
 

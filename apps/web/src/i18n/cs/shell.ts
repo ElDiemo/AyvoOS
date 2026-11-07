@@ -64,6 +64,7 @@ export const shellCs = {
         movements: 'Pohyby',
         suppliers: 'Dodavatelé',
         returns: 'Příjem vratek',
+        afterWash: 'Po mytí',
       },
     },
     production: {

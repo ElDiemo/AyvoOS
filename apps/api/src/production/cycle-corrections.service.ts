@@ -19,6 +19,18 @@ import { CratesService } from '../crates/crates.service.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 
+/**
+ * A bottle "Po mytí" (READY_FOR_REUSE, doc 048 §2) goes into a crate only with its refilling (R3):
+ * in R2 the station, the corrections and the database refuse it.
+ */
+export const notPlaceableYet = (bottle: string) =>
+  domainErrorWithDetails(
+    409,
+    'NOT_PLACEABLE_YET',
+    'A bottle ready for reuse goes into a crate only with its refilling (not yet available)',
+    { bottle },
+  );
+
 /** A crate held by an order (doc 028) keeps its bottles: remove it from the order first. */
 /** A crate held by an order: loaded (removable from the order) or handed to the carrier. */
 export const crateAllocated = (status?: string) =>
@@ -143,6 +155,7 @@ export class CycleCorrectionsService {
         }
         // Only an empty labelled or a filled bottle takes a place (checked under the bottle lock):
         // a returned, retired or disposed one would make the crate unfillable (#129 follow-up).
+        if (status === 'READY_FOR_REUSE') throw notPlaceableYet(bottle.code);
         if (status !== 'LABELED_EMPTY' && status !== 'FILLED') {
           throw domainErrorWithDetails(
             409,

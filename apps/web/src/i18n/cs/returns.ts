@@ -95,6 +95,48 @@ export const returnsCs = {
     crate: (code: string, order: string) => `Bedna ${code} přijata (objednávka ${order})`,
     crateAgain: (code: string) => `Bedna ${code} už je v tomto příjmu`,
   },
+  afterWash: {
+    title: 'Po mytí',
+    subtitle:
+      'Druhý sken vrácené lahve – jen po fyzickém umytí a kontrole. Lahev se stejným QR je pak připravená k plnění; nic se nespotřebuje a do bedny zatím nejde.',
+    scan: 'Naskenujte umytou a zkontrolovanou lahev',
+    scanPlaceholder: 'QR lahve',
+    submit: 'Po mytí – připravit k plnění',
+    hint: 'Lahev, která po mytí neprošla kontrolou, neskenujte – zůstane vrácená.',
+    ready: (code: string, product: string | null, design: string | null) =>
+      `${code}: Připravená k plnění · Po mytí${product ? ` · ${product}` : ''}${design ? ` · ${design}` : ''}`,
+    repeated: (code: string) => `${code}: už je po mytí (první výsledek, nic dalšího se nezapsalo)`,
+    waiting: 'Vrácené, čekají na mytí',
+    waitingEmpty: 'Žádná lahev nečeká na mytí.',
+    withdrawn: 'Vyčleněno – odvolaná etiketa',
+    withdrawnHint:
+      'Design etikety už není pro produkt schválený. Lahev zůstává vrácená a čeká na výslovné rozhodnutí; nic se nevyřazuje automaticky.',
+    withdrawnEmpty: 'Žádná vyčleněná lahev.',
+    readyList: 'Připravené k plnění · Po mytí',
+    readyHint: 'Do bedny a k plnění přijdou až s dalším krokem (plnění vrácených lahví).',
+    readyEmpty: 'Zatím žádná lahev po mytí.',
+    count: (shown: number, total: number) => (shown < total ? `${shown} z ${total}` : `${total}`),
+    since: 'od',
+    noProduct: 'bez vazby na produkt',
+    sessionEnded:
+      'Přihlášení skončilo. Neodeslané skeny zůstávají uložené v tomto okně – po novém přihlášení stejného uživatele na stejné provozovně je odešlete tlačítkem „Zkusit znovu“.',
+    refusals: (n: number) => `Odmítnuté skeny této série (${n}) – lahve odložte stranou`,
+    refusalsHide: 'Skrýt',
+    refreshFailed:
+      'Sken je zapsaný, ale přehled se nepodařilo načíst. Obnovte ho – nic se znovu neodešle.',
+    queue: {
+      retry: 'Zkusit znovu',
+      blockedTitle: 'Výsledek posledního skenu není jistý.',
+      blockedText:
+        'Spojení selhalo. „Zkusit znovu“ pošle stejný požadavek – lahev se nezapíše dvakrát. Další naskenované lahve čekají a nic se neztratí.',
+      leaveGuard: {
+        title: 'Skeny nejsou vyřešené',
+        text: 'Některý sken čeká na odeslání nebo jeho výsledek není jistý. Stránku nyní nelze opustit – vraťte se a sken dokončete („Zkusit znovu“).',
+        stay: 'Zpět k vyřešení skenu',
+      },
+      waiting: (n: number) => (n === 0 ? 'Žádné další skeny nečekají.' : `Čeká na odeslání: ${n}`),
+    },
+  },
   errors: {
     RETURN_RECEIPT_NOT_FOUND: 'Příjem neexistuje.',
     RETURN_LINE_NOT_FOUND: 'Kontejner v tomto příjmu neexistuje.',
@@ -124,6 +166,11 @@ export const returnsCs = {
     WRONG_BOTTLE: 'Neshoda se týká jiné lahve.',
     HOTEL_NOT_FOUND: 'Hotel neexistuje nebo ho tato provozovna neobsluhuje.',
     IDEMPOTENCY_CONFLICT: 'Požadavek se už použil jinak – zkuste to znovu.',
+    NOT_RETURNED:
+      'Lahev nečeká na mytí – „Po mytí“ je jen pro lahev přijatou z vratky jako dobrou. Nic se nezapsalo.',
+    DESIGN_WITHDRAWN:
+      'Etiketa této lahve už není schválená – lahev je vyčleněná (odvolaná etiketa). Nic se nezapsalo.',
+    NO_PRODUCT_BINDING: 'Lahev nemá vazbu na produkt – nic se nezapsalo.',
   } as Record<string, string>,
   uncertain: 'Spojení selhalo – výsledek není jistý. „Zkusit znovu“ pošle stejný požadavek.',
   retry: 'Zkusit znovu',

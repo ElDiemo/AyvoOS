@@ -115,8 +115,32 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
     expect(done.status, JSON.stringify(done.body)).toBe(200);
   }
 
+  /** A labelling session with this factory's context and a newly registered, loaded crate. */
+  async function openStation() {
+    if (pool.length < capacity) await refill();
+    const ls = await labelingSession(t);
+    const ctx = await setContext(t, ls, {
+      productCode: kit.productCode,
+      labelTemplateVersionId: versionId,
+      sourceLotId: bottleLot,
+    });
+    expect(ctx.status, JSON.stringify(ctx.body)).toBe(200);
+    const crateUrl = await registerCrate(t, kit.crateTypeCode);
+    expect((await loadCrate(t, ls, crateUrl)).status).toBe(200);
+    return { sessionId: ls, crateUrl };
+  }
+
   /** refill(): the next crates carry a new, approved label design (a new printed series). */
-  return { kit, capacity, make, fillAndFinish, refill, receiveLiquid };
+  return {
+    kit,
+    capacity,
+    make,
+    fillAndFinish,
+    refill,
+    receiveLiquid,
+    openStation,
+    designVersion: () => versionId,
+  };
 }
 
 export function hotelBody(overrides: Partial<CreateHotelRequest> = {}): CreateHotelRequest {

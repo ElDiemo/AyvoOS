@@ -29,7 +29,7 @@ import { LabelPrintJobsService } from '../label-production/label-print-jobs.serv
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { StationSessionsService } from '../workstations/station-sessions.service.js';
 import type { WorkstationRecord } from '../workstations/workstations.service.js';
-import { crateAllocated } from './cycle-corrections.service.js';
+import { crateAllocated, notPlaceableYet } from './cycle-corrections.service.js';
 
 const notLabeling = () => domainError(409, 'WRONG_STATION_MODE', 'This is not a labelling station');
 const contextIncomplete = () =>
@@ -300,6 +300,9 @@ export class LabelingService {
           throw domainError(422, 'BOTTLE_OF_ANOTHER_SITE', 'This bottle belongs to another site');
         }
         const status = await this.bottles.lockForLabelApplication(tx, bottle.id);
+        // Washed after a return ("Po mytí", doc 048 §2): placed into a crate only with its
+        // refilling (R3) — never labelled again.
+        if (status === 'READY_FOR_REUSE') throw notPlaceableYet(bottle.code);
         if (status !== 'CREATED') {
           // Already labelled: in THIS crate it is a duplicate scan (no write, no consumption).
           if (cycle && (await this.cycles.isActiveMember(tx, cycle.id, bottle.id))) {
