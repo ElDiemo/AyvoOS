@@ -94,7 +94,8 @@ external call; mail uses the test transport.
    - answers are alike for unknown and known accounts.
 
 Playwright (PR 5): the ADR §11 walk on the isolated `ayvo_e2e` database at 390 px and 1440 px,
-with TOTP from the test provider's secret. There is no real mailbox; the invitation link comes
+with the TOTP code computed from the enrolment secret (`otpauth`, as `native-auth.e2e`
+does). There is no real mailbox; the invitation link comes
 from the test mail transport.
 
 ## 5. Blockers
