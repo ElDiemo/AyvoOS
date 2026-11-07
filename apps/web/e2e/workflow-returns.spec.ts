@@ -756,6 +756,9 @@ test('"Po mytí": reads of the queue are merged — at most one at a time, one m
       log.push('GET');
       if (holding) await reads;
       const r = await route.fetch();
+      // Counted as finished before its answer is handed back: the merged next read can only
+      // start after that answer, so two reads never overlap here — but there is a moment with
+      // none in flight between them (synchronised below on the number of reads).
       inFlight -= 1;
       return route.fulfill({ response: r });
     }
@@ -777,6 +780,8 @@ test('"Po mytí": reads of the queue are merged — at most one at a time, one m
   holding = false;
   releaseReads();
   await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
+  // The merged read follows the held one: wait for it to start, then for it to finish.
+  await expect.poll(() => log.filter((x) => x === 'GET').length).toBe(2);
   await expect.poll(() => inFlight).toBe(0);
   // One read held during the series, exactly one more after it; never two at once.
   expect(maxInFlight).toBe(1);
