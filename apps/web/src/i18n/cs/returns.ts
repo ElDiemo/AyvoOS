@@ -118,6 +118,20 @@ export const returnsCs = {
     count: (shown: number, total: number) => (shown < total ? `${shown} z ${total}` : `${total}`),
     since: 'od',
     noProduct: 'bez vazby na produkt',
+    refreshFailed:
+      'Sken je zapsaný, ale přehled se nepodařilo načíst. Obnovte ho – nic se znovu neodešle.',
+    queue: {
+      retry: 'Zkusit znovu',
+      blockedTitle: 'Výsledek posledního skenu není jistý.',
+      blockedText:
+        'Spojení selhalo. „Zkusit znovu“ pošle stejný požadavek – lahev se nezapíše dvakrát. Další naskenované lahve čekají a nic se neztratí.',
+      leaveGuard: {
+        title: 'Skeny nejsou vyřešené',
+        text: 'Některý sken čeká na odeslání nebo jeho výsledek není jistý. Stránku nyní nelze opustit – vraťte se a sken dokončete („Zkusit znovu“).',
+        stay: 'Zpět k vyřešení skenu',
+      },
+      waiting: (n: number) => (n === 0 ? 'Žádné další skeny nečekají.' : `Čeká na odeslání: ${n}`),
+    },
   },
   errors: {
     RETURN_RECEIPT_NOT_FOUND: 'Příjem neexistuje.',
