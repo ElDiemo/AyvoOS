@@ -36,6 +36,12 @@ export const warehouseCs = {
     firstReceipt: 'Zaevidovat první příjem',
     newReceipt: 'Příjem zboží',
     showAll: 'Zobrazit vše',
+    quick: {
+      title: 'Rychlé akce',
+      returns: { label: 'Přijmout vratku', hint: 'Bedny a jednotlivé lahve' },
+      afterWash: { label: 'Po mytí', hint: 'Potvrdit umyté lahve' },
+      goods: { label: 'Přijmout zboží', hint: 'Dodávka od dodavatele' },
+    },
   },
   common: {
     pcs: 'ks',
