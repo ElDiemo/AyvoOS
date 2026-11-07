@@ -444,21 +444,21 @@ Operating view of b (§3.0a):
 - step 8: "K plnění · Po mytí", "bez bedny";
 - step 8b: the same, crate K2.
 
-| #   | Step                                                               | b afterwards                               | Cycle                | Reuse | N   | P   | X   |
-| --- | ------------------------------------------------------------------ | ------------------------------------------ | -------------------- | ----- | --- | --- | --- |
-| 1   | Labelled into K (existing walk)                                    | `LABELED_EMPTY`, binding                   | K1 `OPEN_ASSEMBLY`   | 0     | −1  | —   | —   |
-| 2   | Filled, Hotovo                                                     | `FILLED`, pump attached                    | K1 `FILLED`          | 0     | —   | −1  | —   |
-| 3   | Picked into O1, dispatched, delivered (existing walk)              | unchanged, no event                        | K1 `DELIVERED`       | 0     | —   | —   | —   |
-| 4   | R1.1: crate scan of K (frees K; b's membership `CRATE_RETURNED`)   | still `FILLED`, no event, "bez bedny"      | K1 `CLOSED`          | 0     | —   | —   | —   |
-| 5   | R1.1: b scanned good in the receipt (no crate chosen)              | `RETURNED`, `SORTED` (K1)                  | —                    | 1     | —   | —   | —   |
-| 6   | The same b scanned again; and in another receipt                   | first result; `ALREADY_RECEIVED_ELSEWHERE` | —                    | 1     | —   | —   | —   |
-| 7   | "Odepsat pumpičky" X = 3 at the intake; washing (no scan)          | —                                          | —                    | 1     | —   | —   | +3  |
-| 8   | R2 "Po mytí" (the same QR → "K plnění")                            | `READY_FOR_REUSE`, pump closed             | —                    | 1     | —   | —   | —   |
-| 8b  | R3-b: scanned at the station like a new bottle, into K (new cycle) | `REUSE` member, nothing consumed           | K2 `OPEN_ASSEMBLY`   | 1     | —   | —   | —   |
-| 9   | R3: filled (FILL BOM without the pump), Hotovo                     | `FILLED` (K2), pump attached               | K2 `FILLED`          | 1     | —   | —   | —   |
-| 10  | Picked into O2, dispatched, delivered                              | unchanged                                  | K2 `DELIVERED`       | 1     | —   | —   | —   |
-| 11  | Second return: crate scan of K, then b scanned                     | `RETURNED`, `SORTED` (K2)                  | K2 `CLOSED`          | 2     | —   | —   | —   |
-| 12  | Throughout: O1 shows its contents, parcel and delivery, never K2's | —                                          | K1 history unchanged | —     | —   | —   | —   |
+| #   | Step                                                                     | b afterwards                               | Cycle                | Reuse | N   | P   | X   |
+| --- | ------------------------------------------------------------------------ | ------------------------------------------ | -------------------- | ----- | --- | --- | --- |
+| 1   | Labelled into K (existing walk)                                          | `LABELED_EMPTY`, binding                   | K1 `OPEN_ASSEMBLY`   | 0     | −1  | —   | —   |
+| 2   | Filled, Hotovo                                                           | `FILLED`, pump attached                    | K1 `FILLED`          | 0     | —   | −1  | —   |
+| 3   | Picked into O1, dispatched, delivered (existing walk)                    | unchanged, no event                        | K1 `DELIVERED`       | 0     | —   | —   | —   |
+| 4   | R1.1: crate scan of K (frees K; b released `CRATE_RETURNED` by K's line) | still `FILLED`, no event, "bez bedny"      | K1 `CLOSED`          | 0     | —   | —   | —   |
+| 5   | R1.1: b scanned good in the receipt (no crate chosen)                    | `RETURNED`, `SORTED` (K1)                  | —                    | 1     | —   | —   | —   |
+| 6   | The same b scanned again; and in another receipt                         | first result; `ALREADY_RECEIVED_ELSEWHERE` | —                    | 1     | —   | —   | —   |
+| 7   | "Odepsat pumpičky" X = 3 at the intake (step P); washing (no scan)       | —                                          | —                    | 1     | —   | —   | +3  |
+| 8   | R2 "Po mytí" (the same QR → "K plnění")                                  | `READY_FOR_REUSE`, pump closed             | —                    | 1     | —   | —   | —   |
+| 8b  | R3-b: scanned at the station like a new bottle, into K (new cycle)       | `REUSE` member, nothing consumed           | K2 `OPEN_ASSEMBLY`   | 1     | —   | —   | —   |
+| 9   | R3: filled (FILL BOM without the pump), Hotovo                           | `FILLED` (K2), pump attached               | K2 `FILLED`          | 1     | —   | —   | —   |
+| 10  | Picked into O2, dispatched, delivered                                    | unchanged                                  | K2 `DELIVERED`       | 1     | —   | —   | —   |
+| 11  | Second return: crate scan of K, then b scanned                           | `RETURNED`, `SORTED` (K2)                  | K2 `CLOSED`          | 2     | —   | —   | —   |
+| 12  | Throughout: O1 shows its contents, parcel and delivery, never K2's       | —                                          | K1 history unchanged | —     | —   | —   | —   |
 
 Variants of the same walk:
 
@@ -467,6 +467,11 @@ Variants of the same walk:
 - **An empty return:** step 4 without step 5. K is free, b stays `FILLED`, "u hotelu", with
   reuse 0.
 - **A mixed return:** a bottle of crate L, whose crate never came back, is identified for L1.
+- **A late scan:** at step 11, b scanned in a receipt opened **before** O2's delivery gives
+  `DELIVERED_AFTER_RECEIPT`, also with a new `requestId`; the same receipt's scan of crate K gives
+  `CRATE_DELIVERED_AFTER_RECEIPT`. Nothing is written, and K1's `SORTED` is never taken for K2.
+- **b back in production** (assigned to K3, not delivered), scanned at an intake:
+  `NOT_DELIVERED`/`NOT_IN_CIRCULATION`. There is no fallback to K2 (doc 047 §6.3).
 - **b `RETURNED` at the station** (before "Po mytí"): `NOT_WASHED`, nothing written. **On the
   R3-a schema only:** any membership of a `READY_FOR_REUSE` b is refused at commit, as in R2.
 - **b defective at step 5:** `RETIRED`, reuse 1, never steps 8–11.
@@ -651,8 +656,11 @@ the filling fixtures (`fillingSession`, `fillLoadCrate`, `chooseLiquidLot`, `fil
      Hotovo.
    - A second `fillScan` of b1: `ALREADY_FILLED` with circulation 2's liquid lot (§8.1).
    - Two concurrent fills of b3 from two requests: one `FILLED`.
-6. **Second circulation.** K2 is shipped in O2 and delivered. Receipt R′: crate scan of K
-   (frees K2), then b1 GOOD (`SORTED` for K2, not K1).
+6. **Second circulation.** K2 is shipped in O2 and delivered.
+   - A receipt R″ opened **before** that delivery: b1 gives `DELIVERED_AFTER_RECEIPT` and crate K
+     gives `CRATE_DELIVERED_AFTER_RECEIPT`, also with new `requestId`s. Nothing is written.
+   - Receipt R′, opened after the delivery: crate scan of K frees K2 and releases its remaining
+     member `CRATE_RETURNED` by that line. Then b1 GOOD: `SORTED` for K2, not K1.
 7. **Asserted throughout:**
    - **Identity:** b1's code and `public_token` (the same QR URL) never change. Its events, in
      order:
@@ -667,7 +675,8 @@ the filling fixtures (`fillingSession`, `fillLoadCrate`, `chooseLiquidLot`, `fil
    - **Order history:** O1 still lists b1, b2, b3, b4, b7, b8 and its parcels and delivery, and the
      crate scans never changed it; O2 lists b1 and b3.
    - **Operating view (§3.0a)** of b1 at each step as in the §5 note: readiness, crate and
-     location apart, the location "u hotelu" until b1's own `SORTED`, also after K's crate scan.
+     location apart. The location stays "u hotelu", with the source of its last delivered
+     allocation (O1, then O2), until b1's own `SORTED`, also after K's crate scan.
 8. **On the R3-a schema alone** (before R3-b): the same walk up to step 3, then a direct
    membership of the `READY_FOR_REUSE` b1 by SQL, committed as `ayvo_core`, fails. The R2 API
    tests pass unchanged.
