@@ -194,7 +194,10 @@ and nothing is stored for them.
      like physical stock;
    - "na provozovně" from the first label application on, while no shipped cycle is open;
    - "u dopravce" (its cycle `DISPATCHED`);
-   - "u hotelu" (its cycle `DELIVERED` and the bottle not yet identified at a return);
+   - "u hotelu": the bottle's **last delivered allocation** (`order_allocation_bottles`, parcel
+     delivered) has no `SORTED` of the bottle yet. The source is shown with it: order, hotel and
+     delivery time. This stays true after its crate was scanned back and the crate binding
+     ended (R1.1, doc 047 §6.3), because it never depends on the crate binding.
    - back "na provozovně" from its own `SORTED`. The return from the hotel is derived from the
      bottle's own scan, never from the crate scan.
    - The delivery history (order, parcel, delivery) is kept and shown as it is.
@@ -226,9 +229,20 @@ proposal outside R3.
   never writes a ledger movement.
 - New pumps leave stock only by the filling of a **new** bottle (`FILL`, as today) and by
   receipts and their corrections. A reused bottle's filling never touches them (§3.1).
-- **Open, not for R3:** if new pumps are added to the washed pool by hand, how is that recorded?
-  The existing manual issue of doc 018 §5a might serve, but that is not decided. Nothing is
-  assumed until the owner says so.
+- **R3 assumes a really washed pump** on every reused bottle. That is why its filling writes no
+  pump movement.
+- **Adding new pumps to the reused pool is a separate stock proposal**, not part of R3 and not
+  decided (review 5814140177):
+  - **Today it cannot be recorded:** the manual stock issue (doc 018 §5a) accepts only
+    `CONSUMABLE` items and refuses a `PUMP` with `NOT_CONSUMABLE` (`stock-issues.service.ts:39`).
+  - **The proposal:** one quantity action "Nové pumpičky do oběhu: N" (`inventory` permission,
+    active site, idempotent per `requestId`). It writes a real ledger write-off of N pieces of the
+    **new** pump item: a new movement type with exactly one source row, a reason, and a balance
+    that is never negative.
+  - It has no link to a bottle, a crate or a filling scan, and there is no choice at any scan.
+  - The pool itself still has no stock record. This only records that new pumps left stock
+    into it.
+  - Its own model PR for the owner.
 - Quantities only: no price and no valuation.
 
 ### 3.3 Data (for review)
