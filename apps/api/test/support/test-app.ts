@@ -50,6 +50,10 @@ export class ControllableRenderer extends LabelPdfRenderer {
 /** Real local storage whose writes can be told to fail (disk full, I/O error). */
 export class ControllableStorage extends LocalFileStorage {
   failPutsRemaining = 0;
+  /** Reads wait this long first (a slow bucket). */
+  delayGetsMs = 0;
+  /** Reads return altered bytes (a stored file that no longer matches its hash). */
+  tamperGets = false;
 
   constructor(readonly directory: string) {
     super(directory);
@@ -61,6 +65,12 @@ export class ControllableStorage extends LocalFileStorage {
       throw new Error('Simulated storage failure ENOSPC /var/lib/ayvo/files');
     }
     return super.put(key, data);
+  }
+
+  override async get(key: string): Promise<Buffer> {
+    if (this.delayGetsMs > 0) await new Promise((r) => setTimeout(r, this.delayGetsMs));
+    const bytes = await super.get(key);
+    return this.tamperGets ? Buffer.concat([bytes, Buffer.from('tampered')]) : bytes;
   }
 }
 

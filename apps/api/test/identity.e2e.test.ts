@@ -268,6 +268,10 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'POST /api/internal/v1/finance/principal',
       'POST /api/internal/v1/finance/suppliers/lookup',
     ]);
+    // Finance introspecting a hotel portal session (ADR 0045 §5): Finance's token, no staff session.
+    expect(
+      routes.filter((r) => r.rule!.kind === 'finance-portal').map((r) => `${r.method} ${r.route}`),
+    ).toEqual(['POST /api/internal/v1/finance/introspect-portal']);
     // The hotel portal contract (ADR 0045 §3): only portal-web's token, only under its prefix.
     expect(
       routes
@@ -294,7 +298,9 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       expect(res.body.code, `${r.method} ${r.route}`).toBe(
         r.rule!.kind === 'agent'
           ? 'AGENT_UNAUTHORIZED'
-          : r.rule!.kind === 'service' || r.rule!.kind === 'portal-service'
+          : r.rule!.kind === 'service' ||
+              r.rule!.kind === 'portal-service' ||
+              r.rule!.kind === 'finance-portal'
             ? 'SERVICE_UNAUTHENTICATED'
             : 'UNAUTHENTICATED',
       );
