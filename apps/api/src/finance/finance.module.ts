@@ -1,3 +1,9 @@
+import { FinancePortalPrismaService } from './finance-portal-prisma.service.js';
+import {
+  FinancePortalInvoicesController,
+  FinancePortalRequestLimit,
+} from './portal-invoices.controller.js';
+import { FinancePortalInvoicesService } from './portal-invoices.service.js';
 import { FinancePortalGrantsController } from './portal-grants.controller.js';
 import { FinancePortalGrantsService } from './portal-grants.service.js';
 import { Module } from '@nestjs/common';
@@ -51,9 +57,13 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     BankController,
     FinanceHealthController,
     FinancePortalGrantsController,
+    FinancePortalInvoicesController,
   ],
   providers: [
     FinancePortalGrantsService,
+    FinancePortalPrismaService,
+    FinancePortalInvoicesService,
+    FinancePortalRequestLimit,
     FinanceDocumentsService,
     AccountingExportsService,
     BillingSettingsService,

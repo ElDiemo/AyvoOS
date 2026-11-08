@@ -12,6 +12,53 @@ export interface FileStorage {
   put(key: string, data: Uint8Array): Promise<void>;
   /** Reads an object. Throws {@link StorageObjectNotFoundError} if it does not exist. */
   get(key: string): Promise<Buffer>;
+  /**
+   * Reads an object as a bounded, cancellable piece of work: bytes are counted while they arrive
+   * and the read stops at once beyond `maxBytes` ({@link StorageObjectTooLargeError}); `signal`
+   * stops the actual read (the file or the bucket request). It settles only after its resource is
+   * released, so a caller that waits for it never starts a replacement too early.
+   */
+  getBounded(key: string, options: { signal: AbortSignal; maxBytes: number }): Promise<Buffer>;
+}
+
+export class StorageObjectTooLargeError extends Error {
+  constructor() {
+    super('Stored file is larger than allowed here');
+  }
+}
+
+/**
+ * Collects a byte stream within `maxBytes`, stopping on `signal`. It destroys the stream on any
+ * stop and settles only once the stream is closed.
+ */
+export function collectBounded(
+  stream: AsyncIterable<Uint8Array> & { destroy(error?: Error): unknown },
+  options: { signal: AbortSignal; maxBytes: number },
+): Promise<Buffer> {
+  return (async () => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const abort = () => stream.destroy(new Error('aborted'));
+    if (options.signal.aborted) abort();
+    options.signal.addEventListener('abort', abort, { once: true });
+    try {
+      for await (const chunk of stream) {
+        size += chunk.byteLength;
+        if (size > options.maxBytes) {
+          stream.destroy();
+          throw new StorageObjectTooLargeError();
+        }
+        chunks.push(Buffer.from(chunk));
+      }
+      if (options.signal.aborted) throw options.signal.reason ?? new Error('aborted');
+      return Buffer.concat(chunks, size);
+    } catch (error) {
+      if (options.signal.aborted) throw options.signal.reason ?? error;
+      throw error;
+    } finally {
+      options.signal.removeEventListener('abort', abort);
+    }
+  })();
 }
 
 export const FILE_STORAGE = Symbol('FILE_STORAGE');

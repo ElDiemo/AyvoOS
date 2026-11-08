@@ -20,7 +20,7 @@ import {
   type LabelPdfInput,
 } from '../../src/labels/label-pdf-renderer.js';
 import { RedisService } from '../../src/redis/redis.service.js';
-import { FILE_STORAGE } from '../../src/storage/file-storage.js';
+import { collectBounded, FILE_STORAGE } from '../../src/storage/file-storage.js';
 import { LocalFileStorage } from '../../src/storage/local-file-storage.js';
 
 /** Test QR base URL: neither a DEV nor the production host. */
@@ -50,6 +50,15 @@ export class ControllableRenderer extends LabelPdfRenderer {
 /** Real local storage whose writes can be told to fail (disk full, I/O error). */
 export class ControllableStorage extends LocalFileStorage {
   failPutsRemaining = 0;
+  /** Reads wait this long first (a slow bucket); bounded reads wait this long per chunk. */
+  delayGetsMs = 0;
+  /** Reads return altered bytes (a stored file that no longer matches its hash). */
+  tamperGets = false;
+  /** Bounded reads deliver this many zero bytes instead of the object (a huge object). */
+  virtualSizeBytes = 0;
+  /** Bounded reads running now, and all bytes they delivered (what the read really did). */
+  activeReads = 0;
+  bytesRead = 0;
 
   constructor(readonly directory: string) {
     super(directory);
@@ -61,6 +70,62 @@ export class ControllableStorage extends LocalFileStorage {
       throw new Error('Simulated storage failure ENOSPC /var/lib/ayvo/files');
     }
     return super.put(key, data);
+  }
+
+  /**
+   * A bounded read as a real stream of 64 KiB chunks (optionally slow, or huge), counted while it
+   * runs; the storage contract's collector stops it.
+   */
+  override async getBounded(
+    key: string,
+    options: { signal: AbortSignal; maxBytes: number },
+  ): Promise<Buffer> {
+    const source = this.virtualSizeBytes > 0 ? null : await super.get(key);
+    const size = source ? source.length : this.virtualSizeBytes;
+    const delay = this.delayGetsMs;
+    const tamper = this.tamperGets;
+    const CHUNK = 64 * 1024;
+    let destroyed = false;
+    // Like a real file or socket stream, destroying it ends a pending wait at once.
+    let wake: (() => void) | null = null;
+    const counted = { add: (n: number) => (this.bytesRead += n) };
+    const stream = {
+      destroy: () => {
+        destroyed = true;
+        wake?.();
+      },
+      async *[Symbol.asyncIterator]() {
+        for (let at = 0; at < size && !destroyed; at += CHUNK) {
+          if (delay > 0)
+            await new Promise<void>((r) => {
+              const timer = setTimeout(r, delay);
+              wake = () => {
+                clearTimeout(timer);
+                r();
+              };
+            });
+          if (destroyed) return;
+          const chunk = source
+            ? source.subarray(at, Math.min(at + CHUNK, size))
+            : Buffer.alloc(Math.min(CHUNK, size - at));
+          counted.add(chunk.length);
+          yield chunk;
+        }
+        if (tamper && !destroyed) yield Buffer.from('tampered');
+      },
+    };
+    this.activeReads++;
+    try {
+      return await collectBounded(stream, options);
+    } finally {
+      this.activeReads--;
+    }
+  }
+
+  override async get(key: string): Promise<Buffer> {
+    if (this.delayGetsMs > 0) await new Promise((r) => setTimeout(r, this.delayGetsMs));
+    const bytes = await super.get(key);
+    return this.tamperGets ? Buffer.concat([bytes, Buffer.from('tampered')]) : bytes;
   }
 }
 

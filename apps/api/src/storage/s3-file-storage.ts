@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { once, type EventEmitter } from 'node:events';
 import {
   GetBucketEncryptionCommand,
   GetBucketOwnershipControlsCommand,
@@ -14,7 +15,9 @@ import type { Env } from '../config/env.js';
 import {
   STORAGE_KEY_PATTERN,
   StorageObjectAlreadyExistsError,
+  collectBounded,
   StorageObjectNotFoundError,
+  StorageObjectTooLargeError,
   StorageUnavailableError,
   type FileStorage,
 } from './file-storage.js';
@@ -139,6 +142,48 @@ export class S3FileStorage implements FileStorage {
     }
   }
 
+  async getBounded(
+    key: string,
+    options: { signal: AbortSignal; maxBytes: number },
+  ): Promise<Buffer> {
+    this.validateKey(key);
+    const signal = AbortSignal.any([options.signal, AbortSignal.timeout(DEADLINE_MS)]);
+    let response;
+    try {
+      response = await this.client.send(new GetObjectCommand({ ...this.target(), Key: key }), {
+        abortSignal: signal,
+      });
+    } catch (error) {
+      if (httpStatus(error) === 404 && errorName(error) === 'NoSuchKey')
+        throw new StorageObjectNotFoundError();
+      throw new StorageUnavailableError();
+    }
+    const body = response.Body as
+      (AsyncIterable<Uint8Array> & { destroy(error?: Error): unknown }) | undefined;
+    try {
+      if (!body || typeof body.destroy !== 'function') throw new StorageUnavailableError();
+      // Refused before the body is read when the object is already known to be too large.
+      if ((response.ContentLength ?? 0) > options.maxBytes) throw new StorageObjectTooLargeError();
+      const bytes = await collectBounded(body, { signal, maxBytes: options.maxBytes });
+      const expectedHash = response.Metadata?.sha256;
+      if (
+        !expectedHash ||
+        !/^[a-f0-9]{64}$/.test(expectedHash) ||
+        createHash('sha256').update(bytes).digest('hex') !== expectedHash
+      )
+        throw new StorageUnavailableError();
+      return bytes;
+    } catch (error) {
+      if (error instanceof StorageObjectTooLargeError) throw error;
+      throw new StorageUnavailableError();
+    } finally {
+      // On every path once the body exists — read, too large (also before reading), aborted,
+      // failed — the body is closed for real before this read settles, so the caller's slot is
+      // never free while the bucket connection still is not.
+      await releaseBody(body);
+    }
+  }
+
   onModuleDestroy(): void {
     this.client.destroy();
   }
@@ -150,6 +195,28 @@ export class S3FileStorage implements FileStorage {
   private validateKey(key: string): void {
     if (!STORAGE_KEY_PATTERN.test(key)) throw new Error('Invalid storage key');
   }
+}
+
+/**
+ * Destroys a response body and waits until it is really closed (a Node stream's `close`, which a
+ * custom or socket-backed stream may emit only after an asynchronous teardown). A body that is not
+ * a Node stream is only destroyed.
+ */
+async function releaseBody(body: unknown): Promise<void> {
+  const stream = body as
+    { destroy?: () => unknown; once?: unknown; closed?: boolean; destroyed?: boolean } | undefined;
+  if (!stream || typeof stream.destroy !== 'function') return;
+  if (typeof stream.once !== 'function') {
+    stream.destroy();
+    return;
+  }
+  if (stream.closed) return;
+  const closed = once(stream as unknown as EventEmitter, 'close').then(
+    () => undefined,
+    () => undefined,
+  );
+  if (!stream.destroyed) stream.destroy();
+  await closed;
 }
 
 /** No endpoint override, ambient profile or instance-metadata credential lookup. */

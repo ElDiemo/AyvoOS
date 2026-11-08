@@ -16,6 +16,7 @@ import {
   newStorageKey,
   StorageObjectAlreadyExistsError,
   StorageObjectNotFoundError,
+  StorageObjectTooLargeError,
   StorageUnavailableError,
 } from './file-storage.js';
 import { createS3FileStorage, S3FileStorage } from './s3-file-storage.js';
@@ -273,6 +274,126 @@ describe('S3FileStorage (real SDK, synthetic HTTP only)', () => {
       StorageObjectAlreadyExistsError,
     );
     expect(await f.storage.get(key)).toEqual(Buffer.from('first'));
+  });
+
+  it('a bounded read: within the limit; refused by Content-Length before reading; stopped while streaming beyond it or by its signal', async () => {
+    const f = fixture();
+    const key = newStorageKey('finance-documents', 'pdf');
+    const bytes = Buffer.alloc(200_000, 3);
+    await f.storage.put(key, bytes);
+    const open = { signal: new AbortController().signal };
+    expect(await f.storage.getBounded(key, { ...open, maxBytes: bytes.length })).toEqual(bytes);
+    // Streamed beyond the limit (no length announced): stopped there.
+    await expect(f.storage.getBounded(key, { ...open, maxBytes: 1000 })).rejects.toBeInstanceOf(
+      StorageObjectTooLargeError,
+    );
+    // Announced too large: refused before a byte of the body is read.
+    let pulled = 0;
+    const body = new Readable({
+      read() {
+        pulled++;
+        this.push(Buffer.alloc(1024));
+      },
+    });
+    f.override((request) =>
+      request.method === 'GET'
+        ? {
+            response: {
+              statusCode: 200,
+              headers: { 'content-length': '999999999', 'x-amz-meta-sha256': 'a'.repeat(64) },
+              body,
+            },
+          }
+        : undefined,
+    );
+    await expect(f.storage.getBounded(key, { ...open, maxBytes: 1000 })).rejects.toBeInstanceOf(
+      StorageObjectTooLargeError,
+    );
+    expect(body.destroyed).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(1);
+    // A body that never ends: its signal stops the read and destroys the body.
+    const endless = new Readable({ read() {} });
+    f.override((request) =>
+      request.method === 'GET'
+        ? {
+            response: {
+              statusCode: 200,
+              headers: { 'x-amz-meta-sha256': 'a'.repeat(64) },
+              body: endless,
+            },
+          }
+        : undefined,
+    );
+    const stop = new AbortController();
+    const reading = f.storage.getBounded(key, { signal: stop.signal, maxBytes: 1_000_000 });
+    setTimeout(() => stop.abort(new Error('stopped')), 50);
+    await expect(reading).rejects.toBeInstanceOf(StorageUnavailableError);
+    expect(endless.destroyed).toBe(true);
+  });
+
+  it('a bounded read settles only after the body is really closed — also with an asynchronous teardown', async () => {
+    const f = fixture();
+    const key = newStorageKey('finance-documents', 'pdf');
+    await f.storage.put(key, Buffer.from('x'));
+    /** A body whose teardown completes 100 ms after destroy(); it records what it saw. */
+    const slowBody = (chunks: number) => {
+      const state = { destroyStarted: false, closedAtDestroy: true, closed: false };
+      let sent = 0;
+      const body = new Readable({
+        read() {
+          if (sent++ < chunks) this.push(Buffer.alloc(1024));
+        },
+        destroy(error, callback) {
+          state.destroyStarted = true;
+          state.closedAtDestroy = state.closed;
+          setTimeout(() => callback(error), 100);
+        },
+      });
+      body.once('close', () => (state.closed = true));
+      return { body, state };
+    };
+    const serve = (body: Readable, headers: Record<string, string> = {}) =>
+      f.override((request) =>
+        request.method === 'GET'
+          ? {
+              response: {
+                statusCode: 200,
+                headers: { 'x-amz-meta-sha256': 'a'.repeat(64), ...headers },
+                body,
+              },
+            }
+          : undefined,
+      );
+    const open = { signal: new AbortController().signal };
+
+    // Too large by Content-Length (the collector never runs): five in a row.
+    for (let i = 0; i < 5; i++) {
+      const { body, state } = slowBody(1000);
+      serve(body, { 'content-length': '999999999' });
+      await expect(f.storage.getBounded(key, { ...open, maxBytes: 1000 })).rejects.toBeInstanceOf(
+        StorageObjectTooLargeError,
+      );
+      expect(state).toEqual({ destroyStarted: true, closedAtDestroy: false, closed: true });
+    }
+    // Too large while streaming.
+    {
+      const { body, state } = slowBody(1000);
+      serve(body);
+      await expect(f.storage.getBounded(key, { ...open, maxBytes: 4096 })).rejects.toBeInstanceOf(
+        StorageObjectTooLargeError,
+      );
+      expect(state).toEqual({ destroyStarted: true, closedAtDestroy: false, closed: true });
+    }
+    // Aborted while waiting for data.
+    {
+      const { body, state } = slowBody(0);
+      serve(body);
+      const stop = new AbortController();
+      const reading = f.storage.getBounded(key, { signal: stop.signal, maxBytes: 1_000_000 });
+      setTimeout(() => stop.abort(new Error('stopped')), 50);
+      await expect(reading).rejects.toBeInstanceOf(StorageUnavailableError);
+      expect(state).toEqual({ destroyStarted: true, closedAtDestroy: false, closed: true });
+    }
   });
 
   it('detects corrupted bytes / missing integrity metadata', async () => {
