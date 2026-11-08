@@ -158,10 +158,111 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+describe.skipIf(!hasDocker)('the optional DEV portal edge (ADR 0045)', () => {
+  it.each(['', 'dev-portal.ayvo.co'])('renders portal isolation and routes for %j', (domain) => {
+    const r = run(
+      'docker',
+      [
+        'compose',
+        '-f',
+        join(devDir, 'compose.yml'),
+        '--env-file',
+        join(dir, 'fixture.env'),
+        '--profile',
+        'portal',
+        '--profile',
+        'finance',
+        'config',
+        '--format',
+        'json',
+      ],
+      {
+        DEV_TAILNET_IPV4: '100.64.0.7',
+        DEV_PORTAL_DOMAIN: domain,
+        PORTAL_CORE_TOKEN: 'fixture-portal-core',
+        PORTAL_FINANCE_TOKEN: 'fixture-portal-finance',
+        PORTAL_SERVICE_TOKEN_SHA256: 'fixture-core-hash',
+        PORTAL_FINANCE_TOKEN_SHA256: 'fixture-finance-hash',
+      },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const { services, networks } = JSON.parse(r.stdout);
+    const portal = services['portal-web'];
+    expect(portal.networks).toEqual({ 'portal-edge': null, 'portal-contracts': null });
+    expect(portal.profiles).toEqual(['portal']);
+    expect(portal.ports).toBeUndefined();
+    expect(portal.volumes).toBeUndefined();
+    expect(portal.read_only).toBe(true);
+    expect(portal.mem_limit).toBe('268435456');
+    expect(portal.cpus).toBe(0.5);
+    expect(portal.pids_limit).toBe(128);
+    expect(networks['portal-edge'].internal).toBe(true);
+    expect(networks['portal-contracts'].internal).toBe(true);
+    expect(services.caddy.networks).toHaveProperty('portal-edge');
+    expect(services.caddy.networks).not.toHaveProperty('portal-contracts');
+    expect(services.api.networks).toHaveProperty('portal-contracts');
+    expect(services.finance.networks).toHaveProperty('portal-contracts');
+    expect(services.api.environment.PORTAL_PUBLIC_ORIGIN).toBe(domain ? 'https://' + domain : '');
+    expect(services.api.environment.PORTAL_SERVICE_TOKEN_SHA256).toBe(
+      domain ? 'fixture-core-hash' : '',
+    );
+    expect(services.finance.environment.PORTAL_FINANCE_TOKEN_SHA256).toBe(
+      domain ? 'fixture-finance-hash' : '',
+    );
+    for (const service of [services.caddy, services.dns, services.api, services.finance]) {
+      expect(service.environment).not.toHaveProperty('PORTAL_CORE_TOKEN');
+      expect(service.environment).not.toHaveProperty('PORTAL_FINANCE_TOKEN');
+    }
+
+    const caddy = run('docker', [
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '--mount',
+      'type=bind,src=' + join(devDir, 'Caddyfile') + ',dst=/etc/caddy/Caddyfile,readonly',
+      '-e',
+      'DEV_DOMAIN=dev.example-preview.test',
+      '-e',
+      'ACME_EMAIL=ops@ayvo.test',
+      '-e',
+      'DEV_PORTAL_DOMAIN=' + domain,
+      '-e',
+      'DEV_PORTAL_SITE=' + services.caddy.environment.DEV_PORTAL_SITE,
+      services.caddy.image,
+      'caddy',
+      'adapt',
+      '--config',
+      '/etc/caddy/Caddyfile',
+    ]);
+    expect(caddy.status, caddy.stderr).toBe(0);
+    const servers = Object.values(JSON.parse(caddy.stdout).apps.http.servers) as {
+      listen: string[];
+      routes: { match?: { host?: string[] }[]; handle: unknown[] }[];
+    }[];
+    const https = servers.find((s) => s.listen.includes(':443'));
+    const routes = https?.routes.filter((route) =>
+      route.match?.some((match) => match.host?.includes('dev-portal.ayvo.co')),
+    );
+    expect(routes).toHaveLength(domain ? 1 : 0);
+    if (domain) {
+      const portalRoute = JSON.stringify(routes);
+      expect(portalRoute).toContain('100.64.0.0/10');
+      expect(portalRoute).toContain('"path":["/api","/api/*"]');
+      expect(portalRoute).toContain('"path":["/auth","/auth/*"]');
+      expect(portalRoute).toContain('"max_size":4096');
+      expect(portalRoute).toContain('"read_timeout":5000000000');
+      expect(portalRoute).toContain('"read_min_rate":819');
+      expect(portalRoute).toContain('portal-web:3200');
+      expect(portalRoute).not.toMatch(/"dial":"(?:api|finance|web):/);
+    }
+  });
+});
+
 describe.skipIf(!hasDocker || !hasDig)('the real Compose dns service (TS33-R1)', () => {
   const project = `ayvo-test-dns-${process.pid}`;
   const address = '127.0.0.77';
-  const compose = (...args: string[]) =>
+  const composeWithDomain = (domain: string, ...args: string[]) =>
     run(
       'docker',
       [
@@ -174,8 +275,9 @@ describe.skipIf(!hasDocker || !hasDig)('the real Compose dns service (TS33-R1)',
         join(dir, 'fixture.env'),
         ...args,
       ],
-      { DEV_TAILNET_IPV4: address },
+      { DEV_TAILNET_IPV4: address, DEV_PORTAL_DOMAIN: domain },
     );
+  const compose = (...args: string[]) => composeWithDomain('', ...args);
   afterAll(() => compose('down', '--remove-orphans'));
 
   it('answers A over UDP and TCP and refuses every other name', () => {
@@ -188,6 +290,25 @@ describe.skipIf(!hasDocker || !hasDig)('the real Compose dns service (TS33-R1)',
     }
     expect(dig('+short', 'dev.example-preview.test', 'AAAA').trim()).toBe('');
     expect(dig('x.dev.example-preview.test', 'A')).toContain('status: NXDOMAIN');
+  });
+  it('only answers the actual portal name after the portal DNS is enabled', () => {
+    const dig = () =>
+      run('dig', ['+time=2', '+tries=2', '@' + address, 'dev-portal.ayvo.co', 'A']).stdout;
+    expect(dig()).toContain('status: REFUSED');
+    const up = composeWithDomain(
+      'dev-portal.ayvo.co',
+      'up',
+      '--detach',
+      '--no-deps',
+      '--wait',
+      'dns',
+    );
+    expect(up.status, up.stderr).toBe(0);
+    expect(dig()).toContain('status: NOERROR');
+    expect(dig()).toContain(address);
+    expect(
+      run('dig', ['+time=2', '+tries=2', '@' + address, 'dev.example-preview.test', 'A']).stdout,
+    ).toContain(address);
   });
 });
 
@@ -246,6 +367,8 @@ ${extra}`;
       project,
       '-f',
       join(work, 'compose.yml'),
+      '--profile',
+      'portal',
       'down',
       '--remove-orphans',
     ]);
@@ -263,7 +386,10 @@ ${extra}`;
     // fails to start) and a new Caddyfile on disk (new inode), while the OLD caddy still runs.
     writeFileSync(
       join(work, 'compose.yml'),
-      compose(newPort, "  dns:\n    image: alpine:3.20\n    command: ['false']\n"),
+      compose(
+        newPort,
+        "  dns:\n    image: alpine:3.20\n    command: ['false']\n  portal-web:\n    image: alpine:3.20\n    command: ['sleep', '3600']\n    profiles: ['portal']\n",
+      ),
     );
     writeFileSync(join(work, 'Caddyfile.next'), ':80 {\n\trespond "new"\n}\n');
     renameSync(join(work, 'Caddyfile.next'), join(work, 'Caddyfile'));
@@ -283,11 +409,13 @@ ${extra}`;
     expect(complete).toContain(`compose=git:${tag.slice(0, 12)}`);
     expect(readFileSync(join(saved, 'compose.yml'), 'utf8')).toContain(`127.0.0.1:${oldPort}:80`);
     expect(readFileSync(join(saved, 'Caddyfile'), 'utf8')).toContain('respond "old"');
-    expect(readFileSync(join(saved, 'runtime.env'), 'utf8')).toBe(`AYVO_IMAGE_TAG=${tag}\n`);
+    expect(readFileSync(join(saved, 'runtime.env'), 'utf8')).toBe(
+      `AYVO_IMAGE_TAG=${tag}\nDEV_PORTAL_DOMAIN=\n`,
+    );
     expect(readFileSync(join(saved, 'ports'), 'utf8').trim()).toBe(`127.0.0.1:${oldPort}->80/tcp`);
 
     // The switch fails half-way: the new caddy runs on the new port, dns does not start.
-    dc('up', '--detach', '--no-deps', 'caddy', 'dns');
+    dc('up', '--detach', '--no-deps', 'caddy', 'dns', 'portal-web');
     expect(until(newPort, 'new')).toBe('new');
     expect(get(oldPort)).toBe('');
 
@@ -304,6 +432,15 @@ ${extra}`;
       'label=com.docker.compose.service=dns',
     ]);
     expect(left.stdout.trim()).toBe('');
+    const portal = run('docker', [
+      'ps',
+      '-q',
+      '--filter',
+      `label=com.docker.compose.project=${project}`,
+      '--filter',
+      'label=com.docker.compose.service=portal-web',
+    ]);
+    expect(portal.stdout.trim()).not.toBe('');
   });
 
   it('refuses to restore a tampered backup', () => {
@@ -332,6 +469,7 @@ services:
     ports: ['\${DEV_TAILNET_IPV4:?set by deploy}:${port}:80']
     environment:
       DEV_TAILNET_IPV4: \${DEV_TAILNET_IPV4}
+      DEV_PORTAL_DOMAIN: \${DEV_PORTAL_DOMAIN:-}
     volumes: ['./Caddyfile:/etc/caddy/Caddyfile:ro']
   api:
     image: ayvo-edgetest/api:\${AYVO_IMAGE_TAG:-local}
@@ -389,14 +527,22 @@ services:
     expect(b.status, b.stderr).toBe(0);
     const saved = b.stdout.trim();
     expect(readFileSync(join(saved, 'runtime.env'), 'utf8')).toBe(
-      `AYVO_IMAGE_TAG=${tag}\nDEV_TAILNET_IPV4=127.0.0.1\n`,
+      `AYVO_IMAGE_TAG=${tag}\nDEV_TAILNET_IPV4=127.0.0.1\nDEV_PORTAL_DOMAIN=\n`,
     );
     // A partly failed switch removed the caddy altogether.
     run('docker', ['rm', '-f', `${project}-caddy-1`]);
     expect(get(port)).toBe('');
-    const r = clean(helper, ['restore', saved, join(dir, 'fixture.env')]);
+    const laterEnv = join(dir, 'portal-enabled.env');
+    writeFileSync(
+      laterEnv,
+      readFileSync(join(dir, 'fixture.env'), 'utf8') + 'DEV_PORTAL_DOMAIN=dev-portal.ayvo.co\n',
+    );
+    const r = clean(helper, ['restore', saved, laterEnv]);
     expect(r.status, r.stderr).toBe(0);
     expect(until(port, 'tailnet')).toBe('tailnet');
+    const env = run('docker', ['exec', `${project}-caddy-1`, 'printenv', 'DEV_PORTAL_DOMAIN']);
+    expect(env.status).toBe(0);
+    expect(env.stdout).toBe('\n');
   });
 });
 

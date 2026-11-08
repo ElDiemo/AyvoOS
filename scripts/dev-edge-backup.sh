@@ -54,7 +54,7 @@ caddy_container() {
 # Variables that the deploy process exports and Compose interpolates, but that are not in the env
 # file. They are saved with the backup (runtime.env) and every render/restore uses exactly those,
 # in a clean environment — never whatever the current shell happens to export (TS33-R4).
-readonly RUNTIME_VARS=(AYVO_IMAGE_TAG DEV_TAILNET_IPV4 AYVO_EDGE_COMMIT)
+readonly RUNTIME_VARS=(AYVO_IMAGE_TAG DEV_TAILNET_IPV4 AYVO_EDGE_COMMIT DEV_PORTAL_DOMAIN)
 
 # compose DIR FILE ENV ARGS… — Docker Compose with the env file plus DIR/runtime.env only.
 compose_in() {
@@ -103,6 +103,8 @@ backup() {
   {
     printf 'AYVO_IMAGE_TAG=%s\n' "$tag"
     [[ -z $ip ]] || printf 'DEV_TAILNET_IPV4=%s\n' "$ip"
+    # A later env file must not enable the portal when restoring the old Caddy.
+    printf 'DEV_PORTAL_DOMAIN=%s\n' "$(jq -r '.[0].Config.Env[] | select(startswith("DEV_PORTAL_DOMAIN=")) | sub("^[^=]*="; "")' "$dir/caddy.json")"
   } >"$dir/runtime.env"
 
   # The Compose file the running caddy was created from. The file at its path may already be newer
@@ -155,13 +157,15 @@ restore() {
   fi
   local -a C=(compose_in "$dir" "$dir/compose.yml" "$env" -p "$project")
 
-  # Containers of services that did not exist before the switch (e.g. dns) go away.
+  # Only this edge's DNS service may be removed. Independently deployed profile and
+  # overlay services (Finance, bank simulation, marketing and the portal) are outside this restore.
   local defined
   defined="$("${C[@]}" config --services)" || die "the saved compose.yml does not render"
-  for id in $(docker ps -aq --filter "label=com.docker.compose.project=$project"); do
-    svc="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$id")"
-    grep -qxF "$svc" <<<"$defined" || docker rm -f "$id" >/dev/null
-  done
+  if ! grep -qxF dns <<<"$defined"; then
+    for id in $(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=dns"); do
+      docker rm -f "$id" >/dev/null
+    done
+  fi
 
   "${C[@]}" up --detach --no-deps --no-build --force-recreate caddy
   diff -q <(ports_of "$(caddy_container "$project")") "$dir/ports" >/dev/null ||

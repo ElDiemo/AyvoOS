@@ -129,6 +129,68 @@ http://{$DEV_DOMAIN} {
 	}
 }
 
+# The hotel portal is opt-in on DEV. Without DEV_PORTAL_DOMAIN the site is an HTTP-only
+# sink on a reserved .invalid name, so no certificate is requested for the portal.
+{$DEV_PORTAL_SITE:http://dev-portal.invalid} {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	import tailnet
+
+	@blocked path /api /api/*
+	@disabled not host dev-portal.ayvo.co
+	handle @outside {
+		abort
+	}
+	handle @disabled {
+		abort
+	}
+	handle @blocked {
+		abort
+	}
+
+	@portal_auth path /auth /auth/*
+	handle @portal_auth {
+		route {
+			# Limit the upload at the edge as well as in portal-web. The rate bounds
+			# trickled bodies. Portal-web imposes a separate total five-second deadline.
+			timeouts {
+				read_timeout 5s 819
+			}
+			request_body {
+				max_size 4KiB
+			}
+			reverse_proxy portal-web:3200 {
+				header_up X-Forwarded-For {remote_host}
+				header_down -X-Powered-By
+			}
+		}
+	}
+	handle {
+		reverse_proxy portal-web:3200 {
+			header_up X-Forwarded-For {remote_host}
+			header_down -X-Powered-By
+		}
+	}
+}
+
+# HTTP-01 is handled by Caddy itself. Every other public request is aborted.
+http://dev-portal.ayvo.co {
+	import tailnet
+	handle @outside {
+		abort
+	}
+	@enabled expression `"{$DEV_PORTAL_DOMAIN:}" == "dev-portal.ayvo.co"`
+	handle @enabled {
+		redir https://dev-portal.ayvo.co{uri} 308
+	}
+	handle {
+		abort
+	}
+}
+
 # Any other host name or a bare IP address: nothing.
 http:// {
 	abort

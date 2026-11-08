@@ -22,6 +22,25 @@
 	errors
 }
 
+# Split DNS for the optional portal host. When disabled this block owns a reserved
+# .invalid zone, with no A response, and the real portal name is refused by the root block.
+{$DEV_PORTAL_DOMAIN}:1053 {
+	template IN A {$DEV_PORTAL_DOMAIN} {
+		match "^dev-portal[.]ayvo[.]co[.]$"
+		answer "{{ .Name }} 60 IN A {$DEV_TAILNET_IPV4}"
+		fallthrough
+	}
+	template ANY ANY {$DEV_PORTAL_DOMAIN} {
+		match "^dev-portal[.]ayvo[.]co[.]$"
+		rcode NOERROR
+		fallthrough
+	}
+	template ANY ANY {$DEV_PORTAL_DOMAIN} {
+		rcode NXDOMAIN
+	}
+	errors
+}
+
 .:1053 {
 	acl {
 		block
