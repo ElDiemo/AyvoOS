@@ -1020,6 +1020,8 @@ enum OperationKind {
   RETURN_RECEIPT_CLOSE
   RETURN_ISSUE_RESOLVE
   REUSE_READY_SCAN
+  PORTAL_GRANT_ISSUE
+  PORTAL_GRANT_REPLACE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1148,6 +1150,9 @@ model User {
   scopes                    UserScope[]               @relation("UserScopes")
   scopesGranted             UserScope[]               @relation("ScopeGrantedBy")
   scopesRevoked             UserScope[]               @relation("ScopeRevokedBy")
+  portalGrants              PortalGrant[]             @relation("PortalGrantUser")
+  portalGrantsGranted       PortalGrant[]             @relation("PortalGrantGrantedBy")
+  portalGrantsRevoked       PortalGrant[]             @relation("PortalGrantRevokedBy")
   sessions                  UserSession[]
   bootstrap                 IdentityBootstrap?
   rolesCreated              Role[]                    @relation("RoleCreatedBy")
@@ -2448,12 +2453,13 @@ model Hotel {
   receivingContactPhone String?         @map("receiving_contact_phone")
   receivingContactEmail String?         @map("receiving_contact_email")
 
-  fulfillmentSite Site             @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
-  creator         User             @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  operation       OperationRequest @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  fulfillmentSite Site               @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
+  creator         User               @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  operation       OperationRequest   @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   orders          Order[]
   supplyPlan      SupplyPlan?
   contractDrafts  ContractDraft[]
+  portalGrants    PortalGrantHotel[]
 
   @@index([fulfillmentSiteId])
   @@map("hotels")
@@ -3957,4 +3963,47 @@ model ReturnPumpCount {
 
   @@index([receiptId])
   @@map("return_pump_counts")
+}
+
+/// A hotel portal grant (ADR 0045 §4): which payer and which of its hotels one PORTAL account may
+/// see. Issued and replaced only through Finance (which checked the pair), revoked in the core;
+/// never edited, never revived. At most one active grant per (user, payer). A change of scope is a
+/// new grant that `replaces` the old one, revoked in the same transaction.
+model PortalGrant {
+  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  /// Finance's customer id — opaque to the core, no FK across units.
+  payerCustomerId String    @map("payer_customer_id") @db.Uuid
+  grantedAt       DateTime  @default(now()) @map("granted_at") @db.Timestamptz(3)
+  grantedBy       String    @map("granted_by") @db.Uuid
+  reason          String
+  /// What Finance confirmed: the payer version and the hotels (as sent).
+  financeCheck    Json      @map("finance_check")
+  replacesId      String?   @unique @map("replaces_id") @db.Uuid
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedBy       String?   @map("revoked_by") @db.Uuid
+  revokeReason    String?   @map("revoke_reason")
+
+  user          User               @relation("PortalGrantUser", fields: [userId], references: [id], onDelete: Restrict)
+  grantedByUser User               @relation("PortalGrantGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  revokedByUser User?              @relation("PortalGrantRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  replaces      PortalGrant?       @relation("PortalGrantReplaces", fields: [replacesId], references: [id], onDelete: Restrict)
+  replacedBy    PortalGrant?       @relation("PortalGrantReplaces")
+  hotels        PortalGrantHotel[]
+
+  @@index([payerCustomerId])
+  @@map("portal_grants")
+}
+
+/// The hotels of one grant; written with the grant, never changed.
+model PortalGrantHotel {
+  grantId String @map("grant_id") @db.Uuid
+  hotelId String @map("hotel_id") @db.Uuid
+
+  grant PortalGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
+  hotel Hotel       @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+
+  @@id([grantId, hotelId])
+  @@index([hotelId])
+  @@map("portal_grant_hotels")
 }

@@ -257,6 +257,9 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/internal/v1/finance/supplier-documents/:id/content',
       'GET /api/internal/v1/finance/suppliers',
       'POST /api/internal/v1/finance/hotels/lookup',
+      // Hotel portal grants (ADR 0045 §4): issued and replaced only through Finance.
+      'POST /api/internal/v1/finance/portal-grants',
+      'POST /api/internal/v1/finance/portal-grants/:id/replace',
       'POST /api/internal/v1/finance/principal',
       'POST /api/internal/v1/finance/suppliers/lookup',
     ]);

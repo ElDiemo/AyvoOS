@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module.js';
+import { PortalGrantsModule } from '../portal-grants/portal-grants.module.js';
 import { ProcurementModule } from '../procurement/procurement.module.js';
 import { FinanceContractController } from './finance-contract.controller.js';
 
@@ -8,7 +9,7 @@ import { FinanceContractController } from './finance-contract.controller.js';
  * runs in its own container (apps/api/src/finance, `node dist/finance/main.js`).
  */
 @Module({
-  imports: [ProcurementModule, CustomersModule],
+  imports: [ProcurementModule, CustomersModule, PortalGrantsModule],
   controllers: [FinanceContractController],
 })
 export class FinanceContractModule {}

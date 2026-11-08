@@ -34,6 +34,8 @@ export const identityCs = {
     'identity:users_read': 'Zobrazit uživatele, role a audit',
     'identity:users_manage': 'Spravovat uživatele a jejich přístup',
     'identity:roles_manage': 'Spravovat vlastní role',
+    'identity:portal_grants_manage':
+      'Spravovat přístup účtů hotelového portálu k plátci a jeho hotelům (vydání a náhrada přes Finance, odvolání)',
     'sites:manage': 'Spravovat provozovny',
     'sites:all_access': 'Přístup ke všem provozovnám a skladům',
     'inventory:read': 'Zobrazit sklad (zásoby, šarže, pohyby, příjmy, dodavatelé)',
@@ -381,6 +383,9 @@ export const identityCs = {
       PRINT_AGENT_TOKEN_ROTATED: 'Nový token tiskového agenta',
       PRINT_AGENT_REVOKED: 'Zrušení tiskového agenta',
       PRINTER_SAVED: 'Změna tiskárny',
+      PORTAL_GRANT_ISSUED: 'Přístup do hotelového portálu vydán',
+      PORTAL_GRANT_REPLACED: 'Přístup do hotelového portálu nahrazen',
+      PORTAL_GRANT_REVOKED: 'Přístup do hotelového portálu odvolán',
     } as Record<string, string>,
   },
   roles_admin: {

@@ -76,6 +76,6 @@ import { EmployeeCardRateLimit } from './employee-card-rate-limit.service.js';
     },
     { provide: APP_GUARD, useClass: AccessGuard },
   ],
-  exports: [AccessService],
+  exports: [AccessService, SessionsService],
 })
 export class IdentityModule {}
