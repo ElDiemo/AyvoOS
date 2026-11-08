@@ -2,6 +2,7 @@ import 'server-only';
 import { PORTAL_SESSION_HEADER } from '@ayvo/types';
 import type { z } from 'zod';
 import { portalEnv } from './env';
+import { contentLengthWithin, deadline, readBounded, SlotLimit } from './slots';
 
 /** Contract timeouts (ADR 0045 §8): 3 s per core call, 5 s per Finance call. */
 const CORE_TIMEOUT_MS = 3_000;
@@ -42,8 +43,36 @@ function target(unit: Unit) {
       };
 }
 
-/** A raw contract call: the unit's own token, the portal session forwarded when there is one. */
-export async function contractFetch(
+/**
+ * portal-web's own request limit per receiver (ADR 0045 §8: "keep-alive 8 / 4"): at most 8 calls to
+ * the core and 4 to Finance in flight from this process, counted until the answer's body has been
+ * read or released. Beyond that a call is refused at once (503), never queued.
+ */
+const UNIT_SLOTS: Record<Unit, SlotLimit> = { core: new SlotLimit(8), finance: new SlotLimit(4) };
+/** The largest JSON answer portal-web reads from a contract (checked while reading). */
+export const CONTRACT_JSON_MAX_BYTES = 1024 * 1024;
+
+/** For tests and diagnostics: the calls in flight per receiver. */
+export const contractCallsInFlight = () => ({
+  core: UNIT_SLOTS.core.inFlight,
+  finance: UNIT_SLOTS.finance.inFlight,
+});
+
+export interface ContractCall {
+  res: Response;
+  /** The call's single deadline (the caller's, or the unit's own timeout). */
+  signal: AbortSignal;
+  /** Ends the call: the unit's timer and its slot. Run after the body is read or cancelled. */
+  finish: () => void;
+}
+
+/**
+ * A raw contract call holding one of the receiver's slots: the unit's own token, the portal
+ * session forwarded when there is one. `signal`, when given, is the caller's single deadline for
+ * the whole request (it then replaces the unit's timeout); otherwise the unit's timeout covers
+ * the fetch and the reading of the answer. The caller must `finish()` it.
+ */
+export async function contractOpen(
   unit: Unit,
   path: string,
   init: {
@@ -51,16 +80,19 @@ export async function contractFetch(
     body?: unknown;
     session?: string | null;
     signal?: AbortSignal;
-    timeoutMs?: number;
   } = {},
-): Promise<Response> {
+): Promise<ContractCall> {
   const t = target(unit);
-  const signal = AbortSignal.any([
-    AbortSignal.timeout(init.timeoutMs ?? t.timeout),
-    ...(init.signal ? [init.signal] : []),
-  ]);
+  const releaseSlot = UNIT_SLOTS[unit].acquire();
+  if (!releaseSlot) throw new PortalUnavailable();
+  const own = init.signal ? null : deadline(t.timeout);
+  const signal = init.signal ?? own!.signal;
+  const finish = () => {
+    own?.done();
+    releaseSlot();
+  };
   try {
-    return await fetch(`${t.base}/${path}`, {
+    const res = await fetch(`${t.base}/${path}`, {
       method: init.method ?? 'GET',
       headers: {
         authorization: `Bearer ${t.token}`,
@@ -72,8 +104,30 @@ export async function contractFetch(
       redirect: 'error',
       cache: 'no-store',
     });
+    return { res, signal, finish };
+  } catch {
+    finish();
+    throw new PortalUnavailable();
+  }
+}
+
+/** Reads a JSON answer within the byte limit and the call's deadline; undefined if not JSON. */
+async function readJson(call: ContractCall): Promise<unknown> {
+  const { res, signal } = call;
+  if (!contentLengthWithin(res.headers.get('content-length'), CONTRACT_JSON_MAX_BYTES)) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new PortalUnavailable();
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await readBounded(res.body, { maxBytes: CONTRACT_JSON_MAX_BYTES, stop: signal });
   } catch {
     throw new PortalUnavailable();
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return undefined;
   }
 }
 
@@ -82,12 +136,20 @@ export async function contractJson<T extends z.ZodType>(
   unit: Unit,
   path: string,
   schema: T,
-  init: Parameters<typeof contractFetch>[2] = {},
+  init: Parameters<typeof contractOpen>[2] = {},
 ): Promise<z.infer<T>> {
-  const res = await contractFetch(unit, path, init);
-  if (res.status === 204) return undefined as z.infer<T>;
-  const body = (await res.json().catch(() => undefined)) as
-    { code?: string; message?: string } | undefined;
+  const call = await contractOpen(unit, path, init);
+  const { res } = call;
+  let body: { code?: string; message?: string } | undefined;
+  try {
+    if (res.status === 204) {
+      await res.body?.cancel().catch(() => undefined);
+      return undefined as z.infer<T>;
+    }
+    body = (await readJson(call)) as typeof body;
+  } finally {
+    call.finish();
+  }
   if (res.ok) {
     const parsed = schema.safeParse(body);
     if (!parsed.success) throw new PortalUnavailable();
