@@ -7,6 +7,7 @@ import type {
 import { Injectable } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
+import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, type AccountAudience } from '../generated/prisma/client.js';
 import { SessionsService } from '../identity/sessions.service.js';
@@ -45,10 +46,17 @@ export class PortalGrantsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly sessions: SessionsService,
+    private readonly operations: OperationRequestsService,
   ) {}
 
+  /**
+   * A new grant. Idempotent per `requestId`: the same actor, account, payer and scope get the
+   * stored result again (one grant, one audit event); anything else under that id is
+   * IDEMPOTENCY_CONFLICT.
+   */
   async issue(actorId: string, input: PortalGrantIssueRequest): Promise<PortalGrant> {
-    return this.write(async (tx) => {
+    const meaning = { actorId, userId: input.userId, ...scopeOf(input) };
+    return this.idempotent('PORTAL_GRANT_ISSUE', input.requestId, meaning, async (tx) => {
       await this.lockAccount(tx, input.userId);
       await this.requireHotels(tx, input.hotelIds);
       const open = await tx.portalGrant.findFirst({
@@ -75,13 +83,17 @@ export class PortalGrantsService {
     });
   }
 
-  /** An atomic replacement: the new hotel set as a new grant, the old one revoked "nahrazen". */
+  /**
+   * An atomic replacement: the new hotel set as a new grant, the old one revoked "nahrazen".
+   * Idempotent per `requestId` like `issue` (the replaced grant is part of its meaning).
+   */
   async replace(
     actorId: string,
     grantId: string,
     input: PortalGrantReplaceRequest,
   ): Promise<PortalGrant> {
-    return this.write(async (tx) => {
+    const meaning = { actorId, grantId, ...scopeOf(input) };
+    return this.idempotent('PORTAL_GRANT_REPLACE', input.requestId, meaning, async (tx) => {
       const old = await this.lockGrant(tx, grantId);
       if (old.payerCustomerId !== input.payerCustomerId)
         throw domainError(409, 'GRANT_PAYER_MISMATCH', 'A replacement keeps the payer');
@@ -149,14 +161,35 @@ export class PortalGrantsService {
 
   // --- internals ---------------------------------------------------------------------------
 
+  /**
+   * One transaction, exactly once per request id (doc 018 §8): the request row first, then the
+   * account and grant locks. A refusal rolls everything back, the request row included.
+   */
+  private async idempotent(
+    kind: 'PORTAL_GRANT_ISSUE' | 'PORTAL_GRANT_REPLACE',
+    requestId: string,
+    meaning: unknown,
+    work: (tx: Tx) => Promise<PortalGrant>,
+  ): Promise<PortalGrant> {
+    try {
+      const { result } = await this.operations.run(
+        kind,
+        requestId,
+        meaning,
+        async (tx) => (await work(tx)) as unknown as Prisma.InputJsonObject,
+      );
+      return result as unknown as PortalGrant;
+    } catch (error) {
+      throw mapUniqueViolation(error);
+    }
+  }
+
   /** One transaction; a concurrent second active grant (unique index) is reported as such. */
   private async write<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     try {
       return await this.prisma.$transaction(fn);
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw grantExists(null);
-      throw error;
+      throw mapUniqueViolation(error);
     }
   }
 
@@ -233,6 +266,20 @@ export class PortalGrantsService {
     return toView(grant);
   }
 }
+
+/** What a request means, for its idempotency (hotel lists as sets). */
+const scopeOf = (input: PortalGrantReplaceRequest) => ({
+  payerCustomerId: input.payerCustomerId,
+  hotelIds: [...input.hotelIds].sort(),
+  reason: input.reason,
+  financeCheck: { ...input.financeCheck, hotelIds: [...input.financeCheck.hotelIds].sort() },
+});
+
+/** A concurrent second active grant (unique index) is reported as such. */
+const mapUniqueViolation = (error: unknown) =>
+  error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
+    ? grantExists(null)
+    : error;
 
 const grantExists = (grantId: string | null) =>
   domainErrorWithDetails(

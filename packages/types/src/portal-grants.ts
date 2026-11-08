@@ -28,6 +28,11 @@ export const portalGrantFinanceCheckSchema = z.strictObject({
 export type PortalGrantFinanceCheck = z.infer<typeof portalGrantFinanceCheckSchema>;
 
 const grantBody = z.strictObject({
+  /**
+   * Finance's stable id of this one operation: a retry after a lost answer sends the same id and
+   * gets the same result, written once. The same id for another operation or scope is refused.
+   */
+  requestId: z.uuid(),
   payerCustomerId: z.uuid(),
   hotelIds: hotelIdsSchema,
   reason: reasonSchema,
