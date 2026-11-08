@@ -19,7 +19,15 @@ export type AccessRule =
    * `/api/internal/`, verifies the service token of that audience, and resolves the user from the
    * forwarded session token exactly like a browser request (current roles, scopes, revocation).
    */
-  | { kind: 'service'; audience: 'finance' };
+  | { kind: 'service'; audience: 'finance' }
+  /**
+   * portal-web calling the core's hotel portal contract (ADR 0045 §3, §6) — a machine with its
+   * own token, acting for an anonymous browser or a PORTAL session it forwards. Declared only
+   * through `@PortalServiceAccess()`; the global guard allows it only under
+   * `/api/internal/v1/portal/` and only with the portal token. No staff principal is ever
+   * resolved; the contract checks the forwarded portal session itself, as PORTAL.
+   */
+  | { kind: 'portal-service' };
 
 /** Anonymous access (bottle passport, health, login). Use sparingly. */
 export const Public = () => SetMetadata(ACCESS_METADATA, { kind: 'public' } satisfies AccessRule);
@@ -38,3 +46,7 @@ export const RequirePermission = (...permissions: [PermissionCode, ...Permission
 /** The core's internal contract for one runtime unit (ADR 0039): service token + user session. */
 export const ServiceAccess = (audience: 'finance') =>
   SetMetadata(ACCESS_METADATA, { kind: 'service', audience } satisfies AccessRule);
+
+/** The hotel portal contract (ADR 0045): portal-web's token only; the portal session is checked by the route. */
+export const PortalServiceAccess = () =>
+  SetMetadata(ACCESS_METADATA, { kind: 'portal-service' } satisfies AccessRule);

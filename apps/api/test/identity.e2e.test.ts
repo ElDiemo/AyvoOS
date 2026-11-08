@@ -263,6 +263,23 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'POST /api/internal/v1/finance/principal',
       'POST /api/internal/v1/finance/suppliers/lookup',
     ]);
+    // The hotel portal contract (ADR 0045 §3): only portal-web's token, only under its prefix.
+    expect(
+      routes
+        .filter((r) => r.rule!.kind === 'portal-service')
+        .map((r) => `${r.method} ${r.route}`)
+        .sort(),
+    ).toEqual([
+      'GET /api/internal/v1/portal/hotels',
+      'GET /api/internal/v1/portal/hotels/:id',
+      'GET /api/internal/v1/portal/session',
+      'POST /api/internal/v1/portal/auth/activate',
+      'POST /api/internal/v1/portal/auth/forgot-password',
+      'POST /api/internal/v1/portal/auth/logout',
+      'POST /api/internal/v1/portal/auth/mfa',
+      'POST /api/internal/v1/portal/auth/password',
+      'POST /api/internal/v1/portal/auth/reset-password',
+    ]);
     // Without a session every other route answers 401 — guards run before any parameter parsing;
     // an agent route without the agent's token too (a session never counts there).
     for (const r of routes.filter((x) => x.rule!.kind !== 'public')) {
@@ -272,7 +289,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       expect(res.body.code, `${r.method} ${r.route}`).toBe(
         r.rule!.kind === 'agent'
           ? 'AGENT_UNAUTHORIZED'
-          : r.rule!.kind === 'service'
+          : r.rule!.kind === 'service' || r.rule!.kind === 'portal-service'
             ? 'SERVICE_UNAUTHENTICATED'
             : 'UNAUTHENTICATED',
       );
