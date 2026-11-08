@@ -287,12 +287,23 @@ export class PortalGrantsService {
   }
 }
 
-/** What a request means, for its idempotency (hotel lists as sets). */
+/**
+ * What a request means, for its idempotency: who (the actor, added by the caller), which
+ * operation on which account or grant (the caller), the payer, the hotels as a set and the reason.
+ *
+ * `financeCheck` is NOT part of it. It is Finance's evidence of a server-side check: when it was
+ * made (`checkedAt`) and against which payer version (`payerVersionId`). Finance makes the check
+ * again before every attempt, including a safe retry after a lost answer, so the evidence of a
+ * retry may be newer. Its hotels are always exactly the grant's (schema), so they are already in
+ * the meaning. A replay of the same request therefore returns the ORIGINAL stored grant with its
+ * ORIGINAL evidence — the one the grant was written on. Nothing of the retry's evidence is stored.
+ * A changed payer version on a retry is still the same request: Finance has confirmed the same
+ * payer and hotels again.
+ */
 const scopeOf = (input: PortalGrantReplaceRequest) => ({
   payerCustomerId: input.payerCustomerId,
   hotelIds: [...input.hotelIds].sort(),
   reason: input.reason,
-  financeCheck: { ...input.financeCheck, hotelIds: [...input.financeCheck.hotelIds].sort() },
 });
 
 /** A concurrent second active grant (unique index) is reported as such. */

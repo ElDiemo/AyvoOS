@@ -30,7 +30,10 @@ export type PortalGrantFinanceCheck = z.infer<typeof portalGrantFinanceCheckSche
 const grantBody = z.strictObject({
   /**
    * Finance's stable id of this one operation: a retry after a lost answer sends the same id and
-   * gets the same result, written once. The same id for another operation or scope is refused.
+   * gets the same result (the original grant and its original `financeCheck`), written once. The
+   * same id with another actor, operation, account/grant, payer, hotels or reason is refused. A
+   * retry may carry newer `financeCheck` evidence (a new `checkedAt` or payer version); that does
+   * not make it another request.
    */
   requestId: z.uuid(),
   payerCustomerId: z.uuid(),

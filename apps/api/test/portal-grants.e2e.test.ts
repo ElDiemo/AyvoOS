@@ -553,6 +553,51 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       expect(await written(user.id)).toEqual({ grants: 2, audit: 2 });
       expect((await active(user.id)).map((g) => g.id)).toEqual([a.body.id]);
     });
+
+    /** Finance checks again before each attempt: the retry carries newer evidence of that check. */
+    const rechecked = <T extends { financeCheck: { hotelIds: string[] } }>(p: T) => ({
+      ...p,
+      financeCheck: {
+        payerVersionId: randomUUID(),
+        hotelIds: p.financeCheck.hotelIds,
+        checkedAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+
+    it('issue retried after a new Finance check (new checkedAt and payer version) → the original grant and evidence, written once', async () => {
+      const user = await portalAccount();
+      const payload = { userId: user.id, ...body([hotels[0]!]) };
+      const first = await contract('portal-grants').send(payload).expect(201);
+      const retry = rechecked(payload);
+      expect(retry.financeCheck.checkedAt).not.toBe(payload.financeCheck.checkedAt);
+      const again = await contract('portal-grants').send(retry);
+      expect([again.status, again.body]).toEqual([201, first.body]);
+      expect(again.body.financeCheck).toEqual(payload.financeCheck);
+      const stored = await t.prisma.portalGrant.findUniqueOrThrow({ where: { id: first.body.id } });
+      expect(stored.financeCheck).toEqual(payload.financeCheck);
+      expect(await written(user.id)).toEqual({ grants: 1, audit: 1 });
+      // Another reason under the same id is still another request.
+      const reworded = await contract('portal-grants').send({ ...retry, reason: 'another reason' });
+      expect([reworded.status, reworded.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+      expect(await written(user.id)).toEqual({ grants: 1, audit: 1 });
+    });
+
+    it('replace retried after a new Finance check → the original successor and evidence, replaced once; another scope still conflicts', async () => {
+      const user = await portalAccount();
+      const old = await issue(user.id, [hotels[0]!]);
+      const payload = body([hotels[0]!, hotels[1]!], old.payerCustomerId);
+      const first = await contract(`portal-grants/${old.id}/replace`).send(payload).expect(201);
+      const again = await contract(`portal-grants/${old.id}/replace`).send(rechecked(payload));
+      expect([again.status, again.body]).toEqual([201, first.body]);
+      expect(again.body.financeCheck).toEqual(payload.financeCheck);
+      expect(await written(user.id)).toEqual({ grants: 2, audit: 2 });
+      const wider = await contract(`portal-grants/${old.id}/replace`).send({
+        ...rechecked(body([hotels[0]!, hotels[1]!, hotels[2]!], old.payerCustomerId)),
+        requestId: payload.requestId,
+      });
+      expect([wider.status, wider.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+      expect(await written(user.id)).toEqual({ grants: 2, audit: 2 });
+    });
   });
 
   describe('a replacement that fails after revoking the old grant', () => {
