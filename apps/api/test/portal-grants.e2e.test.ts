@@ -45,7 +45,7 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
     payerCustomerId,
     hotelIds,
     reason: 'synthetic portal grant',
-    financeCheck: { payerVersionId: randomUUID(), hotelIds, checkedAt: new Date().toISOString() },
+    financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
   });
   const issue = async (userId: string, hotelIds: string[], payer: string = randomUUID()) => {
     const res = await contract('portal-grants').send({ userId, ...body(hotelIds, payer) });
@@ -193,6 +193,48 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       );
       expect((await revokeRoute(fake, operator).send({ reason: 'no right' })).status).toBe(403);
       expect(await written(user.id)).toEqual({ grants: 0, audit: 0 });
+    });
+
+    it('the account, invitation and read routes need both permissions too', async () => {
+      const user = await portalAccount();
+      const calls = [
+        contract('portal-accounts', operator).send({ email: unique('x'), displayName: 'X' }),
+        contract(`portal-accounts/${user.id}/invitation`, operator).send({
+          requestId: randomUUID(),
+        }),
+        core()
+          .get(`/api/internal/v1/finance/portal-grants?payerCustomerId=${randomUUID()}`)
+          .set('Authorization', `Bearer ${financeToken}`)
+          .set('x-ayvo-session', tokenOf(operator)),
+        core()
+          .get(`/api/internal/v1/finance/portal-grants/${randomUUID()}`)
+          .set('Authorization', `Bearer ${financeToken}`)
+          .set('x-ayvo-session', tokenOf(operator)),
+      ];
+      for (const res of await Promise.all(calls))
+        expect([res.status, res.body.code]).toEqual([403, 'FORBIDDEN']);
+    });
+
+    it('the account of an e-mail: created once also when asked twice at once; a staff e-mail is refused', async () => {
+      const email = unique('race');
+      const [a, b] = await Promise.all([
+        contract('portal-accounts').send({ email, displayName: 'Race' }),
+        contract('portal-accounts').send({ email, displayName: 'Race' }),
+      ]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      expect(a.body.userId).toBe(b.body.userId);
+      expect([a.body.created, b.body.created].sort()).toEqual([false, true]);
+      const row = await t.prisma.user.findUniqueOrThrow({ where: { email } });
+      expect([row.audience, row.status]).toEqual(['PORTAL', 'ACTIVE']);
+      expect(await t.prisma.userRole.count({ where: { userId: row.id } })).toBe(0);
+      const staff = await t.prisma.user.create({
+        data: { email: unique('staff-mail'), displayName: 'Staff' },
+      });
+      const refused = await contract('portal-accounts').send({
+        email: staff.email.toUpperCase(),
+        displayName: 'Staff',
+      });
+      expect([refused.status, refused.body.code]).toEqual([409, 'EMAIL_IS_STAFF']);
     });
 
     it('identity:portal_grants_manage is ADMIN only, security administration', async () => {
@@ -558,7 +600,7 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
     const rechecked = <T extends { financeCheck: { hotelIds: string[] } }>(p: T) => ({
       ...p,
       financeCheck: {
-        payerVersionId: randomUUID(),
+        payerVersion: 2,
         hotelIds: p.financeCheck.hotelIds,
         checkedAt: new Date(Date.now() + 60_000).toISOString(),
       },

@@ -252,12 +252,17 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
         .sort(),
     ).toEqual([
       'GET /api/internal/v1/finance/hotels',
+      'GET /api/internal/v1/finance/portal-grants',
+      'GET /api/internal/v1/finance/portal-grants/:id',
       'GET /api/internal/v1/finance/supplier-documents',
       'GET /api/internal/v1/finance/supplier-documents/:id',
       'GET /api/internal/v1/finance/supplier-documents/:id/content',
       'GET /api/internal/v1/finance/suppliers',
       'POST /api/internal/v1/finance/hotels/lookup',
-      // Hotel portal grants (ADR 0045 §4): issued and replaced only through Finance.
+      // Hotel portal grants (ADR 0045 §4): issued and replaced only through Finance, which also
+      // creates the account and invites it after the grant.
+      'POST /api/internal/v1/finance/portal-accounts',
+      'POST /api/internal/v1/finance/portal-accounts/:id/invitation',
       'POST /api/internal/v1/finance/portal-grants',
       'POST /api/internal/v1/finance/portal-grants/:id/replace',
       'POST /api/internal/v1/finance/principal',

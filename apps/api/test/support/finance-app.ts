@@ -42,6 +42,8 @@ export interface FinanceTestApp {
 export async function createFinanceTestApp(
   options: {
     core?: Parameters<typeof createTestApp>[2];
+    /** Extra environment of the core (e.g. the hotel portal's origin and token). */
+    coreEnv?: Partial<Record<string, string>>;
     coreUrl?: string;
     finance?: Partial<Record<string, string>>;
   } = {},
@@ -49,7 +51,10 @@ export async function createFinanceTestApp(
   if (!financeDatabaseUrl) throw new Error('No Finance test database');
   const token = randomBytes(32).toString('base64url');
   const core = await createTestApp(
-    { FINANCE_SERVICE_TOKEN_SHA256: createHash('sha256').update(token).digest('hex') },
+    {
+      FINANCE_SERVICE_TOKEN_SHA256: createHash('sha256').update(token).digest('hex'),
+      ...options.coreEnv,
+    },
     {},
     options.core,
   );
