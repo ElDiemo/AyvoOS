@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SessionsService } from '../src/identity/sessions.service.js';
 import { createHotel } from './support/order-fixtures.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 
 const unique = (p: string) => `${p}-${randomUUID().slice(0, 8)}@ayvo.test`;
 const tokenOf = (cookie: string) => cookie.replace(/^ayvo_session=/, '');
@@ -40,6 +40,7 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       data: { email: unique('portal'), displayName: 'Portal account', audience: 'PORTAL' },
     });
   const body = (hotelIds: string[], payerCustomerId: string = randomUUID()) => ({
+    requestId: randomUUID() as string,
     payerCustomerId,
     hotelIds,
     reason: 'synthetic portal grant',
@@ -408,9 +409,14 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       const sql = (q: TemplateStringsArray, ...v: unknown[]) => t.prisma.$executeRaw(q, ...v);
       await expect(
         sql`UPDATE "portal_grants" SET "reason" = 'edited' WHERE "id" = ${g.id}::uuid`,
-      ).rejects.toThrow(/never edited/);
+      ).rejects.toThrow(/only ever revoked/);
       await expect(
         sql`UPDATE "portal_grants" SET "payer_customer_id" = ${randomUUID()}::uuid WHERE "id" = ${g.id}::uuid`,
+      ).rejects.toThrow(/only ever revoked/);
+      // Revoking and editing at once is still an edit.
+      await expect(
+        sql`UPDATE "portal_grants" SET "revoked_at" = now(), "revoked_by" = ${user.id}::uuid,
+              "revoke_reason" = 'x', "reason" = 'edited' WHERE "id" = ${g.id}::uuid`,
       ).rejects.toThrow(/never edited/);
       await expect(
         sql`INSERT INTO "portal_grant_hotels" ("grant_id", "hotel_id") VALUES (${g.id}::uuid, ${hotels[1]}::uuid)`,
@@ -443,6 +449,142 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       // A "replacement" of an active grant (not revoked in the same transaction) is refused.
       const live = await issue(user.id, [hotels[1]!]);
       await expect(insertGrant(user.id, live.id)).rejects.toThrow(/replaces only its own/);
+    });
+
+    it('a committed grant is never extended by SQL as the runtime role (review 5817695791 P1)', async () => {
+      // This runs as the application's own role, not the owner.
+      const [role] = await t.prisma.$queryRaw<{ rolsuper: boolean; rolbypassrls: boolean }[]>`
+        SELECT "rolsuper", "rolbypassrls" FROM pg_roles WHERE "rolname" = current_user`;
+      expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+      const user = await portalAccount();
+      const g = await issue(user.id, [hotels[0]!]);
+      const scope = () =>
+        t.prisma.portalGrantHotel.findMany({ where: { grantId: g.id }, select: { hotelId: true } });
+      // The reproduction: a no-op UPDATE (new row version of this transaction), then a late hotel —
+      // each committed on its own, and both in one transaction.
+      await expect(
+        t.prisma
+          .$executeRaw`UPDATE "portal_grants" SET "reason" = "reason" WHERE "id" = ${g.id}::uuid`,
+      ).rejects.toThrow(/only ever revoked/);
+      await expect(
+        t.prisma
+          .$executeRaw`INSERT INTO "portal_grant_hotels" ("grant_id", "hotel_id") VALUES (${g.id}::uuid, ${hotels[1]}::uuid)`,
+      ).rejects.toThrow(/written with the grant/);
+      await expect(
+        t.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`UPDATE "portal_grants" SET "reason" = "reason" WHERE "id" = ${g.id}::uuid`;
+          await tx.$executeRaw`INSERT INTO "portal_grant_hotels" ("grant_id", "hotel_id") VALUES (${g.id}::uuid, ${hotels[1]}::uuid)`;
+        }),
+      ).rejects.toThrow(/only ever revoked/);
+      // A row lock alone does not make the grant the transaction's own either.
+      await expect(
+        t.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT 1 FROM "portal_grants" WHERE "id" = ${g.id}::uuid FOR UPDATE`;
+          await tx.$executeRaw`INSERT INTO "portal_grant_hotels" ("grant_id", "hotel_id") VALUES (${g.id}::uuid, ${hotels[1]}::uuid)`;
+        }),
+      ).rejects.toThrow(/written with the grant/);
+      expect(await scope()).toEqual([{ hotelId: hotels[0] }]);
+      const row = await t.prisma.portalGrant.findUniqueOrThrow({ where: { id: g.id } });
+      expect([row.revokedAt, row.reason]).toEqual([null, 'synthetic portal grant']);
+    });
+  });
+
+  describe('requestId: a retry gets the same result, written once', () => {
+    it('issue: the same request again → the same grant, one row, one audit event; another meaning → IDEMPOTENCY_CONFLICT', async () => {
+      const user = await portalAccount();
+      const payload = { userId: user.id, ...body([hotels[0]!, hotels[1]!]) };
+      const first = await contract('portal-grants').send(payload);
+      expect(first.status).toBe(201);
+      // The same meaning (hotel order does not matter) after a lost answer.
+      const again = await contract('portal-grants').send({
+        ...payload,
+        hotelIds: [hotels[1]!, hotels[0]!],
+        financeCheck: { ...payload.financeCheck, hotelIds: [hotels[1]!, hotels[0]!] },
+      });
+      expect([again.status, again.body]).toEqual([201, first.body]);
+      expect(await written(user.id)).toEqual({ grants: 1, audit: 1 });
+      // The same id with another scope, another account or as a replacement → refused.
+      for (const other of [
+        {
+          ...payload,
+          ...body([hotels[2]!], payload.payerCustomerId),
+          requestId: payload.requestId,
+        },
+        { ...payload, userId: (await portalAccount()).id },
+      ]) {
+        const res = await contract('portal-grants').send(other);
+        expect([res.status, res.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+      }
+      const asReplace = await contract(`portal-grants/${first.body.id}/replace`).send({
+        ...body([hotels[2]!], payload.payerCustomerId),
+        requestId: payload.requestId,
+      });
+      expect([asReplace.status, asReplace.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+      // …and by another administrator.
+      const other = await prepareInvitedUser(t, { email: unique('admin-2'), displayName: 'A2' });
+      await t.prisma.userRole.create({
+        data: { userId: other.id, roleCode: 'ADMIN', grantReason: 'second administrator' },
+      });
+      const byOther = await contract('portal-grants', await sessionCookie(t, other.email)).send(
+        payload,
+      );
+      expect([byOther.status, byOther.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
+      expect(await written(user.id)).toEqual({ grants: 1, audit: 1 });
+    });
+
+    it('replace: the same request again → the same successor, replaced once; two at once → one write', async () => {
+      const user = await portalAccount();
+      const old = await issue(user.id, [hotels[0]!]);
+      const payload = body([hotels[0]!, hotels[1]!], old.payerCustomerId);
+      const [a, b] = await Promise.all([
+        contract(`portal-grants/${old.id}/replace`).send(payload),
+        contract(`portal-grants/${old.id}/replace`).send(payload),
+      ]);
+      expect([a.status, b.status]).toEqual([201, 201]);
+      expect(b.body).toEqual(a.body);
+      const again = await contract(`portal-grants/${old.id}/replace`).send(payload);
+      expect([again.status, again.body]).toEqual([201, a.body]);
+      expect(await written(user.id)).toEqual({ grants: 2, audit: 2 });
+      expect((await active(user.id)).map((g) => g.id)).toEqual([a.body.id]);
+    });
+  });
+
+  describe('a replacement that fails after revoking the old grant', () => {
+    it('rolls back whole: the old grant and its hotels stay active, no successor, no audit, no request', async () => {
+      const marker = `forced failure ${randomUUID()}`;
+      // A failure injected into the successor's insert — after the old grant's revocation.
+      await withPrivileged(async (db) => {
+        await db.$executeRawUnsafe(`
+          CREATE FUNCTION test_portal_grant_fail() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN RAISE EXCEPTION 'test: forced failure after the revocation'; END $$`);
+        await db.$executeRawUnsafe(`
+          CREATE TRIGGER "test_portal_grant_fail" AFTER INSERT ON "portal_grants"
+            FOR EACH ROW WHEN (NEW."reason" = '${marker}') EXECUTE FUNCTION test_portal_grant_fail()`);
+      });
+      try {
+        const user = await portalAccount();
+        const old = await issue(user.id, [hotels[0]!]);
+        const before = await written(user.id);
+        const payload = { ...body([hotels[1]!], old.payerCustomerId), reason: marker };
+        const res = await contract(`portal-grants/${old.id}/replace`).send(payload);
+        expect(res.status).toBe(500);
+        const grant = await t.prisma.portalGrant.findUniqueOrThrow({
+          where: { id: old.id },
+          include: { hotels: true, replacedBy: true },
+        });
+        expect([grant.revokedAt, grant.revokeReason, grant.replacedBy]).toEqual([null, null, null]);
+        expect(grant.hotels.map((h) => h.hotelId)).toEqual([hotels[0]]);
+        expect((await active(user.id)).map((g) => g.id)).toEqual([old.id]);
+        expect(await written(user.id)).toEqual(before);
+        expect(
+          await t.prisma.operationRequest.count({ where: { requestId: payload.requestId } }),
+        ).toBe(0);
+      } finally {
+        await withPrivileged(async (db) => {
+          await db.$executeRawUnsafe(`DROP TRIGGER "test_portal_grant_fail" ON "portal_grants"`);
+          await db.$executeRawUnsafe(`DROP FUNCTION test_portal_grant_fail()`);
+        });
+      }
     });
   });
 });
