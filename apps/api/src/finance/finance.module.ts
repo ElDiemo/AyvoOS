@@ -1,3 +1,5 @@
+import { FinancePortalGrantsController } from './portal-grants.controller.js';
+import { FinancePortalGrantsService } from './portal-grants.service.js';
 import { Module } from '@nestjs/common';
 import { MulterModule } from '@nestjs/platform-express';
 import { AccountingExportsService } from './accounting-exports.service.js';
@@ -48,8 +50,10 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     PaymentsController,
     BankController,
     FinanceHealthController,
+    FinancePortalGrantsController,
   ],
   providers: [
+    FinancePortalGrantsService,
     FinanceDocumentsService,
     AccountingExportsService,
     BillingSettingsService,
