@@ -1,0 +1,71 @@
+import Link from 'next/link';
+import type { PortalInvoicePage } from '@ayvo/types';
+import { Shell } from '@/components/shell';
+import { cs } from '@/i18n/cs';
+import { PortalUnavailable } from '@/lib/backend';
+import { portalEnv } from '@/lib/env';
+import { formatDate, formatMoney } from '@/lib/format';
+import { myInvoices, portalSession } from '@/lib/portal';
+
+export const dynamic = 'force-dynamic';
+
+/** "Faktury": the invoices the session's grants cover (Finance's one predicate), paged. */
+export default async function InvoicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const { token, view } = await portalSession();
+  const page = Math.max(1, Math.min(10_000, Number((await searchParams).page) || 1));
+  let list: PortalInvoicePage | null = null;
+  try {
+    list = await myInvoices(token, page);
+  } catch (error) {
+    // Finance down: only this section is unavailable; "Moje hotely" keeps working.
+    if (!(error instanceof PortalUnavailable)) throw error;
+  }
+  const pages = list ? Math.max(1, Math.ceil(list.total / list.pageSize)) : 1;
+  return (
+    <Shell user={view.user} active="invoices" testInvoices={portalEnv().APP_ENV !== 'production'}>
+      <h1 className="text-xl font-semibold">{cs.invoices.title}</h1>
+      {!list ? (
+        <p role="alert" className="text-sm text-amber-900" data-testid="invoices-unavailable">
+          {cs.invoices.unavailable}
+        </p>
+      ) : list.items.length === 0 ? (
+        <p className="text-sm text-stone-600">{cs.invoices.none}</p>
+      ) : (
+        <>
+          <ul className="flex flex-col gap-2" data-testid="portal-invoices">
+            {list.items.map((i) => (
+              <li key={i.id} className="rounded-md border border-stone-200 bg-white p-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <Link href={`/invoices/${i.id}`} className="font-medium underline">
+                    {i.number}
+                  </Link>
+                  <span className="text-sm font-medium">{formatMoney(i.total, i.currency)}</span>
+                </div>
+                <p className="text-sm text-stone-600">
+                  {i.kind === 'TEST' && (
+                    <span className="mr-2 rounded bg-amber-100 px-1 text-xs font-semibold text-amber-900">
+                      {cs.invoices.test}
+                    </span>
+                  )}
+                  {formatDate(i.issuedOn)} · {i.hotels.map((h) => h.name).join(', ')} ·{' '}
+                  {i.cancelled ? cs.invoices.cancelled : cs.invoices.states[i.paymentState]}
+                </p>
+              </li>
+            ))}
+          </ul>
+          {pages > 1 && (
+            <nav className="flex items-center gap-3 text-sm">
+              {page > 1 && <Link href={`/invoices?page=${page - 1}`}>{cs.invoices.previous}</Link>}
+              <span>{cs.invoices.page(page, pages)}</span>
+              {page < pages && <Link href={`/invoices?page=${page + 1}`}>{cs.invoices.next}</Link>}
+            </nav>
+          )}
+        </>
+      )}
+    </Shell>
+  );
+}
