@@ -1,10 +1,13 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Secret, TOTP } from 'otpauth';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { InvitationsService } from '../src/identity/invitations.service.js';
-import { NativeTokensService } from '../src/identity/native-tokens.service.js';
+import type { NativePasswords } from '../src/identity/native-credentials.js';
+import type { NativeAuthService } from '../src/identity/native-auth.service.js';
+import { NATIVE_PASSWORDS, NativeTokensService } from '../src/identity/native-tokens.service.js';
 import { PortalRequestLimit } from '../src/portal/portal-request-limit.js';
+import { PORTAL_NATIVE_AUTH, PORTAL_PASSWORDS } from '../src/portal/portal-tokens.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
 import { createHotel } from './support/order-fixtures.js';
 import {
@@ -42,7 +45,13 @@ const portalEnv = {
   PORTAL_PUBLIC_ORIGIN: PORTAL_ORIGIN,
   PORTAL_SERVICE_TOKEN_SHA256: sha(portalToken),
   FINANCE_SERVICE_TOKEN_SHA256: sha(financeToken),
+  // Bounded portal database work, short enough for the tests.
+  PORTAL_DB_ACQUIRE_TIMEOUT_MS: '1500',
+  PORTAL_DB_STATEMENT_TIMEOUT_MS: '2500',
 };
+/** A client IP no other test (or earlier run in the shared Redis) has used. */
+const freshIp = () =>
+  `198.18.${Math.floor(Math.random() * 256)}.${1 + Math.floor(Math.random() * 254)}`;
 
 /**
  * The core's hotel portal contract (ADR 0045 §3, §6, §8 on `0d500f6`, PR 3): portal-web's token
@@ -458,61 +467,174 @@ describe.skipIf(!hasDatabase)('hotel portal contract', () => {
     });
   });
 
-  describe('reserved pool and request limit (ADR §8)', () => {
-    it('held portal requests use only the portal pool and slots; the rest 503 at once; staff work is unaffected; nothing leaks', async () => {
+  describe('the MFA step refuses before any database work', () => {
+    it('a foreign origin or an exhausted IP limit never looks the challenge up', async () => {
+      const lookups = vi.spyOn(
+        t.app.get<NativeAuthService>(PORTAL_NATIVE_AUTH),
+        'challengeAccount',
+      );
+      try {
+        const res = await post('auth/mfa').send({
+          challenge: 'x'.repeat(43),
+          code: '123456',
+          client: client({ origin: 'https://evil.example' }),
+        });
+        expect([res.status, res.body.code]).toEqual([403, 'CSRF_REJECTED']);
+        expect(lookups).not.toHaveBeenCalled();
+      } finally {
+        lookups.mockRestore();
+      }
+      const limited = await createTestApp(
+        { ...portalEnv, AUTH_RATE_LIMIT_LOGIN_MAX: '2' },
+        {},
+        { auth: 'real', redis: 'real' },
+      );
+      const spy = vi.spyOn(
+        limited.app.get<NativeAuthService>(PORTAL_NATIVE_AUTH),
+        'challengeAccount',
+      );
+      try {
+        const ip = freshIp();
+        const statuses: number[] = [];
+        for (let i = 0; i < 4; i++) {
+          const res = await request(limited.app.getHttpServer())
+            .post('/api/internal/v1/portal/auth/mfa')
+            .set('Authorization', `Bearer ${portalToken}`)
+            .send({ challenge: 'y'.repeat(43), code: '123456', client: client({ ip }) });
+          statuses.push(res.status);
+        }
+        expect(statuses).toEqual([401, 401, 429, 429]);
+        // Only the two requests within the IP limit reached the lookup.
+        expect(spy).toHaveBeenCalledTimes(2);
+      } finally {
+        spy.mockRestore();
+        await limited.close();
+      }
+    });
+  });
+
+  describe('Argon2 capacity: the portal has its own', () => {
+    /** Occupies n of an instance's Argon2 slots until released (as running computations would). */
+    const occupy = (pw: NativePasswords, n: number) => {
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      const running = Array.from({ length: n }, () =>
+        (pw as unknown as { work: (op: () => Promise<void>) => Promise<void> }).work(() => held),
+      );
+      return async () => {
+        release();
+        await Promise.all(running);
+      };
+    };
+
+    it('a saturated portal never refuses a staff sign-in, and the reverse; peak memory is bounded', async () => {
+      const portalPw = t.app.get<NativePasswords>(PORTAL_PASSWORDS);
+      const staffPw = t.app.get<NativePasswords>(NATIVE_PASSWORDS);
+      expect(portalPw).not.toBe(staffPw);
+      const capacity = (pw: NativePasswords) =>
+        (pw as unknown as { concurrency: number }).concurrency;
+      // Peak Argon2 memory of one API process: (2 + 1) × 64 MiB = 192 MiB.
+      expect([capacity(staffPw), capacity(portalPw)]).toEqual([2, 1]);
+
+      const staff = await staffSession();
+      const staffStep = () =>
+        core()
+          .post('/api/auth/native/password')
+          .set('Origin', TEST_APP_ORIGIN)
+          .send({ email: staff.user.email, password: PASSWORD, next: '/' });
+      const portalStep = () =>
+        post('auth/password').send({
+          email: unique('nobody'),
+          password: PASSWORD,
+          client: client({ ip: freshIp() }),
+        });
+
+      // The portal's capacity is taken: portal sign-in 503, staff sign-in goes on.
+      let release = occupy(portalPw, 1);
+      try {
+        const [p, s] = await Promise.all([portalStep(), staffStep()]);
+        expect([p.status, p.body.code]).toEqual([503, 'AUTH_UNAVAILABLE']);
+        expect([s.status, s.body.step]).toEqual([200, 'MFA']);
+      } finally {
+        await release();
+      }
+      // The internal OS's capacity is taken: staff 503, the portal still verifies (401 unknown).
+      release = occupy(staffPw, 2);
+      try {
+        const [p, s] = await Promise.all([portalStep(), staffStep()]);
+        expect([p.status, p.body.code]).toEqual([401, 'INVALID_LOGIN']);
+        expect([s.status, s.body.code]).toEqual([503, 'AUTH_UNAVAILABLE']);
+      } finally {
+        await release();
+      }
+      // Real concurrent load on the portal: every staff sign-in in the middle of it succeeds.
+      const burst = Array.from({ length: 6 }, () => Promise.resolve(portalStep()));
+      const staffDuring = await Promise.all([staffStep(), staffStep()]);
+      expect(staffDuring.map((r) => r.status)).toEqual([200, 200]);
+      const portalStatuses = (await Promise.all(burst)).map((r) => r.status);
+      expect(portalStatuses.every((st) => st === 401 || st === 503)).toBe(true);
+    });
+  });
+
+  describe('reserved pool, bounded database work and the request limit (ADR §8)', () => {
+    it('with a lock held throughout: only the portal pool waits, the rest 503 at once, all end 503 without data in time, slots and connections free while the lock stays; staff unaffected', async () => {
       const { user, session } = await activated();
       await grant(user.id, [hotels[0]!]);
       const staffCookie = (await staffSession()).cookie;
       const limit = t.app.get(PortalRequestLimit);
       expect(limit.inFlight).toBe(0);
 
-      // Every portal read of the grants waits behind this lock.
+      // Every portal read of the grants waits behind this lock, which is held to the very end.
       const lock = await holding((tx) =>
         tx.$executeRawUnsafe(`LOCK TABLE "portal_grants" IN ACCESS EXCLUSIVE MODE`),
       );
-      let held: Promise<request.Response>[] = [];
       try {
-        held = Array.from({ length: 8 }, () => Promise.resolve(get('session', session)));
+        const started = Date.now();
+        const held = Array.from({ length: 8 }, () => Promise.resolve(get('session', session)));
         // Only the portal pool's 2 connections reach the database and wait there.
         expect(await waiters(2, true)).toBe(2);
         for (let i = 0; i < 20 && limit.inFlight < 8; i++)
           await new Promise((r) => setTimeout(r, 25));
         expect(limit.inFlight).toBe(8);
         // Further portal requests: 503 at once.
-        const started = Date.now();
         const busy = await Promise.all([get('session', session), get('hotels', session)]);
         expect(busy.map((r) => [r.status, r.body.code])).toEqual([
           [503, 'PORTAL_BUSY'],
           [503, 'PORTAL_BUSY'],
         ]);
-        expect(Date.now() - started).toBeLessThan(1000);
         // Staff work on the core completes meanwhile, on its own pool.
         const before = Date.now();
         const me = await core().get('/api/auth/me').set('Cookie', staffCookie);
         expect(me.status).toBe(200);
-        expect(Date.now() - before).toBeLessThan(2000);
-      } finally {
-        await lock.release();
-      }
-      const answers = await Promise.all(held);
-      expect(answers.map((r) => r.status)).toEqual(Array(8).fill(200));
-      expect(limit.inFlight).toBe(0);
+        expect(Date.now() - before).toBeLessThan(1000);
+        // The held requests end by themselves — the lock is still held: 503, no data.
+        const answers = await Promise.all(held);
+        expect(Date.now() - started).toBeLessThan(2500 + 1500 + 1500);
+        for (const a of answers) {
+          expect(a.status).toBe(503);
+          expect(a.body.code).toBe('PORTAL_UNAVAILABLE');
+          expect(Object.keys(a.body).sort()).toEqual(['code', 'message', 'statusCode']);
+        }
+        expect(limit.inFlight).toBe(0);
+        expect(await waiters(0, true)).toBe(0);
 
-      // Aborted portal requests (the client gives up while they wait) leak no slot.
-      const again = await holding((tx) =>
-        tx.$executeRawUnsafe(`LOCK TABLE "portal_grants" IN ACCESS EXCLUSIVE MODE`),
-      );
-      try {
+        // Aborted portal requests (the client gives up while they wait) free their slots and
+        // connections in time too — still with the lock held.
         const aborted = Array.from({ length: 8 }, () =>
           Promise.resolve(get('session', session).timeout(150)).catch(() => 'aborted'),
         );
         expect(await Promise.all(aborted)).toEqual(Array(8).fill('aborted'));
+        const abortedAt = Date.now();
+        for (let i = 0; i < 400 && limit.inFlight > 0; i++)
+          await new Promise((r) => setTimeout(r, 25));
+        expect(limit.inFlight).toBe(0);
+        expect(Date.now() - abortedAt).toBeLessThan(2500 + 1500 + 1000);
+        expect(await waiters(0, true)).toBe(0);
+        // A staff operation in parallel with the stuck portal.
+        expect((await core().get('/api/auth/me').set('Cookie', staffCookie)).status).toBe(200);
       } finally {
-        await again.release();
+        await lock.release();
       }
-      for (let i = 0; i < 100 && limit.inFlight > 0; i++)
-        await new Promise((r) => setTimeout(r, 25));
-      expect(limit.inFlight).toBe(0);
       const after = await Promise.all(
         Array.from({ length: 8 }, () => Promise.resolve(get('session', session))),
       );
