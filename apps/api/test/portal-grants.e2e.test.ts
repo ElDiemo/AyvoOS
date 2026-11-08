@@ -8,6 +8,7 @@ import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './supp
 
 const unique = (p: string) => `${p}-${randomUUID().slice(0, 8)}@ayvo.test`;
 const tokenOf = (cookie: string) => cookie.replace(/^ayvo_session=/, '');
+const ADMIN_REASONS = ['portal grants test', 'second administrator'];
 
 /**
  * Hotel portal grants (ADR 0045 §4 on `0d500f6`, PR 2): issued and replaced only through
@@ -141,6 +142,11 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       hotels.push((await createHotel(su, { name })).id);
   });
   afterAll(async () => {
+    // Other test files bootstrap the first ADMIN: leave no open ADMIN grant behind.
+    await t?.prisma.userRole.updateMany({
+      where: { roleCode: 'ADMIN', revokedAt: null, grantReason: { in: ADMIN_REASONS } },
+      data: { revokedAt: new Date(), revokeReason: 'end of test' },
+    });
     await t?.close();
     await su?.close();
   });
