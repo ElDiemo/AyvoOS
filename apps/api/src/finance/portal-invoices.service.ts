@@ -116,34 +116,30 @@ export class FinancePortalInvoicesService {
 
   /**
    * The stored PDF of a visible invoice. The predicate runs on the portal pool and its connection
-   * is free again before the file is read; the file is read within the time limit, at most the size
-   * limit, and its SHA-256 must be the one recorded at issue (else 503, nothing sent).
+   * is free again before the file is read. The read is real bounded work: `signal` (the request's
+   * deadline, or the client gone) stops it in the storage itself, bytes are counted as they arrive
+   * and the read stops beyond the size limit, and it settles only once the storage resource is
+   * released. The SHA-256 must be the one recorded at issue. Any failure → 503, nothing sent.
    */
-  async pdf(scope: PortalIntrospection, id: string): Promise<{ number: string; bytes: Buffer }> {
+  async pdf(
+    scope: PortalIntrospection,
+    id: string,
+    signal: AbortSignal,
+  ): Promise<{ number: string; bytes: Buffer }> {
     if (scope.grants.length === 0) throw notFound();
     const [row] = await this.db.$queryRaw<
       { number: string; pdf_storage_key: string; pdf_sha256: string }[]
     >`SELECT i."number", i."pdf_storage_key", i."pdf_sha256" FROM "finance"."invoices" i
       WHERE ${this.where(scope)} AND i."id" = ${id}::uuid`;
     if (!row) throw notFound();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error('PortalPdfTimeout')),
-        this.env.FINANCE_PORTAL_PDF_TIMEOUT_MS,
-      );
-    });
     let bytes: Buffer;
     try {
-      bytes = await Promise.race([this.storage.get(row.pdf_storage_key), timeout]);
+      bytes = await this.storage.getBounded(row.pdf_storage_key, {
+        signal,
+        maxBytes: this.env.FINANCE_PORTAL_PDF_MAX_BYTES,
+      });
     } catch (error) {
-      this.logger.warn(`Portal PDF not read: ${(error as Error).message}`);
-      throw unavailable();
-    } finally {
-      clearTimeout(timer);
-    }
-    if (bytes.length > this.env.FINANCE_PORTAL_PDF_MAX_BYTES) {
-      this.logger.error('Portal PDF over the size limit');
+      this.logger.warn(`Portal PDF not read: ${(error as Error).name}`);
       throw unavailable();
     }
     if (createHash('sha256').update(bytes).digest('hex') !== row.pdf_sha256) {

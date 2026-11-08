@@ -14,7 +14,9 @@ import type { Env } from '../config/env.js';
 import {
   STORAGE_KEY_PATTERN,
   StorageObjectAlreadyExistsError,
+  collectBounded,
   StorageObjectNotFoundError,
+  StorageObjectTooLargeError,
   StorageUnavailableError,
   type FileStorage,
 } from './file-storage.js';
@@ -135,6 +137,44 @@ export class S3FileStorage implements FileStorage {
       }
       return bytes;
     } catch {
+      throw new StorageUnavailableError();
+    }
+  }
+
+  async getBounded(
+    key: string,
+    options: { signal: AbortSignal; maxBytes: number },
+  ): Promise<Buffer> {
+    this.validateKey(key);
+    const signal = AbortSignal.any([options.signal, AbortSignal.timeout(DEADLINE_MS)]);
+    let response;
+    try {
+      response = await this.client.send(new GetObjectCommand({ ...this.target(), Key: key }), {
+        abortSignal: signal,
+      });
+    } catch (error) {
+      if (httpStatus(error) === 404 && errorName(error) === 'NoSuchKey')
+        throw new StorageObjectNotFoundError();
+      throw new StorageUnavailableError();
+    }
+    const body = response.Body as
+      (AsyncIterable<Uint8Array> & { destroy(error?: Error): unknown }) | undefined;
+    try {
+      if (!body || typeof body.destroy !== 'function') throw new StorageUnavailableError();
+      // Refused before the body is read when the object is already known to be too large.
+      if ((response.ContentLength ?? 0) > options.maxBytes) throw new StorageObjectTooLargeError();
+      const bytes = await collectBounded(body, { signal, maxBytes: options.maxBytes });
+      const expectedHash = response.Metadata?.sha256;
+      if (
+        !expectedHash ||
+        !/^[a-f0-9]{64}$/.test(expectedHash) ||
+        createHash('sha256').update(bytes).digest('hex') !== expectedHash
+      )
+        throw new StorageUnavailableError();
+      return bytes;
+    } catch (error) {
+      body?.destroy?.();
+      if (error instanceof StorageObjectTooLargeError) throw error;
       throw new StorageUnavailableError();
     }
   }

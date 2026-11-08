@@ -17,7 +17,6 @@ import {
   ParseUUIDPipe,
   Query,
   Res,
-  StreamableFile,
 } from '@nestjs/common';
 import type { ServerResponse } from 'node:http';
 import { domainError } from '../common/domain-error.js';
@@ -75,6 +74,7 @@ export class FinancePortalInvoicesController {
     private readonly invoices: FinancePortalInvoicesService,
     private readonly core: CoreClient,
     private readonly slots: FinancePortalRequestLimit,
+    @Inject(FINANCE_ENV) private readonly env: FinanceEnv,
   ) {}
 
   private async scope(session: string | undefined) {
@@ -100,23 +100,53 @@ export class FinancePortalInvoicesController {
     return this.slots.run(async () => this.invoices.detail(await this.scope(session), id));
   }
 
-  /** The issued PDF: private, never cached, always a download, never sniffed. */
+  /**
+   * The issued PDF: private, never cached, always a download, never sniffed. Its request slot is
+   * held until the bytes have left — the response finished, the client gone, or the deadline
+   * passed (then the connection is cut) — so slow receivers can never hold more PDFs in memory
+   * than the request limit. One deadline (FINANCE_PORTAL_PDF_TIMEOUT_MS) covers reading and
+   * sending; the client leaving stops the read too.
+   */
   @PortalServiceAccess()
   @Get(':id/pdf')
   pdf(
     @Param('id', ParseUUIDPipe) id: string,
     @Headers(PORTAL_SESSION_HEADER) session: string | undefined,
-    @Res({ passthrough: true }) res: ServerResponse,
-  ): Promise<StreamableFile> {
+    @Res() res: ServerResponse,
+  ): Promise<void> {
     return this.slots.run(async () => {
-      const file = await this.invoices.pdf(await this.scope(session), id);
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      return new StreamableFile(file.bytes, {
-        type: 'application/pdf',
-        disposition: `attachment; filename="${file.number.replace(/[^A-Za-z0-9_-]/g, '_')}.pdf"`,
-        length: file.bytes.length,
-      });
+      const stop = new AbortController();
+      const deadline = setTimeout(
+        () => stop.abort(new Error('PortalPdfDeadline')),
+        this.env.FINANCE_PORTAL_PDF_TIMEOUT_MS,
+      );
+      const gone = () => {
+        if (!res.writableFinished) stop.abort(new Error('PortalPdfClientGone'));
+      };
+      res.once('close', gone);
+      try {
+        const file = await this.invoices.pdf(await this.scope(session), id, stop.signal);
+        if (stop.signal.aborted) throw stop.signal.reason;
+        if (res.destroyed) return;
+        await new Promise<void>((resolve) => {
+          const done = () => resolve();
+          res.once('finish', done);
+          res.once('close', done);
+          // The deadline also bounds the sending: a receiver too slow is cut off.
+          stop.signal.addEventListener('abort', () => res.destroy(), { once: true });
+          res.writeHead(200, {
+            'Content-Type': 'application/pdf',
+            'Content-Length': String(file.bytes.length),
+            'Content-Disposition': `attachment; filename="${file.number.replace(/[^A-Za-z0-9_-]/g, '_')}.pdf"`,
+            'Cache-Control': 'private, no-store',
+            'X-Content-Type-Options': 'nosniff',
+          });
+          res.end(file.bytes);
+        });
+      } finally {
+        clearTimeout(deadline);
+        res.off('close', gone);
+      }
     });
   }
 }

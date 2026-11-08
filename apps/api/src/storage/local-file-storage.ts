@@ -1,9 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { link, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
 import { dirname, resolve, sep } from 'node:path';
 import {
+  collectBounded,
   STORAGE_KEY_PATTERN,
   StorageObjectNotFoundError,
+  StorageObjectTooLargeError,
   type FileStorage,
 } from './file-storage.js';
 
@@ -40,6 +44,29 @@ export class LocalFileStorage implements FileStorage {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT')
         throw new StorageObjectNotFoundError();
       throw error;
+    }
+  }
+
+  async getBounded(
+    key: string,
+    options: { signal: AbortSignal; maxBytes: number },
+  ): Promise<Buffer> {
+    const path = this.pathFor(key);
+    try {
+      // Refused before a byte is read when the file is already known to be too large.
+      if ((await stat(path)).size > options.maxBytes) throw new StorageObjectTooLargeError();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        throw new StorageObjectNotFoundError();
+      throw error;
+    }
+    const stream = createReadStream(path);
+    const closed = once(stream, 'close').catch(() => undefined);
+    try {
+      return await collectBounded(stream, options);
+    } finally {
+      stream.destroy();
+      await closed;
     }
   }
 
