@@ -1134,6 +1134,8 @@ model User {
   deactivatedBy        String?                  @map("deactivated_by") @db.Uuid
   deactivationReason   String?                  @map("deactivation_reason")
   lastLoginAt          DateTime?                @map("last_login_at") @db.Timestamptz(3)
+  /// STAFF (the internal OS) or PORTAL (the hotel portal); set at creation, never changed (DB).
+  audience             AccountAudience          @default(STAFF)
 
   createdByUser             User?                     @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   createdUsers              User[]                    @relation("UserCreatedBy")
@@ -1292,6 +1294,8 @@ model NativeAuthToken {
   deliveryAttempts   Int                   @default(0) @map("delivery_attempts")
   nextDeliveryAt     DateTime              @default(now()) @map("next_delivery_at") @db.Timestamptz(3)
   deliveryLeaseUntil DateTime?             @map("delivery_lease_until") @db.Timestamptz(3)
+  /// The user's audience (DB); the link's origin follows it.
+  audience           AccountAudience       @default(STAFF)
   user               User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
   challenges         NativeAuthChallenge[]
 
@@ -1316,6 +1320,8 @@ model NativeAuthChallenge {
   expiresAt          DateTime         @map("expires_at") @db.Timestamptz(3)
   attempts           Int              @default(0)
   usedAt             DateTime?        @map("used_at") @db.Timestamptz(3)
+  /// The user's audience (DB): a pre-session step is completed only on its own side.
+  audience           AccountAudience  @default(STAFF)
   user               User             @relation(fields: [userId], references: [id], onDelete: Restrict)
   action             NativeAuthToken? @relation(fields: [actionId], references: [id], onDelete: Restrict)
 
@@ -1340,20 +1346,29 @@ model NativeRecoveryCode {
 /// Roles. System roles (is_system) are seeded and change only by migration; custom roles are
 /// created by ADMIN (doc 021 §7a). DB: never deleted; code, id and is_system immutable; a role
 /// with open grants cannot be deactivated; an inactive role cannot be granted.
+/// Who an account, role, session or sign-in step is for (ADR 0045 §2): the internal OS or the hotel
+/// portal. Never mixed, never changed (DB).
+enum AccountAudience {
+  STAFF
+  PORTAL
+}
+
 model Role {
-  code          String    @id
+  code          String          @id
   /// Stable identifier (the code is the human-readable key).
-  id            String    @unique @default(dbgenerated("uuidv7()")) @db.Uuid
+  id            String          @unique @default(dbgenerated("uuidv7()")) @db.Uuid
   /// Czech display name.
   name          String
   description   String
-  isSystem      Boolean   @default(false) @map("is_system")
-  active        Boolean   @default(true)
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  createdBy     String?   @map("created_by") @db.Uuid
-  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
-  updatedBy     String?   @map("updated_by") @db.Uuid
-  deactivatedAt DateTime? @map("deactivated_at") @db.Timestamptz(3)
+  isSystem      Boolean         @default(false) @map("is_system")
+  active        Boolean         @default(true)
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdBy     String?         @map("created_by") @db.Uuid
+  updatedAt     DateTime        @default(now()) @map("updated_at") @db.Timestamptz(3)
+  updatedBy     String?         @map("updated_by") @db.Uuid
+  deactivatedAt DateTime?       @map("deactivated_at") @db.Timestamptz(3)
+  /// HOTEL_USER is PORTAL; every other system role and every custom role is STAFF (DB).
+  audience      AccountAudience @default(STAFF)
 
   permissions   RolePermission[]
   grants        UserRole[]
@@ -1453,20 +1468,22 @@ model UserScope {
 /// An AYVO application session. Only the SHA-256 of the random cookie token is stored.
 /// DB: token hash unique; revocation closes once.
 model UserSession {
-  id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  tokenSha256       String    @unique @map("token_sha256") @db.Char(64)
-  userId            String    @map("user_id") @db.Uuid
-  identityId        String    @map("identity_id") @db.Uuid
+  id                String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  tokenSha256       String          @unique @map("token_sha256") @db.Char(64)
+  userId            String          @map("user_id") @db.Uuid
+  identityId        String          @map("identity_id") @db.Uuid
   /// The provider's session id (for provider logout); never a credential.
-  providerSessionId String?   @map("provider_session_id")
-  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
-  idleExpiresAt     DateTime  @map("idle_expires_at") @db.Timestamptz(3)
-  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
-  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
-  revokeReason      String?   @map("revoke_reason")
+  providerSessionId String?         @map("provider_session_id")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime        @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  idleExpiresAt     DateTime        @map("idle_expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt DateTime        @map("absolute_expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime?       @map("revoked_at") @db.Timestamptz(3)
+  revokeReason      String?         @map("revoke_reason")
   /// The site the user works at in this session (validated against the scopes on every request).
-  activeSiteId      String?   @map("active_site_id") @db.Uuid
+  activeSiteId      String?         @map("active_site_id") @db.Uuid
+  /// The user's audience (DB): a STAFF session never works on the portal, a PORTAL one never here.
+  audience          AccountAudience @default(STAFF)
 
   user       User         @relation(fields: [userId], references: [id], onDelete: Restrict)
   identity   UserIdentity @relation(fields: [identityId], references: [id], onDelete: Restrict)

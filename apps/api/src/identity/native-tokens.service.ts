@@ -10,7 +10,8 @@ import type SMTPTransport from 'nodemailer/lib/smtp-transport/index.js';
 import { GOOGLE_SMTP_RELAY } from '../common/google-smtp-relay.js';
 import { ENV, type Env } from '../config/env.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { domainError } from '../common/domain-error.js';
+import type { AccountAudience, Prisma } from '../generated/prisma/client.js';
 import { randomToken } from './crypto.js';
 import { ayvoLogoAttachment, renderAuthMail } from './mail/auth-mail.js';
 import {
@@ -100,6 +101,17 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
     this.smtp?.close();
   }
 
+  /**
+   * Where a link of this audience points (ADR 0045 §2): the configured origin of that side, never
+   * one taken from a request. Without a configured portal origin no portal link is issued.
+   */
+  private linkOrigin(audience: AccountAudience): string {
+    if (audience === 'STAFF') return this.env.APP_PUBLIC_ORIGIN;
+    if (!this.env.PORTAL_PUBLIC_ORIGIN)
+      throw domainError(503, 'PORTAL_NOT_CONFIGURED', 'The hotel portal is not configured');
+    return this.env.PORTAL_PUBLIC_ORIGIN;
+  }
+
   async issue(
     tx: Prisma.TransactionClient,
     input: {
@@ -111,11 +123,17 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
   ) {
     const token = randomToken();
     const route = input.purpose === 'ENROLL' ? 'activate' : 'reset-password';
+    // The link and the token carry the user's audience (the database checks it).
+    const { audience } = await tx.user.findUniqueOrThrow({
+      where: { id: input.userId },
+      select: { audience: true },
+    });
     // Fragment is read/cleared by the client and sent only in POST JSON: no URL access log token.
-    const url = `${this.env.APP_PUBLIC_ORIGIN}/${route}#token=${token}`;
+    const url = `${this.linkOrigin(audience)}/${route}#token=${token}`;
     return tx.nativeAuthToken.create({
       data: {
         userId: input.userId,
+        audience,
         purpose: input.purpose,
         tokenSha256: nativeTokenHash(input.purpose, token)!,
         deliveryCiphertext: this.box.seal(input.userId, 'MAIL', url),
@@ -137,7 +155,7 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
         deliveryCiphertext: this.box.seal(
           row.userId,
           'MAIL',
-          `${this.env.APP_PUBLIC_ORIGIN}/${route}#token=${token}`,
+          `${this.linkOrigin(row.audience)}/${route}#token=${token}`,
         ),
         revision: { increment: 1 },
         claimedAt: null,

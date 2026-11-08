@@ -377,18 +377,17 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     expect(refused.status).toBe(403);
     expect(refused.body.code).toBe('SITE_REQUIRED');
 
-    // The hotel role grants nothing internal.
-    const hotel = await createUser(['HOTEL_USER']);
-    const hotelCookie = await session(hotel.email);
-    for (const path of [
-      '/api/admin/inventory/stock',
-      '/api/admin/inventory/stock-summary',
-      '/api/admin/goods-receipts',
-      '/api/admin/bottles',
-      '/api/admin/identity/users',
-    ]) {
-      expect((await http().get(path).set('Cookie', hotelCookie)).status, path).toBe(403);
-    }
+    // The hotel role grants nothing internal: it belongs only to a hotel portal (PORTAL) account
+    // (ADR 0045 §2), which never signs in to the internal OS at all — not even for a 403.
+    const hotel = await t.prisma.user.create({
+      data: { email: unique('hotel'), displayName: 'Hotel Test', audience: 'PORTAL' },
+    });
+    await t.prisma.userRole.create({
+      data: { userId: hotel.id, roleCode: 'HOTEL_USER', grantReason: 'hotel account (test)' },
+    });
+    const hotelSignIn = await signIn(hotel.email);
+    expect(String(hotelSignIn.headers['set-cookie'] ?? '')).not.toMatch(/ayvo_session=[^;]/);
+    expect(await t.prisma.userSession.count({ where: { userId: hotel.id } })).toBe(0);
   });
 
   it('the role catalogue in the database is exactly the approved matrix; ADMIN holds every permission', async () => {

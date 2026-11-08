@@ -20,6 +20,30 @@ export function labelQrSettings(
   };
 }
 
+const DEFAULT_APP_PUBLIC_ORIGIN = 'http://localhost:3000';
+
+/**
+ * Why a hotel portal origin is not acceptable, or null (ADR 0045 §7). It must be exactly a
+ * canonical HTTPS origin — scheme and host only, no user info, path, query or fragment, written
+ * as the browser writes the origin — on **another host** than the internal app: cookies are
+ * scoped to a host, not to a port, so the same host on another port would share them.
+ */
+export function portalOriginProblem(portal: string, app: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(portal);
+  } catch {
+    return 'PORTAL_PUBLIC_ORIGIN must be an https origin';
+  }
+  if (url.protocol !== 'https:') return 'PORTAL_PUBLIC_ORIGIN must use https';
+  if (url.username || url.password) return 'PORTAL_PUBLIC_ORIGIN must not contain user info';
+  if (url.pathname !== '/' || url.search || url.hash || portal !== url.origin)
+    return 'PORTAL_PUBLIC_ORIGIN must be a canonical origin (scheme and host only)';
+  if (url.hostname === new URL(app).hostname)
+    return 'PORTAL_PUBLIC_ORIGIN must be another host than APP_PUBLIC_ORIGIN (a port does not isolate cookies)';
+  return null;
+}
+
 /** An empty or whitespace-only variable counts as not set. */
 const blankAsUnset = (value: unknown) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
@@ -139,6 +163,10 @@ export const envSchema = z
       .url({ protocol: /^https?$/ })
       .refine((url) => new URL(url).pathname === '/' && !url.endsWith('/'), 'origin without path')
       .optional(),
+    // The hotel portal's own origin (ADR 0045 §7): links of PORTAL accounts point there, never to
+    // the internal app. Unset = no portal link is ever issued (fail closed). Checked against
+    // APP_PUBLIC_ORIGIN below (`portalOriginProblem`).
+    PORTAL_PUBLIC_ORIGIN: z.preprocess(blankAsUnset, z.string().optional()),
     // Local authentication everywhere; the legacy fixture provider exists only in tests.
     AUTH_PROVIDER: z.enum(['local', 'test']).optional(),
     AUTH_ENCRYPTION_KEY: z.preprocess(
@@ -331,6 +359,13 @@ export const envSchema = z
     if (production && !env.APP_PUBLIC_ORIGIN) {
       return fail('APP_PUBLIC_ORIGIN', 'APP_PUBLIC_ORIGIN is required in production');
     }
+    if (env.PORTAL_PUBLIC_ORIGIN !== undefined) {
+      const problem = portalOriginProblem(
+        env.PORTAL_PUBLIC_ORIGIN,
+        env.APP_PUBLIC_ORIGIN ?? DEFAULT_APP_PUBLIC_ORIGIN,
+      );
+      if (problem) return fail('PORTAL_PUBLIC_ORIGIN', problem);
+    }
     if (env.SESSION_IDLE_MINUTES > env.SESSION_ABSOLUTE_HOURS * 60) {
       return fail(
         'SESSION_IDLE_MINUTES',
@@ -383,7 +418,7 @@ export const envSchema = z
       AUTH_ENCRYPTION_KEY: env.AUTH_ENCRYPTION_KEY ?? '11'.repeat(32), // APP_ENV=test only above.
       AUTH_MAIL_DRIVER: mailDriver,
       AUTH_MAIL_FROM: env.AUTH_MAIL_FROM ?? 'noreply@ayvo.test',
-      APP_PUBLIC_ORIGIN: env.APP_PUBLIC_ORIGIN ?? 'http://localhost:3000',
+      APP_PUBLIC_ORIGIN: env.APP_PUBLIC_ORIGIN ?? DEFAULT_APP_PUBLIC_ORIGIN,
       PUBLIC_QR_BASE_URL: publicQrBaseUrl,
       ...labelQrSettings(env.APP_ENV, env.LABEL_QR_MIN_SIZE_MM, env.LABEL_QR_ERROR_CORRECTION),
     };
