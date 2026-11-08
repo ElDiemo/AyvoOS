@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { get as httpGet, type IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PortalInvoicePage } from '@ayvo/types';
@@ -85,6 +87,7 @@ describe.skipIf(!hasDatabase)('hotel portal invoices in Finance', () => {
         FINANCE_PORTAL_DB_ACQUIRE_TIMEOUT_MS: '500',
         FINANCE_PORTAL_DB_STATEMENT_TIMEOUT_MS: '1500',
         FINANCE_PORTAL_PDF_TIMEOUT_MS: '1000',
+        FINANCE_PORTAL_PDF_MAX_BYTES: String(32 * 1024 * 1024),
       },
     });
     actorId = (
@@ -379,6 +382,147 @@ describe.skipIf(!hasDatabase)('hotel portal invoices in Finance', () => {
         await release();
       }
       expect((await portal('', session)).status).toBe(200);
+    });
+  });
+
+  describe('the PDF is bounded work: reading and sending', () => {
+    const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    it('a slow bucket: every 503 is a stopped read — no read keeps running and no bytes arrive after it', async () => {
+      const { session } = await account([{ payer: payers.A, hotels: [h.H1] }]);
+      const slots = f.app.get(FinancePortalRequestLimit);
+      f.storage.virtualSizeBytes = 4 * 1024 * 1024; // 64 chunks…
+      f.storage.delayGetsMs = 200; // …far beyond the 1 s deadline
+      try {
+        for (let series = 0; series < 3; series++) {
+          const started = Date.now();
+          const answers = await Promise.all([
+            portal(`/${ids.A1}/pdf`, session),
+            portal(`/${ids.A1}/pdf`, session),
+          ]);
+          expect(answers.map((a) => [a.status, a.body.code])).toEqual([
+            [503, 'INVOICES_UNAVAILABLE'],
+            [503, 'INVOICES_UNAVAILABLE'],
+          ]);
+          expect(Date.now() - started).toBeLessThan(2000);
+          // The slots were released only after the reads had really stopped.
+          expect([slots.inFlight, f.storage.activeReads]).toEqual([0, 0]);
+          const read = f.storage.bytesRead;
+          await settle(500);
+          expect(f.storage.bytesRead).toBe(read);
+        }
+      } finally {
+        f.storage.virtualSizeBytes = 0;
+        f.storage.delayGetsMs = 0;
+      }
+    });
+
+    it('a huge object: the read stops at the size limit, never the whole object', async () => {
+      const { session } = await account([{ payer: payers.A, hotels: [h.H1] }]);
+      const before = f.storage.bytesRead;
+      f.storage.virtualSizeBytes = 200 * 1024 * 1024;
+      try {
+        const res = await portal(`/${ids.A1}/pdf`, session);
+        expect([res.status, res.body.code]).toEqual([503, 'INVOICES_UNAVAILABLE']);
+      } finally {
+        f.storage.virtualSizeBytes = 0;
+      }
+      const read = f.storage.bytesRead - before;
+      expect(read).toBeGreaterThan(32 * 1024 * 1024);
+      expect(read).toBeLessThanOrEqual(32 * 1024 * 1024 + 64 * 1024);
+      expect(f.storage.activeReads).toBe(0);
+    });
+
+    describe('a slow receiver', () => {
+      let big: string;
+      let url: (path: string) => URL;
+
+      beforeAll(async () => {
+        // A visible invoice whose stored PDF is large enough to fill the socket buffers.
+        const bytes = randomBytes(24 * 1024 * 1024);
+        const key = `finance-invoices/2026/11/${randomUUID()}.pdf`;
+        await f.storage.put(key, bytes);
+        big = randomUUID();
+        const digits = (n: number) =>
+          Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join('');
+        await withPrivileged((db) =>
+          db.$transaction(async (tx) => {
+            await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
+            await tx.$executeRawUnsafe(`
+              INSERT INTO "finance"."invoices" ("id", "serial", "kind", "number", "variable_symbol",
+                "customer_id", "customer_version", "period_month", "issued_on", "due_on", "currency",
+                "total", "snapshot", "pdf_storage_key", "pdf_sha256", "issued_by", "issued_by_name",
+                "request_id")
+              SELECT '${big}', "serial" + 200000, "kind", 'T9998-${digits(5)}', '8${digits(9)}',
+                "customer_id", "customer_version", "period_month", "issued_on", "due_on", "currency",
+                "total", "snapshot", '${key}', '${createHash('sha256').update(bytes).digest('hex')}',
+                "issued_by", "issued_by_name", '${randomUUID()}'
+              FROM "finance"."invoices" WHERE "id" = '${ids.A1}'`);
+            await tx.$executeRawUnsafe(`
+              INSERT INTO "finance"."invoice_lines"
+              SELECT '${big}', "line_no", "agreement_id", "agreement_revision", "period_month",
+                "hotel_id", "hotel_code", "hotel_name", "billed_rooms", "unit_price", "amount"
+              FROM "finance"."invoice_lines" WHERE "invoice_id" = '${ids.A1}'`);
+          }),
+        );
+        const server = f.app.getHttpServer();
+        if (!server.listening) await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+        const port = (server.address() as AddressInfo).port;
+        url = (path: string) => new URL(`http://127.0.0.1:${port}${P}${path}`);
+      });
+
+      /** A GET whose body is never read: the server cannot finish sending. */
+      const stalled = (session: string) =>
+        new Promise<{ res: IncomingMessage; destroy: () => void }>((resolve, reject) => {
+          const req = httpGet(
+            url(`/${big}/pdf`),
+            {
+              headers: {
+                authorization: `Bearer ${portalToken}`,
+                'x-ayvo-portal-session': session,
+              },
+            },
+            (res) => {
+              res.pause();
+              resolve({ res, destroy: () => req.destroy() });
+            },
+          );
+          req.on('error', () => undefined);
+          req.once('error', reject);
+        });
+      const waitFor = async (cond: () => boolean, ms: number) => {
+        const until = Date.now() + ms;
+        while (!cond() && Date.now() < until) await settle(20);
+        return cond();
+      };
+
+      it('its slot is held while the bytes wait, and freed when the client goes', async () => {
+        const { session } = await account([{ payer: payers.A, hotels: [h.H1] }]);
+        const slots = f.app.get(FinancePortalRequestLimit);
+        const a = await stalled(session);
+        expect(a.res.statusCode).toBe(200);
+        await settle(300);
+        expect(slots.inFlight).toBe(1);
+        a.destroy();
+        expect(await waitFor(() => slots.inFlight === 0, 500)).toBe(true);
+      });
+
+      it('two stalled receivers take both slots; a third PDF is refused at once; the deadline cuts them off', async () => {
+        const { session } = await account([{ payer: payers.A, hotels: [h.H1] }]);
+        const slots = f.app.get(FinancePortalRequestLimit);
+        const started = Date.now();
+        const [a, b] = await Promise.all([stalled(session), stalled(session)]);
+        expect(slots.inFlight).toBe(2);
+        const third = await portal(`/${ids.A1}/pdf`, session);
+        expect([third.status, third.body.code]).toEqual([503, 'PORTAL_BUSY']);
+        // The 1 s deadline covers the sending too: the server cuts both connections and frees
+        // the slots while the receivers still have not read a byte.
+        expect(await waitFor(() => slots.inFlight === 0, 2500)).toBe(true);
+        expect(Date.now() - started).toBeLessThan(2500);
+        a.destroy();
+        b.destroy();
+        expect((await portal(`/${ids.A1}/pdf`, session)).status).toBe(200);
+      });
     });
   });
 });
