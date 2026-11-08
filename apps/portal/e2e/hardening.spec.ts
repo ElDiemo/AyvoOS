@@ -115,6 +115,31 @@ test.describe('portal-web hardening (review 5818694161)', () => {
     );
   });
 
+  test('CSP: a request with prefetch headers still gets the nonce policy on its HTML (review 5818871541)', async ({
+    page,
+  }) => {
+    const variants: Record<string, string>[] = [
+      { purpose: 'prefetch' },
+      { 'next-router-prefetch': '1' },
+      { purpose: 'prefetch', 'sec-purpose': 'prefetch', 'next-router-prefetch': '1' },
+    ];
+    for (const path of ['/login', '/', '/invoices']) {
+      for (const headers of variants) {
+        const r = await page.request.get(path, { headers, maxRedirects: 0 });
+        const label = `${path} ${JSON.stringify(headers)} → ${r.status()}`;
+        const csp = r.headers()['content-security-policy'];
+        expect(csp, label).toContain("script-src 'self' 'nonce-");
+        expect(csp, label).not.toContain('unsafe-inline');
+        const nonce = /'nonce-([A-Za-z0-9+/=]+)'/.exec(csp!)?.[1];
+        if ((r.headers()['content-type'] ?? '').includes('text/html')) {
+          const scripts = (await r.text()).match(/<script\b[^>]*>/g) ?? [];
+          expect(scripts.length, label).toBeGreaterThan(0);
+          for (const tag of scripts) expect(tag, label).toContain(`nonce="${nonce}"`);
+        }
+      }
+    }
+  });
+
   test('CSP in the browser: activation, sign-in and the pages work with no violation', async ({
     page,
   }) => {
@@ -130,6 +155,13 @@ test.describe('portal-web hardening (review 5818694161)', () => {
     await page.getByRole('button', { name: 'Dokončit aktivaci' }).click();
     await page.getByRole('button', { name: 'Uloženo, pokračovat' }).click();
     await expect(page.getByTestId('portal-hotels')).toBeVisible();
+    // Client-side transitions (Next.js prefetches the links) work under the policy both ways.
+    for (let i = 0; i < 2; i++) {
+      await page.getByRole('link', { name: 'Faktury' }).click();
+      await expect(page.getByTestId('portal-invoices')).toBeVisible();
+      await page.getByRole('link', { name: 'Moje hotely' }).click();
+      await expect(page.getByTestId('portal-hotels')).toBeVisible();
+    }
     await page.getByRole('link', { name: 'Faktury' }).click();
     await expect(page.getByTestId('portal-invoices')).toBeVisible();
     await page.getByRole('button', { name: 'Odhlásit' }).click();

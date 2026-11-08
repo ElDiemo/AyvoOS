@@ -29,15 +29,10 @@ export function proxy(request: NextRequest) {
 }
 
 // Must be a static literal (Next.js reads it at build time). Skipped: static assets, and the
-// route handlers that read a body or stream a file (see above).
+// route handlers that read a body or stream a file (see above). Nothing is skipped by request
+// header (review 5818871541): `Purpose: prefetch` or `Next-Router-Prefetch: 1` come from the client
+// and do not prove the answer is an RSC payload — a page answered with them is full HTML and gets
+// its own nonce policy like any other.
 export const config = {
-  matcher: [
-    {
-      source: '/((?!_next/static|_next/image|favicon.ico|auth/|invoices/[^/]+/pdf).*)',
-      missing: [
-        { type: 'header', key: 'next-router-prefetch' },
-        { type: 'header', key: 'purpose', value: 'prefetch' },
-      ],
-    },
-  ],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|auth/|invoices/[^/]+/pdf).*)'],
 };
