@@ -1,6 +1,7 @@
 import 'server-only';
 import { portalChallengeStepSchema, portalMfaResultSchema } from '@ayvo/types';
 import { z } from 'zod';
+import { acquireAuthStep, readInput } from './auth-input';
 import { answer, stateChanging } from './auth-route';
 import { contractJson } from './backend';
 import { clientOf } from './request';
@@ -10,12 +11,34 @@ const text = (max: number) => z.string().min(1).max(max);
 const credentials = z.object({ email: text(254), password: text(1024) });
 const action = z.object({ token: z.string().length(43), password: text(1024) });
 
-/** The browser's body, shape-checked here; the core validates it fully again. */
-async function body<T extends z.ZodType>(request: Request, schema: T): Promise<z.infer<T> | null> {
-  const parsed = schema.safeParse(await request.json().catch(() => null));
-  return parsed.success ? parsed.data : null;
-}
 const invalid = () => answer(400, { code: 'INVALID_REQUEST' });
+
+/**
+ * A public sign-in step (review 5818694161): the portal's own origin, then one of the public step
+ * slots (503 at once when all are busy), then the body within its byte and time limits — and only
+ * then a shape check and the core. Nothing of an oversized, slow or malformed body reaches the
+ * core, and the slot is given back as soon as the step ends (also when it was cut).
+ */
+function publicStep<T extends z.ZodType>(
+  request: Request,
+  schema: T,
+  work: (body: z.infer<T>) => Promise<Response>,
+) {
+  return stateChanging(request, async () => {
+    const release = acquireAuthStep();
+    if (!release) return answer(503, { code: 'PORTAL_UNAVAILABLE' });
+    try {
+      const input = await readInput(request);
+      if (input.kind === 'too-large') return answer(413, { code: 'REQUEST_TOO_LARGE' });
+      if (input.kind === 'too-slow') return answer(408, { code: 'REQUEST_TIMEOUT' });
+      const parsed = input.kind === 'ok' ? schema.safeParse(input.value) : null;
+      if (!parsed?.success) return invalid();
+      return await work(parsed.data);
+    } finally {
+      release();
+    }
+  });
+}
 
 /** A pre-session step: its token goes into `__Host-ayvo_portal_pre`, the page gets the rest. */
 async function challenge(path: string, payload: Record<string, unknown>) {
@@ -28,30 +51,22 @@ async function challenge(path: string, payload: Record<string, unknown>) {
 }
 
 export const password = (request: Request) =>
-  stateChanging(request, async () => {
-    const b = await body(request, credentials);
-    if (!b) return invalid();
-    return challenge('auth/password', { ...b, client: clientOf(request) });
-  });
+  publicStep(request, credentials, (b) =>
+    challenge('auth/password', { ...b, client: clientOf(request) }),
+  );
 
 export const activate = (request: Request) =>
-  stateChanging(request, async () => {
-    const b = await body(request, action);
-    if (!b) return invalid();
-    return challenge('auth/activate', { ...b, client: clientOf(request) });
-  });
+  publicStep(request, action, (b) =>
+    challenge('auth/activate', { ...b, client: clientOf(request) }),
+  );
 
 export const resetPassword = (request: Request) =>
-  stateChanging(request, async () => {
-    const b = await body(request, action);
-    if (!b) return invalid();
-    return challenge('auth/reset-password', { ...b, client: clientOf(request) });
-  });
+  publicStep(request, action, (b) =>
+    challenge('auth/reset-password', { ...b, client: clientOf(request) }),
+  );
 
 export const forgotPassword = (request: Request) =>
-  stateChanging(request, async () => {
-    const b = await body(request, z.object({ email: text(254) }));
-    if (!b) return invalid();
+  publicStep(request, z.object({ email: text(254) }), async (b) => {
     const r = await contractJson(
       'core',
       'auth/forgot-password',
@@ -66,9 +81,7 @@ export const forgotPassword = (request: Request) =>
 
 /** The second factor: a session into `__Host-ayvo_portal`, or a finished password reset. */
 export const mfa = (request: Request) =>
-  stateChanging(request, async () => {
-    const b = await body(request, z.object({ code: text(64) }));
-    if (!b) return invalid();
+  publicStep(request, z.object({ code: text(64) }), async (b) => {
     const pending = await readCookie(PRE_COOKIE);
     if (!pending) return answer(401, { code: 'NO_PENDING_STEP' });
     const r = await contractJson('core', 'auth/mfa', portalMfaResultSchema, {

@@ -78,6 +78,9 @@ export const cs = {
     PORTAL_UNAVAILABLE: 'Portál je dočasně nedostupný. Zkuste to za chvíli.',
     CSRF_REJECTED: 'Požadavek byl odmítnut. Obnovte stránku.',
     NO_PENDING_STEP: 'Platnost kroku vypršela. Začněte znovu.',
+    INVALID_REQUEST: 'Údaje nejsou úplné nebo jsou příliš dlouhé.',
+    REQUEST_TOO_LARGE: 'Údaje jsou příliš dlouhé.',
+    REQUEST_TIMEOUT: 'Odeslání trvalo příliš dlouho. Zkuste to znovu.',
   } as Record<string, string>,
   unavailable: 'Portál je dočasně nedostupný. Zkuste to prosím později.',
 };
