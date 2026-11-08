@@ -99,7 +99,15 @@ export const portalAccountSchema = z.object({
 export type PortalAccount = z.infer<typeof portalAccountSchema>;
 
 /** Finance → core: invite the account — only once it holds an active grant (§4). */
-export const portalInvitationRequestSchema = z.strictObject({ requestId: z.uuid() });
+export const portalInvitationRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  /**
+   * A targeted new attempt by the administrator: an open invitation whose mail could not be
+   * delivered is sent again with a rotated link (the old one stops working); an expired, failed or
+   * revoked one is replaced. Never two valid links.
+   */
+  retry: z.boolean().default(false),
+});
 export type PortalInvitationRequest = z.infer<typeof portalInvitationRequestSchema>;
 
 export const portalInvitationSchema = z.object({
@@ -120,10 +128,20 @@ export const portalGrantListItemSchema = portalGrantSchema.extend({
     displayName: z.string(),
     signsIn: z.boolean(),
     /**
-     * The account's invitation now: ACTIVE (signs in), DELIVERED (the mail went out), PENDING (on
-     * its way, not delivered yet), FAILED (refused — send a new one), NONE (none open).
+     * The account's invitation now. ACTIVE: signs in. QUEUED: written, its mail not handed over
+     * yet. ACCEPTED_BY_SERVER: the mail server accepted it (not proof of delivery to the
+     * mailbox). DELIVERY_FAILED: every delivery attempt failed — send it again. EXPIRED: its link
+     * expired unused — send a new one. FAILED: refused when created — send a new one. NONE.
      */
-    invitation: z.enum(['ACTIVE', 'DELIVERED', 'PENDING', 'FAILED', 'NONE']),
+    invitation: z.enum([
+      'ACTIVE',
+      'QUEUED',
+      'ACCEPTED_BY_SERVER',
+      'DELIVERY_FAILED',
+      'EXPIRED',
+      'FAILED',
+      'NONE',
+    ]),
   }),
 });
 export type PortalGrantListItem = z.infer<typeof portalGrantListItemSchema>;
@@ -157,10 +175,28 @@ export const financePortalGrantResultSchema = z.object({
   account: portalAccountSchema.omit({ created: true }).nullable(),
   /**
    * Only on issue: the invitation, sent after the grant was written (see portalInvitationSchema).
-   * FAILED: send a new invitation (its own action); UNCERTAIN: save the same form again.
+   * FAILED: send a new invitation (its own action); UNCERTAIN: save the same form again. null:
+   * no invitation was attempted (a replacement, or a replay whose account or grant is no longer
+   * active — see `current`).
    */
   invitation: portalInvitationSchema.shape.state.nullable(),
+  /** On a replay of an issue already performed: the account's and the grant's state now. */
+  current: z.object({ accountActive: z.boolean(), grantActive: z.boolean() }).nullable(),
 });
+
+/** The core's answer to a lookup of a performed request: the stored grant and its account now. */
+export const portalGrantPerformedSchema = z.object({
+  grant: portalGrantSchema,
+  account: z.object({
+    userId: z.uuid(),
+    email: z.string(),
+    displayName: z.string(),
+    active: z.boolean(),
+  }),
+  /** The stored grant (the request's result) is still active now. */
+  grantActive: z.boolean(),
+});
+export type PortalGrantPerformed = z.infer<typeof portalGrantPerformedSchema>;
 
 /**
  * Finance → core: the stored result of a grant request, if the core already performed it — read

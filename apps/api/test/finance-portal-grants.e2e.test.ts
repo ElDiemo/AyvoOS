@@ -95,7 +95,7 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
     const page = (await f.get(`${G}?payerCustomerId=${a.id}`).expect(200))
       .body as FinancePortalAccess;
     expect(page.grants.map((g) => [g.id, g.account.email, g.account.invitation])).toEqual([
-      [grant.id, email, 'DELIVERED'],
+      [grant.id, email, 'ACCEPTED_BY_SERVER'],
     ]);
     expect(page.payerHotels.map((x) => [x.id, x.basis]).sort()).toEqual(
       [
@@ -261,11 +261,11 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
         .send({ requestId: randomUUID() })
         .expect(201);
       expect(again.body.invitation).toBe('SENT');
-      expect((await listed(a.id)).account.invitation).toBe('PENDING');
+      expect((await listed(a.id)).account.invitation).toBe('QUEUED');
       const third = await f.post(`${G}/${grant.id}/invitation`).send({ requestId: randomUUID() });
       expect(third.body.invitation).toBe('OPEN');
       expect(await mails(body.email)).toHaveLength(1);
-      expect((await listed(a.id)).account.invitation).toBe('DELIVERED');
+      expect((await listed(a.id)).account.invitation).toBe('ACCEPTED_BY_SERVER');
       const user = await f.core.prisma.user.findUniqueOrThrow({ where: { email: body.email } });
       expect(
         await f.core.prisma.userInvitation.count({ where: { userId: user.id, state: 'PENDING' } }),
@@ -373,5 +373,147 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
     expect(page.payerHotels).toEqual([
       { id: hh.id, code: hh.code, name: hh.name, basis: 'INVOICE' },
     ]);
+  });
+
+  describe('the outbox after the invitation was written', () => {
+    const listedOf = async (payerId: string) =>
+      ((await f.get(`${G}?payerCustomerId=${payerId}`).expect(200)).body as FinancePortalAccess)
+        .grants[0]!;
+    const fresh = async (label: string) => {
+      const a = await payer(f);
+      const hh = await hotel(f);
+      await agreement(f, a.id, hh.id);
+      const email = unique(label);
+      const res = (await issue(a.id, [hh.id], { email }).expect(201))
+        .body as FinancePortalGrantResult;
+      expect(res.invitation).toBe('SENT');
+      const user = await f.core.prisma.user.findUniqueOrThrow({ where: { email } });
+      return { payerId: a.id, email, user, grantId: res.grant.id };
+    };
+    const validLinks = (userId: string) =>
+      f.core.prisma.nativeAuthToken.count({
+        where: {
+          userId,
+          purpose: 'ENROLL',
+          usedAt: null,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+      });
+
+    it('every delivery attempt failed: shown as such, sent again with a rotated link, one valid link', async () => {
+      const x = await fresh('portal-undeliverable');
+      const token = await f.core.prisma.nativeAuthToken.findFirstOrThrow({
+        where: { userId: x.user.id, purpose: 'ENROLL' },
+      });
+      // Four failed attempts already; the fifth fails now (the mail server is down).
+      await f.core.prisma.nativeAuthToken.update({
+        where: { id: token.id },
+        data: { deliveryAttempts: 4, nextDeliveryAt: new Date(Date.now() - 1000) },
+      });
+      const tokens = f.core.app.get(NativeTokensService);
+      const outbox = (tokens as unknown as { testMail: { to: string; url: string }[] }).testMail;
+      const push = outbox.push.bind(outbox);
+      // The mail server refuses this one mail (other queued mail goes through).
+      const down = vi.spyOn(outbox, 'push').mockImplementation((...m) => {
+        if (m[0]!.to === x.email) throw new Error('mail server down (synthetic)');
+        return push(...m);
+      });
+      try {
+        await tokens.deliverPending();
+      } finally {
+        down.mockRestore();
+      }
+      expect(await mails(x.email)).toHaveLength(0);
+      expect((await listedOf(x.payerId)).account.invitation).toBe('DELIVERY_FAILED');
+      // The administrator sends it again: the same row, a rotated link, attempts from zero.
+      const again = await f
+        .post(`${G}/${x.grantId}/invitation`)
+        .send({ requestId: randomUUID() })
+        .expect(201);
+      expect(again.body.invitation).toBe('SENT');
+      const rotated = await f.core.prisma.nativeAuthToken.findUniqueOrThrow({
+        where: { id: token.id },
+      });
+      expect(rotated.tokenSha256).not.toBe(token.tokenSha256);
+      expect(rotated.deliveryAttempts).toBe(0);
+      expect(await mails(x.email)).toHaveLength(1);
+      expect((await listedOf(x.payerId)).account.invitation).toBe('ACCEPTED_BY_SERVER');
+      expect(await validLinks(x.user.id)).toBe(1);
+    });
+
+    it('the link expired unused: shown as such, a new invitation, one valid link', async () => {
+      const x = await fresh('portal-expired');
+      await mails(x.email);
+      const past = new Date(Date.now() - 60_000);
+      await f.core.prisma.$executeRaw`UPDATE "native_auth_tokens"
+        SET "created_at" = now() - interval '8 days', "expires_at" = ${past}
+        WHERE "user_id" = ${x.user.id}::uuid AND "purpose" = 'ENROLL'`;
+      await f.core.prisma.userInvitation.updateMany({
+        where: { userId: x.user.id, state: 'PENDING' },
+        data: { expiresAt: past },
+      });
+      expect((await listedOf(x.payerId)).account.invitation).toBe('EXPIRED');
+      const again = await f
+        .post(`${G}/${x.grantId}/invitation`)
+        .send({ requestId: randomUUID() })
+        .expect(201);
+      expect(again.body.invitation).toBe('SENT');
+      expect(await mails(x.email)).toHaveLength(2);
+      expect(await validLinks(x.user.id)).toBe(1);
+      expect((await listedOf(x.payerId)).account.invitation).toBe('ACCEPTED_BY_SERVER');
+    });
+  });
+
+  describe('a replay after the account was deactivated or the grant revoked', () => {
+    const body = (payerCustomerId: string, hotelId: string) => ({
+      requestId: randomUUID(),
+      payerCustomerId,
+      email: unique('portal-replay'),
+      displayName: 'Hotel Replay',
+      hotelIds: [hotelId],
+      reason: 'Přístup (syntetický)',
+    });
+
+    it('deactivated: the written grant is confirmed read only, with the state now; no invitation', async () => {
+      const a = await payer(f);
+      const hh = await hotel(f);
+      await agreement(f, a.id, hh.id);
+      const req = body(a.id, hh.id);
+      const first = (await f.post(G).send(req).expect(201)).body as FinancePortalGrantResult;
+      // The answer is lost; meanwhile the account is deactivated.
+      await request(f.core.app.getHttpServer())
+        .post(`/api/admin/identity/users/${first.account!.userId}/deactivate`)
+        .send({ reason: 'Konec spolupráce (syntetický)' })
+        .expect(200);
+      const user = await f.core.prisma.user.findUniqueOrThrow({ where: { email: req.email } });
+      const before = await f.core.prisma.nativeAuthToken.count({ where: { userId: user.id } });
+      const retry = await f.post(G).send(req);
+      expect(retry.status, JSON.stringify(retry.body)).toBe(201);
+      expect(retry.body.grant).toEqual(first.grant);
+      expect(retry.body.account).toMatchObject({ email: req.email });
+      expect(retry.body.current).toEqual({ accountActive: false, grantActive: true });
+      expect(retry.body.invitation).toBeNull();
+      expect(await f.core.prisma.nativeAuthToken.count({ where: { userId: user.id } })).toBe(
+        before,
+      );
+      expect(await coreState(req.email)).toEqual({ user: 'PORTAL', grants: 1 });
+    });
+
+    it('revoked: confirmed with the state now; no invitation', async () => {
+      const a = await payer(f);
+      const hh = await hotel(f);
+      await agreement(f, a.id, hh.id);
+      const req = body(a.id, hh.id);
+      const first = (await f.post(G).send(req).expect(201)).body as FinancePortalGrantResult;
+      await request(f.core.app.getHttpServer())
+        .post(`/api/admin/identity/portal-grants/${first.grant.id}/revoke`)
+        .send({ reason: 'Odvoláno (syntetické)' })
+        .expect(200);
+      const retry = (await f.post(G).send(req).expect(201)).body as FinancePortalGrantResult;
+      expect(retry.grant).toEqual(first.grant);
+      expect(retry.current).toEqual({ accountActive: true, grantActive: false });
+      expect(retry.invitation).toBeNull();
+    });
   });
 });

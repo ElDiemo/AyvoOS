@@ -91,25 +91,37 @@ export class FinancePortalGrantsService {
       hotelIds: req.hotelIds,
       reason: req.reason,
     });
-    const check = performed ? null : await this.checkPair(req.payerCustomerId, req.hotelIds);
+    if (performed) {
+      // Read only: the stored grant and its account as they are now — the account is neither
+      // created nor checked for eligibility again, so a later deactivation never hides a written
+      // result. The invitation is resumed only while both the account and the grant are active.
+      const { account } = performed;
+      const live = account.active && performed.grantActive;
+      return {
+        grant: performed.grant,
+        account: { userId: account.userId, email: account.email, displayName: account.displayName },
+        invitation: live ? await this.invite(caller, account.userId, req.requestId) : null,
+        current: { accountActive: account.active, grantActive: performed.grantActive },
+      };
+    }
+    const check = await this.checkPair(req.payerCustomerId, req.hotelIds);
     const account = await this.core.portalAccount(caller.sessionToken, {
       email: req.email,
       displayName: req.displayName,
     });
-    const grant =
-      performed ??
-      (await this.core.issuePortalGrant(caller.sessionToken, {
-        requestId: req.requestId,
-        userId: account.userId,
-        payerCustomerId: req.payerCustomerId,
-        hotelIds: req.hotelIds,
-        reason: req.reason,
-        financeCheck: check!,
-      }));
+    const grant = await this.core.issuePortalGrant(caller.sessionToken, {
+      requestId: req.requestId,
+      userId: account.userId,
+      payerCustomerId: req.payerCustomerId,
+      hotelIds: req.hotelIds,
+      reason: req.reason,
+      financeCheck: check,
+    });
     return {
       grant,
       account: { userId: account.userId, email: account.email, displayName: account.displayName },
       invitation: await this.invite(caller, account.userId, req.requestId),
+      current: null,
     };
   }
 
@@ -129,7 +141,8 @@ export class FinancePortalGrantsService {
       hotelIds: req.hotelIds,
       reason: req.reason,
     });
-    if (performed) return { grant: performed, account: null, invitation: null };
+    if (performed)
+      return { grant: performed.grant, account: null, invitation: null, current: null };
     const check = await this.checkPair(old.payerCustomerId, req.hotelIds);
     const grant = await this.core.replacePortalGrant(caller.sessionToken, grantId, {
       requestId: req.requestId,
@@ -138,10 +151,14 @@ export class FinancePortalGrantsService {
       reason: req.reason,
       financeCheck: check,
     });
-    return { grant, account: null, invitation: null };
+    return { grant, account: null, invitation: null, current: null };
   }
 
-  /** A new invitation attempt (its own request id) for the account of an active grant. */
+  /**
+   * A targeted new invitation attempt (its own request id) for the account of an active grant:
+   * after a refused, undeliverable or expired invitation. The core resends an open one with a
+   * rotated link, or replaces a closed one.
+   */
   async reinvite(
     caller: FinanceCaller,
     grantId: string,
@@ -153,6 +170,7 @@ export class FinancePortalGrantsService {
       caller.sessionToken,
       grant.userId,
       requestId,
+      true,
     );
     return { invitation: state };
   }

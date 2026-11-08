@@ -6,6 +6,7 @@ import {
   financePrincipalSchema,
   portalAccountSchema,
   portalGrantListItemSchema,
+  portalGrantPerformedSchema,
   portalGrantSchema,
   portalInvitationSchema,
   portalIntrospectionSchema,
@@ -21,6 +22,7 @@ import {
   type PortalGrantIssueRequest,
   type PortalGrantListItem,
   type PortalGrantRequestLookup,
+  type PortalGrantPerformed,
   type PortalGrantReplaceRequest,
   type PortalInvitation,
   type PortalIntrospection,
@@ -192,13 +194,14 @@ export class CoreClient {
     sessionToken: string,
     userId: string,
     requestId: string,
+    retry = false,
   ): Promise<PortalInvitation> {
     return this.json(
       'POST',
       `portal-accounts/${encodeURIComponent(userId)}/invitation`,
       sessionToken,
       portalInvitationSchema,
-      { requestId },
+      { requestId, retry },
       true,
     );
   }
@@ -207,13 +210,13 @@ export class CoreClient {
   async performedPortalGrantRequest(
     sessionToken: string,
     body: PortalGrantRequestLookup,
-  ): Promise<PortalGrant | null> {
+  ): Promise<PortalGrantPerformed | null> {
     try {
       return await this.json(
         'POST',
         'portal-grants/requests/lookup',
         sessionToken,
-        portalGrantSchema,
+        portalGrantPerformedSchema,
         body,
         true,
       );

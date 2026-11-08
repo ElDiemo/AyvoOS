@@ -64,6 +64,9 @@ export function smtpTransportOptions(env: Env): SMTPTransport.Options | null {
   return null;
 }
 
+/** Delivery attempts of one link mail before the outbox stops trying (a new send rotates it). */
+export const MAIL_DELIVERY_ATTEMPTS = 5;
+
 export const NATIVE_SECRET_BOX = Symbol('NATIVE_SECRET_BOX');
 export const NATIVE_PASSWORDS = Symbol('NATIVE_PASSWORDS');
 
@@ -204,7 +207,7 @@ export class NativeTokensService implements OnModuleInit, OnModuleDestroy {
           revokedAt: null,
           sentAt: null,
           expiresAt: { gt: now },
-          deliveryAttempts: { lt: 5 },
+          deliveryAttempts: { lt: MAIL_DELIVERY_ATTEMPTS },
           nextDeliveryAt: { lte: now },
           OR: [{ deliveryLeaseUntil: null }, { deliveryLeaseUntil: { lt: now } }],
           // Eligibility before the batch limit: mail of deactivated accounts stays queued

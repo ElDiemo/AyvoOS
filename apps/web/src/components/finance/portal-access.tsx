@@ -15,6 +15,9 @@ import { apiSend, ClientApiError } from '@/lib/client-api';
 
 type Hotel = FinancePortalAccess['payerHotels'][number];
 
+/** Invitation states after which the administrator sends a new one (a targeted retry). */
+const RETRYABLE = new Set(['FAILED', 'DELIVERY_FAILED', 'EXPIRED']);
+
 /** One action's request id, kept for retries of the same input (a new one after any edit). */
 function useAction() {
   const router = useRouter();
@@ -42,7 +45,13 @@ function useAction() {
       // An uncertain invitation keeps the id: saving again repeats the same request. Anything
       // else is settled, and the next action is a new one.
       if (r.invitation !== 'UNCERTAIN') fresh();
-      setNote(r.invitation ? (t.invitation[r.invitation] ?? t.saved) : t.saved);
+      setNote(
+        r.current && !(r.current.accountActive && r.current.grantActive)
+          ? t.replayInactive
+          : r.invitation
+            ? (t.invitation[r.invitation] ?? t.saved)
+            : t.saved,
+      );
       router.refresh();
     } catch (err) {
       setError(
@@ -183,7 +192,7 @@ function ActiveGrant({ grant, hotels }: { grant: PortalGrantListItem; hotels: Ho
   const [revokeReason, setRevokeReason] = useState('');
   return (
     <div className="mt-2 flex flex-col gap-3">
-      {grant.account.invitation === 'FAILED' && (
+      {RETRYABLE.has(grant.account.invitation) && (
         <div className="flex flex-col gap-1">
           <button
             type="button"

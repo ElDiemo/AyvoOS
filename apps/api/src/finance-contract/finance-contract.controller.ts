@@ -28,6 +28,7 @@ import {
   type PermissionCode,
   type PortalAccount,
   type PortalGrantRequestLookup,
+  type PortalGrantPerformed,
   type PortalAccountRequest,
   type PortalGrant,
   type PortalGrantListItem,
@@ -211,7 +212,7 @@ export class FinanceContractController {
   portalGrantRequest(
     @Body(new ZodValidationPipe(portalGrantRequestLookupSchema)) body: PortalGrantRequestLookup,
     @CurrentPrincipal() p: Principal,
-  ): Promise<PortalGrant> {
+  ): Promise<PortalGrantPerformed> {
     require(p, 'finance:billing_read', 'identity:portal_grants_manage');
     return this.portalGrants.performed(p.userId, body);
   }
@@ -238,7 +239,7 @@ export class FinanceContractController {
     @CurrentPrincipal() p: Principal,
   ): Promise<PortalInvitation> {
     require(p, 'finance:billing_read', 'identity:portal_grants_manage');
-    return this.portalGrants.invite(p.userId, id, body.requestId);
+    return this.portalGrants.invite(p.userId, id, body.requestId, body.retry);
   }
 
   /** The payer's grants for its page in Finance ("Přístup do portálu"). */
