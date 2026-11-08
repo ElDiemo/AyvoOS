@@ -1,4 +1,10 @@
 import type {
+  PortalGrantPerformed,
+  PortalGrantRequestLookup,
+  PortalAccount,
+  PortalAccountRequest,
+  PortalGrantListItem,
+  PortalInvitation,
   PortalGrant,
   PortalGrantFinanceCheck,
   PortalGrantIssueRequest,
@@ -10,6 +16,8 @@ import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, type AccountAudience } from '../generated/prisma/client.js';
+import { InvitationsService } from '../identity/invitations.service.js';
+import { MAIL_DELIVERY_ATTEMPTS } from '../identity/native-tokens.service.js';
 import { SessionsService } from '../identity/sessions.service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -40,6 +48,50 @@ const toView = (g: GrantRow): PortalGrant => ({
  * fixed lock order: the account's user row, then the grant row. A grant is never edited or
  * revived (also DB); one active grant per (user, payer) (DB).
  */
+/** What the invitation state of an account is computed from. */
+const invitationSelect = {
+  nativeCredential: { select: { userId: true } },
+  invitations: {
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 1,
+    select: { state: true, providerInvitationId: true, expiresAt: true },
+  },
+  nativeTokens: {
+    where: { purpose: 'ENROLL' },
+    select: {
+      id: true,
+      sentAt: true,
+      deliveryAttempts: true,
+      expiresAt: true,
+      usedAt: true,
+      revokedAt: true,
+    },
+  },
+} satisfies Prisma.UserSelect;
+type InvitationState = PortalGrantListItem['account']['invitation'];
+
+function invitationOf(
+  u: Prisma.UserGetPayload<{ select: typeof invitationSelect }>,
+  now: Date,
+): InvitationState {
+  if (u.nativeCredential) return 'ACTIVE';
+  const latest = u.invitations[0];
+  if (!latest) return 'NONE';
+  if (latest.state === 'FAILED') return 'FAILED';
+  if (latest.state === 'EXPIRED') return 'EXPIRED';
+  if (latest.state === 'SENDING') return 'QUEUED';
+  if (latest.state !== 'PENDING') return 'NONE';
+  if (latest.expiresAt && latest.expiresAt <= now) return 'EXPIRED';
+  // The local provider's link mail goes out from the outbox (its token).
+  const token = u.nativeTokens.find((t) => t.id === latest.providerInvitationId);
+  if (!token || token.usedAt || token.revokedAt) return 'NONE';
+  if (token.expiresAt <= now) return 'EXPIRED';
+  if (token.sentAt) return 'ACCEPTED_BY_SERVER';
+  // The outbox stops after this many attempts (NativeTokensService.deliverPending).
+  if (token.deliveryAttempts >= MAIL_DELIVERY_ATTEMPTS) return 'DELIVERY_FAILED';
+  return 'QUEUED';
+}
+
 @Injectable()
 export class PortalGrantsService {
   constructor(
@@ -47,7 +99,216 @@ export class PortalGrantsService {
     private readonly audit: AuditService,
     private readonly sessions: SessionsService,
     private readonly operations: OperationRequestsService,
+    private readonly invitations: InvitationsService,
   ) {}
+
+  // --- the hotel portal account -------------------------------------------------------------
+
+  /**
+   * The PORTAL account of this e-mail; created (no role, no credential, no invitation yet) when
+   * none exists. An internal (STAFF) account's e-mail is refused, EMAIL_IS_STAFF (ADR 0045 §2):
+   * the unique e-mail index decides a concurrent race, and the loser reads the winner's account.
+   */
+  async ensureAccount(actorId: string, input: PortalAccountRequest): Promise<PortalAccount> {
+    const existing = async () => {
+      const user = await this.prisma.user.findUnique({ where: { email: input.email } });
+      if (!user) return null;
+      if (user.audience !== 'PORTAL')
+        throw domainError(
+          409,
+          'EMAIL_IS_STAFF',
+          'This e-mail belongs to an internal AYVO account; a hotel portal account needs another',
+        );
+      if (user.status !== 'ACTIVE')
+        throw domainError(409, 'USER_INACTIVE', 'This hotel portal account is deactivated');
+      return { userId: user.id, email: user.email, displayName: user.displayName, created: false };
+    };
+    const found = await existing();
+    if (found) return found;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email: input.email,
+            displayName: input.displayName,
+            audience: 'PORTAL',
+            createdBy: actorId,
+          },
+        });
+        await this.audit.record(
+          {
+            type: 'USER_CREATED',
+            actorUserId: actorId,
+            targetUserId: user.id,
+            reason: 'Hotel portal account (with its first grant)',
+            payload: { audience: 'PORTAL' },
+          },
+          tx,
+        );
+        return { userId: user.id, email: user.email, displayName: user.displayName, created: true };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const winner = await existing();
+        if (winner) return winner;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Invites the account to the portal — only while it holds an active grant, so an invitation
+   * always follows a written grant (§4). Idempotent per `requestId` (the invitation's own request
+   * id). An account that already signs in, or has an invitation on its way, is not invited again.
+   */
+  async invite(
+    actorId: string,
+    userId: string,
+    requestId: string,
+    retry = false,
+  ): Promise<PortalInvitation> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { nativeCredential: { select: { userId: true } } },
+    });
+    if (!user) throw domainError(404, 'USER_NOT_FOUND', 'No such user');
+    if (user.audience !== 'PORTAL')
+      throw domainError(409, 'ACCOUNT_AUDIENCE_MISMATCH', 'Not a hotel portal account');
+    if (user.status !== 'ACTIVE')
+      throw domainError(409, 'USER_INACTIVE', 'This hotel portal account is deactivated');
+    if (user.nativeCredential) return { state: 'ACTIVE' };
+    if ((await this.prisma.portalGrant.count({ where: { userId, revokedAt: null } })) === 0)
+      throw domainError(
+        409,
+        'NO_ACTIVE_GRANT',
+        'A hotel portal account is invited only with a grant',
+      );
+    // A mail still in the outbox is not rotated under the worker's feet: it is on its way.
+    if (retry && (await this.invitationState(userId)) === 'QUEUED') return { state: 'OPEN' };
+    try {
+      // A targeted retry resends an open invitation with a rotated link (the old link stops
+      // working) or replaces an expired / failed / revoked one; never a second valid link.
+      await (retry ? this.invitations.resend : this.invitations.send).call(
+        this.invitations,
+        actorId,
+        userId,
+        requestId,
+        'Pozvánka do hotelového portálu',
+        'PORTAL',
+      );
+      return { state: 'SENT' };
+    } catch (error) {
+      const code = (error as { getResponse?: () => { code?: string } }).getResponse?.().code;
+      if (code === 'INVITATION_OPEN') return { state: 'OPEN' };
+      if (code === 'ALREADY_LINKED' || code === 'INVITATION_ACCEPTED') return { state: 'ACTIVE' };
+      // Refused for good: this request id answers so forever; a new attempt has a new id.
+      if (code === 'INVITATION_PROVIDER_FAILED') return { state: 'FAILED' };
+      // No definite answer (the provider may have acted, or the same attempt still runs): the
+      // same request id reconciles.
+      if (code === 'INVITATION_PROVIDER_UNAVAILABLE' || code === 'INVITATION_IN_PROGRESS')
+        return { state: 'UNCERTAIN' };
+      throw error;
+    }
+  }
+
+  // --- reading (Finance's payer page) ---------------------------------------------------------
+
+  /**
+   * The stored result of a grant request the core already performed (read only), for Finance's
+   * retry after a lost answer: the same actor and meaning as the original, else
+   * IDEMPOTENCY_CONFLICT; never performed → 404 REQUEST_NOT_FOUND.
+   */
+  async performed(actorId: string, req: PortalGrantRequestLookup): Promise<PortalGrantPerformed> {
+    const scope = {
+      payerCustomerId: req.payerCustomerId,
+      hotelIds: [...req.hotelIds].sort(),
+      reason: req.reason,
+    };
+    let result: PortalGrant | null = null;
+    if (req.kind === 'ISSUE') {
+      const user = await this.prisma.user.findUnique({
+        where: { email: req.email },
+        select: { id: true },
+      });
+      if (user)
+        result = await this.operations.peek<PortalGrant>('PORTAL_GRANT_ISSUE', req.requestId, {
+          actorId,
+          userId: user.id,
+          ...scope,
+        });
+    } else {
+      result = await this.operations.peek<PortalGrant>('PORTAL_GRANT_REPLACE', req.requestId, {
+        actorId,
+        grantId: req.grantId,
+        ...scope,
+      });
+    }
+    if (!result) throw domainError(404, 'REQUEST_NOT_FOUND', 'This request was not performed');
+    // The stored result as it was, with the account and the grant as they are now (read only).
+    const [account, grant] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({
+        where: { id: result.userId },
+        select: { id: true, email: true, displayName: true, status: true },
+      }),
+      this.prisma.portalGrant.findUniqueOrThrow({
+        where: { id: result.id },
+        select: { revokedAt: true },
+      }),
+    ]);
+    return {
+      grant: result,
+      account: {
+        userId: account.id,
+        email: account.email,
+        displayName: account.displayName,
+        active: account.status === 'ACTIVE',
+      },
+      grantActive: grant.revokedAt === null,
+    };
+  }
+
+  /** The payer's grants, active first, with their accounts and invitation state. */
+  async ofPayer(payerCustomerId: string): Promise<PortalGrantListItem[]> {
+    const now = new Date();
+    const rows = await this.prisma.portalGrant.findMany({
+      where: { payerCustomerId },
+      include: {
+        hotels: true,
+        user: { select: { email: true, displayName: true, ...invitationSelect } },
+      },
+      orderBy: [{ grantedAt: 'desc' }],
+    });
+    return rows
+      .map((g) => ({
+        ...toView(g),
+        account: {
+          email: g.user.email,
+          displayName: g.user.displayName,
+          signsIn: g.user.nativeCredential !== null,
+          invitation: invitationOf(g.user, now),
+        },
+      }))
+      .sort((a, b) => Number(a.revokedAt !== null) - Number(b.revokedAt !== null));
+  }
+
+  /** The account's invitation state now (see portalGrantListItemSchema). */
+  async invitationState(userId: string): Promise<InvitationState> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: invitationSelect,
+    });
+    return invitationOf(user, new Date());
+  }
+
+  /** One grant (any state); unknown → 404. */
+  async byId(grantId: string): Promise<PortalGrant> {
+    const g = await this.prisma.portalGrant.findUnique({
+      where: { id: grantId },
+      include: { hotels: true },
+    });
+    if (!g) throw domainError(404, 'GRANT_NOT_FOUND', 'No such portal grant');
+    return toView(g);
+  }
 
   /**
    * A new grant. Idempotent per `requestId`: the same actor, account, payer and scope get the
@@ -292,7 +553,7 @@ export class PortalGrantsService {
  * operation on which account or grant (the caller), the payer, the hotels as a set and the reason.
  *
  * `financeCheck` is NOT part of it. It is Finance's evidence of a server-side check: when it was
- * made (`checkedAt`) and against which payer version (`payerVersionId`). Finance makes the check
+ * made (`checkedAt`) and against which payer version (`payerVersion`). Finance makes the check
  * again before every attempt, including a safe retry after a lost answer, so the evidence of a
  * retry may be newer. Its hotels are always exactly the grant's (schema), so they are already in
  * the meaning. A replay of the same request therefore returns the ORIGINAL stored grant with its

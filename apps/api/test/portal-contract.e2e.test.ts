@@ -86,7 +86,7 @@ describe.skipIf(!hasDatabase)('hotel portal contract', () => {
       payerCustomerId: randomUUID(),
       hotelIds,
       reason: 'synthetic portal grant',
-      financeCheck: { payerVersionId: randomUUID(), hotelIds, checkedAt: new Date().toISOString() },
+      financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
     });
   const revoke = (grantId: string) =>
     t.app.get(PortalGrantsService).revoke(adminId, grantId, 'synthetic revocation');
@@ -315,7 +315,7 @@ describe.skipIf(!hasDatabase)('hotel portal contract', () => {
         hotelIds: [hotels[1]!],
         reason: 'narrowed',
         financeCheck: {
-          payerVersionId: randomUUID(),
+          payerVersion: 1,
           hotelIds: [hotels[1]!],
           checkedAt: new Date().toISOString(),
         },

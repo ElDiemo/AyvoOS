@@ -55,7 +55,7 @@ const isForeignKey = (e: unknown) =>
  * result never depends on the order the rows were read in, and two rows recorded within the same
  * millisecond are still ordered.
  */
-function effectiveAt<T extends { effectiveFrom: Date; recordedAt: Date; revision: bigint }>(
+export function effectiveAt<T extends { effectiveFrom: Date; recordedAt: Date; revision: bigint }>(
   rows: readonly T[],
   date: Date,
   asOf: Date,

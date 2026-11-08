@@ -40,6 +40,18 @@ export interface IdempotentOutcome<R> {
 export class OperationRequestsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * The stored result of a completed request, read only: null when the request id was never
+   * completed; the same id with another kind or payload → IDEMPOTENCY_CONFLICT.
+   */
+  async peek<R>(kind: OperationKind, requestId: string, payload: unknown): Promise<R | null> {
+    const row = await this.prisma.operationRequest.findUnique({ where: { requestId } });
+    if (!row || row.result === null) return null;
+    if (row.kind !== kind || row.payloadSha256 !== payloadHash(kind, payload))
+      throw idempotencyConflict();
+    return row.result as R;
+  }
+
   run<R extends Prisma.InputJsonValue>(
     kind: OperationKind,
     requestId: string,

@@ -1,10 +1,16 @@
-import { billingCustomerDetailSchema, effectiveTermsPageSchema } from '@ayvo/types';
+import {
+  billingCustomerDetailSchema,
+  effectiveTermsPageSchema,
+  financePortalAccessSchema,
+} from '@ayvo/types';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CustomerForm } from '@/components/finance/billing-forms';
 import { FinanceHeader } from '@/components/finance/finance-header';
+import { PortalAccess } from '@/components/finance/portal-access';
 import { Card, Field, FieldList } from '@/components/ui';
 import { billingCs as t } from '@/i18n/cs/finance-billing';
+import { portalAccessCs } from '@/i18n/cs/finance-portal';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { ApiError, apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
@@ -32,6 +38,14 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
     effectiveTermsPageSchema,
   );
   const paid = terms.items.filter((i) => i.customer?.id === c.id);
+  // Hotel portal access (ADR 0045 §4): ADMIN only — both permissions.
+  const portal =
+    hasPermission(me, 'finance:billing_read') && hasPermission(me, 'identity:portal_grants_manage')
+      ? await apiGet(
+          `admin/finance/portal-grants?payerCustomerId=${c.id}`,
+          financePortalAccessSchema,
+        )
+      : null;
   return (
     <>
       <FinanceHeader
@@ -94,6 +108,11 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
             </ul>
           )}
         </Card>
+        {portal && (
+          <Card title={portalAccessCs.title} testId="portal-access">
+            <PortalAccess payerCustomerId={c.id} access={portal} />
+          </Card>
+        )}
         <Card title={t.history} testId="customer-history">
           <details>
             <summary
