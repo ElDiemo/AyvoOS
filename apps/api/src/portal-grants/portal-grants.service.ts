@@ -1,4 +1,5 @@
 import type {
+  PortalGrantRequestLookup,
   PortalAccount,
   PortalAccountRequest,
   PortalGrantListItem,
@@ -142,13 +143,53 @@ export class PortalGrantsService {
       const code = (error as { getResponse?: () => { code?: string } }).getResponse?.().code;
       if (code === 'INVITATION_OPEN') return { state: 'OPEN' };
       if (code === 'ALREADY_LINKED') return { state: 'ACTIVE' };
+      // Refused for good: this request id answers so forever; a new attempt has a new id.
+      if (code === 'INVITATION_PROVIDER_FAILED') return { state: 'FAILED' };
+      // No definite answer (the provider may have acted, or the same attempt still runs): the
+      // same request id reconciles.
+      if (code === 'INVITATION_PROVIDER_UNAVAILABLE' || code === 'INVITATION_IN_PROGRESS')
+        return { state: 'UNCERTAIN' };
       throw error;
     }
   }
 
   // --- reading (Finance's payer page) ---------------------------------------------------------
 
-  /** The payer's grants, active first, with their accounts. */
+  /**
+   * The stored result of a grant request the core already performed (read only), for Finance's
+   * retry after a lost answer: the same actor and meaning as the original, else
+   * IDEMPOTENCY_CONFLICT; never performed → 404 REQUEST_NOT_FOUND.
+   */
+  async performed(actorId: string, req: PortalGrantRequestLookup): Promise<PortalGrant> {
+    const scope = {
+      payerCustomerId: req.payerCustomerId,
+      hotelIds: [...req.hotelIds].sort(),
+      reason: req.reason,
+    };
+    let result: PortalGrant | null = null;
+    if (req.kind === 'ISSUE') {
+      const user = await this.prisma.user.findUnique({
+        where: { email: req.email },
+        select: { id: true },
+      });
+      if (user)
+        result = await this.operations.peek<PortalGrant>('PORTAL_GRANT_ISSUE', req.requestId, {
+          actorId,
+          userId: user.id,
+          ...scope,
+        });
+    } else {
+      result = await this.operations.peek<PortalGrant>('PORTAL_GRANT_REPLACE', req.requestId, {
+        actorId,
+        grantId: req.grantId,
+        ...scope,
+      });
+    }
+    if (!result) throw domainError(404, 'REQUEST_NOT_FOUND', 'This request was not performed');
+    return result;
+  }
+
+  /** The payer's grants, active first, with their accounts and invitation state. */
   async ofPayer(payerCustomerId: string): Promise<PortalGrantListItem[]> {
     const rows = await this.prisma.portalGrant.findMany({
       where: { payerCustomerId },
@@ -159,11 +200,35 @@ export class PortalGrantsService {
             email: true,
             displayName: true,
             nativeCredential: { select: { userId: true } },
+            invitations: {
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { state: true, providerInvitationId: true },
+            },
+            nativeTokens: {
+              where: { purpose: 'ENROLL' },
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+              select: { id: true, sentAt: true },
+            },
           },
         },
       },
       orderBy: [{ grantedAt: 'desc' }],
     });
+    const invitationOf = (u: (typeof rows)[number]['user']) => {
+      if (u.nativeCredential) return 'ACTIVE' as const;
+      const latest = u.invitations[0];
+      if (!latest) return 'NONE' as const;
+      if (latest.state === 'FAILED') return 'FAILED' as const;
+      if (latest.state === 'SENDING') return 'PENDING' as const;
+      if (latest.state !== 'PENDING') return 'NONE' as const;
+      // The local provider's mail goes out from the outbox: delivered once its link was sent.
+      const token = u.nativeTokens[0];
+      return token?.id === latest.providerInvitationId && token.sentAt
+        ? ('DELIVERED' as const)
+        : ('PENDING' as const);
+    };
     return rows
       .map((g) => ({
         ...toView(g),
@@ -171,6 +236,7 @@ export class PortalGrantsService {
           email: g.user.email,
           displayName: g.user.displayName,
           signsIn: g.user.nativeCredential !== null,
+          invitation: invitationOf(g.user),
         },
       }))
       .sort((a, b) => Number(a.revokedAt !== null) - Number(b.revokedAt !== null));

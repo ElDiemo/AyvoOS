@@ -16,6 +16,7 @@ import {
   financePrincipalRequestSchema,
   financeSupplierLookupSchema,
   portalAccountRequestSchema,
+  portalGrantRequestLookupSchema,
   portalGrantIssueRequestSchema,
   portalGrantReplaceRequestSchema,
   portalInvitationRequestSchema,
@@ -26,6 +27,7 @@ import {
   type FinancePrincipalRequest,
   type PermissionCode,
   type PortalAccount,
+  type PortalGrantRequestLookup,
   type PortalAccountRequest,
   type PortalGrant,
   type PortalGrantListItem,
@@ -200,6 +202,18 @@ export class FinanceContractController {
   ): Promise<PortalGrant> {
     require(p, 'finance:billing_read', 'identity:portal_grants_manage');
     return this.portalGrants.replace(p.userId, id, body);
+  }
+
+  /** The stored result of a grant request already performed (read only; else 404). */
+  @ServiceAccess('finance')
+  @Post('portal-grants/requests/lookup')
+  @HttpCode(200)
+  portalGrantRequest(
+    @Body(new ZodValidationPipe(portalGrantRequestLookupSchema)) body: PortalGrantRequestLookup,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalGrant> {
+    require(p, 'finance:billing_read', 'identity:portal_grants_manage');
+    return this.portalGrants.performed(p.userId, body);
   }
 
   /** The PORTAL account of an e-mail (created when new) — Finance's first step of a new grant. */
