@@ -1,0 +1,302 @@
+import {
+  PORTAL_SESSION_HEADER,
+  portalActionRequestSchema,
+  portalForgotRequestSchema,
+  portalLogoutRequestSchema,
+  portalMfaRequestSchema,
+  portalPasswordRequestSchema,
+  type PortalActionRequest,
+  type PortalChallengeStep,
+  type PortalClient,
+  type PortalForgotRequest,
+  type PortalHotel,
+  type PortalLogoutRequest,
+  type PortalMfaRequest,
+  type PortalMfaResult,
+  type PortalPasswordRequest,
+  type PortalSessionView,
+} from '@ayvo/types';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  Inject,
+  Param,
+  ParseUUIDPipe,
+  Post,
+} from '@nestjs/common';
+import QRCode from 'qrcode';
+import { AuditService } from '../audit/audit.service.js';
+import { domainError } from '../common/domain-error.js';
+import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
+import { ENV, type Env } from '../config/env.js';
+import { HotelsService } from '../customers/hotels.service.js';
+import { PortalServiceAccess } from '../identity/access.decorators.js';
+import {
+  accountInactive,
+  sameOriginRequest,
+  sessionExpired,
+  unauthenticated,
+} from '../identity/access.guard.js';
+import { AuthRateLimitService } from '../identity/auth-rate-limit.service.js';
+import { sha256Hex } from '../identity/crypto.js';
+import { NativeAuthService } from '../identity/native-auth.service.js';
+import { PasswordWorkLimitError } from '../identity/native-credentials.js';
+import { SessionsService } from '../identity/sessions.service.js';
+import { PortalGrantsService } from '../portal-grants/portal-grants.service.js';
+import { PORTAL_AUDIT, PORTAL_NATIVE_AUTH, PORTAL_SESSIONS } from './portal-tokens.js';
+import { PortalPrismaService } from './portal-prisma.service.js';
+import { PortalRequestLimit } from './portal-request-limit.js';
+
+/** Seconds the pre-session step lives (as on the internal routes). */
+const LOGIN_STEP_SECONDS = 300;
+const ACTION_STEP_SECONDS = 900;
+
+const denied = () =>
+  domainError(401, 'INVALID_LOGIN', 'Přihlášení se nezdařilo. Zkontrolujte údaje.');
+
+/**
+ * The core's hotel portal contract (ADR 0045 §3, §6, §8), called only by portal-web with its own
+ * token (`@PortalServiceAccess()`). Every step runs as PORTAL: an account, link, challenge or
+ * session of the internal OS is unknown here (PR 1). Each route:
+ * - holds one of the portal's request slots (`PortalRequestLimit`, the rest 503 at once);
+ * - reads and writes only through the portal's reserved pool (`PortalPrismaService`, via the
+ *   module's own service instances);
+ * - checks the browser request portal-web forwards: Origin of the portal, and the sign-in rate
+ *   limits per IP and per account, link or pending login (Redis, fail closed).
+ * What a session may see is evaluated on every call from its active grants.
+ */
+@Controller('internal/v1/portal')
+export class PortalContractController {
+  constructor(
+    @Inject(PORTAL_NATIVE_AUTH) private readonly auth: NativeAuthService,
+    @Inject(PORTAL_SESSIONS) private readonly sessions: SessionsService,
+    private readonly grants: PortalGrantsService,
+    private readonly hotels: HotelsService,
+    private readonly limits: AuthRateLimitService,
+    private readonly slots: PortalRequestLimit,
+    private readonly db: PortalPrismaService,
+    @Inject(PORTAL_AUDIT) private readonly audit: AuditService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  // --- sign-in (no account oracle: unknown and known accounts answer alike) -----------------
+
+  @PortalServiceAccess()
+  @Post('auth/password')
+  @HttpCode(200)
+  password(
+    @Body(new ZodValidationPipe(portalPasswordRequestSchema)) body: PortalPasswordRequest,
+  ): Promise<PortalChallengeStep> {
+    return this.slots.run(async () => {
+      await this.browser(body.client, body.email);
+      const result = await this.expensive(() =>
+        this.auth.beginLogin(body.email, body.password, '/', 'PORTAL'),
+      );
+      if (!result) throw denied();
+      return { step: 'MFA', challenge: result.token, maxAgeSeconds: LOGIN_STEP_SECONDS };
+    });
+  }
+
+  @PortalServiceAccess()
+  @Post('auth/activate')
+  @HttpCode(200)
+  activate(
+    @Body(new ZodValidationPipe(portalActionRequestSchema)) body: PortalActionRequest,
+  ): Promise<PortalChallengeStep> {
+    return this.slots.run(async () => {
+      await this.browser(body.client, body.token);
+      const result = await this.expensive(() =>
+        this.auth.beginAction('ENROLL', body.token, body.password, 'PORTAL'),
+      );
+      if (!result?.enrollmentUri)
+        throw domainError(
+          400,
+          'INVALID_LINK',
+          'Odkaz už neplatí. Požádejte AYVO o novou pozvánku.',
+        );
+      return {
+        step: 'ENROLL_MFA',
+        challenge: result.token,
+        maxAgeSeconds: ACTION_STEP_SECONDS,
+        qrDataUrl: await QRCode.toDataURL(result.enrollmentUri, {
+          errorCorrectionLevel: 'M',
+          width: 256,
+        }),
+        setupKey: new URL(result.enrollmentUri).searchParams.get('secret') ?? undefined,
+      };
+    });
+  }
+
+  @PortalServiceAccess()
+  @Post('auth/forgot-password')
+  @HttpCode(200)
+  forgotPassword(
+    @Body(new ZodValidationPipe(portalForgotRequestSchema)) body: PortalForgotRequest,
+  ): Promise<{ message: string }> {
+    return this.slots.run(async () => {
+      await this.browser(body.client, body.email);
+      await this.auth.requestPasswordReset(body.email, 'PORTAL');
+      return { message: 'Pokud má tento e-mail aktivní účet, pošleme odkaz na obnovu hesla.' };
+    });
+  }
+
+  @PortalServiceAccess()
+  @Post('auth/reset-password')
+  @HttpCode(200)
+  resetPassword(
+    @Body(new ZodValidationPipe(portalActionRequestSchema)) body: PortalActionRequest,
+  ): Promise<PortalChallengeStep> {
+    return this.slots.run(async () => {
+      await this.browser(body.client, body.token);
+      const result = await this.expensive(() =>
+        this.auth.beginAction('RESET_PASSWORD', body.token, body.password, 'PORTAL'),
+      );
+      if (!result) throw domainError(400, 'INVALID_LINK', 'Odkaz už neplatí. Vyžádejte si nový.');
+      return { step: 'MFA', challenge: result.token, maxAgeSeconds: ACTION_STEP_SECONDS };
+    });
+  }
+
+  @PortalServiceAccess()
+  @Post('auth/mfa')
+  @HttpCode(200)
+  mfa(
+    @Body(new ZodValidationPipe(portalMfaRequestSchema)) body: PortalMfaRequest,
+  ): Promise<PortalMfaResult> {
+    return this.slots.run(async () => {
+      const account = await this.auth.challengeAccount(body.challenge, 'PORTAL');
+      await this.browser(body.client, account ?? undefined);
+      const result = await this.auth.complete(body.challenge, body.code.trim(), 'PORTAL');
+      if (result.kind === 'denied')
+        throw domainError(
+          401,
+          'INVALID_MFA',
+          'Kód neplatí nebo vypršel. Zkuste nový kód, případně se přihlaste znovu.',
+        );
+      if (result.kind === 'reset') return { step: 'PASSWORD_RESET' };
+      return {
+        step: 'DONE',
+        session: result.token,
+        maxAgeSeconds: result.maxAgeSeconds,
+        ...(result.recoveryCodes ? { recoveryCodes: result.recoveryCodes } : {}),
+      };
+    });
+  }
+
+  /** Ends the forwarded portal session (idempotent: an unknown one is simply not there). */
+  @PortalServiceAccess()
+  @Post('auth/logout')
+  @HttpCode(204)
+  logout(
+    @Body(new ZodValidationPipe(portalLogoutRequestSchema)) body: PortalLogoutRequest,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<void> {
+    return this.slots.run(async () => {
+      this.sameOrigin(body.client);
+      const session = await this.sessions.lookup(token ?? null, 'PORTAL');
+      if (session.kind !== 'active') return;
+      await this.db.$transaction(async (tx) => {
+        await this.sessions.revoke(session.sessionId, 'LOGOUT', tx);
+        await this.audit.record(
+          { type: 'LOGOUT', actorUserId: session.user.id, targetUserId: session.user.id },
+          tx,
+        );
+      });
+    });
+  }
+
+  // --- the session and "Moje hotely" (read only) --------------------------------------------
+
+  /** The forwarded portal session and its active grants, now. */
+  @PortalServiceAccess()
+  @Get('session')
+  session(@Headers(PORTAL_SESSION_HEADER) token: string | undefined): Promise<PortalSessionView> {
+    return this.slots.run(async () => {
+      const session = await this.portalSession(token);
+      return {
+        user: session.user,
+        idleExpiresAt: session.idleExpiresAt.toISOString(),
+        absoluteExpiresAt: session.absoluteExpiresAt.toISOString(),
+        grants: await this.grants.activeOf(session.user.id, this.db),
+      };
+    });
+  }
+
+  /** The hotels of the session's active grants. */
+  @PortalServiceAccess()
+  @Get('hotels')
+  myHotels(@Headers(PORTAL_SESSION_HEADER) token: string | undefined): Promise<PortalHotel[]> {
+    return this.slots.run(async () => this.granted(await this.portalSession(token)));
+  }
+
+  /** One granted hotel; any other id is "not found", exactly like a missing one. */
+  @PortalServiceAccess()
+  @Get('hotels/:id')
+  myHotel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<PortalHotel> {
+    return this.slots.run(async () => {
+      const hotel = (await this.granted(await this.portalSession(token), id))[0];
+      if (!hotel) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+      return hotel;
+    });
+  }
+
+  // --- internals ---------------------------------------------------------------------------
+
+  private async portalSession(token: string | undefined) {
+    const session = await this.sessions.lookup(token ?? null, 'PORTAL');
+    if (session.kind === 'expired') throw sessionExpired();
+    if (session.kind === 'inactive') throw accountInactive();
+    if (session.kind !== 'active') throw unauthenticated();
+    return session;
+  }
+
+  private async granted(session: { user: { id: string } }, only?: string): Promise<PortalHotel[]> {
+    const ids = new Set(
+      (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+    );
+    const wanted = only === undefined ? [...ids] : ids.has(only) ? [only] : [];
+    return wanted.length === 0 ? [] : this.hotels.financeContractHotels(wanted, this.db);
+  }
+
+  /** The forwarded browser request: the portal's origin, then the rate limits (fail closed). */
+  private async browser(client: PortalClient, account?: string): Promise<void> {
+    this.sameOrigin(client);
+    // Separate account keys thwart distributed guessing; no raw e-mail or token is in Redis.
+    const decisions = [await this.limits.hit('login', `portal-ip:${client.ip}`)];
+    if (account)
+      decisions.push(
+        await this.limits.hit('callback_failure', `portal-account:${sha256Hex(account)}`),
+      );
+    const decision = decisions.find((d) => !d.allowed);
+    if (decision)
+      throw domainError(
+        decision.unavailable ? 503 : 429,
+        decision.unavailable ? 'AUTH_UNAVAILABLE' : 'RATE_LIMITED',
+        'Přihlášení je dočasně omezené. Zkuste to za chvíli.',
+      );
+  }
+
+  /** The browser's request came from the portal itself (the portal's own CSRF rule, §3). */
+  private sameOrigin(client: PortalClient): void {
+    const portal = this.env.PORTAL_PUBLIC_ORIGIN;
+    if (!portal)
+      throw domainError(503, 'PORTAL_NOT_CONFIGURED', 'The hotel portal is not configured');
+    if (client.origin !== portal || !sameOriginRequest(client.secFetchSite, client.origin, portal))
+      throw domainError(403, 'CSRF_REJECTED', 'Cross-site request refused');
+  }
+
+  private async expensive<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof PasswordWorkLimitError)
+        throw domainError(503, 'AUTH_UNAVAILABLE', 'Přihlášení je vytížené. Zkuste to za chvíli.');
+      throw error;
+    }
+  }
+}

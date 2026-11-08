@@ -76,6 +76,13 @@ import { EmployeeCardRateLimit } from './employee-card-rate-limit.service.js';
     },
     { provide: APP_GUARD, useClass: AccessGuard },
   ],
-  exports: [AccessService, SessionsService],
+  exports: [
+    AccessService,
+    SessionsService,
+    // For the hotel portal contract's own instances of the native sign-in (ADR 0045 §8).
+    AuthRateLimitService,
+    NATIVE_PASSWORDS,
+    NATIVE_SECRET_BOX,
+  ],
 })
 export class IdentityModule {}

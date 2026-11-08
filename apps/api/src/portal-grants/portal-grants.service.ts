@@ -159,6 +159,26 @@ export class PortalGrantsService {
     });
   }
 
+  /**
+   * The account's active grants now (read on every portal request). `db`: the caller's own client
+   * (the hotel portal reads through its reserved pool).
+   */
+  async activeOf(
+    userId: string,
+    db: Tx = this.prisma,
+  ): Promise<{ id: string; payerCustomerId: string; hotelIds: string[] }[]> {
+    const rows = await db.portalGrant.findMany({
+      where: { userId, revokedAt: null },
+      include: { hotels: { select: { hotelId: true } } },
+      orderBy: { grantedAt: 'asc' },
+    });
+    return rows.map((g) => ({
+      id: g.id,
+      payerCustomerId: g.payerCustomerId,
+      hotelIds: g.hotels.map((h) => h.hotelId).sort(),
+    }));
+  }
+
   // --- internals ---------------------------------------------------------------------------
 
   /**

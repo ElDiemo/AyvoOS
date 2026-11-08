@@ -15,6 +15,7 @@ import { ProductionModule } from './production/production.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IdentityModule } from './identity/identity.module.js';
+import { PortalContractModule } from './portal/portal-contract.module.js';
 import { PortalGrantsModule } from './portal-grants/portal-grants.module.js';
 import { InventoryModule } from './inventory/inventory.module.js';
 import { LabelProductionModule } from './label-production/label-production.module.js';
@@ -60,6 +61,7 @@ import { WarehouseModule } from './warehouse/warehouse.module.js';
     ContractsModule,
     FinanceContractModule,
     PortalGrantsModule,
+    PortalContractModule,
     PrintingModule,
     OrdersModule,
     ReturnsModule,

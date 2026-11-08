@@ -208,8 +208,12 @@ export class HotelsService implements OnModuleInit {
    * contacts, site or delivery details. All hotels, or those of the given ids (an unknown id is
    * simply absent).
    */
-  financeContractHotels(ids?: readonly string[]): Promise<FinanceContractHotel[]> {
-    return this.prisma.hotel.findMany({
+  /** `db`: a caller's own client (the hotel portal reads through its reserved pool). */
+  financeContractHotels(
+    ids?: readonly string[],
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<FinanceContractHotel[]> {
+    return db.hotel.findMany({
       where: ids ? { id: { in: [...ids] } } : undefined,
       orderBy: { serial: 'asc' },
       select: {
