@@ -35,7 +35,7 @@ export const identityCs = {
     'identity:users_manage': 'Spravovat uživatele a jejich přístup',
     'identity:roles_manage': 'Spravovat vlastní role',
     'identity:portal_grants_manage':
-      'Hotelový portál: přístup účtu k plátci a jeho hotelům (vydání a náhrada přes Finance, odvolání)',
+      'Spravovat přístup účtů hotelového portálu k plátci a jeho hotelům (vydání a náhrada přes Finance, odvolání)',
     'sites:manage': 'Spravovat provozovny',
     'sites:all_access': 'Přístup ke všem provozovnám a skladům',
     'inventory:read': 'Zobrazit sklad (zásoby, šarže, pohyby, příjmy, dodavatelé)',
