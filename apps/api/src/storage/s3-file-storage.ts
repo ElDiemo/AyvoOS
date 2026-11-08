@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { once, type EventEmitter } from 'node:events';
 import {
   GetBucketEncryptionCommand,
   GetBucketOwnershipControlsCommand,
@@ -173,9 +174,13 @@ export class S3FileStorage implements FileStorage {
         throw new StorageUnavailableError();
       return bytes;
     } catch (error) {
-      body?.destroy?.();
       if (error instanceof StorageObjectTooLargeError) throw error;
       throw new StorageUnavailableError();
+    } finally {
+      // On every path once the body exists — read, too large (also before reading), aborted,
+      // failed — the body is closed for real before this read settles, so the caller's slot is
+      // never free while the bucket connection still is not.
+      await releaseBody(body);
     }
   }
 
@@ -190,6 +195,28 @@ export class S3FileStorage implements FileStorage {
   private validateKey(key: string): void {
     if (!STORAGE_KEY_PATTERN.test(key)) throw new Error('Invalid storage key');
   }
+}
+
+/**
+ * Destroys a response body and waits until it is really closed (a Node stream's `close`, which a
+ * custom or socket-backed stream may emit only after an asynchronous teardown). A body that is not
+ * a Node stream is only destroyed.
+ */
+async function releaseBody(body: unknown): Promise<void> {
+  const stream = body as
+    { destroy?: () => unknown; once?: unknown; closed?: boolean; destroyed?: boolean } | undefined;
+  if (!stream || typeof stream.destroy !== 'function') return;
+  if (typeof stream.once !== 'function') {
+    stream.destroy();
+    return;
+  }
+  if (stream.closed) return;
+  const closed = once(stream as unknown as EventEmitter, 'close').then(
+    () => undefined,
+    () => undefined,
+  );
+  if (!stream.destroyed) stream.destroy();
+  await closed;
 }
 
 /** No endpoint override, ambient profile or instance-metadata credential lookup. */
