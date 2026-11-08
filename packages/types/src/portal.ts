@@ -90,3 +90,52 @@ export interface PortalHotel {
   city: string;
   countryCode: string;
 }
+
+// --- Finance ↔ core: introspection of a portal session (ADR 0045 §5, §6) ------------------------
+
+/** What a PORTAL session may see now — its active grants (an empty list: nothing). */
+export const portalIntrospectionSchema = z.object({
+  userId: z.uuid(),
+  grants: z.array(
+    z.object({ id: z.uuid(), payerCustomerId: z.uuid(), hotelIds: z.array(z.uuid()) }),
+  ),
+});
+export type PortalIntrospection = z.infer<typeof portalIntrospectionSchema>;
+
+// --- "Faktury": portal-web → Finance (/api/internal/v1/portal/invoices*) -------------------------
+
+export const PORTAL_INVOICE_PAGE_MAX = 50;
+
+export const portalInvoiceListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(PORTAL_INVOICE_PAGE_MAX).default(20),
+});
+export type PortalInvoiceListQuery = z.infer<typeof portalInvoiceListQuerySchema>;
+
+/** One invoice as issued (its snapshot), its payment state and whether it was cancelled. */
+export const portalInvoiceSchema = z.object({
+  id: z.uuid(),
+  number: z.string(),
+  /** TEST invoices only outside production; labelled so in the portal. */
+  kind: z.enum(['TEST']),
+  issuedOn: z.iso.date(),
+  dueOn: z.iso.date(),
+  periodMonth: z.string().regex(/^\d{4}-\d{2}$/),
+  total: z.string(),
+  currency: z.string(),
+  hotels: z.array(z.object({ id: z.uuid(), code: z.string(), name: z.string() })),
+  paymentState: z.enum(['UNPAID', 'PARTIALLY_PAID', 'PAID']),
+  paid: z.string(),
+  remaining: z.string(),
+  cancelled: z.boolean(),
+});
+export type PortalInvoice = z.infer<typeof portalInvoiceSchema>;
+
+export const portalInvoicePageSchema = z.object({
+  items: z.array(portalInvoiceSchema),
+  /** The number of visible invoices — never counts another payer's or hotel's invoice. */
+  total: z.number().int(),
+  page: z.number().int(),
+  pageSize: z.number().int(),
+});
+export type PortalInvoicePage = z.infer<typeof portalInvoicePageSchema>;

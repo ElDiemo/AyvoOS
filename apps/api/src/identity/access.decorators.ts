@@ -27,7 +27,13 @@ export type AccessRule =
    * `/api/internal/v1/portal/` and only with the portal token. No staff principal is ever
    * resolved; the contract checks the forwarded portal session itself, as PORTAL.
    */
-  | { kind: 'portal-service' };
+  | { kind: 'portal-service' }
+  /**
+   * Finance introspecting a hotel portal session (ADR 0045 §5): Finance's token only, only under
+   * `/api/internal/v1/finance/`; no staff principal. The route checks the forwarded PORTAL session
+   * itself. Declared only through `@FinancePortalAccess()`.
+   */
+  | { kind: 'finance-portal' };
 
 /** Anonymous access (bottle passport, health, login). Use sparingly. */
 export const Public = () => SetMetadata(ACCESS_METADATA, { kind: 'public' } satisfies AccessRule);
@@ -50,3 +56,7 @@ export const ServiceAccess = (audience: 'finance') =>
 /** The hotel portal contract (ADR 0045): portal-web's token only; the portal session is checked by the route. */
 export const PortalServiceAccess = () =>
   SetMetadata(ACCESS_METADATA, { kind: 'portal-service' } satisfies AccessRule);
+
+/** Finance asking what a hotel portal session may see (ADR 0045 §5): Finance's token only. */
+export const FinancePortalAccess = () =>
+  SetMetadata(ACCESS_METADATA, { kind: 'finance-portal' } satisfies AccessRule);

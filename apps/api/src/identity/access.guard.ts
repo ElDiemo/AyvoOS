@@ -94,6 +94,13 @@ export class AccessGuard implements CanActivate {
         throw domainError(401, 'SERVICE_UNAUTHENTICATED', 'Unknown service');
       return true;
     }
+    if (rule.kind === 'finance-portal') {
+      // Finance introspecting a portal session (ADR 0045 §5): its prefix, Finance's token only.
+      if (!(req.url ?? '').startsWith(`${API_BASE_PATH}/internal/v1/finance/`)) throw forbidden();
+      if (!this.serviceTokenValid(req, 'finance'))
+        throw domainError(401, 'SERVICE_UNAUTHENTICATED', 'Unknown service');
+      return true;
+    }
 
     let resolution;
     if (rule.kind === 'service') {
