@@ -9,14 +9,7 @@ import {
 } from '../src/identity/identity-provider.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
 import { createFinanceTestApp, type FinanceTestApp } from './support/finance-app.js';
-import {
-  agreement,
-  ensureIssuing,
-  hotel,
-  invoice,
-  newTerms,
-  payer,
-} from './support/finance-portal.js';
+import { agreement, hotel, invoice, newTerms, payer } from './support/finance-portal.js';
 import { hasDatabase } from './support/test-app.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
@@ -166,7 +159,6 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
   });
 
   it('a hotel that moved to another payer: its old payer still has it by an issued invoice, the new one by the agreement', async () => {
-    await ensureIssuing(f);
     const a = await payer(f, 'Starý plátce');
     const b = await payer(f, 'Nový plátce');
     const c = await payer(f, 'Cizí plátce');
@@ -370,7 +362,6 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
   });
 
   it('the payer page offers a hotel the payer has only by an issued invoice', async () => {
-    await ensureIssuing(f);
     const a = await payer(f);
     const b = await payer(f);
     const hh = await hotel(f, 'Hotel Historie');

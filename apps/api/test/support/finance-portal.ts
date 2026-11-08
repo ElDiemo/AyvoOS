@@ -1,16 +1,16 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { expect } from 'vitest';
-import type { EffectiveTermsPage, IssuerSettings } from '@ayvo/types';
+import { newStorageKey } from '../../src/storage/file-storage.js';
 import type { FinanceTestApp } from './finance-app.js';
 import { createHotel } from './order-fixtures.js';
+import { withPrivileged } from './test-app.js';
 
 /**
  * Synthetic payers, hotels, agreements and TEST invoices for the hotel portal tests (ADR 0045):
- * everything through Finance's and the core's own admin routes, as an administrator would.
+ * payers, hotels and agreements through the admin routes, as an administrator would; invoices as
+ * synthetic rows (below).
  */
 const B = '/api/admin/finance/billing';
-const I = '/api/admin/finance/issuer';
-const INV = '/api/admin/finance/invoices';
 
 /** A synthetic payer (Finance customer). */
 export async function payer(f: FinanceTestApp, name = 'Plátce') {
@@ -98,82 +98,81 @@ export async function newTerms(f: FinanceTestApp, code: string, over: Record<str
   expect(res.status, JSON.stringify(res.body)).toBe(201);
 }
 
-/** An issuer and an active default CZK account, as needed to issue TEST invoices. */
-export async function ensureIssuing(f: FinanceTestApp) {
-  let s = (await f.get(I).expect(200)).body as IssuerSettings;
-  if (!s.current) {
-    const res = await f.post(`${I}/versions`).send({
-      requestId: randomUUID(),
-      expectedVersion: 0,
-      issuer: {
-        legalName: 'Testovací vystavitel s.r.o.',
-        addressLine1: 'Testovací 1',
-        addressLine2: null,
-        postalCode: '110 00',
-        city: 'Praha',
-        countryCode: 'CZ',
-        companyId: '12345678',
-        vatStatus: 'NOT_VAT_PAYER',
-        vatId: null,
-        registration: 'C 000000 vedená u testovacího soudu (syntetické)',
-        email: 'fakturace@vystavitel.test',
-        phone: null,
-        web: null,
-      },
-      reason: 'test',
-    });
-    expect(res.status, JSON.stringify(res.body)).toBe(201);
-    s = (await f.get(I).expect(200)).body as IssuerSettings;
-  }
-  const d = s.defaults.find((x) => x.currency === 'CZK');
-  const chosen = d && s.accounts.find((a) => a.code === d.accountCode);
-  if (chosen?.current.status === 'ACTIVE') return;
-  const created = await f.post(`${I}/bank-accounts`).send({
-    requestId: randomUUID(),
-    account: {
-      label: `Účet CZK (test ${randomUUID().slice(0, 4)})`,
-      currency: 'CZK',
-      accountPrefix: '19',
-      accountNumber: '2000145399',
-      bankCode: '0800',
-      iban: 'CZ65 0800 0000 1920 0014 5399',
-      bic: 'GIBACZPX',
-    },
-    reason: 'Zřízení (test)',
+/**
+ * A synthetic TEST invoice of these agreements for a month, written by SQL with triggers off — as
+ * if issued, with its lines (hotel, agreement revision, customer version as stored when issued)
+ * and a stored "PDF" whose SHA-256 is recorded. It needs no issuer: the issuer is one per
+ * installation, and the issuer tests expect to set it up themselves.
+ */
+export async function invoice(
+  f: FinanceTestApp,
+  agreementCodes: string[],
+  month = '2026-09',
+  pdf: Buffer = randomBytes(2048),
+) {
+  const agreements = await Promise.all(
+    agreementCodes.map((code) =>
+      f.prisma.billingAgreement.findUniqueOrThrow({
+        where: { code },
+        include: { versions: { orderBy: { revision: 'desc' }, take: 1 } },
+      }),
+    ),
+  );
+  const customerId = agreements[0]!.versions[0]!.customerId;
+  const { version } = await f.prisma.customerVersion.findFirstOrThrow({
+    where: { customerId },
+    orderBy: { version: 'desc' },
   });
-  expect(created.status, JSON.stringify(created.body)).toBe(201);
-  const fresh = (created.body as IssuerSettings).accounts.at(-1)!;
-  const set = await f.post(`${I}/default-accounts`).send({
-    requestId: randomUUID(),
-    currency: 'CZK',
-    accountCode: fresh.code,
-    expectedRevision: d?.revision ?? null,
-    reason: 'Volba výchozího účtu (test)',
-  });
-  expect(set.status, JSON.stringify(set.body)).toBe(201);
-}
-
-/** A TEST invoice of these agreements for a month (one payer), as the issuing form sends it. */
-export async function invoice(f: FinanceTestApp, agreementCodes: string[], month = '2026-09') {
-  const items = (
-    (await f.get(`${B}/agreements/effective?month=${month}`).expect(200)).body as EffectiveTermsPage
-  ).items;
-  const lines = agreementCodes.map((code) => {
-    const i = items.find((x) => x.agreement.code === code);
-    return {
-      agreementCode: code,
-      agreementRevision: i?.version?.revision ?? 1,
-      customerVersion: i?.customer?.version ?? 1,
-      priceListVersionId: i?.price.priceListVersionId ?? null,
-      unitPrice: i?.price.perRoomMonth ?? '0.00',
-      billedRooms: i?.version?.billedRooms ?? 1,
-    };
-  });
-  const res = await f.post(`${INV}/test`).send({ requestId: randomUUID(), month, lines });
-  expect(res.status, JSON.stringify(res.body)).toBe(201);
-  const { number } = res.body as { number: string };
-  return f.prisma.invoice.findUniqueOrThrow({
-    where: { number },
-    select: { id: true, number: true },
-  });
+  const id = randomUUID();
+  const digits = (n: number) =>
+    Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join('');
+  const number = `T${digits(4)}-${digits(5)}`;
+  const key = newStorageKey('finance-documents', 'pdf');
+  await f.storage.put(key, pdf);
+  const sha = createHash('sha256').update(pdf).digest('hex');
+  const amount = '1000.00';
+  await withPrivileged((db) =>
+    db.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "finance"."invoices" ("id", "serial", "kind", "number", "variable_symbol",
+           "customer_id", "customer_version", "period_month", "issued_on", "due_on", "currency",
+           "total", "snapshot", "pdf_storage_key", "pdf_sha256", "issued_by", "issued_by_name",
+           "request_id")
+         VALUES ($1::uuid, $2, 'TEST', $3, $4, $5::uuid, $6, $7::date, current_date,
+           current_date + 14, 'CZK', $8::numeric, '{}'::jsonb, $9, $10, $11::uuid,
+           'Syntetický test', $12::uuid)`,
+        id,
+        BigInt(900_000_000 + Math.floor(Math.random() * 99_000_000)),
+        number,
+        `9${digits(9)}`,
+        customerId,
+        version,
+        `${month}-01`,
+        (Number(amount) * agreements.length).toFixed(2),
+        key,
+        sha,
+        randomUUID(),
+        randomUUID(),
+      );
+      let line = 1;
+      for (const a of agreements)
+        await tx.$executeRawUnsafe(
+          `INSERT INTO "finance"."invoice_lines" ("invoice_id", "line_no", "agreement_id",
+             "agreement_revision", "period_month", "hotel_id", "hotel_code", "hotel_name",
+             "billed_rooms", "unit_price", "amount")
+           VALUES ($1::uuid, $2, $3::uuid, $4, $5::date, $6::uuid, $7, $8, 10, 100.00, $9::numeric)`,
+          id,
+          line++,
+          a.id,
+          a.versions[0]!.revision,
+          `${month}-01`,
+          a.hotelId,
+          a.hotelCode,
+          a.hotelName,
+          amount,
+        );
+    }),
+  );
+  return { id, number, pdfSha256: sha };
 }
