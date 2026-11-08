@@ -1,4 +1,5 @@
 import type {
+  PortalGrantPerformed,
   PortalGrantRequestLookup,
   PortalAccount,
   PortalAccountRequest,
@@ -16,6 +17,7 @@ import { OperationRequestsService } from '../database/operation-requests.service
 import { PrismaService } from '../database/prisma.service.js';
 import { Prisma, type AccountAudience } from '../generated/prisma/client.js';
 import { InvitationsService } from '../identity/invitations.service.js';
+import { MAIL_DELIVERY_ATTEMPTS } from '../identity/native-tokens.service.js';
 import { SessionsService } from '../identity/sessions.service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -46,6 +48,50 @@ const toView = (g: GrantRow): PortalGrant => ({
  * fixed lock order: the account's user row, then the grant row. A grant is never edited or
  * revived (also DB); one active grant per (user, payer) (DB).
  */
+/** What the invitation state of an account is computed from. */
+const invitationSelect = {
+  nativeCredential: { select: { userId: true } },
+  invitations: {
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 1,
+    select: { state: true, providerInvitationId: true, expiresAt: true },
+  },
+  nativeTokens: {
+    where: { purpose: 'ENROLL' },
+    select: {
+      id: true,
+      sentAt: true,
+      deliveryAttempts: true,
+      expiresAt: true,
+      usedAt: true,
+      revokedAt: true,
+    },
+  },
+} satisfies Prisma.UserSelect;
+type InvitationState = PortalGrantListItem['account']['invitation'];
+
+function invitationOf(
+  u: Prisma.UserGetPayload<{ select: typeof invitationSelect }>,
+  now: Date,
+): InvitationState {
+  if (u.nativeCredential) return 'ACTIVE';
+  const latest = u.invitations[0];
+  if (!latest) return 'NONE';
+  if (latest.state === 'FAILED') return 'FAILED';
+  if (latest.state === 'EXPIRED') return 'EXPIRED';
+  if (latest.state === 'SENDING') return 'QUEUED';
+  if (latest.state !== 'PENDING') return 'NONE';
+  if (latest.expiresAt && latest.expiresAt <= now) return 'EXPIRED';
+  // The local provider's link mail goes out from the outbox (its token).
+  const token = u.nativeTokens.find((t) => t.id === latest.providerInvitationId);
+  if (!token || token.usedAt || token.revokedAt) return 'NONE';
+  if (token.expiresAt <= now) return 'EXPIRED';
+  if (token.sentAt) return 'ACCEPTED_BY_SERVER';
+  // The outbox stops after this many attempts (NativeTokensService.deliverPending).
+  if (token.deliveryAttempts >= MAIL_DELIVERY_ATTEMPTS) return 'DELIVERY_FAILED';
+  return 'QUEUED';
+}
+
 @Injectable()
 export class PortalGrantsService {
   constructor(
@@ -115,7 +161,12 @@ export class PortalGrantsService {
    * always follows a written grant (§4). Idempotent per `requestId` (the invitation's own request
    * id). An account that already signs in, or has an invitation on its way, is not invited again.
    */
-  async invite(actorId: string, userId: string, requestId: string): Promise<PortalInvitation> {
+  async invite(
+    actorId: string,
+    userId: string,
+    requestId: string,
+    retry = false,
+  ): Promise<PortalInvitation> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { nativeCredential: { select: { userId: true } } },
@@ -123,6 +174,8 @@ export class PortalGrantsService {
     if (!user) throw domainError(404, 'USER_NOT_FOUND', 'No such user');
     if (user.audience !== 'PORTAL')
       throw domainError(409, 'ACCOUNT_AUDIENCE_MISMATCH', 'Not a hotel portal account');
+    if (user.status !== 'ACTIVE')
+      throw domainError(409, 'USER_INACTIVE', 'This hotel portal account is deactivated');
     if (user.nativeCredential) return { state: 'ACTIVE' };
     if ((await this.prisma.portalGrant.count({ where: { userId, revokedAt: null } })) === 0)
       throw domainError(
@@ -130,8 +183,13 @@ export class PortalGrantsService {
         'NO_ACTIVE_GRANT',
         'A hotel portal account is invited only with a grant',
       );
+    // A mail still in the outbox is not rotated under the worker's feet: it is on its way.
+    if (retry && (await this.invitationState(userId)) === 'QUEUED') return { state: 'OPEN' };
     try {
-      await this.invitations.send(
+      // A targeted retry resends an open invitation with a rotated link (the old link stops
+      // working) or replaces an expired / failed / revoked one; never a second valid link.
+      await (retry ? this.invitations.resend : this.invitations.send).call(
+        this.invitations,
         actorId,
         userId,
         requestId,
@@ -142,7 +200,7 @@ export class PortalGrantsService {
     } catch (error) {
       const code = (error as { getResponse?: () => { code?: string } }).getResponse?.().code;
       if (code === 'INVITATION_OPEN') return { state: 'OPEN' };
-      if (code === 'ALREADY_LINKED') return { state: 'ACTIVE' };
+      if (code === 'ALREADY_LINKED' || code === 'INVITATION_ACCEPTED') return { state: 'ACTIVE' };
       // Refused for good: this request id answers so forever; a new attempt has a new id.
       if (code === 'INVITATION_PROVIDER_FAILED') return { state: 'FAILED' };
       // No definite answer (the provider may have acted, or the same attempt still runs): the
@@ -160,7 +218,7 @@ export class PortalGrantsService {
    * retry after a lost answer: the same actor and meaning as the original, else
    * IDEMPOTENCY_CONFLICT; never performed → 404 REQUEST_NOT_FOUND.
    */
-  async performed(actorId: string, req: PortalGrantRequestLookup): Promise<PortalGrant> {
+  async performed(actorId: string, req: PortalGrantRequestLookup): Promise<PortalGrantPerformed> {
     const scope = {
       payerCustomerId: req.payerCustomerId,
       hotelIds: [...req.hotelIds].sort(),
@@ -186,49 +244,40 @@ export class PortalGrantsService {
       });
     }
     if (!result) throw domainError(404, 'REQUEST_NOT_FOUND', 'This request was not performed');
-    return result;
+    // The stored result as it was, with the account and the grant as they are now (read only).
+    const [account, grant] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({
+        where: { id: result.userId },
+        select: { id: true, email: true, displayName: true, status: true },
+      }),
+      this.prisma.portalGrant.findUniqueOrThrow({
+        where: { id: result.id },
+        select: { revokedAt: true },
+      }),
+    ]);
+    return {
+      grant: result,
+      account: {
+        userId: account.id,
+        email: account.email,
+        displayName: account.displayName,
+        active: account.status === 'ACTIVE',
+      },
+      grantActive: grant.revokedAt === null,
+    };
   }
 
   /** The payer's grants, active first, with their accounts and invitation state. */
   async ofPayer(payerCustomerId: string): Promise<PortalGrantListItem[]> {
+    const now = new Date();
     const rows = await this.prisma.portalGrant.findMany({
       where: { payerCustomerId },
       include: {
         hotels: true,
-        user: {
-          select: {
-            email: true,
-            displayName: true,
-            nativeCredential: { select: { userId: true } },
-            invitations: {
-              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-              take: 1,
-              select: { state: true, providerInvitationId: true },
-            },
-            nativeTokens: {
-              where: { purpose: 'ENROLL' },
-              orderBy: { createdAt: 'desc' },
-              take: 1,
-              select: { id: true, sentAt: true },
-            },
-          },
-        },
+        user: { select: { email: true, displayName: true, ...invitationSelect } },
       },
       orderBy: [{ grantedAt: 'desc' }],
     });
-    const invitationOf = (u: (typeof rows)[number]['user']) => {
-      if (u.nativeCredential) return 'ACTIVE' as const;
-      const latest = u.invitations[0];
-      if (!latest) return 'NONE' as const;
-      if (latest.state === 'FAILED') return 'FAILED' as const;
-      if (latest.state === 'SENDING') return 'PENDING' as const;
-      if (latest.state !== 'PENDING') return 'NONE' as const;
-      // The local provider's mail goes out from the outbox: delivered once its link was sent.
-      const token = u.nativeTokens[0];
-      return token?.id === latest.providerInvitationId && token.sentAt
-        ? ('DELIVERED' as const)
-        : ('PENDING' as const);
-    };
     return rows
       .map((g) => ({
         ...toView(g),
@@ -236,10 +285,19 @@ export class PortalGrantsService {
           email: g.user.email,
           displayName: g.user.displayName,
           signsIn: g.user.nativeCredential !== null,
-          invitation: invitationOf(g.user),
+          invitation: invitationOf(g.user, now),
         },
       }))
       .sort((a, b) => Number(a.revokedAt !== null) - Number(b.revokedAt !== null));
+  }
+
+  /** The account's invitation state now (see portalGrantListItemSchema). */
+  async invitationState(userId: string): Promise<InvitationState> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: invitationSelect,
+    });
+    return invitationOf(user, new Date());
   }
 
   /** One grant (any state); unknown → 404. */
