@@ -18,20 +18,22 @@ const nextConfig: NextConfig = {
   typescript: { tsconfigPath: 'tsconfig.build.json' },
   poweredByHeader: false,
   async headers() {
+    const common = [
+      { key: 'X-Frame-Options', value: 'DENY' },
+      { key: 'Referrer-Policy', value: 'no-referrer' },
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+    ];
+    // Pages get a per-request nonce policy from src/proxy.ts. The route handlers it skips (JSON
+    // sign-in steps and the PDF) run no script at all.
+    const noScripts = {
+      key: 'Content-Security-Policy',
+      value: "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    };
     return [
-      {
-        source: '/:path*',
-        headers: [
-          { key: 'X-Frame-Options', value: 'DENY' },
-          {
-            key: 'Content-Security-Policy',
-            value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-          },
-          { key: 'Referrer-Policy', value: 'no-referrer' },
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
-        ],
-      },
+      { source: '/:path*', headers: common },
+      { source: '/auth/:path*', headers: [noScripts] },
+      { source: '/invoices/:id/pdf', headers: [noScripts] },
     ];
   },
 };
