@@ -1020,6 +1020,8 @@ enum OperationKind {
   RETURN_RECEIPT_CLOSE
   RETURN_ISSUE_RESOLVE
   REUSE_READY_SCAN
+  PORTAL_GRANT_ISSUE
+  PORTAL_GRANT_REPLACE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;

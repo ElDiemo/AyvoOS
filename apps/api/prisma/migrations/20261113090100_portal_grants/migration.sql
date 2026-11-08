@@ -106,6 +106,13 @@ BEGIN
   IF OLD."revoked_at" IS NOT NULL THEN
     RAISE EXCEPTION 'AYVO: a revoked portal grant never changes' USING ERRCODE = 'restrict_violation';
   END IF;
+  -- The only update is the revocation itself: active → revoked. Any other update (also a no-op
+  -- `SET x = x`) is refused: it would leave the grant active with a new row version, and the hotel
+  -- set must never be extended after its grant's own transaction (see the hotels' rule below).
+  IF NEW."revoked_at" IS NULL THEN
+    RAISE EXCEPTION 'AYVO: a portal grant is only ever revoked; a change of scope is a new grant'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
   IF NEW."id" <> OLD."id" OR NEW."user_id" <> OLD."user_id"
      OR NEW."payer_customer_id" <> OLD."payer_customer_id" OR NEW."granted_at" <> OLD."granted_at"
      OR NEW."granted_by" <> OLD."granted_by" OR NEW."reason" <> OLD."reason"
@@ -141,6 +148,9 @@ DECLARE
   g "portal_grants"%ROWTYPE;
 BEGIN
   SELECT * INTO g FROM "portal_grants" WHERE "id" = NEW."grant_id";
+  -- Only in the grant's own (inserting) transaction: its row version is that transaction's. The
+  -- one update a grant ever takes revokes it, so a later transaction can never make an active
+  -- grant's row its own.
   IF NOT FOUND OR g.xmin <> pg_current_xact_id()::xid OR g."revoked_at" IS NOT NULL THEN
     RAISE EXCEPTION 'AYVO: the hotels of a portal grant are written with the grant'
       USING ERRCODE = 'restrict_violation';
