@@ -265,6 +265,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'POST /api/internal/v1/finance/portal-accounts/:id/invitation',
       'POST /api/internal/v1/finance/portal-grants',
       'POST /api/internal/v1/finance/portal-grants/:id/replace',
+      'POST /api/internal/v1/finance/portal-grants/requests/lookup',
       'POST /api/internal/v1/finance/principal',
       'POST /api/internal/v1/finance/suppliers/lookup',
     ]);

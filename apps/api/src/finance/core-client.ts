@@ -20,6 +20,7 @@ import {
   type PortalGrant,
   type PortalGrantIssueRequest,
   type PortalGrantListItem,
+  type PortalGrantRequestLookup,
   type PortalGrantReplaceRequest,
   type PortalInvitation,
   type PortalIntrospection,
@@ -200,6 +201,27 @@ export class CoreClient {
       { requestId },
       true,
     );
+  }
+
+  /** The stored result of a grant request the core already performed, or null (read only). */
+  async performedPortalGrantRequest(
+    sessionToken: string,
+    body: PortalGrantRequestLookup,
+  ): Promise<PortalGrant | null> {
+    try {
+      return await this.json(
+        'POST',
+        'portal-grants/requests/lookup',
+        sessionToken,
+        portalGrantSchema,
+        body,
+        true,
+      );
+    } catch (error) {
+      const code = (error as { getResponse?: () => { code?: string } }).getResponse?.().code;
+      if (code === 'REQUEST_NOT_FOUND') return null;
+      throw error;
+    }
   }
 
   portalGrant(sessionToken: string, grantId: string): Promise<PortalGrant> {

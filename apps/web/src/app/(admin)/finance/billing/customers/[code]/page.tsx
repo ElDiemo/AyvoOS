@@ -1,10 +1,9 @@
 import {
   billingCustomerDetailSchema,
   effectiveTermsPageSchema,
-  portalGrantListItemSchema,
+  financePortalAccessSchema,
 } from '@ayvo/types';
 import Link from 'next/link';
-import { z } from 'zod';
 import { notFound } from 'next/navigation';
 import { CustomerForm } from '@/components/finance/billing-forms';
 import { FinanceHeader } from '@/components/finance/finance-header';
@@ -44,7 +43,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
     hasPermission(me, 'finance:billing_read') && hasPermission(me, 'identity:portal_grants_manage')
       ? await apiGet(
           `admin/finance/portal-grants?payerCustomerId=${c.id}`,
-          z.array(portalGrantListItemSchema),
+          financePortalAccessSchema,
         )
       : null;
   return (
@@ -111,11 +110,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
         </Card>
         {portal && (
           <Card title={portalAccessCs.title} testId="portal-access">
-            <PortalAccess
-              payerCustomerId={c.id}
-              grants={portal}
-              hotels={paid.map((i) => ({ id: i.agreement.hotel.id, name: i.agreement.hotel.name }))}
-            />
+            <PortalAccess payerCustomerId={c.id} access={portal} />
           </Card>
         )}
         <Card title={t.history} testId="customer-history">

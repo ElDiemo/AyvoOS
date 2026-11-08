@@ -1,11 +1,12 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import {
+  financePortalInvitationSchema,
   financePortalGrantIssueSchema,
   financePortalGrantReplaceSchema,
   type FinancePortalGrantIssue,
   type FinancePortalGrantReplace,
+  type FinancePortalAccess,
   type FinancePortalGrantResult,
-  type PortalGrantListItem,
 } from '@ayvo/types';
 import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
@@ -29,7 +30,7 @@ export class FinancePortalGrantsController {
     @Query(new ZodValidationPipe(z.object({ payerCustomerId: z.uuid() })))
     query: { payerCustomerId: string },
     @Caller() caller: FinanceCaller,
-  ): Promise<PortalGrantListItem[]> {
+  ): Promise<FinancePortalAccess> {
     return this.grants.ofPayer(caller, query.payerCustomerId);
   }
 
@@ -50,5 +51,16 @@ export class FinancePortalGrantsController {
     @Caller() caller: FinanceCaller,
   ): Promise<FinancePortalGrantResult> {
     return this.grants.replace(caller, id, body);
+  }
+
+  /** A new invitation attempt for the grant's account (after a FAILED one): its own requestId. */
+  @Post(':id/invitation')
+  @RequirePermission('finance:billing_read', 'identity:portal_grants_manage')
+  reinvite(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(financePortalInvitationSchema)) body: { requestId: string },
+    @Caller() caller: FinanceCaller,
+  ): Promise<{ invitation: FinancePortalGrantResult['invitation'] }> {
+    return this.grants.reinvite(caller, id, body.requestId);
   }
 }

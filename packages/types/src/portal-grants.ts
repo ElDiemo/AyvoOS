@@ -103,14 +103,28 @@ export const portalInvitationRequestSchema = z.strictObject({ requestId: z.uuid(
 export type PortalInvitationRequest = z.infer<typeof portalInvitationRequestSchema>;
 
 export const portalInvitationSchema = z.object({
-  /** SENT now; OPEN = an invitation is already on its way; ACTIVE = the account already signs in. */
-  state: z.enum(['SENT', 'OPEN', 'ACTIVE']),
+  /**
+   * SENT: recorded for delivery now (or by the earlier attempt of the same request). OPEN: another
+   * invitation is already on its way. ACTIVE: the account already signs in. FAILED: definitively
+   * refused — the same request id always answers FAILED; a NEW attempt (a new request id) may
+   * invite again. UNCERTAIN: no definite answer — retry with the SAME request id.
+   */
+  state: z.enum(['SENT', 'OPEN', 'ACTIVE', 'FAILED', 'UNCERTAIN']),
 });
 export type PortalInvitation = z.infer<typeof portalInvitationSchema>;
 
 /** A grant as Finance's payer page shows it (with its account). */
 export const portalGrantListItemSchema = portalGrantSchema.extend({
-  account: z.object({ email: z.string(), displayName: z.string(), signsIn: z.boolean() }),
+  account: z.object({
+    email: z.string(),
+    displayName: z.string(),
+    signsIn: z.boolean(),
+    /**
+     * The account's invitation now: ACTIVE (signs in), DELIVERED (the mail went out), PENDING (on
+     * its way, not delivered yet), FAILED (refused — send a new one), NONE (none open).
+     */
+    invitation: z.enum(['ACTIVE', 'DELIVERED', 'PENDING', 'FAILED', 'NONE']),
+  }),
 });
 export type PortalGrantListItem = z.infer<typeof portalGrantListItemSchema>;
 
@@ -141,7 +155,58 @@ export const financePortalGrantResultSchema = z.object({
   grant: portalGrantSchema,
   /** Only on issue: the account the grant is for. */
   account: portalAccountSchema.omit({ created: true }).nullable(),
-  /** Only on issue: the invitation, sent after the grant was written. FAILED = retry the request. */
-  invitation: z.enum(['SENT', 'OPEN', 'ACTIVE', 'FAILED']).nullable(),
+  /**
+   * Only on issue: the invitation, sent after the grant was written (see portalInvitationSchema).
+   * FAILED: send a new invitation (its own action); UNCERTAIN: save the same form again.
+   */
+  invitation: portalInvitationSchema.shape.state.nullable(),
 });
+
+/**
+ * Finance → core: the stored result of a grant request, if the core already performed it — read
+ * only, nothing written (a retry after a lost answer, before Finance re-checks the pair). The
+ * request's meaning must be the stored one, else IDEMPOTENCY_CONFLICT; not performed → 404.
+ */
+export const portalGrantRequestLookupSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('ISSUE'),
+    requestId: z.uuid(),
+    /** The account by its e-mail (it may not exist yet: then the request was not performed). */
+    email: accountEmail,
+    payerCustomerId: z.uuid(),
+    hotelIds: hotelIdsSchema,
+    reason: reasonSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('REPLACE'),
+    requestId: z.uuid(),
+    grantId: z.uuid(),
+    payerCustomerId: z.uuid(),
+    hotelIds: hotelIdsSchema,
+    reason: reasonSchema,
+  }),
+]);
+export type PortalGrantRequestLookup = z.infer<typeof portalGrantRequestLookupSchema>;
+
+/** A payer's hotel as a grant may name it (Finance's own data; ADR §4). */
+export const financePortalPayerHotelSchema = z.object({
+  id: z.uuid(),
+  code: z.string(),
+  name: z.string(),
+  /** AGREEMENT: the payer's terms are in effect today; INVOICE: only on invoices issued to it. */
+  basis: z.enum(['AGREEMENT', 'INVOICE']),
+});
+export type FinancePortalPayerHotel = z.infer<typeof financePortalPayerHotelSchema>;
+
+/** A new invitation attempt for the account of an active grant (after a FAILED one). */
+export const financePortalInvitationSchema = z.strictObject({ requestId: z.uuid() });
 export type FinancePortalGrantResult = z.infer<typeof financePortalGrantResultSchema>;
+
+/** "Přístup do portálu" of a payer page: the grants, the hotels a grant may name, all names. */
+export const financePortalAccessSchema = z.object({
+  grants: z.array(portalGrantListItemSchema),
+  payerHotels: z.array(financePortalPayerHotelSchema),
+  /** Names of every hotel shown (also of a grant's hotel the payer no longer has). */
+  hotelNames: z.record(z.string(), z.string()),
+});
+export type FinancePortalAccess = z.infer<typeof financePortalAccessSchema>;
