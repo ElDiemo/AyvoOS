@@ -156,6 +156,21 @@ export const envSchema = z
         .optional(),
     ),
 
+    // --- Hotel portal contract (ADR 0045 §3, §6, §8) ----------------------------------------
+    // SHA-256 (hex) of the token portal-web presents on /api/internal/v1/portal (never accepted on
+    // Finance's routes, nor Finance's token here). Unset: the portal contract refuses every call.
+    PORTAL_SERVICE_TOKEN_SHA256: z.preprocess(
+      blankAsUnset,
+      z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
+    ),
+    // The portal's reserved database connections (its own pool; staff work never shares it) and
+    // how many portal requests one process serves at once (the rest 503 at once).
+    PORTAL_DB_POOL_MAX: z.coerce.number().int().min(1).max(10).default(2),
+    PORTAL_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(64).default(8),
+
     // --- Identity and access (ADR 0022, doc 021) ---------------------------------------------
     // Origin of the web application as the browser sees it (redirect URIs, Origin checks of
     // state-changing requests). DEV preview: https://dev.ayvo.co. Required in production.

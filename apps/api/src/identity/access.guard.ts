@@ -87,6 +87,14 @@ export class AccessGuard implements CanActivate {
       return true;
     }
 
+    if (rule.kind === 'portal-service') {
+      // Hotel portal contract (ADR 0045 §6): only its own prefix, only portal-web's token.
+      if (!(req.url ?? '').startsWith(`${API_BASE_PATH}/internal/v1/portal/`)) throw forbidden();
+      if (!this.serviceTokenValid(req, 'portal'))
+        throw domainError(401, 'SERVICE_UNAUTHENTICATED', 'Unknown service');
+      return true;
+    }
+
     let resolution;
     if (rule.kind === 'service') {
       // Internal contract (ADR 0039): only under /api/internal/, only with the audience's
@@ -136,8 +144,11 @@ export class AccessGuard implements CanActivate {
   }
 
   /** `Authorization: Bearer <token>` whose SHA-256 is the configured one (constant time). */
-  private serviceTokenValid(req: RequestWithPrincipal, audience: 'finance'): boolean {
-    const expected = audience === 'finance' ? this.env.FINANCE_SERVICE_TOKEN_SHA256 : undefined;
+  private serviceTokenValid(req: RequestWithPrincipal, audience: 'finance' | 'portal'): boolean {
+    const expected =
+      audience === 'finance'
+        ? this.env.FINANCE_SERVICE_TOKEN_SHA256
+        : this.env.PORTAL_SERVICE_TOKEN_SHA256;
     const header = req.headers.authorization;
     if (!expected || typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
     const given = createHash('sha256').update(header.slice('Bearer '.length)).digest();
