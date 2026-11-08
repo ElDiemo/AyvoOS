@@ -57,39 +57,51 @@ export type PortalForgotRequest = z.infer<typeof portalForgotRequestSchema>;
 export type PortalLogoutRequest = z.infer<typeof portalLogoutRequestSchema>;
 
 /** A pre-session step: portal-web stores `challenge` in `__Host-ayvo_portal_pre` for `maxAgeSeconds`. */
-export interface PortalChallengeStep {
-  step: 'MFA' | 'ENROLL_MFA';
-  challenge: string;
-  maxAgeSeconds: number;
+export const portalChallengeStepSchema = z.object({
+  step: z.enum(['MFA', 'ENROLL_MFA']),
+  challenge: z.string().min(1).max(128),
+  maxAgeSeconds: z.number().int().positive(),
   /** Only for ENROLL_MFA. */
-  qrDataUrl?: string;
-  setupKey?: string;
-}
+  qrDataUrl: z.string().startsWith('data:image/png;base64,').optional(),
+  setupKey: z.string().optional(),
+});
+export type PortalChallengeStep = z.infer<typeof portalChallengeStepSchema>;
 
 /** The MFA step's result: a portal session (into `__Host-ayvo_portal`) or a finished reset. */
-export type PortalMfaResult =
-  | { step: 'DONE'; session: string; maxAgeSeconds: number; recoveryCodes?: string[] }
-  | { step: 'PASSWORD_RESET' };
+export const portalMfaResultSchema = z.discriminatedUnion('step', [
+  z.object({
+    step: z.literal('DONE'),
+    session: z.string().min(1),
+    maxAgeSeconds: z.number().positive(),
+    recoveryCodes: z.array(z.string()).optional(),
+  }),
+  z.object({ step: z.literal('PASSWORD_RESET') }),
+]);
+export type PortalMfaResult = z.infer<typeof portalMfaResultSchema>;
 
 /** The current portal session and what it may see right now (evaluated on every call). */
-export interface PortalSessionView {
-  user: { id: string; email: string; displayName: string };
-  idleExpiresAt: string;
-  absoluteExpiresAt: string;
-  grants: { id: string; payerCustomerId: string; hotelIds: string[] }[];
-}
+export const portalSessionViewSchema = z.object({
+  user: z.object({ id: z.uuid(), email: z.string(), displayName: z.string() }),
+  idleExpiresAt: z.iso.datetime(),
+  absoluteExpiresAt: z.iso.datetime(),
+  grants: z.array(
+    z.object({ id: z.uuid(), payerCustomerId: z.uuid(), hotelIds: z.array(z.uuid()) }),
+  ),
+});
+export type PortalSessionView = z.infer<typeof portalSessionViewSchema>;
 
 /** "Moje hotely": a granted hotel, read only (identity and address). */
-export interface PortalHotel {
-  id: string;
-  code: string;
-  name: string;
-  addressLine1: string;
-  addressLine2: string | null;
-  postalCode: string;
-  city: string;
-  countryCode: string;
-}
+export const portalHotelSchema = z.object({
+  id: z.uuid(),
+  code: z.string(),
+  name: z.string(),
+  addressLine1: z.string(),
+  addressLine2: z.string().nullable(),
+  postalCode: z.string(),
+  city: z.string(),
+  countryCode: z.string(),
+});
+export type PortalHotel = z.infer<typeof portalHotelSchema>;
 
 // --- Finance ↔ core: introspection of a portal session (ADR 0045 §5, §6) ------------------------
 
