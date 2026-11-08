@@ -15,6 +15,39 @@ export const PRE_COOKIE = '__Host-ayvo_portal_pre';
  */
 export const LOGOUT_PENDING_COOKIE = '__Host-ayvo_portal_out';
 export const LOGOUT_PENDING_SECONDS = 24 * 60 * 60;
+/**
+ * How many unconfirmed sign-outs one browser may carry (review 5818871541). A new session after a
+ * failed sign-out must not hide the older one: the cookie keeps every session still to be ended,
+ * and a new sign-in is refused while it is full (the login page offers to finish signing out).
+ */
+export const MAX_PENDING_LOGOUTS = 4;
+
+/** The sessions whose sign-out the core has not confirmed yet, oldest first. */
+export async function readPendingLogouts(): Promise<string[]> {
+  const raw = await readCookie(LOGOUT_PENDING_COOKIE);
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((part) => {
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return '';
+      }
+    })
+    .filter((token) => token.length > 0)
+    .slice(0, MAX_PENDING_LOGOUTS);
+}
+
+/** Keeps exactly these unconfirmed sign-outs (none: the cookie is removed). */
+export async function writePendingLogouts(tokens: readonly string[]) {
+  if (tokens.length === 0) return clearCookie(LOGOUT_PENDING_COOKIE);
+  await setCookie(
+    LOGOUT_PENDING_COOKIE,
+    tokens.map((t) => encodeURIComponent(t)).join(','),
+    LOGOUT_PENDING_SECONDS,
+  );
+}
 
 const attributes = { httpOnly: true, secure: true, sameSite: 'strict', path: '/' } as const;
 

@@ -22,7 +22,7 @@ vi.mock('next/headers', () => ({
   }),
 }));
 
-const { logout, password } = await import('./auth-steps');
+const { logout, mfa, password } = await import('./auth-steps');
 const { AUTH_INPUT_DEADLINE_MS, AUTH_STEPS_IN_FLIGHT, authStepsInFlight } =
   await import('./auth-input');
 
@@ -175,6 +175,85 @@ describe('signing out tells the truth (review 5818694161)', () => {
     );
     expect((await out()).status).toBe(204);
     expect([...jar.keys()]).toEqual([]);
+  });
+
+  /** The sessions each core call was made for, in order. */
+  const sessionsSent = (core: { mock: { calls: unknown[][] } }) =>
+    core.mock.calls.map(
+      (c) => (c[1] as { headers: Record<string, string> }).headers['x-ayvo-portal-session'],
+    );
+  const signIn = () =>
+    mfa(
+      new Request('http://localhost:3300/auth/mfa', {
+        method: 'POST',
+        headers: { ...ORIGIN, 'content-type': 'application/json' },
+        body: JSON.stringify({ code: '123456' }),
+      }),
+    );
+
+  it('outage → new sign-in → sign-out: the core is asked to end both sessions; 204 only when both are ended (review 5818871541)', async () => {
+    jar.set('__Host-ayvo_portal', 'old');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ code: 'PORTAL_BUSY' }, { status: 503 }),
+    );
+    expect((await out()).status).toBe(503);
+    expect(jar.get('__Host-ayvo_portal_out')).toBe('old');
+
+    // A new sign-in in the same browser.
+    jar.set('__Host-ayvo_portal_pre', 'p'.repeat(43));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ step: 'DONE', session: 'new', maxAgeSeconds: 3600 }),
+    );
+    expect((await signIn()).status).toBe(200);
+    expect(jar.get('__Host-ayvo_portal')).toBe('new');
+    expect(jar.get('__Host-ayvo_portal_out')).toBe('old');
+
+    // Signing out of the new session: the old one is still down at the core.
+    vi.restoreAllMocks();
+    let core = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({ code: 'PORTAL_BUSY' }, { status: 503 }));
+    const res = await out();
+    expect([res.status, (await res.json()).code]).toEqual([503, 'LOGOUT_INCOMPLETE']);
+    expect(sessionsSent(core)).toEqual(['new', 'old']);
+    expect(jar.has('__Host-ayvo_portal')).toBe(false);
+    expect(jar.get('__Host-ayvo_portal_out')).toBe('old');
+    vi.restoreAllMocks();
+
+    // Both confirmed: the same action with the core healthy answers 204 and keeps nothing.
+    jar.set('__Host-ayvo_portal', 'new2');
+    core = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    expect((await out()).status).toBe(204);
+    expect(sessionsSent(core)).toEqual(['new2', 'old']);
+    expect([...jar.keys()]).toEqual([]);
+  });
+
+  it('both sessions unconfirmed: both are kept for the retry, which ends them', async () => {
+    jar.set('__Host-ayvo_portal', 'new');
+    jar.set('__Host-ayvo_portal_out', 'old');
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('connect ECONNREFUSED'));
+    expect((await out()).status).toBe(503);
+    vi.restoreAllMocks();
+    const core = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    expect((await out()).status).toBe(204);
+    expect(sessionsSent(core).sort()).toEqual(['new', 'old']);
+    expect([...jar.keys()]).toEqual([]);
+  });
+
+  it('a full list of unfinished sign-outs refuses a new sign-in before the core', async () => {
+    jar.set('__Host-ayvo_portal_out', ['a', 'b', 'c', 'd'].join(','));
+    jar.set('__Host-ayvo_portal_pre', 'p'.repeat(43));
+    const core = vi.spyOn(globalThis, 'fetch');
+    const res = await signIn();
+    expect([res.status, (await res.json()).code]).toEqual([409, 'LOGOUT_INCOMPLETE']);
+    expect(core).not.toHaveBeenCalled();
+    expect(jar.has('__Host-ayvo_portal')).toBe(false);
   });
 
   it('nothing to end: 204 without calling the core', async () => {

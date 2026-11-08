@@ -219,6 +219,28 @@ test.describe('portal-web hardening (review 5818694161)', () => {
     expect(cookies).not.toContain('__Host-ayvo_portal_out');
   });
 
+  test('sign-out with the core down, a new sign-in, then sign-out: the core ends both sessions (review 5818871541)', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const first = (await stubState(page)).sessions;
+    await control(page, { logoutMode: 'down' });
+    await page.getByRole('button', { name: 'Odhlásit' }).click();
+    await expect(page.getByTestId('logout-pending')).toBeVisible();
+    await control(page, { logoutMode: 'ok' });
+    // The user signs in again instead of finishing the sign-out.
+    await signIn(page);
+    expect((await stubState(page)).sessions).toBe(first + 1);
+    await page.getByRole('button', { name: 'Odhlásit' }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByTestId('logout-pending')).toHaveCount(0);
+    // Both the new and the earlier unconfirmed session are ended at the core.
+    expect((await stubState(page)).sessions).toBe(first - 1);
+    const cookies = (await page.context().cookies()).map((c) => c.name);
+    expect(cookies).not.toContain('__Host-ayvo_portal');
+    expect(cookies).not.toContain('__Host-ayvo_portal_out');
+  });
+
   test('sign-out whose answer is lost after the core ended the session: unfinished, then confirmed by the retry', async ({
     page,
   }) => {

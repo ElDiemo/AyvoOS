@@ -88,6 +88,8 @@ export const cs = {
     INVALID_REQUEST: 'Údaje nejsou úplné nebo jsou příliš dlouhé.',
     REQUEST_TOO_LARGE: 'Údaje jsou příliš dlouhé.',
     REQUEST_TIMEOUT: 'Odeslání trvalo příliš dlouho. Zkuste to znovu.',
+    LOGOUT_INCOMPLETE:
+      'Nejdřív dokončete dřívější odhlášení (tlačítko „Dokončit odhlášení“ na této stránce), pak se přihlaste znovu.',
   } as Record<string, string>,
   unavailable: 'Portál je dočasně nedostupný. Zkuste to prosím později.',
 };

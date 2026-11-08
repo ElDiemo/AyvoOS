@@ -7,12 +7,13 @@ import { contractJson, PortalUnauthenticated } from './backend';
 import { clientOf } from './request';
 import {
   clearCookie,
-  LOGOUT_PENDING_COOKIE,
-  LOGOUT_PENDING_SECONDS,
+  MAX_PENDING_LOGOUTS,
   PRE_COOKIE,
   readCookie,
+  readPendingLogouts,
   SESSION_COOKIE,
   setCookie,
+  writePendingLogouts,
 } from './session';
 
 const text = (max: number) => z.string().min(1).max(max);
@@ -92,6 +93,11 @@ export const mfa = (request: Request) =>
   publicStep(request, z.object({ code: text(64) }), async (b) => {
     const pending = await readCookie(PRE_COOKIE);
     if (!pending) return answer(401, { code: 'NO_PENDING_STEP' });
+    // No new session while this browser cannot remember one more unfinished sign-out (review
+    // 5818871541): signing out of the new session must still be able to end the older ones.
+    if ((await readPendingLogouts()).length >= MAX_PENDING_LOGOUTS) {
+      return answer(409, { code: 'LOGOUT_INCOMPLETE' });
+    }
     const r = await contractJson('core', 'auth/mfa', portalMfaResultSchema, {
       method: 'POST',
       body: { challenge: pending, code: b.code, client: clientOf(request) },
@@ -106,35 +112,42 @@ export const mfa = (request: Request) =>
   });
 
 /**
- * Signing out (review 5818694161). Local access ends at once, always: the session cookie is
- * dropped before the core is asked, so no page of this browser uses the session again. The
- * answer then says truthfully whether the core ended the session:
- * - **204** — the core confirmed it (or the session was already gone there: logout is idempotent,
- *   so a retry after an answer lost past the core's commit lands here);
- * - **503 LOGOUT_INCOMPLETE** — the core could not be reached or refused. The session token is
- *   kept only in `__Host-ayvo_portal_out` (HttpOnly; no page reads it as a session), and the login
- *   page offers to finish signing out, which retries exactly this call.
+ * Signing out (reviews 5818694161, 5818871541). Local access ends at once, always: the session
+ * cookie is dropped before the core is asked, so no page of this browser uses the session again.
+ * The action ends **every** session this browser still has to end — the current one and each
+ * earlier sign-out the core has not confirmed (a new sign-in after a failed sign-out must not hide
+ * the older session) — and the answer says truthfully whether the core ended all of them:
+ * - **204** — the core confirmed each one (or it was already gone there: logout is idempotent, so a
+ *   retry after an answer lost past the core's commit lands here); only then is the retry state
+ *   removed;
+ * - **503 LOGOUT_INCOMPLETE** — the core could not be reached or refused for at least one. Exactly
+ *   those session tokens are kept in `__Host-ayvo_portal_out` (HttpOnly; no page reads it as a
+ *   session), and the login page offers to finish signing out, which retries them.
  */
 export const logout = (request: Request) =>
   stateChanging(request, async () => {
-    const session = (await readCookie(SESSION_COOKIE)) ?? (await readCookie(LOGOUT_PENDING_COOKIE));
+    const current = await readCookie(SESSION_COOKIE);
+    const targets = [...new Set([...(current ? [current] : []), ...(await readPendingLogouts())])];
     await clearCookie(SESSION_COOKIE);
-    const done = async () => {
-      await clearCookie(LOGOUT_PENDING_COOKIE);
-      return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
-    };
-    if (!session) return done();
-    try {
-      await contractJson('core', 'auth/logout', z.unknown(), {
-        method: 'POST',
-        body: { client: clientOf(request) },
-        session,
-      });
-      return await done();
-    } catch (error) {
-      // The core no longer knows the session: it is ended.
-      if (error instanceof PortalUnauthenticated) return done();
-      await setCookie(LOGOUT_PENDING_COOKIE, session, LOGOUT_PENDING_SECONDS);
-      return answer(503, { code: 'LOGOUT_INCOMPLETE' });
+    const unfinished: string[] = [];
+    for (const session of targets) {
+      if (!(await endAtCore(request, session))) unfinished.push(session);
     }
+    await writePendingLogouts(unfinished);
+    if (unfinished.length > 0) return answer(503, { code: 'LOGOUT_INCOMPLETE' });
+    return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
   });
+
+/** True when the core ended the session now or no longer knows it. */
+async function endAtCore(request: Request, session: string): Promise<boolean> {
+  try {
+    await contractJson('core', 'auth/logout', z.unknown(), {
+      method: 'POST',
+      body: { client: clientOf(request) },
+      session,
+    });
+    return true;
+  } catch (error) {
+    return error instanceof PortalUnauthenticated;
+  }
+}
