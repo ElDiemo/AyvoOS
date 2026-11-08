@@ -10,14 +10,7 @@ import { portalInvoiceKinds } from '../src/finance/portal-invoices.service.js';
 import { SessionsService } from '../src/identity/sessions.service.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
 import { createFinanceTestApp, type FinanceTestApp } from './support/finance-app.js';
-import {
-  agreement,
-  ensureIssuing,
-  hotel,
-  invoice,
-  newTerms,
-  payer,
-} from './support/finance-portal.js';
+import { agreement, hotel, invoice, newTerms, payer } from './support/finance-portal.js';
 import { hasDatabase, withPrivileged } from './support/test-app.js';
 
 const portalToken = randomBytes(32).toString('base64url');
@@ -93,7 +86,6 @@ describe.skipIf(!hasDatabase)('hotel portal invoices in Finance', () => {
     actorId = (
       await f.core.prisma.user.create({ data: { email: unique('admin'), displayName: 'Admin' } })
     ).id;
-    await ensureIssuing(f);
     const A = await payer(f, 'Plátce A');
     const B = await payer(f, 'Plátce B');
     payers = { A: A.id, B: B.id };
