@@ -22,7 +22,7 @@ vi.mock('next/headers', () => ({
   }),
 }));
 
-const { password } = await import('./auth-steps');
+const { logout, password } = await import('./auth-steps');
 const { AUTH_INPUT_DEADLINE_MS, AUTH_STEPS_IN_FLIGHT, authStepsInFlight } =
   await import('./auth-input');
 
@@ -117,5 +117,69 @@ describe('public sign-in steps: input limits before the core (review 5818694161)
     });
     expect(jar.get('__Host-ayvo_portal_pre')).toBe('p'.repeat(43));
     expect(authStepsInFlight()).toBe(0);
+  });
+});
+
+describe('signing out tells the truth (review 5818694161)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    jar.clear();
+  });
+  const out = () =>
+    logout(new Request('http://localhost:3300/auth/logout', { method: 'POST', headers: ORIGIN }));
+
+  it('confirmed by the core: 204, no cookie left', async () => {
+    jar.set('__Host-ayvo_portal', 's1');
+    const core = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    expect((await out()).status).toBe(204);
+    expect(core.mock.calls[0]![1]!.headers).toMatchObject({ 'x-ayvo-portal-session': 's1' });
+    expect([...jar.keys()]).toEqual([]);
+  });
+
+  it('core 503: local access ends at once, the answer says LOGOUT_INCOMPLETE, and the retry finishes it', async () => {
+    jar.set('__Host-ayvo_portal', 's1');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ code: 'PORTAL_BUSY' }, { status: 503 }),
+    );
+    const res = await out();
+    expect([res.status, (await res.json()).code]).toEqual([503, 'LOGOUT_INCOMPLETE']);
+    expect(jar.has('__Host-ayvo_portal')).toBe(false);
+    expect(jar.get('__Host-ayvo_portal_out')).toBe('s1');
+    // The retry sends the same session again; the core confirms.
+    const core = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    expect((await out()).status).toBe(204);
+    expect(core.mock.calls[0]![1]!.headers).toMatchObject({ 'x-ayvo-portal-session': 's1' });
+    expect([...jar.keys()]).toEqual([]);
+  });
+
+  it('the answer lost after the core committed: incomplete first, then the idempotent retry is confirmed', async () => {
+    jar.set('__Host-ayvo_portal', 's1');
+    // The core ended the session, but the connection broke before its answer arrived.
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('socket hang up'));
+    expect((await out()).status).toBe(503);
+    expect(jar.get('__Host-ayvo_portal_out')).toBe('s1');
+    // The core no longer knows the session: logout answers 204 (idempotent) …
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 204 }));
+    expect((await out()).status).toBe(204);
+    expect([...jar.keys()]).toEqual([]);
+  });
+
+  it('… and a core that says the session is gone counts as signed out too', async () => {
+    jar.set('__Host-ayvo_portal_out', 's1');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ code: 'UNAUTHENTICATED' }, { status: 401 }),
+    );
+    expect((await out()).status).toBe(204);
+    expect([...jar.keys()]).toEqual([]);
+  });
+
+  it('nothing to end: 204 without calling the core', async () => {
+    const core = vi.spyOn(globalThis, 'fetch');
+    expect((await out()).status).toBe(204);
+    expect(core).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,13 @@ import { cookies } from 'next/headers';
  */
 export const SESSION_COOKIE = '__Host-ayvo_portal';
 export const PRE_COOKIE = '__Host-ayvo_portal_pre';
+/**
+ * A sign-out the core has not confirmed yet (review 5818694161): the session token, kept only so
+ * the sign-out can be retried. No page reads it as a session. It lives as long as a portal session
+ * can (the absolute limit, 24 h); the core's own expiry ends the session anyway.
+ */
+export const LOGOUT_PENDING_COOKIE = '__Host-ayvo_portal_out';
+export const LOGOUT_PENDING_SECONDS = 24 * 60 * 60;
 
 const attributes = { httpOnly: true, secure: true, sameSite: 'strict', path: '/' } as const;
 

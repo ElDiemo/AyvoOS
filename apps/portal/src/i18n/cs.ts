@@ -21,6 +21,13 @@ export const cs = {
     confirm: 'Dokončit aktivaci',
     noToken: 'Odkaz neobsahuje aktivační údaj. Otevřete odkaz z pozvánky znovu.',
   },
+  logout: {
+    failed: 'Odhlášení se nepodařilo odeslat. Zkontrolujte připojení a zkuste to znovu.',
+    pending:
+      'Odhlášení nebylo na serveru dokončeno. V tomto prohlížeči jste odhlášeni, ale relace může na serveru zůstat platná, dokud odhlášení nedokončíte nebo nevyprší.',
+    stillPending: 'Odhlášení se zatím nepodařilo dokončit. Zkuste to prosím za chvíli znovu.',
+    finish: 'Dokončit odhlášení',
+  },
   recovery: {
     title: 'Záchranné kódy',
     help: 'Uložte si je na bezpečné místo. Každý kód lze použít jednou místo kódu z aplikace. Znovu je neuvidíte.',
