@@ -170,6 +170,13 @@ export const envSchema = z
     // how many portal requests one process serves at once (the rest 503 at once).
     PORTAL_DB_POOL_MAX: z.coerce.number().int().min(1).max(10).default(2),
     PORTAL_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(64).default(8),
+    // Bounded database work of a portal request: waiting for one of its connections, and one
+    // statement (lock waits included). Then 503, no data; the slot and connection are free again.
+    PORTAL_DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(50).max(10_000).default(1000),
+    PORTAL_DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(50).max(10_000).default(2000),
+    // Argon2 computations the portal may run at once — its own capacity, beside the internal OS's
+    // (2), which the portal never takes. Peak Argon2 memory: (2 + this) × 64 MiB.
+    PORTAL_PASSWORD_CONCURRENCY: z.coerce.number().int().min(1).max(2).default(1),
 
     // --- Identity and access (ADR 0022, doc 021) ---------------------------------------------
     // Origin of the web application as the browser sees it (redirect URIs, Origin checks of

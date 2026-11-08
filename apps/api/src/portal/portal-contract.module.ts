@@ -5,12 +5,8 @@ import { CustomersModule } from '../customers/customers.module.js';
 import type { PrismaService } from '../database/prisma.service.js';
 import { IdentityModule } from '../identity/identity.module.js';
 import { NativeAuthService } from '../identity/native-auth.service.js';
-import {
-  NATIVE_PASSWORDS,
-  NATIVE_SECRET_BOX,
-  NativeTokensService,
-} from '../identity/native-tokens.service.js';
-import type { NativePasswords, NativeSecretBox } from '../identity/native-credentials.js';
+import { NATIVE_SECRET_BOX, NativeTokensService } from '../identity/native-tokens.service.js';
+import { NativePasswords, type NativeSecretBox } from '../identity/native-credentials.js';
 import { SessionsService } from '../identity/sessions.service.js';
 import { PortalGrantsModule } from '../portal-grants/portal-grants.module.js';
 import { PortalContractController } from './portal-contract.controller.js';
@@ -19,6 +15,7 @@ import {
   PORTAL_AUDIT,
   PORTAL_NATIVE_AUTH,
   PORTAL_NATIVE_TOKENS,
+  PORTAL_PASSWORDS,
   PORTAL_SESSIONS,
 } from './portal-tokens.js';
 import { PortalRequestLimit } from './portal-request-limit.js';
@@ -64,6 +61,12 @@ const asClient = (db: PortalPrismaService) => db as unknown as PrismaService;
       useFactory: (db: PortalPrismaService, env: Env, box: NativeSecretBox) =>
         new PortalNativeTokensService(asClient(db), env, box),
     },
+    // The portal's own Argon2 capacity: portal sign-ins never take the internal OS's.
+    {
+      provide: PORTAL_PASSWORDS,
+      inject: [ENV],
+      useFactory: (env: Env) => new NativePasswords(env.PORTAL_PASSWORD_CONCURRENCY),
+    },
     {
       provide: PORTAL_NATIVE_AUTH,
       inject: [
@@ -71,7 +74,7 @@ const asClient = (db: PortalPrismaService) => db as unknown as PrismaService;
         PORTAL_AUDIT,
         PORTAL_SESSIONS,
         PORTAL_NATIVE_TOKENS,
-        NATIVE_PASSWORDS,
+        PORTAL_PASSWORDS,
         NATIVE_SECRET_BOX,
       ],
       useFactory: (

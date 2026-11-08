@@ -166,8 +166,10 @@ export class PortalContractController {
     @Body(new ZodValidationPipe(portalMfaRequestSchema)) body: PortalMfaRequest,
   ): Promise<PortalMfaResult> {
     return this.slots.run(async () => {
+      // Origin and the IP limit first: a request refused there never reaches the database.
+      await this.browser(body.client);
       const account = await this.auth.challengeAccount(body.challenge, 'PORTAL');
-      await this.browser(body.client, account ?? undefined);
+      if (account) await this.accountLimit(account);
       const result = await this.auth.complete(body.challenge, body.code.trim(), 'PORTAL');
       if (result.kind === 'denied')
         throw domainError(
@@ -263,17 +265,23 @@ export class PortalContractController {
     return wanted.length === 0 ? [] : this.hotels.financeContractHotels(wanted, this.db);
   }
 
-  /** The forwarded browser request: the portal's origin, then the rate limits (fail closed). */
+  /**
+   * The forwarded browser request, before any database work: the portal's origin, the IP limit,
+   * then (when the request names it) the account's or link's limit. Redis, fail closed.
+   */
   private async browser(client: PortalClient, account?: string): Promise<void> {
     this.sameOrigin(client);
-    // Separate account keys thwart distributed guessing; no raw e-mail or token is in Redis.
-    const decisions = [await this.limits.hit('login', `portal-ip:${client.ip}`)];
-    if (account)
-      decisions.push(
-        await this.limits.hit('callback_failure', `portal-account:${sha256Hex(account)}`),
-      );
-    const decision = decisions.find((d) => !d.allowed);
-    if (decision)
+    this.decide(await this.limits.hit('login', `portal-ip:${client.ip}`));
+    if (account) await this.accountLimit(account);
+  }
+
+  /** Separate account keys thwart distributed guessing; no raw e-mail or token is in Redis. */
+  private async accountLimit(account: string): Promise<void> {
+    this.decide(await this.limits.hit('callback_failure', `portal-account:${sha256Hex(account)}`));
+  }
+
+  private decide(decision: { allowed: boolean; unavailable?: boolean }): void {
+    if (!decision.allowed)
       throw domainError(
         decision.unavailable ? 503 : 429,
         decision.unavailable ? 'AUTH_UNAVAILABLE' : 'RATE_LIMITED',

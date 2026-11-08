@@ -3,3 +3,4 @@ export const PORTAL_AUDIT = Symbol('PORTAL_AUDIT');
 export const PORTAL_SESSIONS = Symbol('PORTAL_SESSIONS');
 export const PORTAL_NATIVE_TOKENS = Symbol('PORTAL_NATIVE_TOKENS');
 export const PORTAL_NATIVE_AUTH = Symbol('PORTAL_NATIVE_AUTH');
+export const PORTAL_PASSWORDS = Symbol('PORTAL_PASSWORDS');
