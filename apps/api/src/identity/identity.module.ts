@@ -79,6 +79,8 @@ import { EmployeeCardRateLimit } from './employee-card-rate-limit.service.js';
   exports: [
     AccessService,
     SessionsService,
+    // Hotel portal accounts are invited by the grants module once a grant exists (ADR 0045 §4).
+    InvitationsService,
     // For the hotel portal contract's own instances of the native sign-in (ADR 0045 §8).
     AuthRateLimitService,
     NATIVE_SECRET_BOX,

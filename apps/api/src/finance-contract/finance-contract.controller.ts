@@ -15,15 +15,22 @@ import {
   financeHotelLookupSchema,
   financePrincipalRequestSchema,
   financeSupplierLookupSchema,
+  portalAccountRequestSchema,
   portalGrantIssueRequestSchema,
   portalGrantReplaceRequestSchema,
+  portalInvitationRequestSchema,
   type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
   type FinancePrincipal,
   type FinancePrincipalRequest,
   type PermissionCode,
+  type PortalAccount,
+  type PortalAccountRequest,
   type PortalGrant,
+  type PortalGrantListItem,
+  type PortalInvitation,
+  type PortalInvitationRequest,
   type PortalGrantIssueRequest,
   type PortalGrantReplaceRequest,
 } from '@ayvo/types';
@@ -193,5 +200,53 @@ export class FinanceContractController {
   ): Promise<PortalGrant> {
     require(p, 'finance:billing_read', 'identity:portal_grants_manage');
     return this.portalGrants.replace(p.userId, id, body);
+  }
+
+  /** The PORTAL account of an e-mail (created when new) — Finance's first step of a new grant. */
+  @ServiceAccess('finance')
+  @Post('portal-accounts')
+  @HttpCode(200)
+  portalAccount(
+    @Body(new ZodValidationPipe(portalAccountRequestSchema)) body: PortalAccountRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalAccount> {
+    require(p, 'finance:billing_read', 'identity:portal_grants_manage');
+    return this.portalGrants.ensureAccount(p.userId, body);
+  }
+
+  /** Finance's last step: the invitation, only once the account holds an active grant. */
+  @ServiceAccess('finance')
+  @Post('portal-accounts/:id/invitation')
+  @HttpCode(200)
+  portalInvitation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(portalInvitationRequestSchema)) body: PortalInvitationRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalInvitation> {
+    require(p, 'finance:billing_read', 'identity:portal_grants_manage');
+    return this.portalGrants.invite(p.userId, id, body.requestId);
+  }
+
+  /** The payer's grants for its page in Finance ("Přístup do portálu"). */
+  @ServiceAccess('finance')
+  @Get('portal-grants')
+  portalGrantsOfPayer(
+    @Query(new ZodValidationPipe(z.object({ payerCustomerId: z.uuid() })))
+    query: { payerCustomerId: string },
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalGrantListItem[]> {
+    require(p, 'finance:billing_read', 'identity:portal_grants_manage');
+    return this.portalGrants.ofPayer(query.payerCustomerId);
+  }
+
+  /** One grant (Finance re-checks a replacement against the grant's own payer). */
+  @ServiceAccess('finance')
+  @Get('portal-grants/:id')
+  portalGrant(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalGrant> {
+    require(p, 'finance:billing_read', 'identity:portal_grants_manage');
+    return this.portalGrants.byId(id);
   }
 }
