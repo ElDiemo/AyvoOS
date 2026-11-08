@@ -8,6 +8,8 @@ import {
   portalGrantListItemSchema,
   portalGrantSchema,
   portalInvitationSchema,
+  portalIntrospectionSchema,
+  PORTAL_SESSION_HEADER,
   type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
@@ -20,6 +22,7 @@ import {
   type PortalGrantListItem,
   type PortalGrantReplaceRequest,
   type PortalInvitation,
+  type PortalIntrospection,
 } from '@ayvo/types';
 import { z } from 'zod';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
@@ -123,6 +126,39 @@ export class CoreClient {
       this.env.CORE_CONTENT_TIMEOUT_MS,
     );
     return Buffer.from(await res.arrayBuffer());
+  }
+
+  /**
+   * What a hotel portal session may see now (ADR 0045 §5): asked on every portal request, never
+   * cached. Finance's token and the forwarded PORTAL session (never a staff one). 401 = no such
+   * session (the portal's answer); anything else, or no answer within CORE_INTROSPECT_TIMEOUT_MS,
+   * is "unavailable" — never a broader or an older scope.
+   */
+  async introspectPortal(portalSession: string): Promise<PortalIntrospection> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.env.CORE_INTERNAL_URL}/api/internal/v1/finance/introspect-portal`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.env.FINANCE_SERVICE_TOKEN}`,
+          [PORTAL_SESSION_HEADER]: portalSession,
+        },
+        signal: AbortSignal.timeout(this.env.CORE_INTROSPECT_TIMEOUT_MS),
+        redirect: 'error',
+      });
+    } catch {
+      this.logger.warn('Portal introspection: unreachable');
+      throw dependencyUnavailable();
+    }
+    const answer = (await res.json().catch(() => undefined)) as { code?: string } | undefined;
+    if (res.status === 401 && answer?.code !== 'SERVICE_UNAUTHENTICATED')
+      throw domainError(401, answer?.code ?? 'UNAUTHENTICATED', 'Sign-in is required');
+    const parsed = res.ok ? portalIntrospectionSchema.safeParse(answer) : null;
+    if (!parsed?.success) {
+      this.logger.warn(`Portal introspection: HTTP ${res.status}`);
+      throw dependencyUnavailable();
+    }
+    return parsed.data;
   }
 
   // --- hotel portal grants (ADR 0045 §4): Finance → core, never the other way --------------

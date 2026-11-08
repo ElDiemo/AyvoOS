@@ -20,6 +20,36 @@ export const financeEnvSchema = z
     /** Contract timeouts (ADR 0039 §4). */
     CORE_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2_000),
     CORE_CONTENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+
+    // --- Hotel portal invoices (ADR 0045 §5, §6, §8) ------------------------------------------
+    /** SHA-256 (hex) of portal-web's own Finance token. Unset: the portal routes refuse every call. */
+    PORTAL_FINANCE_TOKEN_SHA256: optional(z.string().regex(/^[a-f0-9]{64}$/)),
+    /** Finance → core introspection of a portal session (§8: 2 s). */
+    CORE_INTROSPECT_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(2_000),
+    /** The portal's reserved connections beside the staff pool (4), and its in-flight requests. */
+    FINANCE_PORTAL_DB_POOL_MAX: z.coerce.number().int().min(1).max(4).default(1),
+    FINANCE_PORTAL_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(16).default(2),
+    /** Bounded portal DB work: the wait for its connection and each statement (lock waits included). */
+    FINANCE_PORTAL_DB_ACQUIRE_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(50)
+      .max(10_000)
+      .default(1_000),
+    FINANCE_PORTAL_DB_STATEMENT_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(50)
+      .max(10_000)
+      .default(2_000),
+    /** An invoice PDF for the portal: read from storage within this time and at most this size. */
+    FINANCE_PORTAL_PDF_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(20_000),
+    FINANCE_PORTAL_PDF_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(50 * 1024 * 1024)
+      .default(10 * 1024 * 1024),
     FILE_STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     FILE_STORAGE_DIR: z.string().min(1).default('../../var/storage'),
     AWS_REGION: optional(z.string().regex(/^[a-z]{2}(?:-[a-z]+)+-\d+$/)),
