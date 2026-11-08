@@ -55,7 +55,17 @@ const invoices = [
 ];
 const pdf = Buffer.from('%PDF-1.4\n% synthetic portal e2e invoice\n%%EOF\n');
 
-const state = { financeDown: false, lastClient: null, sessions: new Set(), pending: new Map() };
+const state = {
+  financeDown: false,
+  /** 'ok' | 'down' (503) | 'lost' (the session is ended, then the answer is lost). */
+  logoutMode: 'ok',
+  /** 'ok' | 'oversize' (Content-Length over 10 MB) | 'disposition' (an unexpected header). */
+  pdfMode: 'ok',
+  lastClient: null,
+  coreCalls: 0,
+  sessions: new Set(),
+  pending: new Map(),
+};
 
 const send = (res, status, body, schema) => {
   const value = schema ? schema.parse(body) : body;
@@ -77,6 +87,7 @@ const session = (req) => {
 };
 
 async function core(req, res, path) {
+  state.coreCalls++;
   if (!authorized(req, STUB.coreToken)) return refuse(res, 401, 'SERVICE_UNAUTHENTICATED');
   if (req.method === 'POST' && path.startsWith('auth/')) {
     const body = await readBody(req);
@@ -133,8 +144,13 @@ async function core(req, res, path) {
       );
     }
     if (step === 'logout') {
+      if (state.logoutMode === 'down') return refuse(res, 503, 'PORTAL_BUSY');
       const s = session(req);
       if (s) state.sessions.delete(s);
+      if (state.logoutMode === 'lost') {
+        req.socket.destroy();
+        return;
+      }
       res.writeHead(204).end();
       return;
     }
@@ -186,8 +202,12 @@ function finance(req, res, path) {
   if (pdfPart === 'pdf') {
     res.writeHead(200, {
       'content-type': 'application/pdf',
-      'content-length': String(pdf.length),
-      'content-disposition': `attachment; filename="${found.number}.pdf"`,
+      'content-length':
+        state.pdfMode === 'oversize' ? String(11 * 1024 * 1024) : String(pdf.length),
+      'content-disposition':
+        state.pdfMode === 'disposition'
+          ? 'inline; filename="../../evil.html"'
+          : `attachment; filename="${found.number}.pdf"`,
       'cache-control': 'private, no-store',
     });
     res.end(pdf);
@@ -199,7 +219,13 @@ function finance(req, res, path) {
 const CORE = '/api/internal/v1/portal/';
 export function startStubs(corePort = 4301, financePort = 4311) {
   const control = async (req, res) => {
-    if (req.url === '/__state') return send(res, 200, { lastClient: state.lastClient, invoices });
+    if (req.url === '/__state')
+      return send(res, 200, {
+        lastClient: state.lastClient,
+        coreCalls: state.coreCalls,
+        sessions: state.sessions.size,
+        invoices,
+      });
     if (req.url === '/__control') {
       Object.assign(state, await readBody(req));
       return send(res, 200, { ok: true });
