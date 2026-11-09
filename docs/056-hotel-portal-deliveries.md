@@ -24,8 +24,20 @@ Per delivery the portal shows:
 - products in whole crates and bottles;
 - the moments the order was handed to the carrier and delivered.
 
-Those moments are the carrier-proven order events `HANDED_TO_CARRIER` and `DELIVERED` (doc 031).
-When the carrier reported the pickup and the delivery in one go, only the delivery is shown.
+Those moments are the order events `HANDED_TO_CARRIER` and `DELIVERED` (doc 031):
+
+- from the carrier's tracking;
+- or a hand-over confirmed by hand by AYVO staff (`source = USER`; its time is the confirmation).
+
+Two cases have no time:
+
+- When the carrier reported the pickup and the delivery in one go, only the delivery is shown.
+- When a parcel's pickup time was never reported (TRACK39-R1, `pickupTimeUnknown`), the hand-over is
+  shown without a time. Its event carries only the moment tracking saw it, and that is not shown as
+  the hand-over time.
+
+The ship day is a day of the serving site's time zone. Moments are shown in Europe/Prague, like every
+portal time.
 
 The portal never shows the serving site, crates, bottles, recipe or label versions, labels,
 carrier accounts or connections, parcel numbers, people, cancel reasons or internal events.

@@ -204,33 +204,39 @@ export class OrdersService implements OnModuleInit {
         orderBy: { lineNo: 'asc' },
       },
     } satisfies Prisma.OrderSelect;
-    const [open, delivered] = await Promise.all([
-      db.order.findMany({
-        where: {
-          hotelId,
-          status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP', 'HANDED_TO_CARRIER'] },
-        },
-        select,
-        orderBy: [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
-      }),
-      db.order.findMany({
-        where: { hotelId, status: 'DELIVERED' },
-        select,
-        orderBy: [{ requestedShipDate: 'desc' }, { serial: 'desc' }],
-        take: PORTAL_DELIVERED_MAX,
-      }),
-    ]);
+    // One query at a time: the portal pool is small (PORTAL_DB_POOL_MAX, 2 by default), and one
+    // hotel page must not hold every connection while its other calls wait for one.
+    const open = await db.order.findMany({
+      where: {
+        hotelId,
+        status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP', 'HANDED_TO_CARRIER'] },
+      },
+      select,
+      orderBy: [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
+    });
+    const delivered = await db.order.findMany({
+      where: { hotelId, status: 'DELIVERED' },
+      select,
+      orderBy: [{ requestedShipDate: 'desc' }, { serial: 'desc' }],
+      take: PORTAL_DELIVERED_MAX,
+    });
     const all = [...open, ...delivered];
     const events = await db.orderEvent.findMany({
       where: {
         orderId: { in: all.map((o) => o.id) },
         type: { in: ['HANDED_TO_CARRIER', 'DELIVERED'] },
       },
-      select: { orderId: true, type: true, occurredAt: true },
+      select: { orderId: true, type: true, occurredAt: true, payload: true },
       orderBy: { occurredAt: 'asc' },
     });
     const at = new Map<string, Date>();
-    for (const e of events) at.set(`${e.orderId}:${e.type}`, e.occurredAt);
+    for (const e of events) {
+      // A hand-over whose pickup time the carrier never reported carries the moment tracking
+      // established it (TRACK39-R1): never shown to the hotel as the hand-over time.
+      const unknown = (e.payload as { pickupTimeUnknown?: unknown } | null)?.pickupTimeUnknown;
+      if (e.type === 'HANDED_TO_CARRIER' && unknown === true) continue;
+      at.set(`${e.orderId}:${e.type}`, e.occurredAt);
+    }
     const view = (o: (typeof all)[number]): PortalDelivery => ({
       code: o.code,
       state: PORTAL_STATE[o.status as keyof typeof PORTAL_STATE],

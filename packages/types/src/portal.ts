@@ -161,11 +161,12 @@ export const portalDeliveryStateSchema = z.enum([
 export const portalDeliverySchema = z.object({
   code: z.string(),
   state: portalDeliveryStateSchema,
-  /** The planned ship day (Europe/Prague). */
+  /** The planned ship day: a calendar day of the serving site's time zone (as the order stores it). */
   shipDate: z.iso.date(),
   /** From the hotel's supply plan (else ordered by hand). */
   fromPlan: z.boolean(),
   lines: z.array(z.object({ product: z.string(), crates: z.int(), bottles: z.int() })),
+  /** Null when not yet handed over, or when the carrier never reported the pickup time. */
   handedOverAt: z.iso.datetime().nullable(),
   deliveredAt: z.iso.datetime().nullable(),
 });
