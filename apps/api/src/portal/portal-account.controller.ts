@@ -75,6 +75,9 @@ export class PortalAccountController {
       this.sameOrigin(body.client);
       const userId = (await this.activeSession(token)).user.id;
       await this.db.$transaction(async (tx) => {
+        // The user lock first (as deactivation and sign-in completion): a sign-in finishing at the
+        // same moment either commits before this revocation (and is ended by it) or waits for it.
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
         const ended = await this.sessions.revokeAllForUser(userId, 'LOGOUT_ALL', tx);
         await this.audit.record(
           {
