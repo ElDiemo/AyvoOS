@@ -198,6 +198,8 @@ export const PORTAL_UPCOMING_DAYS = 60;
 export const portalHotelProfileUpdateSchema = z.strictObject({
   expected: z.string().regex(/^[0-9a-f]{64}$/),
   profile: hotelProfileFieldsSchema,
+  /** Why the hotel changes its details (owner 2026-11-09: required, kept in the audit). */
+  reason: z.string().trim().min(3).max(500),
 });
 export type PortalHotelProfileUpdate = z.infer<typeof portalHotelProfileUpdateSchema>;
 

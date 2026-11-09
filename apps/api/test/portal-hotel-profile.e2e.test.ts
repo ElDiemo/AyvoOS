@@ -78,7 +78,8 @@ describe.skipIf(!hasDatabase)('hotel portal: the hotel profile', () => {
     expected: string,
     profile: Record<string, unknown>,
     c = client(),
-  ) => post(`hotels/${hotelId}/profile`, session).send({ expected, profile, client: c });
+    reason = 'Nová recepce a příjem zboží ze dvora',
+  ) => post(`hotels/${hotelId}/profile`, session).send({ expected, profile, reason, client: c });
   const row = (id: string) => t.prisma.hotel.findUniqueOrThrow({ where: { id } });
   const audits = (code: string) =>
     t.prisma.auditEvent.findMany({
@@ -220,7 +221,11 @@ describe.skipIf(!hasDatabase)('hotel portal: the hotel profile', () => {
     const events = await audits(hotelA.code);
     expect(events).toHaveLength(auditsBefore + 1);
     const event = events.at(-1)!;
-    expect(event).toMatchObject({ actorUserId: a.user.id, siteId: before.fulfillmentSiteId });
+    expect(event).toMatchObject({
+      actorUserId: a.user.id,
+      siteId: before.fulfillmentSiteId,
+      reason: 'Nová recepce a příjem zboží ze dvora',
+    });
     expect(event.payload).toMatchObject({
       hotel: hotelA.code,
       via: 'PORTAL',
@@ -263,10 +268,21 @@ describe.skipIf(!hasDatabase)('hotel portal: the hotel profile', () => {
     const extra = await post(`hotels/${hotelA.id}/profile`, a.session).send({
       expected: current.fingerprint,
       profile: profileOf({ city: 'Brno' }),
+      reason: 'Přestěhování recepce',
       client: client(),
       hotelId: hotelB.id,
     });
     expect(extra.status).toBe(400);
+    // The reason is required (owner 2026-11-09).
+    for (const reason of [undefined, '', '  ', 'x'.repeat(501)]) {
+      const res = await post(`hotels/${hotelA.id}/profile`, a.session).send({
+        expected: current.fingerprint,
+        profile: profileOf({ city: 'Brno' }),
+        ...(reason === undefined ? {} : { reason }),
+        client: client(),
+      });
+      expect(res.status, JSON.stringify(reason)).toBe(400);
+    }
     for (const c of [
       client({ origin: 'https://evil.example' }),
       client({ origin: 'https://dev.ayvo.co' }),
