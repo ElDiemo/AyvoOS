@@ -546,3 +546,37 @@ export const salespersonSchema = z.object({
   manages: z.boolean(),
 });
 export type Salesperson = z.infer<typeof salespersonSchema>;
+
+/**
+ * The indicative price per room and month for the salesperson's calculator (owner 2026-11-09 night,
+ * doc 060 §D): set by the sales manager, never a default, append-only; the newest per currency is
+ * current. An exact decimal string ("320.00"). The note says what it includes (e.g. VAT).
+ */
+export const salesIndicativePriceSchema = z.object({
+  id: z.uuid(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  amount: z.string().regex(/^\d{1,10}\.\d{2}$/),
+  note: z.string(),
+  setBy: z.string(),
+  setAt: z.iso.datetime(),
+});
+export type SalesIndicativePrice = z.infer<typeof salesIndicativePriceSchema>;
+export const salesIndicativePricesSchema = z.object({
+  /** The current price per currency (newest first by currency code). */
+  current: z.array(salesIndicativePriceSchema),
+  /** The latest versions, newest first (at most 20). */
+  history: z.array(salesIndicativePriceSchema),
+});
+export type SalesIndicativePrices = z.infer<typeof salesIndicativePricesSchema>;
+export const setIndicativePriceRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  /** An exact decimal with at most two places, more than 0 (never a float). */
+  amount: z
+    .string()
+    .trim()
+    .regex(/^\d{1,10}(\.\d{1,2})?$/)
+    .refine((v) => /[1-9]/.test(v), 'more than 0'),
+  note: z.string().trim().min(1).max(300),
+});
+export type SetIndicativePriceRequest = z.infer<typeof setIndicativePriceRequestSchema>;

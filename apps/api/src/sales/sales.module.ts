@@ -3,6 +3,7 @@ import { ProspectContextService } from './prospect-context.service.js';
 import { ProspectsService } from './prospects.service.js';
 import { SalesController } from './sales.controller.js';
 import { SalesImportService } from './sales-import.service.js';
+import { SalesPricesService } from './sales-prices.service.js';
 import { SalesViews } from './sales-views.js';
 import { SalesWorkService } from './sales-work.service.js';
 
@@ -19,6 +20,7 @@ import { SalesWorkService } from './sales-work.service.js';
     SalesViews,
     SalesImportService,
     ProspectContextService,
+    SalesPricesService,
   ],
   exports: [ProspectContextService],
 })
