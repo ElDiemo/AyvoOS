@@ -29,7 +29,7 @@ import { LabelPrintJobsService } from '../label-production/label-print-jobs.serv
 import { LabelTemplatesService } from '../labels/label-templates.service.js';
 import { StationSessionsService } from '../workstations/station-sessions.service.js';
 import type { WorkstationRecord } from '../workstations/workstations.service.js';
-import { crateAllocated, notPlaceableYet } from './cycle-corrections.service.js';
+import { crateAllocated } from './cycle-corrections.service.js';
 
 const notLabeling = () => domainError(409, 'WRONG_STATION_MODE', 'This is not a labelling station');
 const contextIncomplete = () =>
@@ -300,9 +300,86 @@ export class LabelingService {
           throw domainError(422, 'BOTTLE_OF_ANOTHER_SITE', 'This bottle belongs to another site');
         }
         const status = await this.bottles.lockForLabelApplication(tx, bottle.id);
-        // Washed after a return ("Po mytí", doc 048 §2): placed into a crate only with its
-        // refilling (R3) — never labelled again.
-        if (status === 'READY_FOR_REUSE') throw notPlaceableYet(bottle.code);
+        // Washed after a return ("Po mytí", doc 048 §2–§3.0): the same scan as a new bottle, only
+        // placed (its label is on it, nothing consumed, never labelled again).
+        if (status === 'READY_FOR_REUSE') {
+          if (cycle && (await this.cycles.isActiveMember(tx, cycle.id, bottle.id))) {
+            return this.result(
+              'ALREADY_APPLIED',
+              bottle.code,
+              crate.code,
+              cycle,
+              sourceLotId,
+              station,
+              tx,
+            );
+          }
+          const binding = await this.bottles.productBinding(tx, bottle.id);
+          if (
+            !binding ||
+            binding.productId !== productId ||
+            binding.labelTemplateVersionId !== labelTemplateVersionId
+          ) {
+            throw domainError(
+              409,
+              'BINDING_MISMATCH',
+              'This bottle carries another product or label design than the crate',
+            );
+          }
+          if (!(await this.approvals.isOpen(tx, productId, labelTemplateVersionId))) {
+            throw domainError(
+              409,
+              'DESIGN_NOT_APPROVED',
+              'This label design is no longer approved for the product',
+            );
+          }
+          const occurredAt = new Date();
+          if (!cycle) {
+            const product = await tx.product.findUniqueOrThrow({ where: { id: productId } });
+            await this.assertNewCycleAllowed(tx, session, crate.crateTypeId);
+            cycle = await this.cycles.createCycle(tx, {
+              crate: {
+                id: crate.id,
+                siteId: crate.siteId,
+                crateTypeId: crate.crateTypeId,
+                capacity: crate.crateType.capacity,
+              },
+              productId,
+              categoryCode: product.categoryCode,
+              recipeVersionId,
+              labelTemplateVersionId,
+              actorId: principal.userId,
+              operationId: input.requestId,
+              occurredAt,
+            });
+          }
+          const assigned = await this.bottles.assignedToCrateEvent(tx, {
+            bottleId: bottle.id,
+            occurredAt,
+            crateCode: crate.code,
+            actorId: principal.userId,
+            crateCycleId: cycle.id,
+            workstationSessionId: sessionId,
+            operationRequestId: input.requestId,
+          });
+          cycle = await this.cycles.addMember(tx, cycle, {
+            bottleId: bottle.id,
+            assignedEventId: assigned.eventId,
+            actorId: principal.userId,
+            operationId: input.requestId,
+            occurredAt,
+            source: 'REUSE',
+          });
+          return this.result('PLACED', bottle.code, crate.code, cycle, sourceLotId, station, tx);
+        }
+        // Returned and not yet confirmed washed: never at the station (only "Po mytí" does it).
+        if (status === 'RETURNED') {
+          throw domainError(
+            409,
+            'NOT_WASHED',
+            'This returned bottle has not been confirmed washed ("Po mytí") yet',
+          );
+        }
         if (status !== 'CREATED') {
           // Already labelled: in THIS crate it is a duplicate scan (no write, no consumption).
           if (cycle && (await this.cycles.isActiveMember(tx, cycle.id, bottle.id))) {

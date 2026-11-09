@@ -124,7 +124,7 @@ export const crateContentSchema = z.object({
     z.object({
       ordinal: z.number().int(),
       bottle: z.object({ code: z.string(), status: bottleStatusSchema }),
-      source: z.enum(['LABELING', 'REPACKED', 'REPLACEMENT']),
+      source: z.enum(['LABELING', 'REPACKED', 'REPLACEMENT', 'REUSE']),
       assignedAt: z.iso.datetime(),
       /** The liquid lot of a filled member. */
       liquidLot: z.string().nullable(),

@@ -35,9 +35,11 @@ export const labelingCs = {
   },
   scan: {
     label: 'Naskenujte lahev po nalepení etikety',
-    help: 'Scan potvrdí nalepení: lahev se vloží do bedny a odepíše se tělo lahve a etiketa. Opakovaný scan nic neodepíše.',
+    help: 'Scan potvrdí nalepení: lahev se vloží do bedny a odepíše se tělo lahve a etiketa. Lahev po mytí se jen vloží (etiketu už má, nic se neodepíše). Opakovaný scan nic neodepíše.',
     applied: (bottle: string, n: number, cap: number) =>
       `${bottle} nalepena a vložena (${n}/${cap}).`,
+    placed: (bottle: string, n: number, cap: number) =>
+      `${bottle} po mytí vložena (${n}/${cap}) – etiketu už má, nic se neodepsalo.`,
     already: (bottle: string) => `${bottle} už v této bedně je – nic se neodepsalo.`,
     lotLeft: (code: string, onHand: string) => `Šarže ${code}: zbývá ${onHand} ks`,
     uncertain:
@@ -69,6 +71,9 @@ export const labelingCs = {
     IN_ANOTHER_CRATE: 'Lahev už je v jiné bedně – nic se nepřesunulo.',
     NOT_PLACEABLE_YET:
       'Lahev je po mytí – do bedny ji zatím vložit nelze (přijde s dalším plněním). Odložte ji stranou.',
+    NOT_WASHED:
+      'Lahev je vrácená, ale ještě nebyla potvrzena „Po mytí“. Nejdřív ji umyjte a naskenujte v Po mytí.',
+    BINDING_MISMATCH: 'Lahev má jiný produkt nebo design etikety než bedna. Odložte ji stranou.',
     ALREADY_LABELED:
       'Lahev už má etiketu (nalepenou dříve, mimo tento postup). Odložte ji stranou.',
     NOT_APPLICABLE: 'Tuto lahev nelze nalepit.',

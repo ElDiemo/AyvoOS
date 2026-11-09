@@ -556,9 +556,11 @@ export class BottlesService {
   }
 
   /** The liquid lot recorded for a filled bottle (its FILLED event), or null. */
+  /** The liquid lot of the bottle's current circulation's filling (its latest FILLED). */
   filledLot(db: Prisma.TransactionClient, bottleId: string) {
     return db.bottleEvent.findFirst({
       where: { bottleId, type: 'FILLED' },
+      orderBy: { id: 'desc' },
       select: { liquidLot: { select: { id: true, code: true } } },
     });
   }

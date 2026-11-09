@@ -166,13 +166,16 @@ export function LabelingWorkspace({
         const text =
           r.outcome === 'APPLIED'
             ? t.scan.applied(r.bottle.code, r.cycle.memberCount, r.cycle.capacity)
-            : t.scan.already(r.bottle.code);
+            : r.outcome === 'PLACED'
+              ? t.scan.placed(r.bottle.code, r.cycle.memberCount, r.cycle.capacity)
+              : t.scan.already(r.bottle.code);
+        const ok = r.outcome !== 'ALREADY_APPLIED';
         const full = r.cycle.status === 'READY_TO_FILL';
         setNotice({
-          tone: r.outcome === 'APPLIED' ? 'ok' : 'warn',
+          tone: ok ? 'ok' : 'warn',
           text: full ? `${text} ${t.crate.full(r.crate.code)}` : text,
         });
-        push(r.outcome === 'APPLIED' ? 'ok' : 'warn', text);
+        push(ok ? 'ok' : 'warn', text);
         scanFeedback(r.outcome === 'APPLIED' ? 'ok' : 'error');
       }
       return true;

@@ -93,6 +93,7 @@ export const cratesCs = {
       LABELING: 'lepení',
       REPACKED: 'přeložena (vedoucí)',
       REPLACEMENT: 'doplněna (vedoucí)',
+      REUSE: 'po mytí',
     } as Record<string, string>,
     aborted: 'Zrušené oběhy',
     abortedLine: (product: string, at: string, reason: string) =>

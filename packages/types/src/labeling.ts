@@ -133,7 +133,12 @@ export const labelingStateSchema = z.object({
 export type LabelingState = z.infer<typeof labelingStateSchema>;
 
 export const labelScanResultSchema = z.object({
-  outcome: z.enum(['APPLIED', 'ALREADY_APPLIED']),
+  /**
+   * APPLIED: a new bottle labelled into the crate. PLACED: a washed bottle ("Po mytí", R3-b)
+   * placed into the crate — its label is already on it, nothing consumed. ALREADY_APPLIED: a
+   * duplicate scan in this crate.
+   */
+  outcome: z.enum(['APPLIED', 'PLACED', 'ALREADY_APPLIED']),
   bottle: z.object({ code: z.string() }),
   crate: z.object({ code: z.string() }),
   cycle: cycleStateSchema,
