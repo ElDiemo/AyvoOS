@@ -2375,6 +2375,8 @@ enum CrateAssignmentSource {
   LABELING
   REPACKED
   REPLACEMENT
+  /// R3-b (doc 048 §3.0): a washed bottle (READY_FOR_REUSE) placed into an assembling crate.
+  REUSE
 }
 
 /// A bottle's membership in a crate cycle, with an ordinal (1…capacity; not a physical slot).

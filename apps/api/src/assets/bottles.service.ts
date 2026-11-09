@@ -555,12 +555,26 @@ export class BottlesService {
     return { eventId: event.id };
   }
 
-  /** The liquid lot recorded for a filled bottle (its FILLED event), or null. */
+  /** The liquid lot of the bottle's current circulation's filling (its latest FILLED). */
   filledLot(db: Prisma.TransactionClient, bottleId: string) {
     return db.bottleEvent.findFirst({
       where: { bottleId, type: 'FILLED' },
+      orderBy: { id: 'desc' },
       select: { liquidLot: { select: { id: true, code: true } } },
     });
+  }
+
+  /**
+   * The crate cycle of the bottle's current circulation's filling (its latest FILLED), or null:
+   * a refilled bottle ("Po mytí", R3-b) carries the recipe of that cycle, not of its labelling.
+   */
+  async latestFillingCycleId(db: Prisma.TransactionClient, bottleId: string) {
+    const filled = await db.bottleEvent.findFirst({
+      where: { bottleId, type: 'FILLED' },
+      orderBy: { id: 'desc' },
+      select: { crateCycleId: true },
+    });
+    return filled?.crateCycleId ?? null;
   }
 
   /** The permanent product binding of a freshly labelled bottle (owner B1). */

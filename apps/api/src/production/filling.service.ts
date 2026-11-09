@@ -247,13 +247,17 @@ export class FillingService {
             tx,
           );
         }
-        if (status !== 'LABELED_EMPTY') {
+        if (status !== 'LABELED_EMPTY' && status !== 'READY_FOR_REUSE') {
           throw domainError(409, 'BOTTLE_NOT_FILLABLE', 'This bottle cannot be filled');
         }
 
-        // 5. balances: the cycle recipe's FILL lines — liquid from the chosen lot, pump.
-        const lines = await this.fillLines(tx, cycle!);
-        const liquid = this.liquidLine(lines);
+        // 5. balances: the cycle recipe's FILL lines — liquid from the chosen lot, pump. A washed
+        // bottle gets a washed pump from the anonymous pool: no new pump is consumed (doc 048 §3.1).
+        const recipeLines = await this.fillLines(tx, cycle!);
+        const liquid = this.liquidLine(recipeLines);
+        const lines = recipeLines.filter(
+          (line) => status !== 'READY_FOR_REUSE' || line.item.kind !== 'PUMP',
+        );
         const lot = await this.inventory.getLot(liquidLotId, tx);
         if (!lot || lot.itemId !== liquid.itemId) {
           throw domainError(409, 'WRONG_LOT', 'The chosen lot is not a lot of the recipe’s liquid');

@@ -5,21 +5,24 @@
 export const labelingCs = {
   context: {
     title: 'Co se lepí',
-    help: 'Zvolte jednou produkt, schválený design etikety a šarži nových lahví. Server je ověří při každém scanu.',
+    help: 'Zvolte jednou produkt, schválený design etikety a šarži nových lahví. Server je ověří při každém scanu. Umyté lahve („Po mytí“) šarži nepotřebují.',
     product: 'Produkt',
     design: 'Schválený design etikety',
     noDesign:
       'Produkt nemá schválený design etikety. Schválí ho vedoucí v Produktech a recepturách.',
     lot: 'Šarže nových lahví',
-    noLot: 'Ve skladu není žádná šarže těchto lahví se zásobou.',
+    noLot:
+      'Ve skladu není žádná šarže těchto lahví se zásobou. Umyté lahve lze vkládat i bez ní; nová lahev se bez šarže nezapíše.',
+    lotNone: 'Bez šarže – jen umyté lahve',
+    noLotChosen: 'bez šarže nových lahví (jen umyté lahve)',
     lotOption: (code: string, onHand: string) => `${code} (zbývá ${onHand} ks)`,
     recipe: (v: number) => `Receptura verze ${v}`,
     choose: 'Vyberte…',
     apply: 'Použít',
     change: 'Změnit',
     noProducts: 'Žádný aktivní produkt nemá aktivní recepturu.',
-    current: (product: string, design: string, lot: string) =>
-      `${product} · design ${design} · šarže ${lot}`,
+    current: (product: string, design: string, lot: string | null) =>
+      `${product} · design ${design}${lot ? ` · šarže ${lot}` : ''}`,
   },
   crate: {
     title: 'Bedna',
@@ -35,9 +38,11 @@ export const labelingCs = {
   },
   scan: {
     label: 'Naskenujte lahev po nalepení etikety',
-    help: 'Scan potvrdí nalepení: lahev se vloží do bedny a odepíše se tělo lahve a etiketa. Opakovaný scan nic neodepíše.',
+    help: 'Scan potvrdí nalepení: lahev se vloží do bedny a odepíše se tělo lahve a etiketa. Lahev po mytí se jen vloží (etiketu už má, nic se neodepíše). Opakovaný scan nic neodepíše.',
     applied: (bottle: string, n: number, cap: number) =>
       `${bottle} nalepena a vložena (${n}/${cap}).`,
+    placed: (bottle: string, n: number, cap: number) =>
+      `${bottle} po mytí vložena (${n}/${cap}) – etiketu už má, nic se neodepsalo.`,
     already: (bottle: string) => `${bottle} už v této bedně je – nic se neodepsalo.`,
     lotLeft: (code: string, onHand: string) => `Šarže ${code}: zbývá ${onHand} ks`,
     uncertain:
@@ -69,6 +74,9 @@ export const labelingCs = {
     IN_ANOTHER_CRATE: 'Lahev už je v jiné bedně – nic se nepřesunulo.',
     NOT_PLACEABLE_YET:
       'Lahev je po mytí – do bedny ji zatím vložit nelze (přijde s dalším plněním). Odložte ji stranou.',
+    NOT_WASHED:
+      'Lahev je vrácená, ale ještě nebyla potvrzena „Po mytí“. Nejdřív ji umyjte a naskenujte v Po mytí.',
+    BINDING_MISMATCH: 'Lahev má jiný produkt nebo design etikety než bedna. Odložte ji stranou.',
     ALREADY_LABELED:
       'Lahev už má etiketu (nalepenou dříve, mimo tento postup). Odložte ji stranou.',
     NOT_APPLICABLE: 'Tuto lahev nelze nalepit.',
@@ -76,10 +84,11 @@ export const labelingCs = {
     CRATE_INCOMPATIBLE: 'V bedně je jiný produkt nebo design. Jedna bedna je nikdy nemíchá.',
     CRATE_TYPE_MISMATCH: 'Tento typ bedny produkt nenese.',
     CRATE_IN_USE: 'Bedna je načtená na jiném pracovišti.',
-    CONTEXT_INCOMPLETE: 'Nejprve zvolte produkt, design, šarži a bednu.',
+    CONTEXT_INCOMPLETE: 'Nejprve zvolte produkt, design a bednu.',
     LOT_EXHAUSTED: 'Zvolená šarže lahví došla. Zvolte jinou šarži.',
     INSUFFICIENT_STOCK: 'Ve skladu nejsou etikety. Nic se neodepsalo.',
-    LOT_REQUIRED: 'Receptura vyžaduje šarži, kterou nelze zvolit.',
+    LOT_REQUIRED:
+      'Nová lahev potřebuje šarži nových lahví – zvolte ji v „Co se lepí“. Nic se nezapsalo.',
     RECIPE_INCOMPLETE: 'Receptura nemá tělo lahve.',
     WRONG_LOT: 'Šarže nepatří k lahvím této receptury.',
     UNKNOWN_PRODUCT: 'Produkt neexistuje nebo je archivovaný.',
