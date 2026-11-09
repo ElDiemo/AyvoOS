@@ -150,6 +150,22 @@ describe.skipIf(!hasDatabase)(
         for (const id of [h1.id, h2.id])
           for (const path of ['', '/profile', '/deliveries', '/contracts'])
             expect((await get(`hotels/${id}${path}`, b.session)).status, `B ${path}`).toBe(404);
+
+        it('revoking one hotel of a two-hotel account: gone at once from the list and every path; the other hotel stays', async () => {
+          const [h1, h2] = hotels as [HotelDetail, HotelDetail];
+          const a = await account();
+          const g1 = await grant(a.user.id, [h1.id]);
+          await grant(a.user.id, [h2.id]);
+          expect(((await get('hotels', a.session).expect(200)).body as PortalHotel[]).length).toBe(
+            2,
+          );
+          await t.app.get(PortalGrantsService).revoke(adminId, g1.id, 'synthetic revocation');
+          const left = (await get('hotels', a.session).expect(200)).body as PortalHotel[];
+          expect(left.map((h) => h.id)).toEqual([h2.id]);
+          for (const path of ['', '/profile', '/deliveries', '/contracts'])
+            expect((await get(`hotels/${h1.id}${path}`, a.session)).status, path).toBe(404);
+          await get(`hotels/${h2.id}/deliveries`, a.session).expect(200);
+        });
       });
   },
 );
