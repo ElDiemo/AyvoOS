@@ -33,16 +33,12 @@ import { crateAllocated } from './cycle-corrections.service.js';
 
 const notLabeling = () => domainError(409, 'WRONG_STATION_MODE', 'This is not a labelling station');
 const contextIncomplete = () =>
-  domainError(
-    409,
-    'CONTEXT_INCOMPLETE',
-    'Choose the product, label design, bottle lot and crate first',
-  );
+  domainError(409, 'CONTEXT_INCOMPLETE', 'Choose the product, label design and crate first');
 
 /**
  * Labelling into crates (doc 025 A3, owner decisions B1–B4). At a labelling station the operator
  * chooses once: product (its ACTIVE recipe version), an approved label design and the source lot of
- * new bottles, then loads a crate. Each "Potvrdit nalepení" scan — after the label is physically
+ * new bottles (optional: a crate of washed bottles needs none, doc 048 §3.0), then loads a crate. Each "Potvrdit nalepení" scan — after the label is physically
  * applied — in ONE transaction: CREATED → LABELED_EMPTY, LABEL_APPLIED, the LABEL attachment, the
  * permanent product binding, the consumption of the cycle recipe's LABEL_APPLICATION BOM (bottle
  * body from the chosen lot + label) exactly once, ASSIGNED_TO_CRATE and the membership (the
@@ -159,11 +155,17 @@ export class LabelingService {
             'This label design is not approved for the product',
           );
         }
-        const lines = await this.recipes.stageBomLines(tx, recipe.id, 'LABEL_APPLICATION');
-        const bottleLine = lines.find((l) => l.item.kind === 'NEW_BOTTLE');
-        const lot = await this.inventory.getLot(input.sourceLotId, tx);
-        if (!lot || !bottleLine || lot.itemId !== bottleLine.itemId) {
-          throw domainError(422, 'WRONG_LOT', 'The lot is not a lot of the recipe’s new bottles');
+        // The lot of new bottles is optional (washed bottles take none); a chosen one must be a
+        // lot of the recipe's new bottles.
+        let lot: { id: string } | null = null;
+        if (input.sourceLotId !== null) {
+          const lines = await this.recipes.stageBomLines(tx, recipe.id, 'LABEL_APPLICATION');
+          const bottleLine = lines.find((l) => l.item.kind === 'NEW_BOTTLE');
+          const chosen = await this.inventory.getLot(input.sourceLotId, tx);
+          if (!chosen || !bottleLine || chosen.itemId !== bottleLine.itemId) {
+            throw domainError(422, 'WRONG_LOT', 'The lot is not a lot of the recipe’s new bottles');
+          }
+          lot = chosen;
         }
         // A loaded crate stays only if its open cycle (if any) has the same product and design.
         let keepCrate = false;
@@ -179,7 +181,7 @@ export class LabelingService {
           productId: product.id,
           recipeVersionId: recipe.id,
           labelTemplateVersionId: input.labelTemplateVersionId,
-          sourceLotId: lot.id,
+          sourceLotId: lot?.id ?? null,
           keepCrate,
         });
         const updated = await tx.workstationSession.findUniqueOrThrow({ where: { id: sessionId } });
@@ -271,7 +273,7 @@ export class LabelingService {
         if (station.mode !== 'LABELING') throw notLabeling();
         const { productId, recipeVersionId, labelTemplateVersionId, sourceLotId, crateId } =
           session;
-        if (!productId || !recipeVersionId || !labelTemplateVersionId || !sourceLotId || !crateId) {
+        if (!productId || !recipeVersionId || !labelTemplateVersionId || !crateId) {
           throw contextIncomplete();
         }
         // The scan belongs to the context it was made in; never to a newer one (other crate,
@@ -403,6 +405,14 @@ export class LabelingService {
           }
           // Labelled before this change (no crate, no binding — owner B3) or otherwise used.
           throw domainError(409, 'ALREADY_LABELED', 'This bottle is already labelled');
+        }
+        // A new bottle consumes its body from the chosen lot: without one nothing is written.
+        if (!sourceLotId) {
+          throw domainError(
+            409,
+            'LOT_REQUIRED',
+            'Choose the lot of new bottles first; nothing was recorded',
+          );
         }
 
         // The label: printed by a completed job, with the chosen design, approved for the product.
@@ -625,21 +635,27 @@ export class LabelingService {
     bottleCode: string,
     crateCode: string,
     cycle: CycleRecord,
-    sourceLotId: string,
+    sourceLotId: string | null,
     station: WorkstationRecord,
     db: Prisma.TransactionClient,
   ): Promise<LabelScanResult> {
-    const lot = await db.inventoryLot.findUniqueOrThrow({ where: { id: sourceLotId } });
-    const onHand = await db.inventoryBalance.findFirst({
-      where: { lotId: sourceLotId, locationId: station.locationId },
-      select: { onHand: true },
-    });
+    const lot = sourceLotId
+      ? await db.inventoryLot.findUniqueOrThrow({ where: { id: sourceLotId } })
+      : null;
+    const onHand = lot
+      ? await db.inventoryBalance.findFirst({
+          where: { lotId: lot.id, locationId: station.locationId },
+          select: { onHand: true },
+        })
+      : null;
     return {
       outcome,
       bottle: { code: bottleCode },
       crate: { code: crateCode },
       cycle: await this.cycles.toState(cycle, db),
-      sourceLot: { code: lot.code, onHand: formatQuantity(onHand?.onHand ?? quantity(0)) },
+      sourceLot: lot
+        ? { code: lot.code, onHand: formatQuantity(onHand?.onHand ?? quantity(0)) }
+        : null,
     };
   }
 

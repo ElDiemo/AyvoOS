@@ -82,7 +82,11 @@ export const setLabelingContextRequestSchema = z.strictObject({
   requestId: z.uuid(),
   productCode: z.string().min(1).max(40),
   labelTemplateVersionId: z.uuid(),
-  sourceLotId: z.uuid(),
+  /**
+   * The lot of NEW bottles; null = none chosen (doc 048 §3.0: a crate of washed bottles needs no
+   * lot — a new bottle's scan then asks for it, LOT_REQUIRED, and writes nothing).
+   */
+  sourceLotId: z.uuid().nullable(),
 });
 export type SetLabelingContextRequest = z.infer<typeof setLabelingContextRequestSchema>;
 
@@ -142,6 +146,7 @@ export const labelScanResultSchema = z.object({
   bottle: z.object({ code: z.string() }),
   crate: z.object({ code: z.string() }),
   cycle: cycleStateSchema,
-  sourceLot: z.object({ code: z.string(), onHand: z.string() }),
+  /** The chosen lot of new bottles and what is left of it; null when none is chosen. */
+  sourceLot: z.object({ code: z.string(), onHand: z.string() }).nullable(),
 });
 export type LabelScanResult = z.infer<typeof labelScanResultSchema>;

@@ -260,6 +260,38 @@ describe.skipIf(!hasDatabase)('R3-b: a washed bottle back into production', () =
     return { id: spare.id, url };
   }
 
+  it('a crate of washed bottles needs no lot of new bottles; a new bottle without one writes nothing', async () => {
+    const washed = await washedCrate();
+    const station = await factory.openStation({ withLot: false });
+    const state = await http().get(`/api/admin/station-sessions/${station.sessionId}/labeling`);
+    expect(state.body.sourceLot).toBeNull();
+    const siteId = (
+      await t.prisma.bottle.findUniqueOrThrow({ where: { id: washed.bottleIds[0]! } })
+    ).siteId;
+    const movements = await t.prisma.inventoryMovement.count();
+    const first = await labelScan(t, station.sessionId, washed.bottleUrls[0]!);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.outcome).toBe('PLACED');
+    expect(first.body.sourceLot).toBeNull();
+    // A new bottle in the same series: refused, nothing written — no label, no stock, no event.
+    const fresh = await spareOf(siteId);
+    const events = await t.prisma.bottleEvent.count({ where: { bottleId: fresh.id } });
+    const refused = await labelScan(t, station.sessionId, fresh.url);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.code).toBe('LOT_REQUIRED');
+    expect((await t.prisma.bottle.findUniqueOrThrow({ where: { id: fresh.id } })).status).toBe(
+      'CREATED',
+    );
+    expect(await t.prisma.bottleEvent.count({ where: { bottleId: fresh.id } })).toBe(events);
+    expect(await t.prisma.inventoryMovement.count()).toBe(movements);
+    // The second washed bottle fills the crate; still nothing consumed.
+    const second = await labelScan(t, station.sessionId, washed.bottleUrls[1]!);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(second.body.outcome).toBe('PLACED');
+    expect(second.body.cycle.status).toBe('READY_TO_FILL');
+    expect(await t.prisma.inventoryMovement.count()).toBe(movements);
+  });
+
   it('"Doplnit lahev" of a refilled bottle uses the recipe of its latest filling, not of its labelling', async () => {
     // Crate A: assembled and partly filled with recipe version 1 (one free place after a removal).
     const a = await factory.make('FILLING');

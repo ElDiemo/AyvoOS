@@ -115,14 +115,17 @@ export async function crateFactory(t: TestApp, opts: { capacity?: number } = {})
     expect(done.status, JSON.stringify(done.body)).toBe(200);
   }
 
-  /** A labelling session with this factory's context and a newly registered, loaded crate. */
-  async function openStation() {
+  /**
+   * A labelling session with this factory's context and a newly registered, loaded crate.
+   * `withLot: false`: no lot of new bottles chosen (a crate of washed bottles, doc 048 §3.0).
+   */
+  async function openStation(opts: { withLot?: boolean } = {}) {
     if (pool.length < capacity) await refill();
     const ls = await labelingSession(t);
     const ctx = await setContext(t, ls, {
       productCode: kit.productCode,
       labelTemplateVersionId: versionId,
-      sourceLotId: bottleLot,
+      sourceLotId: opts.withLot === false ? null : bottleLot,
     });
     expect(ctx.status, JSON.stringify(ctx.body)).toBe(200);
     const crateUrl = await registerCrate(t, kit.crateTypeCode);
