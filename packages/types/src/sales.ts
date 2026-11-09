@@ -284,6 +284,8 @@ export const prospectListQuerySchema = z.object({
     .regex(/^[A-Z]{2}$/)
     .optional(),
   next: nextTaskFilterSchema.optional(),
+  /** Only prospects in progress (Oslovený, Jednání, Nabídka) — e.g. those without a next step. */
+  phase: z.literal('in-progress').optional(),
   /** Archived prospects are listed only on request (doc 034 §3a). */
   archived: z.enum(['active', 'archived']).default('active'),
   page: z.coerce.number().int().min(1).max(10000).default(1),
@@ -549,6 +551,11 @@ export const salesOverviewSchema = z.object({
   /** The next 7 days after today. */
   upcoming: z.array(taskSchema),
   inProgress: z.array(prospectSummarySchema),
+  /**
+   * Prospects in progress without any open task (at most 20, longest without activity first):
+   * nobody knows the next step — each opens its prospect.
+   */
+  withoutNextStep: z.array(prospectSummarySchema),
   counts: z.object({
     overdue: z.number().int(),
     dueToday: z.number().int(),
