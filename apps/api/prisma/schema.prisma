@@ -286,14 +286,30 @@ model BottleEvent {
   /// Small event-specific data, validated by Zod in the assets module.
   payload              Json                  @default("{}")
 
-  bottle        Bottle                      @relation(fields: [bottleId], references: [id], onDelete: Restrict)
-  creationBatch BottleCreationBatch?        @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
-  movements     InventoryMovement[]
-  installations BottleComponentAttachment[] @relation("ComponentInstalledBy")
-  removals      BottleComponentAttachment[] @relation("ComponentRemovedBy")
+  bottle          Bottle                      @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  creationBatch   BottleCreationBatch?        @relation(fields: [creationBatchId], references: [id], onDelete: Restrict)
+  movements       InventoryMovement[]
+  installations   BottleComponentAttachment[] @relation("ComponentInstalledBy")
+  removals        BottleComponentAttachment[] @relation("ComponentRemovedBy")
+  /// R3-a (doc 048 §3.3b): a FILLED's circulation, and the FILLED of a circulation event.
+  fillCirculation BottleFillCirculation?      @relation("FillCirculationFilled")
+  circulationFill BottleFillCirculation?      @relation("FillCirculationAnchor")
 
   @@index([bottleId, occurredAt])
   @@map("bottle_events")
+}
+
+/// One filling per circulation (doc 048 §3.3b, owner 2026-11-09): each FILLED anchored to the event
+/// that made its bottle fillable — its LABEL_APPLIED or a later REUSE_READY. Written only by the
+/// database (the FILLED insert trigger); insert-only; the circulation is unique.
+model BottleFillCirculation {
+  filledEventId      String @id @map("filled_event_id") @db.Uuid
+  circulationEventId String @unique(map: "bottle_fill_circulations_circulation_key") @map("circulation_event_id") @db.Uuid
+
+  filled      BottleEvent @relation("FillCirculationFilled", fields: [filledEventId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "bottle_fill_circulations_filled_fkey")
+  circulation BottleEvent @relation("FillCirculationAnchor", fields: [circulationEventId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "bottle_fill_circulations_circulation_fkey")
+
+  @@map("bottle_fill_circulations")
 }
 
 // ---------------------------------------------------------------------------------------------
