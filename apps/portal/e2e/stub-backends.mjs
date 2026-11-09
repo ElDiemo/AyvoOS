@@ -174,6 +174,8 @@ async function core(req, res, path) {
       const kind = state.pending.get(body.challenge);
       if (!kind || body.code !== STUB.code) return refuse(res, 401, 'INVALID_MFA');
       state.pending.delete(body.challenge);
+      // A replaced app ends every earlier session of the account (as the core does).
+      if (kind === 'REPLACE') state.sessions.clear();
       const token = randomUUID();
       state.sessions.add(token);
       return send(
@@ -184,6 +186,7 @@ async function core(req, res, path) {
           session: token,
           maxAgeSeconds: 3600,
           ...(kind === 'ENROLL' ? { recoveryCodes: ['aaaa-bbbb-cccc', 'dddd-eeee-ffff'] } : {}),
+          ...(kind === 'REPLACE' ? { recoveryCodes: ['nnnn-oooo-pppp', 'qqqq-rrrr-ssss'] } : {}),
         },
         portalMfaResultSchema,
       );
@@ -203,6 +206,29 @@ async function core(req, res, path) {
   }
   const s = session(req);
   if (!s) return refuse(res, 401, 'UNAUTHENTICATED');
+  if (req.method === 'POST' && path === 'account/replace-mfa') {
+    // "Zabezpečení účtu": the core's checks — the browser's origin, the password and a current code.
+    const body = await readBody(req);
+    state.lastClient = body.client ?? null;
+    if (body.client?.origin !== STUB.portalOrigin) return refuse(res, 403, 'CSRF_REJECTED');
+    if (body.password !== STUB.password || body.code !== STUB.code)
+      return refuse(res, 401, 'INVALID_CREDENTIALS');
+    const challenge = randomUUID();
+    state.pending.set(challenge, 'REPLACE');
+    return send(
+      res,
+      200,
+      {
+        step: 'ENROLL_MFA',
+        challenge,
+        maxAgeSeconds: 900,
+        qrDataUrl:
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        setupKey: 'KRSXG5CTMVRXEZLU',
+      },
+      portalChallengeStepSchema,
+    );
+  }
   if (path === 'session')
     return send(
       res,

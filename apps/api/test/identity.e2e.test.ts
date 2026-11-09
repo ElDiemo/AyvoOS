@@ -284,6 +284,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/internal/v1/portal/hotels/:id',
       'GET /api/internal/v1/portal/hotels/:id/profile',
       'GET /api/internal/v1/portal/session',
+      'POST /api/internal/v1/portal/account/replace-mfa',
       'POST /api/internal/v1/portal/auth/activate',
       'POST /api/internal/v1/portal/auth/forgot-password',
       'POST /api/internal/v1/portal/auth/logout',

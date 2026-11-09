@@ -5,11 +5,11 @@ import { cs } from '@/i18n/cs';
 
 const input =
   'block w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-stone-500';
-const button =
+export const button =
   'rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50';
 
 /** One step to portal-web's own route (same origin; the cookies stay HttpOnly). */
-async function post(
+export async function post(
   path: string,
   body: unknown,
 ): Promise<{ ok: boolean; data: Record<string, unknown> }> {
@@ -25,7 +25,7 @@ async function post(
     return { ok: false, data: { code: 'PORTAL_UNAVAILABLE' } };
   }
 }
-const message = (data: Record<string, unknown>) =>
+export const message = (data: Record<string, unknown>) =>
   cs.errors[String(data.code)] ?? cs.errors.PORTAL_UNAVAILABLE!;
 
 /**
@@ -51,7 +51,7 @@ function go(path: string) {
   window.location.assign(path);
 }
 
-function Field(props: {
+export function Field(props: {
   label: string;
   name: string;
   type?: string;
@@ -77,7 +77,7 @@ function Field(props: {
   );
 }
 
-function Problem({ text }: { text: string | null }) {
+export function Problem({ text }: { text: string | null }) {
   return text ? (
     <p role="alert" className="text-sm text-red-700">
       {text}
@@ -86,7 +86,16 @@ function Problem({ text }: { text: string | null }) {
 }
 
 /** The second factor, then (on enrolment) the recovery codes, then the portal. */
-function SecondFactor({ confirm, after }: { confirm: string; after: 'portal' | 'login' }) {
+export function SecondFactor({
+  confirm,
+  after,
+  label = cs.login.code,
+}: {
+  confirm: string;
+  after: 'portal' | 'login';
+  /** The code field's label (replacing the app takes a code of the NEW app only). */
+  label?: string;
+}) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +132,7 @@ function SecondFactor({ confirm, after }: { confirm: string; after: 'portal' | '
       }}
     >
       <Field
-        label={cs.login.code}
+        label={label}
         name="code"
         value={code}
         onChange={setCode}
