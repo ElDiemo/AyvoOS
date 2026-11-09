@@ -1,6 +1,6 @@
 'use client';
 
-import { prospectDetailSchema } from '@ayvo/types';
+import { prospectDetailSchema, type ProspectDetail } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useAttempt } from '@/components/catalog/form-kit';
@@ -44,13 +44,14 @@ export function useSalesSend() {
   const router = useRouter();
   const { busy, run } = useAttempt();
   const [error, setError] = useState<unknown>(null);
-  async function send(path: string, body: object, onDone: () => void) {
+  /** `onDone` gets the prospect as the confirmed write returned it (before any refresh). */
+  async function send(path: string, body: object, onDone: (detail: ProspectDetail) => void) {
     setError(null);
     const result = await run(path + JSON.stringify(body), (requestId) =>
       apiSend('POST', path, prospectDetailSchema, { requestId, ...body }),
     );
     if (result.ok) {
-      onDone();
+      onDone(result.value);
       router.refresh();
     } else if (result.error) setError(result.error);
   }
