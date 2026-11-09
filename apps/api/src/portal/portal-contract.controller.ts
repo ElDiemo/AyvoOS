@@ -315,6 +315,7 @@ export class PortalContractController {
           grantId: grant.id,
           expected: body.expected,
           profile: body.profile,
+          reason: body.reason,
         });
       });
     });

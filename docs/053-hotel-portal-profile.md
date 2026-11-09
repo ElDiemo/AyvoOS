@@ -39,8 +39,8 @@ documents are not touched.
   waits for the save.
 - **CSRF:** portal-web refuses a request that does not come from the portal origin. The core
   checks the forwarded browser request again.
-- **Audit:** `HOTEL_UPDATED` with the portal account as actor, the hotel's serving site,
-  `via: PORTAL`, the grant and the changed fields before and after.
+- **Audit:** `HOTEL_UPDATED` with the portal account as actor, the hotel's serving site, the
+  required reason, `via: PORTAL`, the grant and the changed fields before and after.
 
 ## portal-web
 
@@ -60,13 +60,15 @@ therefore needs an explicit allowlist for exactly `POST /hotels/<uuid>/profile` 
 same read timeouts. That change is a separate, follow-up draft PR. Until both are deployed, a save
 behind the DEV edge answers 405 and nothing changes.
 
-## Open questions for the owner
+## Owner decisions (2026-11-09)
 
-1. The hotel name and the country are read only in the portal. AYVO changes them because the
-   country affects carriage and the serving site. Should the hotel be allowed to edit its name?
-2. Every account with a grant on the hotel may edit the profile. Is a separate "read only"
-   portal account needed?
-3. The portal does not ask for a reason for a change, unlike staff "Upravit praktické údaje".
-   The audit records the account, the grant and before/after.
-4. Should AYVO staff be notified of a profile change, for example in Hotely? Nothing is sent
-   today.
+1. **The hotel name stays read only** in the portal; AYVO changes it. The country is read only
+   too.
+2. **Every account with a grant on the hotel may edit** the profile. In practice the hotel's
+   manager holds the access, so no read-only portal account is added.
+3. **A reason is required** for every save, so AYVO knows why. It is kept in the audit event's
+   `reason` together with the account, the grant and before/after. Saving the same values again
+   is still a no-op.
+4. **No notification** to staff. An address change applies only to orders created afterwards;
+   existing orders and their shipments keep their snapshot. The audit with its reason is the
+   record.
