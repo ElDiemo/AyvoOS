@@ -163,7 +163,7 @@ export class HotelsService implements OnModuleInit {
    * locked; a save made against older values (another fingerprint) is refused, unless it asks for
    * exactly what is stored (a repeated save: nothing changes, nothing is audited). Orders keep
    * their own snapshot, so the change applies to orders created afterwards. Audited as
-   * HOTEL_UPDATED with the portal account, its grant and before/after.
+   * HOTEL_UPDATED with the portal account, its grant, the hotel's reason and before/after.
    */
   async applyPortalProfile(
     tx: Prisma.TransactionClient,
@@ -173,6 +173,7 @@ export class HotelsService implements OnModuleInit {
       grantId: string;
       expected: string;
       profile: HotelProfileFields;
+      reason: string;
     },
   ): Promise<PortalHotelProfile> {
     await tx.$executeRaw`SELECT 1 FROM "hotels" WHERE "id" = ${input.hotelId}::uuid FOR UPDATE`;
@@ -200,6 +201,7 @@ export class HotelsService implements OnModuleInit {
         type: 'HOTEL_UPDATED',
         actorUserId: input.actorUserId,
         siteId: row.fulfillmentSiteId,
+        reason: input.reason,
         payload: {
           hotel: row.code,
           via: 'PORTAL',
