@@ -121,6 +121,17 @@ export const portalInvitationSchema = z.object({
 });
 export type PortalInvitation = z.infer<typeof portalInvitationSchema>;
 
+/** The account's invitation now (see portalGrantListItemSchema). */
+export const portalInvitationStateSchema = z.enum([
+  'ACTIVE',
+  'QUEUED',
+  'ACCEPTED_BY_SERVER',
+  'DELIVERY_FAILED',
+  'EXPIRED',
+  'FAILED',
+  'NONE',
+]);
+
 /** A grant as Finance's payer page shows it (with its account). */
 export const portalGrantListItemSchema = portalGrantSchema.extend({
   account: z.object({
@@ -133,18 +144,46 @@ export const portalGrantListItemSchema = portalGrantSchema.extend({
      * mailbox). DELIVERY_FAILED: every delivery attempt failed — send it again. EXPIRED: its link
      * expired unused — send a new one. FAILED: refused when created — send a new one. NONE.
      */
-    invitation: z.enum([
-      'ACTIVE',
-      'QUEUED',
-      'ACCEPTED_BY_SERVER',
-      'DELIVERY_FAILED',
-      'EXPIRED',
-      'FAILED',
-      'NONE',
-    ]),
+    invitation: portalInvitationStateSchema,
   }),
 });
 export type PortalGrantListItem = z.infer<typeof portalGrantListItemSchema>;
+
+// --- Hotely → Uživatelé (staff): the hotel portal accounts, never internal users ----------------
+
+/**
+ * A hotel portal account with all its grants (active first) and their hotels, for the staff tab
+ * Hotely → Uživatelé. The payer is Finance's customer id (opaque to the core); the staff web
+ * resolves its name from Finance when the viewer may read billing.
+ */
+export const portalAccountListItemSchema = z.object({
+  id: z.uuid(),
+  email: z.string(),
+  displayName: z.string(),
+  status: z.enum(['ACTIVE', 'DEACTIVATED']),
+  deactivatedAt: z.iso.datetime().nullable(),
+  deactivationReason: z.string().nullable(),
+  lastLoginAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  signsIn: z.boolean(),
+  invitation: portalInvitationStateSchema,
+  activeSessions: z.int().min(0),
+  grants: z.array(
+    z.object({
+      id: z.uuid(),
+      payerCustomerId: z.uuid(),
+      hotels: z.array(z.object({ id: z.uuid(), code: z.string(), name: z.string() })),
+      grantedAt: z.iso.datetime(),
+      revokedAt: z.iso.datetime().nullable(),
+      revokeReason: z.string().nullable(),
+    }),
+  ),
+});
+export type PortalAccountListItem = z.infer<typeof portalAccountListItemSchema>;
+
+/** Deactivation or reactivation of a hotel portal account (a reason, as for internal users). */
+export const portalAccountActivationSchema = z.strictObject({ reason: reasonSchema });
+export type PortalAccountActivation = z.infer<typeof portalAccountActivationSchema>;
 
 // --- Finance's admin routes (the browser → Finance) ----------------------------------------------
 

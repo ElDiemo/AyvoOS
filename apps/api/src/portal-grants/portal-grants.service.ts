@@ -3,6 +3,7 @@ import type {
   PortalGrantRequestLookup,
   PortalAccount,
   PortalAccountRequest,
+  PortalAccountListItem,
   PortalGrantListItem,
   PortalInvitation,
   PortalGrant,
@@ -289,6 +290,70 @@ export class PortalGrantsService {
         },
       }))
       .sort((a, b) => Number(a.revokedAt !== null) - Number(b.revokedAt !== null));
+  }
+
+  /**
+   * Hotely → Uživatelé: every hotel portal (PORTAL) account — never an internal one — with all its
+   * grants (active first) and their hotels' identity, its invitation and its open sessions. One
+   * account (`only`) or all, by name.
+   */
+  async accounts(only?: string): Promise<PortalAccountListItem[]> {
+    const now = new Date();
+    const users = await this.prisma.user.findMany({
+      where: { audience: 'PORTAL', ...(only ? { id: only } : {}) },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        status: true,
+        deactivatedAt: true,
+        deactivationReason: true,
+        lastLoginAt: true,
+        createdAt: true,
+        ...invitationSelect,
+        portalGrants: {
+          include: {
+            hotels: { include: { hotel: { select: { id: true, code: true, name: true } } } },
+          },
+          orderBy: { grantedAt: 'desc' },
+        },
+      },
+      orderBy: [{ status: 'asc' }, { displayName: 'asc' }, { email: 'asc' }],
+    });
+    const sessions = await this.prisma.userSession.groupBy({
+      by: ['userId'],
+      where: {
+        userId: { in: users.map((u) => u.id) },
+        revokedAt: null,
+        idleExpiresAt: { gt: now },
+        absoluteExpiresAt: { gt: now },
+      },
+      _count: { _all: true },
+    });
+    const open = new Map(sessions.map((s) => [s.userId, s._count._all]));
+    return users.map((u) => ({
+      id: u.id,
+      email: u.email,
+      displayName: u.displayName,
+      status: u.status,
+      deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
+      deactivationReason: u.deactivationReason,
+      lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+      createdAt: u.createdAt.toISOString(),
+      signsIn: u.nativeCredential !== null,
+      invitation: invitationOf(u, now),
+      activeSessions: open.get(u.id) ?? 0,
+      grants: u.portalGrants
+        .map((g) => ({
+          id: g.id,
+          payerCustomerId: g.payerCustomerId,
+          hotels: g.hotels.map((h) => h.hotel).sort((a, b) => a.code.localeCompare(b.code)),
+          grantedAt: g.grantedAt.toISOString(),
+          revokedAt: g.revokedAt?.toISOString() ?? null,
+          revokeReason: g.revokeReason,
+        }))
+        .sort((a, b) => Number(a.revokedAt !== null) - Number(b.revokedAt !== null)),
+    }));
   }
 
   /** The account's invitation state now (see portalGrantListItemSchema). */

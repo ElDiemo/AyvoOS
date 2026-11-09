@@ -483,7 +483,7 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
       const first = (await f.post(G).send(req).expect(201)).body as FinancePortalGrantResult;
       // The answer is lost; meanwhile the account is deactivated.
       await request(f.core.app.getHttpServer())
-        .post(`/api/admin/identity/users/${first.account!.userId}/deactivate`)
+        .post(`/api/admin/identity/portal-accounts/${first.account!.userId}/deactivate`)
         .send({ reason: 'Konec spolupráce (syntetický)' })
         .expect(200);
       const user = await f.core.prisma.user.findUniqueOrThrow({ where: { email: req.email } });
