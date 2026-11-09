@@ -10,6 +10,7 @@ import {
   fillScan,
   finishCrate,
   labelScan,
+  registerCrate,
 } from './support/labeling-fixtures.js';
 import { crateFactory, createHotel, type MadeCrate } from './support/order-fixtures.js';
 import { deliver, pickUp, RETURN_ENV, returnsApi, shipCrates } from './support/return-fixtures.js';
@@ -246,5 +247,102 @@ describe.skipIf(!hasDatabase)('R3-b: a washed bottle back into production', () =
     expect(
       await t.prisma.crateAssignment.count({ where: { bottleId: back, releasedAt: null } }),
     ).toBe(0);
+  });
+  /** A printed, not yet labelled bottle of the factory's current design at the bottle's site. */
+  async function spareOf(siteId: string) {
+    const spare = await t.prisma.bottle.findFirstOrThrow({
+      where: { status: 'CREATED', siteId, printJobItems: { some: {} } },
+      orderBy: { serial: 'desc' },
+    });
+    const url = (
+      await t.prisma.labelPrintJobItem.findFirstOrThrow({ where: { bottleId: spare.id } })
+    ).qrUrl;
+    return { id: spare.id, url };
+  }
+
+  it('"Doplnit lahev" of a refilled bottle uses the recipe of its latest filling, not of its labelling', async () => {
+    // Crate A: assembled and partly filled with recipe version 1 (one free place after a removal).
+    const a = await factory.make('FILLING');
+    const freed = await correctCrate(t, a.crateCode, 'remove-bottle', {
+      bottle: (await t.prisma.bottle.findUniqueOrThrow({ where: { id: a.bottleIds[1]! } })).code,
+    });
+    expect(freed.status, JSON.stringify(freed.body)).toBe(200);
+    const product = factory.kit.productCode;
+    const catalog = '/api/admin/catalog';
+    const items = await t.prisma.inventoryItem.findMany({
+      where: {
+        id: { in: [factory.kit.labelItemId, factory.kit.liquidItemId, factory.kit.pumpItemId] },
+      },
+    });
+    const code = (id: string) => items.find((i) => i.id === id)!.code;
+    const washed = await washedCrate(); // labelled with recipe version 1
+    const reused = { id: washed.bottleIds[0]!, url: washed.bottleUrls[0]! };
+    // Recipe version 2 becomes active: the second circulation is filled with it.
+    const v2 = await http()
+      .post(`${catalog}/products/${product}/recipes`)
+      .send({
+        requestId: randomUUID(),
+        reason: 'nová receptura',
+        crateTypeCode: factory.kit.crateTypeCode,
+        components: [
+          { itemCode: 'NEW_BOTTLE', quantity: '1', unitCode: 'pcs' },
+          { itemCode: code(factory.kit.labelItemId), quantity: '1', unitCode: 'pcs' },
+          { itemCode: code(factory.kit.liquidItemId), quantity: '330', unitCode: 'ml' },
+          { itemCode: code(factory.kit.pumpItemId), quantity: '1', unitCode: 'pcs' },
+        ],
+      });
+    expect(v2.status, JSON.stringify(v2.body)).toBe(201);
+    const version = v2.body.version as number;
+    const activated = await http()
+      .post(`${catalog}/products/${product}/recipes/${version}/activate`)
+      .send({ requestId: randomUUID(), reason: 'schváleno', expectedActiveVersion: version - 1 });
+    expect(activated.status, JSON.stringify(activated.body)).toBe(200);
+    // The last test of this file: the factory's product keeps recipe 2 from here on.
+    // Crate B (recipe 2): the washed bottle placed next to a new one; only the washed one filled.
+    const station = await factory.openStation();
+    expect((await labelScan(t, station.sessionId, reused.url)).body.outcome).toBe('PLACED');
+    const siteId = (await t.prisma.bottle.findUniqueOrThrow({ where: { id: reused.id } })).siteId;
+    const fresh = await spareOf(siteId);
+    expect((await labelScan(t, station.sessionId, fresh.url)).body.outcome).toBe('APPLIED');
+    const fs = await fillingSession(t, 'HAND_SOAP');
+    expect((await fillLoadCrate(t, fs, station.crateUrl)).status).toBe(200);
+    expect((await chooseLiquidLot(t, fs, await factory.receiveLiquid())).status).toBe(200);
+    const filled = await fillScan(t, fs, reused.url);
+    expect(filled.status, JSON.stringify(filled.body)).toBe(200);
+    const b = await t.prisma.crateCycle.findFirstOrThrow({
+      where: { crate: { qrToken: station.crateUrl.split('/').pop()! } },
+      orderBy: { openedAt: 'desc' },
+      include: { crate: true, recipeVersion: true },
+    });
+    expect(b.recipeVersion.version).toBe(version);
+    const bottle = (await t.prisma.bottle.findUniqueOrThrow({ where: { id: reused.id } })).code;
+    const out = () => correctCrate(t, b.crate.code, 'remove-bottle', { bottle });
+    expect((await out()).status).toBe(200);
+    const movements = await t.prisma.inventoryMovement.count();
+
+    // Into crate A (recipe 1, the recipe of its labelling): refused.
+    const intoA = await correctCrate(t, a.crateCode, 'add-bottle', { bottle });
+    expect(intoA.status, JSON.stringify(intoA.body)).toBe(409);
+    expect(intoA.body.code).toBe('SNAPSHOT_MISMATCH');
+    // Back into crate B (recipe 2, filling): accepted, nothing consumed.
+    const intoB = await correctCrate(t, b.crate.code, 'add-bottle', { bottle });
+    expect(intoB.status, JSON.stringify(intoB.body)).toBe(200);
+    expect(await t.prisma.inventoryMovement.count()).toBe(movements);
+    // Into an empty crate: a FILLING cycle with recipe 2 (the database accepts it), no consumption.
+    expect((await out()).status).toBe(200);
+    const emptyUrl = await registerCrate(t, factory.kit.crateTypeCode);
+    const empty = await t.prisma.crate.findUniqueOrThrow({
+      where: { qrToken: emptyUrl.split('/').pop()! },
+    });
+    const intoEmpty = await correctCrate(t, empty.code, 'add-bottle', { bottle });
+    expect(intoEmpty.status, JSON.stringify(intoEmpty.body)).toBe(200);
+    const c = await t.prisma.crateCycle.findFirstOrThrow({
+      where: { crateId: empty.id },
+      include: { recipeVersion: true, assignments: { where: { releasedAt: null } } },
+    });
+    expect(c.status).toBe('FILLING');
+    expect(c.recipeVersion.version).toBe(version);
+    expect(c.assignments.map((m) => [m.bottleId, m.source])).toEqual([[reused.id, 'REPACKED']]);
+    expect(await t.prisma.inventoryMovement.count()).toBe(movements);
   });
 });
