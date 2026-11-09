@@ -12,6 +12,15 @@ describe('sales stages (doc 034 §4)', () => {
     expect(stageChangeNeedsReason('LOST', 'NEGOTIATION')).toBe(true);
     expect(stageChangeNeedsReason('LOST', 'WON')).toBe(true);
   });
+
+  it('PILOT sits between Nabídka and Získaný', () => {
+    expect(stageChangeNeedsReason('OFFER', 'PILOT')).toBe(false);
+    expect(stageChangeNeedsReason('PILOT', 'WON')).toBe(false);
+    expect(stageChangeNeedsReason('PILOT', 'LOST')).toBe(false);
+    expect(stageChangeNeedsReason('PILOT', 'OFFER')).toBe(true);
+    expect(stageChangeNeedsReason('WON', 'PILOT')).toBe(true);
+    expect(stageChangeNeedsReason('LOST', 'PILOT')).toBe(true);
+  });
 });
 
 describe('quick creation of a prospect', () => {

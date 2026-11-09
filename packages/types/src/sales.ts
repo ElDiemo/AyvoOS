@@ -12,14 +12,33 @@ export const SALES_TIME_ZONE = 'Europe/Prague';
 
 export const prospectCodeSchema = z.string().regex(/^AKV-\d{6,}$/, 'e.g. AKV-000001');
 
-export const PROSPECT_STAGES = ['NEW', 'CONTACTED', 'NEGOTIATION', 'OFFER', 'WON', 'LOST'] as const;
+/**
+ * The pipeline. PILOT (owner 2026-11-09 night, doc 060 §B): the hotel tests AYVO before the
+ * contract; work in progress like the stages before it. "Odloženo" is not a stage: a task with
+ * its date keeps the prospect off the "without a next step" list.
+ */
+export const PROSPECT_STAGES = [
+  'NEW',
+  'CONTACTED',
+  'NEGOTIATION',
+  'OFFER',
+  'PILOT',
+  'WON',
+  'LOST',
+] as const;
 export const prospectStageSchema = z.enum(PROSPECT_STAGES);
 export type ProspectStage = z.infer<typeof prospectStageSchema>;
 /** Work in progress (the overview's "rozpracovaní"). */
-export const IN_PROGRESS_STAGES: readonly ProspectStage[] = ['CONTACTED', 'NEGOTIATION', 'OFFER'];
+export const IN_PROGRESS_STAGES: readonly ProspectStage[] = [
+  'CONTACTED',
+  'NEGOTIATION',
+  'OFFER',
+  'PILOT',
+];
 /** The order of the pipeline: a lower rank than the current stage is a step back. */
 export function stageRank(stage: ProspectStage): number {
-  return stage === 'LOST' ? 4 : PROSPECT_STAGES.indexOf(stage);
+  // LOST is a result like WON: the same rank (leaving either needs a reason anyway).
+  return PROSPECT_STAGES.indexOf(stage === 'LOST' ? 'WON' : stage);
 }
 /** A change that needs a reason: back in the pipeline, or out of a result (reopening). */
 export function stageChangeNeedsReason(from: ProspectStage, to: ProspectStage): boolean {
