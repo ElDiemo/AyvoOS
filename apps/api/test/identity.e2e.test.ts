@@ -282,6 +282,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
     ).toEqual([
       'GET /api/internal/v1/portal/hotels',
       'GET /api/internal/v1/portal/hotels/:id',
+      'GET /api/internal/v1/portal/hotels/:id/profile',
       'GET /api/internal/v1/portal/session',
       'POST /api/internal/v1/portal/auth/activate',
       'POST /api/internal/v1/portal/auth/forgot-password',
@@ -289,6 +290,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'POST /api/internal/v1/portal/auth/mfa',
       'POST /api/internal/v1/portal/auth/password',
       'POST /api/internal/v1/portal/auth/reset-password',
+      'POST /api/internal/v1/portal/hotels/:id/profile',
     ]);
     // Without a session every other route answers 401 — guards run before any parameter parsing;
     // an agent route without the agent's token too (a session never counts there).
