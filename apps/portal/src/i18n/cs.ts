@@ -107,6 +107,18 @@ export const cs = {
     },
   },
   hotelTabs: { label: 'Hotel', profile: 'Profil', deliveries: 'Dodávky' },
+  home: {
+    nextDispatch: 'Nejbližší expedice (plánované odeslání)',
+    asap: 'Odešleme co nejdřív',
+    noDispatch: 'Žádná expedice zatím není naplánovaná.',
+    latest: 'Poslední zásilky',
+    handedOver: (at: string) => `předáno dopravci ${at}`,
+    planned: (day: string) => `plánované odeslání ${day}`,
+    more: (n: number) => (n === 1 ? 'a 1 další na cestě' : `a ${n} další na cestě`),
+    lastDelivered: (at: string) => `Poslední doručení ${at}`,
+    noShipments: 'Zatím žádná zásilka.',
+    unavailable: 'Stav dodávek se teď nepodařilo načíst.',
+  },
   deliveries: {
     title: 'Dodávky',
     intro:

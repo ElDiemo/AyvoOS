@@ -1,15 +1,51 @@
 import Link from 'next/link';
+import type { PortalDeliveries } from '@ayvo/types';
+import { HotelDispatch, pragueToday } from '@/components/home-overview';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
 import { portalEnv } from '@/lib/env';
-import { myHotels, portalSession } from '@/lib/portal';
+import { PortalRefusal, PortalUnavailable } from '@/lib/backend';
+import { myDeliveries, myHotels, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
 
-/** "Moje hotely": the hotels of the session's active grants, each leading to its profile. */
+/** At most this many hotels' deliveries are read at once (portal-web's core budget is 8). */
+const DELIVERY_READS = 3;
+
+/**
+ * Each hotel's deliveries through the same contract as its "Dodávky" page (the core checks the
+ * grant on every one), a few at a time; one hotel unavailable never hides the others.
+ */
+async function deliveriesOf(token: string, ids: string[]) {
+  const out = new Map<string, PortalDeliveries | null>();
+  for (let i = 0; i < ids.length; i += DELIVERY_READS) {
+    const batch = ids.slice(i, i + DELIVERY_READS);
+    const read = await Promise.all(
+      batch.map((id) =>
+        myDeliveries(token, id).catch((error: unknown) => {
+          // Unavailable, or the grant on this hotel ended meanwhile (404): this card only.
+          if (error instanceof PortalUnavailable || error instanceof PortalRefusal) return null;
+          throw error;
+        }),
+      ),
+    );
+    batch.forEach((id, k) => out.set(id, read[k] ?? null));
+  }
+  return out;
+}
+
+/**
+ * "Moje hotely": the hotels of the session's active grants, each leading to its profile, with
+ * its dispatch at a glance (owner 2026-11-10).
+ */
 export default async function HotelsPage() {
   const { token, view } = await portalSession();
   const hotels = await myHotels(token);
+  const deliveries = await deliveriesOf(
+    token,
+    hotels.map((h) => h.id),
+  );
+  const today = pragueToday();
   return (
     <Shell user={view.user} active="hotels" testInvoices={portalEnv().APP_ENV !== 'production'}>
       <div className="flex flex-col gap-1">
@@ -33,6 +69,7 @@ export default async function HotelsPage() {
                 <span className="text-sm text-stone-600">
                   {h.addressLine1}, {h.postalCode} {h.city}
                 </span>
+                <HotelDispatch deliveries={deliveries.get(h.id) ?? null} today={today} />
                 <span className="mt-auto pt-2 text-sm font-medium text-emerald-800 group-hover:underline">
                   {cs.hotels.open} <span aria-hidden="true">→</span>
                 </span>

@@ -156,7 +156,7 @@ const state = {
   lastProfileBody: null,
   /** 'ok' | 'none' (no signed contract yet) | 'down' (the core does not answer the list). */
   contractsMode: 'ok',
-  /** 'ok' | 'none' (no delivery at all) | 'plan-only' (only upcoming plan days) | 'down'. */
+  /** 'ok' | 'none' | 'plan-only' (only upcoming plan days) | 'late' (a past ship day) | 'down'. */
   deliveriesMode: 'ok',
 };
 
@@ -283,7 +283,15 @@ async function core(req, res, path) {
         ? { planned: [], inProgress: [], delivered: [], upcoming: [] }
         : state.deliveriesMode === 'plan-only'
           ? { planned: [], inProgress: [], delivered: [], upcoming: DELIVERIES.upcoming }
-          : DELIVERIES;
+          : state.deliveriesMode === 'late'
+            ? {
+                // A planned order whose ship day has passed (not dispatched yet).
+                planned: [delivery('OR-000912', 'PLANNED', '2020-01-06')],
+                inProgress: [],
+                delivered: [],
+                upcoming: [],
+              }
+            : DELIVERIES;
     return send(res, 200, value, portalDeliveriesSchema);
   }
   const contractsMatch = path.match(/^hotels\/([^/]+)\/contracts$/);
