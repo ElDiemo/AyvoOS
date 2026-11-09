@@ -3,12 +3,14 @@ import type {
   FinanceContractHotel,
   CreateHotelRequest,
   FulfillmentSiteOption,
+  HotelChange,
   HotelDetail,
   HotelProfileFields,
   HotelSummary,
   PortalHotelProfile,
   UpdateHotelPracticalRequest,
 } from '@ayvo/types';
+import { HOTEL_CHANGES_MAX } from '@ayvo/types';
 import { Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
@@ -214,6 +216,45 @@ export class HotelsService implements OnModuleInit {
       tx,
     );
     return toPortalProfile(updated);
+  }
+
+  /**
+   * "Historie změn údajů": the latest HOTEL_UPDATED events of the hotel (staff edits of the
+   * practical details and the hotel's own edits in the portal), newest first, with the changed
+   * fields only. The reason is the event's own (portal) or the one staff wrote into the payload.
+   */
+  async changes(code: string): Promise<HotelChange[]> {
+    const row = await this.byCode(code);
+    if (!row) throw new NotFoundException('Hotel not found');
+    const events = await this.audit.list(
+      { type: 'HOTEL_UPDATED', payload: { path: ['hotel'], equals: row.code } },
+      HOTEL_CHANGES_MAX,
+    );
+    const text = (v: unknown) => (v === null || v === undefined ? null : String(v));
+    return events.map((e) => {
+      const d = e.details as {
+        via?: string;
+        reason?: unknown;
+        before?: Record<string, unknown>;
+        after?: Record<string, unknown>;
+      };
+      const before = d.before ?? {};
+      const after = d.after ?? {};
+      const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
+        (k) => text(before[k]) !== text(after[k]),
+      );
+      return {
+        at: e.occurredAt,
+        by: e.actor,
+        via: d.via === 'PORTAL' ? 'PORTAL' : 'AYVO',
+        reason: e.reason ?? text(d.reason),
+        changes: fields.map((field) => ({
+          field,
+          before: text(before[field]),
+          after: text(after[field]),
+        })),
+      };
+    });
   }
 
   fulfillmentSites(): Promise<FulfillmentSiteOption[]> {

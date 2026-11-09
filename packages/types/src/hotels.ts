@@ -160,3 +160,19 @@ export const hotelProfileFieldsSchema = z
     { message: 'A receiving contact needs a name', path: ['receivingContactName'] },
   );
 export type HotelProfileFields = z.infer<typeof hotelProfileFieldsSchema>;
+
+/**
+ * One change of a hotel's details (staff "Historie změn údajů"): when, who (e-mail), whether
+ * AYVO staff or the hotel itself in the portal, the reason and the changed fields before/after.
+ */
+export const hotelChangeSchema = z.object({
+  at: z.iso.datetime(),
+  by: z.string().nullable(),
+  via: z.enum(['AYVO', 'PORTAL']),
+  reason: z.string().nullable(),
+  changes: z.array(
+    z.object({ field: z.string(), before: z.string().nullable(), after: z.string().nullable() }),
+  ),
+});
+export type HotelChange = z.infer<typeof hotelChangeSchema>;
+export const HOTEL_CHANGES_MAX = 50;

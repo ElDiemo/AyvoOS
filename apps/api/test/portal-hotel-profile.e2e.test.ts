@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import type { HotelDetail, PortalHotelProfile } from '@ayvo/types';
+import type { HotelChange, HotelDetail, PortalHotelProfile } from '@ayvo/types';
 import { Secret, TOTP } from 'otpauth';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -396,6 +396,63 @@ describe.skipIf(!hasDatabase)('hotel portal: the hotel profile', () => {
     const res = await pending;
     expect([res.status, res.body.code]).toEqual([404, 'HOTEL_NOT_FOUND']);
     expect(await row(hotelA.id)).toEqual(stored);
+  });
+
+  it('staff see who changed the details, when, why — from the portal and from AYVO', async () => {
+    const hotel = await createHotel(su, { name: 'Hotel Profil Historie' });
+    const a = await account();
+    await grant(a.user.id, [hotel.id]);
+    const current = await read(a.session, hotel.id);
+    await save(
+      a.session,
+      hotel.id,
+      current.fingerprint,
+      profileOf({
+        city: 'Hranice',
+        deliveryNote: null,
+        receivingContactName: null,
+        receivingContactPhone: null,
+      }),
+      client(),
+      'Recepce se přestěhovala',
+    ).expect(200);
+    await request(su.app.getHttpServer())
+      .post(`/api/admin/hotels/${hotel.code}/practical`)
+      .send({
+        requestId: randomUUID(),
+        deliveryNote: 'Zvonit u rampy',
+        receivingContactName: null,
+        receivingContactPhone: null,
+        receivingContactEmail: null,
+        reason: 'Telefonát s hotelem',
+      })
+      .expect(200);
+    const list = (
+      await request(su.app.getHttpServer())
+        .get(`/api/admin/hotels/${hotel.code}/changes`)
+        .expect(200)
+    ).body as HotelChange[];
+    expect(list).toHaveLength(2);
+    const [staff, portal] = list; // newest first
+    expect(staff).toMatchObject({
+      via: 'AYVO',
+      reason: 'Telefonát s hotelem',
+      changes: [{ field: 'deliveryNote', before: null, after: 'Zvonit u rampy' }],
+    });
+    expect(portal).toMatchObject({
+      via: 'PORTAL',
+      by: a.user.email,
+      reason: 'Recepce se přestěhovala',
+    });
+    expect(portal!.changes).toContainEqual({
+      field: 'city',
+      before: hotel.address.city,
+      after: 'Hranice',
+    });
+    expect(portal!.changes.map((c) => c.field)).not.toContain('postalCode'); // unchanged fields
+    expect(
+      (await request(su.app.getHttpServer()).get('/api/admin/hotels/HT-999999/changes')).status,
+    ).toBe(404);
   });
 
   it('existing orders keep their address snapshot; a new order takes the new address', async () => {

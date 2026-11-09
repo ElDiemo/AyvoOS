@@ -1,4 +1,5 @@
 import {
+  hotelChangeSchema,
   hotelCodeSchema,
   hotelDeliveriesSchema,
   hotelDetailSchema,
@@ -11,6 +12,7 @@ import { notFound } from 'next/navigation';
 import { OrderRows } from '@/components/dispatch/order-rows';
 import { Pager } from '@/components/dispatch/pager';
 import { DeliveriesOverview } from '@/components/hotels/deliveries-overview';
+import { HotelChanges } from '@/components/hotels/hotel-changes';
 import { HotelsHeader } from '@/components/hotels/hotels-header';
 import { PracticalDetails } from '@/components/hotels/practical-details';
 import { SupplyPlanSummary } from '@/components/hotels/supply-plan-summary';
@@ -18,7 +20,8 @@ import { buttonClass, Card, EmptyState, Field, FieldList, Notice } from '@/compo
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { hotelsCs } from '@/i18n/cs/hotels';
 import { supplyPlansCs } from '@/i18n/cs/supply-plans';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiGetPanel } from '@/lib/api';
+import { z } from 'zod';
 import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 import { ContractDraftsCard } from '@/components/contracts/contract-drafts-card';
 import { HotelBillingPanel } from '@/components/hotels/hotel-billing-panel';
@@ -46,7 +49,7 @@ export default async function HotelPage({
   const active = me.sites.find((s) => s.id === me.activeSiteId) ?? null;
   const servedHere = active?.code === hotel.fulfillmentSite.code;
   const canSeeOrders = hasPermission(me, 'orders:read') && servedHere;
-  const [orders, plan, deliveries, calendar, timeZone] = await Promise.all([
+  const [orders, plan, deliveries, calendar, timeZone, changes] = await Promise.all([
     canSeeOrders
       ? apiGet(`admin/orders/hotel/${code}`, hotelOrdersSchema, { page, pageSize: 50 })
       : Promise.resolve(null),
@@ -58,6 +61,8 @@ export default async function HotelPage({
       : Promise.resolve(null),
     canSeeOrders ? apiGet('admin/orders/calendar', orderCalendarSchema) : Promise.resolve(null),
     siteTimeZone(),
+    // Bounded: the history never brings the hotel page down.
+    apiGetPanel(`admin/hotels/${code}/changes`, z.array(hotelChangeSchema)),
   ]);
   const a = hotel.address;
   const canBilling = hasPermission(me, 'finance:billing_read');
@@ -140,6 +145,12 @@ export default async function HotelPage({
           </p>
           <p className="mt-2 text-xs text-stone-500">{hotelsCs.form.siteHelp}</p>
         </Card>
+        <div className="md:col-span-2">
+          <HotelChanges
+            changes={changes.state === 'ok' ? changes.data : null}
+            timeZone={timeZone}
+          />
+        </div>
       </section>
       {hasPermission(me, 'orders:read') && !servedHere && (
         <div className="mb-6" data-testid="hotel-orders">
