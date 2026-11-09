@@ -3522,6 +3522,10 @@ model SalesProspect {
   stage             String    @default("NEW")
   lostReason        String?   @map("lost_reason")
   note              String?
+  /// What the hotel uses today (free text; null = not known).
+  currentAmenities  String?   @map("current_amenities")
+  /// The hotel's main objection (free text; null = not known).
+  mainObjection     String?   @map("main_objection")
   revision          Int       @default(1)
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   createdBy         String    @map("created_by") @db.Uuid

@@ -651,6 +651,7 @@ export function ProspectActions({
   // a non-blocking offer to plan its next step (the ordinary task form). Decided from the write's
   // own answer, so it holds even if the page's refresh fails.
   const [offer, setOffer] = useState(false);
+  const [cardFailed, setCardFailed] = useState(false);
   const offerIfMissing = (detail: ProspectDetail) =>
     setOffer(
       IN_PROGRESS_STAGES.includes(detail.stage) &&
@@ -710,6 +711,15 @@ export function ProspectActions({
       >
         {d.archive}
       </button>
+      {cardFailed && (
+        <p
+          role="alert"
+          className="w-full rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+          data-testid="visit-card-failed"
+        >
+          {salesCs.visit.cardFailed}
+        </p>
+      )}
       {offer && (
         <div
           role="status"
@@ -759,6 +769,7 @@ export function ProspectActions({
         open={open === 'visit'}
         onClose={() => setOpen(null)}
         onSaved={offerIfMissing}
+        onCardFailed={() => setCardFailed(true)}
       />
       <TaskDialog
         code={prospect.code}

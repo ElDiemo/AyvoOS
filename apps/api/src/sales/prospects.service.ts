@@ -58,6 +58,8 @@ const PROFILE_FIELDS = [
   'source',
   'priority',
   'note',
+  'currentAmenities',
+  'mainObjection',
 ] as const;
 type ProfileField = (typeof PROFILE_FIELDS)[number];
 
@@ -618,7 +620,13 @@ export class ProspectsService {
         if (row.revision !== input.revision) {
           throw changed('PROSPECT_CHANGED', 'prospect', row.revision);
         }
-        const next = profileData(input);
+        // The two later fields are optional in the request: omitted = unchanged (older clients).
+        const next = profileData({
+          ...input,
+          currentAmenities:
+            input.currentAmenities === undefined ? row.currentAmenities : input.currentAmenities,
+          mainObjection: input.mainObjection === undefined ? row.mainObjection : input.mainObjection,
+        });
         const changes: Record<string, { before: unknown; after: unknown }> = {};
         for (const f of PROFILE_FIELDS) {
           const before = row[f as ProfileField];
@@ -918,6 +926,8 @@ export function profileData(input: Pick<CreateProspectRequest, ProfileField>) {
     source: input.source,
     priority: input.priority,
     note: input.note,
+    currentAmenities: input.currentAmenities ?? null,
+    mainObjection: input.mainObjection ?? null,
   };
 }
 

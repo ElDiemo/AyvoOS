@@ -12,7 +12,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { addDays, salesToday } from '../src/sales/sales-access.js';
 import { INITIAL_SITE_ID, prepareInvitedUser, sessionCookie } from './support/sign-in.js';
-import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
 
 /**
  * Obchod — hotel acquisition (doc 034) through the real sign-in: salespeople with the SALES role
@@ -905,5 +905,46 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
     expect(listed).not.toContain(planned.code);
     expect(listed).not.toContain(foreign.code);
     expect((await a.get('/prospects?phase=other')).status).toBe(400);
+  });
+
+  it('Současná kosmetika and Hlavní námitka: set at creation or by an edit (with the event), kept when omitted, bounded', async () => {
+    const a = as(people.a.cookie);
+    const d = await create(people.a.cookie, `Hotel Kosmetika ${tag}`, {
+      currentAmenities: '  jednorázové lahvičky  ',
+    });
+    expect(d).toMatchObject({ currentAmenities: 'jednorázové lahvičky', mainObjection: null });
+    const edit = (revision: number, extra: object) =>
+      a.post(`/prospects/${d.code}/update`, {
+        ...prospect(d.name),
+        revision,
+        ownerId: undefined,
+        contact: undefined,
+        acknowledgeDuplicates: undefined,
+        ...extra,
+      });
+    const set = (await edit(d.revision, { mainObjection: 'cena' }).expect(200))
+      .body as ProspectDetail;
+    expect(set).toMatchObject({ currentAmenities: 'jednorázové lahvičky', mainObjection: 'cena' });
+    expect(set.events.find((e) => e.type === 'PROSPECT_UPDATED')!.payload).toEqual({
+      changes: { mainObjection: { before: null, after: 'cena' } },
+    });
+    // An older client that omits both fields changes neither.
+    const city = (await edit(set.revision, { city: 'Zlín' }).expect(200)).body as ProspectDetail;
+    expect(city).toMatchObject({
+      city: 'Zlín',
+      currentAmenities: 'jednorázové lahvičky',
+      mainObjection: 'cena',
+    });
+    // Cleared explicitly; bounded to 500 characters (also by the database).
+    const cleared = (await edit(city.revision, { currentAmenities: '', city: 'Zlín' }).expect(200))
+      .body as ProspectDetail;
+    expect(cleared.currentAmenities).toBeNull();
+    expect((await edit(cleared.revision, { mainObjection: 'x'.repeat(501) })).status).toBe(400);
+    await expect(
+      withPrivileged(
+        (db) =>
+          db.$executeRaw`UPDATE "sales_prospects" SET "main_objection" = '   ', "revision" = "revision" + 1 WHERE "code" = ${d.code}`,
+      ),
+    ).rejects.toThrow(/amenities_objection_check/);
   });
 });

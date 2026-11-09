@@ -117,6 +117,10 @@ const profileFields = {
   source: optional(200),
   priority: prioritySchema.nullable(),
   note: optional(4000),
+  /** What the hotel uses today (e.g. "jednorázové lahvičky od velkoobchodu"); null = not known. Omitted = unchanged on an edit. */
+  currentAmenities: optional(500).optional(),
+  /** The hotel's main objection (free text); null = not known. Omitted = unchanged on an edit. */
+  mainObjection: optional(500).optional(),
 };
 
 export const createProspectRequestSchema = z.strictObject({
@@ -460,6 +464,8 @@ export const prospectDetailSchema = z.object({
   stage: prospectStageSchema,
   lostReason: z.string().nullable(),
   note: z.string().nullable(),
+  currentAmenities: z.string().nullable(),
+  mainObjection: z.string().nullable(),
   owner: userRefSchema,
   revision: z.number().int(),
   /** Archived (not a stage): read-only until restored. */

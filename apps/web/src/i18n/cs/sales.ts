@@ -150,6 +150,11 @@ export const salesCs = {
     priority: 'Priorita',
     priorityNone: 'Neurčena',
     note: 'Poznámka',
+    currentAmenities: 'Současná kosmetika',
+    currentAmenitiesHelp:
+      'Co hotel používá dnes a od koho, např. jednorázové lahvičky od velkoobchodu.',
+    mainObjection: 'Hlavní námitka',
+    mainObjectionHelp: 'Co hotel nejvíc brzdí, např. cena, vzhled, logistika, současný dodavatel.',
     owner: 'Obchodník',
     ownerMe: 'Já',
     create: 'Založit zájemce',
@@ -212,6 +217,8 @@ export const salesCs = {
     source: 'Zdroj',
     address: 'Adresa',
     note: 'Poznámka',
+    currentAmenities: 'Současná kosmetika',
+    mainObjection: 'Hlavní námitka',
     firstContact: 'První oslovení',
     lastContact: 'Poslední kontakt',
     noContactYet: 'zatím žádný',
@@ -351,6 +358,9 @@ export const salesCs = {
       notes: 'Poznámky',
     },
     empty: 'Vyplňte aspoň jeden bod nebo poznámku.',
+    toCard: 'Uložit současnou kosmetiku a námitky i do karty hotelu',
+    cardFailed:
+      'Schůzka je uložená, ale kartu hotelu se nepodařilo upravit. Doplňte současnou kosmetiku a námitku v úpravě karty.',
   },
   task: {
     title: 'Přidat úkol',
