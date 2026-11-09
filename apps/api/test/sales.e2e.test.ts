@@ -850,7 +850,7 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
     });
   });
 
-  it('Kalendář: the tasks due in a month for the same people as the list; overdue before it counted', async () => {
+  it('Kalendář: the tasks due in a month for the same people as the list; only really overdue ones counted', async () => {
     const a = as(people.a.cookie);
     const b = as(people.b.cookie);
     const day = addDays(today(), 1);
@@ -903,16 +903,35 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
         .filter((x) => x.endsWith(tag)),
     ).toEqual([`Bářin úkol ${tag}`]);
 
-    // An open task due before the month viewed is counted as overdue there, not listed.
+    // Overdue in a later month: only open tasks due before that month AND before today. A
+    // future task (tomorrow, still before the month viewed) is not late (review 5829337971);
+    // one really due three days ago is counted — neither is listed there.
     const [yy, mm] = month.split('-').map(Number) as [number, number];
     const nextMonth = mm === 12 ? `${yy + 1}-01` : `${yy}-${String(mm + 1).padStart(2, '0')}`;
-    const view = async () =>
-      (await a.get(`/tasks/calendar?month=${nextMonth}`).expect(200)).body as SalesCalendar;
-    const before = await view();
-    await task(people.a.cookie, pa.code, `Ještě jeden ${tag}`, day);
-    const after = await view();
+    const view = async (m: string) =>
+      (await a.get(`/tasks/calendar?month=${m}`).expect(200)).body as SalesCalendar;
+    const before = await view(nextMonth);
+    const beforeNow = await view(today().slice(0, 7));
+    await task(people.a.cookie, pa.code, `Zítra ${tag}`, day);
+    await task(people.a.cookie, pa.code, `Zpožděný ${tag}`, day);
+    const late = (
+      (await a.get(`/prospects/${pa.code}`).expect(200)).body as ProspectDetail
+    ).openTasks.find((x) => x.title === `Zpožděný ${tag}`)!;
+    // Test-only: a past due date cannot be entered through the API.
+    await t.prisma.salesTask.update({
+      where: { id: late.id },
+      data: { dueOn: new Date(`${addDays(today(), -3)}T00:00:00Z`), revision: { increment: 1 } },
+    });
+    const after = await view(nextMonth);
     expect(after.overdueBefore).toBe(before.overdueBefore + 1);
-    expect(after.items.map((x) => x.title)).not.toContain(`Ještě jeden ${tag}`);
+    expect(after.items.map((x) => x.title)).not.toContain(`Zítra ${tag}`);
+    expect(after.items.map((x) => x.title)).not.toContain(`Zpožděný ${tag}`);
+    // The current month: the late task counts there too when it fell in an earlier month;
+    // otherwise it is in the grid itself (red), not in the count.
+    const lateMonth = addDays(today(), -3).slice(0, 7);
+    expect((await view(today().slice(0, 7))).overdueBefore).toBe(
+      beforeNow.overdueBefore + (lateMonth < today().slice(0, 7) ? 1 : 0),
+    );
     for (const q of ['?month=2026-13', '?month=26-01', '?assignee=nobody'])
       expect((await a.get(`/tasks/calendar${q}`)).status, q).toBe(400);
   });

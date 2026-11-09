@@ -225,9 +225,24 @@ export default async function SalesCalendarPage({
                     />
                   ))}
                   {tasks.length > PER_CELL && (
-                    <span className="px-1 text-xs text-stone-500">
-                      {t.more(tasks.length - PER_CELL)}
-                    </span>
+                    // The rest of the day, opened in place — a native disclosure, so it works
+                    // from the keyboard and without JavaScript (review 5829337971).
+                    <details className="group" data-testid={`calendar-more-${day}`}>
+                      <summary className="cursor-pointer list-none rounded px-1 text-xs font-medium text-emerald-800 hover:underline focus-visible:outline-2 focus-visible:outline-emerald-700 [&::-webkit-details-marker]:hidden">
+                        <span className="group-open:hidden">{t.more(tasks.length - PER_CELL)}</span>
+                        <span className="hidden group-open:inline">{t.less}</span>
+                      </summary>
+                      <div className="mt-1 flex flex-col gap-1">
+                        {tasks.slice(PER_CELL).map((task) => (
+                          <TaskChip
+                            key={task.id}
+                            task={task}
+                            today={cal.today}
+                            showAssignee={showAssignee}
+                          />
+                        ))}
+                      </div>
+                    </details>
                   )}
                 </div>
               );

@@ -115,3 +115,68 @@ test('390 px: the days with tasks as a list, no sideways scrolling', async ({ br
   await shot(page, 'sales-calendar-390');
   await page.context().close();
 });
+
+test('desktop: a day with five tasks opens the rest in place, from the keyboard', async ({
+  browser,
+}) => {
+  // Review 5829337971: with 5+ tasks a day the grid showed four and a static "+ 1 další", and the
+  // full list is hidden from md up — the fifth task could not be reached.
+  const page = await signIn(browser, F.email);
+  const p = await json<ProspectDetail>(
+    await page.request.post('/api/admin/sales/prospects', {
+      data: prospect(`Hotel Plný den ${tag}`, { city: 'Ostrava' }),
+    }),
+  );
+  // A day of this month with no other task of F (beforeAll uses today, tomorrow and two days
+  // ago): three days ahead, or back when the month ends sooner. A past day's tasks are simply
+  // shown as overdue.
+  const month = pragueDay(0).slice(0, 7);
+  const offset = [3, 4, 5, -3, -4, -5].find((o) => pragueDay(o).slice(0, 7) === month)!;
+  const day = pragueDay(offset);
+  const titles = ['Úkol jedna', 'Úkol dva', 'Úkol tři', 'Úkol čtyři', 'Úkol pět'].map(
+    (x) => `${x} ${tag}`,
+  );
+  for (const title of titles)
+    await json(
+      await page.request.post(`/api/admin/sales/prospects/${p.code}/tasks`, {
+        data: task(title, day < pragueDay(0) ? pragueDay(0) : day),
+      }),
+    );
+  if (day < pragueDay(0)) {
+    const detail = await json<ProspectDetail>(
+      await page.request.get(`/api/admin/sales/prospects/${p.code}`),
+    );
+    const ids = detail.openTasks.filter((x) => titles.includes(x.title)).map((x) => `'${x.id}'`);
+    await e2eSql([
+      `UPDATE "sales_tasks" SET "due_on" = DATE '${day}', "revision" = "revision" + 1 WHERE "id" IN (${ids.join(',')})`,
+    ]);
+  }
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/sales/calendar?month=${day.slice(0, 7)}`);
+  const cell = page.getByTestId('calendar-grid').getByTestId(`calendar-day-${day}`);
+  const chip = (title: string) => cell.getByRole('link', { name: new RegExp(title) });
+  const visible = async () => {
+    let n = 0;
+    for (const title of titles) if (await chip(title).isVisible()) n++;
+    return n;
+  };
+  await expect(cell.getByText('+ 1 další')).toBeVisible();
+  expect(await visible()).toBe(4);
+  const fifth: string[] = [];
+  for (const title of titles) if (!(await chip(title).isVisible())) fifth.push(title);
+  expect(fifth).toHaveLength(1);
+
+  // Keyboard: focus the disclosure, open it with Enter, then every task is reachable.
+  const more = cell.getByTestId(`calendar-more-${day}`).locator('summary');
+  await more.focus();
+  await page.keyboard.press('Enter');
+  await expect(cell.getByText('Skrýt další')).toBeVisible();
+  expect(await visible()).toBe(5);
+  await noOverflow(page);
+  // The fifth one (hidden before) opens its prospect from the keyboard too.
+  await chip(fifth[0]!).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { level: 1 })).toContainText(`Hotel Plný den ${tag}`);
+  await page.context().close();
+});

@@ -371,6 +371,7 @@ export const salesCs = {
     empty: 'V tomto měsíci nejsou žádné úkoly.',
     truncated: 'Úkolů je v tomto měsíci příliš mnoho, ukazujeme jen část. Použijte seznam Úkoly.',
     more: (n: number) => `+ ${n} další`,
+    less: 'Skrýt další',
     done: 'Hotovo',
     cancelled: 'Zrušeno',
     overdueTag: 'Po termínu',

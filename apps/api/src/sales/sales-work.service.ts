@@ -362,7 +362,8 @@ export class SalesWorkService {
 
   /**
    * "Kalendář": the tasks due in one month for the same people and prospects as the task list
-   * (the same scope check), open and closed, by day; and the open ones overdue before it.
+   * (the same scope check), open and closed, by day; and the open ones overdue before it (due
+   * before the month and before today).
    */
   async calendar(scope: SalesScope, q: SalesCalendarQuery): Promise<SalesCalendar> {
     if (q.assignee !== 'me' && !scope.all) {
@@ -373,6 +374,8 @@ export class SalesWorkService {
     const [y, m] = month.split('-').map(Number) as [number, number];
     const first = new Date(Date.UTC(y, m - 1, 1));
     const next = new Date(Date.UTC(y, m, 1));
+    const startOfToday = new Date(`${today}T00:00:00Z`);
+    const overdueBound = first < startOfToday ? first : startOfToday;
     const who: Prisma.SalesTaskWhereInput = {
       ...(q.assignee === 'me'
         ? { assigneeId: scope.userId }
@@ -383,7 +386,11 @@ export class SalesWorkService {
     };
     const [items, overdueBefore] = await Promise.all([
       this.views.tasks({ ...who, dueOn: { gte: first, lt: next } }, SALES_CALENDAR_MAX + 1),
-      this.prisma.salesTask.count({ where: { ...who, status: 'OPEN', dueOn: { lt: first } } }),
+      // Overdue = due before the month viewed AND before today: an open task due later this
+      // month is not late when a future month is viewed (review 5829337971).
+      this.prisma.salesTask.count({
+        where: { ...who, status: 'OPEN', dueOn: { lt: overdueBound } },
+      }),
     ]);
     return {
       month,
