@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import wordmark from '@/assets/ayvo-wordmark.svg';
+import { account } from '@/i18n/account';
 import { cs } from '@/i18n/cs';
 import { LogoutButton } from './logout-button';
 
@@ -14,7 +15,8 @@ export function Shell({
   children,
 }: {
   user: { displayName: string; email: string };
-  active: 'hotels' | 'invoices';
+  /** The current section; none on pages outside the navigation (Zabezpečení účtu). */
+  active?: 'hotels' | 'invoices';
   testInvoices?: boolean;
   children: React.ReactNode;
 }) {
@@ -47,6 +49,13 @@ export function Shell({
               <span className="font-medium text-stone-800">{user.displayName}</span>
               <span className="hidden sm:inline"> · {user.email}</span>
             </span>
+            <Link
+              href="/account"
+              className="text-xs whitespace-nowrap text-stone-600 underline-offset-2 hover:underline"
+              data-testid="account-link"
+            >
+              {account.link}
+            </Link>
             <LogoutButton />
           </div>
         </div>

@@ -9,6 +9,7 @@ import { NATIVE_SECRET_BOX, NativeTokensService } from '../identity/native-token
 import { NativePasswords, type NativeSecretBox } from '../identity/native-credentials.js';
 import { SessionsService } from '../identity/sessions.service.js';
 import { PortalGrantsModule } from '../portal-grants/portal-grants.module.js';
+import { PortalAccountController } from './portal-account.controller.js';
 import { PortalContractController } from './portal-contract.controller.js';
 import { PortalIntrospectionController } from './portal-introspection.controller.js';
 import { PortalPrismaService } from './portal-prisma.service.js';
@@ -42,7 +43,7 @@ const asClient = (db: PortalPrismaService) => db as unknown as PrismaService;
  */
 @Module({
   imports: [IdentityModule, CustomersModule, PortalGrantsModule],
-  controllers: [PortalContractController, PortalIntrospectionController],
+  controllers: [PortalContractController, PortalIntrospectionController, PortalAccountController],
   providers: [
     PortalPrismaService,
     PortalRequestLimit,

@@ -28,7 +28,7 @@ const invalid = () => answer(400, { code: 'INVALID_REQUEST' });
  * then a shape check and the core. Nothing of an oversized, slow or malformed body reaches the
  * core, and the slot is given back as soon as the step ends (also when it was cut).
  */
-function publicStep<T extends z.ZodType>(
+export function publicStep<T extends z.ZodType>(
   request: Request,
   schema: T,
   work: (body: z.infer<T>) => Promise<Response>,

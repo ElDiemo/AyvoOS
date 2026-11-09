@@ -24,6 +24,7 @@ export * from './returns.js';
 export * from './labels.js';
 export * from './orders.js';
 export * from './portal.js';
+export * from './portal-account.js';
 export * from './portal-grants.js';
 export * from './printing.js';
 export * from './procurement.js';
