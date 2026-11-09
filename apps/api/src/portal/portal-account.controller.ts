@@ -1,12 +1,15 @@
 import {
   PORTAL_SESSION_HEADER,
+  portalLogoutRequestSchema,
   portalReplaceMfaRequestSchema,
   type PortalChallengeStep,
   type PortalClient,
+  type PortalLogoutRequest,
   type PortalReplaceMfaRequest,
 } from '@ayvo/types';
 import { Body, Controller, Headers, HttpCode, Inject, Post } from '@nestjs/common';
 import QRCode from 'qrcode';
+import { AuditService } from '../audit/audit.service.js';
 import { domainError } from '../common/domain-error.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ENV, type Env } from '../config/env.js';
@@ -22,7 +25,8 @@ import { sha256Hex } from '../identity/crypto.js';
 import { NativeAuthService } from '../identity/native-auth.service.js';
 import { PasswordWorkLimitError } from '../identity/native-credentials.js';
 import { SessionsService } from '../identity/sessions.service.js';
-import { PORTAL_NATIVE_AUTH, PORTAL_SESSIONS } from './portal-tokens.js';
+import { PORTAL_AUDIT, PORTAL_NATIVE_AUTH, PORTAL_SESSIONS } from './portal-tokens.js';
+import { PortalPrismaService } from './portal-prisma.service.js';
 import { PortalRequestLimit } from './portal-request-limit.js';
 
 /** The replacement's setup step lives as long as the internal OS's (`SETUP_MS`, 15 minutes). */
@@ -47,8 +51,40 @@ export class PortalAccountController {
     @Inject(PORTAL_SESSIONS) private readonly sessions: SessionsService,
     private readonly limits: AuthRateLimitService,
     private readonly slots: PortalRequestLimit,
+    private readonly db: PortalPrismaService,
+    @Inject(PORTAL_AUDIT) private readonly audit: AuditService,
     @Inject(ENV) private readonly env: Env,
   ) {}
+
+  /**
+   * "Odhlásit ze všech zařízení" (a lost phone, a shared computer): every session of the signed-in
+   * portal account ends, this one included, in one transaction with its audit event (LOGOUT with
+   * `allSessions`). A session that is already gone answers 401 like any other route.
+   */
+  @PortalServiceAccess()
+  @Post('logout-all')
+  @HttpCode(204)
+  logoutAll(
+    @Body(new ZodValidationPipe(portalLogoutRequestSchema)) body: PortalLogoutRequest,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<void> {
+    return this.slots.run(async () => {
+      this.sameOrigin(body.client);
+      const userId = (await this.activeSession(token)).user.id;
+      await this.db.$transaction(async (tx) => {
+        const ended = await this.sessions.revokeAllForUser(userId, 'LOGOUT_ALL', tx);
+        await this.audit.record(
+          {
+            type: 'LOGOUT',
+            actorUserId: userId,
+            targetUserId: userId,
+            payload: { allSessions: true, ended: ended.count },
+          },
+          tx,
+        );
+      });
+    });
+  }
 
   @PortalServiceAccess()
   @Post('replace-mfa')
@@ -60,11 +96,7 @@ export class PortalAccountController {
     return this.slots.run(async () => {
       this.sameOrigin(body.client);
       this.decide(await this.limits.hit('login', `portal-ip:${body.client.ip}`));
-      const session = await this.sessions.lookup(token ?? null, 'PORTAL');
-      if (session.kind === 'expired') throw sessionExpired();
-      if (session.kind === 'inactive') throw accountInactive();
-      if (session.kind !== 'active') throw unauthenticated();
-      const userId = session.user.id;
+      const userId = (await this.activeSession(token)).user.id;
       this.decide(await this.limits.hit('callback_failure', `portal-account:${sha256Hex(userId)}`));
       const result = await this.expensive(() =>
         this.auth.beginMfaReplacement(userId, body.password, body.code.trim()),
@@ -86,6 +118,14 @@ export class PortalAccountController {
         setupKey: new URL(result.enrollmentUri).searchParams.get('secret') ?? undefined,
       };
     });
+  }
+
+  private async activeSession(token: string | undefined) {
+    const session = await this.sessions.lookup(token ?? null, 'PORTAL');
+    if (session.kind === 'expired') throw sessionExpired();
+    if (session.kind === 'inactive') throw accountInactive();
+    if (session.kind !== 'active') throw unauthenticated();
+    return session;
   }
 
   private decide(decision: { allowed: boolean; unavailable?: boolean }): void {

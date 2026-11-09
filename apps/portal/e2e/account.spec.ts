@@ -102,4 +102,32 @@ test.describe('hotel portal: replacing the authenticator app', () => {
     });
     expect(cross.status()).toBe(403);
   });
+
+  test('Odhlásit ze všech zařízení: a confirmation; the core down keeps the user signed in; then every device is signed out', async ({
+    page,
+    browser,
+  }) => {
+    const other = await browser.newPage();
+    await signIn(other);
+    await signIn(page);
+    await page.goto('/account');
+    const box = page.getByTestId('logout-everywhere');
+    await box.getByRole('button', { name: 'Odhlásit všude' }).click();
+    await noSideways(page);
+    await shot(page, 'account-everywhere');
+    // The core cannot end the sessions: said so, still signed in.
+    await page.request.post(`${STUB}/__control`, { data: { logoutMode: 'down' } });
+    await box.getByRole('button', { name: 'Opravdu odhlásit všude' }).click();
+    await expect(box.getByRole('alert')).toHaveText(/Jste stále přihlášeni/);
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Zabezpečení účtu' })).toBeVisible();
+    await page.request.post(`${STUB}/__control`, { data: { logoutMode: 'ok' } });
+    await box.getByRole('button', { name: 'Odhlásit všude' }).click();
+    await box.getByRole('button', { name: 'Opravdu odhlásit všude' }).click();
+    await expect(page).toHaveURL(/\/login/);
+    expect((await stubState(page)).sessions).toBe(0);
+    await other.reload();
+    await expect(other).toHaveURL(/\/login/);
+    await other.close();
+  });
 });

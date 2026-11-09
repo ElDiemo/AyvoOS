@@ -269,4 +269,44 @@ describe.skipIf(!hasDatabase)('hotel portal: replacing the authenticator app', (
     expect(r.status).toBe(401);
     expect(await replacements(user.id)).toBe(0);
   });
+
+  it('Odhlásit ze všech zařízení: every session of the account ends, this one too; audited; others untouched', async () => {
+    const a = await activated();
+    const b = await activated(); // another portal account
+    const step = await post('auth/password').send({
+      email: a.user.email,
+      password: PASSWORD,
+      client: client(),
+    });
+    const second = await post('auth/mfa').send({
+      challenge: step.body.challenge,
+      code: a.recoveryCodes[0],
+      client: client(),
+    });
+    expect(second.status).toBe(200);
+    // Another origin or no session: refused, nothing ended.
+    expect(
+      (
+        await post('account/logout-all', a.session).send({
+          client: client({ origin: 'https://evil.example.test' }),
+        })
+      ).status,
+    ).toBe(403);
+    expect((await post('account/logout-all').send({ client: client() })).status).toBe(401);
+    expect((await get('session', a.session)).status).toBe(200);
+    expect((await post('account/logout-all', a.session).send({ client: client() })).status).toBe(
+      204,
+    );
+    expect((await get('session', a.session)).status).toBe(401);
+    expect((await get('session', second.body.session)).status).toBe(401);
+    expect((await get('session', b.session)).status).toBe(200);
+    // Again with the ended session: 401, nothing more.
+    expect((await post('account/logout-all', a.session).send({ client: client() })).status).toBe(
+      401,
+    );
+    const audit = await t.prisma.auditEvent.findMany({
+      where: { targetUserId: a.user.id, type: 'LOGOUT' },
+    });
+    expect(audit.map((x) => x.payload)).toEqual([{ allSessions: true, ended: 2 }]);
+  });
 });
