@@ -462,6 +462,8 @@ describe.skipIf(!hasDatabase)('hotel portal: replacing the authenticator app', (
     });
     expect(after).toEqual(before);
     expect((await get('session', a.session)).status).toBe(200);
+  });
+
   it('Odhlásit ze všech zařízení waits for the user lock (as a sign-in completing at the same moment holds it)', async () => {
     const a = await activated();
     let release!: () => void;
