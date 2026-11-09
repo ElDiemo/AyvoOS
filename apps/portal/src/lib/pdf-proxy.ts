@@ -60,7 +60,9 @@ export async function passPdf(
 /**
  * A file of a given type passed through from a contract (see passPdf). `refused`, when given,
  * turns the receiver's refusals (400, 404, 409, 422, its 503 with a code) into this answer
- * instead of a bare text — e.g. a redirect back to the page with the reason.
+ * instead of a bare text — e.g. a redirect back to the page with the reason. With it, a full
+ * local slot is `refused(503, 'BUSY')` and the receiver being unreachable or unusable is
+ * `refused(503, null)`, so such a caller never shows a bare error page.
  */
 export async function passFile(
   request: Request,
@@ -80,7 +82,7 @@ export async function passFile(
   if (!session) return plain(401, 'Přihlaste se prosím znovu.');
   slots ??= new SlotLimit(portalEnv().PORTAL_PDF_MAX_IN_FLIGHT);
   const releasePdf = slots.acquire();
-  if (!releasePdf) return plain(503, options.busy);
+  if (!releasePdf) return options.refused?.(503, 'BUSY') ?? plain(503, options.busy);
   const stop = deadline(options.deadlineMs, request.signal);
   let call: Awaited<ReturnType<typeof contractOpen>>;
   try {
@@ -91,7 +93,8 @@ export async function passFile(
   } catch (error) {
     stop.done();
     releasePdf();
-    if (error instanceof PortalUnavailable) return plain(503, options.unavailable);
+    if (error instanceof PortalUnavailable)
+      return options.refused?.(503, null) ?? plain(503, options.unavailable);
     throw error;
   }
   const { res } = call;
@@ -133,7 +136,7 @@ export async function passFile(
     if (options.refused && res.status === 503 && code) return options.refused(503, code);
     if (res.status === 404) return plain(404, 'Nenalezeno');
     if (res.status === 401) return plain(401, 'Přihlaste se prosím znovu.');
-    return plain(503, options.unavailable);
+    return options.refused?.(503, null) ?? plain(503, options.unavailable);
   }
   const body = boundedPassThrough(res.body!, {
     stop: stop.signal,

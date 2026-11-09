@@ -42,9 +42,11 @@ export async function GET(request: Request) {
       back(
         status === 400
           ? 'INVALID_PERIOD'
-          : code && ['NO_INVOICES', 'PACKAGE_TOO_LARGE', 'PACKAGE_BUSY'].includes(code)
-            ? code
-            : 'UNAVAILABLE',
+          : code === 'BUSY' // portal-web's own slots are full
+            ? 'PACKAGE_BUSY'
+            : code && ['NO_INVOICES', 'PACKAGE_TOO_LARGE', 'PACKAGE_BUSY'].includes(code)
+              ? code
+              : 'UNAVAILABLE', // Finance unreachable or its answer unusable
       ),
   });
 }

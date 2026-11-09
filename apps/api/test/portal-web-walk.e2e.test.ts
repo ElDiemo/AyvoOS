@@ -686,6 +686,10 @@ describe.skipIf(!enabled)(
       financeClosed = true;
       const list = await html(b, '/invoices');
       expect(list.text).toContain('Faktury nejsou dostupné');
+      // The package says so too, as a way back to the invoices — never an error page.
+      const pkg = await b.get('/invoices/package?from=2026-08&to=2026-09');
+      expect(pkg.status).toBe(303);
+      expect(pkg.headers.get('location')).toContain('balicek=UNAVAILABLE');
       expect((await b.get(`/invoices/${d.B1.id}/pdf`)).status).toBe(503);
       const home = await html(b, '/');
       expect(home.status).toBe(200);
