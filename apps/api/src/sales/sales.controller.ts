@@ -25,6 +25,7 @@ import {
   rescheduleTaskRequestSchema,
   retireContactRequestSchema,
   saveContactRequestSchema,
+  salesResultsQuerySchema,
   taskListQuerySchema,
   updateProspectRequestSchema,
   updateTaskRequestSchema,
@@ -48,6 +49,8 @@ import {
   type SalesOverview,
   type Salesperson,
   type SaveContactRequest,
+  type SalesResults,
+  type SalesResultsQuery,
   type TaskListQuery,
   type TaskPage,
   type UpdateProspectRequest,
@@ -76,6 +79,7 @@ import { CurrentPrincipal } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import { ProspectsService } from './prospects.service.js';
 import { SalesImportService, type UploadedCsv } from './sales-import.service.js';
+import { SalesResultsService } from './sales-results.service.js';
 import { scopeOf } from './sales-access.js';
 import { SalesWorkService } from './sales-work.service.js';
 
@@ -111,7 +115,17 @@ export class SalesController {
     private readonly prospects: ProspectsService,
     private readonly work: SalesWorkService,
     private readonly imports: SalesImportService,
+    private readonly results: SalesResultsService,
   ) {}
+
+  /** "Výsledky obchodu": the funnel and the period's work of everyone (owner, sales:manage). */
+  @RequirePermission('sales:manage')
+  @Get('results')
+  salesResults(
+    @Query(new ZodValidationPipe(salesResultsQuerySchema)) query: SalesResultsQuery,
+  ): Promise<SalesResults> {
+    return this.results.results(query);
+  }
 
   @RequirePermission('sales:work')
   @Get('overview')
