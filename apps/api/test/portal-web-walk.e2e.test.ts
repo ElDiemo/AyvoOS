@@ -13,7 +13,15 @@ import { join, resolve } from 'node:path';
 import { Secret, TOTP } from 'otpauth';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { FinancePortalGrantResult } from '@ayvo/types';
+import type {
+  ContractDraftDetail,
+  ContractDraftFields,
+  FinancePortalGrantResult,
+} from '@ayvo/types';
+import { testCarrierControl } from '../src/carriers/test-carrier.js';
+import { renderContractPdf } from '../src/contracts/contract-pdf.js';
+import { contractDocument } from '../src/contracts/contract-template.js';
+import { HotelsService } from '../src/customers/hotels.service.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
 import {
   createFinanceTestApp,
@@ -21,7 +29,9 @@ import {
   type FinanceTestApp,
 } from './support/finance-app.js';
 import { agreement, hotel, invoice, payer } from './support/finance-portal.js';
-import { hasDatabase, TEST_APP_ORIGIN } from './support/test-app.js';
+import { crateFactory, createOrder } from './support/order-fixtures.js';
+import { deliver, pickUp, RETURN_ENV, shipCrates } from './support/return-fixtures.js';
+import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
 
 /**
  * The hotel portal walk of ADR 0045 §11 through the REAL units (review 5818694161): the core and
@@ -47,7 +57,7 @@ const BASE = `https://localhost:${EDGE_PORT}`;
 const PASSWORD = 'Dlouhe portalove heslo AYVO 2026';
 const coreToken = randomBytes(32).toString('base64url');
 const financeToken = randomBytes(32).toString('base64url');
-const sha = (v: string) => createHash('sha256').update(v).digest('hex');
+const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
 const portalDir = resolve(import.meta.dirname, '../../portal');
 const otp = (secret: string, offsetSteps = 0) =>
   new TOTP({ secret: Secret.fromBase32(secret), digits: 6, period: 30 }).generate({
@@ -191,12 +201,18 @@ describe.skipIf(!enabled)(
     let edge: Server;
     const portalLog: string[] = [];
     let financeClosed = false;
+    /** A core with the test carrier, for shipping the synthetic orders (same database). */
+    let ship: TestApp;
     const d = {} as {
       A: { id: string };
       B: { id: string };
-      H1: { id: string; name: string };
-      H2: { id: string; name: string };
-      H3: { id: string; name: string };
+      H1: { id: string; code: string; name: string };
+      H2: { id: string; code: string; name: string };
+      H3: { id: string; code: string; name: string };
+      /** H1's signed original (and an unsigned draft that never shows). */
+      contract: { id: string; pdfSha256: string };
+      /** Orders of H1 by state, and one planned order of H3. */
+      orders: { planned: string; transit: string; delivered: string; h3: string };
       A1: { id: string; number: string; pdfSha256: string };
       A2: { id: string; number: string; pdfSha256: string };
       B1: { id: string; number: string; pdfSha256: string };
@@ -231,6 +247,58 @@ describe.skipIf(!enabled)(
     const shotLog: string[] = [];
 
     const coreAdmin = () => request(f.core.app.getHttpServer());
+
+    /** A contract draft for the hotel through the staff route; signed (uploaded) when asked. */
+    async function contractFor(code: string, signedOn: string | null) {
+      const h = await f.core.app.get(HotelsService).detail(code);
+      const fields = {
+        counterpartyName: `Hotelová společnost ${h.code} s.r.o.`,
+        counterpartyCompanyId: '12345678',
+        counterpartyAddress: 'Ukázková 1, 602 00 Brno',
+        representativeName: 'Jana Ukázková',
+        representativeRole: 'jednatelka',
+        hotelName: h.name,
+        hotelAddress: `${h.address.addressLine1}, ${h.address.postalCode} ${h.address.city}`,
+        rooms: 40,
+        pricePerRoomMonth: '120.50',
+        currency: 'CZK',
+        startOn: '2026-11-01',
+        billingTiming: 'ARREARS',
+        paymentTermsDays: 14,
+        holders: 'NONE',
+        holdersOwnership: null,
+      } satisfies ContractDraftFields;
+      const D = '/api/admin/contracts/drafts';
+      const created = await coreAdmin()
+        .post(D)
+        .send({ requestId: randomUUID(), prospectCode: null, hotelCode: h.code, fields });
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      const draft = created.body as ContractDraftDetail;
+      if (!signedOn) return null;
+      const pdf = await renderContractPdf(
+        contractDocument('cs-b2b-1', {
+          code: draft.code,
+          revision: draft.currentRevision,
+          savedOn: signedOn,
+          fields,
+        }),
+      );
+      let req = coreAdmin().post(`${D}/${draft.code}/signed`);
+      for (const [k, v] of Object.entries({
+        requestId: randomUUID(),
+        expectedVersion: String(draft.version),
+        revision: String(draft.currentRevision),
+        signedOn,
+        confirm: 'true',
+      }))
+        req = req.field(k, v);
+      const up = await req.attach('file', pdf, 'Smlouva podepsaná.pdf');
+      expect(up.status, JSON.stringify(up.body)).toBe(201);
+      const doc = await f.core.prisma.contractSignedDocument.findFirstOrThrow({
+        where: { revisionRow: { draft: { code: draft.code } } },
+      });
+      return { id: doc.id, pdfSha256: sha(pdf) };
+    }
 
     async function invitationOf(email: string) {
       const tokens = f.core.app.get(NativeTokensService);
@@ -336,6 +404,29 @@ describe.skipIf(!enabled)(
       d.A2 = await invoice(f, [a1.code, a2.code], '2026-09', pdf('A2'));
       d.B1 = await invoice(f, [b3.code], '2026-09', pdf('B1'));
 
+      // H1: a signed contract and a draft (never shown); orders planned, on the way, delivered
+      // (the test carrier reports pickup and delivery). H3: one planned order.
+      d.contract = (await contractFor(d.H1.code, '2026-10-15'))!;
+      await contractFor(d.H1.code, null);
+      ship = await createTestApp(RETURN_ENV);
+      testCarrierControl.reset();
+      testCarrierControl.rules.parcelWeight = 'NOT_USED';
+      const factory = await crateFactory(ship, { capacity: 2 });
+      const product = factory.kit.productCode;
+      const planned = await createOrder(ship, d.H1.code, [{ productCode: product, crates: 1 }]);
+      const transit = await shipCrates(ship, d.H1.code, product, [await factory.make()]);
+      await pickUp(ship, transit);
+      const delivered = await shipCrates(ship, d.H1.code, product, [await factory.make()]);
+      await pickUp(ship, delivered);
+      await deliver(ship, delivered);
+      const h3 = await createOrder(ship, d.H3.code, [{ productCode: product, crates: 1 }]);
+      d.orders = {
+        planned: planned.code,
+        transit: transit.order,
+        delivered: delivered.order,
+        h3: h3.code,
+      };
+
       const tls = edgeCertificate();
       edgeCa = tls.cert;
       edge = await startEdge(tls);
@@ -374,6 +465,8 @@ describe.skipIf(!enabled)(
     afterAll(async () => {
       portal?.kill('SIGTERM');
       edge?.close();
+      testCarrierControl.reset();
+      await ship?.close();
       if (financeClosed) await f?.core.close();
       else await f?.close();
     });
@@ -428,6 +521,36 @@ describe.skipIf(!enabled)(
       await shoot('a-invoice-A1', a.session, `/invoices/${d.A1.id}`);
     });
 
+    it('3b. user A on H1: the signed contract (never the draft) downloads as uploaded; deliveries planned, on the way and delivered', async () => {
+      const a = users.a.browser;
+      const detail = await html(a, `/hotels/${d.H1.id}`);
+      expect(detail.status).toBe(200);
+      expect(detail.text).toContain('Smlouva podepsaná');
+      // Exactly one contract link (the page also carries it in its RSC payload): the draft never.
+      expect([...new Set(detail.text.match(/\/contracts\/[0-9a-f-]{36}\/pdf/g) ?? [])]).toEqual([
+        `/contracts/${d.contract.id}/pdf`,
+      ]);
+      expect(detail.text).toContain('Nejbližší dodávka');
+      const file = await a.get(`/contracts/${d.contract.id}/pdf`);
+      expect(file.status).toBe(200);
+      expect(file.headers.get('content-type')).toBe('application/pdf');
+      expect(sha(Buffer.from(await file.arrayBuffer()))).toBe(d.contract.pdfSha256);
+
+      const list = await html(a, `/hotels/${d.H1.id}/deliveries`);
+      expect(list.status).toBe(200);
+      for (const [code, state] of [
+        [d.orders.planned, 'Naplánováno'],
+        [d.orders.transit, 'Na cestě'],
+        [d.orders.delivered, 'Doručeno'],
+      ] as const) {
+        expect(list.text).toContain(code);
+        expect(list.text).toContain(state);
+      }
+      expect(list.text).not.toContain(d.orders.h3);
+      await shoot('a-hotel-H1', a.session, `/hotels/${d.H1.id}`);
+      await shoot('a-deliveries-H1', a.session, `/hotels/${d.H1.id}/deliveries`);
+    });
+
     it('4. user B sees H3 and B1 only; A’s invoice, its PDF and A’s hotel are not found for B', async () => {
       const b = users.b.browser;
       const home = await html(b, '/');
@@ -441,6 +564,11 @@ describe.skipIf(!enabled)(
       expect(foreign.status).toBe(404);
       expect(foreign.text).not.toContain(d.A1.number);
       expect((await html(b, `/hotels/${d.H1.id}`)).status).toBe(404);
+      // A's hotel's deliveries and contract are not found for B either.
+      const foreignDeliveries = await html(b, `/hotels/${d.H1.id}/deliveries`);
+      expect(foreignDeliveries.status).toBe(404);
+      expect(foreignDeliveries.text).not.toContain(d.orders.planned);
+      expect((await b.get(`/contracts/${d.contract.id}/pdf`)).status).toBe(404);
       const own = await b.get(`/invoices/${d.B1.id}/pdf`);
       expect(
         createHash('sha256')
@@ -521,7 +649,15 @@ describe.skipIf(!enabled)(
       const home = await html(b, '/');
       expect(home.status).toBe(200);
       expect(home.text).toContain(d.H3.name);
+      // The core's sections of the hotel keep working without Finance.
+      const detail = await html(b, `/hotels/${d.H3.id}`);
+      expect(detail.status).toBe(200);
+      expect(detail.text).toContain('Zatím tu není žádná podepsaná smlouva.');
+      const deliveries = await html(b, `/hotels/${d.H3.id}/deliveries`);
+      expect(deliveries.status).toBe(200);
+      expect(deliveries.text).toContain(d.orders.h3);
       await shoot('b-finance-down', b.session, '/invoices');
+      await shoot('b-deliveries-finance-down', b.session, `/hotels/${d.H3.id}/deliveries`);
     });
 
     it('the screenshots taken (390 / 1440 px)', () => {
