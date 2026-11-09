@@ -47,6 +47,7 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
       priority: q.priority,
       country: q.country,
       next: q.next,
+      phase: q.phase,
       archived: q.archived,
       page: q.page,
     }),
@@ -61,6 +62,7 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
     q.priority ||
     q.country ||
     q.next ||
+    q.phase ||
     archivedView
   );
   const exportQuery = new URLSearchParams(
@@ -71,6 +73,7 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
       priority: q.priority,
       country: q.country,
       next: q.next,
+      phase: q.phase,
       archived: archivedView ? 'archived' : undefined,
     }).filter((e): e is [string, string] => !!e[1]),
   ).toString();
@@ -142,6 +145,27 @@ export default async function ProspectsPage({ searchParams }: { searchParams: Pr
       <div className="flex flex-col gap-6">
         <Card>
           <form method="get" className="flex flex-col gap-4" data-testid="prospect-filters">
+            {q.phase && (
+              <p
+                className="flex flex-wrap items-center gap-2 text-sm text-stone-700"
+                data-testid="filter-phase"
+              >
+                <input type="hidden" name="phase" value={q.phase} />
+                <span className="rounded bg-stone-100 px-2 py-0.5 font-medium">
+                  {t.phaseInProgress}
+                </span>
+                <Link
+                  href={`/sales/prospects?${new URLSearchParams(
+                    Object.entries(raw).filter(
+                      (e): e is [string, string] => !!e[1] && e[0] !== 'phase' && e[0] !== 'page',
+                    ),
+                  ).toString()}`}
+                  className="underline"
+                >
+                  {t.phaseClear}
+                </Link>
+              </p>
+            )}
             <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-stone-500">
               {t.search}
               <input
