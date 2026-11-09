@@ -63,6 +63,7 @@ EDGE_BODY=""
 TAILNET_IPV4=""
 EDGE_BACKUP=""
 PORTAL_RELEASE_IMAGE=""
+PORTAL_RELEASE_IMAGE_ID=""
 
 # --- output ------------------------------------------------------------------------------------
 
@@ -251,6 +252,8 @@ validate_env() {
 
 # Require a healthy portal before first enabling its edge or activating a named portal release.
 # A portal outage must not block ordinary Core/edge work when the route is already enabled.
+# With an explicit PORTAL_IMAGE_TAG the running container must be the image that tag names NOW:
+# a tag re-pointed by a later build would otherwise pass by name alone.
 check_portal_before_switch() {
   local domain=${CFG[DEV_PORTAL_DOMAIN]:-}
   [[ -n $domain ]] || return 0
@@ -260,16 +263,24 @@ check_portal_before_switch() {
     return 0
   fi
 
-  local status
-  status="$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}} {{.Config.Image}}' "$PROJECT-portal-web-1" 2>/dev/null)" ||
+  local status running health image_id image
+  status="$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.Image}}|{{.Config.Image}}' "$PROJECT-portal-web-1" 2>/dev/null)" ||
     die "start the reviewed portal-web before enabling its DEV route (docs/052)"
-  [[ $status == "true healthy $IMAGE_PREFIX/portal-web:"* ]] ||
+  IFS='|' read -r running health image_id image <<<"$status"
+  [[ $running == true && $health == healthy && $image == "$IMAGE_PREFIX/portal-web:"* ]] ||
     die "portal-web must be running and healthy before enabling its DEV route (docs/052)"
-  PORTAL_RELEASE_IMAGE=${status#true healthy }
-  if [[ -n ${PORTAL_IMAGE_TAG:-} && $PORTAL_RELEASE_IMAGE != "$IMAGE_PREFIX/portal-web:$PORTAL_IMAGE_TAG" ]]; then
-    die "running portal-web does not match the selected PORTAL_IMAGE_TAG"
+  if [[ -n ${PORTAL_IMAGE_TAG:-} ]]; then
+    [[ $image == "$IMAGE_PREFIX/portal-web:$PORTAL_IMAGE_TAG" ]] ||
+      die "running portal-web does not match the selected PORTAL_IMAGE_TAG"
+    local tagged_id
+    tagged_id="$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)" ||
+      die "image $image not found"
+    [[ $tagged_id == "$image_id" ]] ||
+      die "running portal-web is not the image now tagged $image: recreate it from that tag (docs/052)"
   fi
-  ok "portal-web is healthy ($PORTAL_RELEASE_IMAGE)"
+  PORTAL_RELEASE_IMAGE=$image
+  PORTAL_RELEASE_IMAGE_ID=$image_id
+  ok "portal-web is healthy ($PORTAL_RELEASE_IMAGE, $PORTAL_RELEASE_IMAGE_ID)"
 }
 
 # --- verification ------------------------------------------------------------------------------
@@ -676,6 +687,6 @@ fi
 
 verify
 
-record "SUCCESS" "mode=$MODE${PORTAL_RELEASE_IMAGE:+ portal_image=$PORTAL_RELEASE_IMAGE}"
+record "SUCCESS" "mode=$MODE${PORTAL_RELEASE_IMAGE:+ portal_image=$PORTAL_RELEASE_IMAGE portal_image_id=$PORTAL_RELEASE_IMAGE_ID}"
 log "DEV preview deployed: https://${CFG[DEV_DOMAIN]} (tag $TAG)"
 compose ps

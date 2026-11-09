@@ -55,8 +55,11 @@ Check the image tags and portal limits (256 MiB, half a CPU and 128 PIDs). DEV p
 all proxied portal bodies to 4 KiB and bounds stalled or trickled requests. It proxies GET and
 HEAD, plus POST to auth routes. Portal-web separately enforces its five-second total body deadline. No request to the portal host routes to the
 internal web, Core or Finance directly. Before the first switch or a tagged portal release,
-`deploy-dev.sh` requires a healthy portal container. It records the checked image on success.
-Ordinary staff redeploys with an already active portal do not require the portal to be healthy.
+`deploy-dev.sh` requires a healthy portal container. With an explicit `PORTAL_IMAGE_TAG`, the
+running container must also be the image that tag names now (same image ID), so a tag reused by a
+later build cannot pass. On success the deployment log records `portal_image=` and
+`portal_image_id=`. Ordinary staff redeploys with an already active portal and no
+`PORTAL_IMAGE_TAG` do not check the portal.
 
 ## Verify and disable
 
@@ -68,16 +71,71 @@ Ordinary staff redeploys with an already active portal do not require the portal
 3. With synthetic accounts and an approved test mail path, use the walk from ADR 0045 §11.
    Verify invite → TOTP → own hotel and invoice → PDF, denial for another hotel and revocation.
    Stop only portal-web in a controlled test and verify the internal application and Finance.
-4. To disable the portal, unset `DEV_PORTAL_DOMAIN` in the server env, run
-   `scripts/deploy-dev.sh --edge` and stop only portal-web with the same Compose profile.
-   This removes the portal route and DNS answer. Redeploy the current reviewed Core and Finance
-   releases with the domain blank to clear both receiving hashes, then remove the portal's DNS
-   records and restricted nameserver rule through the approved infrastructure workflow. Use the
-   previous env and the pre-switch Caddy backup if the edge update fails. Restoring the Caddy
-   backup only restores Caddy. With the previous env, run `scripts/deploy-dev.sh --edge` from
-   the reviewed checkout to restore the CoreDNS configuration as well. Verify that
-   `dig @"$DEV_TAILNET_IPV4" dev-portal.ayvo.co A` returns REFUSED for the disabled portal.
-   A Core release predating portal audiences must never be restored once a portal account or
-   session exists. Keep the data and recover using the reviewed version or a forward fix.
+4. To disable the portal, follow "Disable the portal" below.
+
+## Return portal-web to the previous image
+
+Portal-web owns no data, so a bad portal release is reverted by running the previous image again.
+Keep the previous image until the new one is accepted. Never re-point or delete a released tag.
+
+1. Find the last `SUCCESS` line before the bad release in `/opt/ayvo/logs/deployments-dev-preview.log`
+   that names `portal_image=` and `portal_image_id=`. Use it only if it was recorded with the
+   running Core release, so both sides speak the same contract.
+2. Check that the image still exists with that ID:
+   `docker image inspect --format '{{.Id}}' ayvo-dev-preview/portal-web:<previous tag>`. If the ID
+   differs or the image is gone, do not rebuild under the old tag. Build the reviewed commit under
+   a new tag and treat it as a new release.
+3. Replace only portal-web, using `portal_compose` from the deployment above:
+
+   ```bash
+   export PORTAL_IMAGE_TAG=<previous tag>
+   flock -n /opt/ayvo/logs/.deploy-dev-preview.lock "${portal_compose[@]}" up \
+     --detach --wait --wait-timeout 120 --no-deps --no-build portal-web
+   ```
+
+4. With the same export, run `scripts/deploy-dev.sh --edge`. The preflight requires the healthy
+   previous image with the recorded ID, the verification loads `/login` over the tailnet and the
+   log records the image again. Core, Finance and the database are not touched.
+
+## Disable the portal
+
+Use these steps for a planned disable and after a failed first activation. If the first
+`deploy-dev.sh` with the portal domain fails, do not retry it. Keep its log and follow every
+step, because Core may already hold the portal service hash and Finance its own.
+
+1. Restore the previous env file, which has `DEV_PORTAL_DOMAIN` blank. For a planned disable,
+   blank it in the server env. Unset `PORTAL_IMAGE_TAG` in the shell.
+2. Only if Caddy is not running or not serving the staff site, restore the pre-switch backup the
+   failed run printed. This restores Caddy only, never CoreDNS:
+
+   ```bash
+   scripts/dev-edge-backup.sh restore <backup directory> /opt/ayvo/secrets/dev-preview.env
+   ```
+
+3. From the reviewed checkout, run `scripts/deploy-dev.sh --edge`. It recreates Caddy and
+   CoreDNS without the portal site and fails unless
+   `dig @"$DEV_TAILNET_IPV4" dev-portal.ayvo.co A` returns REFUSED.
+4. Stop only portal-web with the same Compose profile:
+   `flock -n /opt/ayvo/logs/.deploy-dev-preview.lock "${portal_compose[@]}" stop portal-web`.
+5. Close the receiving contracts without a new build or migration. Re-apply the running Core
+   image with `scripts/deploy-dev.sh --rollback <running Core tag>`. The tag is the part after
+   `ayvo-dev-preview/api:` in `docker inspect --format '{{.Config.Image}}' ayvo-dev-preview-api-1`.
+   Then run `scripts/deploy-finance-dev.sh --rollback <running Finance tag>` (`finance-…`, read the
+   same way from `ayvo-dev-preview-finance-1`). With the domain blank, neither container receives
+   a portal hash. Confirm it without printing values; each count must be 0:
+
+   ```bash
+   for c in ayvo-dev-preview-api-1 ayvo-dev-preview-finance-1; do
+     docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$c" |
+       grep -c '^PORTAL_[A-Z_]*SHA256=.' || true
+   done
+   ```
+
+6. Verify the staff login and Finance, and that `dig` still returns REFUSED for the portal name.
+7. Remove the portal's DNS records and restricted nameserver rule through the approved
+   infrastructure workflow.
+
+A Core release predating portal audiences must never be restored once a portal account or
+session exists. Keep the data and recover using the reviewed version or a forward fix.
 
 A customer-facing address and its edge are a separate release.

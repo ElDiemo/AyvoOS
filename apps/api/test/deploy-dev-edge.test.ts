@@ -159,34 +159,57 @@ beforeAll(() => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('portal readiness before changing the DEV edge', () => {
+  const healthy = (id: string, tag: string) =>
+    `true|healthy|sha256:${id}|ayvo-dev-preview/portal-web:${tag}`;
   it.each([
-    { active: false, running: 'missing', tag: '', ready: false },
+    { active: false, running: 'missing', tag: '', tagged: '', error: 'start the reviewed' },
     {
       active: false,
-      running: 'true unhealthy ayvo-dev-preview/portal-web:new',
+      running: 'true|unhealthy|sha256:new|ayvo-dev-preview/portal-web:new',
       tag: '',
-      ready: false,
+      tagged: '',
+      error: 'running and healthy',
     },
     {
       active: false,
-      running: 'true healthy ayvo-dev-preview/portal-web:new',
+      running: 'true||sha256:new|ayvo-dev-preview/portal-web:new',
       tag: '',
-      ready: true,
+      tagged: '',
+      error: 'running and healthy',
     },
-    { active: true, running: 'missing', tag: '', ready: true },
+    { active: false, running: healthy('new', 'new'), tag: '', tagged: '', error: '' },
+    { active: true, running: 'missing', tag: '', tagged: '', error: '' },
     {
       active: true,
-      running: 'true healthy ayvo-dev-preview/portal-web:old',
+      running: healthy('old', 'old'),
       tag: 'new',
-      ready: false,
+      tagged: 'sha256:new',
+      error: 'does not match the selected PORTAL_IMAGE_TAG',
+    },
+    // A later build re-pointed the tag: the running container is still the old image.
+    {
+      active: true,
+      running: healthy('old', 'new'),
+      tag: 'new',
+      tagged: 'sha256:new',
+      error: 'not the image now tagged ayvo-dev-preview/portal-web:new',
+    },
+    {
+      active: false,
+      running: healthy('old', 'new'),
+      tag: 'new',
+      tagged: 'sha256:new',
+      error: 'not the image now tagged',
     },
     {
       active: true,
-      running: 'true healthy ayvo-dev-preview/portal-web:new',
+      running: healthy('new', 'new'),
       tag: 'new',
-      ready: true,
+      tagged: '',
+      error: 'image ayvo-dev-preview/portal-web:new not found',
     },
-  ])('checks activation and tagged releases %#', ({ active, running, tag, ready }) => {
+    { active: true, running: healthy('new', 'new'), tag: 'new', tagged: 'sha256:new', error: '' },
+  ])('checks activation and tagged releases %#', ({ active, running, tag, tagged, error }) => {
     const source = readFileSync(join(root, 'scripts/deploy-dev.sh'), 'utf8');
     const body = source.split('check_portal_before_switch() {')[1]!.split('\n}\n')[0]!;
     const script = `set -euo pipefail
@@ -194,10 +217,15 @@ declare -A CFG=([DEV_PORTAL_DOMAIN]=dev-portal.ayvo.co)
 PROJECT=ayvo-dev-preview
 IMAGE_PREFIX=ayvo-dev-preview
 PORTAL_RELEASE_IMAGE=
+PORTAL_RELEASE_IMAGE_ID=
 PORTAL_IMAGE_TAG="$3"
 die() { echo "$*" >&2; exit 1; }
 ok() { :; }
 docker() {
+  if [[ $1 == image ]]; then
+    [[ "\${!#}" == "ayvo-dev-preview/portal-web:$PORTAL_IMAGE_TAG" && -n "$TAGGED" ]] && printf '%s\\n' "$TAGGED"
+    return
+  fi
   case "\${!#}" in
     *-caddy-1) [[ "$ACTIVE" = yes ]] && printf 'DEV_PORTAL_DOMAIN=dev-portal.ayvo.co\\n' ;;
     *-portal-web-1) [[ "$RUNNING" != missing ]] && printf '%s\\n' "$RUNNING" ;;
@@ -205,15 +233,29 @@ docker() {
 }
 ACTIVE="$1"
 RUNNING="$2"
+TAGGED="$4"
 check_portal_before_switch() {${body}
 }
 check_portal_before_switch
-printf '%s' "$PORTAL_RELEASE_IMAGE"
+printf '%s %s' "$PORTAL_RELEASE_IMAGE" "$PORTAL_RELEASE_IMAGE_ID"
 `;
-    const result = run('bash', ['-c', script, 'portal-test', active ? 'yes' : 'no', running, tag]);
-    expect(result.status, result.stderr).toBe(ready ? 0 : 1);
-    if (ready) {
-      expect(result.stdout).toBe(active && !tag ? '' : 'ayvo-dev-preview/portal-web:new');
+    const result = run('bash', [
+      '-c',
+      script,
+      'portal-test',
+      active ? 'yes' : 'no',
+      running,
+      tag,
+      tagged,
+    ]);
+    if (error) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(error);
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        active && !tag ? ' ' : 'ayvo-dev-preview/portal-web:new sha256:new',
+      );
     }
   });
 });
