@@ -204,22 +204,22 @@ export class OrdersService implements OnModuleInit {
         orderBy: { lineNo: 'asc' },
       },
     } satisfies Prisma.OrderSelect;
-    const [open, delivered] = await Promise.all([
-      db.order.findMany({
-        where: {
-          hotelId,
-          status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP', 'HANDED_TO_CARRIER'] },
-        },
-        select,
-        orderBy: [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
-      }),
-      db.order.findMany({
-        where: { hotelId, status: 'DELIVERED' },
-        select,
-        orderBy: [{ requestedShipDate: 'desc' }, { serial: 'desc' }],
-        take: PORTAL_DELIVERED_MAX,
-      }),
-    ]);
+    // One query at a time: the portal pool is small (PORTAL_DB_POOL_MAX, 2 by default), and one
+    // hotel page must not hold every connection while its other calls wait for one.
+    const open = await db.order.findMany({
+      where: {
+        hotelId,
+        status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP', 'HANDED_TO_CARRIER'] },
+      },
+      select,
+      orderBy: [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
+    });
+    const delivered = await db.order.findMany({
+      where: { hotelId, status: 'DELIVERED' },
+      select,
+      orderBy: [{ requestedShipDate: 'desc' }, { serial: 'desc' }],
+      take: PORTAL_DELIVERED_MAX,
+    });
     const all = [...open, ...delivered];
     const events = await db.orderEvent.findMany({
       where: {
