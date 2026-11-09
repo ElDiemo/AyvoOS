@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
 import type {
   FinanceContractHotel,
   CreateHotelRequest,
   FulfillmentSiteOption,
   HotelDetail,
+  HotelProfileFields,
   HotelSummary,
+  PortalHotelProfile,
   UpdateHotelPracticalRequest,
 } from '@ayvo/types';
 import { Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
@@ -97,7 +100,8 @@ export class HotelsService implements OnModuleInit {
   /**
    * The optional practical details (doc 032): delivery note and receiving contact. Never required
    * of existing hotels; the address, main contact and serving site are not changed here. Reason
-   * and before/after audited. Orders keep their own snapshot.
+   * and before/after audited, "before" read under the row's lock (the portal edits the same row).
+   * Orders keep their own snapshot.
    */
   async updatePractical(
     actorId: string,
@@ -109,9 +113,14 @@ export class HotelsService implements OnModuleInit {
       input.requestId,
       { actorId, code, ...input, requestId: undefined },
       async (tx) => {
+        // Lock first, then read: the audit's "before" must be what this write replaces. Read
+        // before the lock, a portal save committed while we waited (A → B) would be audited
+        // as A → C instead of B → C (review 5829367477).
+        const locked = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "hotels" WHERE "code" = ${code} FOR UPDATE`;
+        if (locked.length === 0) throw new NotFoundException('Hotel not found');
         const row = await this.byCode(code, tx);
         if (!row) throw new NotFoundException('Hotel not found');
-        await tx.$executeRaw`SELECT 1 FROM "hotels" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
         const before = {
           deliveryNote: row.deliveryNote,
           receivingContactName: row.receivingContactName,
@@ -138,6 +147,79 @@ export class HotelsService implements OnModuleInit {
       },
     );
     return this.detail(code);
+  }
+
+  /**
+   * A hotel's own profile for the hotel portal (portal "Profil hotelu"), read through the caller's
+   * client. Access (the session's active grant on this hotel) is the portal contract's business;
+   * this owns only what the profile is. Null for an unknown id.
+   */
+  async portalProfile(
+    id: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<PortalHotelProfile | null> {
+    const row = await db.hotel.findUnique({ where: { id }, select: profileSelect });
+    return row ? toPortalProfile(row) : null;
+  }
+
+  /**
+   * Saves a hotel's own profile from the hotel portal, inside the caller's transaction (which has
+   * already re-checked the session and its grant on this hotel under the account's lock). Only the
+   * whitelisted fields change; the name, country, code, id and serving site never do. The row is
+   * locked; a save made against older values (another fingerprint) is refused, unless it asks for
+   * exactly what is stored (a repeated save: nothing changes, nothing is audited). Orders keep
+   * their own snapshot, so the change applies to orders created afterwards. Audited as
+   * HOTEL_UPDATED with the portal account, its grant, the hotel's reason and before/after.
+   */
+  async applyPortalProfile(
+    tx: Prisma.TransactionClient,
+    input: {
+      hotelId: string;
+      actorUserId: string;
+      grantId: string;
+      expected: string;
+      profile: HotelProfileFields;
+      reason: string;
+    },
+  ): Promise<PortalHotelProfile> {
+    await tx.$executeRaw`SELECT 1 FROM "hotels" WHERE "id" = ${input.hotelId}::uuid FOR UPDATE`;
+    const row = await tx.hotel.findUnique({ where: { id: input.hotelId }, select: profileSelect });
+    if (!row) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+    const before = profileFields(row);
+    const after = { ...input.profile };
+    if (sameProfile(before, after)) return toPortalProfile(row);
+    if (fingerprintOf(row.id, before) !== input.expected)
+      throw domainError(
+        409,
+        'PROFILE_STALE',
+        'Údaje hotelu se mezitím změnily. Načtěte je znovu a upravte znovu.',
+      );
+    const updated = await tx.hotel.update({
+      where: { id: row.id },
+      data: after,
+      select: profileSelect,
+    });
+    const changed = (Object.keys(after) as (keyof HotelProfileFields)[]).filter(
+      (k) => before[k] !== after[k],
+    );
+    await this.audit.record(
+      {
+        type: 'HOTEL_UPDATED',
+        actorUserId: input.actorUserId,
+        siteId: row.fulfillmentSiteId,
+        reason: input.reason,
+        payload: {
+          hotel: row.code,
+          via: 'PORTAL',
+          grantId: input.grantId,
+          changed,
+          before: pick(before, changed),
+          after: pick(after, changed),
+        },
+      },
+      tx,
+    );
+    return toPortalProfile(updated);
   }
 
   fulfillmentSites(): Promise<FulfillmentSiteOption[]> {
@@ -254,5 +336,80 @@ function toSummary(row: HotelRecord): HotelSummary {
     countryCode: row.countryCode,
     fulfillmentSite: row.fulfillmentSite,
     createdAt: row.createdAt.toISOString(),
+  };
+}
+
+const profileSelect = {
+  id: true,
+  code: true,
+  name: true,
+  countryCode: true,
+  fulfillmentSiteId: true,
+  addressLine1: true,
+  addressLine2: true,
+  postalCode: true,
+  city: true,
+  contactName: true,
+  contactPhone: true,
+  contactEmail: true,
+  receivingContactName: true,
+  receivingContactPhone: true,
+  receivingContactEmail: true,
+  deliveryNote: true,
+} satisfies Prisma.HotelSelect;
+type ProfileRow = Prisma.HotelGetPayload<{ select: typeof profileSelect }>;
+
+/** The editable values, in one fixed order (the fingerprint depends on it). */
+const PROFILE_KEYS = [
+  'addressLine1',
+  'addressLine2',
+  'postalCode',
+  'city',
+  'contactName',
+  'contactPhone',
+  'contactEmail',
+  'receivingContactName',
+  'receivingContactPhone',
+  'receivingContactEmail',
+  'deliveryNote',
+] as const satisfies readonly (keyof HotelProfileFields)[];
+
+function profileFields(row: ProfileRow): HotelProfileFields {
+  return Object.fromEntries(PROFILE_KEYS.map((k) => [k, row[k]])) as HotelProfileFields;
+}
+
+function sameProfile(a: HotelProfileFields, b: HotelProfileFields): boolean {
+  return PROFILE_KEYS.every((k) => a[k] === b[k]);
+}
+
+function fingerprintOf(id: string, fields: HotelProfileFields): string {
+  return createHash('sha256')
+    .update(JSON.stringify([id, ...PROFILE_KEYS.map((k) => fields[k])]))
+    .digest('hex');
+}
+
+function pick(fields: HotelProfileFields, keys: readonly (keyof HotelProfileFields)[]) {
+  return Object.fromEntries(keys.map((k) => [k, fields[k]]));
+}
+
+function toPortalProfile(row: ProfileRow): PortalHotelProfile {
+  return {
+    id: row.id,
+    name: row.name,
+    countryCode: row.countryCode,
+    address: {
+      addressLine1: row.addressLine1,
+      addressLine2: row.addressLine2,
+      postalCode: row.postalCode,
+      city: row.city,
+    },
+    contact: { name: row.contactName, phone: row.contactPhone, email: row.contactEmail },
+    receiving: {
+      contactName: row.receivingContactName,
+      contactPhone: row.receivingContactPhone,
+      contactEmail: row.receivingContactEmail,
+      deliveryNote: row.deliveryNote,
+    },
+    fingerprint: fingerprintOf(row.id, profileFields(row)),
   };
 }
