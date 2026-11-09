@@ -1,5 +1,5 @@
 import 'server-only';
-import { portalChallengeStepSchema } from '@ayvo/types';
+import { portalChallengeStepSchema, portalChangePasswordResultSchema } from '@ayvo/types';
 import { z } from 'zod';
 import { answer, stateChanging } from './auth-route';
 import { publicStep } from './auth-steps';
@@ -46,3 +46,35 @@ export const logoutAll = (request: Request) =>
     await clearCookie(SESSION_COOKIE);
     return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
   });
+
+/**
+ * "Změnit heslo": the current password, a current code and the new password (at least 12
+ * characters, as at activation). The core ends every session of the account and returns the one
+ * new session, which replaces this browser's cookie.
+ */
+export const changePassword = (request: Request) =>
+  publicStep(
+    request,
+    z.object({ currentPassword: text(1024), newPassword: text(1024), code: text(64) }),
+    async (b) => {
+      const session = await readCookie(SESSION_COOKIE);
+      if (!session) return answer(401, { code: 'UNAUTHENTICATED' });
+      const r = await contractJson(
+        'core',
+        'account/change-password',
+        portalChangePasswordResultSchema,
+        {
+          method: 'POST',
+          body: {
+            currentPassword: b.currentPassword,
+            newPassword: b.newPassword,
+            code: b.code,
+            client: clientOf(request),
+          },
+          session,
+        },
+      );
+      await setCookie(SESSION_COOKIE, r.session, r.maxAgeSeconds);
+      return answer(200, { step: 'DONE' });
+    },
+  );

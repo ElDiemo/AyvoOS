@@ -494,6 +494,103 @@ export class NativeAuthService implements OnModuleInit {
     });
   }
 
+  /**
+   * A signed-in account changes its password: the current password and a current code (or an
+   * unused recovery code), then the new password. In one transaction, under the user's lock: the
+   * credential gets the new hash and a new revision (pending challenges of the old one stop
+   * counting), every session of the account ends, one new session is issued, PASSWORD_CHANGED is
+   * audited. Wrong input changes nothing (an unused recovery code is consumed only on success).
+   * Used by the hotel portal (Zabezpečení účtu); `audience` must be the account's own.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    currentCode: string,
+    audience: AccountAudience,
+  ): Promise<{ token: string; maxAgeSeconds: number } | null> {
+    const snapshot = await this.prisma.nativeCredential.findUnique({ where: { userId } });
+    // Both Argon2 steps always run, so a right password with a wrong code takes as long as a wrong
+    // password (no timing signal that the password was right).
+    const matched = await this.passwords.verify(currentPassword, snapshot?.passwordHash ?? null);
+    const encoded = await this.passwords.hash(newPassword);
+    if (!snapshot || !matched) return null;
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockUser(tx, userId);
+      const user = await tx.user.findUniqueOrThrow({
+        where: { id: userId },
+        include: { nativeCredential: true },
+      });
+      const credential = user.nativeCredential;
+      if (
+        user.status !== 'ACTIVE' ||
+        user.audience !== audience ||
+        !credential ||
+        credential.revision !== snapshot.revision
+      )
+        return null;
+      // Looked up before any write: a refusal here must change nothing.
+      const identity = await tx.userIdentity.findFirst({
+        where: { userId, provider: 'LOCAL', unlinkedAt: null },
+      });
+      if (!identity) return null;
+      const step = verifiedTotpStep(
+        this.box.open(userId, 'TOTP', credential.totpCiphertext),
+        currentCode,
+        Date.now(),
+        credential.lastTotpStep,
+      );
+      if (step === null) {
+        const hash = recoveryCodeHash(userId, currentCode);
+        if (
+          !hash ||
+          (
+            await tx.nativeRecoveryCode.updateMany({
+              where: {
+                userId,
+                mfaRevision: credential.mfaRevision,
+                codeSha256: hash,
+                usedAt: null,
+              },
+              data: { usedAt: new Date() },
+            })
+          ).count !== 1
+        )
+          return null;
+        await this.audit.record(
+          { type: 'RECOVERY_CODE_USED', actorUserId: userId, targetUserId: userId },
+          tx,
+        );
+      }
+      await tx.nativeCredential.update({
+        where: { userId },
+        data: {
+          passwordHash: encoded,
+          revision: { increment: 1 },
+          updatedAt: new Date(),
+          ...(step !== null ? { lastTotpStep: step } : {}),
+        },
+      });
+      await this.sessions.revokeAllForUser(userId, 'PASSWORD_CHANGED', tx);
+      const session = await this.sessions.create(tx, {
+        userId,
+        identityId: identity.id,
+        providerSessionId: null,
+        audience: user.audience,
+      });
+      await this.audit.record(
+        {
+          type: 'PASSWORD_CHANGED',
+          actorUserId: userId,
+          targetUserId: userId,
+          payload: { sessionId: session.sessionId },
+        },
+        tx,
+      );
+      return { token: session.token, maxAgeSeconds: session.maxAgeSeconds };
+    });
+  }
+
   async beginMfaReplacement(
     userId: string,
     password: string,
