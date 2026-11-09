@@ -116,7 +116,11 @@ export default async function SalesResultsPage({
                 >
                   {r.withoutNextStep}
                 </span>
-                <Link href="/sales/prospects?next=none" className="underline">
+                <Link
+                  href="/sales/prospects?next=none&phase=in-progress"
+                  className="underline"
+                  data-testid="results-without-next-step-link"
+                >
                   {t.showList}
                 </Link>
               </span>
