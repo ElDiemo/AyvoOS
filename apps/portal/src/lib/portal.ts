@@ -1,5 +1,6 @@
 import 'server-only';
 import {
+  portalContractSchema,
   portalHotelProfileSchema,
   portalHotelSchema,
   portalInvoicePageSchema,
@@ -32,6 +33,15 @@ export const myHotelProfile = (session: string, id: string) =>
   contractJson('core', `hotels/${encodeURIComponent(id)}/profile`, portalHotelProfileSchema, {
     session,
   });
+export const myContracts = (session: string, id: string) =>
+  contractJson(
+    'core',
+    `hotels/${encodeURIComponent(id)}/contracts`,
+    z.array(portalContractSchema),
+    {
+      session,
+    },
+  );
 export const myInvoices = (session: string, page: number) =>
   contractJson('finance', `invoices?page=${page}&pageSize=20`, portalInvoicePageSchema, {
     session,

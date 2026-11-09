@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   portalChallengeStepSchema,
+  portalContractSchema,
   portalHotelProfileRequestSchema,
   portalHotelProfileSchema,
   portalHotelSchema,
@@ -94,6 +95,16 @@ const invoices = [
   invoice(2),
 ];
 const pdf = Buffer.from('%PDF-1.4\n% synthetic portal e2e invoice\n%%EOF\n');
+const contractPdf = Buffer.from('%PDF-1.4\n% synthetic signed contract\n%%EOF\n');
+/** A signed original of the hotel (the core offers only signed ones). */
+export const CONTRACT = {
+  id: randomUUID(),
+  signedOn: '2026-10-15',
+  startOn: '2026-11-01',
+  byteSize: contractPdf.length,
+};
+/** Another hotel's signed contract: never reachable from this session. */
+export const FOREIGN_CONTRACT_ID = randomUUID();
 
 const state = {
   financeDown: false,
@@ -110,6 +121,8 @@ const state = {
   profileGrant: true,
   profileSaves: 0,
   lastProfileBody: null,
+  /** 'ok' | 'none' (no signed contract yet) | 'down' (the core does not answer the list). */
+  contractsMode: 'ok',
 };
 
 const send = (res, status, body, schema) => {
@@ -222,6 +235,34 @@ async function core(req, res, path) {
       [hotel].map((h) => portalHotelSchema.parse(h)),
     );
   if (path === `hotels/${hotel.id}`) return send(res, 200, hotel, portalHotelSchema);
+  const contractsMatch = path.match(/^hotels\/([^/]+)\/contracts$/);
+  if (contractsMatch) {
+    if (contractsMatch[1] !== hotel.id || !state.profileGrant)
+      return refuse(res, 404, 'HOTEL_NOT_FOUND');
+    if (state.contractsMode === 'down') {
+      req.socket.destroy();
+      return;
+    }
+    const list = state.contractsMode === 'none' ? [] : [CONTRACT];
+    return send(
+      res,
+      200,
+      list.map((c) => portalContractSchema.parse(c)),
+    );
+  }
+  const contractPdfMatch = path.match(/^contracts\/([^/]+)\/pdf$/);
+  if (contractPdfMatch) {
+    if (contractPdfMatch[1] !== CONTRACT.id || !state.profileGrant)
+      return refuse(res, 404, 'CONTRACT_NOT_FOUND');
+    res.writeHead(200, {
+      'content-type': 'application/pdf',
+      'content-length': String(contractPdf.length),
+      'content-disposition': `attachment; filename="AYVO-smlouva-${CONTRACT.signedOn}.pdf"`,
+      'cache-control': 'private, no-store',
+    });
+    res.end(contractPdf);
+    return;
+  }
   const profileMatch = path.match(/^hotels\/([^/]+)\/profile$/);
   if (profileMatch) {
     const granted = profileMatch[1] === hotel.id && state.profileGrant;
@@ -293,6 +334,8 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         profileSaves: state.profileSaves,
         lastProfileBody: state.lastProfileBody,
         foreignHotelId: FOREIGN_HOTEL_ID,
+        contract: CONTRACT,
+        foreignContractId: FOREIGN_CONTRACT_ID,
         hotelId: hotel.id,
         invoices,
       });
@@ -301,6 +344,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
       if (body.resetProfile) {
         state.profile = freshProfile();
         state.profileGrant = true;
+        state.contractsMode = 'ok';
         delete body.resetProfile;
       }
       if (body.touchProfile) {

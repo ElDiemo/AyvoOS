@@ -1,11 +1,12 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ContractsCard } from '@/components/contracts-card';
 import { HotelHero, ProfileGroups } from '@/components/profile-view';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
-import { PortalRefusal } from '@/lib/backend';
+import { PortalRefusal, PortalUnavailable } from '@/lib/backend';
 import { portalEnv } from '@/lib/env';
-import { myHotelProfile, portalSession } from '@/lib/portal';
+import { myContracts, myHotelProfile, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,11 +21,18 @@ export default async function HotelPage({
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/.test(id)) notFound();
   const { token, view } = await portalSession();
-  const profile = await myHotelProfile(token, id).catch((e: unknown) => {
-    // Another hotel (or none): not found, exactly like a missing one.
-    if (e instanceof PortalRefusal && e.status === 404) notFound();
-    throw e;
-  });
+  const [profile, contracts] = await Promise.all([
+    myHotelProfile(token, id).catch((e: unknown) => {
+      // Another hotel (or none): not found, exactly like a missing one.
+      if (e instanceof PortalRefusal && e.status === 404) notFound();
+      throw e;
+    }),
+    // The contracts never bring the profile down: unavailable → said so in their card.
+    myContracts(token, id).catch((e: unknown) => {
+      if (e instanceof PortalUnavailable || e instanceof PortalRefusal) return null;
+      throw e;
+    }),
+  ]);
   const saved = (await searchParams).saved === '1';
   return (
     <Shell user={view.user} active="hotels" testInvoices={portalEnv().APP_ENV !== 'production'}>
@@ -51,6 +59,7 @@ export default async function HotelPage({
         }
       />
       <ProfileGroups profile={profile} />
+      <ContractsCard contracts={contracts} />
       <p className="text-xs text-stone-500">{cs.profile.managed}</p>
     </Shell>
   );

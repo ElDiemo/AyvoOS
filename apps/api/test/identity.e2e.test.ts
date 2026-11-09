@@ -280,8 +280,10 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
         .map((r) => `${r.method} ${r.route}`)
         .sort(),
     ).toEqual([
+      'GET /api/internal/v1/portal/contracts/:id/pdf',
       'GET /api/internal/v1/portal/hotels',
       'GET /api/internal/v1/portal/hotels/:id',
+      'GET /api/internal/v1/portal/hotels/:id/contracts',
       'GET /api/internal/v1/portal/hotels/:id/profile',
       'GET /api/internal/v1/portal/session',
       'POST /api/internal/v1/portal/auth/activate',

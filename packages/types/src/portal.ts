@@ -130,6 +130,20 @@ export const portalHotelProfileSchema = z.object({
 });
 export type PortalHotelProfile = z.infer<typeof portalHotelProfileSchema>;
 
+/**
+ * "Smlouvy": a signed original of a contract for a granted hotel — only documents signed and
+ * uploaded by AYVO (never a draft, a revision without a signed original, or the working template).
+ * The PDF is downloaded as kept (its hash checked).
+ */
+export const portalContractSchema = z.object({
+  id: z.uuid(),
+  signedOn: z.iso.date(),
+  /** The start of the service the signed revision names. */
+  startOn: z.iso.date(),
+  byteSize: z.int().min(1),
+});
+export type PortalContract = z.infer<typeof portalContractSchema>;
+
 /** The browser → portal-web body of a profile save (whitelisted fields only). */
 export const portalHotelProfileUpdateSchema = z.strictObject({
   expected: z.string().regex(/^[0-9a-f]{64}$/),

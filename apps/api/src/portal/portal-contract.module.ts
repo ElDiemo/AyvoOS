@@ -1,6 +1,7 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service.js';
 import { ENV, type Env } from '../config/env.js';
+import { ContractsModule } from '../contracts/contracts.module.js';
 import { CustomersModule } from '../customers/customers.module.js';
 import type { PrismaService } from '../database/prisma.service.js';
 import { IdentityModule } from '../identity/identity.module.js';
@@ -41,7 +42,7 @@ const asClient = (db: PortalPrismaService) => db as unknown as PrismaService;
  * their modules' services with the portal's client.
  */
 @Module({
-  imports: [IdentityModule, CustomersModule, PortalGrantsModule],
+  imports: [IdentityModule, CustomersModule, ContractsModule, PortalGrantsModule],
   controllers: [PortalContractController, PortalIntrospectionController],
   providers: [
     PortalPrismaService,

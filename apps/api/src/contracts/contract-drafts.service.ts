@@ -13,6 +13,7 @@ import {
   type LinkContractHotelRequest,
   type RemoveContractDraftRequest,
   type ReviseContractDraftRequest,
+  type PortalContract,
   type UploadSignedContractFields,
 } from '@ayvo/types';
 import { CODE_PREFIX, formatCode } from '../common/codes.js';
@@ -710,6 +711,66 @@ export class ContractDraftsService {
       });
       return { file, name: `${code}-r${revision}-PODEPSANO.pdf` };
     });
+  }
+
+  // --- the hotel portal (ADR 0045; doc 055): signed originals only -------------------------
+
+  /**
+   * The signed originals of drafts linked to this hotel, newest first, through the caller's client
+   * (the portal's pool). Only what AYVO uploaded as signed: drafts, their revisions and the
+   * working template are never offered. A signed draft keeps its hotel for good (DB).
+   */
+  async portalSigned(hotelId: string, db: Db = this.prisma): Promise<PortalContract[]> {
+    const rows = await db.contractSignedDocument.findMany({
+      where: { revisionRow: { draft: { hotelId } } },
+      select: {
+        id: true,
+        signedOn: true,
+        byteSize: true,
+        revisionRow: { select: { startOn: true } },
+      },
+      orderBy: [{ signedOn: 'desc' }, { uploadedAt: 'desc' }],
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      signedOn: r.signedOn.toISOString().slice(0, 10),
+      startOn: r.revisionRow.startOn.toISOString().slice(0, 10),
+      byteSize: r.byteSize,
+    }));
+  }
+
+  /**
+   * One signed original for a portal account, if its draft's hotel is one of `hotelIds` (the
+   * session's granted hotels, evaluated by the caller now); any other id is "not found". The file
+   * is returned as kept, its hash checked, and the download recorded on the draft with the portal
+   * account as actor.
+   */
+  async portalSignedFile(
+    documentId: string,
+    hotelIds: ReadonlySet<string>,
+    actorUserId: string,
+    db: Db = this.prisma,
+  ): Promise<{ file: Buffer; signedOn: string }> {
+    const doc = await db.contractSignedDocument.findUnique({
+      where: { id: documentId },
+      include: { revisionRow: { select: { draft: { select: { id: true, hotelId: true } } } } },
+    });
+    const hotelId = doc?.revisionRow.draft.hotelId;
+    if (!doc || !hotelId || !hotelIds.has(hotelId))
+      throw domainError(404, 'CONTRACT_NOT_FOUND', 'No such contract');
+    const file = await this.storage.get(doc.storageKey);
+    if (createHash('sha256').update(file).digest('hex') !== doc.sha256)
+      throw domainError(500, 'STORED_FILE_CHANGED', 'Uložený originál neodpovídá svému otisku.');
+    await db.contractDraftEvent.create({
+      data: {
+        draftId: doc.revisionRow.draft.id,
+        kind: 'SIGNED_DOWNLOADED',
+        revision: doc.revision,
+        actorId: actorUserId,
+        details: { via: 'PORTAL' },
+      },
+    });
+    return { file, signedOn: doc.signedOn.toISOString().slice(0, 10) };
   }
 
   // --- helpers -------------------------------------------------------------------------------

@@ -103,6 +103,15 @@ export const cs = {
       other: 'Zkontrolujte tento údaj.',
     },
   },
+  contracts: {
+    title: 'Smlouvy',
+    help: 'Podepsané smlouvy, které AYVO k hotelu nahrálo. Rozpracované návrhy se tu neukazují.',
+    none: 'Zatím tu není žádná podepsaná smlouva.',
+    unavailable: 'Smlouvy se teď nepodařilo načíst. Zkuste to prosím později.',
+    signed: (date: string) => `Smlouva podepsaná ${date}`,
+    startOn: (date: string) => `Služba od ${date}`,
+    download: 'Stáhnout PDF',
+  },
   invoices: {
     title: 'Faktury',
     none: 'Žádné faktury.',

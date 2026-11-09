@@ -8,6 +8,7 @@ import {
   portalPasswordRequestSchema,
   type PortalActionRequest,
   type PortalChallengeStep,
+  type PortalContract,
   type PortalClient,
   type PortalForgotRequest,
   type PortalHotel,
@@ -23,17 +24,20 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
   HttpCode,
   Inject,
   Param,
   ParseUUIDPipe,
   Post,
+  StreamableFile,
 } from '@nestjs/common';
 import QRCode from 'qrcode';
 import { AuditService } from '../audit/audit.service.js';
 import { domainError } from '../common/domain-error.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
+import { ContractDraftsService } from '../contracts/contract-drafts.service.js';
 import { ENV, type Env } from '../config/env.js';
 import { HotelsService } from '../customers/hotels.service.js';
 import { PortalServiceAccess } from '../identity/access.decorators.js';
@@ -78,6 +82,7 @@ export class PortalContractController {
     @Inject(PORTAL_SESSIONS) private readonly sessions: SessionsService,
     private readonly grants: PortalGrantsService,
     private readonly hotels: HotelsService,
+    private readonly contracts: ContractDraftsService,
     private readonly limits: AuthRateLimitService,
     private readonly slots: PortalRequestLimit,
     private readonly db: PortalPrismaService,
@@ -316,6 +321,57 @@ export class PortalContractController {
           expected: body.expected,
           profile: body.profile,
         });
+      });
+    });
+  }
+
+  // --- "Smlouvy" (signed originals only) -------------------------------------------------
+
+  /** A granted hotel's signed contracts (newest first); any other id is "not found". */
+  @PortalServiceAccess()
+  @Get('hotels/:id/contracts')
+  contractsOf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<PortalContract[]> {
+    return this.slots.run(async () => {
+      const session = await this.portalSession(token);
+      const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
+        g.hotelIds.includes(id),
+      );
+      if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+      return this.contracts.portalSigned(id, this.db);
+    });
+  }
+
+  /**
+   * One signed original as kept (hash checked), if its hotel is granted to the session now; any
+   * other id is "not found". The download is recorded on the draft with the portal account.
+   */
+  @PortalServiceAccess()
+  @Get('contracts/:id/pdf')
+  @Header('Cache-Control', 'private, no-store')
+  @Header('Content-Security-Policy', "default-src 'none'; sandbox")
+  @Header('X-Content-Type-Options', 'nosniff')
+  contractPdf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<StreamableFile> {
+    return this.slots.run(async () => {
+      const session = await this.portalSession(token);
+      const hotels = new Set(
+        (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+      );
+      const { file, signedOn } = await this.contracts.portalSignedFile(
+        id,
+        hotels,
+        session.user.id,
+        this.db,
+      );
+      return new StreamableFile(file, {
+        type: 'application/pdf',
+        length: file.length,
+        disposition: `attachment; filename="AYVO-smlouva-${signedOn}.pdf"`,
       });
     });
   }
