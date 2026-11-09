@@ -48,6 +48,7 @@ import { SupplyPlansService } from './supply-plans.service.js';
     SupplyPlanRunner,
     OrderReturnsService,
   ],
-  exports: [OrderReturnsService],
+  // The hotel portal reads a granted hotel's deliveries (OrdersService.portalDeliveries).
+  exports: [OrderReturnsService, OrdersService],
 })
 export class OrdersModule {}

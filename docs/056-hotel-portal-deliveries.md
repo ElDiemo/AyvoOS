@@ -1,0 +1,50 @@
+# Hotel portal: deliveries (read only)
+
+The third step of the owner's portal priority (2026-11-09), after the profile (doc 053) and the
+contracts (doc 055). The hotel sees planned, in-progress and delivered deliveries, with states
+taken from its real orders.
+
+## Source and states
+
+Orders of the hotel come from every serving site: the hotel sees its deliveries, not our sites.
+Cancelled orders are not shown.
+
+| Group       | Order status (doc 028/029/031) | State in the portal                  |
+| ----------- | ------------------------------ | ------------------------------------ |
+| Planned     | `OPEN`                         | Naplánováno (`PLANNED`)              |
+| Planned     | `READY_TO_DISPATCH`            | Připravujeme k odeslání (`PREPARED`) |
+| In progress | `READY_FOR_PICKUP`             | Čeká na převzetí dopravcem           |
+| In progress | `HANDED_TO_CARRIER`            | Na cestě (`IN_TRANSIT`)              |
+| Delivered   | `DELIVERED` (latest 20)        | Doručeno                             |
+
+Per delivery the portal shows:
+
+- the order code and the planned ship day;
+- whether it came from the supply plan;
+- products in whole crates and bottles;
+- the moments the order was handed to the carrier and delivered.
+
+Those moments are the carrier-proven order events `HANDED_TO_CARRIER` and `DELIVERED` (doc 031).
+When the carrier reported the pickup and the delivery in one go, only the delivery is shown.
+
+The portal never shows the serving site, crates, bottles, recipe or label versions, labels,
+carrier accounts or connections, parcel numbers, people, cancel reasons or internal events.
+
+## Implementation
+
+- `OrdersService.portalDeliveries` (the orders module, exported) reads through the portal's pool.
+  `GET /api/internal/v1/portal/hotels/:id/deliveries` checks the session and the grant on that
+  hotel. A hotel not granted to the session answers 404.
+- portal-web adds:
+  - tabs "Profil" and "Dodávky" on the hotel;
+  - "Nejbližší dodávka" on the profile: the first in progress, else the first planned;
+  - `/hotels/<id>/deliveries` with the three groups, empty states and an unavailable state.
+
+  The profile never fails because of deliveries.
+
+## Open for the owner
+
+- Should future days of the supply plan beyond the 14-day horizon also be shown? Today only real
+  orders are shown.
+- Should the carrier's parcel number or a tracking link be shown? Not shown today.
+- Should cancelled orders be shown, and with what reason? Not shown today.

@@ -9,6 +9,7 @@ import {
   type PortalActionRequest,
   type PortalChallengeStep,
   type PortalContract,
+  type PortalDeliveries,
   type PortalClient,
   type PortalForgotRequest,
   type PortalHotel,
@@ -38,6 +39,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { domainError } from '../common/domain-error.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ContractDraftsService } from '../contracts/contract-drafts.service.js';
+import { OrdersService } from '../orders/orders.service.js';
 import { ENV, type Env } from '../config/env.js';
 import { HotelsService } from '../customers/hotels.service.js';
 import { PortalServiceAccess } from '../identity/access.decorators.js';
@@ -83,6 +85,7 @@ export class PortalContractController {
     private readonly grants: PortalGrantsService,
     private readonly hotels: HotelsService,
     private readonly contracts: ContractDraftsService,
+    private readonly orders: OrdersService,
     private readonly limits: AuthRateLimitService,
     private readonly slots: PortalRequestLimit,
     private readonly db: PortalPrismaService,
@@ -322,6 +325,25 @@ export class PortalContractController {
           profile: body.profile,
         });
       });
+    });
+  }
+
+  // --- "Dodávky" (real orders, read only) -------------------------------------------------
+
+  /** A granted hotel's deliveries in three groups; any other id is "not found". */
+  @PortalServiceAccess()
+  @Get('hotels/:id/deliveries')
+  deliveriesOf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<PortalDeliveries> {
+    return this.slots.run(async () => {
+      const session = await this.portalSession(token);
+      const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
+        g.hotelIds.includes(id),
+      );
+      if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+      return this.orders.portalDeliveries(id, this.db);
     });
   }
 

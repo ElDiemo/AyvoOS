@@ -144,6 +144,43 @@ export const portalContractSchema = z.object({
 });
 export type PortalContract = z.infer<typeof portalContractSchema>;
 
+/**
+ * "Dodávky": a granted hotel's real orders, as the hotel may see them — never the serving site,
+ * crates, bottles, labels, carrier accounts, people or internal notes. Cancelled orders are not
+ * shown. PLANNED (an open order), PREPARED (picked, the shipment being prepared), READY_FOR_PICKUP
+ * (labelled, waiting for the carrier), IN_TRANSIT (every parcel with the carrier), DELIVERED
+ * (every parcel delivered, proven by the carrier).
+ */
+export const portalDeliveryStateSchema = z.enum([
+  'PLANNED',
+  'PREPARED',
+  'READY_FOR_PICKUP',
+  'IN_TRANSIT',
+  'DELIVERED',
+]);
+export const portalDeliverySchema = z.object({
+  code: z.string(),
+  state: portalDeliveryStateSchema,
+  /** The planned ship day (Europe/Prague). */
+  shipDate: z.iso.date(),
+  /** From the hotel's supply plan (else ordered by hand). */
+  fromPlan: z.boolean(),
+  lines: z.array(z.object({ product: z.string(), crates: z.int(), bottles: z.int() })),
+  handedOverAt: z.iso.datetime().nullable(),
+  deliveredAt: z.iso.datetime().nullable(),
+});
+export type PortalDelivery = z.infer<typeof portalDeliverySchema>;
+export const portalDeliveriesSchema = z.object({
+  /** Planned and being prepared, soonest first. */
+  planned: z.array(portalDeliverySchema),
+  /** Waiting for the carrier or on the way, soonest first. */
+  inProgress: z.array(portalDeliverySchema),
+  /** The latest delivered ones (at most PORTAL_DELIVERED_MAX), newest first. */
+  delivered: z.array(portalDeliverySchema),
+});
+export type PortalDeliveries = z.infer<typeof portalDeliveriesSchema>;
+export const PORTAL_DELIVERED_MAX = 20;
+
 /** The browser → portal-web body of a profile save (whitelisted fields only). */
 export const portalHotelProfileUpdateSchema = z.strictObject({
   expected: z.string().regex(/^[0-9a-f]{64}$/),

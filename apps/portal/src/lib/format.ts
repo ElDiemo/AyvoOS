@@ -3,3 +3,13 @@ const money = (amount: string, currency: string) =>
 const date = (iso: string) => new Intl.DateTimeFormat('cs-CZ').format(new Date(`${iso}T12:00:00Z`));
 export const formatMoney = money;
 export const formatDate = date;
+const dateTime = (iso: string) =>
+  new Intl.DateTimeFormat('cs-CZ', {
+    day: 'numeric',
+    month: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/Prague',
+  }).format(new Date(iso));
+export const formatDateTime = dateTime;
