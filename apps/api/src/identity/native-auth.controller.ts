@@ -29,6 +29,9 @@ const actionSchema = z.object({ token: z.string().length(43), password: newPassw
 const codeSchema = z.object({ code: z.string().min(1).max(64) }).strict();
 const resetSchema = z.object({ email }).strict();
 const replaceSchema = z.object({ password, code: z.string().min(1).max(64) }).strict();
+const changeSchema = z
+  .object({ currentPassword: password, newPassword, code: z.string().min(1).max(64) })
+  .strict();
 const denied = () =>
   domainError(401, 'INVALID_LOGIN', 'Přihlášení se nezdařilo. Zkontrolujte údaje.');
 
@@ -176,6 +179,48 @@ export class NativeAuthController {
       }),
       setupKey: new URL(result.enrollmentUri).searchParams.get('secret'),
     };
+  }
+
+  /**
+   * "Změnit heslo" of a signed-in staff account (the same step as the hotel portal's): the current
+   * password, a current code (or an unused recovery code) and the new password. Every session of
+   * the account ends and this browser gets the one new session (NativeAuthService.changePassword).
+   * The password step's own account bucket (the e-mail) is hit, so a held session never adds a
+   * second budget for guessing the password.
+   */
+  @Post('change-password')
+  @Authenticated()
+  @HttpCode(200)
+  async changePassword(
+    @CurrentPrincipal() principal: Principal,
+    @Body(new ZodValidationPipe(changeSchema)) body: z.infer<typeof changeSchema>,
+    @Req() req: IncomingMessage,
+    @Res({ passthrough: true }) res: ServerResponse,
+  ) {
+    await this.limit(req, res, principal.email);
+    const result = await this.expensive(
+      () =>
+        this.auth.changePassword(
+          principal.userId,
+          body.currentPassword,
+          body.newPassword,
+          body.code.trim(),
+          'STAFF',
+        ),
+      res,
+    );
+    if (!result)
+      throw domainError(
+        401,
+        'INVALID_CREDENTIALS',
+        'Heslo nebo kód nesouhlasí. Zkontrolujte je a zkuste to znovu.',
+      );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader(
+      'Set-Cookie',
+      serializeCookie(SESSION_COOKIE, result.token, result.maxAgeSeconds),
+    );
+    return { step: 'DONE' };
   }
 
   private challenge(res: ServerResponse, token: string, seconds: number): void {

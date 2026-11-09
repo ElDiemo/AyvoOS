@@ -374,6 +374,11 @@ export function NativeSignIn({
               Zapomenuté heslo
             </Link>
           )}
+          {mode === 'replace' && step === 'PASSWORD' && (
+            <Link href="/account/password" className="text-center text-xs underline">
+              Změnit heslo
+            </Link>
+          )}
           {mode !== 'login' && (
             <Link href="/login" className="text-center text-xs underline">
               Zpět na přihlášení

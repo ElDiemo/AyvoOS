@@ -427,6 +427,45 @@ describe.skipIf(!hasDatabase)('native authentication through HTTP, PostgreSQL an
     await post('mfa').set('Cookie', next).send({ code: item.recoveryCodes[0] }).expect(401);
   });
 
+  it('Změnit heslo (staff): wrong input changes nothing; then every session ends, one new, only the new password', async () => {
+    const item = await activated();
+    const before = await t.prisma.nativeCredential.findUniqueOrThrow({
+      where: { userId: item.user.id },
+    });
+    const body = (over: Record<string, unknown> = {}) => ({
+      currentPassword: PASSWORD,
+      newPassword: NEW_PASSWORD,
+      code: otp(item.secret),
+      ...over,
+    });
+    await post('change-password').send(body()).expect(401); // no session
+    await post('change-password')
+      .set('Cookie', item.session)
+      .send(body({ currentPassword: 'Uplne jine heslo AYVO 000' }))
+      .expect(401);
+    await post('change-password')
+      .set('Cookie', item.session)
+      .send(body({ code: '000000' }))
+      .expect(401);
+    await post('change-password')
+      .set('Cookie', item.session)
+      .send(body({ newPassword: 'kratke' }))
+      .expect(400);
+    expect(
+      await t.prisma.nativeCredential.findUniqueOrThrow({ where: { userId: item.user.id } }),
+    ).toEqual(before);
+    const done = await post('change-password').set('Cookie', item.session).send(body()).expect(200);
+    await http().get('/api/auth/me').set('Cookie', item.session).expect(401);
+    await http().get('/api/auth/me').set('Cookie', cookies(done, 'ayvo_session')).expect(200);
+    await post('password').send({ email: item.user.email, password: PASSWORD }).expect(401);
+    await post('password').send({ email: item.user.email, password: NEW_PASSWORD }).expect(200);
+    expect(
+      await t.prisma.auditEvent.count({
+        where: { targetUserId: item.user.id, type: 'PASSWORD_CHANGED' },
+      }),
+    ).toBe(1);
+  });
+
   it('retains same-origin CSRF checks and fails closed when Redis cannot decide', async () => {
     const item = await activated();
     await http()
