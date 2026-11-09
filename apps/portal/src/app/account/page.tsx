@@ -1,5 +1,9 @@
 import Link from 'next/link';
-import { AccountSecurityForm, LogoutEverywhere } from '@/components/account-security';
+import {
+  AccountSecurityForm,
+  ChangePasswordForm,
+  LogoutEverywhere,
+} from '@/components/account-security';
 import { Shell } from '@/components/shell';
 import { account } from '@/i18n/account';
 import { portalSession } from '@/lib/portal';
@@ -15,7 +19,8 @@ export default async function AccountPage() {
         <h1 className="text-xl font-semibold">{account.title}</h1>
         <p className="text-sm text-stone-600">{account.intro}</p>
         <AccountSecurityForm />
-        <p className="text-xs text-stone-500">{account.password_help}</p>
+        <hr className="border-stone-200" />
+        <ChangePasswordForm />
         <hr className="border-stone-200" />
         <LogoutEverywhere />
         <Link href="/" className="text-sm underline">

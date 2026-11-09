@@ -206,6 +206,19 @@ async function core(req, res, path) {
   }
   const s = session(req);
   if (!s) return refuse(res, 401, 'UNAUTHENTICATED');
+  if (req.method === 'POST' && path === 'account/change-password') {
+    const body = await readBody(req);
+    if (body.client?.origin !== STUB.portalOrigin) return refuse(res, 403, 'CSRF_REJECTED');
+    if (body.currentPassword !== STUB.password || body.code !== STUB.code)
+      return refuse(res, 401, 'INVALID_CREDENTIALS');
+    if ([...String(body.newPassword ?? '')].length < 12) return refuse(res, 400, 'VALIDATION');
+    // Every session ends; one new one (the stub keeps the password: tests sign in as before).
+    state.sessions.clear();
+    const token = randomUUID();
+    state.sessions.add(token);
+    state.passwordChanges = (state.passwordChanges ?? 0) + 1;
+    return send(res, 200, { session: token, maxAgeSeconds: 3600 });
+  }
   if (req.method === 'POST' && path === 'account/logout-all') {
     const body = await readBody(req);
     if (body.client?.origin !== STUB.portalOrigin) return refuse(res, 403, 'CSRF_REJECTED');
@@ -323,6 +336,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         lastClient: state.lastClient,
         coreCalls: state.coreCalls,
         sessions: state.sessions.size,
+        passwordChanges: state.passwordChanges ?? 0,
         profile: state.profile,
         profileSaves: state.profileSaves,
         lastProfileBody: state.lastProfileBody,

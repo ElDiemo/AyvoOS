@@ -1,8 +1,11 @@
 import {
   PORTAL_SESSION_HEADER,
+  portalChangePasswordRequestSchema,
   portalLogoutRequestSchema,
   portalReplaceMfaRequestSchema,
   type PortalChallengeStep,
+  type PortalChangePasswordRequest,
+  type PortalChangePasswordResult,
   type PortalClient,
   type PortalLogoutRequest,
   type PortalReplaceMfaRequest,
@@ -83,6 +86,43 @@ export class PortalAccountController {
           tx,
         );
       });
+    });
+  }
+
+  /**
+   * "Změnit heslo": the current password, a current code (or an unused recovery code) and the new
+   * password. Every session of the account ends; the answer carries the one new session
+   * (`NativeAuthService.changePassword`, one transaction, PASSWORD_CHANGED audited).
+   */
+  @PortalServiceAccess()
+  @Post('change-password')
+  @HttpCode(200)
+  changePassword(
+    @Body(new ZodValidationPipe(portalChangePasswordRequestSchema))
+    body: PortalChangePasswordRequest,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<PortalChangePasswordResult> {
+    return this.slots.run(async () => {
+      this.sameOrigin(body.client);
+      this.decide(await this.limits.hit('login', `portal-ip:${body.client.ip}`));
+      const userId = (await this.activeSession(token)).user.id;
+      this.decide(await this.limits.hit('callback_failure', `portal-account:${sha256Hex(userId)}`));
+      const result = await this.expensive(() =>
+        this.auth.changePassword(
+          userId,
+          body.currentPassword,
+          body.newPassword,
+          body.code.trim(),
+          'PORTAL',
+        ),
+      );
+      if (!result)
+        throw domainError(
+          401,
+          'INVALID_CREDENTIALS',
+          'Heslo nebo kód nesouhlasí. Zkontrolujte je a zkuste to znovu.',
+        );
+      return { session: result.token, maxAgeSeconds: result.maxAgeSeconds };
     });
   }
 

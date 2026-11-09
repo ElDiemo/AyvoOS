@@ -6,6 +6,7 @@ const STUB = 'http://127.0.0.1:4301';
 const stubState = async (page: Page) =>
   (await (await page.request.get(`${STUB}/__state`)).json()) as {
     sessions: number;
+    passwordChanges: number;
     lastClient: { origin: string } | null;
   };
 /** Screenshots for the PR, only when asked for (PORTAL_SCREENSHOTS=<dir>). */
@@ -126,6 +127,41 @@ test.describe('hotel portal: replacing the authenticator app', () => {
     await box.getByRole('button', { name: 'Opravdu odhlásit všude' }).click();
     await expect(page).toHaveURL(/\/login/);
     expect((await stubState(page)).sessions).toBe(0);
+    await other.reload();
+    await expect(other).toHaveURL(/\/login/);
+    await other.close();
+  });
+
+  test('Změnit heslo: a short or wrong input refused; then this browser stays signed in, the other device is signed out', async ({
+    page,
+    browser,
+  }) => {
+    const other = await browser.newPage();
+    await signIn(other);
+    await signIn(page);
+    await page.goto('/account');
+    const box = page.getByTestId('change-password');
+    const changes = (await stubState(page)).passwordChanges;
+    await box.locator('[name=current-password]').fill('Dlouhe portalove heslo 2026');
+    await box.locator('[name=new-password]').fill('kratke');
+    await box.locator('[name=password-code]').fill('123456');
+    await box.locator('[name=new-password]').evaluate((e) => e.removeAttribute('minlength'));
+    await box.getByRole('button', { name: 'Změnit heslo' }).click();
+    await expect(box.getByRole('alert')).toHaveText(/aspoň 12 znaků/);
+    await box.locator('[name=new-password]').fill('Nove portalove heslo 2027');
+    await box.locator('[name=password-code]').fill('000000');
+    await box.getByRole('button', { name: 'Změnit heslo' }).click();
+    await expect(box.getByRole('alert')).toHaveText(/Heslo nebo kód nesouhlasí/);
+    expect((await stubState(page)).passwordChanges).toBe(changes);
+    await box.locator('[name=password-code]').fill('123456');
+    await box.getByRole('button', { name: 'Změnit heslo' }).click();
+    await expect(page.getByTestId('change-password-done')).toBeVisible();
+    await noSideways(page);
+    await shot(page, 'account-password');
+    expect((await stubState(page)).passwordChanges).toBe(changes + 1);
+    // This browser keeps working with the new session; the other device is signed out.
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'Moje hotely' })).toBeVisible();
     await other.reload();
     await expect(other).toHaveURL(/\/login/);
     await other.close();

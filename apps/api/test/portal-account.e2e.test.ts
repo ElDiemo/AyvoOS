@@ -309,4 +309,120 @@ describe.skipIf(!hasDatabase)('hotel portal: replacing the authenticator app', (
     });
     expect(audit.map((x) => x.payload)).toEqual([{ allSessions: true, ended: 2 }]);
   });
+
+  it('Změnit heslo: every old session ends, one new session; only the new password signs in; audited', async () => {
+    const a = await activated();
+    const NEW = 'Nove portalove heslo AYVO 2026';
+    const before = await t.prisma.nativeCredential.findUniqueOrThrow({
+      where: { userId: a.user.id },
+    });
+    // Wrong current password, wrong code, a too short new password: nothing changes.
+    const body = (over: Record<string, unknown> = {}) => ({
+      currentPassword: PASSWORD,
+      newPassword: NEW,
+      code: otp(a.secret, 30_000),
+      client: client(),
+      ...over,
+    });
+    const wrong = await post('account/change-password', a.session).send(
+      body({ currentPassword: 'Uplne jine heslo AYVO 000' }),
+    );
+    expect(wrong.status).toBe(401);
+    expect(wrong.body.code).toBe('INVALID_CREDENTIALS');
+    expect(
+      (await post('account/change-password', a.session).send(body({ code: '000000' }))).status,
+    ).toBe(401);
+    expect(
+      (await post('account/change-password', a.session).send(body({ newPassword: 'kratke' })))
+        .status,
+    ).toBe(400);
+    expect((await post('account/change-password').send(body())).status).toBe(401);
+    expect(
+      (
+        await post('account/change-password', a.session).send(
+          body({ client: client({ origin: 'https://evil.example.test' }) }),
+        )
+      ).status,
+    ).toBe(403);
+    const unchanged = await t.prisma.nativeCredential.findUniqueOrThrow({
+      where: { userId: a.user.id },
+    });
+    expect(unchanged.revision).toBe(before.revision);
+    expect(unchanged.passwordHash).toBe(before.passwordHash);
+    expect((await get('session', a.session)).status).toBe(200);
+
+    const done = await post('account/change-password', a.session).send(body());
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect((await get('session', a.session)).status).toBe(401);
+    expect((await get('session', done.body.session)).status).toBe(200);
+    // The old password is refused; the new one signs in.
+    expect(
+      (
+        await post('auth/password').send({
+          email: a.user.email,
+          password: PASSWORD,
+          client: client(),
+        })
+      ).status,
+    ).toBe(401);
+    const step = await post('auth/password').send({
+      email: a.user.email,
+      password: NEW,
+      client: client(),
+    });
+    expect(step.status).toBe(200);
+    expect(
+      (
+        await post('auth/mfa').send({
+          challenge: step.body.challenge,
+          code: a.recoveryCodes[1], // the TOTP step was used by the change
+          client: client(),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      await t.prisma.auditEvent.count({
+        where: { targetUserId: a.user.id, type: 'PASSWORD_CHANGED' },
+      }),
+    ).toBe(1);
+  });
+
+  it('Změnit heslo with a recovery code: the code is used up; a pending sign-in of the old password stops', async () => {
+    const a = await activated();
+    // A sign-in started with the old password, not finished yet.
+    const pending = await post('auth/password').send({
+      email: a.user.email,
+      password: PASSWORD,
+      client: client(),
+    });
+    expect(pending.status).toBe(200);
+    const done = await post('account/change-password', a.session).send({
+      currentPassword: PASSWORD,
+      newPassword: 'Nove portalove heslo AYVO 2027',
+      code: a.recoveryCodes[0],
+      client: client(),
+    });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    // The old credential's challenge no longer completes.
+    expect(
+      (
+        await post('auth/mfa').send({
+          challenge: pending.body.challenge,
+          code: otp(a.secret, 30_000),
+          client: client(),
+        })
+      ).status,
+    ).toBe(401);
+    // The recovery code is used up.
+    expect(
+      (
+        await post('account/change-password', done.body.session).send({
+          currentPassword: 'Nove portalove heslo AYVO 2027',
+          newPassword: 'Jeste novejsi heslo AYVO 2028',
+          code: a.recoveryCodes[0],
+          client: client(),
+        })
+      ).status,
+    ).toBe(401);
+  });
 });
