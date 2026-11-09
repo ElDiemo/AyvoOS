@@ -65,7 +65,12 @@ test.describe('hotel portal: the hotel profile', () => {
     );
     await expect(page.getByTestId('profile-receiving')).toContainText('Bez pokynů k doručení.');
     const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
-    await expect(nav.getByRole('link')).toHaveText(['Moje hotely', 'Faktury']);
+    await expect(nav.getByRole('link')).toHaveText([
+      'Moje hotely',
+      'Dodávky',
+      'Smlouvy',
+      'Faktury',
+    ]);
     await noSideways(page);
     await shot(page, 'profile-empty');
   });

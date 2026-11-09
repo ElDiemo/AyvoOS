@@ -2,7 +2,25 @@
 export const cs = {
   brand: 'AYVO – hotelový portál',
   portalName: 'Hotelový portál',
-  nav: { label: 'Hlavní navigace', hotels: 'Moje hotely', invoices: 'Faktury', logout: 'Odhlásit' },
+  nav: {
+    label: 'Hlavní navigace',
+    hotels: 'Moje hotely',
+    deliveries: 'Dodávky',
+    contracts: 'Smlouvy',
+    invoices: 'Faktury',
+    logout: 'Odhlásit',
+  },
+  allDeliveries: {
+    title: 'Dodávky',
+    intro:
+      'Dodávky všech vašich hotelů podle skutečných objednávek a orientační dny podle plánu zásobování. Plánované odeslání není termín doručení.',
+    unavailable: 'Dodávky tohoto hotelu se teď nepodařilo načíst.',
+    hotel: 'Profil hotelu',
+  },
+  allContracts: {
+    title: 'Smlouvy',
+    intro: 'Podepsané smlouvy vašich hotelů. Rozpracované návrhy se tu neukazují.',
+  },
   login: {
     title: 'Přihlášení',
     email: 'E-mail',

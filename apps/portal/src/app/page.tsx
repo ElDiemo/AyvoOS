@@ -1,38 +1,12 @@
 import Link from 'next/link';
-import type { PortalDeliveries } from '@ayvo/types';
 import { HotelDispatch, pragueToday } from '@/components/home-overview';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
 import { portalEnv } from '@/lib/env';
-import { PortalRefusal, PortalUnavailable } from '@/lib/backend';
+import { perHotel } from '@/lib/per-hotel';
 import { myDeliveries, myHotels, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
-
-/** At most this many hotels' deliveries are read at once (portal-web's core budget is 8). */
-const DELIVERY_READS = 3;
-
-/**
- * Each hotel's deliveries through the same contract as its "Dodávky" page (the core checks the
- * grant on every one), a few at a time; one hotel unavailable never hides the others.
- */
-async function deliveriesOf(token: string, ids: string[]) {
-  const out = new Map<string, PortalDeliveries | null>();
-  for (let i = 0; i < ids.length; i += DELIVERY_READS) {
-    const batch = ids.slice(i, i + DELIVERY_READS);
-    const read = await Promise.all(
-      batch.map((id) =>
-        myDeliveries(token, id).catch((error: unknown) => {
-          // Unavailable, or the grant on this hotel ended meanwhile (404): this card only.
-          if (error instanceof PortalUnavailable || error instanceof PortalRefusal) return null;
-          throw error;
-        }),
-      ),
-    );
-    batch.forEach((id, k) => out.set(id, read[k] ?? null));
-  }
-  return out;
-}
 
 /**
  * "Moje hotely": the hotels of the session's active grants, each leading to its profile, with
@@ -41,9 +15,9 @@ async function deliveriesOf(token: string, ids: string[]) {
 export default async function HotelsPage() {
   const { token, view } = await portalSession();
   const hotels = await myHotels(token);
-  const deliveries = await deliveriesOf(
-    token,
+  const deliveries = await perHotel(
     hotels.map((h) => h.id),
+    (id) => myDeliveries(token, id),
   );
   const today = pragueToday();
   return (
