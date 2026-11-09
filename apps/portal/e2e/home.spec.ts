@@ -78,4 +78,33 @@ test.describe('hotel portal: dispatch on Moje hotely', () => {
     await expect(page.getByTestId('home-dispatch-unavailable')).toBeVisible();
     await expect(page.getByTestId('portal-hotels')).toContainText('Hotel Portál E2E');
   });
+
+  test('an account with two hotels: both on Moje hotely and a switcher on the hotel pages', async ({
+    page,
+  }) => {
+    await control(page, { secondHotel: true });
+    try {
+      await signIn(page);
+      await expect(page.getByTestId('portal-hotels').getByRole('listitem')).toHaveCount(2);
+      const { hotelId, secondHotelId } = (await (
+        await page.request.get(`${STUB}/__state`)
+      ).json()) as { hotelId: string; secondHotelId: string };
+      await page.goto(`/hotels/${hotelId}/deliveries`);
+      const switcher = page.getByTestId('hotel-switcher');
+      await expect(switcher.locator('[aria-current=page]')).toHaveText('Hotel Portál E2E');
+      await expect(switcher.getByRole('link', { name: 'Hotel Druhý E2E' })).toHaveAttribute(
+        'href',
+        `/hotels/${secondHotelId}/deliveries`,
+      );
+      await noSideways(page);
+      await shot(page, 'hotel-switcher');
+    } finally {
+      await control(page, { secondHotel: false });
+    }
+    // One hotel: no switcher.
+    await page.goto('/');
+    await page.getByTestId('portal-hotels').getByRole('link').first().click();
+    await expect(page.getByTestId('profile-next-delivery')).toBeVisible();
+    await expect(page.getByTestId('hotel-switcher')).toHaveCount(0);
+  });
 });

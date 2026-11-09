@@ -37,6 +37,8 @@ const hotel = {
   city: 'Olomouc',
   countryCode: 'CZ',
 };
+/** A second hotel of the same account, granted only with `state.secondHotel` (the switcher). */
+const secondHotel = { ...hotel, id: randomUUID(), code: 'H-000902', name: 'Hotel Druhý E2E' };
 /** A hotel of another account: never reachable from this session. */
 export const FOREIGN_HOTEL_ID = randomUUID();
 const freshProfile = () => ({
@@ -158,6 +160,8 @@ const state = {
   contractsMode: 'ok',
   /** 'ok' | 'none' | 'plan-only' (only upcoming plan days) | 'late' (a past ship day) | 'down'. */
   deliveriesMode: 'ok',
+  /** The account also manages a second hotel (two hotels in its grant). */
+  secondHotel: false,
 };
 
 const send = (res, status, body, schema) => {
@@ -259,7 +263,13 @@ async function core(req, res, path) {
         user,
         idleExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         absoluteExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-        grants: [{ id: randomUUID(), payerCustomerId: randomUUID(), hotelIds: [hotel.id] }],
+        grants: [
+          {
+            id: randomUUID(),
+            payerCustomerId: randomUUID(),
+            hotelIds: state.secondHotel ? [hotel.id, secondHotel.id] : [hotel.id],
+          },
+        ],
       },
       portalSessionViewSchema,
     );
@@ -267,7 +277,7 @@ async function core(req, res, path) {
     return send(
       res,
       200,
-      [hotel].map((h) => portalHotelSchema.parse(h)),
+      (state.secondHotel ? [hotel, secondHotel] : [hotel]).map((h) => portalHotelSchema.parse(h)),
     );
   if (path === `hotels/${hotel.id}`) return send(res, 200, hotel, portalHotelSchema);
   const deliveriesMatch = path.match(/^hotels\/([^/]+)\/deliveries$/);
@@ -396,6 +406,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         contract: CONTRACT,
         foreignContractId: FOREIGN_CONTRACT_ID,
         hotelId: hotel.id,
+        secondHotelId: secondHotel.id,
         invoices,
       });
     if (req.url === '/__control') {

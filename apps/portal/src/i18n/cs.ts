@@ -107,6 +107,7 @@ export const cs = {
     },
   },
   hotelTabs: { label: 'Hotel', profile: 'Profil', deliveries: 'Dodávky' },
+  switcher: { label: 'Vaše hotely' },
   home: {
     nextDispatch: 'Nejbližší expedice (plánované odeslání)',
     asap: 'Odešleme co nejdřív',

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ContractsCard } from '@/components/contracts-card';
 import { NextDeliveryCard } from '@/components/deliveries';
+import { HotelSwitcher } from '@/components/hotel-switcher';
 import { HotelTabs } from '@/components/hotel-tabs';
 import { HotelHero, ProfileGroups } from '@/components/profile-view';
 import { Shell } from '@/components/shell';
@@ -64,6 +65,7 @@ export default async function HotelPage({
           </Link>
         }
       />
+      <HotelSwitcher token={token} view={view} current={id} section="profile" />
       <HotelTabs hotelId={id} active="profile" />
       <NextDeliveryCard hotelId={id} deliveries={deliveries} />
       <ProfileGroups profile={profile} />
