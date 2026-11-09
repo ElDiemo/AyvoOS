@@ -3,6 +3,7 @@ import type { HotelChange, HotelDetail, PortalHotelProfile } from '@ayvo/types';
 import { Secret, TOTP } from 'otpauth';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { HotelsService } from '../src/customers/hotels.service.js';
 import { InvitationsService } from '../src/identity/invitations.service.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
@@ -124,13 +125,13 @@ describe.skipIf(!hasDatabase)('hotel portal: the hotel profile', () => {
     return { user, session: done.body.session as string };
   }
 
-  /** Waits until a backend of this database waits for a lock. */
-  async function lockWaiter() {
+  /** Waits until `n` backends of this database wait for a lock. */
+  async function lockWaiter(n = 1) {
     for (let i = 0; i < 200; i++) {
       const [r] = await t.prisma.$queryRaw<{ n: number }[]>`
         SELECT count(*)::int AS n FROM pg_stat_activity
         WHERE datname = current_database() AND wait_event_type = 'Lock'`;
-      if (r!.n >= 1) return;
+      if (r!.n >= n) return;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     throw new Error('no lock waiter');
@@ -453,6 +454,66 @@ describe.skipIf(!hasDatabase)('hotel portal: the hotel profile', () => {
     expect(
       (await request(su.app.getHttpServer()).get('/api/admin/hotels/HT-999999/changes')).status,
     ).toBe(404);
+  });
+
+  it('a staff edit waiting behind a portal save audits what it replaced (B → C, not A → C)', async () => {
+    // Review 5829367477: the staff path read the row before its FOR UPDATE and audited that copy.
+    const hotel = await createHotel(su, { name: 'Hotel Profil Souběh' });
+    const a = await account();
+    await grant(a.user.id, [hotel.id]);
+    const current = await read(a.session, hotel.id); // state A: no receiving contact
+    // Something holds the hotel's row lock, so both writers queue behind it in a known order.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const isLocked = new Promise<void>((r) => (locked = r));
+    const holder = withPrivileged((db) =>
+      db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT 1 FROM "hotels" WHERE "id" = ${hotel.id}::uuid FOR UPDATE`;
+          locked();
+          await held;
+        },
+        { timeout: 30_000 },
+      ),
+    );
+    await isLocked;
+    // First in the queue: the portal saves B. Second: the staff edit saves C.
+    const portal = save(
+      a.session,
+      hotel.id,
+      current.fingerprint,
+      profileOf({ receivingContactName: 'Portál B', deliveryNote: 'Poznámka B' }),
+    ).then((r) => r);
+    await lockWaiter(1);
+    const staff = t.app.get(HotelsService).updatePractical(adminId, hotel.code, {
+      requestId: randomUUID(),
+      deliveryNote: 'Poznámka C',
+      receivingContactName: 'Sklad C',
+      receivingContactPhone: null,
+      receivingContactEmail: null,
+      reason: 'interní úprava (souběh)',
+    });
+    await lockWaiter(2);
+    release();
+    await holder;
+    const res = await portal;
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await staff;
+
+    const stored = await row(hotel.id);
+    expect([stored.receivingContactName, stored.deliveryNote]).toEqual(['Sklad C', 'Poznámka C']);
+    type Change = { via?: string; before: Record<string, unknown>; after: Record<string, unknown> };
+    const trail = (await audits(hotel.code)).map((e) => e.payload as unknown as Change);
+    expect(trail.map((p) => p.via ?? 'STAFF')).toEqual(['PORTAL', 'STAFF']);
+    const [b, c] = trail as [Change, Change];
+    expect(b.after).toMatchObject({ receivingContactName: 'Portál B', deliveryNote: 'Poznámka B' });
+    // The staff change is recorded as replacing B — the chain A → B → C can be followed.
+    expect(c.before).toMatchObject({
+      receivingContactName: 'Portál B',
+      deliveryNote: 'Poznámka B',
+    });
+    expect(c.after).toMatchObject({ receivingContactName: 'Sklad C', deliveryNote: 'Poznámka C' });
   });
 
   it('existing orders keep their address snapshot; a new order takes the new address', async () => {
