@@ -100,7 +100,8 @@ export class HotelsService implements OnModuleInit {
   /**
    * The optional practical details (doc 032): delivery note and receiving contact. Never required
    * of existing hotels; the address, main contact and serving site are not changed here. Reason
-   * and before/after audited. Orders keep their own snapshot.
+   * and before/after audited, "before" read under the row's lock (the portal edits the same row).
+   * Orders keep their own snapshot.
    */
   async updatePractical(
     actorId: string,
@@ -112,9 +113,14 @@ export class HotelsService implements OnModuleInit {
       input.requestId,
       { actorId, code, ...input, requestId: undefined },
       async (tx) => {
+        // Lock first, then read: the audit's "before" must be what this write replaces. Read
+        // before the lock, a portal save committed while we waited (A → B) would be audited
+        // as A → C instead of B → C (review 5829367477).
+        const locked = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "hotels" WHERE "code" = ${code} FOR UPDATE`;
+        if (locked.length === 0) throw new NotFoundException('Hotel not found');
         const row = await this.byCode(code, tx);
         if (!row) throw new NotFoundException('Hotel not found');
-        await tx.$executeRaw`SELECT 1 FROM "hotels" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
         const before = {
           deliveryNote: row.deliveryNote,
           receivingContactName: row.receivingContactName,
