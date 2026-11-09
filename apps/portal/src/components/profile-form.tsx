@@ -141,6 +141,8 @@ function Fieldset({
 export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
   const [values, setValues] = useState<Values>(() => initial(profile));
   const [errors, setErrors] = useState<Partial<Record<Key, string>>>({});
+  const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -165,7 +167,9 @@ export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
     setStale(false);
     const found = problems(values);
     setErrors(found);
-    if (Object.keys(found).length > 0) {
+    const badReason = reason.trim().length < 3 || reason.trim().length > 500;
+    setReasonError(badReason ? cs.profile.invalid.reason : null);
+    if (Object.keys(found).length > 0 || badReason) {
       requestAnimationFrame(() => summary.current?.focus());
       return;
     }
@@ -174,7 +178,7 @@ export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
       const res = await fetch(`/hotels/${profile.id}/profile`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ expected: profile.fingerprint, profile: values }),
+        body: JSON.stringify({ expected: profile.fingerprint, profile: values, reason }),
       }).catch(() => null);
       const data = (await res?.json().catch(() => ({}))) as {
         code?: string;
@@ -204,7 +208,7 @@ export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
     }
   }
 
-  const invalid = Object.keys(errors).length > 0;
+  const invalid = Object.keys(errors).length > 0 || reasonError !== null;
   return (
     <form noValidate onSubmit={submit} className="flex flex-col gap-4" data-testid="profile-form">
       {(invalid || failure) && (
@@ -224,6 +228,13 @@ export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
                   </a>
                 </li>
               ))}
+              {reasonError && (
+                <li>
+                  <a href="#field-reason" className="underline">
+                    {cs.profile.reason}: {reasonError}
+                  </a>
+                </li>
+              )}
             </ul>
           )}
           {stale && (
@@ -253,6 +264,31 @@ export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
         {field('receivingContactEmail', 254, { type: 'email', autoComplete: 'off' })}
         {field('deliveryNote', 500, { wide: true, multiline: true, help: cs.profile.noteHelp })}
       </Fieldset>
+      <div className="flex flex-col gap-1 rounded-xl border border-stone-200 bg-white p-5 shadow-sm">
+        <label htmlFor="field-reason" className="text-sm font-medium text-stone-800">
+          {cs.profile.reason}
+        </label>
+        <textarea
+          id="field-reason"
+          name="reason"
+          rows={2}
+          maxLength={500}
+          required
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          aria-invalid={reasonError ? true : undefined}
+          aria-describedby={`field-reason-help${reasonError ? ' field-reason-error' : ''}`}
+          className={input}
+        />
+        <p id="field-reason-help" className="text-xs text-stone-500">
+          {cs.profile.reasonHelp}
+        </p>
+        {reasonError && (
+          <p id="field-reason-error" className="text-xs font-medium text-red-700">
+            {reasonError}
+          </p>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"

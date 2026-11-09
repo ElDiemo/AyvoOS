@@ -99,6 +99,8 @@ test.describe('hotel portal: the hotel profile', () => {
     await page.keyboard.type('+420 600 300 400');
     await page.getByLabel('Pokyny k doručení (nepovinné)').focus();
     await page.keyboard.type('Příjem 7–11 h, rampa.');
+    await page.getByLabel('Důvod změny').focus();
+    await page.keyboard.type('Nový vchod ze dvora');
     await page.getByLabel('E-mail', { exact: true }).focus();
     await page.keyboard.press('Enter');
 
@@ -112,7 +114,13 @@ test.describe('hotel portal: the hotel profile', () => {
     const state = await stubState(page);
     expect(state.profileSaves).toBe(1);
     // Only the whitelisted fields, the fingerprint and the browser request reached the core.
-    expect(Object.keys(state.lastProfileBody!).sort()).toEqual(['client', 'expected', 'profile']);
+    expect(Object.keys(state.lastProfileBody!).sort()).toEqual([
+      'client',
+      'expected',
+      'profile',
+      'reason',
+    ]);
+    expect(state.lastProfileBody!.reason).toBe('Nový vchod ze dvora');
     expect(Object.keys(state.lastProfileBody!.profile as object).sort()).toEqual(
       [
         'addressLine1',
@@ -147,6 +155,8 @@ test.describe('hotel portal: the hotel profile', () => {
     await expect(alert).toContainText('Město: Vyplňte prosím.');
     await expect(alert).toContainText('E-mail: Zadejte platný e-mail.');
     await expect(alert).toContainText('Jméno (nepovinné): Kontakt pro příjem potřebuje jméno.');
+    await expect(alert).toContainText('Důvod změny: Napište prosím důvod změny');
+    await expect(page.getByLabel('Důvod změny')).toHaveAttribute('aria-invalid', 'true');
     await expect(page.getByLabel('Město')).toHaveAttribute('aria-invalid', 'true');
     await noSideways(page);
     await shot(page, 'profile-invalid');
@@ -161,6 +171,7 @@ test.describe('hotel portal: the hotel profile', () => {
     await page.goto(`/hotels/${hotelId}/edit`);
     await control(page, { touchProfile: true });
     await page.getByLabel('Ulice a číslo').fill('Souběžná 1');
+    await page.getByLabel('Důvod změny').fill('Oprava adresy');
     await page.getByRole('button', { name: 'Uložit změny' }).click();
     await expect(page.getByTestId('profile-form').getByRole('alert')).toContainText(
       'mezitím změnil někdo jiný',
@@ -171,6 +182,7 @@ test.describe('hotel portal: the hotel profile', () => {
 
     await control(page, { profileGrant: false });
     await page.getByLabel('Ulice a číslo').fill('Odvolaná 1');
+    await page.getByLabel('Důvod změny').fill('Oprava adresy');
     await page.getByRole('button', { name: 'Uložit změny' }).click();
     await expect(page.getByTestId('profile-form').getByRole('alert')).toContainText(
       'Tento hotel už ve vašem přístupu není.',
@@ -192,7 +204,7 @@ test.describe('hotel portal: the hotel profile', () => {
     const current = (await (await page.request.get(`${STUB}/__state`)).json()) as {
       profile: Record<string, string | null>;
     };
-    const body = { expected: 'a'.repeat(64), profile: current.profile };
+    const body = { expected: 'a'.repeat(64), profile: current.profile, reason: 'Oprava údajů' };
     const save = (id: string, data: unknown, headers: Record<string, string> = {}) =>
       page.request.post(`/hotels/${id}/profile`, {
         data,
