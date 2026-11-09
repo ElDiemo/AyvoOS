@@ -46,22 +46,36 @@ SELECT (SELECT count(*) FROM bottle_events WHERE type = 'FILLED')  AS filled,
 
 After the migration, `filled = anchored`. `reuse_anchored` stays 0 until R3-b.
 
-## Rollback
+## Rollback: the previous image only, the schema stays
 
-While `reuse_anchored = 0` (always true before R3-b), the R2 release runs unchanged on this schema:
-deploy the previous image, with no down migration needed. The rows of the side table are read by
-nothing else. To restore the old index as well, run as the migration role:
+The only rollback of R3-a is to start the previous (R2) image again, **with the R3-a schema kept**:
 
-```sql
-BEGIN;
-LOCK TABLE bottle_events IN SHARE ROW EXCLUSIVE MODE;
-DROP TRIGGER bottle_events_fill_circulation ON bottle_events;
-CREATE UNIQUE INDEX bottle_events_one_filled_per_bottle ON bottle_events (bottle_id) WHERE type = 'FILLED';
-COMMIT;
-```
+- DEV: `scripts/deploy-dev.sh --rollback <previous-tag>`.
+- PROD: `scripts/deploy-prod.sh --rollback <previous-release>`.
 
-The index can be restored only while no bottle has a second `FILLED`, which only R3-b can write.
-After R3-b's first write, fix forward only.
+Both start the earlier images and run no migration, so nothing in the database changes.
+
+The R2 code runs unchanged on this schema. R3-a changes no API, and the R2 suites pass on it (see
+Tests). The trigger stays in force, so every `FILLED` the R2 image writes still gets its anchor
+(`filled = anchored` holds). A later forward deploy therefore finds a complete side table:
+Prisma has the migration recorded, and nothing has to be backfilled again.
+
+After the rollback, run the read-only check above. `filled = anchored` must still hold, and
+`reuse_anchored` must still be 0.
+
+**Never take the schema back by hand.** Do not drop the trigger, do not remove the side table and
+do not restore `bottle_events_one_filled_per_bottle` (review 5829368903):
+
+- From then on, the R2 code would write fillings with no anchor.
+- Prisma would still count R3-a as applied, so no later deploy would recreate the trigger or fill in
+  the missing anchors.
+- R3-b could then refuse ordinary operations on such a bottle.
+
+Reversing the schema would need its own reviewed procedure. That procedure must include a tested
+way forward again, with a backfill and the rules restored. This release does not provide one.
+
+The image rollback is possible only until R3-b's first write. A bottle filled a second time
+(`reuse_anchored > 0`) is something the R2 code does not know, so from then on fix forward only.
 
 ## Tests (API e2e on a real DB, as the core runtime role, with commits)
 
