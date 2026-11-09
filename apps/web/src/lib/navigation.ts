@@ -109,6 +109,12 @@ export const MODULES: readonly NavModule[] = [
         permission: 'sales:work',
       },
       { id: 'tasks', href: '/sales/tasks', label: s.pages.tasks, permission: 'sales:work' },
+      {
+        id: 'calendar',
+        href: '/sales/calendar',
+        label: s.pages.calendar,
+        permission: 'sales:work',
+      },
     ],
   },
   {
@@ -445,7 +451,7 @@ export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'ex
 export type FinanceViewId =
   'invoices' | 'billing' | 'customers' | 'bank' | 'payments' | 'company' | 'prices';
 export type DispatchPageId = 'orders' | 'new';
-export type SalesPageId = 'overview' | 'prospects' | 'tasks';
+export type SalesPageId = 'overview' | 'prospects' | 'tasks' | 'calendar';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports

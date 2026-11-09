@@ -25,6 +25,7 @@ import {
   rescheduleTaskRequestSchema,
   retireContactRequestSchema,
   saveContactRequestSchema,
+  salesCalendarQuerySchema,
   taskListQuerySchema,
   updateProspectRequestSchema,
   updateTaskRequestSchema,
@@ -48,6 +49,8 @@ import {
   type SalesOverview,
   type Salesperson,
   type SaveContactRequest,
+  type SalesCalendar,
+  type SalesCalendarQuery,
   type TaskListQuery,
   type TaskPage,
   type UpdateProspectRequest,
@@ -346,6 +349,16 @@ export class SalesController {
     @CurrentPrincipal() p: Principal,
   ): Promise<ProspectDetail> {
     return this.work.createTask(scopeOf(p), code, body);
+  }
+
+  /** "Kalendář": the tasks due in one month, for the same people as the task list. */
+  @RequirePermission('sales:work')
+  @Get('tasks/calendar')
+  calendar(
+    @Query(new ZodValidationPipe(salesCalendarQuerySchema)) query: SalesCalendarQuery,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<SalesCalendar> {
+    return this.work.calendar(scopeOf(p), query);
   }
 
   @RequirePermission('sales:work')

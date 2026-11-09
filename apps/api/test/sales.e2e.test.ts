@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  SalesCalendar,
   AdminUserDetail,
   CurrentUser,
   DuplicateHint,
@@ -847,5 +848,72 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
       items: [],
       total: 60,
     });
+  });
+
+  it('Kalendář: the tasks due in a month for the same people as the list; overdue before it counted', async () => {
+    const a = as(people.a.cookie);
+    const b = as(people.b.cookie);
+    const day = addDays(today(), 1);
+    const month = day.slice(0, 7);
+    const pa = await create(people.a.cookie, `Kalendář A ${tag}`);
+    const pb = await create(people.b.cookie, `Kalendář B ${tag}`);
+    const task = (cookie: string, code: string, title: string, dueOn: string) =>
+      as(cookie)
+        .post(`/prospects/${code}/tasks`, {
+          title,
+          dueOn,
+          contactId: null,
+          assigneeId: null,
+          note: null,
+        })
+        .expect(200);
+    await task(people.a.cookie, pa.code, `Zavolat ${tag}`, day);
+    await task(people.a.cookie, pa.code, `Poslat nabídku ${tag}`, day);
+    await task(people.a.cookie, pa.code, `Později ${tag}`, addDays(today(), 70));
+    await task(people.b.cookie, pb.code, `Bářin úkol ${tag}`, day);
+    const done = (await a.get(`/prospects/${pa.code}`).expect(200)).body as ProspectDetail;
+    const first = done.openTasks.find((x) => x.title === `Poslat nabídku ${tag}`)!;
+    await a.post(`/tasks/${first.id}/done`, { revision: first.revision, result: null }).expect(200);
+
+    const mine = (await a.get(`/tasks/calendar?month=${month}`).expect(200)).body as SalesCalendar;
+    const titles = mine.items.filter((x) => x.title.endsWith(tag)).map((x) => [x.title, x.status]);
+    expect(titles.sort()).toEqual(
+      [
+        [`Poslat nabídku ${tag}`, 'DONE'],
+        [`Zavolat ${tag}`, 'OPEN'],
+      ].sort(),
+    );
+    expect(mine).toMatchObject({ month, today: today(), truncated: false });
+    expect(mine.items.every((x) => x.dueOn.startsWith(month))).toBe(true);
+    // Without a month: the current one.
+    expect(((await a.get('/tasks/calendar').expect(200)).body as SalesCalendar).month).toBe(
+      today().slice(0, 7),
+    );
+    // Another salesperson's tasks: never for a SALES user, all of them for the administrator.
+    expect((await b.get('/tasks/calendar?assignee=all').expect(403)).status).toBe(403);
+    expect((await b.get(`/tasks/calendar?assignee=${people.a.id}`)).status).toBe(403);
+    const all = (await as(admin).get(`/tasks/calendar?month=${month}&assignee=all`).expect(200))
+      .body as SalesCalendar;
+    expect(all.items.map((x) => x.title)).toEqual(
+      expect.arrayContaining([`Zavolat ${tag}`, `Bářin úkol ${tag}`]),
+    );
+    expect(
+      ((await b.get(`/tasks/calendar?month=${month}`).expect(200)).body as SalesCalendar).items
+        .map((x) => x.title)
+        .filter((x) => x.endsWith(tag)),
+    ).toEqual([`Bářin úkol ${tag}`]);
+
+    // An open task due before the month viewed is counted as overdue there, not listed.
+    const [yy, mm] = month.split('-').map(Number) as [number, number];
+    const nextMonth = mm === 12 ? `${yy + 1}-01` : `${yy}-${String(mm + 1).padStart(2, '0')}`;
+    const view = async () =>
+      (await a.get(`/tasks/calendar?month=${nextMonth}`).expect(200)).body as SalesCalendar;
+    const before = await view();
+    await task(people.a.cookie, pa.code, `Ještě jeden ${tag}`, day);
+    const after = await view();
+    expect(after.overdueBefore).toBe(before.overdueBefore + 1);
+    expect(after.items.map((x) => x.title)).not.toContain(`Ještě jeden ${tag}`);
+    for (const q of ['?month=2026-13', '?month=26-01', '?assignee=nobody'])
+      expect((await a.get(`/tasks/calendar${q}`)).status, q).toBe(400);
   });
 });
