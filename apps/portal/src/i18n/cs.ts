@@ -131,6 +131,7 @@ export const cs = {
     asap: 'Odešleme co nejdřív',
     noDispatch: 'Žádná expedice zatím není naplánovaná.',
     latest: 'Poslední zásilky',
+    lastShipment: 'Poslední zásilka',
     handedOver: (at: string) => `předáno dopravci ${at}`,
     planned: (day: string) => `plánované odeslání ${day}`,
     more: (n: number) => (n === 1 ? 'a 1 další na cestě' : `a ${n} další na cestě`),

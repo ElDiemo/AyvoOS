@@ -109,7 +109,7 @@ test.describe('hotel portal: deliveries', () => {
       'Žádný další den podle plánu zásobování.',
     );
     await page.goto(`/hotels/${id}`);
-    await expect(next).toContainText('Žádná dodávka není naplánovaná ani na cestě.');
+    await expect(next).toContainText('Žádná expedice zatím není naplánovaná.');
 
     await control(page, { deliveriesMode: 'down' });
     await page.goto(`/hotels/${id}/deliveries`);

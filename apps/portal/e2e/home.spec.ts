@@ -107,4 +107,35 @@ test.describe('hotel portal: dispatch on Moje hotely', () => {
     await expect(page.getByTestId('profile-next-delivery')).toBeVisible();
     await expect(page.getByTestId('hotel-switcher')).toHaveCount(0);
   });
+
+  test('the hotel profile: the next dispatch with its products apart from the last real shipment', async ({
+    page,
+  }) => {
+    await signIn(page);
+    await page.getByTestId('portal-hotels').getByRole('link').first().click();
+    const card = page.getByTestId('profile-next-delivery');
+    const next = card.getByTestId('next-dispatch');
+    await expect(next).toContainText('Připravujeme k odeslání');
+    await expect(next).toContainText('Mýdlo na ruce AYVO 330 ml · 2 bedny (80 lahví)');
+    const last = card.getByTestId('last-shipment');
+    await expect(last).toContainText('Na cestě');
+    await expect(last).toContainText('předáno dopravci 9. 11. 2026');
+    await noSideways(page);
+    await shot(page, 'profile-dispatch');
+    // Only plan days: the plan day with its crates, no shipment yet.
+    await control(page, { deliveriesMode: 'plan-only' });
+    await page.reload();
+    await expect(next).toContainText('Podle plánu');
+    await expect(next).toContainText('Mýdlo na ruce AYVO 330 ml · 2 bedny');
+    await expect(next).not.toContainText('lahví');
+    await expect(last).toContainText('Zatím žádná zásilka.');
+    // A passed ship day is never shown as a date.
+    await control(page, { deliveriesMode: 'late' });
+    await page.reload();
+    await expect(next).toContainText('Odešleme co nejdřív');
+    await control(page, { deliveriesMode: 'down' });
+    await page.reload();
+    await expect(card).toContainText('Dodávky se teď nepodařilo načíst');
+    await expect(page.getByTestId('portal-hotel-name')).toBeVisible();
+  });
 });
