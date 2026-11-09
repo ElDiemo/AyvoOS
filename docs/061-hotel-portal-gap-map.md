@@ -1,6 +1,6 @@
 # 061 — Hotel portal: what exists, what is in a PR, what waits for the owner
 
-Status: **working map, 2026-11-09** (main `1c1b995`). Sources: issue #125 (owner priority), ADR
+Status: **working map, updated 2026-11-10** (main `1c1b995`). Against issue #169 (AYVO HOTEL v1). Sources: issue #125 (owner priority), ADR
 0045 §9 (PR #127), doc 040 §14, doc 053. It decides nothing; it shows the gaps so the owner can pick
 the next steps. Update it when a PR merges.
 
@@ -17,16 +17,19 @@ the next steps. Update it when a PR merges.
 | Faktury       | own invoices, payment state, PDF (one Finance predicate)                         | #140, #143          |
 | Edge          | dev-portal host, path allowlist, body limits                                     | #146, doc 052       |
 
-## 2. In open PRs (not merged)
+## 2. In open PRs (not merged, not deployed)
 
-| PR   | What                                                                                                                            | Who       |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| #147 | Hotely → Uživatelé: staff manage portal accounts apart from internal users                                                      | ayvoos-23 |
-| #148 | Signed contracts, read only                                                                                                     | ayvoos-23 |
-| #149 | Deliveries: planned, in progress, delivered (from real orders; tracking link not shown, cancelled not shown — owner 2026-11-09) | ayvoos-23 |
-| #150 | Invoice package for a period (ZIP + manifest); its limits (12 months, 60 invoices, 40 MB) wait for the owner                    | ayvoos-23 |
-| #151 | Change history on the staff hotel detail                                                                                        | ayvoos-23 |
-| #161 | Zabezpečení účtu: replacing the authenticator app (new phone)                                                                   | Claude    |
+| PR                 | What                                                                                     | #169           | State                                         |
+| ------------------ | ---------------------------------------------------------------------------------------- | -------------- | --------------------------------------------- |
+| #148               | Signed contracts, read only                                                              | P0 5           | CI green; waits for review                    |
+| #149               | Deliveries (planned / on the way / delivered), nearest delivery, 60-day plan days        | P0 2, 3, 4     | stacked on #148; review P2×2 fixed at 0d782dc |
+| #170               | "Moje hotely" dispatch at a glance; hotel switcher; isolation test across several hotels | P0 1, 2        | stacked on #149 (merged in 0d782dc)           |
+| #150               | Invoice package for a period (ZIP)                                                       | P0 6 follow-up | after the deliveries                          |
+| #147               | Hotely → Uživatelé (staff manage portal accounts)                                        | —              | draft                                         |
+| #151               | Change history on the staff hotel detail                                                 | —              | draft                                         |
+| #161 → #163 → #165 | Zabezpečení účtu: new phone, sign out everywhere, change password                        | —              | #161 CI green                                 |
+
+Done = merged **and** on DEV **and** confirmed by the owner (#169). Nothing above is done yet.
 
 ## 3. Gaps that need no new business rule (candidates)
 
