@@ -2,6 +2,7 @@ import {
   PORTAL_SESSION_HEADER,
   portalActionRequestSchema,
   portalForgotRequestSchema,
+  portalHotelProfileRequestSchema,
   portalLogoutRequestSchema,
   portalMfaRequestSchema,
   portalPasswordRequestSchema,
@@ -10,6 +11,8 @@ import {
   type PortalClient,
   type PortalForgotRequest,
   type PortalHotel,
+  type PortalHotelProfile,
+  type PortalHotelProfileRequest,
   type PortalLogoutRequest,
   type PortalMfaRequest,
   type PortalMfaResult,
@@ -244,6 +247,76 @@ export class PortalContractController {
       const hotel = (await this.granted(await this.portalSession(token), id))[0];
       if (!hotel) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
       return hotel;
+    });
+  }
+
+  // --- "Profil hotelu" (the hotel's own profile) ------------------------------------------
+
+  /** A granted hotel's own profile; any other id is "not found", exactly like a missing one. */
+  @PortalServiceAccess()
+  @Get('hotels/:id/profile')
+  profile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<PortalHotelProfile> {
+    return this.slots.run(async () => {
+      const session = await this.portalSession(token);
+      const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
+        g.hotelIds.includes(id),
+      );
+      const profile = allowed ? await this.hotels.portalProfile(id, this.db) : null;
+      if (!profile) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+      return profile;
+    });
+  }
+
+  /**
+   * Saves a granted hotel's own profile (whitelisted fields only, schema-strict). The browser
+   * request is checked again (the portal's origin, CSRF). Then, in ONE transaction and under the
+   * account's row lock — the lock a grant revocation or a deactivation takes first — the session
+   * and its active grant on THIS hotel are checked again: a revocation that committed before is
+   * seen, one that comes later waits for this save. Foreign or no longer granted hotels are "not
+   * found"; an ended session signs in again. The customers module writes and audits the change.
+   */
+  @PortalServiceAccess()
+  @Post('hotels/:id/profile')
+  @HttpCode(200)
+  saveProfile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(portalHotelProfileRequestSchema)) body: PortalHotelProfileRequest,
+    @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
+  ): Promise<PortalHotelProfile> {
+    return this.slots.run(async () => {
+      this.sameOrigin(body.client);
+      const session = await this.portalSession(token);
+      return this.db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT 1 FROM "users" WHERE "id" = ${session.user.id}::uuid FOR SHARE`;
+        const live = await tx.userSession.findUnique({
+          where: { id: session.sessionId },
+          select: {
+            revokedAt: true,
+            idleExpiresAt: true,
+            absoluteExpiresAt: true,
+            user: { select: { status: true } },
+          },
+        });
+        if (!live) throw unauthenticated();
+        if (live.user.status !== 'ACTIVE') throw accountInactive();
+        const now = new Date();
+        if (live.revokedAt || live.idleExpiresAt <= now || live.absoluteExpiresAt <= now)
+          throw sessionExpired();
+        const grant = (await this.grants.activeOf(session.user.id, tx)).find((g) =>
+          g.hotelIds.includes(id),
+        );
+        if (!grant) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+        return this.hotels.applyPortalProfile(tx, {
+          hotelId: id,
+          actorUserId: session.user.id,
+          grantId: grant.id,
+          expected: body.expected,
+          profile: body.profile,
+        });
+      });
     });
   }
 

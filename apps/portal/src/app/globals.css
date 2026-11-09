@@ -1,6 +1,19 @@
 @import 'tailwindcss';
 
+/*
+ * AYVO identity in the portal: warm neutrals (stone), the dark green of the internal application
+ * (emerald 900–950) and the gold of the AYVO labels, sparingly. No external fonts.
+ */
+@theme {
+  --color-gold: #b08d57;
+  --color-gold-soft: #e9dcc6;
+}
+
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid #0284c7;
+  outline: 2px solid #047857;
   outline-offset: 2px;
+}
+
+.on-dark :where(a, button):focus-visible {
+  outline-color: #e9dcc6;
 }
