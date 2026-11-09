@@ -226,11 +226,17 @@ export class OrdersService implements OnModuleInit {
         orderId: { in: all.map((o) => o.id) },
         type: { in: ['HANDED_TO_CARRIER', 'DELIVERED'] },
       },
-      select: { orderId: true, type: true, occurredAt: true },
+      select: { orderId: true, type: true, occurredAt: true, payload: true },
       orderBy: { occurredAt: 'asc' },
     });
     const at = new Map<string, Date>();
-    for (const e of events) at.set(`${e.orderId}:${e.type}`, e.occurredAt);
+    for (const e of events) {
+      // A hand-over whose pickup time the carrier never reported carries the moment tracking
+      // established it (TRACK39-R1): never shown to the hotel as the hand-over time.
+      const unknown = (e.payload as { pickupTimeUnknown?: unknown } | null)?.pickupTimeUnknown;
+      if (e.type === 'HANDED_TO_CARRIER' && unknown === true) continue;
+      at.set(`${e.orderId}:${e.type}`, e.occurredAt);
+    }
     const view = (o: (typeof all)[number]): PortalDelivery => ({
       code: o.code,
       state: PORTAL_STATE[o.status as keyof typeof PORTAL_STATE],
