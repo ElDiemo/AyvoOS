@@ -17,7 +17,15 @@ import {
   pragueToday,
   scanCrate,
 } from './support/order-fixtures.js';
-import { deliver, pickUp, RETURN_ENV, shipCrates } from './support/return-fixtures.js';
+import {
+  DELIVERED,
+  deliver,
+  look,
+  PICKED_UP,
+  pickUp,
+  RETURN_ENV,
+  shipCrates,
+} from './support/return-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
@@ -50,6 +58,7 @@ describe.skipIf(!hasDatabase)('hotel portal: deliveries', () => {
   let other: HotelDetail;
   let codes: Record<string, string>;
   let product: string;
+  let factory: Awaited<ReturnType<typeof crateFactory>>;
 
   const core = () => request(t.app.getHttpServer());
   const get = (path: string, session?: string, token = portalToken) => {
@@ -113,7 +122,7 @@ describe.skipIf(!hasDatabase)('hotel portal: deliveries', () => {
     adminId = (
       await t.prisma.user.create({ data: { email: unique('grant-admin'), displayName: 'Admin' } })
     ).id;
-    const factory = await crateFactory(su, { capacity: 2 });
+    factory = await crateFactory(su, { capacity: 2 });
     product = factory.kit.productCode;
     hotel = await createHotel(su, { name: 'Hotel Dodávky' });
     other = await createHotel(su, { name: 'Hotel Cizí dodávky' });
@@ -252,6 +261,28 @@ describe.skipIf(!hasDatabase)('hotel portal: deliveries', () => {
     }
     expect((await get(`hotels/${hotel.id}/deliveries`)).status).toBe(401);
     expect((await get(`hotels/${hotel.id}/deliveries`, a.session, financeToken)).status).toBe(401);
+  });
+
+  it('a hand-over whose pickup time the carrier never reported is shown without a time', async () => {
+    // TRACK39-R1: parcel 1 reported only as delivered (pickup implied, time unknown), parcel 2
+    // picked up. The order is with the carrier, and its event carries the moment tracking saw it.
+    const h = await createHotel(su, { name: 'Hotel Dodávky bez času' });
+    const a = await account();
+    await grant(a.user.id, [h.id]);
+    const o = await shipCrates(su, h.code, product, [await factory.make(), await factory.make()]);
+    const [n1, n2] = o.numbers as [string, string];
+    testCarrierControl.track(n1, { statusId: DELIVERED, at: new Date().toISOString() });
+    testCarrierControl.track(n2, { statusId: PICKED_UP, at: new Date().toISOString() });
+    await look(su, o.shipmentId);
+    const event = await t.prisma.orderEvent.findFirstOrThrow({
+      where: { order: { code: o.order }, type: 'HANDED_TO_CARRIER' },
+    });
+    expect(event.payload).toMatchObject({ pickupTimeUnknown: true });
+    const d = (await get(`hotels/${h.id}/deliveries`, a.session).expect(200))
+      .body as PortalDeliveries;
+    expect(d.inProgress.map((x) => [x.code, x.state, x.handedOverAt])).toEqual([
+      [o.order, 'IN_TRANSIT', null],
+    ]);
   });
 
   it('a revoked grant ends access to the hotel’s deliveries', async () => {

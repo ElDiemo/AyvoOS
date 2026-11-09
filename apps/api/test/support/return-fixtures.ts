@@ -19,8 +19,8 @@ export const RETURN_ENV = {
   CARRIER_CALL_TIMEOUT_SECONDS: '2',
   CARRIER_TRACKING_SECONDS: '60',
 };
-const PICKED_UP = 150;
-const DELIVERED = 450;
+export const PICKED_UP = 150;
+export const DELIVERED = 450;
 
 const http = (t: TestApp) => request(t.app.getHttpServer());
 
@@ -64,7 +64,7 @@ export async function shipCrates(
 }
 
 /** One tracking look of the shipment, as the poller would. */
-async function look(t: TestApp, shipmentId: string) {
+export async function look(t: TestApp, shipmentId: string) {
   await t.prisma.$executeRaw`INSERT INTO "shipment_tracking" ("shipment_id", "next_at")
     VALUES (${shipmentId}::uuid, now()) ON CONFLICT ("shipment_id") DO NOTHING`;
   await t.prisma.shipmentTracking.updateMany({

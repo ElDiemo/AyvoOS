@@ -349,10 +349,9 @@ export class PortalContractController {
         g.hotelIds.includes(id),
       );
       if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
-      const [orders, upcoming] = await Promise.all([
-        this.orders.portalDeliveries(id, this.db),
-        this.plans.portalUpcoming(id, this.db),
-      ]);
+      // Sequential, as every portal call: at most one portal connection per request.
+      const orders = await this.orders.portalDeliveries(id, this.db);
+      const upcoming = await this.plans.portalUpcoming(id, this.db);
       return { ...orders, upcoming };
     });
   }
