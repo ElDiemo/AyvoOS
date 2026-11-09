@@ -93,6 +93,8 @@ export const cs = {
       deliveryNote: 'Pokyny k doručení (nepovinné)',
     } as Record<string, string>,
     noteHelp: 'Např. hodiny příjmu, vjezd, rampa. Nejvýše 500 znaků.',
+    reason: 'Důvod změny',
+    reasonHelp: 'Krátce napište, co a proč měníte. Uvidí to AYVO.',
     country: 'Země',
     invalid: {
       required: 'Vyplňte prosím.',
@@ -100,6 +102,7 @@ export const cs = {
       email: 'Zadejte platný e-mail.',
       phone: 'Zadejte telefon (číslice, mezery, +, závorky).',
       needsName: 'Kontakt pro příjem potřebuje jméno.',
+      reason: 'Napište prosím důvod změny (aspoň 3 znaky).',
       other: 'Zkontrolujte tento údaj.',
     },
   },
