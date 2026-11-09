@@ -80,8 +80,11 @@ export async function ModuleNav({ module, active }: { module: NavModule['id']; a
           );
         })}
       </ul>
-      {/* Evidence and Nastavení always name their pages (also a single, read-only one). */}
-      {(activeSection === 'records' || activeSection === 'setup') && pages.length > 0 && (
+      {/* Evidence and Nastavení always name their pages (also a single, read-only one); Práce
+          only when it has more than one (the station and Oběh lahví). */}
+      {(activeSection === 'records' || activeSection === 'setup'
+        ? pages.length > 0
+        : activeSection === 'work' && pages.length > 1) && (
         <div className="border-b border-stone-200">
           <PageStrip pages={pages} active={active} />
         </div>

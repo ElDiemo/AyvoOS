@@ -215,7 +215,7 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'warehouse',
     section: 'operations',
-    permissions: ['inventory:read', 'inventory:stock_summary', 'returns:receive'],
+    permissions: ['inventory:read', 'inventory:stock_summary'],
     label: w.label,
     href: '/warehouse',
     description: w.description,
@@ -258,18 +258,6 @@ export const MODULES: readonly NavModule[] = [
         label: w.pages.suppliers,
         permission: 'inventory:read',
       },
-      {
-        id: 'returns',
-        href: '/warehouse/returns',
-        label: w.pages.returns,
-        permission: 'returns:receive',
-      },
-      {
-        id: 'after-wash',
-        href: '/warehouse/after-wash',
-        label: w.pages.afterWash,
-        permission: 'returns:receive',
-      },
     ],
   },
   {
@@ -285,6 +273,7 @@ export const MODULES: readonly NavModule[] = [
       'production:fill',
       'production:label_apply',
       'production:workstations_manage',
+      'returns:receive',
     ],
     label: p.label,
     href: '/production',
@@ -304,6 +293,15 @@ export const MODULES: readonly NavModule[] = [
         group: 'work',
         // The station page admits either mode (issue #11 UI-15).
         anyOf: ['production:label_apply', 'production:fill'],
+      },
+      {
+        // Oběh lahví (owner 2026-11-09): Příjem vratek and Po mytí of the active site in one
+        // place; the former warehouse URLs redirect here (next.config.ts).
+        id: 'cycle',
+        href: '/production/cycle',
+        label: p.pages.cycle,
+        group: 'work',
+        permission: 'returns:receive',
       },
       {
         id: 'crates',
@@ -420,20 +418,13 @@ export const MODULES: readonly NavModule[] = [
 ];
 
 export type WarehousePageId =
-  | 'overview'
-  | 'new-receipt'
-  | 'receipts'
-  | 'stock'
-  | 'availability'
-  | 'movements'
-  | 'suppliers'
-  | 'returns'
-  | 'after-wash';
+  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId =
   | 'overview'
   | 'bottles'
   | 'templates'
   | 'station'
+  | 'cycle'
   | 'crates'
   | 'workstations'
   | 'catalog'

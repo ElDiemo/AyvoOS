@@ -1,8 +1,34 @@
 /**
- * Czech strings of the return intake (Sklad → Příjem vratek, doc 047 §4.9). Codes and states stay
+ * Czech strings of Výroba → Oběh lahví: the return intake (Příjem vratek, doc 047 §4.9) and Po mytí. Codes and states stay
  * language-neutral; every visible text is here.
  */
 export const returnsCs = {
+  /** Výroba → Oběh lahví (owner 2026-11-09): where to scan a return, confirm washing, go on. */
+  cycle: {
+    title: 'Oběh lahví',
+    subtitle:
+      'Vrácené lahve aktivní provozovny: nejdřív příjem vratek, po fyzickém umytí a kontrole druhý sken.',
+    views: 'Části oběhu lahví',
+    view: { overview: 'Přehled', returns: 'Příjem vratek', afterWash: 'Po mytí' },
+    site: (name: string) => `Provozovna: ${name}`,
+    step: (n: number) => `Krok ${n}`,
+    returns: {
+      text: 'Tady pípáte vrácenou bednu nebo krabici od hotelu a v ní každou lahev zvlášť.',
+      open: 'Přijmout vratku',
+    },
+    afterWash: {
+      text: 'Tady jedním skenem potvrzujete umytou a zkontrolovanou lahev.',
+      open: 'Potvrdit po mytí',
+      waiting: 'Čekají na mytí',
+      ready: 'Připravené k plnění · Po mytí',
+    },
+    station: {
+      title: 'Pracoviště',
+      text: 'Lepení etiket a plnění do beden probíhá na pracovišti.',
+      open: 'Pracovat na pracovišti',
+    },
+    next: 'Pokračovat: Po mytí',
+  },
   title: 'Příjem vratek',
   subtitle:
     'Vrácené bedny a krabice od hotelů: každá lahev se skenuje jednotlivě. Obsah bedny se nikdy nepředpokládá.',

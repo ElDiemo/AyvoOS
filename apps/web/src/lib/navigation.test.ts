@@ -109,12 +109,11 @@ describe('AYVO OS navigation (doc 019)', () => {
       'Dostupnost',
       'Pohyby',
       'Dodavatelé',
-      'Příjem vratek',
-      'Po mytí',
     ]);
     expect(production.pages.map((p) => p.label)).toEqual([
       'Přehled výroby',
       'Pracovat na pracovišti',
+      'Oběh lahví',
       'Bedny',
       'Lahve',
       'Připravit výrobu',
@@ -216,6 +215,35 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/admin/users/x')).toBe('admin/users');
     expect(where('/admin/roles/new')).toBe('admin/roles');
     expect(where('/admin/sites/x')).toBe('admin/sites');
+    // Oběh lahví (owner 2026-11-09): the hub, Příjem vratek with its receipts, and Po mytí.
+    expect(where('/production/cycle')).toBe('production/cycle');
+    expect(where('/production/cycle/returns')).toBe('production/cycle');
+    expect(where('/production/cycle/returns/VR-000001')).toBe('production/cycle');
+    expect(where('/production/cycle/after-wash')).toBe('production/cycle');
+    // The former warehouse URLs are redirects (next.config.ts), never warehouse pages.
+    expect(where('/warehouse/returns')).toBeNull();
+    expect(where('/warehouse/after-wash')).toBeNull();
+  });
+
+  it('Oběh lahví is Výroba → Práce with returns:receive only; the warehouse no longer lists it', () => {
+    // An account with returns:receive alone: Výroba with just Oběh lahví, opened on it; no Sklad.
+    const modules = visibleModules(['returns:receive']);
+    expect(modules.map((m) => m.id)).toEqual(['production']);
+    expect(production(['returns:receive'])).toEqual(['cycle:work']);
+    expect(modules[0]!.href).toBe('/production/cycle');
+    // Next to the station for those who may work there; never for the station alone.
+    expect(production(['returns:receive', 'production:fill'])).toEqual([
+      'station:work',
+      'cycle:work',
+    ]);
+    expect(production(['production:fill', 'production:label_apply'])).toEqual(['station:work']);
+    for (const perms of [['inventory:read'], ['inventory:read', 'returns:receive']]) {
+      expect(
+        visibleModules(perms)
+          .find((m) => m.id === 'warehouse')!
+          .pages.map((p) => p.id),
+      ).not.toEqual(expect.arrayContaining(['returns']));
+    }
   });
 
   it('Finance (doc 042): five work pages, views by permission, the settings apart; every former URL kept', () => {
