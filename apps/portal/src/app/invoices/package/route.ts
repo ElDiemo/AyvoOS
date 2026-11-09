@@ -1,5 +1,4 @@
 import { portalInvoicePackageQuerySchema } from '@ayvo/types';
-import { NextResponse } from 'next/server';
 import { passFile } from '@/lib/pdf-proxy';
 
 export const dynamic = 'force-dynamic';
@@ -15,14 +14,15 @@ const DISPOSITION = /^attachment; filename="AYVO-faktury-\d{4}-\d{2}-\d{4}-\d{2}
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
+  // Back to the invoices with the reason. The Location is relative: behind the edge,
+  // request.url names portal-web's own listener (e.g. 127.0.0.1:3200), never the public origin.
   const back = (reason: string) => {
-    const to = new URL('/invoices', url);
-    to.searchParams.set('balicek', reason);
+    const query = new URLSearchParams({ balicek: reason });
     for (const k of ['from', 'to']) {
       const v = url.searchParams.get(k);
-      if (v && /^\d{4}-\d{2}$/.test(v)) to.searchParams.set(k, v);
+      if (v && /^\d{4}-\d{2}$/.test(v)) query.set(k, v);
     }
-    return NextResponse.redirect(to, 303);
+    return new Response(null, { status: 303, headers: { Location: `/invoices?${query}` } });
   };
   const q = portalInvoicePackageQuerySchema.safeParse({
     from: url.searchParams.get('from'),
