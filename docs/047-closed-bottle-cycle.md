@@ -770,8 +770,37 @@ unreadable pieces) and the unreadable pieces as today.
      - otherwise `DELIVERED_AFTER_RECEIPT`, nothing written. A scan made in a receipt opened
        earlier never closes a later circulation, also when it is replayed with a new
        `requestId`;
-     - the same anchor holds for resolving an issue (`identify`): the issue's receipt;
+     - the same anchor holds for resolving an issue (`identify`): the issue's receipt. The one
+       exception is an anchored `NOT_DELIVERED` issue (below);
      - for an issue on an old R1 line, the line's own `scanned_at` as today.
+   - **`NOT_DELIVERED`: the circulation known at the first scan** (re-review 5829605561). The
+     goods can reach the hotel after the receipt was opened: the carrier records `delivered_at`
+     later, and the receipt may close in between. Today such an issue is resolved by one
+     `identify` on its own line, also after the close (`returns.e2e.test.ts`, "NOT_DELIVERED
+     commits … resolved after the close"). Under the receipt anchor alone that would become
+     impossible, so the rule for this one case is:
+     - **At the first scan.** When a known bottle's latest assignment is in a cycle with an
+       allocation that is not delivered yet (`ALLOCATED`, `DISPATCHED`), the `NOT_DELIVERED` issue
+       stores that cycle and its allocation (`anchor_cycle_id`, `anchor_allocation_id`; new,
+       nullable columns of `return_receipt_issues`). A composite FK `(anchor_allocation_id,
+anchor_cycle_id)` points to the allocation of exactly that cycle. A CHECK makes both
+       present or both absent. A new R1.1 `NOT_DELIVERED` issue always has them (the insert
+       check). A retry of the scan returns the same issue and never re-anchors it.
+     - **Resolution (`identify`)**, at any time, also after the receipt closed. Under the
+       bottle's lock, in this order; the first refusal writes nothing and leaves the issue open:
+       1. the scanned bottle is the issue's bottle, else `WRONG_BOTTLE`;
+       2. the bottle's latest assignment is still in `anchor_cycle_id`, so the circulation is
+          still current, else `CIRCULATION_CHANGED`;
+       3. the anchored allocation's parcel is delivered (`delivered_at IS NOT NULL`), else
+          `NOT_DELIVERED`. Its time is **not** compared with the receipt's `opened_at`: this
+          delivery is the one the issue recorded;
+       4. the bottle is still unidentified in that cycle (no `SORTED` for (bottle,
+          `anchor_cycle_id`)), else `ALREADY_RECEIVED_ELSEWHERE`.
+     - It then writes the `SORTED` of `anchor_cycle_id` on the issue's line, with
+       `resolves_issue` = the issue, and the release as for a normal scan. The receipt stays
+       `CLOSED`, and the line's counts are as today.
+     - **Everything else keeps the receipt anchor:** every ordinary bottle scan, the crate scan,
+       and `NOT_IN_CIRCULATION`, `UNREADABLE` and the other issues.
    - `SORTED` once per (bottle, cycle), as today:
      - an assignment still active (the bottle scanned before its crate) is released
        `RETURN_IDENTIFIED` by this `SORTED`, as today;
@@ -801,7 +830,11 @@ unreadable pieces) and the unreadable pieces as today.
    - **The `SORTED` anchor:**
      - the bottle's latest assignment, active or `CRATE_RETURNED`, in that cycle;
      - recorded in its delivered allocation;
-     - the parcel delivered before the receipt's `opened_at`.
+     - the parcel delivered before the receipt's `opened_at`; or, for a `SORTED` that resolves
+       an anchored `NOT_DELIVERED` issue, the cycle and allocation are exactly the issue's anchor
+       and the parcel was delivered before the `SORTED` itself. No other `SORTED` may use that
+       exception. A direct SQL `SORTED` naming another cycle, or a late delivery with no such
+       issue, is refused.
    - **`bottle_events_sorted_complete`:** the assignment is released by this `SORTED`, or was
      already released `CRATE_RETURNED`.
    - **`bottles_labeled_has_event`:** a `RETURNED`/`RETIRED` bottle's latest assignment's cycle
@@ -837,7 +870,8 @@ unreadable pieces) and the unreadable pieces as today.
    | Closed R1 receipts, emptied lines, `COUNT_MISMATCH`, R1 `SORTED`                  | Unchanged and readable; every new rule accepts them                                                                                                                                         |
    | R1 `CLOSED` cycle with still active members (bottles never scanned)               | Kept active; a later bottle scan identifies them through the same anchor (latest assignment, delivered before the receipt). No automatic release                                            |
    | **Open** R1 receipt with a `RETURNED` (not emptied) `CRATE` or a `CONTAINER` line | Its lines keep R1's Vyprázdněno with the count until emptied. Its bottle scans go to its new `BOTTLES` line; it closes when its R1 lines are emptied                                        |
-   | Preflight (read-only, before the deploy)                                          | Open receipts; `RETURNED` cycles; active members of `RETURNED`/`CLOSED` cycles. The expected value on DEV is 0, and any other value goes to the owner                                       |
+   | Open R1 `NOT_DELIVERED` issue (no anchor)                                         | Resolved under R1's rule (its line's `scanned_at`), as today; never anchored afterwards. Counted by the preflight                                                                           |
+   | Preflight (read-only, before the deploy)                                          | Open receipts; `RETURNED` cycles; active members of `RETURNED`/`CLOSED` cycles; open `NOT_DELIVERED` issues. The expected value on DEV is 0, and any other value goes to the owner          |
    | **First R1.1 write**                                                              | A `BOTTLES` line, a `CRATE_RETURNED` release or a `CRATE` line emptied without a count. After it, the R1 release cannot read the new values (Prisma enums): fix forward only, as doc 049 §3 |
 
 7. **Tests** (API e2e on a real DB; DB guards committed as `ayvo_core`):
@@ -860,6 +894,29 @@ unreadable pieces) and the unreadable pieces as today.
      - b back in production (K3 assembling) is scanned → `NOT_IN_CIRCULATION`/`NOT_DELIVERED`,
        never K2's or K1's `SORTED`;
      - an issue resolved by `identify` with the same anchor.
+   - **`NOT_DELIVERED` anchored at the first scan** (re-review 5829605561):
+     - **A late-confirmed original circulation passes.** This is today's scenario under R1.1:
+       - K1 is dispatched; receipt R is opened; b of K1 is scanned → `NOT_DELIVERED`, anchored to
+         K1 and its allocation (a retry: the same issue, the same anchor);
+       - R is closed; `identify` → `NOT_DELIVERED`;
+       - the parcel is delivered (`delivered_at` after R's `opened_at`);
+       - `identify` with another bottle → `WRONG_BOTTLE`;
+       - `identify` with b → `IDENTIFIED`: one `SORTED` of K1 on the issue's `BOTTLES` line, R
+         still `CLOSED`, the reuse counter 1, a repeat returns the first result.
+     - **An old issue against a new circulation writes nothing:**
+       - the issue is anchored to K1;
+       - b is identified for K1 in another receipt; `identify` on the old issue →
+         `ALREADY_RECEIVED_ELSEWHERE`;
+       - b goes through its next circulation (Po mytí, then a reuse placement into K2, then K2
+         delivered); `identify` on the old issue → `CIRCULATION_CHANGED`;
+       - each time: no `SORTED` for K2, K2's assignment still active, the issue still open.
+
+       The reuse placement exists only with R3-b (doc 048). If R1.1 is implemented first, this
+       case is added in the R3-b PR, which must contain it.
+
+     - **In the database:** a direct SQL `SORTED` that resolves the issue but names K2, or a
+       late-delivered cycle without an anchored issue, fails; an issue with only one of the two
+       anchor columns fails; an anchor naming another cycle's allocation fails (composite FK).
    - **Double scans** of the crate and the bottle, in the same receipt and in another.
    - **The crate's next circulation:** O1's content, parcel and delivery unchanged; an old K1
      bottle gets K1, a K2 bottle K2.
@@ -881,20 +938,20 @@ plnění" (with P or on its own).
 
 ### 6.5 The checks in today's code that each step changes (`main` `5650409`)
 
-| Check today                                                | Where                                                                                                                                                  | Changed by                   |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- |
-| Crate scan: CRATE line, allocation completed, `RETURNED`   | `apps/api/src/returns/return-receipts.service.ts:245` (`scanCrate`); `crate-cycles.service.ts:365` (`returnFromHotel`)                                 | R1.1 §6.3.1                  |
-| Freeing only by Vyprázdněno with a count                   | `return-receipts.service.ts:375` (`emptyLine`); `crate-cycles.service.ts:381` (`closeEmptied`)                                                         | R1.1 §6.3.5                  |
-| A bottle needs a line; "assigned before the line"          | `return-receipts.service.ts:810` (`before`); `:859` (`NOT_IN_THIS_LINE`); `:779` (`inCirculationAgain`)                                                | R1.1 §6.3.2 (receipt anchor) |
-| Resolving an issue with the line's anchor                  | `return-receipts.service.ts:573` (`identifyIssue`)                                                                                                     | R1.1 §6.3.2                  |
-| `SORTED` anchor: active, assigned before its line          | `migrations/20261109090100_return_receipts/migration.sql:503`                                                                                          | R1.1 §6.3.4                  |
-| Release only by `SORTED` (`released_event_id`, unique)     | same migration `:148` (unique key), `:682`/`:704` (`crate_assignments_guard`); `crate-cycles.service.ts:394` (`releaseByReturn`)                       | R1.1 §6.3.3                  |
-| Status backed by "latest membership ended by its `SORTED`" | `20261109090100…:661`; replaced in R2 `20261111090100_reuse_ready/migration.sql:93`/`:144`                                                             | R1.1 §6.3.4                  |
-| `emptied_at` ⇔ `physical_count`                            | `20261109090100…:261` (`return_receipt_lines_emptied_check`)                                                                                           | R1.1 §6.3.5                  |
-| A receipt closes only with every line emptied              | `20261109090100…:303`/`:326` (`return_receipts_guard`)                                                                                                 | R1.1 §6.3.5                  |
-| Pumps only in an open receipt                              | `20261109090100…:448` (`return_pump_counts_insert_check`); `return-receipts.service.ts:477` (`countPumps`)                                             | P-free (new table)           |
-| The UI sends one pump                                      | `apps/web/src/components/returns/receipt-workspace.tsx:216` (`defective: 1`); the contract `packages/types/src/returns.ts:43` already takes −1000…1000 | P (UI only)                  |
-| The manual stock issue refuses a pump                      | `apps/api/src/inventory/stock-issues.service.ts:39` (`NOT_CONSUMABLE`)                                                                                 | — (doc 048 §3.2 proposal)    |
+| Check today                                                | Where                                                                                                                                                  | Changed by                           |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| Crate scan: CRATE line, allocation completed, `RETURNED`   | `apps/api/src/returns/return-receipts.service.ts:245` (`scanCrate`); `crate-cycles.service.ts:365` (`returnFromHotel`)                                 | R1.1 §6.3.1                          |
+| Freeing only by Vyprázdněno with a count                   | `return-receipts.service.ts:375` (`emptyLine`); `crate-cycles.service.ts:381` (`closeEmptied`)                                                         | R1.1 §6.3.5                          |
+| A bottle needs a line; "assigned before the line"          | `return-receipts.service.ts:810` (`before`); `:859` (`NOT_IN_THIS_LINE`); `:779` (`inCirculationAgain`)                                                | R1.1 §6.3.2 (receipt anchor)         |
+| Resolving an issue with the line's anchor                  | `return-receipts.service.ts:573` (`identifyIssue`)                                                                                                     | R1.1 §6.3.2 (`NOT_DELIVERED` anchor) |
+| `SORTED` anchor: active, assigned before its line          | `migrations/20261109090100_return_receipts/migration.sql:503`                                                                                          | R1.1 §6.3.4                          |
+| Release only by `SORTED` (`released_event_id`, unique)     | same migration `:148` (unique key), `:682`/`:704` (`crate_assignments_guard`); `crate-cycles.service.ts:394` (`releaseByReturn`)                       | R1.1 §6.3.3                          |
+| Status backed by "latest membership ended by its `SORTED`" | `20261109090100…:661`; replaced in R2 `20261111090100_reuse_ready/migration.sql:93`/`:144`                                                             | R1.1 §6.3.4                          |
+| `emptied_at` ⇔ `physical_count`                            | `20261109090100…:261` (`return_receipt_lines_emptied_check`)                                                                                           | R1.1 §6.3.5                          |
+| A receipt closes only with every line emptied              | `20261109090100…:303`/`:326` (`return_receipts_guard`)                                                                                                 | R1.1 §6.3.5                          |
+| Pumps only in an open receipt                              | `20261109090100…:448` (`return_pump_counts_insert_check`); `return-receipts.service.ts:477` (`countPumps`)                                             | P-free (new table)                   |
+| The UI sends one pump                                      | `apps/web/src/components/returns/receipt-workspace.tsx:216` (`defective: 1`); the contract `packages/types/src/returns.ts:43` already takes −1000…1000 | P (UI only)                          |
+| The manual stock issue refuses a pump                      | `apps/api/src/inventory/stock-issues.service.ts:39` (`NOT_CONSUMABLE`)                                                                                 | — (doc 048 §3.2 proposal)            |
 
 ### 6.6 Compatibility and rollback per step
 
