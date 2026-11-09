@@ -425,4 +425,36 @@ describe.skipIf(!hasDatabase)('hotel portal: replacing the authenticator app', (
       ).status,
     ).toBe(401);
   });
+
+  it('Změnit heslo and the new app: a TOTP code already used (at sign-in) is refused; nothing changes', async () => {
+    const a = await activated(); // the activation used the current step
+    const before = await t.prisma.nativeCredential.findUniqueOrThrow({
+      where: { userId: a.user.id },
+    });
+    const used = otp(a.secret);
+    expect(
+      (
+        await post('account/change-password', a.session).send({
+          currentPassword: PASSWORD,
+          newPassword: 'Nove portalove heslo AYVO 2029',
+          code: used,
+          client: client(),
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await post('account/replace-mfa', a.session).send({
+          password: PASSWORD,
+          code: used,
+          client: client(),
+        })
+      ).status,
+    ).toBe(401);
+    const after = await t.prisma.nativeCredential.findUniqueOrThrow({
+      where: { userId: a.user.id },
+    });
+    expect(after).toEqual(before);
+    expect((await get('session', a.session)).status).toBe(200);
+  });
 });

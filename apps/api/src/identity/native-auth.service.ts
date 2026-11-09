@@ -510,9 +510,11 @@ export class NativeAuthService implements OnModuleInit {
     audience: AccountAudience,
   ): Promise<{ token: string; maxAgeSeconds: number } | null> {
     const snapshot = await this.prisma.nativeCredential.findUnique({ where: { userId } });
-    if (!snapshot || !(await this.passwords.verify(currentPassword, snapshot.passwordHash)))
-      return null;
+    // Both Argon2 steps always run, so a right password with a wrong code takes as long as a wrong
+    // password (no timing signal that the password was right).
+    const matched = await this.passwords.verify(currentPassword, snapshot?.passwordHash ?? null);
     const encoded = await this.passwords.hash(newPassword);
+    if (!snapshot || !matched) return null;
     return this.prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
       const user = await tx.user.findUniqueOrThrow({
@@ -527,6 +529,11 @@ export class NativeAuthService implements OnModuleInit {
         credential.revision !== snapshot.revision
       )
         return null;
+      // Looked up before any write: a refusal here must change nothing.
+      const identity = await tx.userIdentity.findFirst({
+        where: { userId, provider: 'LOCAL', unlinkedAt: null },
+      });
+      if (!identity) return null;
       const step = verifiedTotpStep(
         this.box.open(userId, 'TOTP', credential.totpCiphertext),
         currentCode,
@@ -565,10 +572,6 @@ export class NativeAuthService implements OnModuleInit {
         },
       });
       await this.sessions.revokeAllForUser(userId, 'PASSWORD_CHANGED', tx);
-      const identity = await tx.userIdentity.findFirst({
-        where: { userId, provider: 'LOCAL', unlinkedAt: null },
-      });
-      if (!identity) return null;
       const session = await this.sessions.create(tx, {
         userId,
         identityId: identity.id,

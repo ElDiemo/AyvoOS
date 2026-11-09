@@ -108,8 +108,14 @@ export class PortalAccountController {
     return this.slots.run(async () => {
       this.sameOrigin(body.client);
       this.decide(await this.limits.hit('login', `portal-ip:${body.client.ip}`));
-      const userId = (await this.activeSession(token)).user.id;
+      const { user } = await this.activeSession(token);
+      const userId = user.id;
       this.decide(await this.limits.hit('callback_failure', `portal-account:${sha256Hex(userId)}`));
+      // The password step's own bucket too (keyed by the e-mail): a held session never gives a
+      // second budget for guessing the password.
+      this.decide(
+        await this.limits.hit('callback_failure', `portal-account:${sha256Hex(user.email)}`),
+      );
       const result = await this.expensive(() =>
         this.auth.changePassword(
           userId,
