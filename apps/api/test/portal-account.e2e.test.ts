@@ -4,7 +4,13 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { InvitationsService } from '../src/identity/invitations.service.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
-import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
+import {
+  createTestApp,
+  hasDatabase,
+  TEST_APP_ORIGIN,
+  type TestApp,
+  withPrivileged,
+} from './support/test-app.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
 const PASSWORD = 'Dlouhe portalove heslo AYVO 789';
@@ -268,5 +274,89 @@ describe.skipIf(!hasDatabase)('hotel portal: replacing the authenticator app', (
     });
     expect(r.status).toBe(401);
     expect(await replacements(user.id)).toBe(0);
+  });
+
+  it('Odhlásit ze všech zařízení: every session of the account ends, this one too; audited; others untouched', async () => {
+    const a = await activated();
+    const b = await activated(); // another portal account
+    const step = await post('auth/password').send({
+      email: a.user.email,
+      password: PASSWORD,
+      client: client(),
+    });
+    const second = await post('auth/mfa').send({
+      challenge: step.body.challenge,
+      code: a.recoveryCodes[0],
+      client: client(),
+    });
+    expect(second.status).toBe(200);
+    // Another origin or no session: refused, nothing ended.
+    expect(
+      (
+        await post('account/logout-all', a.session).send({
+          client: client({ origin: 'https://evil.example.test' }),
+        })
+      ).status,
+    ).toBe(403);
+    expect((await post('account/logout-all').send({ client: client() })).status).toBe(401);
+    expect((await get('session', a.session)).status).toBe(200);
+    expect((await post('account/logout-all', a.session).send({ client: client() })).status).toBe(
+      204,
+    );
+    expect((await get('session', a.session)).status).toBe(401);
+    expect((await get('session', second.body.session)).status).toBe(401);
+    expect((await get('session', b.session)).status).toBe(200);
+    // Again with the ended session: 401, nothing more.
+    expect((await post('account/logout-all', a.session).send({ client: client() })).status).toBe(
+      401,
+    );
+    const audit = await t.prisma.auditEvent.findMany({
+      where: { targetUserId: a.user.id, type: 'LOGOUT' },
+    });
+    expect(audit.map((x) => x.payload)).toEqual([{ allSessions: true, ended: 2 }]);
+  });
+
+  it('Odhlásit ze všech zařízení waits for the user lock (as a sign-in completing at the same moment holds it)', async () => {
+    const a = await activated();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const isLocked = new Promise<void>((r) => (locked = r));
+    const holder = withPrivileged((db) =>
+      db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM users WHERE id = ${a.user.id}::uuid FOR UPDATE`;
+          locked();
+          await held;
+        },
+        { timeout: 20_000 },
+      ),
+    );
+    await isLocked;
+    let finished = false;
+    const pending = post('account/logout-all', a.session)
+      .send({ client: client() })
+      .then((r) => {
+        finished = true;
+        return r;
+      });
+    // It waits for the lock: still running while the lock is held, the session still active.
+    for (let i = 0; i < 100; i++) {
+      const [row] = await t.prisma.$queryRaw<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+      if (row!.n > 0) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(finished).toBe(false);
+    expect(
+      await t.prisma.userSession.count({ where: { userId: a.user.id, revokedAt: null } }),
+    ).toBeGreaterThan(0);
+    release();
+    await holder;
+    expect((await pending).status).toBe(204);
+    expect(
+      await t.prisma.userSession.count({ where: { userId: a.user.id, revokedAt: null } }),
+    ).toBe(0);
   });
 });

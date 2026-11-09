@@ -13,6 +13,14 @@ export const account = {
   password_help:
     'Heslo změníte přes „Zapomenuté heslo“ na přihlašovací stránce — přijde vám odkaz e-mailem.',
   back: 'Zpět na Moje hotely',
+  everywhere: {
+    title: 'Odhlásit ze všech zařízení',
+    help: 'Ukončí přihlášení na všech zařízeních včetně tohoto, například po ztrátě telefonu nebo na sdíleném počítači.',
+    start: 'Odhlásit všude',
+    confirm: 'Opravdu odhlásit všude',
+    cancel: 'Zrušit',
+    failed: 'Odhlášení se nepodařilo dokončit. Jste stále přihlášeni; zkuste to prosím znovu.',
+  },
   errors: {
     INVALID_CREDENTIALS: 'Heslo nebo kód nesouhlasí. Zkontrolujte je a zkuste to znovu.',
   } as Record<string, string>,

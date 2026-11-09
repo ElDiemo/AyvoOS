@@ -206,6 +206,14 @@ async function core(req, res, path) {
   }
   const s = session(req);
   if (!s) return refuse(res, 401, 'UNAUTHENTICATED');
+  if (req.method === 'POST' && path === 'account/logout-all') {
+    const body = await readBody(req);
+    if (body.client?.origin !== STUB.portalOrigin) return refuse(res, 403, 'CSRF_REJECTED');
+    if (state.logoutMode === 'down') return refuse(res, 503, 'PORTAL_BUSY');
+    state.sessions.clear();
+    res.writeHead(204).end();
+    return;
+  }
   if (req.method === 'POST' && path === 'account/replace-mfa') {
     // "Zabezpečení účtu": the core's checks — the browser's origin, the password and a current code.
     const body = await readBody(req);
