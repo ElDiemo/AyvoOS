@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ContractsCard } from '@/components/contracts-card';
@@ -13,6 +14,7 @@ import { portalEnv } from '@/lib/env';
 import { myContracts, myDeliveries, myHotelProfile, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Profil hotelu' };
 
 /** "Profil hotelu": a granted hotel's own profile in three groups. */
 export default async function HotelPage({

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { ContractsCard } from '@/components/contracts-card';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
@@ -6,6 +7,7 @@ import { perHotel } from '@/lib/per-hotel';
 import { myContracts, myHotels, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Smlouvy' };
 
 /** "Smlouvy" of every hotel of the account (main navigation): signed originals only, per hotel. */
 export default async function AllContractsPage() {

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { HotelDispatch, pragueToday } from '@/components/home-overview';
 import { Shell } from '@/components/shell';
@@ -7,6 +8,7 @@ import { perHotel } from '@/lib/per-hotel';
 import { myDeliveries, myHotels, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Moje hotely' };
 
 /**
  * "Moje hotely": the hotels of the session's active grants, each leading to its profile, with

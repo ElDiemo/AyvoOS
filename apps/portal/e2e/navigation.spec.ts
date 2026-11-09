@@ -56,6 +56,16 @@ test.describe('hotel portal: navigation and icon', () => {
     await expect(section.getByTestId('deliveries-in-progress')).toContainText('Na cestě');
     await noSideways(page);
     await shot(page, 'all-deliveries');
+    // Accessible structure: the tab names the page; groups under the hotel's heading; no
+    // duplicate ids (several hotels' groups share the page).
+    await expect(page).toHaveTitle('Dodávky – AYVO – hotelový portál');
+    await expect(section.getByRole('heading', { level: 3, name: /Probíhající/ })).toBeVisible();
+    expect(
+      await page.evaluate(() => {
+        const ids = [...document.querySelectorAll('[id]')].map((e) => e.id);
+        return ids.length - new Set(ids).size;
+      }),
+    ).toBe(0);
     await control(page, { deliveriesMode: 'down' });
     await page.reload();
     await expect(section).toContainText('Dodávky tohoto hotelu se teď nepodařilo načíst.');

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { DeliveryGroups } from '@/components/deliveries';
 import { Shell } from '@/components/shell';
@@ -7,6 +8,7 @@ import { perHotel } from '@/lib/per-hotel';
 import { myDeliveries, myHotels, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Dodávky' };
 
 /**
  * "Dodávky" of every hotel of the account (main navigation): per hotel the same groups as its own
@@ -51,7 +53,7 @@ export default async function AllDeliveriesPage() {
                 </Link>
               </div>
               {d ? (
-                <DeliveryGroups deliveries={d} />
+                <DeliveryGroups deliveries={d} idPrefix={`h-${h.id}-`} />
               ) : (
                 <p className="text-sm text-amber-800">{t.unavailable}</p>
               )}

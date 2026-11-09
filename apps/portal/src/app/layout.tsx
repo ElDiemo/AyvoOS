@@ -4,7 +4,7 @@ import './globals.css';
 import { cs } from '@/i18n/cs';
 
 export const metadata: Metadata = {
-  title: cs.brand,
+  title: { default: cs.brand, template: `%s – ${cs.brand}` },
   robots: { index: false, follow: false },
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1 };

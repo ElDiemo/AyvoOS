@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { DeliveryGroups } from '@/components/deliveries';
@@ -10,6 +11,7 @@ import { portalEnv } from '@/lib/env';
 import { myDeliveries, myHotelProfile, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Dodávky hotelu' };
 
 /** "Dodávky": a granted hotel's deliveries from its real orders, in three groups. */
 export default async function DeliveriesPage({ params }: { params: Promise<{ id: string }> }) {

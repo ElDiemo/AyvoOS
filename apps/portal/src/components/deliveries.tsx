@@ -75,23 +75,30 @@ function Group({
   help,
   items,
   testId,
+  idPrefix,
+  nested,
 }: {
   title: string;
   empty: string;
   help?: string;
   items: PortalDelivery[];
   testId: string;
+  /** Unique ids when several hotels' groups share a page. */
+  idPrefix: string;
+  /** Under a hotel's own heading (h3 instead of h2). */
+  nested: boolean;
 }) {
+  const H = nested ? 'h3' : 'h2';
   return (
     <section
-      aria-labelledby={`${testId}-title`}
+      aria-labelledby={`${idPrefix}${testId}-title`}
       data-testid={testId}
       className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white p-5 shadow-sm"
     >
       <div className="flex items-baseline justify-between gap-2">
-        <h2 id={`${testId}-title`} className="text-base font-semibold text-stone-900">
+        <H id={`${idPrefix}${testId}-title`} className="text-base font-semibold text-stone-900">
           {title} <span className="font-normal text-stone-500">({items.length})</span>
-        </h2>
+        </H>
         {help && <p className="text-xs text-stone-500">{help}</p>}
       </div>
       {items.length === 0 ? (
@@ -108,17 +115,29 @@ function Group({
 }
 
 /** Upcoming plan days: indicative ship days and whole crates (not orders yet). */
-function UpcomingGroup({ days }: { days: PortalDeliveries['upcoming'] }) {
+function UpcomingGroup({
+  days,
+  idPrefix,
+  nested,
+}: {
+  days: PortalDeliveries['upcoming'];
+  idPrefix: string;
+  nested: boolean;
+}) {
+  const H = nested ? 'h3' : 'h2';
   return (
     <section
-      aria-labelledby="deliveries-upcoming-title"
+      aria-labelledby={`${idPrefix}deliveries-upcoming-title`}
       data-testid="deliveries-upcoming"
       className="flex flex-col gap-3 rounded-xl border border-dashed border-stone-300 bg-stone-50 p-5"
     >
       <div>
-        <h2 id="deliveries-upcoming-title" className="text-base font-semibold text-stone-900">
+        <H
+          id={`${idPrefix}deliveries-upcoming-title`}
+          className="text-base font-semibold text-stone-900"
+        >
           {t.upcoming} <span className="font-normal text-stone-500">({days.length})</span>
-        </h2>
+        </H>
         <p className="text-xs text-stone-500">{t.upcomingHelp}</p>
       </div>
       {days.length === 0 ? (
@@ -153,7 +172,15 @@ function UpcomingGroup({ days }: { days: PortalDeliveries['upcoming'] }) {
 }
 
 /** The groups of a hotel's deliveries, and what the supply plan still has ahead. */
-export function DeliveryGroups({ deliveries }: { deliveries: PortalDeliveries }) {
+export function DeliveryGroups({
+  deliveries,
+  idPrefix = '',
+}: {
+  deliveries: PortalDeliveries;
+  /** Set on a page with several hotels: unique ids and the groups under the hotel's heading. */
+  idPrefix?: string;
+}) {
+  const nested = idPrefix !== '';
   return (
     <div className="flex flex-col gap-4">
       <Group
@@ -161,20 +188,26 @@ export function DeliveryGroups({ deliveries }: { deliveries: PortalDeliveries })
         empty={t.noInProgress}
         items={deliveries.inProgress}
         testId="deliveries-in-progress"
+        idPrefix={idPrefix}
+        nested={nested}
       />
       <Group
         title={t.planned}
         empty={t.noPlanned}
         items={deliveries.planned}
         testId="deliveries-planned"
+        idPrefix={idPrefix}
+        nested={nested}
       />
-      <UpcomingGroup days={deliveries.upcoming} />
+      <UpcomingGroup days={deliveries.upcoming} idPrefix={idPrefix} nested={nested} />
       <Group
         title={t.delivered}
         empty={t.noDelivered}
         help={t.deliveredHelp(20)}
         items={deliveries.delivered}
         testId="deliveries-delivered"
+        idPrefix={idPrefix}
+        nested={nested}
       />
     </div>
   );
