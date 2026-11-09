@@ -177,9 +177,22 @@ export const portalDeliveriesSchema = z.object({
   inProgress: z.array(portalDeliverySchema),
   /** The latest delivered ones (at most PORTAL_DELIVERED_MAX), newest first. */
   delivered: z.array(portalDeliverySchema),
+  /**
+   * Days the hotel's switched-on supply plan still has ahead (owner 2026-11-09: so the hotel
+   * knows roughly when the next ones come), for PORTAL_UPCOMING_DAYS from today, without days
+   * that already have an order (those are in `planned`) or that could not be ordered. Only ship
+   * days and whole crates; indicative, not an order.
+   */
+  upcoming: z.array(
+    z.object({
+      shipDate: z.iso.date(),
+      lines: z.array(z.object({ product: z.string(), crates: z.int() })),
+    }),
+  ),
 });
 export type PortalDeliveries = z.infer<typeof portalDeliveriesSchema>;
 export const PORTAL_DELIVERED_MAX = 20;
+export const PORTAL_UPCOMING_DAYS = 60;
 
 /** The browser → portal-web body of a profile save (whitelisted fields only). */
 export const portalHotelProfileUpdateSchema = z.strictObject({

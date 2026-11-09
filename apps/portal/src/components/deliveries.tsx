@@ -107,7 +107,52 @@ function Group({
   );
 }
 
-/** The three groups of a hotel's deliveries. */
+/** Upcoming plan days: indicative ship days and whole crates (not orders yet). */
+function UpcomingGroup({ days }: { days: PortalDeliveries['upcoming'] }) {
+  return (
+    <section
+      aria-labelledby="deliveries-upcoming-title"
+      data-testid="deliveries-upcoming"
+      className="flex flex-col gap-3 rounded-xl border border-dashed border-stone-300 bg-stone-50 p-5"
+    >
+      <div>
+        <h2 id="deliveries-upcoming-title" className="text-base font-semibold text-stone-900">
+          {t.upcoming} <span className="font-normal text-stone-500">({days.length})</span>
+        </h2>
+        <p className="text-xs text-stone-500">{t.upcomingHelp}</p>
+      </div>
+      {days.length === 0 ? (
+        <p className="text-sm text-stone-500 italic">{t.noUpcoming}</p>
+      ) : (
+        <ul className="flex flex-col">
+          {days.map((d) => (
+            <li
+              key={d.shipDate}
+              className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-200 py-2 first:border-t-0 first:pt-0"
+              data-testid={`upcoming-${d.shipDate}`}
+            >
+              <span className="text-sm font-medium text-stone-800">
+                {t.shipDate}: {formatDate(d.shipDate)}
+              </span>
+              <span className="flex flex-wrap gap-2">
+                {d.lines.map((l) => (
+                  <span
+                    key={l.product}
+                    className="rounded-md border border-stone-200 bg-white px-2 py-1 text-xs text-stone-700"
+                  >
+                    {l.product} · {t.crates(l.crates)}
+                  </span>
+                ))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** The groups of a hotel's deliveries, and what the supply plan still has ahead. */
 export function DeliveryGroups({ deliveries }: { deliveries: PortalDeliveries }) {
   return (
     <div className="flex flex-col gap-4">
@@ -123,6 +168,7 @@ export function DeliveryGroups({ deliveries }: { deliveries: PortalDeliveries })
         items={deliveries.planned}
         testId="deliveries-planned"
       />
+      <UpcomingGroup days={deliveries.upcoming} />
       <Group
         title={t.delivered}
         empty={t.noDelivered}
@@ -143,6 +189,7 @@ export function NextDeliveryCard({
   deliveries: PortalDeliveries | null;
 }) {
   const next = deliveries ? (deliveries.inProgress[0] ?? deliveries.planned[0] ?? null) : null;
+  const fromPlan = deliveries && !next ? (deliveries.upcoming[0] ?? null) : null;
   return (
     <section
       aria-labelledby="next-delivery-title"
@@ -158,6 +205,13 @@ export function NextDeliveryCard({
         ) : next ? (
           <p className="flex flex-wrap items-center gap-2 text-sm text-stone-700">
             <State state={next.state} /> {formatDate(next.shipDate)}
+          </p>
+        ) : fromPlan ? (
+          <p className="flex flex-wrap items-center gap-2 text-sm text-stone-700">
+            <span className="rounded-full bg-stone-100 px-2.5 py-0.5 text-xs font-medium text-stone-700">
+              {t.byPlan}
+            </span>{' '}
+            {formatDate(fromPlan.shipDate)}
           </p>
         ) : (
           <p className="text-sm text-stone-500 italic">{t.none}</p>

@@ -125,6 +125,10 @@ export const DELIVERIES = {
       handedOverAt: '2026-11-09T08:15:00.000Z',
     }),
   ],
+  upcoming: [
+    { shipDate: '2026-12-05', lines: [{ product: 'Mýdlo na ruce AYVO 330 ml', crates: 2 }] },
+    { shipDate: '2026-12-20', lines: [{ product: 'Mýdlo na ruce AYVO 330 ml', crates: 2 }] },
+  ],
   delivered: [
     delivery('OR-000905', 'DELIVERED', '2026-10-28', {
       handedOverAt: '2026-10-28T07:40:00.000Z',
@@ -152,7 +156,7 @@ const state = {
   lastProfileBody: null,
   /** 'ok' | 'none' (no signed contract yet) | 'down' (the core does not answer the list). */
   contractsMode: 'ok',
-  /** 'ok' | 'none' (no delivery at all) | 'down' (the core does not answer). */
+  /** 'ok' | 'none' (no delivery at all) | 'plan-only' (only upcoming plan days) | 'down'. */
   deliveriesMode: 'ok',
 };
 
@@ -275,7 +279,11 @@ async function core(req, res, path) {
       return;
     }
     const value =
-      state.deliveriesMode === 'none' ? { planned: [], inProgress: [], delivered: [] } : DELIVERIES;
+      state.deliveriesMode === 'none'
+        ? { planned: [], inProgress: [], delivered: [], upcoming: [] }
+        : state.deliveriesMode === 'plan-only'
+          ? { planned: [], inProgress: [], delivered: [], upcoming: DELIVERIES.upcoming }
+          : DELIVERIES;
     return send(res, 200, value, portalDeliveriesSchema);
   }
   const contractsMatch = path.match(/^hotels\/([^/]+)\/contracts$/);

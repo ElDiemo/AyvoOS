@@ -40,6 +40,7 @@ import { domainError } from '../common/domain-error.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { ContractDraftsService } from '../contracts/contract-drafts.service.js';
 import { OrdersService } from '../orders/orders.service.js';
+import { SupplyPlansService } from '../orders/supply-plans.service.js';
 import { ENV, type Env } from '../config/env.js';
 import { HotelsService } from '../customers/hotels.service.js';
 import { PortalServiceAccess } from '../identity/access.decorators.js';
@@ -86,6 +87,7 @@ export class PortalContractController {
     private readonly hotels: HotelsService,
     private readonly contracts: ContractDraftsService,
     private readonly orders: OrdersService,
+    private readonly plans: SupplyPlansService,
     private readonly limits: AuthRateLimitService,
     private readonly slots: PortalRequestLimit,
     private readonly db: PortalPrismaService,
@@ -330,7 +332,10 @@ export class PortalContractController {
 
   // --- "Dodávky" (real orders, read only) -------------------------------------------------
 
-  /** A granted hotel's deliveries in three groups; any other id is "not found". */
+  /**
+   * A granted hotel's deliveries in three groups and its upcoming plan days; any other id is "not
+   * found".
+   */
   @PortalServiceAccess()
   @Get('hotels/:id/deliveries')
   deliveriesOf(
@@ -343,7 +348,11 @@ export class PortalContractController {
         g.hotelIds.includes(id),
       );
       if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
-      return this.orders.portalDeliveries(id, this.db);
+      const [orders, upcoming] = await Promise.all([
+        this.orders.portalDeliveries(id, this.db),
+        this.plans.portalUpcoming(id, this.db),
+      ]);
+      return { ...orders, upcoming };
     });
   }
 

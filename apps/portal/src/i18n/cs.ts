@@ -130,6 +130,11 @@ export const cs = {
     order: 'Objednávka',
     crates: (n: number) => (n === 1 ? '1 bedna' : n < 5 ? `${n} bedny` : `${n} beden`),
     bottles: (n: number) => `${n} lahví`,
+    upcoming: 'Další podle plánu zásobování',
+    upcomingHelp:
+      'Orientační dny odeslání podle vašeho plánu zásobování na příštích 60 dní. Objednávku z nich vytvoříme s předstihem.',
+    noUpcoming: 'Žádný další den podle plánu zásobování.',
+    byPlan: 'Podle plánu',
     next: 'Nejbližší dodávka',
     none: 'Žádná dodávka není naplánovaná ani na cestě.',
     open: 'Zobrazit dodávky',

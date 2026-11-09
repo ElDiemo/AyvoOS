@@ -192,7 +192,7 @@ export class OrdersService implements OnModuleInit {
   async portalDeliveries(
     hotelId: string,
     db: Prisma.TransactionClient = this.prisma,
-  ): Promise<PortalDeliveries> {
+  ): Promise<Omit<PortalDeliveries, 'upcoming'>> {
     const select = {
       id: true,
       code: true,

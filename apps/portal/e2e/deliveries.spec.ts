@@ -81,8 +81,21 @@ test.describe('hotel portal: deliveries', () => {
     await expect(delivered.getByTestId('delivery-OR-000905')).toContainText('Doručeno');
     await expect(delivered).toContainText('29. 10. 2026');
     await expect(delivered).toContainText('Mýdlo na ruce AYVO 330 ml · 2 bedny (80 lahví)');
+    const upcoming = page.getByTestId('deliveries-upcoming');
+    await expect(upcoming.getByTestId('upcoming-2026-12-05')).toContainText('5. 12. 2026');
+    await expect(upcoming).toContainText('Mýdlo na ruce AYVO 330 ml · 2 bedny');
+    await expect(upcoming).toContainText('Orientační dny odeslání');
+    // Never a tracking link or parcel number (owner 2026-11-09).
+    await expect(page.locator('main a[href*="ppl"], main a[href*="track"]')).toHaveCount(0);
     await noSideways(page);
     await shot(page, 'deliveries');
+
+    // Only the plan ahead: the nearest delivery says it is by the plan.
+    await control(page, { deliveriesMode: 'plan-only' });
+    await page.goto(`/hotels/${id}`);
+    await expect(next).toContainText('Podle plánu');
+    await expect(next).toContainText('5. 12. 2026');
+    await page.goto(`/hotels/${id}/deliveries`);
 
     await control(page, { deliveriesMode: 'none' });
     await page.reload();
@@ -91,6 +104,9 @@ test.describe('hotel portal: deliveries', () => {
     );
     await expect(page.getByTestId('deliveries-delivered')).toContainText(
       'Zatím žádná doručená dodávka.',
+    );
+    await expect(page.getByTestId('deliveries-upcoming')).toContainText(
+      'Žádný další den podle plánu zásobování.',
     );
     await page.goto(`/hotels/${id}`);
     await expect(next).toContainText('Žádná dodávka není naplánovaná ani na cestě.');

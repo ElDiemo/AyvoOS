@@ -42,9 +42,15 @@ carrier accounts or connections, parcel numbers, people, cancel reasons or inter
 
   The profile never fails because of deliveries.
 
-## Open for the owner
+## Owner decisions (2026-11-09)
 
-- Should future days of the supply plan beyond the 14-day horizon also be shown? Today only real
-  orders are shown.
-- Should the carrier's parcel number or a tracking link be shown? Not shown today.
-- Should cancelled orders be shown, and with what reason? Not shown today.
+- **Future plan days are shown**, so the hotel knows roughly when the next deliveries come.
+  `upcoming` covers the days a switched-on supply plan still has from today for 60 days, in the
+  serving site's time zone. It skips days that already have an order (those are shown as
+  deliveries) and days that could not be ordered (an internal matter). Each day shows only the
+  ship day and whole crates per product, and is marked as indicative. A paused or inactive plan
+  shows nothing. `SupplyPlansService.portalUpcoming` owns this.
+- **No tracking link or parcel number** is shown; it cannot be relied on.
+- **Cancelled orders are not shown.**
+
+No transit time is promised: the portal shows planned ship days, never an arrival estimate.

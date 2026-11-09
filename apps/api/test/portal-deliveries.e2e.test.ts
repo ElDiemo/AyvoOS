@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { testCarrierControl } from '../src/carriers/test-carrier.js';
 import { InvitationsService } from '../src/identity/invitations.service.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
+import { SupplyPlansService } from '../src/orders/supply-plans.service.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
 import {
   cancelOrder,
@@ -13,6 +14,7 @@ import {
   crateFactory,
   createHotel,
   createOrder,
+  pragueToday,
   scanCrate,
 } from './support/order-fixtures.js';
 import { deliver, pickUp, RETURN_ENV, shipCrates } from './support/return-fixtures.js';
@@ -175,11 +177,70 @@ describe.skipIf(!hasDatabase)('hotel portal: deliveries', () => {
     expect(delivered.deliveredAt).not.toBeNull();
     expect(delivered.lines).toEqual([{ product: expect.any(String), crates: 1, bottles: 2 }]);
     expect(delivered.fromPlan).toBe(false);
+    expect(d.upcoming).toEqual([]); // no supply plan
     // Nothing internal: no site, crates, people, carrier account or labels.
     for (const o of [...d.planned, ...d.inProgress, ...d.delivered])
       expect(Object.keys(o).sort()).toEqual(
         ['code', 'deliveredAt', 'fromPlan', 'handedOverAt', 'lines', 'shipDate', 'state'].sort(),
       );
+  });
+
+  it('upcoming days of a switched-on plan, without days already ordered; nothing when paused', async () => {
+    const planned = await createHotel(su, { name: 'Hotel Plán dodávek' });
+    const base = `/api/admin/orders/hotel/${planned.code}/supply-plan`;
+    const http = () => request(su.app.getHttpServer());
+    await http()
+      .post(base)
+      .send({
+        requestId: randomUUID(),
+        reason: 'plán podle smlouvy',
+        validFrom: pragueToday(),
+        validTo: null,
+        rules: [{ productCode: product, crates: 2, days: [5, 20] }],
+      })
+      .expect(200);
+    const { version } = (await http().get(`${base}/preview`).expect(200)).body as {
+      version: number;
+    };
+    await http()
+      .post(`${base}/activate`)
+      .send({ requestId: randomUUID(), confirm: true, version })
+      .expect(200);
+    const a = await account();
+    await grant(a.user.id, [planned.id]);
+    const read = async () =>
+      (await get(`hotels/${planned.id}/deliveries`, a.session).expect(200))
+        .body as PortalDeliveries;
+
+    // Before the plan's round: every plan day of the next 60 days, whole crates only.
+    const before = await read();
+    const today = pragueToday();
+    const last = pragueToday(59);
+    expect(before.upcoming.length).toBeGreaterThanOrEqual(3);
+    for (const day of before.upcoming) {
+      expect(day.shipDate >= today && day.shipDate <= last).toBe(true);
+      expect(['05', '20']).toContain(day.shipDate.slice(8));
+      expect(day.lines).toEqual([{ product: expect.any(String), crates: 2 }]);
+    }
+    expect(before.planned).toEqual([]);
+
+    // The round orders the days inside its horizon: those become deliveries, the rest stay ahead.
+    await su.app.get(SupplyPlansService).runDue();
+    const after = await read();
+    const ordered = after.planned.map((o) => o.shipDate);
+    expect(after.planned.every((o) => o.fromPlan)).toBe(true);
+    expect(after.upcoming.map((d) => d.shipDate).some((day) => ordered.includes(day))).toBe(false);
+    expect([...ordered, ...after.upcoming.map((d) => d.shipDate)].sort()).toEqual(
+      before.upcoming.map((d) => d.shipDate).sort(),
+    );
+
+    await http()
+      .post(`${base}/pause`)
+      .send({ requestId: randomUUID(), reason: 'hotel v rekonstrukci' })
+      .expect(200);
+    const paused = await read();
+    expect(paused.upcoming).toEqual([]);
+    expect(paused.planned.map((o) => o.code)).toEqual(after.planned.map((o) => o.code));
   });
 
   it('another hotel or an unknown id is “not found”; without a session or with Finance’s token 401', async () => {
