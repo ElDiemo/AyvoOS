@@ -625,7 +625,8 @@ export class ProspectsService {
           ...input,
           currentAmenities:
             input.currentAmenities === undefined ? row.currentAmenities : input.currentAmenities,
-          mainObjection: input.mainObjection === undefined ? row.mainObjection : input.mainObjection,
+          mainObjection:
+            input.mainObjection === undefined ? row.mainObjection : input.mainObjection,
         });
         const changes: Record<string, { before: unknown; after: unknown }> = {};
         for (const f of PROFILE_FIELDS) {
