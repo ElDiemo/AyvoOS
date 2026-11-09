@@ -1,6 +1,9 @@
 import {
   SALES_IMPORT_MAX_BYTES,
   archiveProspectRequestSchema,
+  setIndicativePriceRequestSchema,
+  type SalesIndicativePrices,
+  type SetIndicativePriceRequest,
   confirmImportSchema,
   importCodeSchema,
   importOptionsSchema,
@@ -76,6 +79,7 @@ import { CurrentPrincipal } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import { ProspectsService } from './prospects.service.js';
 import { SalesImportService, type UploadedCsv } from './sales-import.service.js';
+import { SalesPricesService } from './sales-prices.service.js';
 import { scopeOf } from './sales-access.js';
 import { SalesWorkService } from './sales-work.service.js';
 
@@ -111,7 +115,25 @@ export class SalesController {
     private readonly prospects: ProspectsService,
     private readonly work: SalesWorkService,
     private readonly imports: SalesImportService,
+    private readonly prices: SalesPricesService,
   ) {}
+
+  /** The indicative price for the calculator (doc 060 §D): every salesperson reads it. */
+  @RequirePermission('sales:work')
+  @Get('indicative-prices')
+  indicativePrices(): Promise<SalesIndicativePrices> {
+    return this.prices.list();
+  }
+
+  /** A new version of the indicative price — only the sales manager (`sales:manage`). */
+  @RequirePermission('sales:manage')
+  @Post('indicative-prices')
+  setIndicativePrice(
+    @Body(new ZodValidationPipe(setIndicativePriceRequestSchema)) body: SetIndicativePriceRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<SalesIndicativePrices> {
+    return this.prices.set(p.userId, body);
+  }
 
   @RequirePermission('sales:work')
   @Get('overview')

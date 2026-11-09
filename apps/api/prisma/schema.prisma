@@ -993,6 +993,7 @@ enum OperationKind {
   ORDER_RESCHEDULE
   HOTEL_UPDATE
   SALES_PROSPECT_CREATE
+  SALES_INDICATIVE_PRICE_SET
   SALES_PROSPECT_UPDATE
   SALES_STAGE_CHANGE
   SALES_OWNER_CHANGE
@@ -1216,6 +1217,7 @@ model User {
   contractRevisions      ContractDraftRevision[]  @relation("ContractDraftRevisionCreatedBy")
   contractDraftEvents    ContractDraftEvent[]     @relation("ContractDraftEventActor")
   contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
+  salesIndicativePrices  SalesIndicativePrice[]   @relation("SalesIndicativePriceSetter")
 
   @@map("users")
 }
@@ -4010,4 +4012,21 @@ model PortalGrantHotel {
   @@id([grantId, hotelId])
   @@index([hotelId])
   @@map("portal_grant_hotels")
+}
+
+/// Obchod: the indicative price per room and month, set by the sales manager (append-only; the
+/// newest per currency is current). Shown in the salesperson's calculator, never an offer.
+model SalesIndicativePrice {
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  currency  String   @db.Char(3)
+  amount    Decimal  @db.Decimal(12, 2)
+  note      String
+  setBy     String   @map("set_by") @db.Uuid
+  setAt     DateTime @default(now()) @map("set_at") @db.Timestamptz(3)
+  requestId String   @unique(map: "sales_indicative_prices_request_key") @map("request_id") @db.Uuid
+
+  setter User @relation("SalesIndicativePriceSetter", fields: [setBy], references: [id], onDelete: Restrict)
+
+  @@index([currency, setAt(sort: Desc), id(sort: Desc)])
+  @@map("sales_indicative_prices")
 }

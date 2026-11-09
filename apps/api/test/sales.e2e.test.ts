@@ -5,6 +5,7 @@ import type {
   DuplicateHint,
   ProspectDetail,
   ProspectPage,
+  SalesIndicativePrices,
   SalesOverview,
   TaskPage,
 } from '@ayvo/types';
@@ -966,5 +967,42 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
     expect((await stage(pilot.revision, 'OFFER')).status).toBe(422);
     const won = (await stage(pilot.revision, 'WON').expect(200)).body as ProspectDetail;
     expect(won.stage).toBe('WON');
+  });
+
+  it('the indicative price: the manager sets versions (exact, append-only, idempotent); every salesperson reads', async () => {
+    const a = as(people.a.cookie);
+    const m = as(admin);
+    const currency = 'XTS'; // the ISO test currency: never a real price
+    const body = (amount: string, requestId = randomUUID()) => ({
+      requestId,
+      currency,
+      amount,
+      note: 'bez DPH, za pokoj a měsíc (test)',
+    });
+    expect((await a.post('/indicative-prices', body('320'))).status).toBe(403);
+    for (const bad of ['0', '0.00', '1.234', '-5', 'abc', '12345678901'])
+      expect((await m.post('/indicative-prices', body(bad))).status, bad).toBe(400);
+    const once = randomUUID();
+    const first = (await m.post('/indicative-prices', body('320', once)).expect(201))
+      .body as SalesIndicativePrices;
+    expect(first.current.find((x) => x.currency === currency)).toMatchObject({
+      amount: '320.00',
+      note: 'bez DPH, za pokoj a měsíc (test)',
+    });
+    // The same request again: the same result, no second version.
+    await m.post('/indicative-prices', body('320', once)).expect(201);
+    await m.post('/indicative-prices', body('350.5')).expect(201);
+    const read = (await a.get('/indicative-prices').expect(200)).body as SalesIndicativePrices;
+    expect(read.current.find((x) => x.currency === currency)!.amount).toBe('350.50');
+    expect(read.history.filter((x) => x.currency === currency).map((x) => x.amount)).toEqual([
+      '350.50',
+      '320.00',
+    ]);
+    await expect(
+      withPrivileged(
+        (db) =>
+          db.$executeRaw`UPDATE "sales_indicative_prices" SET "amount" = 1 WHERE "currency" = ${currency}`,
+      ),
+    ).rejects.toThrow(/AYVO/);
   });
 });
