@@ -1,4 +1,9 @@
-import { prospectCodeSchema, prospectDetailSchema, salespersonSchema } from '@ayvo/types';
+import {
+  prospectCodeSchema,
+  prospectDetailSchema,
+  salesIndicativePricesSchema,
+  salespersonSchema,
+} from '@ayvo/types';
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -13,6 +18,7 @@ import { TaskList } from '@/components/sales/task-list';
 import { SuccessNote } from '@/components/catalog/form-kit';
 import { Card, EmptyState, Field, FieldList, Notice } from '@/components/ui';
 import { salesCs as t } from '@/i18n/cs/sales';
+import { PriceCalculator } from '@/components/sales/price-calculator';
 import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission } from '@/lib/session';
 
@@ -32,9 +38,10 @@ export default async function ProspectPage({
   const { code } = await params;
   const sp = await searchParams;
   if (!prospectCodeSchema.safeParse(code).success) notFound();
-  const [me, p] = await Promise.all([
+  const [me, p, prices] = await Promise.all([
     currentUser(),
     apiGet(`admin/sales/prospects/${code}`, prospectDetailSchema),
+    apiGet('admin/sales/indicative-prices', salesIndicativePricesSchema),
   ]);
   const canManage = hasPermission(me, 'sales:manage');
   const salespeople = canManage
@@ -221,6 +228,7 @@ export default async function ProspectPage({
             <ContactsCard code={p.code} contacts={p.contacts} readOnly={!!archived} />
             {/* Contract drafts (ADR 0043): only by an explicit click; none for an archived one. */}
             <ContractDraftsCard prospect={p.code} canPrepare={!archived} />
+            <PriceCalculator prices={prices.current} rooms={p.roomsEstimate} />
             <Card
               title={d.profile}
               testId="prospect-profile"

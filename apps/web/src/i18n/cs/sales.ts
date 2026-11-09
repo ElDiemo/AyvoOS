@@ -310,6 +310,38 @@ export const salesCs = {
     recorded: (by: string, at: string) => `zapsal(a) ${by} ${at}`,
   },
 
+  calculator: {
+    title: 'Orientační kalkulace',
+    rooms: 'Počet pokojů',
+    noPrice: 'Orientační cenu zatím nezadal vedoucí obchodu, proto se nic nepočítá.',
+    price: (p: string) => `${p} za pokoj a měsíc`,
+    monthly: 'Měsíčně',
+    yearly: 'Ročně (12 měsíců)',
+    enterRooms: 'Zadejte počet pokojů.',
+    copy: 'Kopírovat kalkulaci',
+    copied: 'Zkopírováno',
+    disclaimer:
+      'Orientační výpočet podle ceny, kterou zadal vedoucí obchodu. Nejde o nabídku ani smluvní cenu; zvláštní podmínky schvaluje AYVO.',
+    copyText: (rooms: string, price: string, monthly: string, yearly: string, note: string) =>
+      `AYVO – orientační kalkulace (nejde o nabídku)\nPočet pokojů: ${rooms}\nCena za pokoj a měsíc: ${price} (${note})\nMěsíčně: ${monthly}\nRočně: ${yearly}`,
+  },
+  prices: {
+    title: 'Orientační cena',
+    subtitle:
+      'Cena za pokoj a měsíc pro orientační kalkulaci obchodníků. Nejde o ceník Financí ani o nabídku.',
+    current: 'Platí teď',
+    none: 'Zatím není zadaná žádná orientační cena.',
+    form: 'Zadat novou cenu',
+    currency: 'Měna (ISO kód)',
+    amount: 'Cena za pokoj a měsíc',
+    amountHelp: 'Přesně, nejvýše dvě desetinná místa, např. 320 nebo 320.50.',
+    note: 'Co cena zahrnuje',
+    noteHelp: 'Povinné, např. „bez DPH, za pokoj a měsíc“. Obchodník to uvidí u výpočtu.',
+    save: 'Uložit novou cenu',
+    history: 'Historie',
+    setBy: (who: string, at: string) => `${who}, ${at}`,
+    invalid: 'Zkontrolujte měnu (3 písmena), částku (větší než 0) a poznámku.',
+  },
   visit: {
     start: 'Zahájit návštěvu',
     title: 'Návštěva hotelu',
