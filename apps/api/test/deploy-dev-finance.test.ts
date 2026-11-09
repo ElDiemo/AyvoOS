@@ -133,11 +133,12 @@ describe.skipIf(!hasDocker)('the Finance unit in the rendered DEV Compose (FIN67
 
   it('PostgreSQL shares finance-db with Finance and its migrations; Redis and the API do not', () => {
     expect(networksOf(r, 'postgres')).toEqual(['backend', 'finance-db']);
-    expect(networksOf(r, 'finance')).toEqual(['edge', 'finance-db']);
+    expect(networksOf(r, 'finance')).toEqual(['edge', 'finance-db', 'portal-contracts']);
     expect(networksOf(r, 'finance-migrate')).toEqual(['finance-db']);
     expect(networksOf(r, 'redis')).toEqual(['backend']);
     expect(networksOf(r, 'migrate')).toEqual(['backend']);
-    expect(networksOf(r, 'api')).toEqual(['backend', 'edge']);
+    expect(networksOf(r, 'api')).toEqual(['backend', 'edge', 'portal-contracts']);
+    expect(r.networks['portal-contracts']?.internal).toBe(true);
     expect(r.networks['finance-db']?.internal).toBe(true);
     expect(r.networks.backend?.internal).toBe(true);
   });

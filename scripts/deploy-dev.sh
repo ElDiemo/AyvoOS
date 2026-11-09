@@ -62,6 +62,7 @@ STEP="startup"
 EDGE_BODY=""
 TAILNET_IPV4=""
 EDGE_BACKUP=""
+PORTAL_RELEASE_IMAGE=""
 
 # --- output ------------------------------------------------------------------------------------
 
@@ -248,6 +249,29 @@ validate_env() {
   fi
 }
 
+# Require a healthy portal before first enabling its edge or activating a named portal release.
+# A portal outage must not block ordinary Core/edge work when the route is already enabled.
+check_portal_before_switch() {
+  local domain=${CFG[DEV_PORTAL_DOMAIN]:-}
+  [[ -n $domain ]] || return 0
+  if [[ -z ${PORTAL_IMAGE_TAG:-} ]] &&
+    docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$PROJECT-caddy-1" 2>/dev/null |
+      grep -Fx "DEV_PORTAL_DOMAIN=$domain" >/dev/null; then
+    return 0
+  fi
+
+  local status
+  status="$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}} {{.Config.Image}}' "$PROJECT-portal-web-1" 2>/dev/null)" ||
+    die "start the reviewed portal-web before enabling its DEV route (docs/052)"
+  [[ $status == "true healthy $IMAGE_PREFIX/portal-web:"* ]] ||
+    die "portal-web must be running and healthy before enabling its DEV route (docs/052)"
+  PORTAL_RELEASE_IMAGE=${status#true healthy }
+  if [[ -n ${PORTAL_IMAGE_TAG:-} && $PORTAL_RELEASE_IMAGE != "$IMAGE_PREFIX/portal-web:$PORTAL_IMAGE_TAG" ]]; then
+    die "running portal-web does not match the selected PORTAL_IMAGE_TAG"
+  fi
+  ok "portal-web is healthy ($PORTAL_RELEASE_IMAGE)"
+}
+
 # --- verification ------------------------------------------------------------------------------
 
 api_ready() {
@@ -409,16 +433,20 @@ verify_tailnet_only() {
     log "$STEP"
     [[ "$(dig +short +time=3 +tries=1 @"$TAILNET_IPV4" "$portal_domain" A)" == "$TAILNET_IPV4" ]] ||
       die "the private DNS must answer $portal_domain A $TAILNET_IPV4"
-    retry 180 expect_edge "portal sign-in page" "https://$portal_domain/login" 200 ||
-      die "the portal sign-in page is unavailable through the tailnet"
-    [[ $EDGE_TYPE == text/html* ]] || die "the portal sign-in page must be HTML"
+    if [[ -n $PORTAL_RELEASE_IMAGE ]]; then
+      retry 180 expect_edge "portal sign-in page" "https://$portal_domain/login" 200 ||
+        die "the portal sign-in page is unavailable through the tailnet"
+      [[ $EDGE_TYPE == text/html* ]] || die "the portal sign-in page must be HTML"
+    fi
     code=0
-    curl --http1.1 -s -o /dev/null --max-time 5 --resolve "$portal_domain:443:$TAILNET_IPV4"       "https://$portal_domain/api/internal/v1/portal/session" || code=$?
+    curl --http1.1 -s -o /dev/null --max-time 5 --resolve "$portal_domain:443:$TAILNET_IPV4" \
+      "https://$portal_domain/api/internal/v1/portal/session" || code=$?
     [[ $code == 52 || $code == 56 ]] || die "the portal host must abort direct API requests (curl exit $code)"
     code=0
-    curl --http1.1 -s -o /dev/null --max-time 5 --resolve "$portal_domain:80:$pub4"       "http://$portal_domain/login" || code=$?
+    curl --http1.1 -s -o /dev/null --max-time 5 --resolve "$portal_domain:80:$pub4" \
+      "http://$portal_domain/login" || code=$?
     [[ $code == 52 ]] || die "the public portal HTTP route must abort (curl exit $code)"
-    ok "portal sign-in available over the tailnet; direct API and public HTTP aborted"
+    ok "portal DNS resolves over the tailnet; direct API and public HTTP aborted"
   else
     dig +time=3 +tries=1 @"$TAILNET_IPV4" dev-portal.ayvo.co A | grep -q 'status: REFUSED' ||
       die "the private DNS must refuse the disabled portal host"
@@ -565,6 +593,9 @@ flock -n 9 || die "another deployment is running (lock: $STATE_DIR/.deploy-dev-p
 
 command -v dig >/dev/null || die "required command not found: dig (verification of the private DNS)"
 
+STEP="validate portal readiness before the switch"
+check_portal_before_switch
+
 # The edge exactly as it runs now, verified, BEFORE anything is built, migrated or switched.
 STEP="back up the running edge (Caddy)"
 if [[ -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=caddy")" ]]; then
@@ -645,6 +676,6 @@ fi
 
 verify
 
-record "SUCCESS" "mode=$MODE"
+record "SUCCESS" "mode=$MODE${PORTAL_RELEASE_IMAGE:+ portal_image=$PORTAL_RELEASE_IMAGE}"
 log "DEV preview deployed: https://${CFG[DEV_DOMAIN]} (tag $TAG)"
 compose ps

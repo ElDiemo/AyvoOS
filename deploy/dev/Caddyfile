@@ -138,6 +138,7 @@ http://{$DEV_DOMAIN} {
 		}
 	}
 	import tailnet
+	header -Server
 
 	@blocked path /api /api/*
 	@disabled not host dev-portal.ayvo.co
@@ -151,27 +152,24 @@ http://{$DEV_DOMAIN} {
 		abort
 	}
 
-	@portal_auth path /auth /auth/*
-	handle @portal_auth {
+	@portal_request `method('GET', 'HEAD') || (method('POST') && path('/auth', '/auth/*'))`
+	handle {
 		route {
-			# Limit the upload at the edge as well as in portal-web. The rate bounds
-			# trickled bodies. Portal-web imposes a separate total five-second deadline.
+			# Limit every proxied body, including GETs. Only auth endpoints accept POST.
+			# Portal-web imposes a separate total five-second auth body deadline.
 			timeouts {
 				read_timeout 5s 819
 			}
 			request_body {
 				max_size 4KiB
 			}
-			reverse_proxy portal-web:3200 {
+			reverse_proxy @portal_request portal-web:3200 {
 				header_up X-Forwarded-For {remote_host}
 				header_down -X-Powered-By
 			}
-		}
-	}
-	handle {
-		reverse_proxy portal-web:3200 {
-			header_up X-Forwarded-For {remote_host}
-			header_down -X-Powered-By
+			# Reject unsupported methods without draining an unfinished HTTP/1 upload.
+			header Connection close
+			respond 405
 		}
 	}
 }

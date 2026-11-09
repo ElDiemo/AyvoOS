@@ -51,10 +51,12 @@ scripts/deploy-finance-dev.sh
 ```
 
 Check the image tags and portal limits (256 MiB, half a CPU and 128 PIDs). DEV pins Caddy
-2.11.9 because 2.11.7 could hang HTTP/1.1 after an upload timeout (Caddy #8165). Caddy limits uploads
-to 4 KiB on the auth routes and bounds stalled or trickled requests. Portal-web separately
-enforces its five-second total body deadline. No request to the portal host routes to the
-internal web, Core or Finance directly.
+2.11.9 because 2.11.7 could hang HTTP/1.1 after an upload timeout (Caddy #8165). Caddy limits
+all proxied portal bodies to 4 KiB and bounds stalled or trickled requests. It proxies GET and
+HEAD, plus POST to auth routes. Portal-web separately enforces its five-second total body deadline. No request to the portal host routes to the
+internal web, Core or Finance directly. Before the first switch or a tagged portal release,
+`deploy-dev.sh` requires a healthy portal container. It records the checked image on success.
+Ordinary staff redeploys with an already active portal do not require the portal to be healthy.
 
 ## Verify and disable
 
@@ -71,8 +73,11 @@ internal web, Core or Finance directly.
    This removes the portal route and DNS answer. Redeploy the current reviewed Core and Finance
    releases with the domain blank to clear both receiving hashes, then remove the portal's DNS
    records and restricted nameserver rule through the approved infrastructure workflow. Use the
-   previous env and the pre-switch Caddy backup if the edge update fails. A Core release predating
-   portal audiences must never be restored once a portal account or session exists. Keep the data
-   and recover using the reviewed version or a forward fix.
+   previous env and the pre-switch Caddy backup if the edge update fails. Restoring the Caddy
+   backup only restores Caddy. With the previous env, run `scripts/deploy-dev.sh --edge` from
+   the reviewed checkout to restore the CoreDNS configuration as well. Verify that
+   `dig @"$DEV_TAILNET_IPV4" dev-portal.ayvo.co A` returns REFUSED for the disabled portal.
+   A Core release predating portal audiences must never be restored once a portal account or
+   session exists. Keep the data and recover using the reviewed version or a forward fix.
 
 A customer-facing address and its edge are a separate release.

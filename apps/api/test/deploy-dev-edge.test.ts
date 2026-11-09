@@ -158,6 +158,66 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+describe('portal readiness before changing the DEV edge', () => {
+  it.each([
+    { active: false, running: 'missing', tag: '', ready: false },
+    {
+      active: false,
+      running: 'true unhealthy ayvo-dev-preview/portal-web:new',
+      tag: '',
+      ready: false,
+    },
+    {
+      active: false,
+      running: 'true healthy ayvo-dev-preview/portal-web:new',
+      tag: '',
+      ready: true,
+    },
+    { active: true, running: 'missing', tag: '', ready: true },
+    {
+      active: true,
+      running: 'true healthy ayvo-dev-preview/portal-web:old',
+      tag: 'new',
+      ready: false,
+    },
+    {
+      active: true,
+      running: 'true healthy ayvo-dev-preview/portal-web:new',
+      tag: 'new',
+      ready: true,
+    },
+  ])('checks activation and tagged releases %#', ({ active, running, tag, ready }) => {
+    const source = readFileSync(join(root, 'scripts/deploy-dev.sh'), 'utf8');
+    const body = source.split('check_portal_before_switch() {')[1]!.split('\n}\n')[0]!;
+    const script = `set -euo pipefail
+declare -A CFG=([DEV_PORTAL_DOMAIN]=dev-portal.ayvo.co)
+PROJECT=ayvo-dev-preview
+IMAGE_PREFIX=ayvo-dev-preview
+PORTAL_RELEASE_IMAGE=
+PORTAL_IMAGE_TAG="$3"
+die() { echo "$*" >&2; exit 1; }
+ok() { :; }
+docker() {
+  case "\${!#}" in
+    *-caddy-1) [[ "$ACTIVE" = yes ]] && printf 'DEV_PORTAL_DOMAIN=dev-portal.ayvo.co\\n' ;;
+    *-portal-web-1) [[ "$RUNNING" != missing ]] && printf '%s\\n' "$RUNNING" ;;
+  esac
+}
+ACTIVE="$1"
+RUNNING="$2"
+check_portal_before_switch() {${body}
+}
+check_portal_before_switch
+printf '%s' "$PORTAL_RELEASE_IMAGE"
+`;
+    const result = run('bash', ['-c', script, 'portal-test', active ? 'yes' : 'no', running, tag]);
+    expect(result.status, result.stderr).toBe(ready ? 0 : 1);
+    if (ready) {
+      expect(result.stdout).toBe(active && !tag ? '' : 'ayvo-dev-preview/portal-web:new');
+    }
+  });
+});
+
 describe.skipIf(!hasDocker)('the optional DEV portal edge (ADR 0045)', () => {
   it.each(['', 'dev-portal.ayvo.co'])('renders portal isolation and routes for %j', (domain) => {
     const r = run(
@@ -249,7 +309,9 @@ describe.skipIf(!hasDocker)('the optional DEV portal edge (ADR 0045)', () => {
       const portalRoute = JSON.stringify(routes);
       expect(portalRoute).toContain('100.64.0.0/10');
       expect(portalRoute).toContain('"path":["/api","/api/*"]');
-      expect(portalRoute).toContain('"path":["/auth","/auth/*"]');
+      expect(portalRoute).toContain("path('/auth', '/auth/*')");
+      expect(portalRoute).toContain("method('POST')");
+      expect(portalRoute).toContain('"status_code":405');
       expect(portalRoute).toContain('"max_size":4096');
       expect(portalRoute).toContain('"read_timeout":5000000000');
       expect(portalRoute).toContain('"read_min_rate":819');
