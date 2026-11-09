@@ -18,6 +18,7 @@ import { salesCs } from '@/i18n/cs/sales';
 import { FormDialog } from './sales-dialog';
 import { dueLabel, salesNowLocal } from './sales-format';
 import { dialogError, useSalesSend } from './use-sales-send';
+import { VisitDialog } from './visit-dialog';
 
 type Contact = { id: string; label: string };
 const a = salesCs.activity;
@@ -643,9 +644,9 @@ export function ProspectActions({
   openTasks: Pick<SalesTask, 'id' | 'title' | 'dueOn'>[];
   today: string;
 }) {
-  const [open, setOpen] = useState<'activity' | 'task' | 'stage' | 'owner' | 'archive' | null>(
-    null,
-  );
+  const [open, setOpen] = useState<
+    'activity' | 'visit' | 'task' | 'stage' | 'owner' | 'archive' | null
+  >(null);
   // After a confirmed activity or stage change: a prospect in progress without any open task gets
   // a non-blocking offer to plan its next step (the ordinary task form). Decided from the write's
   // own answer, so it holds even if the page's refresh fails.
@@ -666,6 +667,14 @@ export function ProspectActions({
         data-testid="record-activity"
       >
         {d.recordActivity}
+      </button>
+      <button
+        type="button"
+        className={buttonClass.secondary}
+        onClick={() => setOpen('visit')}
+        data-testid="start-visit"
+      >
+        {salesCs.visit.start}
       </button>
       <button
         type="button"
@@ -741,6 +750,13 @@ export function ProspectActions({
         code={prospect.code}
         contacts={contacts}
         open={open === 'activity'}
+        onClose={() => setOpen(null)}
+        onSaved={offerIfMissing}
+      />
+      <VisitDialog
+        code={prospect.code}
+        contacts={contacts}
+        open={open === 'visit'}
         onClose={() => setOpen(null)}
         onSaved={offerIfMissing}
       />
