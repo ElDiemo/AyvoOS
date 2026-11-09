@@ -2,12 +2,14 @@ import 'server-only';
 import { contractOpen, PortalUnavailable } from './backend';
 import { portalEnv } from './env';
 import { readCookie, SESSION_COOKIE } from './session';
-import { boundedPassThrough, contentLengthWithin, deadline, SlotLimit } from './slots';
+import { boundedPassThrough, contentLengthWithin, deadline, readBounded, SlotLimit } from './slots';
 
 /** §8: one budget of 20 s for the whole PDF request (fetch, reading and passing it on). */
 const PDF_DEADLINE_MS = 20_000;
 /** The receivers name the file with [A-Za-z0-9_-] only. */
 const DISPOSITION = /^attachment; filename="[A-Za-z0-9_-]{1,64}\.pdf"$/;
+/** The largest refusal body read for its code. */
+const REFUSAL_MAX_BYTES = 4096;
 /** One budget of PDFs in flight for the whole process (invoices and contracts together). */
 let slots: SlotLimit | null = null;
 
@@ -43,22 +45,56 @@ export async function passPdf(
   },
 ): Promise<Response> {
   if (!/^[0-9a-f-]{36}$/.test(id)) return plain(404, 'Nenalezeno');
+  return passFile(request, {
+    unit: options.unit,
+    path: options.path(encodeURIComponent(id)),
+    type: 'application/pdf',
+    disposition: DISPOSITION,
+    maxBytes: options.maxBytes,
+    deadlineMs: PDF_DEADLINE_MS,
+    busy: options.busy,
+    unavailable: options.unavailable,
+  });
+}
+
+/**
+ * A file of a given type passed through from a contract (see passPdf). `refused`, when given,
+ * turns the receiver's refusals (400, 404, 409, 422, its 503 with a code) into this answer
+ * instead of a bare text — e.g. a redirect back to the page with the reason. With it, a full
+ * local slot is `refused(503, 'BUSY')` and the receiver being unreachable or unusable is
+ * `refused(503, null)`, so such a caller never shows a bare error page.
+ */
+export async function passFile(
+  request: Request,
+  options: {
+    unit: 'core' | 'finance';
+    path: string;
+    type: string;
+    disposition: RegExp;
+    maxBytes: number;
+    deadlineMs: number;
+    busy: string;
+    unavailable: string;
+    refused?: (status: number, code: string | null) => Response;
+  },
+): Promise<Response> {
   const session = await readCookie(SESSION_COOKIE);
   if (!session) return plain(401, 'Přihlaste se prosím znovu.');
   slots ??= new SlotLimit(portalEnv().PORTAL_PDF_MAX_IN_FLIGHT);
   const releasePdf = slots.acquire();
-  if (!releasePdf) return plain(503, options.busy);
-  const stop = deadline(PDF_DEADLINE_MS, request.signal);
+  if (!releasePdf) return options.refused?.(503, 'BUSY') ?? plain(503, options.busy);
+  const stop = deadline(options.deadlineMs, request.signal);
   let call: Awaited<ReturnType<typeof contractOpen>>;
   try {
-    call = await contractOpen(options.unit, options.path(encodeURIComponent(id)), {
+    call = await contractOpen(options.unit, options.path, {
       session,
       signal: stop.signal,
     });
   } catch (error) {
     stop.done();
     releasePdf();
-    if (error instanceof PortalUnavailable) return plain(503, options.unavailable);
+    if (error instanceof PortalUnavailable)
+      return options.refused?.(503, null) ?? plain(503, options.unavailable);
     throw error;
   }
   const { res } = call;
@@ -72,14 +108,35 @@ export async function passPdf(
   const usable =
     res.ok &&
     res.body !== null &&
-    res.headers.get('content-type')?.split(';')[0]?.trim() === 'application/pdf' &&
+    res.headers.get('content-type')?.split(';')[0]?.trim() === options.type &&
     contentLengthWithin(length, options.maxBytes);
   if (!usable) {
-    await res.body?.cancel().catch(() => undefined);
+    let code: string | null = null;
+    if (
+      options.refused &&
+      [400, 404, 409, 422, 503].includes(res.status) &&
+      contentLengthWithin(length, REFUSAL_MAX_BYTES)
+    ) {
+      // A small JSON refusal (its code only), read within its own byte limit and the deadline.
+      try {
+        const bytes = await readBounded(res.body, {
+          maxBytes: REFUSAL_MAX_BYTES,
+          stop: stop.signal,
+        });
+        const parsed = (JSON.parse(new TextDecoder().decode(bytes)) as { code?: unknown }).code;
+        code = typeof parsed === 'string' && /^[A-Z_]{2,64}$/.test(parsed) ? parsed : null;
+      } catch {
+        await res.body?.cancel().catch(() => undefined);
+        code = null;
+      }
+    } else await res.body?.cancel().catch(() => undefined);
     release();
+    if (options.refused && res.status !== 503 && [400, 404, 409, 422].includes(res.status))
+      return options.refused(res.status, code);
+    if (options.refused && res.status === 503 && code) return options.refused(503, code);
     if (res.status === 404) return plain(404, 'Nenalezeno');
     if (res.status === 401) return plain(401, 'Přihlaste se prosím znovu.');
-    return plain(503, options.unavailable);
+    return options.refused?.(503, null) ?? plain(503, options.unavailable);
   }
   const body = boundedPassThrough(res.body!, {
     stop: stop.signal,
@@ -92,10 +149,10 @@ export async function passPdf(
   return new Response(body, {
     status: 200,
     headers: {
-      'Content-Type': 'application/pdf',
+      'Content-Type': options.type,
       ...(length ? { 'Content-Length': length } : {}),
       'Content-Disposition':
-        disposition && DISPOSITION.test(disposition) ? disposition : 'attachment',
+        disposition && options.disposition.test(disposition) ? disposition : 'attachment',
       'Cache-Control': 'private, no-store',
       'X-Content-Type-Options': 'nosniff',
     },
