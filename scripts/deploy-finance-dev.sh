@@ -28,6 +28,7 @@
 
 set -Eeuo pipefail
 umask 077
+unset DEV_PORTAL_DOMAIN PORTAL_FINANCE_TOKEN_SHA256
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT

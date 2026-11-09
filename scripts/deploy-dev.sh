@@ -37,6 +37,9 @@ set -Eeuo pipefail
 umask 077
 # Obsolete verification inputs must not leak to child processes if an old caller still sets them.
 unset AYVO_DEV_VERIFY_PASSWORD AYVO_DEV_VERIFY_PASSWORD_FILE AYVO_DEV_VERIFY_AUTH
+# For the portal, the checked server file is authoritative over the calling shell.
+unset DEV_PORTAL_DOMAIN PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN PORTAL_SERVICE_TOKEN_SHA256 PORTAL_FINANCE_TOKEN_SHA256
+unset FINANCE_SERVICE_TOKEN_SHA256
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
@@ -59,6 +62,8 @@ STEP="startup"
 EDGE_BODY=""
 TAILNET_IPV4=""
 EDGE_BACKUP=""
+PORTAL_RELEASE_IMAGE=""
+PORTAL_RELEASE_IMAGE_ID=""
 
 # --- output ------------------------------------------------------------------------------------
 
@@ -223,6 +228,59 @@ validate_env() {
     die "CORE_DB_PASSWORD must be 24-128 characters of [A-Za-z0-9_-] (try: openssl rand -hex 32)"
   [[ ${CFG[CORE_DB_PASSWORD]} != "${CFG[POSTGRES_PASSWORD]}" ]] ||
     die "CORE_DB_PASSWORD must differ from POSTGRES_PASSWORD (ADR 0041)"
+
+  if [[ -n ${CFG[DEV_PORTAL_DOMAIN]:-} ]]; then
+    [[ ${CFG[DEV_PORTAL_DOMAIN]} == dev-portal.ayvo.co ]] ||
+      die "DEV_PORTAL_DOMAIN must be dev-portal.ayvo.co"
+    [[ ${CFG[DEV_PORTAL_DOMAIN]} != "${CFG[DEV_DOMAIN]}" ]] ||
+      die "the portal needs a different host from DEV_DOMAIN"
+    local core_token=${CFG[PORTAL_CORE_TOKEN]:-} finance_token=${CFG[PORTAL_FINANCE_TOKEN]:-}
+    [[ $core_token =~ ^[A-Za-z0-9_-]{43,128}$ && $finance_token =~ ^[A-Za-z0-9_-]{43,128}$ ]] ||
+      die "both DEV portal tokens must be 43–128 URL-safe characters"
+    [[ $core_token != "$finance_token" ]] || die "DEV portal tokens must be different"
+    local core_hash finance_hash
+    core_hash="$(printf '%s' "$core_token" | sha256sum | cut -d' ' -f1)"
+    finance_hash="$(printf '%s' "$finance_token" | sha256sum | cut -d' ' -f1)"
+    [[ $core_hash == "${CFG[PORTAL_SERVICE_TOKEN_SHA256]:-}" &&
+       $finance_hash == "${CFG[PORTAL_FINANCE_TOKEN_SHA256]:-}" ]] ||
+      die "DEV portal token hashes do not match their respective tokens"
+    [[ $core_hash != "${CFG[FINANCE_SERVICE_TOKEN_SHA256]:-}" &&
+       $finance_hash != "${CFG[FINANCE_SERVICE_TOKEN_SHA256]:-}" ]] ||
+      die "DEV portal tokens must differ from the Finance-to-core token"
+  fi
+}
+
+# Require a healthy portal before first enabling its edge or activating a named portal release.
+# A portal outage must not block ordinary Core/edge work when the route is already enabled.
+# With an explicit PORTAL_IMAGE_TAG the running container must be the image that tag names NOW:
+# a tag re-pointed by a later build would otherwise pass by name alone.
+check_portal_before_switch() {
+  local domain=${CFG[DEV_PORTAL_DOMAIN]:-}
+  [[ -n $domain ]] || return 0
+  if [[ -z ${PORTAL_IMAGE_TAG:-} ]] &&
+    docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$PROJECT-caddy-1" 2>/dev/null |
+      grep -Fx "DEV_PORTAL_DOMAIN=$domain" >/dev/null; then
+    return 0
+  fi
+
+  local status running health image_id image
+  status="$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.Image}}|{{.Config.Image}}' "$PROJECT-portal-web-1" 2>/dev/null)" ||
+    die "start the reviewed portal-web before enabling its DEV route (docs/052)"
+  IFS='|' read -r running health image_id image <<<"$status"
+  [[ $running == true && $health == healthy && $image == "$IMAGE_PREFIX/portal-web:"* ]] ||
+    die "portal-web must be running and healthy before enabling its DEV route (docs/052)"
+  if [[ -n ${PORTAL_IMAGE_TAG:-} ]]; then
+    [[ $image == "$IMAGE_PREFIX/portal-web:$PORTAL_IMAGE_TAG" ]] ||
+      die "running portal-web does not match the selected PORTAL_IMAGE_TAG"
+    local tagged_id
+    tagged_id="$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)" ||
+      die "image $image not found"
+    [[ $tagged_id == "$image_id" ]] ||
+      die "running portal-web is not the image now tagged $image: recreate it from that tag (docs/052)"
+  fi
+  PORTAL_RELEASE_IMAGE=$image
+  PORTAL_RELEASE_IMAGE_ID=$image_id
+  ok "portal-web is healthy ($PORTAL_RELEASE_IMAGE, $PORTAL_RELEASE_IMAGE_ID)"
 }
 
 # --- verification ------------------------------------------------------------------------------
@@ -244,6 +302,9 @@ edge() {
   local args=(--silent --show-error --max-time 10 --request "$method" --output "$EDGE_BODY"
     --resolve "${CFG[DEV_DOMAIN]}:443:$TAILNET_IPV4" --resolve "${CFG[DEV_DOMAIN]}:80:$TAILNET_IPV4"
     --write-out '%{http_code}\n%header{x-robots-tag}\n%header{location}\n%{content_type}\n%header{www-authenticate}\n')
+  if [[ -n ${CFG[DEV_PORTAL_DOMAIN]:-} ]]; then
+    args+=(--resolve "${CFG[DEV_PORTAL_DOMAIN]}:443:$TAILNET_IPV4")
+  fi
   : >"$EDGE_BODY"
   meta="$(curl "${args[@]}" "$url")" || return 1
   local lines
@@ -375,7 +436,32 @@ verify_tailnet_only() {
     die "the private DNS on $TAILNET_IPV4 must answer $domain A $TAILNET_IPV4"
   dig +time=3 +tries=1 @"$TAILNET_IPV4" example.com A | grep -q 'status: REFUSED' ||
     die "the private DNS must refuse other names (it must never be a resolver)"
-  ok "dns @$TAILNET_IPV4: $domain -> $TAILNET_IPV4; other names REFUSED"
+  ok "dns @$TAILNET_IPV4: $domain -> $TAILNET_IPV4; unrelated names REFUSED"
+
+  local portal_domain=${CFG[DEV_PORTAL_DOMAIN]:-}
+  if [[ -n $portal_domain ]]; then
+    STEP="verify: portal DNS and tailnet-only TLS"
+    log "$STEP"
+    [[ "$(dig +short +time=3 +tries=1 @"$TAILNET_IPV4" "$portal_domain" A)" == "$TAILNET_IPV4" ]] ||
+      die "the private DNS must answer $portal_domain A $TAILNET_IPV4"
+    if [[ -n $PORTAL_RELEASE_IMAGE ]]; then
+      retry 180 expect_edge "portal sign-in page" "https://$portal_domain/login" 200 ||
+        die "the portal sign-in page is unavailable through the tailnet"
+      [[ $EDGE_TYPE == text/html* ]] || die "the portal sign-in page must be HTML"
+    fi
+    code=0
+    curl --http1.1 -s -o /dev/null --max-time 5 --resolve "$portal_domain:443:$TAILNET_IPV4" \
+      "https://$portal_domain/api/internal/v1/portal/session" || code=$?
+    [[ $code == 52 || $code == 56 ]] || die "the portal host must abort direct API requests (curl exit $code)"
+    code=0
+    curl --http1.1 -s -o /dev/null --max-time 5 --resolve "$portal_domain:80:$pub4" \
+      "http://$portal_domain/login" || code=$?
+    [[ $code == 52 ]] || die "the public portal HTTP route must abort (curl exit $code)"
+    ok "portal DNS resolves over the tailnet; direct API and public HTTP aborted"
+  else
+    dig +time=3 +tries=1 @"$TAILNET_IPV4" dev-portal.ayvo.co A | grep -q 'status: REFUSED' ||
+      die "the private DNS must refuse the disabled portal host"
+  fi
 }
 
 verify() {
@@ -474,7 +560,7 @@ while (($#)); do
 done
 
 STEP="validate prerequisites"
-for cmd in docker git curl jq awk flock realpath stat tailscale ip systemctl sysctl; do
+for cmd in docker git curl jq awk flock realpath stat sha256sum tailscale ip systemctl sysctl; do
   command -v "$cmd" >/dev/null || die "required command not found: $cmd"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 plugin is required"
@@ -517,6 +603,9 @@ exec 9>"$STATE_DIR/.deploy-dev-preview.lock"
 flock -n 9 || die "another deployment is running (lock: $STATE_DIR/.deploy-dev-preview.lock)"
 
 command -v dig >/dev/null || die "required command not found: dig (verification of the private DNS)"
+
+STEP="validate portal readiness before the switch"
+check_portal_before_switch
 
 # The edge exactly as it runs now, verified, BEFORE anything is built, migrated or switched.
 STEP="back up the running edge (Caddy)"
@@ -598,6 +687,6 @@ fi
 
 verify
 
-record "SUCCESS" "mode=$MODE"
+record "SUCCESS" "mode=$MODE${PORTAL_RELEASE_IMAGE:+ portal_image=$PORTAL_RELEASE_IMAGE portal_image_id=$PORTAL_RELEASE_IMAGE_ID}"
 log "DEV preview deployed: https://${CFG[DEV_DOMAIN]} (tag $TAG)"
 compose ps

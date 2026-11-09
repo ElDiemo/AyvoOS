@@ -38,7 +38,8 @@ x-app: &app
 
 services:
   caddy:
-    image: caddy:2-alpine
+    # 2.11.7 can hang HTTP/1.1 uploads after a read timeout (Caddy #8165).
+    image: caddy:2.11.9-alpine
     restart: unless-stopped
     labels:
       # The last commit that changed deploy/dev (set by scripts/deploy-dev.sh): lets an edge backup
@@ -61,6 +62,8 @@ services:
       DEV_DOMAIN: ${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
       DEV_TAILNET_IPV4: ${DEV_TAILNET_IPV4}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the server env file}
+      DEV_PORTAL_DOMAIN: ${DEV_PORTAL_DOMAIN:-}
+      DEV_PORTAL_SITE: ${DEV_PORTAL_DOMAIN:+https://}${DEV_PORTAL_DOMAIN:-http://dev-portal.invalid}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # TLS certificates and ACME account; kept across rebuilds to avoid re-issuance rate limits.
@@ -71,6 +74,7 @@ services:
     networks:
       - edge
       - marketing
+      - portal-edge
     depends_on:
       web:
         condition: service_healthy
@@ -100,6 +104,7 @@ services:
     command: ['-conf', '/etc/coredns/Corefile']
     environment:
       # Every {$VAR} of the Corefile must be passed here (test/deploy-dev-edge.test.ts).
+      DEV_PORTAL_DOMAIN: ${DEV_PORTAL_DOMAIN:-dev-portal.invalid}
       DEV_DOMAIN: ${DEV_DOMAIN:?set DEV_DOMAIN in the server env file}
       DEV_TAILNET_IPV4: ${DEV_TAILNET_IPV4:?set by scripts/deploy-dev.sh from tailscale ip -4}
     volumes:
@@ -174,12 +179,15 @@ services:
       CARRIER_CREDENTIALS_KEY: ${CARRIER_CREDENTIALS_KEY:-}
       # SHA-256 of the Finance unit's service token (ADR 0039); empty = its contract is closed.
       FINANCE_SERVICE_TOKEN_SHA256: ${FINANCE_SERVICE_TOKEN_SHA256:-}
+      PORTAL_PUBLIC_ORIGIN: ${DEV_PORTAL_DOMAIN:+https://${DEV_PORTAL_DOMAIN}}
+      PORTAL_SERVICE_TOKEN_SHA256: ${DEV_PORTAL_DOMAIN:+${PORTAL_SERVICE_TOKEN_SHA256:-}}
     volumes:
       # Label artwork and generated print PDFs (doc 016). The root filesystem stays read-only.
       - files-data:/var/lib/ayvo/files
     networks:
       - edge
       - backend
+      - portal-contracts
     depends_on:
       postgres:
         condition: service_healthy
@@ -240,6 +248,34 @@ services:
     networks:
       - marketing
 
+  # Hotel portal (ADR 0045). Started explicitly with the portal profile. It has no
+  # published port or data volume and can reach only the API and Finance contracts.
+  portal-web:
+    <<: *app
+    image: ayvo-dev-preview/portal-web:${PORTAL_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: apps/portal/Dockerfile
+    profiles:
+      - portal
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    environment:
+      APP_ENV: development
+      PORTAL_PUBLIC_ORIGIN: https://${DEV_PORTAL_DOMAIN:-dev-portal.invalid}
+      CORE_INTERNAL_URL: http://api:4000
+      FINANCE_INTERNAL_URL: http://finance:4010
+      PORTAL_CORE_TOKEN: ${PORTAL_CORE_TOKEN:-}
+      PORTAL_FINANCE_TOKEN: ${PORTAL_FINANCE_TOKEN:-}
+      PORTAL_TRUST_PROXY: '1'
+    networks:
+      - portal-edge
+      - portal-contracts
+
   # Finance as its own unit (ADR 0039): same image, own entry point, own DB role (schema finance
   # only), own files, own release tag. Started only by scripts/deploy-finance-dev.sh (profile
   # "finance"); scripts/deploy-dev.sh never starts, stops or rebuilds it.
@@ -271,12 +307,14 @@ services:
       FINANCE_DATABASE_URL: postgresql://ayvo_finance:${FINANCE_DB_PASSWORD:-}@postgres:5432/${POSTGRES_DB:-}
       CORE_INTERNAL_URL: http://api:4000
       FINANCE_SERVICE_TOKEN: ${FINANCE_SERVICE_TOKEN:-}
+      PORTAL_FINANCE_TOKEN_SHA256: ${DEV_PORTAL_DOMAIN:+${PORTAL_FINANCE_TOKEN_SHA256:-}}
       FILE_STORAGE_DIR: /var/lib/ayvo/files
     volumes:
       - finance-files:/var/lib/ayvo/files
     networks:
       - edge
       - finance-db
+      - portal-contracts
     healthcheck:
       test:
         [
@@ -371,6 +409,12 @@ networks:
     internal: true
   # Finance (ADR 0039) ↔ postgres only. No route to the outside world, no Redis.
   finance-db:
+    internal: true
+  # The shared gateway reaches portal-web only on this network.
+  portal-edge:
+    internal: true
+  # Portal-web has no route to the Internet, staff web, Postgres or Redis.
+  portal-contracts:
     internal: true
   # The private DNS server alone (no other service, no upstream resolver).
   dns:
