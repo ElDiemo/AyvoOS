@@ -151,6 +151,7 @@ const STAGE_CS: Record<ProspectStage, string> = {
   CONTACTED: 'Oslovený',
   NEGOTIATION: 'Jednání',
   OFFER: 'Nabídka',
+  PILOT: 'Pilot',
   WON: 'Získaný',
   LOST: 'Neúspěšný',
 };

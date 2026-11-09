@@ -3518,7 +3518,7 @@ model SalesProspect {
   ownerId           String    @map("owner_id") @db.Uuid
   /// A | B | C
   priority          String?
-  /// NEW | CONTACTED | NEGOTIATION | OFFER | WON | LOST
+  /// NEW | CONTACTED | NEGOTIATION | OFFER | PILOT | WON | LOST
   stage             String    @default("NEW")
   lostReason        String?   @map("lost_reason")
   note              String?

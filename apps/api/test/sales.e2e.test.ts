@@ -947,4 +947,24 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
       ),
     ).rejects.toThrow(/amenities_objection_check/);
   });
+
+  it('Pilot: after Nabídka, work in progress (needs a next step), back from it only with a reason', async () => {
+    const a = as(people.a.cookie);
+    const d = await create(people.a.cookie, `Hotel Pilot ${tag}`);
+    const stage = (revision: number, to: string, reason: string | null = null) =>
+      a.post(`/prospects/${d.code}/stage`, { revision, stage: to, reason, lostReason: null });
+    const pilot = (await stage(d.revision, 'PILOT').expect(200)).body as ProspectDetail;
+    expect(pilot.stage).toBe('PILOT');
+    // In progress without a task: listed as without a next step, also by the phase filter.
+    const overview = (await a.get('/overview').expect(200)).body as SalesOverview;
+    expect(overview.withoutNextStep.map((x) => x.code)).toContain(d.code);
+    const listed = (
+      (await a.get('/prospects?next=none&phase=in-progress').expect(200)).body as ProspectPage
+    ).items.map((x) => x.code);
+    expect(listed).toContain(d.code);
+    // Back to Nabídka needs a reason; on to Získaný does not.
+    expect((await stage(pilot.revision, 'OFFER')).status).toBe(422);
+    const won = (await stage(pilot.revision, 'WON').expect(200)).body as ProspectDetail;
+    expect(won.stage).toBe('WON');
+  });
 });

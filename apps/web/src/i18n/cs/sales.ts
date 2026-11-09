@@ -16,6 +16,7 @@ export const salesCs = {
     CONTACTED: 'Oslovený',
     NEGOTIATION: 'Jednání',
     OFFER: 'Nabídka',
+    PILOT: 'Pilot',
     WON: 'Získaný',
     LOST: 'Neúspěšný',
   } satisfies Record<ProspectStage, string>,

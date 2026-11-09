@@ -31,6 +31,7 @@ export const stageClass: Record<ProspectStage, string> = {
   CONTACTED: 'bg-sky-50 text-sky-800',
   NEGOTIATION: 'bg-indigo-50 text-indigo-800',
   OFFER: 'bg-amber-50 text-amber-900',
+  PILOT: 'bg-teal-50 text-teal-800',
   WON: 'bg-emerald-50 text-emerald-800',
   LOST: 'bg-stone-200 text-stone-600',
 };
