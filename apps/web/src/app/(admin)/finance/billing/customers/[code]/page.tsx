@@ -109,7 +109,7 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
           )}
         </Card>
         {portal && (
-          <Card title={portalAccessCs.title} testId="portal-access">
+          <Card title={portalAccessCs.title} testId="portal-access" id="pristup-do-portalu">
             <PortalAccess payerCustomerId={c.id} access={portal} />
           </Card>
         )}

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const ADMIN_STATE = 'e2e/.auth/admin.json';
+const OPERATOR_STATE = 'e2e/.auth/operator.json';
 
 /** Screenshots for the PR, only when asked for (STAFF_SCREENSHOTS=<dir>). */
 const shot = async (page: Page, name: string) => {
@@ -44,7 +45,7 @@ test.describe('Hotely → Uživatelé', () => {
       },
     });
     expect(hotelRes.ok(), await hotelRes.text()).toBe(true);
-    const hotel = (await hotelRes.json()) as { id: string; name: string };
+    const hotel = (await hotelRes.json()) as { id: string; code: string; name: string };
     const customerRes = await request.post('/api/admin/finance/billing/customers', {
       data: {
         requestId: crypto.randomUUID(),
@@ -131,6 +132,40 @@ test.describe('Hotely → Uživatelé', () => {
       ).toBeLessThanOrEqual(0);
       await shot(page, 'hotel-users');
 
+      // The hotel's card: the assigned account, its state, and where to manage or invite.
+      await page.goto(`/hotels/${hotel.code}`);
+      await page
+        .getByTestId('hotel-sections')
+        .getByRole('link', { name: 'Přístup do portálu' })
+        .click();
+      const section = page.getByTestId('hotel-portal-access');
+      const row = section.getByTestId(`hotel-portal-account-${account.userId}`);
+      await expect(row).toContainText(email);
+      await expect(row).toContainText('Aktivní');
+      await expect(row).toContainText(`Portál ${run} s.r.o. (E2E)`);
+      // An assignment, never a claim of operational rights (review 5841786998 pending).
+      await expect(section).not.toContainText('provozní přístup');
+      await expect(section.getByTestId('hotel-portal-access-invite')).toHaveAttribute(
+        'href',
+        `/finance/billing/customers/${customer.code}#pristup-do-portalu`,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ),
+      ).toBeLessThanOrEqual(0);
+      await shot(page, 'hotel-portal-access');
+      await row.getByRole('link', { name: `Recepce ${run}` }).click();
+      await expect(page.getByRole('heading', { level: 1, name: `Recepce ${run}` })).toBeVisible();
+      // From the account: each assigned hotel, and the payer's page to manage the access.
+      await expect(
+        page.getByTestId(`portal-grant-${grant.id}`).getByRole('link', { name: hotel.name }),
+      ).toHaveAttribute('href', `/hotels/${hotel.code}#pristup-do-portalu`);
+      await expect(page.getByTestId(`portal-grant-manage-${grant.id}`)).toHaveAttribute(
+        'href',
+        `/finance/billing/customers/${customer.code}#pristup-do-portalu`,
+      );
+      await page.goto('/hotels/users');
       await card.getByRole('link', { name: `Recepce ${run}` }).click();
       await expect(page.getByRole('heading', { level: 1, name: `Recepce ${run}` })).toBeVisible();
       const within = (testId: string) =>
@@ -157,4 +192,45 @@ test.describe('Hotely → Uživatelé', () => {
       await shot(page, 'hotel-user-detail');
     });
   }
+
+  test.describe('without the grant administrators’ permission', () => {
+    test.use({ storageState: OPERATOR_STATE });
+
+    test('no portal section, account list or e-mail on the hotel card, the tab or the account', async ({
+      page,
+      browser,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 900 });
+      const run = crypto.randomUUID().slice(0, 6);
+      const admin = await browser.newContext({ storageState: ADMIN_STATE });
+      const { hotel, customer } = await setup(admin.request, run);
+      const email = `recepce-${run}@portal-e2e.test`;
+      const issued = await admin.request.post('/api/admin/finance/portal-grants', {
+        data: {
+          requestId: crypto.randomUUID(),
+          payerCustomerId: customer.id,
+          email,
+          displayName: `Recepce ${run}`,
+          hotelIds: [hotel.id],
+          reason: 'Přístup recepce (E2E)',
+        },
+      });
+      expect(issued.ok(), await issued.text()).toBe(true);
+      const { account } = (await issued.json()) as { account: { userId: string } };
+      await admin.close();
+      await page.goto(`/hotels/${hotel.code}`);
+      // The e2e operator has no hotels:read either: the page itself is refused.
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      await expect(page.getByTestId('hotel-portal-access')).toHaveCount(0);
+      expect(await page.content()).not.toContain(email);
+      for (const url of ['/hotels/users', `/hotels/users/${account.userId}`]) {
+        await page.goto(url);
+        await expect(page.getByTestId('hotel-portal-access')).toHaveCount(0);
+        expect(await page.content()).not.toContain(email);
+      }
+      const api = await page.request.get(`/api/admin/identity/portal-accounts?hotelId=${hotel.id}`);
+      expect(api.status()).toBe(403);
+      expect(await api.text()).not.toContain(email);
+    });
+  });
 });

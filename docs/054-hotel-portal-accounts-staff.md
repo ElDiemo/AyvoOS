@@ -41,3 +41,23 @@ Today all of these permissions belong to ADMIN only.
   Issuing, replacing and inviting stay on Finance's payer page (its check of payer and hotels).
   The tab links there, and shows the payer's name when the viewer may read billing.
 - Sign-in, sessions, roles and the audit path are unchanged.
+
+## Hotel card → Přístup do portálu (owner, 2026-11-10)
+
+- The hotel's card (`/hotels/<code>#pristup-do-portalu`) shows the portal accounts assigned to
+  that hotel by an **active** grant: name (link to the account in Hotely → Uživatelé), e-mail,
+  account and invitation state, when it was assigned and by which payer. It is filtered on the
+  server (`GET /api/admin/identity/portal-accounts?hotelId=<uuid>`: only those accounts, each with
+  only the active grants naming the hotel); the card never receives the list of all accounts.
+- Same permission as the tab (`identity:portal_grants_manage`); without it the section, the list
+  and the e-mails are absent (API 403). Payer names and links only with `finance:billing_read`.
+- Inviting an account or changing an assignment links to the hotel's current payer page
+  (Finance → Plátci → plátce → Přístup do portálu): the one existing write path with Finance's
+  check before the core. No new write route.
+- The account's detail links each assigned hotel to that section and offers "Spravovat přístup u
+  plátce" per grant (the payer's page), beside the existing revocation.
+
+**Dependency.** A grant hotel is shown as an *assignment* only. Whether it is operational access
+or invoices only is not recorded yet: the boundary is the open proposal on #148 (review
+5841786998, comment 6767450591) awaiting the owner. Until then the UI makes no claim about
+operational rights; once approved, the card shows the kind of access per hotel.

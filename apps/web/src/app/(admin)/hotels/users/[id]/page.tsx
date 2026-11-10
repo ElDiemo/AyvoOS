@@ -1,9 +1,11 @@
 import { portalAccountListItemSchema } from '@ayvo/types';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { HotelsHeader } from '@/components/hotels/hotels-header';
+import { payerPortalHref } from '@/components/hotels/hotel-portal-access';
 import { GrantRow, PortalAccountSummary } from '@/components/hotels/portal-account-card';
 import { AccountStatusAction, RevokeGrant } from '@/components/hotels/portal-account-actions';
-import { Card, Notice } from '@/components/ui';
+import { buttonClass, Card, Notice } from '@/components/ui';
 import { hotelUsersCs as t } from '@/i18n/cs/hotel-users';
 import { apiGetOptional } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
@@ -44,7 +46,18 @@ export default async function HotelUserPage({ params }: { params: Promise<{ id: 
                 .filter((g) => !g.revokedAt)
                 .map((g) => (
                   <GrantRow key={g.id} grant={g} payers={payers}>
-                    <RevokeGrant grantId={g.id} />
+                    <div className="flex flex-wrap items-center gap-3">
+                      {payers?.get(g.payerCustomerId) && (
+                        <Link
+                          href={payerPortalHref(payers.get(g.payerCustomerId)!.code)}
+                          className={buttonClass.secondary}
+                          data-testid={`portal-grant-manage-${g.id}`}
+                        >
+                          {t.manageInFinance}
+                        </Link>
+                      )}
+                      <RevokeGrant grantId={g.id} />
+                    </div>
                   </GrantRow>
                 ))}
             </ul>

@@ -1,9 +1,11 @@
 import {
   portalAccountActivationSchema,
+  portalAccountsQuerySchema,
   type PortalAccountActivation,
+  type PortalAccountsQuery,
   type PortalAccountListItem,
 } from '@ayvo/types';
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { domainError } from '../common/domain-error.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -29,8 +31,10 @@ export class PortalAccountsController {
 
   @Get()
   @RequirePermission('identity:portal_grants_manage')
-  list(): Promise<PortalAccountListItem[]> {
-    return this.grants.accounts();
+  list(
+    @Query(new ZodValidationPipe(portalAccountsQuerySchema)) q: PortalAccountsQuery,
+  ): Promise<PortalAccountListItem[]> {
+    return this.grants.accounts(undefined, q.hotelId);
   }
 
   @Get(':id')

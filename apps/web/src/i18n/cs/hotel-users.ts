@@ -24,7 +24,17 @@ export const hotelUsersCs = {
   revokedGrants: (n: number) => `Odvolané přístupy (${n})`,
   payer: 'Plátce',
   payerUnknown: 'Plátce ve Financích',
-  manageInFinance: 'Spravovat ve Financích',
+  manageInFinance: 'Spravovat přístup u plátce',
+  /** "Přístup do portálu" on a hotel's card. */
+  hotelCard: {
+    title: 'Přístup do portálu',
+    help: 'Účty hotelového portálu přiřazené k tomuto hotelu. Přiřazení zatím neříká, zda účet smí do provozních údajů, nebo jen do faktur — to se teprve rozhoduje.',
+    none: 'K hotelu zatím není přiřazený žádný účet portálu.',
+    unavailable: 'Přiřazené účty se teď nepodařilo načíst.',
+    assigned: 'Přiřazeno',
+    manageAccount: 'Detail účtu a odvolání přístupu',
+    invite: (payer: string) => `Pozvat účet nebo změnit přiřazení u plátce ${payer}`,
+  },
   grantedAt: 'Vydáno',
   revokedAt: 'Odvoláno',
   detail: 'Detail účtu',

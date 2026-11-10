@@ -295,12 +295,19 @@ export class PortalGrantsService {
   /**
    * Hotely → Uživatelé: every hotel portal (PORTAL) account — never an internal one — with all its
    * grants (active first) and their hotels' identity, its invitation and its open sessions. One
-   * account (`only`) or all, by name.
+   * account (`only`) or all, by name. With `hotelId` (the hotel's card): only the accounts with an
+   * active grant naming that hotel, each with only those grants — never the other accounts.
    */
-  async accounts(only?: string): Promise<PortalAccountListItem[]> {
+  async accounts(only?: string, hotelId?: string): Promise<PortalAccountListItem[]> {
     const now = new Date();
+    // One hotel's card: only accounts with an active grant naming it, and only those grants.
+    const ofHotel = hotelId ? { revokedAt: null, hotels: { some: { hotelId } } } : undefined;
     const users = await this.prisma.user.findMany({
-      where: { audience: 'PORTAL', ...(only ? { id: only } : {}) },
+      where: {
+        audience: 'PORTAL',
+        ...(only ? { id: only } : {}),
+        ...(ofHotel ? { portalGrants: { some: ofHotel } } : {}),
+      },
       select: {
         id: true,
         email: true,
@@ -312,6 +319,7 @@ export class PortalGrantsService {
         createdAt: true,
         ...invitationSelect,
         portalGrants: {
+          ...(ofHotel ? { where: ofHotel } : {}),
           include: {
             hotels: { include: { hotel: { select: { id: true, code: true, name: true } } } },
           },
