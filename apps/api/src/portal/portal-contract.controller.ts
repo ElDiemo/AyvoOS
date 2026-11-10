@@ -331,7 +331,10 @@ export class PortalContractController {
 
   // --- "Smlouvy" (signed originals only) -------------------------------------------------
 
-  /** A granted hotel's signed contracts (newest first); any other id is "not found". */
+  /**
+   * An operational granted hotel's signed contracts (newest first); any other id — also a hotel the
+   * grant opens for invoices only (v6) — is "not found".
+   */
   @PortalServiceAccess()
   @Get('hotels/:id/contracts')
   contractsOf(
@@ -341,7 +344,7 @@ export class PortalContractController {
     return this.slots.run(async () => {
       const session = await this.portalSession(token);
       const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
-        g.hotelIds.includes(id),
+        g.operationalHotelIds.includes(id),
       );
       if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
       return this.contracts.portalSigned(id, this.db);
@@ -377,7 +380,9 @@ export class PortalContractController {
       try {
         const session = await this.portalSession(token);
         const hotels = new Set(
-          (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+          (await this.grants.activeOf(session.user.id, this.db)).flatMap(
+            (g) => g.operationalHotelIds,
+          ),
         );
         const { file, signedOn } = await this.contracts.portalSignedFile(
           id,

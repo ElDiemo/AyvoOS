@@ -16,6 +16,7 @@ import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.
 import { PortalRequestLimit } from '../src/portal/portal-request-limit.js';
 import { createHotel } from './support/order-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { invoicesCheck, operationsCheck } from './support/portal-check.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
 const PASSWORD = 'Dlouhe portalove heslo AYVO 789';
@@ -65,7 +66,7 @@ describe.skipIf(!hasDatabase)('hotel portal: signed contracts', () => {
       payerCustomerId: randomUUID(),
       hotelIds,
       reason: 'synthetic portal grant',
-      financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
+      financeCheck: operationsCheck(hotelIds),
     });
   const pdfBody = (res: request.Response) => res.body as Buffer;
 
@@ -250,6 +251,43 @@ describe.skipIf(!hasDatabase)('hotel portal: signed contracts', () => {
     expect((await get(`hotels/${hotelA.id}/contracts`, a.session)).status).toBe(404);
     expect((await get(`contracts/${signedA.id}/pdf`, a.session)).status).toBe(404);
     expect((await get(`contracts/${signedB.id}/pdf`, a.session)).status).toBe(200);
+  });
+
+  it('the operational boundary (v6): a hotel opened for invoices only, or behind a fence, shows no contracts and no PDF', async () => {
+    const a = await account();
+    const payer = randomUUID();
+    // Hotel A for invoices only (e.g. the payer has it only by an issued invoice).
+    await t.app.get(PortalGrantsService).issue(adminId, {
+      requestId: randomUUID(),
+      userId: a.user.id,
+      payerCustomerId: payer,
+      hotelIds: [hotelA.id],
+      reason: 'synthetic portal grant',
+      financeCheck: invoicesCheck([hotelA.id]),
+    });
+    expect((await get(`hotels/${hotelA.id}/contracts`, a.session)).status).toBe(404);
+    expect((await get(`contracts/${signedA.id}/pdf`, a.session)).status).toBe(404);
+
+    // Hotel B with operations, then a fence ending them yesterday (a change of payer).
+    const b = await account();
+    await grant(b.user.id, [hotelB.id]);
+    const own = await t.prisma.portalGrant.findFirstOrThrow({
+      where: { userId: b.user.id, revokedAt: null },
+    });
+    expect((await get(`contracts/${signedB.id}/pdf`, b.session)).status).toBe(200);
+    const yesterday = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+    await t.prisma.portalOperationalFence.create({
+      data: {
+        payerCustomerId: own.payerCustomerId,
+        hotelId: hotelB.id,
+        endsOn: new Date(`${yesterday}T00:00:00.000Z`),
+        termsRevision: 2,
+        requestId: randomUUID(),
+        reason: 'synthetic transfer',
+      },
+    });
+    expect((await get(`hotels/${hotelB.id}/contracts`, b.session)).status).toBe(404);
+    expect((await get(`contracts/${signedB.id}/pdf`, b.session)).status).toBe(404);
   });
 
   describe('review 5841786998: the PDF read in the core is bounded work', () => {
