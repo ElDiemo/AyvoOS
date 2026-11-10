@@ -57,7 +57,7 @@ Today all of these permissions belong to ADMIN only.
 - The account's detail links each assigned hotel to that section and offers "Spravovat přístup u
   plátce" per grant (the payer's page), beside the existing revocation.
 
-**Dependency.** A grant hotel is shown as an *assignment* only. Whether it is operational access
+**Dependency.** A grant hotel is shown as an _assignment_ only. Whether it is operational access
 or invoices only is not recorded yet: the boundary is the open proposal on #148 (review
 5841786998, comment 6767450591) awaiting the owner. Until then the UI makes no claim about
 operational rights; once approved, the card shows the kind of access per hotel.
