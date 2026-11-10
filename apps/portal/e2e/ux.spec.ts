@@ -132,4 +132,70 @@ test.describe('hotel portal: invoices and sign-in UX', () => {
     await page.goto('/reset-password');
     await expect(page.getByTestId('back-to-login')).toHaveAttribute('href', '/login');
   });
+
+  test('profile edit: the impact before saving, Uložit/Zrušit at hand on a phone, nothing covered', async ({
+    page,
+  }) => {
+    await control(page, { resetProfile: true, profileSaves: 0, lastProfileBody: null });
+    await signIn(page);
+    await page.getByRole('link', { name: /Hotel Portál E2E/ }).click();
+    await page.getByRole('link', { name: 'Upravit profil' }).click();
+    await expect(page.getByRole('heading', { name: 'Upravit profil hotelu' })).toBeVisible();
+    const actions = page.getByTestId('profile-actions');
+    const save = actions.getByRole('button', { name: 'Uložit' });
+    // The impact is read before the decision: before the actions in the document, and above them
+    // on a wide screen where they follow the form.
+    expect(
+      await page
+        .getByTestId('profile-impact')
+        .evaluate(
+          (el) =>
+            !!(
+              el.compareDocumentPosition(document.querySelector('[data-testid=profile-actions]')!) &
+              Node.DOCUMENT_POSITION_FOLLOWING
+            ),
+        ),
+    ).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    expect((await page.getByTestId('profile-impact').boundingBox())!.y).toBeLessThan(
+      (await save.boundingBox())!.y,
+    );
+    // A phone with the keyboard open (a short viewport): the actions stay in view at the top of
+    // the form, and no focused field is ever under them.
+    await page.setViewportSize({ width: 390, height: 560 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(save).toBeInViewport();
+    await expect(actions.getByRole('link', { name: 'Zrušit' })).toBeInViewport();
+    const uncovered = async (selector: string) => {
+      const bar = (await actions.boundingBox())!;
+      const box = (await page.locator(selector).boundingBox())!;
+      expect(box.y + box.height, selector).toBeLessThanOrEqual(bar.y + 1);
+    };
+    for (const name of [
+      'addressLine1',
+      'city',
+      'contactEmail',
+      'receivingContactEmail',
+      'deliveryNote',
+      'reason',
+    ]) {
+      await page.locator(`[name=${name}]`).focus();
+      await uncovered(`[name=${name}]`);
+    }
+    await shot(page, 'ux-profile-edit');
+    // Errors: the summary takes the focus; its link brings the field into view above the actions.
+    await page.locator('[name=addressLine1]').fill('');
+    await page.locator('[name=reason]').fill('');
+    await save.click();
+    const summary = page.getByTestId('profile-form').getByRole('alert');
+    await expect(summary).toBeFocused();
+    await expect(summary).toContainText('Důvod'); // the reason is still required
+    await summary.getByRole('link').first().click();
+    await uncovered('[name=addressLine1]');
+    await noSideways(page);
+    await shot(page, 'ux-profile-errors');
+    // Wide screens: the actions simply follow the form.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    expect(await actions.evaluate((el) => getComputedStyle(el).position)).toBe('static');
+  });
 });
