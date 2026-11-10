@@ -19,6 +19,8 @@ export const portalAccessCs = {
   replayInactive:
     'Přístup už byl uložen dříve. Účet je teď deaktivovaný nebo přístup odvolaný – pozvánka se neposílá.',
   invoiceOnly: 'jen vystavené faktury',
+  preselected: (hotel: string) =>
+    `Předvybraný hotel z jeho karty: ${hotel}. Zkontrolujte výběr a pozvání potvrďte.`,
   granted: (at: string) => `Uděleno ${at}`,
   hotels: 'Hotely',
   noPayerHotels: 'Plátce teď nemá žádný hotel s platnými podmínkami ani vystavenými fakturami.',

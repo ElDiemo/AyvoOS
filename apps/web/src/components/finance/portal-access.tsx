@@ -102,12 +102,23 @@ function HotelPicker({
   );
 }
 
-function NewAccess({ payerCustomerId, hotels }: { payerCustomerId: string; hotels: Hotel[] }) {
+function NewAccess({
+  payerCustomerId,
+  hotels,
+  preselect,
+}: {
+  payerCustomerId: string;
+  hotels: Hotel[];
+  /** A hotel of `hotels` to start with (coming from its card); the user still confirms. */
+  preselect: string | null;
+}) {
   const { busy, error, note, run, fresh } = useAction();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [reason, setReason] = useState('');
-  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [chosen, setChosen] = useState<Set<string>>(
+    () => new Set(preselect && hotels.some((h) => h.id === preselect) ? [preselect] : []),
+  );
   const edit =
     <T,>(set: (v: T) => void) =>
     (v: T) => {
@@ -299,11 +310,19 @@ function ActiveGrant({ grant, hotels }: { grant: PortalGrantListItem; hotels: Ho
 export function PortalAccess({
   payerCustomerId,
   access,
+  preselectHotelId = null,
 }: {
   payerCustomerId: string;
   access: FinancePortalAccess;
+  /**
+   * From a hotel's card (`?hotel=<id>`): that hotel is pre-selected in the new access — only if it
+   * is one of the hotels Finance verified for this payer; any other id selects nothing. The
+   * selection stays visible, the user confirms, and the server checks the pair again.
+   */
+  preselectHotelId?: string | null;
 }) {
   const { grants, payerHotels: hotels, hotelNames } = access;
+  const preselect = hotels.find((h) => h.id === preselectHotelId) ?? null;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-stone-500">{t.help}</p>
@@ -341,12 +360,21 @@ export function PortalAccess({
       {hotels.length === 0 ? (
         <p className="text-sm text-stone-500">{t.noPayerHotels}</p>
       ) : (
-        <details>
+        <details open={preselect !== null}>
           <summary className="cursor-pointer text-sm font-medium" data-testid="portal-access-open">
             {t.newAccess}
           </summary>
-          <div className="mt-3">
-            <NewAccess payerCustomerId={payerCustomerId} hotels={hotels} />
+          <div className="mt-3 flex flex-col gap-3">
+            {preselect && (
+              <p className="text-xs text-stone-600" data-testid="portal-access-preselected">
+                {t.preselected(preselect.name)}
+              </p>
+            )}
+            <NewAccess
+              payerCustomerId={payerCustomerId}
+              hotels={hotels}
+              preselect={preselect?.id ?? null}
+            />
           </div>
         </details>
       )}

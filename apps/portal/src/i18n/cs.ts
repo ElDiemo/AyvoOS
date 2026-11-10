@@ -34,6 +34,7 @@ export const cs = {
     help: 'Uložte si je na bezpečné místo. Každý kód lze použít jednou místo kódu z aplikace. Znovu je neuvidíte.',
     continue: 'Uloženo, pokračovat',
   },
+  backToLogin: 'Zpět na přihlášení',
   forgot: {
     title: 'Zapomenuté heslo',
     email: 'E-mail',
@@ -116,8 +117,26 @@ export const cs = {
     download: 'Stáhnout PDF',
   },
   invoices: {
+    package: {
+      title: 'Balíček za období',
+      open: 'Stáhnout faktury za období (ZIP)',
+      help: 'Stáhněte PDF všech faktur za zvolené měsíce najednou jako ZIP s přehledem (manifest.csv). Nejvýše 12 měsíců.',
+      from: 'Od měsíce',
+      to: 'Do měsíce',
+      submit: 'Stáhnout balíček (ZIP)',
+      reasons: {
+        INVALID_PERIOD: 'Zvolte platné období: začátek nejpozději v konci, nejvýše 12 měsíců.',
+        NO_INVOICES: 'V tomto období nejsou žádné faktury, které můžete vidět.',
+        PACKAGE_TOO_LARGE: 'Balíček by byl příliš velký. Zvolte kratší období.',
+        PACKAGE_BUSY: 'Balíček se právě připravuje. Zkuste to za chvíli.',
+        UNAVAILABLE: 'Balíček se teď nepodařilo připravit. Zkuste to prosím později.',
+      } as Record<string, string>,
+    },
     title: 'Faktury',
-    none: 'Žádné faktury.',
+    none: 'Zatím tu nejsou žádné faktury.',
+    noneHelp:
+      'Faktury, které AYVO vystaví plátci vašeho hotelu, se tu objeví hned po vystavení. S dotazem k fakturaci napište na',
+    billingEmail: 'invoice@ayvo.co',
     unavailable: 'Faktury nejsou dostupné. Zkuste to prosím později.',
     test: 'TESTOVACÍ',
     number: 'Číslo',
