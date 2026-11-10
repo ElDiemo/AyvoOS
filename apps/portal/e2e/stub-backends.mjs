@@ -3,9 +3,11 @@
 // own token per receiver, the forwarded portal session, the browser request it forwards — and
 // every answer is validated against the shared contract schemas before it is sent.
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   portalChallengeStepSchema,
+  portalHotelProfileRequestSchema,
+  portalHotelProfileSchema,
   portalHotelSchema,
   portalInvoicePageSchema,
   portalInvoiceSchema,
@@ -33,6 +35,44 @@ const hotel = {
   city: 'Olomouc',
   countryCode: 'CZ',
 };
+/** A hotel of another account: never reachable from this session. */
+export const FOREIGN_HOTEL_ID = randomUUID();
+const freshProfile = () => ({
+  addressLine1: hotel.addressLine1,
+  addressLine2: null,
+  postalCode: hotel.postalCode,
+  city: hotel.city,
+  contactName: 'Marie Recepční',
+  contactPhone: '+420 585 000 111',
+  contactEmail: 'recepce@hotel-e2e.test',
+  receivingContactName: null,
+  receivingContactPhone: null,
+  receivingContactEmail: null,
+  deliveryNote: null,
+});
+const fingerprint = (fields) =>
+  createHash('sha256')
+    .update(JSON.stringify([hotel.id, ...Object.values(fields)]))
+    .digest('hex');
+const profileView = (fields) => ({
+  id: hotel.id,
+  name: hotel.name,
+  countryCode: hotel.countryCode,
+  address: {
+    addressLine1: fields.addressLine1,
+    addressLine2: fields.addressLine2,
+    postalCode: fields.postalCode,
+    city: fields.city,
+  },
+  contact: { name: fields.contactName, phone: fields.contactPhone, email: fields.contactEmail },
+  receiving: {
+    contactName: fields.receivingContactName,
+    contactPhone: fields.receivingContactPhone,
+    contactEmail: fields.receivingContactEmail,
+    deliveryNote: fields.deliveryNote,
+  },
+  fingerprint: fingerprint(fields),
+});
 const invoice = (n, over = {}) => ({
   id: randomUUID(),
   number: `T2026-0000${n}`,
@@ -54,6 +94,8 @@ const invoices = [
   invoice(2),
 ];
 const pdf = Buffer.from('%PDF-1.4\n% synthetic portal e2e invoice\n%%EOF\n');
+/** An empty but valid ZIP (end of central directory only). */
+const zipBytes = Buffer.from([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
 
 const state = {
   financeDown: false,
@@ -65,6 +107,14 @@ const state = {
   coreCalls: 0,
   sessions: new Set(),
   pending: new Map(),
+  /** The hotel's stored profile; `profileGrant: false` = the grant on it was revoked. */
+  profile: freshProfile(),
+  profileGrant: true,
+  profileSaves: 0,
+  lastProfileBody: null,
+  /** 'ok' | 'empty' (NO_INVOICES) | 'large' (PACKAGE_TOO_LARGE). */
+  packageMode: 'ok',
+  lastPackageQuery: null,
 };
 
 const send = (res, status, body, schema) => {
@@ -177,6 +227,26 @@ async function core(req, res, path) {
       [hotel].map((h) => portalHotelSchema.parse(h)),
     );
   if (path === `hotels/${hotel.id}`) return send(res, 200, hotel, portalHotelSchema);
+  const profileMatch = path.match(/^hotels\/([^/]+)\/profile$/);
+  if (profileMatch) {
+    const granted = profileMatch[1] === hotel.id && state.profileGrant;
+    if (req.method === 'GET') {
+      if (!granted) return refuse(res, 404, 'HOTEL_NOT_FOUND');
+      return send(res, 200, profileView(state.profile), portalHotelProfileSchema);
+    }
+    const raw = await readBody(req);
+    state.lastProfileBody = raw;
+    const parsed = portalHotelProfileRequestSchema.safeParse(raw);
+    if (!parsed.success) return refuse(res, 400, 'VALIDATION');
+    // The core's own CSRF check of the forwarded browser request.
+    if (parsed.data.client.origin !== STUB.portalOrigin) return refuse(res, 403, 'CSRF_REJECTED');
+    if (!granted) return refuse(res, 404, 'HOTEL_NOT_FOUND');
+    if (parsed.data.expected !== fingerprint(state.profile))
+      return refuse(res, 409, 'PROFILE_STALE');
+    state.profile = { ...parsed.data.profile };
+    state.profileSaves++;
+    return send(res, 200, profileView(state.profile), portalHotelProfileSchema);
+  }
   if (path.startsWith('hotels/')) return refuse(res, 404, 'HOTEL_NOT_FOUND');
   return refuse(res, 404, 'NOT_FOUND');
 }
@@ -190,6 +260,22 @@ function finance(req, res, path) {
   if (!session(req)) return refuse(res, 401, 'UNAUTHENTICATED');
   const [base, id, pdfPart] = path.split('?')[0].split('/');
   if (base !== 'invoices') return refuse(res, 404, 'NOT_FOUND');
+  if (id === 'package') {
+    const q = new URLSearchParams(path.split('?')[1] ?? '');
+    state.lastPackageQuery = Object.fromEntries(q);
+    if (!/^\d{4}-\d{2}$/.test(q.get('from') ?? '') || !/^\d{4}-\d{2}$/.test(q.get('to') ?? ''))
+      return refuse(res, 400, 'VALIDATION');
+    if (state.packageMode === 'empty') return refuse(res, 404, 'NO_INVOICES');
+    if (state.packageMode === 'large') return refuse(res, 422, 'PACKAGE_TOO_LARGE');
+    res.writeHead(200, {
+      'content-type': 'application/zip',
+      'content-length': String(zipBytes.length),
+      'content-disposition': `attachment; filename="AYVO-faktury-${q.get('from')}-${q.get('to')}.zip"`,
+      'cache-control': 'private, no-store',
+    });
+    res.end(zipBytes);
+    return;
+  }
   if (!id)
     return send(
       res,
@@ -224,10 +310,27 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         lastClient: state.lastClient,
         coreCalls: state.coreCalls,
         sessions: state.sessions.size,
+        profile: state.profile,
+        profileSaves: state.profileSaves,
+        lastPackageQuery: state.lastPackageQuery,
+        lastProfileBody: state.lastProfileBody,
+        foreignHotelId: FOREIGN_HOTEL_ID,
+        hotelId: hotel.id,
         invoices,
       });
     if (req.url === '/__control') {
-      Object.assign(state, await readBody(req));
+      const body = await readBody(req);
+      if (body.resetProfile) {
+        state.profile = freshProfile();
+        state.profileGrant = true;
+        delete body.resetProfile;
+      }
+      if (body.touchProfile) {
+        // Another account saved meanwhile.
+        state.profile = { ...state.profile, city: `${state.profile.city}-jinde` };
+        delete body.touchProfile;
+      }
+      Object.assign(state, body);
       return send(res, 200, { ok: true });
     }
     return false;

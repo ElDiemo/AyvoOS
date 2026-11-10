@@ -57,6 +57,11 @@ export const salesCs = {
       n === 1
         ? '1 rozpracovaný zájemce nemá další krok.'
         : `${n} rozpracovaných zájemců nemá další krok.`,
+    missingTitle: 'Bez dalšího kroku',
+    missingHelp: 'Otevřete zájemce a naplánujte, co bude dál.',
+    missingAll: 'Všichni bez dalšího kroku',
+    lastContact: (at: string) => `poslední kontakt ${at}`,
+    noContactYet: 'zatím bez kontaktu',
     noOverdue: 'Nic po termínu.',
     noToday: 'Na dnešek nic. Podívejte se na zájemce bez dalšího kroku.',
     noUpcoming: 'Na příštích 7 dní nic naplánováno.',
@@ -68,6 +73,8 @@ export const salesCs = {
   },
 
   list: {
+    phaseInProgress: 'Jen rozpracovaní (Oslovený, Jednání, Nabídka)',
+    phaseClear: 'Zrušit',
     title: 'Akvizice',
     subtitle: 'Zájemci o spolupráci: kdo to je, co proběhlo a co uděláme dál.',
     search: 'Hledat',
@@ -193,6 +200,9 @@ export const salesCs = {
   },
 
   detail: {
+    nextStepOffer: 'Zájemce nemá žádný další krok. Naplánujte, co bude dál – ať se neztratí.',
+    nextStepPlan: 'Naplánovat další krok',
+    nextStepLater: 'Teď ne',
     owner: 'Obchodník',
     stage: 'Fáze',
     priority: 'Priorita',

@@ -22,6 +22,7 @@ import { apiGet } from '@/lib/api';
 import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 import { ContractDraftsCard } from '@/components/contracts/contract-drafts-card';
 import { HotelBillingPanel } from '@/components/hotels/hotel-billing-panel';
+import { HotelPortalAccess } from '@/components/hotels/hotel-portal-access';
 
 export const dynamic = 'force-dynamic';
 const t = hotelsCs.detail;
@@ -62,9 +63,11 @@ export default async function HotelPage({
   const a = hotel.address;
   const canBilling = hasPermission(me, 'finance:billing_read');
   const canInvoices = hasPermission(me, 'finance:invoices_read');
+  const canPortal = hasPermission(me, 'identity:portal_grants_manage');
   const sections = [
     { href: '#udaje', label: t.sectionDetails },
     ...(canBilling || canInvoices ? [{ href: '#fakturace', label: t.sectionBilling }] : []),
+    ...(canPortal ? [{ href: '#pristup-do-portalu', label: t.sectionPortal }] : []),
     ...(canSeeOrders
       ? [
           { href: '#plan', label: t.sectionPlan },
@@ -155,6 +158,12 @@ export default async function HotelPage({
             canInvoices={canInvoices}
             canManage={hasPermission(me, 'finance:billing_manage')}
           />
+        </div>
+      )}
+      {/* Hotel portal accounts assigned to this hotel (doc 054): identity:portal_grants_manage only. */}
+      {canPortal && (
+        <div className="mb-6 scroll-mt-4">
+          <HotelPortalAccess hotelId={hotel.id} me={me} />
         </div>
       )}
       {/* Contract drafts (ADR 0043): sales:manage + hotels:read; only an explicit click prepares one. */}

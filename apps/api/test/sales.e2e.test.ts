@@ -935,4 +935,62 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
     for (const q of ['?month=2026-13', '?month=26-01', '?assignee=nobody'])
       expect((await a.get(`/tasks/calendar${q}`)).status, q).toBe(400);
   });
+
+  it("Přehled: the prospects in progress without a next step, only in the person's scope; the list filter", async () => {
+    const a = as(people.a.cookie);
+    const b = as(people.b.cookie);
+    const contacted = async (cookie: string, name: string) => {
+      const d = await create(cookie, name);
+      return (
+        await as(cookie)
+          .post(`/prospects/${d.code}/stage`, {
+            revision: d.revision,
+            stage: 'CONTACTED',
+            reason: null,
+            lostReason: null,
+          })
+          .expect(200)
+      ).body as ProspectDetail;
+    };
+    const lonely = await contacted(people.a.cookie, `Bez kroku A ${tag}`);
+    const planned = await contacted(people.a.cookie, `S krokem A ${tag}`);
+    await a
+      .post(`/prospects/${planned.code}/tasks`, {
+        title: 'Zavolat',
+        dueOn: addDays(today(), 2),
+        contactId: null,
+        assigneeId: null,
+        note: null,
+      })
+      .expect(200);
+    const fresh = await create(people.a.cookie, `Nový bez kroku A ${tag}`); // NEW: not in progress
+    const foreign = await contacted(people.b.cookie, `Bez kroku B ${tag}`);
+
+    const mine = (await a.get('/overview').expect(200)).body as SalesOverview;
+    const codes = mine.withoutNextStep.map((p) => p.code);
+    expect(codes).toContain(lonely.code);
+    expect(codes).not.toContain(planned.code);
+    expect(codes).not.toContain(fresh.code);
+    expect(codes).not.toContain(foreign.code);
+    expect(mine.withoutNextStep.every((p) => p.nextTask === null)).toBe(true);
+    expect(mine.counts.withoutNextStep).toBeGreaterThanOrEqual(1);
+    // The other salesperson sees only theirs; the administrator, asking for everyone, both.
+    const theirs = (await b.get('/overview').expect(200)).body as SalesOverview;
+    expect(theirs.withoutNextStep.map((p) => p.code)).toContain(foreign.code);
+    expect(theirs.withoutNextStep.map((p) => p.code)).not.toContain(lonely.code);
+    const all = (await as(admin).get('/overview?scope=all').expect(200)).body as SalesOverview;
+    expect(all.withoutNextStep.map((p) => p.code)).toEqual(
+      expect.arrayContaining([lonely.code, foreign.code]),
+    );
+
+    // The list: in progress without a next step (never a NEW one), own only for a salesperson.
+    const list = (await a.get('/prospects?next=none&phase=in-progress').expect(200))
+      .body as ProspectPage;
+    const listed = list.items.map((p) => p.code);
+    expect(listed).toContain(lonely.code);
+    expect(listed).not.toContain(fresh.code);
+    expect(listed).not.toContain(planned.code);
+    expect(listed).not.toContain(foreign.code);
+    expect((await a.get('/prospects?phase=other')).status).toBe(400);
+  });
 });
