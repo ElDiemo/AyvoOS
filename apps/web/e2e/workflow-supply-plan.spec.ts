@@ -107,6 +107,7 @@ test('the hotel in clear sections; receiving details are optional and saved with
   await expect(page.getByTestId('hotel-sections').getByRole('link')).toHaveText([
     'Údaje',
     'Fakturace',
+    'Přístup do portálu',
     'Plán zásobování',
     'Objednávky',
     'Dodávky',
