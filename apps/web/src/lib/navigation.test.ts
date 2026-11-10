@@ -37,6 +37,11 @@ describe('AYVO OS navigation (doc 019)', () => {
         ?.pages.map((p) => p.id);
     expect(pages(['hotels:read'], 'hotels')).toEqual(['list']);
     expect(pages(['hotels:read', 'hotels:manage'], 'hotels')).toEqual(['list', 'new']);
+    // Hotel portal accounts: only for the grant administrators.
+    expect(pages(['hotels:read', 'identity:portal_grants_manage'], 'hotels')).toEqual([
+      'list',
+      'users',
+    ]);
     expect(pages(['orders:read', 'orders:pick'], 'dispatch')).toEqual(['orders']);
     expect(pages(['orders:read', 'orders:manage'], 'dispatch')).toEqual(['orders', 'new']);
     expect(ids(['orders:pick'])).not.toContain('dispatch'); // picking needs the order view too
