@@ -174,6 +174,9 @@ export const envSchema = z
     // statement (lock waits included). Then 503, no data; the slot and connection are free again.
     PORTAL_DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(50).max(10_000).default(1000),
     PORTAL_DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(50).max(10_000).default(2000),
+    // One deadline for a signed contract's PDF in the core: reading it from storage and sending it.
+    // Below portal-web's own 20 s, so the core has stopped its work before the portal gives up.
+    PORTAL_CONTRACT_PDF_TIMEOUT_MS: z.coerce.number().int().min(100).max(15_000).default(10_000),
     // Argon2 computations the portal may run at once — its own capacity, beside the internal OS's
     // (2), which the portal never takes. Peak Argon2 memory: (2 + this) × 64 MiB.
     PORTAL_PASSWORD_CONCURRENCY: z.coerce.number().int().min(1).max(2).default(1),

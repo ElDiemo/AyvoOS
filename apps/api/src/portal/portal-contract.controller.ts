@@ -1,3 +1,4 @@
+import type { ServerResponse } from 'node:http';
 import {
   PORTAL_SESSION_HEADER,
   portalActionRequestSchema,
@@ -24,14 +25,13 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   Headers,
   HttpCode,
   Inject,
   Param,
   ParseUUIDPipe,
   Post,
-  StreamableFile,
+  Res,
 } from '@nestjs/common';
 import QRCode from 'qrcode';
 import { AuditService } from '../audit/audit.service.js';
@@ -348,32 +348,63 @@ export class PortalContractController {
   /**
    * One signed original as kept (hash checked), if its hotel is granted to the session now; any
    * other id is "not found". The download is recorded on the draft with the portal account.
+   *
+   * Bounded work (review 5841786998, as the Finance invoice PDF): one deadline
+   * (PORTAL_CONTRACT_PDF_TIMEOUT_MS) covers reading and sending, the client leaving stops the read
+   * in the storage, at most the upload limit is read, and the request slot is held until the
+   * bytes have left or the connection is cut — never while storage work still runs.
    */
   @PortalServiceAccess()
   @Get('contracts/:id/pdf')
-  @Header('Cache-Control', 'private, no-store')
-  @Header('Content-Security-Policy', "default-src 'none'; sandbox")
-  @Header('X-Content-Type-Options', 'nosniff')
   contractPdf(
     @Param('id', ParseUUIDPipe) id: string,
     @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
-  ): Promise<StreamableFile> {
+    @Res() res: ServerResponse,
+  ): Promise<void> {
     return this.slots.run(async () => {
-      const session = await this.portalSession(token);
-      const hotels = new Set(
-        (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+      const stop = new AbortController();
+      const deadline = setTimeout(
+        () => stop.abort(new Error('PortalContractPdfDeadline')),
+        this.env.PORTAL_CONTRACT_PDF_TIMEOUT_MS,
       );
-      const { file, signedOn } = await this.contracts.portalSignedFile(
-        id,
-        hotels,
-        session.user.id,
-        this.db,
-      );
-      return new StreamableFile(file, {
-        type: 'application/pdf',
-        length: file.length,
-        disposition: `attachment; filename="AYVO-smlouva-${signedOn}.pdf"`,
-      });
+      const gone = () => {
+        if (!res.writableFinished) stop.abort(new Error('PortalContractPdfClientGone'));
+      };
+      res.once('close', gone);
+      try {
+        const session = await this.portalSession(token);
+        const hotels = new Set(
+          (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+        );
+        const { file, signedOn } = await this.contracts.portalSignedFile(
+          id,
+          hotels,
+          session.user.id,
+          { signal: stop.signal, maxBytes: this.env.SUPPLIER_DOCUMENT_MAX_BYTES },
+          this.db,
+        );
+        if (stop.signal.aborted) throw stop.signal.reason;
+        if (res.destroyed) return;
+        await new Promise<void>((resolve) => {
+          const done = () => resolve();
+          res.once('finish', done);
+          res.once('close', done);
+          // The deadline also bounds the sending: a receiver too slow is cut off.
+          stop.signal.addEventListener('abort', () => res.destroy(), { once: true });
+          res.writeHead(200, {
+            'Content-Type': 'application/pdf',
+            'Content-Length': String(file.length),
+            'Content-Disposition': `attachment; filename="AYVO-smlouva-${signedOn}.pdf"`,
+            'Cache-Control': 'private, no-store',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
+            'X-Content-Type-Options': 'nosniff',
+          });
+          res.end(file);
+        });
+      } finally {
+        clearTimeout(deadline);
+        res.off('close', gone);
+      }
     });
   }
 

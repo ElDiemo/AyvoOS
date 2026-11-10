@@ -13,6 +13,7 @@ import { contractDocument } from '../src/contracts/contract-template.js';
 import { InvitationsService } from '../src/identity/invitations.service.js';
 import { NativeTokensService } from '../src/identity/native-tokens.service.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
+import { PortalRequestLimit } from '../src/portal/portal-request-limit.js';
 import { createHotel } from './support/order-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
 
@@ -22,6 +23,7 @@ const D = '/api/admin/contracts/drafts';
 const portalToken = randomBytes(32).toString('base64url');
 const financeToken = randomBytes(32).toString('base64url');
 const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
+const MAX_READ = 1024 * 1024;
 const unique = (p: string) => `${p}-${randomUUID().slice(0, 8)}@ayvo.test`;
 const tokenOf = (url: string) => new URLSearchParams(new URL(url).hash.slice(1)).get('token')!;
 const otp = (secret: string) =>
@@ -162,6 +164,10 @@ describe.skipIf(!hasDatabase)('hotel portal: signed contracts', () => {
         FINANCE_SERVICE_TOKEN_SHA256: sha(financeToken),
         PORTAL_DB_ACQUIRE_TIMEOUT_MS: '1500',
         PORTAL_DB_STATEMENT_TIMEOUT_MS: '5000',
+        // The portal app only reads signed originals (uploads go through `su`): a small read limit
+        // and a short deadline make the bounded-read tests fast.
+        SUPPLIER_DOCUMENT_MAX_BYTES: String(MAX_READ),
+        PORTAL_CONTRACT_PDF_TIMEOUT_MS: '1000',
       },
       {},
       { auth: 'real', redis: 'real' },
@@ -244,5 +250,70 @@ describe.skipIf(!hasDatabase)('hotel portal: signed contracts', () => {
     expect((await get(`hotels/${hotelA.id}/contracts`, a.session)).status).toBe(404);
     expect((await get(`contracts/${signedA.id}/pdf`, a.session)).status).toBe(404);
     expect((await get(`contracts/${signedB.id}/pdf`, a.session)).status).toBe(200);
+  });
+
+  describe('review 5841786998: the PDF read in the core is bounded work', () => {
+    const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const downloads = () =>
+      t.prisma.contractDraftEvent.count({
+        where: { draft: { code: signedA.draft }, kind: 'SIGNED_DOWNLOADED' },
+      });
+
+    it('a hanging storage: 503 at the deadline, the read really stopped and the slot free; the portal and the internal OS keep answering meanwhile', async () => {
+      const a = await account();
+      await grant(a.user.id, [hotelA.id]);
+      const slots = t.app.get(PortalRequestLimit);
+      const before = await downloads();
+      t.storage.virtualSizeBytes = 512 * 1024; // 8 chunks…
+      t.storage.delayGetsMs = 400; // …far beyond the 1 s deadline
+      try {
+        for (let series = 0; series < 2; series++) {
+          const started = Date.now();
+          const pending = [0, 1].map(() => get(`contracts/${signedA.id}/pdf`, a.session).then());
+          await settle(150);
+          // While both reads hang: other portal work and the internal OS answer at once.
+          const [list, health] = await Promise.all([
+            get(`hotels/${hotelA.id}/contracts`, a.session),
+            core().get('/api/health'),
+          ]);
+          expect([list.status, health.status]).toEqual([200, 200]);
+          const answers = await Promise.all(pending);
+          expect(answers.map((r) => [r.status, r.body.code])).toEqual([
+            [503, 'CONTRACT_UNAVAILABLE'],
+            [503, 'CONTRACT_UNAVAILABLE'],
+          ]);
+          expect(Date.now() - started).toBeLessThan(2500);
+          // The slots were released only after the reads had really stopped.
+          expect([slots.inFlight, t.storage.activeReads]).toEqual([0, 0]);
+          const read = t.storage.bytesRead;
+          await settle(500);
+          expect(t.storage.bytesRead).toBe(read);
+        }
+      } finally {
+        t.storage.virtualSizeBytes = 0;
+        t.storage.delayGetsMs = 0;
+      }
+      // Nothing was recorded as downloaded; the original is served again once storage is back.
+      expect(await downloads()).toBe(before);
+      expect((await get(`contracts/${signedA.id}/pdf`, a.session)).status).toBe(200);
+    });
+
+    it('an oversized object: the read stops at the limit, never the whole object, nothing recorded', async () => {
+      const a = await account();
+      await grant(a.user.id, [hotelA.id]);
+      const before = await downloads();
+      const read = t.storage.bytesRead;
+      t.storage.virtualSizeBytes = 64 * MAX_READ;
+      try {
+        const res = await get(`contracts/${signedA.id}/pdf`, a.session);
+        expect([res.status, res.body.code]).toEqual([503, 'CONTRACT_UNAVAILABLE']);
+      } finally {
+        t.storage.virtualSizeBytes = 0;
+      }
+      expect(t.storage.bytesRead - read).toBeLessThanOrEqual(MAX_READ + 64 * 1024);
+      expect(t.storage.activeReads).toBe(0);
+      expect(t.app.get(PortalRequestLimit).inFlight).toBe(0);
+      expect(await downloads()).toBe(before);
+    });
   });
 });

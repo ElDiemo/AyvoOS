@@ -49,6 +49,8 @@ const safeFilename = (name: string) => {
     .slice(0, 200);
   return cleaned.length > 0 ? cleaned : 'podepsano.pdf';
 };
+const contractUnavailable = () =>
+  domainError(503, 'CONTRACT_UNAVAILABLE', 'Smlouvu teď nelze stáhnout. Zkuste to za chvíli.');
 const signedLocked = () =>
   domainError(
     409,
@@ -749,6 +751,7 @@ export class ContractDraftsService {
     documentId: string,
     hotelIds: ReadonlySet<string>,
     actorUserId: string,
+    read: { signal: AbortSignal; maxBytes: number },
     db: Db = this.prisma,
   ): Promise<{ file: Buffer; signedOn: string }> {
     const doc = await db.contractSignedDocument.findUnique({
@@ -758,7 +761,17 @@ export class ContractDraftsService {
     const hotelId = doc?.revisionRow.draft.hotelId;
     if (!doc || !hotelId || !hotelIds.has(hotelId))
       throw domainError(404, 'CONTRACT_NOT_FOUND', 'No such contract');
-    const file = await this.storage.get(doc.storageKey);
+    // Bounded real work (review 5841786998): the request's deadline or the client leaving stops the
+    // read in the storage itself, at most the upload limit is ever read, and the read settles only
+    // once the storage resource is released. Any failure → 503, nothing recorded or sent.
+    let file: Buffer;
+    try {
+      file = await this.storage.getBounded(doc.storageKey, read);
+    } catch (error) {
+      this.logger.warn(`Portal contract PDF not read: ${(error as Error).name}`);
+      throw contractUnavailable();
+    }
+    if (read.signal.aborted) throw contractUnavailable();
     if (createHash('sha256').update(file).digest('hex') !== doc.sha256)
       throw domainError(500, 'STORED_FILE_CHANGED', 'Uložený originál neodpovídá svému otisku.');
     await db.contractDraftEvent.create({
