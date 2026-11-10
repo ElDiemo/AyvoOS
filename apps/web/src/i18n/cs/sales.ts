@@ -351,6 +351,41 @@ export const salesCs = {
     prospect: 'Zájemce',
   },
 
+  calendar: {
+    title: 'Kalendář',
+    subtitle: 'Úkoly podle dnů v měsíci — otevřené i hotové.',
+    previous: 'Předchozí měsíc',
+    next: 'Další měsíc',
+    today: 'Dnes',
+    months: [
+      'leden',
+      'únor',
+      'březen',
+      'duben',
+      'květen',
+      'červen',
+      'červenec',
+      'srpen',
+      'září',
+      'říjen',
+      'listopad',
+      'prosinec',
+    ],
+    weekdays: ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'],
+    weekdaysLong: ['pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota', 'neděle'],
+    overdue: (n: number) =>
+      n === 1
+        ? '1 otevřený úkol je po termínu z dřívějška.'
+        : `${n} otevřených úkolů je po termínu z dřívějška.`,
+    showOverdue: 'Zobrazit v Úkolech',
+    empty: 'V tomto měsíci nejsou žádné úkoly.',
+    truncated: 'Úkolů je v tomto měsíci příliš mnoho, ukazujeme jen část. Použijte seznam Úkoly.',
+    more: (n: number) => `+ ${n} další`,
+    less: 'Skrýt další',
+    done: 'Hotovo',
+    cancelled: 'Zrušeno',
+    overdueTag: 'Po termínu',
+  },
   history: {
     title: 'Historie',
     activities: 'Aktivity',
