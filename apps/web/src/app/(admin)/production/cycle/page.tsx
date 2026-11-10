@@ -1,9 +1,8 @@
-import { afterWashQueueSchema } from '@ayvo/types';
 import Link from 'next/link';
+import { AfterWashCounts } from '@/components/returns/after-wash-counts';
 import { CycleHeader } from '@/components/returns/cycle-header';
-import { buttonClass, Card, Stat } from '@/components/ui';
+import { buttonClass, Card } from '@/components/ui';
 import { returnsCs } from '@/i18n/cs/returns';
-import { apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -12,11 +11,11 @@ const c = returnsCs.cycle;
 /**
  * Výroba → Oběh lahví (owner 2026-11-09): the two actions of the returned bottles of the active
  * site — Příjem vratek (scan the return) and Po mytí (confirm the washed bottle) — and the link to
- * the station for those who may work there. Only existing screens and reads; no new step.
+ * the station for those who may work there. Only existing screens and reads; no new step. The Po
+ * mytí counts are their own panel: when they fail, both actions stay (review 5841814857).
  */
 export default async function BottleCyclePage() {
   const me = await requirePermission('returns:receive');
-  const queue = await apiGet('admin/returns/after-wash', afterWashQueueSchema);
   const site = me.sites.find((s) => s.id === me.activeSiteId);
   const station =
     hasPermission(me, 'production:label_apply') || hasPermission(me, 'production:fill');
@@ -44,14 +43,7 @@ export default async function BottleCyclePage() {
         <li className="min-w-0">
           <Card title={`${c.step(2)} · ${c.view.afterWash}`} className="h-full">
             <p className="mb-4 text-sm text-stone-600">{c.afterWash.text}</p>
-            <div className="mb-4 grid grid-cols-2 gap-3">
-              <Stat
-                label={c.afterWash.waiting}
-                value={queue.counts.waiting}
-                testId="cycle-waiting"
-              />
-              <Stat label={c.afterWash.ready} value={queue.counts.ready} testId="cycle-ready" />
-            </div>
+            <AfterWashCounts />
             <Link
               href="/production/cycle/after-wash"
               className={buttonClass.primary}

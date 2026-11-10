@@ -46,6 +46,9 @@ for (const width of [390, 1440] as const) {
     await expect(steps).toContainText('Krok 2 · Po mytí');
     await expect(steps).toContainText('potvrzujete umytou a zkontrolovanou lahev');
     await expect(page.getByTestId('cycle-station')).toHaveAttribute('href', '/production/station');
+    // The Po mytí counts load in their own panel; the screenshot shows numbers, not the placeholder.
+    await expect(page.getByTestId('cycle-waiting')).toHaveText(/^\d+$/);
+    await expect(page.getByTestId('cycle-ready')).toHaveText(/^\d+$/);
     await noOverflow(page);
     await page.screenshot({ path: `${SHOTS}/bottle-cycle-${width}.png`, fullPage: true });
 
@@ -82,6 +85,31 @@ for (const width of [390, 1440] as const) {
     await expect(warehouse.getByRole('link', { name: 'Po mytí' })).toHaveCount(0);
   });
 }
+
+test('the Po mytí counts answer 503: both actions stay, the counts say unavailable, Příjem vratek opens', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await activeSite(page, INITIAL_SITE_ID);
+  // Only the queue read fails; Příjem vratek's own endpoints answer as usual.
+  await page.route('**/api/admin/returns/after-wash', (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ status: 503, json: { message: 'unavailable' } })
+      : route.continue(),
+  );
+  await page.goto('/production/cycle');
+  await expect(page.getByTestId('cycle-counts-unavailable')).toHaveText(
+    'Počty Po mytí jsou teď nedostupné. Obě akce fungují dál.',
+  );
+  await expect(page.getByTestId('cycle-waiting')).toHaveCount(0);
+  await expect(page.getByTestId('cycle-after-wash')).toBeVisible();
+  await page.getByTestId('cycle-returns').click();
+  await expect(page).toHaveURL(/\/production\/cycle\/returns$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Příjem vratek');
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
+  await expect(page.getByTestId('receipt-state')).toContainText('Otevřený');
+});
 
 test('the former warehouse URLs are real redirects, a receipt detail included', async ({
   page,

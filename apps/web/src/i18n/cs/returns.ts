@@ -21,6 +21,7 @@ export const returnsCs = {
       open: 'Potvrdit po mytí',
       waiting: 'Čekají na mytí',
       ready: 'Připravené k plnění · Po mytí',
+      countsUnavailable: 'Počty Po mytí jsou teď nedostupné. Obě akce fungují dál.',
     },
     station: {
       title: 'Pracoviště',
