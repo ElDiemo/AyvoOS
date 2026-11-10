@@ -72,7 +72,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(visibleModules(['identity:users_read']).map((m) => m.id)).toEqual(['admin']);
   });
 
-  it('SALES sees only Obchod with its three pages (doc 034)', () => {
+  it('SALES sees only Obchod with its pages (doc 034), the calendar included', () => {
     const modules = visibleModules(['sales:work']);
     expect(modules.map((m) => m.id)).toEqual(['sales']);
     expect(modules[0]!.section).toBe('sales');
@@ -80,7 +80,9 @@ describe('AYVO OS navigation (doc 019)', () => {
       '/sales',
       '/sales/prospects',
       '/sales/tasks',
+      '/sales/calendar',
     ]);
+    expect(locate('/sales/calendar').page?.id).toBe('calendar');
     expect(locate('/sales/prospects/AKV-000001').page?.id).toBe('prospects');
     expect(locate('/sales').page?.id).toBe('overview');
   });
