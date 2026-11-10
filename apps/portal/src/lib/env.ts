@@ -1,4 +1,5 @@
 import 'server-only';
+import { PORTAL_PACKAGE_MAX_MS, PORTAL_PACKAGE_PORTAL_GRACE_MS } from '@ayvo/types';
 import { z } from 'zod';
 
 const origin = z
@@ -22,6 +23,17 @@ const schema = z
     PORTAL_TRUST_PROXY: z.enum(['0', '1']).default('0'),
     /** At most this many PDFs pass through at once (§8: as Finance's own limit). */
     PORTAL_PDF_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(8).default(2),
+    /**
+     * One deadline for the invoice package (fetch, transfer, answer). Behind an edge with a write
+     * limit it must end below that limit (PROD's public edge: 30 s → 25 s, doc 064 §2); never
+     * longer than Finance's ceiling plus the grace.
+     */
+    PORTAL_PACKAGE_DEADLINE_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .max(PORTAL_PACKAGE_MAX_MS + PORTAL_PACKAGE_PORTAL_GRACE_MS)
+      .default(PORTAL_PACKAGE_MAX_MS + PORTAL_PACKAGE_PORTAL_GRACE_MS),
   })
   .refine((e) => e.PORTAL_PUBLIC_ORIGIN.startsWith('https://') || e.APP_ENV === 'test', {
     message: 'PORTAL_PUBLIC_ORIGIN must be https (http only in tests)',
