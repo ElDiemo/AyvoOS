@@ -167,6 +167,16 @@ export const portalInvoiceListQuerySchema = z.object({
 export type PortalInvoiceListQuery = z.infer<typeof portalInvoiceListQuerySchema>;
 
 /**
+ * The one fixed ceiling of the invoice package between Finance and portal-web (review
+ * 5845096918): Finance may be configured lower, never higher, checks the finished ZIP (overhead
+ * included) against its own limit before sending, and portal-web cuts nothing a supported setting
+ * can produce. portal-web waits a little longer than Finance, so Finance's refusal arrives first.
+ */
+export const PORTAL_PACKAGE_MAX_ZIP_BYTES = 40 * 1024 * 1024;
+export const PORTAL_PACKAGE_MAX_MS = 60_000;
+export const PORTAL_PACKAGE_PORTAL_GRACE_MS = 5_000;
+
+/**
  * "Balíček za období" (doc 040 §14): the visible invoices whose billed month lies in [from, to],
  * at most PORTAL_PACKAGE_MAX_MONTHS months, as one ZIP of their PDFs and a manifest.csv. A
  * summary invoice is included once. Bounded in documents and bytes (Finance's env).

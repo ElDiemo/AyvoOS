@@ -163,8 +163,8 @@ export class FinancePortalInvoicesService {
    * in [from, to], each once — a summary invoice over several hotels too, but only if one grant
    * covers it whole. The query ends before any file is read (no DB transaction is open while
    * packing). Bounded: at most FINANCE_PORTAL_PACKAGE_MAX_INVOICES invoices and
-   * FINANCE_PORTAL_PACKAGE_MAX_BYTES of PDFs (both refused with PACKAGE_TOO_LARGE before or while
-   * reading), one package at a time per process (else PACKAGE_BUSY), stopped by `signal`. Every
+   * FINANCE_PORTAL_PACKAGE_MAX_BYTES of PDFs and of the finished ZIP (refused with
+   * PACKAGE_TOO_LARGE before, while reading or before sending), one package at a time per process (else PACKAGE_BUSY), stopped by `signal`. Every
    * PDF must match the hash recorded at issue. The ZIP holds manifest.csv, README.txt and
    * faktury/<number>.pdf.
    */
@@ -276,14 +276,16 @@ export class FinancePortalInvoicesService {
         ...(test ? ['TESTOVACÍ faktury nejsou daňové doklady.'] : []),
         '',
       ].join('\r\n');
-      return {
-        name: `AYVO-faktury-${q.from}-${q.to}.zip`,
-        bytes: buildZip([
-          { name: 'manifest.csv', data: Buffer.from(manifest, 'utf8') },
-          { name: 'README.txt', data: Buffer.from(readme, 'utf8') },
-          ...entries,
-        ]),
-      };
+      const zip = buildZip([
+        { name: 'manifest.csv', data: Buffer.from(manifest, 'utf8') },
+        { name: 'README.txt', data: Buffer.from(readme, 'utf8') },
+        ...entries,
+      ]);
+      entries.length = 0; // the inputs are no longer needed while the ZIP is sent
+      // The finished archive (headers, manifest and README included) within the limit, before a
+      // byte is sent: beyond it the user is told to shorten the period, never "unavailable".
+      if (zip.length > this.env.FINANCE_PORTAL_PACKAGE_MAX_BYTES) throw tooLarge();
+      return { name: `AYVO-faktury-${q.from}-${q.to}.zip`, bytes: zip };
     } finally {
       this.packing = false;
     }

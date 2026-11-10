@@ -21,8 +21,14 @@ the PDFs and a short overview.
     recorded at issue.
 - **Bounds** (Finance env):
   - `FINANCE_PORTAL_PACKAGE_MAX_INVOICES` (default 60) and `FINANCE_PORTAL_PACKAGE_MAX_BYTES`
-    (40 MB). Exceeding either answers `422 PACKAGE_TOO_LARGE`, nothing sent.
-  - `FINANCE_PORTAL_PACKAGE_TIMEOUT_MS` (60 s) for reading, packing and sending.
+    (default and maximum 40 MiB): the PDFs' read budget and the size of the finished ZIP,
+    headers, manifest and README included, checked before a byte is sent. Exceeding either
+    answers `422 PACKAGE_TOO_LARGE`, nothing sent.
+  - `FINANCE_PORTAL_PACKAGE_TIMEOUT_MS` (default and maximum 60 s) for reading, packing and
+    sending.
+  - One fixed ceiling shared with portal-web (`PORTAL_PACKAGE_MAX_ZIP_BYTES`,
+    `PORTAL_PACKAGE_MAX_MS` in `@ayvo/types`, review 5845096918): Finance may be set lower, never
+    higher, so portal-web never cuts a package a supported setting produces.
   - One package at a time per process; otherwise `503 PACKAGE_BUSY`.
   - The query ends before any file is read: no DB transaction is open while packing.
 - **An empty period** answers `404 NO_INVOICES`.
@@ -33,7 +39,8 @@ the PDFs and a short overview.
   token and the forwarded session, introspected at the core. It is sent with `application/zip`,
   `private, no-store`, `nosniff` and the name `AYVO-faktury-<from>-<to>.zip`.
 - **portal-web:** `GET /invoices/package?from=&to=`. It uses the same pass-through as the PDFs:
-  one 65 s deadline, counted bytes up to 41 MB, header checks, and it is outside the CSP proxy.
+  one deadline of Finance's maximum + 5 s (65 s), counted bytes up to the shared 40 MiB ceiling,
+  header checks, and it is outside the CSP proxy.
   When the period is refused (invalid, empty, too large, busy), the user is sent back to
   "Faktury" with the reason.
 - **"Faktury" page:** a "Balíček za období" form with two month fields (the last three months by

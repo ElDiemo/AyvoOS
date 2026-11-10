@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { PORTAL_PACKAGE_MAX_MS, PORTAL_PACKAGE_MAX_ZIP_BYTES } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { FINANCE_ENV, financeEnvSchema, type FinanceEnv } from '../src/finance/finance-env.js';
 import { SessionsService } from '../src/identity/sessions.service.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
 import { createFinanceTestApp, type FinanceTestApp } from './support/finance-app.js';
@@ -175,5 +177,53 @@ describe.skipIf(!hasDatabase)('hotel portal: invoice package for a period', () =
     ]);
     const res = await pkg('?from=2026-08&to=2026-10', both);
     expect([res.status, json(res.body).code]).toEqual([422, 'PACKAGE_TOO_LARGE']);
+  });
+
+  describe('review 5845096918: one ceiling with portal-web', () => {
+    const env = () => f.app.get<FinanceEnv>(FINANCE_ENV);
+
+    it('the shared ceiling bounds Finance’s settings: never above what portal-web passes', () => {
+      const field = (k: 'FINANCE_PORTAL_PACKAGE_MAX_BYTES' | 'FINANCE_PORTAL_PACKAGE_TIMEOUT_MS') =>
+        financeEnvSchema.shape[k];
+      expect(
+        field('FINANCE_PORTAL_PACKAGE_MAX_BYTES').safeParse(String(PORTAL_PACKAGE_MAX_ZIP_BYTES))
+          .success,
+      ).toBe(true);
+      expect(
+        field('FINANCE_PORTAL_PACKAGE_MAX_BYTES').safeParse(
+          String(PORTAL_PACKAGE_MAX_ZIP_BYTES + 1),
+        ).success,
+      ).toBe(false);
+      expect(
+        field('FINANCE_PORTAL_PACKAGE_TIMEOUT_MS').safeParse(String(PORTAL_PACKAGE_MAX_MS)).success,
+      ).toBe(true);
+      expect(
+        field('FINANCE_PORTAL_PACKAGE_TIMEOUT_MS').safeParse(String(PORTAL_PACKAGE_MAX_MS + 1))
+          .success,
+      ).toBe(false);
+    });
+
+    it('the finished ZIP (headers, manifest, README) exactly at the limit is sent; one byte over is refused before sending', async () => {
+      const session = await account([{ payer: payers.A, hotels: [h.H1, h.H2] }]);
+      const full = await pkg('?from=2026-08&to=2026-09', session).expect(200);
+      const size = (full.body as Buffer).length;
+      const pdfBytes = [...unzip(full.body as Buffer).entries()]
+        .filter(([n]) => n.startsWith('faktury/'))
+        .reduce((sum, [, b]) => sum + b.length, 0);
+      expect(size).toBeGreaterThan(pdfBytes); // the overhead is real
+      const before = env().FINANCE_PORTAL_PACKAGE_MAX_BYTES;
+      try {
+        env().FINANCE_PORTAL_PACKAGE_MAX_BYTES = size;
+        const at = await pkg('?from=2026-08&to=2026-09', session);
+        expect([at.status, (at.body as Buffer).length]).toEqual([200, size]);
+        env().FINANCE_PORTAL_PACKAGE_MAX_BYTES = size - 1; // the PDFs alone still fit
+        const over = await pkg('?from=2026-08&to=2026-09', session);
+        expect(over.status).toBe(422);
+        expect(over.headers['content-type']).toMatch(/json/);
+        expect(json(over.body).code).toBe('PACKAGE_TOO_LARGE');
+      } finally {
+        env().FINANCE_PORTAL_PACKAGE_MAX_BYTES = before;
+      }
+    });
   });
 });

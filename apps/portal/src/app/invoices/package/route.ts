@@ -1,4 +1,9 @@
-import { portalInvoicePackageQuerySchema } from '@ayvo/types';
+import {
+  PORTAL_PACKAGE_MAX_MS,
+  PORTAL_PACKAGE_MAX_ZIP_BYTES,
+  PORTAL_PACKAGE_PORTAL_GRACE_MS,
+  portalInvoicePackageQuerySchema,
+} from '@ayvo/types';
 import { passFile } from '@/lib/pdf-proxy';
 
 export const dynamic = 'force-dynamic';
@@ -34,8 +39,9 @@ export async function GET(request: Request) {
     path: `invoices/package?from=${q.data.from}&to=${q.data.to}`,
     type: 'application/zip',
     disposition: DISPOSITION,
-    maxBytes: 41 * 1024 * 1024,
-    deadlineMs: 65_000,
+    // The shared ceiling (Finance never sends more), and a little longer than Finance's deadline.
+    maxBytes: PORTAL_PACKAGE_MAX_ZIP_BYTES,
+    deadlineMs: PORTAL_PACKAGE_MAX_MS + PORTAL_PACKAGE_PORTAL_GRACE_MS,
     busy: 'Balíčky se teď připravují. Zkuste to za chvíli.',
     unavailable: 'Faktury nejsou dostupné.',
     refused: (status, code) =>
