@@ -106,12 +106,20 @@ export class FinancePortalInvoicesController {
     @Headers(PORTAL_SESSION_HEADER) session: string | undefined,
     @Res() res: ServerResponse,
   ): Promise<void> {
-    return this.slots.run(() =>
-      this.sendBounded(res, this.env.FINANCE_PORTAL_PACKAGE_TIMEOUT_MS, async (signal) => {
-        const file = await this.invoices.package(await this.scope(session), q, signal);
-        return { type: 'application/zip', name: file.name, bytes: file.bytes };
-      }),
-    );
+    return this.slots.run(async () => {
+      // One package from its start until its bytes have left or the transfer was aborted.
+      const release = this.invoices.reservePackage();
+      if (!release)
+        throw domainError(503, 'PACKAGE_BUSY', 'Balíček se právě připravuje. Zkuste to za chvíli.');
+      try {
+        await this.sendBounded(res, this.env.FINANCE_PORTAL_PACKAGE_TIMEOUT_MS, async (signal) => {
+          const file = await this.invoices.package(await this.scope(session), q, signal);
+          return { type: 'application/zip', name: file.name, bytes: file.bytes };
+        });
+      } finally {
+        release();
+      }
+    });
   }
 
   @PortalServiceAccess()

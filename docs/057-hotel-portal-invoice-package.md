@@ -29,7 +29,8 @@ the PDFs and a short overview.
   - One fixed ceiling shared with portal-web (`PORTAL_PACKAGE_MAX_ZIP_BYTES`,
     `PORTAL_PACKAGE_MAX_MS` in `@ayvo/types`, review 5845096918): Finance may be set lower, never
     higher, so portal-web never cuts a package a supported setting produces.
-  - One package at a time per process; otherwise `503 PACKAGE_BUSY`.
+  - One package per process from its start until its ZIP has been sent or the transfer aborted
+    (a slow receiver holds it); otherwise `503 PACKAGE_BUSY`. Single PDFs are not affected.
   - The query ends before any file is read: no DB transaction is open while packing.
 - **An empty period** answers `404 NO_INVOICES`.
 

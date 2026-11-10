@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { get as httpGet, type IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { PORTAL_PACKAGE_MAX_MS, PORTAL_PACKAGE_MAX_ZIP_BYTES } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -7,7 +9,7 @@ import { SessionsService } from '../src/identity/sessions.service.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
 import { createFinanceTestApp, type FinanceTestApp } from './support/finance-app.js';
 import { agreement, hotel, invoice, payer } from './support/finance-portal.js';
-import { hasDatabase } from './support/test-app.js';
+import { hasDatabase, withPrivileged } from './support/test-app.js';
 
 const portalToken = randomBytes(32).toString('base64url');
 const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
@@ -89,6 +91,8 @@ describe.skipIf(!hasDatabase)('hotel portal: invoice package for a period', () =
       finance: {
         PORTAL_FINANCE_TOKEN_SHA256: sha(portalToken),
         FINANCE_PORTAL_PACKAGE_MAX_INVOICES: '2',
+        // Room for one PDF large enough to fill the socket buffers (the slow receiver below).
+        FINANCE_PORTAL_PDF_MAX_BYTES: String(32 * 1024 * 1024),
       },
     });
     actorId = (
@@ -179,7 +183,8 @@ describe.skipIf(!hasDatabase)('hotel portal: invoice package for a period', () =
     expect([res.status, json(res.body).code]).toEqual([422, 'PACKAGE_TOO_LARGE']);
   });
 
-  describe('review 5845096918: one ceiling with portal-web', () => {
+  describe('review 5845096918: one ceiling with portal-web, one package until it is sent', () => {
+    const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const env = () => f.app.get<FinanceEnv>(FINANCE_ENV);
 
     it('the shared ceiling bounds Finance’s settings: never above what portal-web passes', () => {
@@ -224,6 +229,84 @@ describe.skipIf(!hasDatabase)('hotel portal: invoice package for a period', () =
       } finally {
         env().FINANCE_PORTAL_PACKAGE_MAX_BYTES = before;
       }
+    });
+
+    describe('a slow receiver', () => {
+      let url: (path: string) => URL;
+
+      beforeAll(async () => {
+        // A visible invoice of H1 in 2026-07 whose PDF is large enough to fill the socket buffers.
+        const bytes = randomBytes(24 * 1024 * 1024);
+        const key = `finance-invoices/2026/11/${randomUUID()}.pdf`;
+        await f.storage.put(key, bytes);
+        const big = randomUUID();
+        const digits = (n: number) =>
+          Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join('');
+        await withPrivileged((db) =>
+          db.$transaction(async (tx) => {
+            await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
+            await tx.$executeRawUnsafe(`
+              INSERT INTO "finance"."invoices" ("id", "serial", "kind", "number", "variable_symbol",
+                "customer_id", "customer_version", "period_month", "issued_on", "due_on", "currency",
+                "total", "snapshot", "pdf_storage_key", "pdf_sha256", "issued_by", "issued_by_name",
+                "request_id")
+              SELECT '${big}', "serial" + 300000, "kind", 'T9997-${digits(5)}', '7${digits(9)}',
+                "customer_id", "customer_version", DATE '2026-07-01', "issued_on", "due_on",
+                "currency", "total", "snapshot", '${key}',
+                '${createHash('sha256').update(bytes).digest('hex')}', "issued_by", "issued_by_name",
+                '${randomUUID()}'
+              FROM "finance"."invoices" WHERE "id" = '${ids.A1}'`);
+            await tx.$executeRawUnsafe(`
+              INSERT INTO "finance"."invoice_lines"
+              SELECT '${big}', "line_no", "agreement_id", "agreement_revision", DATE '2026-07-01',
+                "hotel_id", "hotel_code", "hotel_name", "billed_rooms", "unit_price", "amount"
+              FROM "finance"."invoice_lines" WHERE "invoice_id" = '${ids.A1}'`);
+          }),
+        );
+        const server = f.app.getHttpServer();
+        if (!server.listening) await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+        const port = (server.address() as AddressInfo).port;
+        url = (path: string) => new URL(`http://127.0.0.1:${port}${P}${path}`);
+      });
+
+      /** A package request whose body is never read: Finance cannot finish sending. */
+      const stalled = (session: string) =>
+        new Promise<{ res: IncomingMessage; destroy: () => void }>((resolve, reject) => {
+          const req = httpGet(
+            url('/package?from=2026-07&to=2026-07'),
+            {
+              headers: { authorization: `Bearer ${portalToken}`, 'x-ayvo-portal-session': session },
+            },
+            (res) => {
+              res.pause();
+              resolve({ res, destroy: () => req.destroy() });
+            },
+          );
+          req.on('error', () => undefined);
+          req.once('error', reject);
+        });
+
+      it('a second package is refused while the first waits on its receiver; a single PDF still passes; leaving frees it', async () => {
+        const session = await account([{ payer: payers.A, hotels: [h.H1] }]);
+        const first = await stalled(session);
+        expect(first.res.statusCode).toBe(200);
+        await settle(200);
+        // Held from its start until the bytes have left: not released once the ZIP was built.
+        const second = await pkg('?from=2026-08&to=2026-08', session);
+        expect([second.status, json(second.body).code]).toEqual([503, 'PACKAGE_BUSY']);
+        const pdf = await request(f.app.getHttpServer())
+          .get(`${P}/${ids.A1}/pdf`)
+          .set('Authorization', `Bearer ${portalToken}`)
+          .set('x-ayvo-portal-session', session);
+        expect(pdf.status).toBe(200);
+        first.destroy();
+        let again = 503;
+        for (let i = 0; i < 25 && again === 503; i++) {
+          await settle(40);
+          again = (await pkg('?from=2026-08&to=2026-08', session)).status;
+        }
+        expect(again).toBe(200);
+      });
     });
   });
 });
