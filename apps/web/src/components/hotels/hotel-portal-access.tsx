@@ -15,8 +15,8 @@ import { hasPermission } from '@/lib/session';
 import { AccountBadges } from './portal-account-card';
 
 /** The payer page's portal section (Finance → Plátci → plátce → Přístup do portálu). */
-export const payerPortalHref = (code: string) =>
-  `/finance/billing/customers/${code}#pristup-do-portalu`;
+export const payerPortalHref = (code: string, hotelId?: string) =>
+  `/finance/billing/customers/${code}${hotelId ? `?hotel=${hotelId}` : ''}#pristup-do-portalu`;
 
 /**
  * "Přístup do portálu" on one hotel's card: the portal accounts assigned to it by an active grant
@@ -102,7 +102,7 @@ export async function HotelPortalAccess({ hotelId, me }: { hotelId: string; me: 
         )}
         {current ? (
           <Link
-            href={payerPortalHref(current.code)}
+            href={payerPortalHref(current.code, hotelId)}
             className="self-start rounded-md border border-stone-300 px-3 py-1.5 text-sm font-medium hover:bg-stone-50"
             data-testid="hotel-portal-access-invite"
           >

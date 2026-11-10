@@ -18,9 +18,19 @@ import { hasPermission, requirePermission } from '@/lib/session';
 export const dynamic = 'force-dynamic';
 
 /** One customer (the billed company): its versions and a new version with a reason. */
-export default async function CustomerPage({ params }: { params: Promise<{ code: string }> }) {
+export default async function CustomerPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ code: string }>;
+  searchParams: Promise<{ hotel?: string | string[] }>;
+}) {
   const me = await requirePermission('finance:billing_read');
   const { code } = await params;
+  // A hotel's card links here with `?hotel=<id>`; PortalAccess pre-selects it only if Finance
+  // lists it for this payer.
+  const fromHotel = (await searchParams).hotel;
+  const preselectHotelId = typeof fromHotel === 'string' ? fromHotel : null;
   if (!/^CU-\d{6,}$/.test(code)) notFound();
   const c = await apiGet(
     `admin/finance/billing/customers/${code}`,
@@ -110,7 +120,11 @@ export default async function CustomerPage({ params }: { params: Promise<{ code:
         </Card>
         {portal && (
           <Card title={portalAccessCs.title} testId="portal-access" id="pristup-do-portalu">
-            <PortalAccess payerCustomerId={c.id} access={portal} />
+            <PortalAccess
+              payerCustomerId={c.id}
+              access={portal}
+              preselectHotelId={preselectHotelId}
+            />
           </Card>
         )}
         <Card title={t.history} testId="customer-history">

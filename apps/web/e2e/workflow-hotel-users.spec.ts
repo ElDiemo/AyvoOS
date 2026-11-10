@@ -25,27 +25,7 @@ const shot = async (page: Page, name: string) => {
 test.describe('Hotely → Uživatelé', () => {
   test.use({ storageState: ADMIN_STATE });
 
-  async function setup(request: APIRequestContext, run: string) {
-    const me = (await (await request.get('/api/auth/me')).json()) as {
-      sites: { id: string; code: string }[];
-    };
-    const hotelRes = await request.post('/api/admin/hotels', {
-      data: {
-        requestId: crypto.randomUUID(),
-        name: `Hotel Portál ${run} (E2E)`,
-        addressLine1: 'Portálová 1',
-        addressLine2: null,
-        postalCode: '779 00',
-        city: 'Olomouc',
-        countryCode: 'CZ',
-        contactName: 'Recepce',
-        contactPhone: '+420 500 000 009',
-        contactEmail: 'recepce@portal.test',
-        fulfillmentSiteId: me.sites.find((s) => s.code === 'CZ-PREROV-01')!.id,
-      },
-    });
-    expect(hotelRes.ok(), await hotelRes.text()).toBe(true);
-    const hotel = (await hotelRes.json()) as { id: string; code: string; name: string };
+  async function newPayer(request: APIRequestContext, run: string) {
     const customerRes = await request.post('/api/admin/finance/billing/customers', {
       data: {
         requestId: crypto.randomUUID(),
@@ -64,7 +44,37 @@ test.describe('Hotely → Uživatelé', () => {
       },
     });
     expect(customerRes.ok(), await customerRes.text()).toBe(true);
-    const customer = (await customerRes.json()) as { id: string; code: string };
+    return (await customerRes.json()) as { id: string; code: string };
+  }
+
+  async function setup(
+    request: APIRequestContext,
+    run: string,
+    payer?: { id: string; code: string },
+    suffix = '',
+  ) {
+    const me = (await (await request.get('/api/auth/me')).json()) as {
+      sites: { id: string; code: string }[];
+    };
+    const hotelRes = await request.post('/api/admin/hotels', {
+      data: {
+        requestId: crypto.randomUUID(),
+        name: `Hotel Portál ${run}${suffix} (E2E)`,
+        addressLine1: 'Portálová 1',
+        addressLine2: null,
+        postalCode: '779 00',
+        city: 'Olomouc',
+        countryCode: 'CZ',
+        contactName: 'Recepce',
+        contactPhone: '+420 500 000 009',
+        contactEmail: 'recepce@portal.test',
+        fulfillmentSiteId: me.sites.find((s) => s.code === 'CZ-PREROV-01')!.id,
+      },
+    });
+    expect(hotelRes.ok(), await hotelRes.text()).toBe(true);
+    const hotel = (await hotelRes.json()) as { id: string; code: string; name: string };
+    const customer = payer ?? (await newPayer(request, run));
+
     const terms = (over: Record<string, unknown> = {}) => ({
       effectiveFrom: '2026-01',
       customerId: customer.id,
@@ -147,7 +157,7 @@ test.describe('Hotely → Uživatelé', () => {
       await expect(section).not.toContainText('provozní přístup');
       await expect(section.getByTestId('hotel-portal-access-invite')).toHaveAttribute(
         'href',
-        `/finance/billing/customers/${customer.code}#pristup-do-portalu`,
+        `/finance/billing/customers/${customer.code}?hotel=${hotel.id}#pristup-do-portalu`,
       );
       expect(
         await page.evaluate(
@@ -232,5 +242,62 @@ test.describe('Hotely → Uživatelé', () => {
       expect(api.status()).toBe(403);
       expect(await api.text()).not.toContain(email);
     });
+  });
+
+  test('review 5842104295: the hotel card’s invitation pre-selects exactly this hotel; a forged id selects nothing', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    const run = crypto.randomUUID().slice(0, 6);
+    const { hotel: one, customer } = await setup(page.request, run, undefined, '-1');
+    const { hotel: two } = await setup(page.request, run, customer, '-2');
+    const { hotel: foreign } = await setup(page.request, `${run}x`); // another payer's hotel
+
+    await page.goto(`/hotels/${two.code}`);
+    await page.getByTestId('hotel-portal-access-invite').click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/finance/billing/customers/${customer.code}\\?hotel=${two.id}#pristup-do-portalu$`,
+      ),
+    );
+    const card = page.getByTestId('portal-access');
+    const form = card.getByTestId('portal-access-new');
+    // The form is open with only this hotel chosen, visibly; nothing is saved without a click.
+    await expect(form).toBeVisible();
+    await expect(card.getByTestId('portal-access-preselected')).toContainText(two.name);
+    await expect(form.getByLabel(two.name)).toBeChecked();
+    await expect(form.getByLabel(one.name)).not.toBeChecked();
+    expect(
+      (await page.request
+        .get(`/api/admin/identity/portal-accounts?hotelId=${two.id}`)
+        .then((r) => r.json())) as unknown[],
+    ).toEqual([]);
+    const email = `recepce-${run}@portal-e2e.test`;
+    await form.locator('[name=email]').fill(email);
+    await form.locator('[name=displayName]').fill(`Recepce ${run}`);
+    await form.locator('[name=reason]').fill('Přístup z karty hotelu (E2E)');
+    await form.getByTestId('portal-access-save').click();
+    await expect(form.getByRole('status')).toContainText('Přístup uložen');
+    await expect(card.getByTestId('portal-access-list')).toContainText(`Hotely: ${two.name}`);
+    const onCard = async (hotelId: string) =>
+      (
+        (await (
+          await page.request.get(`/api/admin/identity/portal-accounts?hotelId=${hotelId}`)
+        ).json()) as { email: string }[]
+      ).map((a) => a.email);
+    expect(await onCard(two.id)).toEqual([email]);
+    expect(await onCard(one.id)).toEqual([]);
+
+    // A forged or foreign id pre-selects nothing: the form stays closed and nothing is chosen.
+    for (const forged of [crypto.randomUUID(), foreign.id, 'nope']) {
+      await page.goto(`/finance/billing/customers/${customer.code}?hotel=${forged}`);
+      await expect(card).toBeVisible();
+      await expect(card.getByTestId('portal-access-preselected')).toHaveCount(0);
+      await expect(form).toBeHidden();
+      await card.getByTestId('portal-access-open').click();
+      await expect(form.getByLabel(one.name)).not.toBeChecked();
+      await expect(form.getByLabel(two.name)).not.toBeChecked();
+      await expect(form.getByText(foreign.name)).toHaveCount(0);
+    }
   });
 });
