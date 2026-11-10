@@ -36,7 +36,12 @@ export class PortalIntrospectionController {
       if (session.kind !== 'active') throw unauthenticated();
       return {
         userId: session.user.id,
-        grants: await this.grants.activeOf(session.user.id, this.db),
+        // Invoices: every hotel of the grant — operational or invoices only (v6, #148).
+        grants: (await this.grants.activeOf(session.user.id, this.db)).map((g) => ({
+          id: g.id,
+          payerCustomerId: g.payerCustomerId,
+          hotelIds: g.hotelIds,
+        })),
       };
     });
   }

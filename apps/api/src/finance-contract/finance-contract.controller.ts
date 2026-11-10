@@ -16,6 +16,8 @@ import {
   financePrincipalRequestSchema,
   financeSupplierLookupSchema,
   portalAccountRequestSchema,
+  portalFenceRequestSchema,
+  portalFenceResolutionRequestSchema,
   portalGrantRequestLookupSchema,
   portalGrantIssueRequestSchema,
   portalGrantReplaceRequestSchema,
@@ -27,6 +29,10 @@ import {
   type FinancePrincipalRequest,
   type PermissionCode,
   type PortalAccount,
+  type PortalFence,
+  type PortalFenceRequest,
+  type PortalFenceResolutionRequest,
+  type PortalFenceResolutionResult,
   type PortalGrantRequestLookup,
   type PortalGrantPerformed,
   type PortalAccountRequest,
@@ -45,6 +51,7 @@ import { ServiceAccess } from '../identity/access.decorators.js';
 import { CurrentPrincipal, forbidden, sameOriginRequest } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
 import { HotelsService } from '../customers/hotels.service.js';
+import { PortalFencesService } from '../portal-grants/portal-fences.service.js';
 import { PortalGrantsService } from '../portal-grants/portal-grants.service.js';
 import { ProcurementService } from '../procurement/procurement.service.js';
 
@@ -68,6 +75,7 @@ export class FinanceContractController {
     private readonly procurement: ProcurementService,
     private readonly hotels: HotelsService,
     private readonly portalGrants: PortalGrantsService,
+    private readonly portalFences: PortalFencesService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -215,6 +223,33 @@ export class FinanceContractController {
   ): Promise<PortalGrantPerformed> {
     require(p, 'finance:billing_read', 'identity:portal_grants_manage');
     return this.portalGrants.performed(p.userId, body);
+  }
+
+  // --- the operational boundary (v6, #148): written by whoever changes the billing terms ----
+
+  /** A fence, before Finance commits terms that move the hotel away from the payer. */
+  @ServiceAccess('finance')
+  @Post('portal-fences')
+  @HttpCode(200)
+  portalFence(
+    @Body(new ZodValidationPipe(portalFenceRequestSchema)) body: PortalFenceRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalFence> {
+    require(p, 'finance:billing_manage');
+    return this.portalFences.fence(p.userId, body);
+  }
+
+  /** The resolution of named fences by one committed explicit restore (typed evidence only). */
+  @ServiceAccess('finance')
+  @Post('portal-fence-resolutions')
+  @HttpCode(200)
+  portalFenceResolution(
+    @Body(new ZodValidationPipe(portalFenceResolutionRequestSchema))
+    body: PortalFenceResolutionRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalFenceResolutionResult> {
+    require(p, 'finance:billing_manage');
+    return this.portalFences.resolve(p.userId, body);
   }
 
   /** The PORTAL account of an e-mail (created when new) — Finance's first step of a new grant. */

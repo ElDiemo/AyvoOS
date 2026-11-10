@@ -1022,6 +1022,8 @@ enum OperationKind {
   REUSE_READY_SCAN
   PORTAL_GRANT_ISSUE
   PORTAL_GRANT_REPLACE
+  PORTAL_FENCE_WRITE
+  PORTAL_FENCE_RESOLVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -2453,13 +2455,14 @@ model Hotel {
   receivingContactPhone String?         @map("receiving_contact_phone")
   receivingContactEmail String?         @map("receiving_contact_email")
 
-  fulfillmentSite Site               @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
-  creator         User               @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  operation       OperationRequest   @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  fulfillmentSite Site                     @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
+  creator         User                     @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  operation       OperationRequest         @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
   orders          Order[]
   supplyPlan      SupplyPlan?
   contractDrafts  ContractDraft[]
   portalGrants    PortalGrantHotel[]
+  portalFences    PortalOperationalFence[]
 
   @@index([fulfillmentSiteId])
   @@map("hotels")
@@ -3996,9 +3999,22 @@ model PortalGrant {
 }
 
 /// The hotels of one grant; written with the grant, never changed.
+/// What a grant opens on this hotel (v6, #148): INVOICES — the payer's invoices only; OPERATIONS —
+/// also the hotel's detail, profile, contracts and deliveries. Decided by Finance's check, never by
+/// the core.
+enum PortalGrantAccess {
+  INVOICES
+  OPERATIONS
+}
+
 model PortalGrantHotel {
-  grantId String @map("grant_id") @db.Uuid
-  hotelId String @map("hotel_id") @db.Uuid
+  grantId         String            @map("grant_id") @db.Uuid
+  hotelId         String            @map("hotel_id") @db.Uuid
+  access          PortalGrantAccess
+  /// The committed terms revision Finance checked (OPERATIONS only; NULL exactly for INVOICES).
+  checkedRevision Int?              @map("checked_revision")
+  /// The last day of operational access by the terms checked (NULL: no end known).
+  operationsUntil DateTime?         @map("operations_until") @db.Date
 
   grant PortalGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
   hotel Hotel       @relation(fields: [hotelId], references: [id], onDelete: Restrict)
@@ -4006,4 +4022,40 @@ model PortalGrantHotel {
   @@id([grantId, hotelId])
   @@index([hotelId])
   @@map("portal_grant_hotels")
+}
+
+/// A restriction of operational access (v6, #148), written by Finance BEFORE it commits a change of
+/// payer: from the day after `endsOn` this payer's grants have no operations on this hotel, whatever
+/// they were checked on — until the fence has a resolution and the grant was checked again after
+/// it. Append-only (DB).
+model PortalOperationalFence {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  payerCustomerId String   @map("payer_customer_id") @db.Uuid
+  hotelId         String   @map("hotel_id") @db.Uuid
+  endsOn          DateTime @map("ends_on") @db.Date
+  termsRevision   Int      @map("terms_revision")
+  requestId       String   @unique @map("request_id") @db.Uuid
+  reason          String
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  hotel      Hotel                             @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  resolution PortalOperationalFenceResolution?
+
+  @@index([payerCustomerId, hotelId])
+  @@map("portal_operational_fences")
+}
+
+/// The resolution of one fence by Finance's committed explicit restore (v6 §2). At most one per
+/// fence; append-only (DB).
+model PortalOperationalFenceResolution {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  fenceId          String   @unique @map("fence_id") @db.Uuid
+  restoreRevision  Int      @map("restore_revision")
+  restoreRequestId String   @map("restore_request_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  fence PortalOperationalFence @relation(fields: [fenceId], references: [id], onDelete: Restrict)
+
+  @@index([restoreRequestId])
+  @@map("portal_operational_fence_resolutions")
 }

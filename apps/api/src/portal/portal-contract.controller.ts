@@ -229,19 +229,22 @@ export class PortalContractController {
         user: session.user,
         idleExpiresAt: session.idleExpiresAt.toISOString(),
         absoluteExpiresAt: session.absoluteExpiresAt.toISOString(),
-        grants: await this.grants.activeOf(session.user.id, this.db),
+        grants: (await this.grants.activeOf(session.user.id, this.db)).map(scopeOf),
       };
     });
   }
 
-  /** The hotels of the session's active grants. */
+  /**
+   * The hotels of the session's active grants that are operational today (v6, #148): a hotel the
+   * grant opens for invoices only is not one of them (its invoices are in Finance).
+   */
   @PortalServiceAccess()
   @Get('hotels')
   myHotels(@Headers(PORTAL_SESSION_HEADER) token: string | undefined): Promise<PortalHotel[]> {
     return this.slots.run(async () => this.granted(await this.portalSession(token)));
   }
 
-  /** One granted hotel; any other id is "not found", exactly like a missing one. */
+  /** One operational granted hotel; any other id is "not found", exactly like a missing one. */
   @PortalServiceAccess()
   @Get('hotels/:id')
   myHotel(
@@ -257,7 +260,7 @@ export class PortalContractController {
 
   // --- "Profil hotelu" (the hotel's own profile) ------------------------------------------
 
-  /** A granted hotel's own profile; any other id is "not found", exactly like a missing one. */
+  /** An operational granted hotel's own profile; any other id is "not found" (as a missing one). */
   @PortalServiceAccess()
   @Get('hotels/:id/profile')
   profile(
@@ -267,7 +270,7 @@ export class PortalContractController {
     return this.slots.run(async () => {
       const session = await this.portalSession(token);
       const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
-        g.hotelIds.includes(id),
+        g.operationalHotelIds.includes(id),
       );
       const profile = allowed ? await this.hotels.portalProfile(id, this.db) : null;
       if (!profile) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
@@ -311,7 +314,7 @@ export class PortalContractController {
         if (live.revokedAt || live.idleExpiresAt <= now || live.absoluteExpiresAt <= now)
           throw sessionExpired();
         const grant = (await this.grants.activeOf(session.user.id, tx)).find((g) =>
-          g.hotelIds.includes(id),
+          g.operationalHotelIds.includes(id),
         );
         if (!grant) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
         return this.hotels.applyPortalProfile(tx, {
@@ -420,7 +423,7 @@ export class PortalContractController {
 
   private async granted(session: { user: { id: string } }, only?: string): Promise<PortalHotel[]> {
     const ids = new Set(
-      (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+      (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.operationalHotelIds),
     );
     const wanted = only === undefined ? [...ids] : ids.has(only) ? [only] : [];
     return wanted.length === 0 ? [] : this.hotels.financeContractHotels(wanted, this.db);
@@ -469,3 +472,10 @@ export class PortalContractController {
     }
   }
 }
+
+/** A grant as the session view names it: the payer and all its hotels (unchanged contract). */
+const scopeOf = (g: { id: string; payerCustomerId: string; hotelIds: string[] }) => ({
+  id: g.id,
+  payerCustomerId: g.payerCustomerId,
+  hotelIds: g.hotelIds,
+});

@@ -7,6 +7,7 @@ import { SessionsService } from '../src/identity/sessions.service.js';
 import { createHotel } from './support/order-fixtures.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { operationsCheck } from './support/portal-check.js';
 
 const unique = (p: string) => `${p}-${randomUUID().slice(0, 8)}@ayvo.test`;
 const ADMIN_REASON = 'portal accounts test';
@@ -44,7 +45,7 @@ describe.skipIf(!hasDatabase)(
         payerCustomerId: randomUUID(),
         hotelIds,
         reason: 'synthetic portal grant',
-        financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
+        financeCheck: operationsCheck(hotelIds),
       });
     /** An open PORTAL session of the account (as the portal sign-in creates one). */
     const openSession = (userId: string) =>

@@ -263,6 +263,10 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       // creates the account and invites it after the grant.
       'POST /api/internal/v1/finance/portal-accounts',
       'POST /api/internal/v1/finance/portal-accounts/:id/invitation',
+      // The operational boundary (v6, #148): Finance's fence before a change of payer and the
+      // resolution by its committed explicit restore.
+      'POST /api/internal/v1/finance/portal-fence-resolutions',
+      'POST /api/internal/v1/finance/portal-fences',
       'POST /api/internal/v1/finance/portal-grants',
       'POST /api/internal/v1/finance/portal-grants/:id/replace',
       'POST /api/internal/v1/finance/portal-grants/requests/lookup',
