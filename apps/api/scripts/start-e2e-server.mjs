@@ -34,12 +34,19 @@ const storageDir = createE2eStorage(process.env.E2E_FILE_STORAGE_POINTER);
 const serverUrl = process.env.AYVO_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!serverUrl) throw new Error('Set DATABASE_URL (pnpm infra:up) or AYVO_TEST_DATABASE_URL');
 const withDb = (db) => Object.assign(new URL(serverUrl), { pathname: `/${db}` }).toString();
-const e2eUrl = withDb('ayvo_e2e');
+// E2E_DB_NAME: a second, isolated e2e set next to another one (ayvo_e2e_<suffix>, its own
+// cluster-wide runtime roles with the same suffix, so neither run resets the other's passwords).
+const dbName = process.env.E2E_DB_NAME ?? 'ayvo_e2e';
+const suffix = /^ayvo_e2e(_[a-z0-9]{1,20})?$/.exec(dbName)?.[1] ?? null;
+if (suffix === null && dbName !== 'ayvo_e2e')
+  throw new Error('E2E_DB_NAME must be ayvo_e2e[_suffix]');
+const roleSuffix = suffix ?? '';
+const e2eUrl = withDb(dbName);
 
 const { PrismaClient } = await import(resolve(apiRoot, 'dist/generated/prisma/client.js'));
 const admin = new PrismaClient({ adapter: new PrismaPg({ connectionString: withDb('postgres') }) });
-await admin.$executeRawUnsafe('DROP DATABASE IF EXISTS "ayvo_e2e" WITH (FORCE)');
-await admin.$executeRawUnsafe('CREATE DATABASE "ayvo_e2e"');
+await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+await admin.$executeRawUnsafe(`CREATE DATABASE "${dbName}"`);
 await admin.$disconnect();
 
 execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy'], {
@@ -51,9 +58,9 @@ execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy']
 // Finance unit (ADR 0039), exactly as deployed: its roles and schema (as the superuser), its
 // migrations as the schema owner. Fixed e2e role names; new passwords every run.
 const finance = {
-  ownerRole: 'ayvo_fin_e2e_owner',
+  ownerRole: `ayvo_fin_e2e${roleSuffix}_owner`,
   ownerPassword: randomBytes(24).toString('hex'),
-  runtimeRole: 'ayvo_fin_e2e',
+  runtimeRole: `ayvo_fin_e2e${roleSuffix}`,
   runtimePassword: randomBytes(24).toString('hex'),
   runtimeConnections: 10,
 };
@@ -79,7 +86,7 @@ const serviceToken = randomBytes(32).toString('base64url');
 // The core runtime role of this run (a fresh password each run; the role is cluster-wide).
 const { setupCoreDatabase } = await import(resolve(apiRoot, 'dist/database/core-db-setup.js'));
 const core = {
-  role: 'ayvo_core_e2e',
+  role: `ayvo_core_e2e${roleSuffix}`,
   password: randomBytes(24).toString('base64url'),
   connections: 50,
 };
