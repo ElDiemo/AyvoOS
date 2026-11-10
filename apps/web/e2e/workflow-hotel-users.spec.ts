@@ -1,6 +1,8 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+/** The migrated initial site (doc 022 §9), as in auth.setup. */
+const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
 
 const ADMIN_STATE = 'e2e/.auth/admin.json';
 const OPERATOR_STATE = 'e2e/.auth/operator.json';
@@ -298,6 +300,77 @@ test.describe('Hotely → Uživatelé', () => {
       await expect(form.getByLabel(one.name)).not.toBeChecked();
       await expect(form.getByLabel(two.name)).not.toBeChecked();
       await expect(form.getByText(foreign.name)).toHaveCount(0);
+    }
+  });
+
+  test('review 5842104295: hotels:read without the grant permission sees the real card, never the section or an e-mail', async ({
+    page,
+    browser,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    const run = crypto.randomUUID().slice(0, 6);
+    const { hotel, customer } = await setup(page.request, run);
+    const assigned = `recepce-${run}@portal-e2e.test`;
+    const issued = await page.request.post('/api/admin/finance/portal-grants', {
+      data: {
+        requestId: crypto.randomUUID(),
+        payerCustomerId: customer.id,
+        email: assigned,
+        displayName: `Recepce ${run}`,
+        hotelIds: [hotel.id],
+        reason: 'Přístup recepce (E2E)',
+      },
+    });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    // A real staff account whose only role reads hotels.
+    const role = `E2E_HOTEL_READER_${run.toUpperCase()}`;
+    const roleRes = await page.request.post('/api/admin/identity/roles', {
+      data: {
+        code: role,
+        name: `Čtenář hotelů ${run} (E2E)`,
+        description: 'Hotels read only',
+        permissions: ['hotels:read'],
+        copiedFrom: null,
+        reason: 'hotel card without portal access (E2E)',
+      },
+    });
+    expect(roleRes.status(), await roleRes.text()).toBe(201);
+    const readerEmail = `hotel-reader-${run}@ayvo.test`;
+    const created = await page.request.post('/api/admin/identity/users', {
+      data: {
+        email: readerEmail,
+        displayName: `Čtenář ${run}`,
+        roles: [role],
+        siteIds: [INITIAL_SITE_ID],
+        warehouseCodes: [],
+        reason: 'hotel card without portal access (E2E)',
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+
+    const reader = await browser.newContext({ viewport: { width: 390, height: 900 } });
+    try {
+      const rp = await reader.newPage();
+      await rp.goto(`/api/auth/login?next=/&login_hint=${readerEmail}`);
+      await expect(rp.getByTestId('current-user')).toHaveText(`Čtenář ${run}`);
+      const seen: string[] = [];
+      rp.on('request', (r) => seen.push(r.url()));
+      await rp.goto(`/hotels/${hotel.code}`);
+      // The real card: the hotel's name and details…
+      await expect(rp.getByRole('heading', { level: 1, name: hotel.name })).toBeVisible();
+      await expect(rp.getByTestId('hotel-address')).toBeVisible();
+      // …but no portal section (not even its "unavailable" notice), link or e-mail.
+      await expect(rp.getByTestId('hotel-portal-access')).toHaveCount(0);
+      await expect(rp.getByTestId('hotel-sections')).not.toContainText('Přístup do portálu');
+      const html = await rp.content();
+      expect(html).not.toContain(assigned);
+      expect(html).not.toContain('pristup-do-portalu');
+      expect(seen.filter((u) => u.includes('portal-accounts'))).toEqual([]);
+      const api = await rp.request.get(`/api/admin/identity/portal-accounts?hotelId=${hotel.id}`);
+      expect(api.status()).toBe(403);
+      expect(await api.text()).not.toContain(assigned);
+    } finally {
+      await reader.close();
     }
   });
 });
