@@ -50,6 +50,23 @@ export const financeEnvSchema = z
       .min(1024)
       .max(50 * 1024 * 1024)
       .default(10 * 1024 * 1024),
+    /**
+     * "Balíček za období" of the portal (doc 040 §14): at most this many invoices and bytes of
+     * PDFs, read and packed within this time, one package at a time per process.
+     */
+    FINANCE_PORTAL_PACKAGE_MAX_INVOICES: z.coerce.number().int().min(1).max(500).default(60),
+    FINANCE_PORTAL_PACKAGE_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(200 * 1024 * 1024)
+      .default(40 * 1024 * 1024),
+    FINANCE_PORTAL_PACKAGE_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(100)
+      .max(120_000)
+      .default(60_000),
     FILE_STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     FILE_STORAGE_DIR: z.string().min(1).default('../../var/storage'),
     AWS_REGION: optional(z.string().regex(/^[a-z]{2}(?:-[a-z]+)+-\d+$/)),
