@@ -70,6 +70,19 @@ and finds the Compose file only through that checkout: on disk, or in its git at
 commit. Without it the backup is refused and the deployment stops before changing anything
 (2026-11-10: "no Compose file (none) reproduces the running caddy").
 
+0. **Read-only check before every deployment** (changes nothing on DEV): the checkout the running
+   Caddy names still exists and is unchanged.
+
+   ```bash
+   dir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
+     ayvo-dev-preview-caddy-1)"
+   checkout="${dir%/deploy/dev}"
+   test -f "$dir/compose.yml" && git -C "$checkout" status --porcelain | wc -l
+   ```
+
+   It must print `0`. A missing file or a non-zero count: stop and restore that checkout (step 4)
+   before deploying.
+
 1. Deploy from a detached checkout of the reviewed commit at a fixed path, for example
    `git worktree add --detach /opt/ayvo/repos/AyvoOS-deploy-<sha7> <commit>`. Never edit it.
 2. Before removing any deploy checkout, check that the running Caddy does not come from it (the
@@ -86,6 +99,25 @@ commit. Without it the backup is refused and the deployment stops before changin
    change nothing else: the path is the label without `/deploy/dev`, the commit is the `git=` of
    the last `SUCCESS` line in that log (also the start of Caddy's image tag):
    `git worktree add --detach <path> <commit>`. Never bypass or skip the edge backup.
+
+## Acceptance: invoice ZIP and PDF (synthetic account with an invoice)
+
+Only in an already approved signed-in test session of a synthetic portal account whose payer has
+at least one TEST invoice; never a real customer's account, another person's password, a new
+account or an invitation for the smoke test. Without such a session, record the authenticated
+smoke as not run and rely on the isolated real-units walk (`PORTAL_WEB_WALK=1`, doc 057).
+
+1. Without a session: `/invoices` redirects to `/login`; `/invoices/package?from=…&to=…` and
+   `/invoices/<id>/pdf` answer 401.
+2. Signed in: "Faktury" lists the account's invoices first; open one and "Stáhnout PDF" saves
+   `<number>.pdf`, which opens as a PDF.
+3. Open "Stáhnout faktury za období (ZIP)", choose the invoice's month as from and to and download:
+   `AYVO-faktury-<from>-<to>.zip` contains `manifest.csv`, `README.txt` and
+   `faktury/<number>.pdf`; the PDF's SHA-256 equals the manifest's.
+4. A month without invoices comes back to "Faktury" with "V tomto období nejsou žádné faktury…";
+   more than 12 months with the period message. Nothing is downloaded then.
+5. Record the commit, the time and the results in the deployment notes; no screenshots with real
+   data.
 
 ## Verify and disable
 
