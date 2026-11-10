@@ -1,0 +1,30 @@
+# AYVO OS — the PUBLIC site of the hotel portal (doc 064 option A1, ADR 0045 amendment). Added by
+# scripts/deploy-prod.sh ONLY when PORTAL_PUBLIC=on in prod.env (and the portal unit is configured,
+# compose.portal.yml). Without it the portal stays private: no site, no certificate, no route.
+#
+#   internet ─:443─▶ qr-edge ─(portal-edge network)─▶ portal-web          (exact portal routes only)
+#   CA ─:80─▶ caddy ─(acme network, challenge path only)─▶ qr-edge:80      (portal certificate)
+#
+# Like the ID and marketing sites, qr-edge keeps its own command and configuration: it only gets
+# one more mounted site file. Its global options (write 30 s, read and idle limits, strict SNI)
+# stay exactly as they are for QR, ID and marketing.
+services:
+  qr-edge:
+    environment:
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+    volumes:
+      - ./sites/portal.caddy:/etc/caddy/sites/portal.caddy:ro
+    networks:
+      - portal-edge
+      - acme
+
+  caddy:
+    environment:
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+    volumes:
+      - ./acme.d/portal.caddy:/etc/caddy/acme.d/portal.caddy:ro
+    networks:
+      - acme
+
+networks:
+  acme:
