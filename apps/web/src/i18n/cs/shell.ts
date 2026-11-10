@@ -50,7 +50,12 @@ export const shellCs = {
     sales: {
       label: 'Obchod',
       description: 'Akvizice hotelů: zájemci, kontakty, co proběhlo a co je potřeba udělat dál.',
-      pages: { overview: 'Přehled obchodu', prospects: 'Akvizice', tasks: 'Úkoly' },
+      pages: {
+        overview: 'Přehled obchodu',
+        prospects: 'Akvizice',
+        tasks: 'Úkoly',
+        calendar: 'Kalendář',
+      },
     },
     warehouse: {
       label: 'Sklad',
@@ -101,7 +106,7 @@ export const shellCs = {
     hotels: {
       label: 'Hotely',
       description: 'Hotely, jejich doručovací adresa, kontakt a obsluhující provozovna.',
-      pages: { list: 'Hotely', new: 'Nový hotel' },
+      pages: { list: 'Hotely', new: 'Nový hotel', users: 'Uživatelé' },
     },
     dispatch: {
       label: 'Expedice',

@@ -34,6 +34,7 @@ const nextConfig: NextConfig = {
       { source: '/:path*', headers: common },
       { source: '/auth/:path*', headers: [noScripts] },
       { source: '/invoices/:id/pdf', headers: [noScripts] },
+      { source: '/invoices/package', headers: [noScripts] },
       { source: '/hotels/:id/profile', headers: [noScripts] },
     ];
   },

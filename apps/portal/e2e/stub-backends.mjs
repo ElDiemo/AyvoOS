@@ -94,6 +94,8 @@ const invoices = [
   invoice(2),
 ];
 const pdf = Buffer.from('%PDF-1.4\n% synthetic portal e2e invoice\n%%EOF\n');
+/** An empty but valid ZIP (end of central directory only). */
+const zipBytes = Buffer.from([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
 
 const state = {
   financeDown: false,
@@ -110,6 +112,9 @@ const state = {
   profileGrant: true,
   profileSaves: 0,
   lastProfileBody: null,
+  /** 'ok' | 'empty' (NO_INVOICES) | 'large' (PACKAGE_TOO_LARGE). */
+  packageMode: 'ok',
+  lastPackageQuery: null,
 };
 
 const send = (res, status, body, schema) => {
@@ -255,6 +260,22 @@ function finance(req, res, path) {
   if (!session(req)) return refuse(res, 401, 'UNAUTHENTICATED');
   const [base, id, pdfPart] = path.split('?')[0].split('/');
   if (base !== 'invoices') return refuse(res, 404, 'NOT_FOUND');
+  if (id === 'package') {
+    const q = new URLSearchParams(path.split('?')[1] ?? '');
+    state.lastPackageQuery = Object.fromEntries(q);
+    if (!/^\d{4}-\d{2}$/.test(q.get('from') ?? '') || !/^\d{4}-\d{2}$/.test(q.get('to') ?? ''))
+      return refuse(res, 400, 'VALIDATION');
+    if (state.packageMode === 'empty') return refuse(res, 404, 'NO_INVOICES');
+    if (state.packageMode === 'large') return refuse(res, 422, 'PACKAGE_TOO_LARGE');
+    res.writeHead(200, {
+      'content-type': 'application/zip',
+      'content-length': String(zipBytes.length),
+      'content-disposition': `attachment; filename="AYVO-faktury-${q.get('from')}-${q.get('to')}.zip"`,
+      'cache-control': 'private, no-store',
+    });
+    res.end(zipBytes);
+    return;
+  }
   if (!id)
     return send(
       res,
@@ -291,6 +312,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         sessions: state.sessions.size,
         profile: state.profile,
         profileSaves: state.profileSaves,
+        lastPackageQuery: state.lastPackageQuery,
         lastProfileBody: state.lastProfileBody,
         foreignHotelId: FOREIGN_HOTEL_ID,
         hotelId: hotel.id,
