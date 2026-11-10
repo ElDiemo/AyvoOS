@@ -61,6 +61,32 @@ later build cannot pass. On success the deployment log records `portal_image=` a
 `portal_image_id=`. Ordinary staff redeploys with an already active portal and no
 `PORTAL_IMAGE_TAG` do not check the portal.
 
+## Keep the running Caddy's checkout
+
+The running Caddy is recreated from the checkout that ran `deploy-dev.sh`. Its Compose labels
+(`com.docker.compose.project.config_files`, `…working_dir`, `com.ayvo.edge-commit`) name that
+path and commit. The next deployment first backs up the running edge (`scripts/dev-edge-backup.sh`)
+and finds the Compose file only through that checkout: on disk, or in its git at the labelled
+commit. Without it the backup is refused and the deployment stops before changing anything
+(2026-11-10: "no Compose file (none) reproduces the running caddy").
+
+1. Deploy from a detached checkout of the reviewed commit at a fixed path, for example
+   `git worktree add --detach /opt/ayvo/repos/AyvoOS-deploy-<sha7> <commit>`. Never edit it.
+2. Before removing any deploy checkout, check that the running Caddy does not come from it (the
+   label names `<checkout>/deploy/dev`):
+
+   ```bash
+   docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
+     ayvo-dev-preview-caddy-1
+   ```
+
+3. Remove the previous checkout only after the next deployment has written `SUCCESS` in
+   `/opt/ayvo/logs/deployments-dev-preview.log` and the check above names the new checkout.
+4. If the checkout is already gone, restore exactly the same one before the next deployment and
+   change nothing else: the path is the label without `/deploy/dev`, the commit is the `git=` of
+   the last `SUCCESS` line in that log (also the start of Caddy's image tag):
+   `git worktree add --detach <path> <commit>`. Never bypass or skip the edge backup.
+
 ## Verify and disable
 
 1. Verify the TLS certificate and DNS answer over the tailnet. Verify from outside the tailnet
