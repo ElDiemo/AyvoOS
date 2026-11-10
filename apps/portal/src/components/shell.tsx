@@ -1,8 +1,12 @@
 import Link from 'next/link';
+import wordmark from '@/assets/ayvo-wordmark.svg';
 import { cs } from '@/i18n/cs';
 import { LogoutButton } from './logout-button';
 
-/** The signed-in portal: who, where, and the two sections of P1. */
+/**
+ * The signed-in portal: the AYVO header, who is signed in, and the finished sections only (no
+ * placeholder for features that do not exist yet).
+ */
 export function Shell({
   user,
   active,
@@ -18,32 +22,47 @@ export function Shell({
     <Link
       href={href}
       aria-current={active === key ? 'page' : undefined}
-      className={`rounded-md px-3 py-2 text-sm font-medium ${active === key ? 'bg-stone-900 text-white' : 'text-stone-700 hover:bg-stone-200'}`}
+      className={`-mb-px border-b-2 px-1 pt-2 pb-3 text-sm font-medium ${
+        active === key
+          ? 'border-emerald-800 text-emerald-950'
+          : 'border-transparent text-stone-600 hover:border-stone-300 hover:text-stone-900'
+      }`}
     >
       {cs.nav[key]}
     </Link>
   );
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-col">
-          <span className="text-sm font-semibold">{cs.brand}</span>
-          <span className="text-xs break-all text-stone-500">
-            {user.displayName} · {user.email}
-          </span>
+    <div className="flex min-h-screen flex-col">
+      <header className="border-b border-stone-200 bg-white">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 pt-4">
+          <Link href="/" className="flex items-center gap-3" aria-label={cs.brand}>
+            {/* eslint-disable-next-line @next/next/no-img-element -- a static SVG wordmark */}
+            <img src={wordmark.src} alt="" width={86} height={25} className="h-6 w-auto" />
+            <span className="text-[11px] font-medium tracking-[0.18em] text-stone-500 uppercase">
+              {cs.portalName}
+            </span>
+          </Link>
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="min-w-0 truncate text-right text-xs text-stone-600" title={user.email}>
+              <span className="font-medium text-stone-800">{user.displayName}</span>
+              <span className="hidden sm:inline"> · {user.email}</span>
+            </span>
+            <LogoutButton />
+          </div>
         </div>
-        <nav className="flex flex-wrap items-center gap-2">
+        <nav aria-label={cs.nav.label} className="mx-auto mt-2 flex max-w-5xl gap-6 px-4">
           {link('/', 'hotels')}
           {link('/invoices', 'invoices')}
-          <LogoutButton />
         </nav>
       </header>
       {testInvoices && (
-        <p className="rounded-md bg-amber-100 px-3 py-2 text-xs text-amber-900">
+        <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-900">
           Testovací prostředí: faktury jsou TESTOVACÍ, ne daňové doklady.
         </p>
       )}
-      <main className="flex flex-col gap-4">{children}</main>
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 sm:py-8">
+        {children}
+      </main>
     </div>
   );
 }

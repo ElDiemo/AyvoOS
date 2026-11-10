@@ -279,6 +279,10 @@ export class ProspectsService {
       where.push(Prisma.sql`p."owner_id" = ${scope.userId}::uuid`);
     else if (q.owner) where.push(Prisma.sql`p."owner_id" = ${q.owner}::uuid`);
     if (q.stage) where.push(Prisma.sql`p."stage" = ${q.stage}`);
+    if (q.phase === 'in-progress')
+      where.push(
+        Prisma.sql`p."stage" IN (${Prisma.join(IN_PROGRESS_STAGES.map((s) => Prisma.sql`${s}`))})`,
+      );
     if (q.priority) where.push(Prisma.sql`p."priority" = ${q.priority}`);
     if (q.country) where.push(Prisma.sql`p."country_code" = ${q.country}`);
     where.push(
@@ -381,6 +385,13 @@ export class ProspectsService {
       Prisma.sql`(n."id" IS NULL) DESC, n."due_on" ASC NULLS LAST, p."name" ASC, p."code" ASC`,
     );
     const withoutNextStep = await this.count([...where, Prisma.sql`n."id" IS NULL`]);
+    // The ones without a next step on their own: the oldest change first (forgotten longest).
+    const missing = await this.summaries(
+      [...where, Prisma.sql`n."id" IS NULL`],
+      20,
+      0,
+      Prisma.sql`p."updated_at" ASC, p."name" ASC, p."code" ASC`,
+    );
     return {
       today,
       scope: all ? 'all' : 'me',
@@ -388,6 +399,7 @@ export class ProspectsService {
       dueToday,
       upcoming,
       inProgress: inProgress.map(toSummary),
+      withoutNextStep: missing.map(toSummary),
       counts: {
         overdue: counts[0],
         dueToday: counts[1],
