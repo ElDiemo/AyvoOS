@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hotelProfileFieldsSchema } from './hotels.js';
 
 /**
  * The core's hotel portal contract (ADR 0045 §3, §6): called only by portal-web's server side with
@@ -102,6 +103,47 @@ export const portalHotelSchema = z.object({
   countryCode: z.string(),
 });
 export type PortalHotel = z.infer<typeof portalHotelSchema>;
+
+/**
+ * "Profil hotelu": a granted hotel's own profile. The name and country are shown, not edited; the
+ * fingerprint names exactly these values, so a save made against older values is refused
+ * (PROFILE_STALE) instead of silently overwriting someone else's change.
+ */
+export const portalHotelProfileSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  countryCode: z.string(),
+  address: z.object({
+    addressLine1: z.string(),
+    addressLine2: z.string().nullable(),
+    postalCode: z.string(),
+    city: z.string(),
+  }),
+  contact: z.object({ name: z.string(), phone: z.string(), email: z.string() }),
+  receiving: z.object({
+    contactName: z.string().nullable(),
+    contactPhone: z.string().nullable(),
+    contactEmail: z.string().nullable(),
+    deliveryNote: z.string().nullable(),
+  }),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type PortalHotelProfile = z.infer<typeof portalHotelProfileSchema>;
+
+/** The browser → portal-web body of a profile save (whitelisted fields only). */
+export const portalHotelProfileUpdateSchema = z.strictObject({
+  expected: z.string().regex(/^[0-9a-f]{64}$/),
+  profile: hotelProfileFieldsSchema,
+  /** Why the hotel changes its details (owner 2026-11-09: required, kept in the audit). */
+  reason: z.string().trim().min(3).max(500),
+});
+export type PortalHotelProfileUpdate = z.infer<typeof portalHotelProfileUpdateSchema>;
+
+/** portal-web → core: the same, with the browser request the core checks again (CSRF). */
+export const portalHotelProfileRequestSchema = portalHotelProfileUpdateSchema.extend({
+  client: portalClientSchema,
+});
+export type PortalHotelProfileRequest = z.infer<typeof portalHotelProfileRequestSchema>;
 
 // --- Finance ↔ core: introspection of a portal session (ADR 0045 §5, §6) ------------------------
 

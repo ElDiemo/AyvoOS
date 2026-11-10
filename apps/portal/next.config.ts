@@ -25,7 +25,7 @@ const nextConfig: NextConfig = {
       { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
     ];
     // Pages get a per-request nonce policy from src/proxy.ts. The route handlers it skips (JSON
-    // sign-in steps and the PDF) run no script at all.
+    // sign-in steps, the profile save and the PDF) run no script at all.
     const noScripts = {
       key: 'Content-Security-Policy',
       value: "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
@@ -34,6 +34,7 @@ const nextConfig: NextConfig = {
       { source: '/:path*', headers: common },
       { source: '/auth/:path*', headers: [noScripts] },
       { source: '/invoices/:id/pdf', headers: [noScripts] },
+      { source: '/hotels/:id/profile', headers: [noScripts] },
     ];
   },
 };

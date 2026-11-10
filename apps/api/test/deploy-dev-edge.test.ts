@@ -359,6 +359,17 @@ describe.skipIf(!hasDocker)('the optional DEV portal edge (ADR 0045)', () => {
       expect(portalRoute).toContain('"read_min_rate":819');
       expect(portalRoute).toContain('portal-web:3200');
       expect(portalRoute).not.toMatch(/"dial":"(?:api|finance|web):/);
+      // The one POST outside /auth: the profile save on exactly /hotels/<uuid>/profile, 8 KiB,
+      // matched before the general route (doc 053).
+      const profileSave =
+        '"^/hotels/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/profile$"';
+      expect(portalRoute).toContain(profileSave);
+      expect(portalRoute).toContain('"method":["POST"]');
+      expect(portalRoute).toContain('"max_size":8192');
+      expect(portalRoute.indexOf('"max_size":8192')).toBeLessThan(
+        portalRoute.indexOf('"max_size":4096'),
+      );
+      expect(portalRoute.match(/"path_regexp"/g)).toHaveLength(1);
     }
   });
 });
