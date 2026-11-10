@@ -61,44 +61,71 @@ later build cannot pass. On success the deployment log records `portal_image=` a
 `portal_image_id=`. Ordinary staff redeploys with an already active portal and no
 `PORTAL_IMAGE_TAG` do not check the portal.
 
-## Keep the running Caddy's checkout
+## Keep the running Caddy's source
 
-The running Caddy is recreated from the checkout that ran `deploy-dev.sh`. Its Compose labels
-(`com.docker.compose.project.config_files`, `…working_dir`, `com.ayvo.edge-commit`) name that
-path and commit. The next deployment first backs up the running edge (`scripts/dev-edge-backup.sh`)
-and finds the Compose file only through that checkout: on disk, or in its git at the labelled
-commit. Without it the backup is refused and the deployment stops before changing anything
-(2026-11-10: "no Compose file (none) reproduces the running caddy").
+The next deployment first backs up the running edge (`scripts/dev-edge-backup.sh`) and finds its
+Compose file only through Caddy's own labels (`com.docker.compose.project.working_dir` and
+`…config_files`). Caddy runs from one of two sources, and each must stay intact while it runs:
 
-0. **Read-only check before every deployment** (changes nothing on DEV): the checkout the running
-   Caddy names still exists and is unchanged.
+- **a deploy checkout**: the label is `<checkout>/deploy/dev`, written when `deploy-dev.sh`
+  recreated Caddy from that checkout;
+- **a verified edge backup**: the label is a backup directory
+  `/opt/ayvo/backups/dev-preview/edge-before-*`, written by `dev-edge-backup.sh restore`.
 
-   ```bash
-   dir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
-     ayvo-dev-preview-caddy-1)"
-   checkout="${dir%/deploy/dev}"
-   test -f "$dir/compose.yml" && git -C "$checkout" status --porcelain | wc -l
-   ```
+Neither the last `SUCCESS` line nor Caddy's image tag says which commit Caddy runs from:
+`deploy-dev.sh` switches Caddy before its verification and writes `SUCCESS` only afterwards, so a
+run whose verification failed (`FAILED step=verify…`) can leave Caddy on its new checkout while the
+last `SUCCESS` names an older one. The image is plain `caddy:<version>`, and the label
+`com.ayvo.edge-commit` is the last change of `deploy/dev`, not the release's HEAD.
 
-   It must print `0`. A missing file or a non-zero count: stop and restore that checkout (step 4)
-   before deploying.
+**0. Read-only check before every deployment.** It changes nothing on DEV and stops on any doubt;
+a failing `git` is a stop, never a clean result:
 
-1. Deploy from a detached checkout of the reviewed commit at a fixed path, for example
-   `git worktree add --detach /opt/ayvo/repos/AyvoOS-deploy-<sha7> <commit>`. Never edit it.
-2. Before removing any deploy checkout, check that the running Caddy does not come from it (the
-   label names `<checkout>/deploy/dev`):
+```bash
+bash <<'CHECK'
+set -uo pipefail
+stop() { echo "STOP: $*" >&2; exit 1; }
+dir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
+  ayvo-dev-preview-caddy-1)" || stop "Caddy is not running or has no Compose labels"
+case "$dir" in
+  /opt/ayvo/backups/dev-preview/edge-before-*)
+    [[ -f $dir/COMPLETE ]] || stop "$dir is not a complete edge backup"
+    (cd "$dir" && sha256sum --quiet -c SHA256SUMS) || stop "checksums in $dir do not match"
+    echo "OK backup $dir" ;;
+  */deploy/dev)
+    checkout="${dir%/deploy/dev}"
+    [[ -f $dir/compose.yml ]] || stop "$dir/compose.yml is missing"
+    head="$(git -C "$checkout" rev-parse --short=12 HEAD)" || stop "git cannot read $checkout"
+    changes="$(git -C "$checkout" status --porcelain)" || stop "git status failed in $checkout"
+    [[ -z $changes ]] || stop "$checkout has local changes"
+    echo "OK checkout $checkout $head" ;;
+  *) stop "unknown Caddy source: $dir" ;;
+esac
+CHECK
+```
 
-   ```bash
-   docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
-     ayvo-dev-preview-caddy-1
-   ```
-
-3. Remove the previous checkout only after the next deployment has written `SUCCESS` in
-   `/opt/ayvo/logs/deployments-dev-preview.log` and the check above names the new checkout.
-4. If the checkout is already gone, restore exactly the same one before the next deployment and
-   change nothing else: the path is the label without `/deploy/dev`, the commit is the `git=` of
-   the last `SUCCESS` line in that log (also the start of Caddy's image tag):
-   `git worktree add --detach <path> <commit>`. Never bypass or skip the edge backup.
+1. Deploy from a detached checkout of the reviewed commit named after it, for example
+   `git worktree add --detach /opt/ayvo/repos/AyvoOS-deploy-<sha7> <commit>`, and never edit it.
+2. Keep the checkout or backup that the check names until the next deployment's check names
+   another one. Remove an old checkout only when the check names a different source.
+3. **A normal deployment** (`SUCCESS`): the check then names the new checkout; the previous
+   checkout may be removed.
+4. **Verification failed after the switch** (`FAILED step=verify…`, Caddy recreated): run the check.
+   It names the source Caddy really runs from, usually the new checkout; keep both checkouts.
+   Either deploy again from a checkout, or restore the edge with the backup the failure printed
+   (`scripts/dev-edge-backup.sh restore <edge-before-…> <env file>`); then the check names that
+   backup.
+5. **Running from a restored backup**: keep that `edge-before-*` directory; the check verifies
+   `COMPLETE` and the checksums. The next deployment backs it up from there. Never remove or edit
+   it while Caddy runs from it.
+6. **The checkout is gone** (the check stops): restore it only if its commit is proven, otherwise
+   stop and ask before any deployment. Proof: the checkout's name holds its commit
+   (`AyvoOS-deploy-<sha7>`) and the first line after Caddy's creation time
+   (`docker inspect --format '{{.Created}}' ayvo-dev-preview-caddy-1`) in
+   `/opt/ayvo/logs/deployments-dev-preview.log` — the run that recreated it, `SUCCESS` or
+   `FAILED` — has a `git=` starting with the same `<sha7>`. Then
+   `git worktree add --detach <that path> <that commit>`, run the check again. Never bypass or skip
+   the edge backup.
 
 ## Acceptance: invoice ZIP and PDF (synthetic account with an invoice)
 
