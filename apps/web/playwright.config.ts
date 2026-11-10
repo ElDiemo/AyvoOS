@@ -2,12 +2,14 @@ import { resolve } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 // Dedicated ports, so a running `pnpm dev` (3000/4000, dev database) is never reused by tests.
-const WEB_PORT = 3100;
+// E2E_WEB_PORT / E2E_API_PORT / E2E_FINANCE_PORT / E2E_DB_NAME run a second, isolated set next to
+// another one (the defaults stay 3100 / 4100 / 4110 / ayvo_e2e).
+const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3100);
 /** Session of the e2e operator (all operational roles, MAIN warehouse) — see e2e/auth.setup.ts. */
 export const OPERATOR_STATE = 'e2e/.auth/operator.json';
-const API_PORT = 4100;
+const API_PORT = Number(process.env.E2E_API_PORT ?? 4100);
 /** The Finance unit (ADR 0039), started by the same e2e server script next to the API. */
-const FINANCE_PORT = 4110;
+const FINANCE_PORT = Number(process.env.E2E_FINANCE_PORT ?? 4110);
 /**
  * Pointer file to the e2e API's file storage: the API creates a fresh temporary directory per run
  * and writes its path here (apps/api/scripts/e2e-storage.mjs); crates.spec.ts reads it to make the
@@ -45,6 +47,8 @@ export default defineConfig({
         E2E_API_PORT: String(API_PORT),
         E2E_FINANCE_PORT: String(FINANCE_PORT),
         E2E_PUBLIC_QR_BASE_URL: `http://localhost:${WEB_PORT}/q`,
+        E2E_APP_ORIGIN: `http://localhost:${WEB_PORT}`,
+        E2E_DB_NAME: process.env.E2E_DB_NAME ?? 'ayvo_e2e',
         E2E_FILE_STORAGE_POINTER,
       },
       reuseExistingServer: false,

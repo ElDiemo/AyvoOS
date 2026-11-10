@@ -1,7 +1,7 @@
 import { returnReceiptCodeSchema, returnReceiptDetailSchema } from '@ayvo/types';
 import { notFound } from 'next/navigation';
 import { ReceiptWorkspace } from '@/components/returns/receipt-workspace';
-import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
+import { CycleHeader } from '@/components/returns/cycle-header';
 import { returnsCs } from '@/i18n/cs/returns';
 import { apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
@@ -16,11 +16,11 @@ export default async function ReturnReceiptPage({ params }: { params: Promise<{ 
   const receipt = await apiGet(`admin/returns/receipts/${code}`, returnReceiptDetailSchema);
   return (
     <>
-      <WarehouseHeader
+      <CycleHeader
         active="returns"
         title={`${returnsCs.title} ${receipt.code}`}
         subtitle={receipt.hotelName ?? undefined}
-        back={{ href: '/warehouse/returns', label: returnsCs.receipt.back }}
+        back={{ href: '/production/cycle/returns', label: returnsCs.receipt.back }}
       />
       <ReceiptWorkspace
         key={receipt.code}
