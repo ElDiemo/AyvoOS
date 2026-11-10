@@ -1,8 +1,10 @@
 import {
   PORTAL_SESSION_HEADER,
   portalInvoiceListQuerySchema,
+  portalInvoicePackageQuerySchema,
   type PortalInvoice,
   type PortalInvoiceListQuery,
+  type PortalInvoicePackageQuery,
   type PortalInvoicePage,
 } from '@ayvo/types';
 import {
@@ -91,6 +93,35 @@ export class FinancePortalInvoicesController {
     return this.slots.run(async () => this.invoices.list(await this.scope(session), q));
   }
 
+  /**
+   * "Balíček za období" (doc 040 §14): a ZIP of the visible invoices of the period with a
+   * manifest. Declared before ":id". The same bounded sending as the PDF: one deadline
+   * (FINANCE_PORTAL_PACKAGE_TIMEOUT_MS) for reading, packing and sending, the client leaving stops
+   * it, the request slot is held until the bytes have left.
+   */
+  @PortalServiceAccess()
+  @Get('package')
+  package(
+    @Query(new ZodValidationPipe(portalInvoicePackageQuerySchema)) q: PortalInvoicePackageQuery,
+    @Headers(PORTAL_SESSION_HEADER) session: string | undefined,
+    @Res() res: ServerResponse,
+  ): Promise<void> {
+    return this.slots.run(async () => {
+      // One package from its start until its bytes have left or the transfer was aborted.
+      const release = this.invoices.reservePackage();
+      if (!release)
+        throw domainError(503, 'PACKAGE_BUSY', 'Balíček se právě připravuje. Zkuste to za chvíli.');
+      try {
+        await this.sendBounded(res, this.env.FINANCE_PORTAL_PACKAGE_TIMEOUT_MS, async (signal) => {
+          const file = await this.invoices.package(await this.scope(session), q, signal);
+          return { type: 'application/zip', name: file.name, bytes: file.bytes };
+        });
+      } finally {
+        release();
+      }
+    });
+  }
+
   @PortalServiceAccess()
   @Get(':id')
   detail(
@@ -148,5 +179,41 @@ export class FinancePortalInvoicesController {
         res.off('close', gone);
       }
     });
+  }
+
+  /** Produces a file under one deadline and sends it privately as a download, never sniffed. */
+  private async sendBounded(
+    res: ServerResponse,
+    timeoutMs: number,
+    produce: (signal: AbortSignal) => Promise<{ type: string; name: string; bytes: Buffer }>,
+  ): Promise<void> {
+    const stop = new AbortController();
+    const deadline = setTimeout(() => stop.abort(new Error('PortalFileDeadline')), timeoutMs);
+    const gone = () => {
+      if (!res.writableFinished) stop.abort(new Error('PortalFileClientGone'));
+    };
+    res.once('close', gone);
+    try {
+      const file = await produce(stop.signal);
+      if (stop.signal.aborted) throw stop.signal.reason;
+      if (res.destroyed) return;
+      await new Promise<void>((resolve) => {
+        const done = () => resolve();
+        res.once('finish', done);
+        res.once('close', done);
+        stop.signal.addEventListener('abort', () => res.destroy(), { once: true });
+        res.writeHead(200, {
+          'Content-Type': file.type,
+          'Content-Length': String(file.bytes.length),
+          'Content-Disposition': `attachment; filename="${file.name.replace(/[^A-Za-z0-9_.-]/g, '_')}"`,
+          'Cache-Control': 'private, no-store',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        res.end(file.bytes);
+      });
+    } finally {
+      clearTimeout(deadline);
+      res.off('close', gone);
+    }
   }
 }

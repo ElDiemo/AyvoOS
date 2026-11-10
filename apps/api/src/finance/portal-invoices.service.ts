@@ -3,15 +3,22 @@ import type {
   PortalIntrospection,
   PortalInvoice,
   PortalInvoiceListQuery,
+  PortalInvoicePackageQuery,
   PortalInvoicePage,
 } from '@ayvo/types';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { domainError } from '../common/domain-error.js';
 import { Prisma } from '../generated/finance-prisma/client.js';
-import { FILE_STORAGE, type FileStorage } from '../storage/file-storage.js';
+import {
+  FILE_STORAGE,
+  StorageObjectTooLargeError,
+  type FileStorage,
+} from '../storage/file-storage.js';
+import { csvFile } from './csv.js';
 import { FINANCE_ENV, type FinanceEnv } from './finance-env.js';
 import { FinancePortalPrismaService } from './finance-portal-prisma.service.js';
 import { invoicePaymentState } from './payments.service.js';
+import { buildZip } from './zip.js';
 
 /**
  * Invoice kinds a portal may show (§5 `env_allowed`): TEST only where APP_ENV is development or
@@ -67,6 +74,8 @@ const day = (d: Date) => d.toISOString().slice(0, 10);
 @Injectable()
 export class FinancePortalInvoicesService {
   private readonly logger = new Logger(FinancePortalInvoicesService.name);
+  /** One package is built at a time in this process (its PDFs are held in memory). */
+  private packing = false;
 
   constructor(
     private readonly db: FinancePortalPrismaService,
@@ -148,8 +157,153 @@ export class FinancePortalInvoicesService {
     }
     return { number: row.number, bytes };
   }
+
+  /**
+   * "Balíček za období" (doc 040 §14): the visible invoices (THE predicate) whose billed month is
+   * in [from, to], each once — a summary invoice over several hotels too, but only if one grant
+   * covers it whole. The query ends before any file is read (no DB transaction is open while
+   * packing). Bounded: at most FINANCE_PORTAL_PACKAGE_MAX_INVOICES invoices and
+   * FINANCE_PORTAL_PACKAGE_MAX_BYTES of PDFs and of the finished ZIP (refused with
+   * PACKAGE_TOO_LARGE before, while reading or before sending), stopped by `signal`; the caller
+   * holds the process's one package (reservePackage) until the ZIP is sent. Every
+   * PDF must match the hash recorded at issue. The ZIP holds manifest.csv, README.txt and
+   * faktury/<number>.pdf.
+   */
+  async package(
+    scope: PortalIntrospection,
+    q: PortalInvoicePackageQuery,
+    signal: AbortSignal,
+  ): Promise<{ name: string; bytes: Buffer }> {
+    const empty = () =>
+      domainError(404, 'NO_INVOICES', 'V tomto období nejsou žádné faktury, které můžete vidět.');
+    if (scope.grants.length === 0) throw empty();
+    const max = this.env.FINANCE_PORTAL_PACKAGE_MAX_INVOICES;
+    const inPeriod = Prisma.sql`${this.where(scope)}
+      AND i."period_month" BETWEEN ${`${q.from}-01`}::date AND ${`${q.to}-01`}::date`;
+    const files = await this.db.$queryRaw<
+      { id: string; number: string; pdf_storage_key: string; pdf_sha256: string }[]
+    >`SELECT i."id", i."number", i."pdf_storage_key", i."pdf_sha256"
+        FROM "finance"."invoices" i WHERE ${inPeriod}
+        ORDER BY i."period_month", i."issued_on", i."serial" LIMIT ${max + 1}`;
+    if (files.length === 0) throw empty();
+    if (files.length > max) throw tooLarge();
+    const views = new Map(
+      (
+        await this.db.$queryRaw<Row[]>`${this.select(
+          Prisma.sql`${inPeriod} AND i."id" = ANY(${files.map((f) => f.id)}::uuid[])`,
+        )}`
+      ).map((r) => [r.id, toView(r)]),
+    );
+    // No DB work from here on: the files are read with a shared byte budget.
+    let budget = this.env.FINANCE_PORTAL_PACKAGE_MAX_BYTES;
+    const entries: { name: string; data: Buffer }[] = [];
+    const names = new Set<string>();
+    for (const f of files) {
+      if (signal.aborted) throw signal.reason;
+      let bytes: Buffer;
+      try {
+        bytes = await this.storage.getBounded(f.pdf_storage_key, {
+          signal,
+          maxBytes: Math.min(budget, this.env.FINANCE_PORTAL_PDF_MAX_BYTES),
+        });
+      } catch (error) {
+        if (signal.aborted) throw signal.reason;
+        // Beyond what is left of the package's budget (not beyond one PDF's own limit).
+        if (
+          error instanceof StorageObjectTooLargeError &&
+          budget < this.env.FINANCE_PORTAL_PDF_MAX_BYTES
+        )
+          throw tooLarge();
+        this.logger.warn(`Portal package PDF not read: ${(error as Error).name}`);
+        throw unavailable();
+      }
+      if (createHash('sha256').update(bytes).digest('hex') !== f.pdf_sha256) {
+        this.logger.error('Portal package PDF does not match its recorded hash');
+        throw unavailable();
+      }
+      budget -= bytes.length;
+      let name = `faktury/${f.number.replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`;
+      for (let n = 2; names.has(name); n++) name = name.replace(/(-\d+)?\.pdf$/, `-${n}.pdf`);
+      names.add(name);
+      entries.push({ name, data: bytes });
+    }
+    const manifest = csvFile(
+      [
+        'cislo',
+        'druh',
+        'vystaveno',
+        'splatnost',
+        'obdobi',
+        'celkem',
+        'mena',
+        'stav_platby',
+        'uhrazeno',
+        'zbyva',
+        'stornovana',
+        'hotely',
+        'soubor',
+        'sha256',
+      ],
+      files.map((f, i) => {
+        const v = views.get(f.id)!;
+        return [
+          v.number,
+          v.kind,
+          v.issuedOn,
+          v.dueOn,
+          v.periodMonth,
+          v.total,
+          v.currency,
+          v.paymentState,
+          v.paid,
+          v.remaining,
+          v.cancelled ? 'ano' : 'ne',
+          v.hotels.map((h) => `${h.code} ${h.name}`).join(', '),
+          entries[i]!.name,
+          f.pdf_sha256,
+        ];
+      }),
+    );
+    const test = [...views.values()].some((v) => v.kind === 'TEST');
+    const readme = [
+      `AYVO — vystavené faktury za období ${q.from} až ${q.to}`,
+      'manifest.csv: oddělovač ";", UTF-8. Každá faktura je v balíčku jednou, i souhrnná za více hotelů.',
+      'Sloupec stav_platby: UNPAID = neuhrazená, PARTIALLY_PAID = částečně uhrazená, PAID = uhrazená.',
+      'sha256 ověří, že soubor odpovídá faktuře, jak byla vystavena.',
+      ...(test ? ['TESTOVACÍ faktury nejsou daňové doklady.'] : []),
+      '',
+    ].join('\r\n');
+    const zip = buildZip([
+      { name: 'manifest.csv', data: Buffer.from(manifest, 'utf8') },
+      { name: 'README.txt', data: Buffer.from(readme, 'utf8') },
+      ...entries,
+    ]);
+    entries.length = 0; // the inputs are no longer needed while the ZIP is sent
+    // The finished archive (headers, manifest and README included) within the limit, before a
+    // byte is sent: beyond it the user is told to shorten the period, never "unavailable".
+    if (zip.length > this.env.FINANCE_PORTAL_PACKAGE_MAX_BYTES) throw tooLarge();
+    return { name: `AYVO-faktury-${q.from}-${q.to}.zip`, bytes: zip };
+  }
+
+  /**
+   * The process's one invoice package (review 5845096918): reserved before anything is read and
+   * released by the caller only once the ZIP has been sent or the transfer was aborted — so at
+   * most one archive is ever held in memory, and a slow receiver blocks only other packages.
+   */
+  reservePackage(): (() => void) | null {
+    if (this.packing) return null;
+    this.packing = true;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.packing = false;
+    };
+  }
 }
 
+const tooLarge = () =>
+  domainError(422, 'PACKAGE_TOO_LARGE', 'Balíček by byl příliš velký. Zvolte kratší období.');
 const unavailable = () =>
   domainError(503, 'INVOICES_UNAVAILABLE', 'Faktury teď nejsou dostupné. Zkuste to za chvíli.');
 
