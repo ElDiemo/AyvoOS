@@ -363,6 +363,13 @@ export const MODULES: readonly NavModule[] = [
     pages: [
       { id: 'list', href: '/hotels', label: h.pages.list, permission: 'hotels:read' },
       { id: 'new', href: '/hotels/new', label: h.pages.new, permission: 'hotels:manage' },
+      // Hotel portal accounts (never internal users) and their grants.
+      {
+        id: 'users',
+        href: '/hotels/users',
+        label: h.pages.users,
+        permission: 'identity:portal_grants_manage',
+      },
     ],
   },
   {
@@ -439,7 +446,7 @@ export type ProductionPageId =
   | 'catalog'
   | 'setup';
 export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
-export type HotelsPageId = 'list' | 'new';
+export type HotelsPageId = 'list' | 'new' | 'users';
 /** Finance (doc 042): one strip of work pages, the settings apart; views inside two pages. */
 export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'exports' | 'settings';
 export type FinanceViewId =
