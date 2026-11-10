@@ -19,6 +19,27 @@ const badge = (tone: 'ok' | 'muted' | 'warn', text: string) => (
   </span>
 );
 
+/** The account's state and its invitation's. */
+export function AccountBadges({
+  account,
+}: {
+  account: Pick<PortalAccountListItem, 'status' | 'invitation'>;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {badge(account.status === 'ACTIVE' ? 'ok' : 'muted', t.status[account.status]!)}
+      {badge(
+        account.invitation === 'ACTIVE'
+          ? 'ok'
+          : ['DELIVERY_FAILED', 'EXPIRED', 'FAILED'].includes(account.invitation)
+            ? 'warn'
+            : 'muted',
+        t.invitation[account.invitation]!,
+      )}
+    </div>
+  );
+}
+
 /** The payer of a grant: its name and a link to its Finance page when known, else its id. */
 function Payer({ id, payers }: { id: string; payers: Payers | null }) {
   const payer = payers?.get(id);
@@ -30,7 +51,7 @@ function Payer({ id, payers }: { id: string; payers: Payers | null }) {
     );
   return (
     <Link
-      href={`/finance/billing/customers/${payer.code}`}
+      href={`/finance/billing/customers/${payer.code}#pristup-do-portalu`}
       className="underline-offset-2 hover:underline"
     >
       {payer.name} <span className="font-mono text-xs text-stone-500">{payer.code}</span>
@@ -61,7 +82,7 @@ export function GrantRow({
         {grant.hotels.map((h) => (
           <li key={h.id}>
             <Link
-              href={`/hotels/${h.code}`}
+              href={`/hotels/${h.code}#pristup-do-portalu`}
               className="rounded-md border border-stone-200 px-2 py-0.5 text-xs hover:bg-stone-50"
             >
               {h.name} <span className="font-mono text-stone-500">{h.code}</span>
@@ -110,17 +131,7 @@ export function PortalAccountSummary({
           )}
           <p className="text-sm break-all text-stone-600">{account.email}</p>
         </div>
-        <div className="flex flex-wrap gap-1">
-          {badge(account.status === 'ACTIVE' ? 'ok' : 'muted', t.status[account.status]!)}
-          {badge(
-            account.invitation === 'ACTIVE'
-              ? 'ok'
-              : ['DELIVERY_FAILED', 'EXPIRED', 'FAILED'].includes(account.invitation)
-                ? 'warn'
-                : 'muted',
-            t.invitation[account.invitation]!,
-          )}
-        </div>
+        <AccountBadges account={account} />
       </div>
       <p className="text-xs text-stone-500">
         {t.lastLogin}: {account.lastLoginAt ? formatDateTimeCs(account.lastLoginAt) : t.never} ·{' '}

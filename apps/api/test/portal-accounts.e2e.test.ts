@@ -265,5 +265,52 @@ describe.skipIf(!hasDatabase)(
         'ACTIVE',
       );
     });
+
+    it('one hotel’s card: only the accounts with an active grant naming it, only those grants — filtered on the server', async () => {
+      const hc = await createHotel(su, { name: 'Hotel Karta' });
+      const onCard = await portalAccount('Recepce Karta');
+      const other = await portalAccount('Recepce Jinde');
+      const revoked = await portalAccount('Recepce Odvolaná');
+      await grant(onCard.id, [hotelB.id]); // its other grant is not on the card
+      await grant(onCard.id, [hc.id, hotelA.id]);
+      await grant(other.id, [hotelA.id]);
+      const gone = await grant(revoked.id, [hc.id]);
+      await t.app.get(PortalGrantsService).revoke(adminId, gone.id, 'synthetic revocation');
+      const card = (
+        await asSu()
+          .get('/api/admin/identity/portal-accounts')
+          .query({ hotelId: hc.id })
+          .expect(200)
+      ).body as PortalAccountListItem[];
+      expect(card.map((a) => a.email)).toEqual([onCard.email]);
+      expect(card[0]!.grants).toHaveLength(1);
+      expect(card[0]!.grants[0]!.hotels.map((h) => h.id).sort()).toEqual([hc.id, hotelA.id].sort());
+      expect(card[0]!.grants[0]!.revokedAt).toBeNull();
+      // An unknown hotel has no accounts; a malformed filter or an unknown parameter is refused.
+      expect(
+        (await asSu().get('/api/admin/identity/portal-accounts').query({ hotelId: randomUUID() }))
+          .body,
+      ).toEqual([]);
+      for (const q of [{ hotelId: 'nope' }, { hotel: hc.id }])
+        expect((await asSu().get('/api/admin/identity/portal-accounts').query(q)).status).toBe(400);
+    });
+
+    it('the hotel filter needs the same permission: no list and no e-mail without it', async () => {
+      const portal = await portalAccount('Recepce Bez Práva');
+      await grant(portal.id, [hotelA.id]);
+      const res = await request(t.app.getHttpServer())
+        .get('/api/admin/identity/portal-accounts')
+        .query({ hotelId: hotelA.id })
+        .set('Cookie', operator);
+      expect(res.status).toBe(403);
+      expect(JSON.stringify(res.body)).not.toContain(portal.email);
+      expect(
+        (
+          await request(t.app.getHttpServer())
+            .get('/api/admin/identity/portal-accounts')
+            .query({ hotelId: hotelA.id })
+        ).status,
+      ).toBe(401);
+    });
   },
 );

@@ -181,6 +181,13 @@ export const portalAccountListItemSchema = z.object({
 });
 export type PortalAccountListItem = z.infer<typeof portalAccountListItemSchema>;
 
+/**
+ * The list's filter: `hotelId` = one hotel's card (Hotely → hotel → Přístup do portálu) — only the
+ * accounts assigned to it by an active grant, filtered on the server.
+ */
+export const portalAccountsQuerySchema = z.strictObject({ hotelId: z.uuid().optional() });
+export type PortalAccountsQuery = z.infer<typeof portalAccountsQuerySchema>;
+
 /** Deactivation or reactivation of a hotel portal account (a reason, as for internal users). */
 export const portalAccountActivationSchema = z.strictObject({ reason: reasonSchema });
 export type PortalAccountActivation = z.infer<typeof portalAccountActivationSchema>;
