@@ -254,7 +254,11 @@ export class FinancePortalGrantsService {
     return hotels;
   }
 
-  /** Each hotel belongs to the payer (above), else HOTEL_NOT_OF_PAYER and nothing goes to the core. */
+  /**
+   * Each hotel belongs to the payer (above), else HOTEL_NOT_OF_PAYER and nothing goes to the core.
+   * Each is sent with its basis (v6, #148): AGREEMENT with the terms revision it was checked in and
+   * the last day of operations, INVOICE with neither — the core never derives them itself.
+   */
   private async checkPair(payerCustomerId: string, hotelIds: readonly string[]) {
     const { payerVersion } = await this.payer(payerCustomerId);
     const hotels = await this.payerHotels(payerCustomerId);
@@ -266,6 +270,50 @@ export class FinancePortalGrantsService {
         'Some hotels do not belong to this payer',
         { hotelIds: foreign },
       );
-    return { payerVersion, hotelIds: [...hotelIds].sort(), checkedAt: new Date().toISOString() };
+    const terms = await this.operationalTerms(
+      payerCustomerId,
+      hotelIds.filter((h) => hotels.get(h)!.basis === 'AGREEMENT'),
+    );
+    return {
+      payerVersion,
+      hotels: [...hotelIds]
+        .sort()
+        .map((id) =>
+          hotels.get(id)!.basis === 'AGREEMENT'
+            ? { id, basis: 'AGREEMENT' as const, ...terms.get(id)! }
+            : { id, basis: 'INVOICE' as const, checkedRevision: null, operationsUntil: null },
+        ),
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * For each AGREEMENT hotel, from one read of its agreement: the terms revision checked (the
+   * number of the agreement's versions recorded so far — their order in the agreement) and the
+   * last day of operations: the earliest of the payer's terms' `validTo` and the day before any
+   * recorded later version that names another payer (a scheduled transfer away).
+   */
+  private async operationalTerms(payerCustomerId: string, hotelIds: readonly string[]) {
+    const today = pragueToday();
+    const now = new Date();
+    const agreements = await this.prisma.billingAgreement.findMany({
+      where: { hotelId: { in: [...hotelIds] } },
+      include: { versions: { where: { recordedAt: { lte: now } } } },
+    });
+    const out = new Map<string, { checkedRevision: number; operationsUntil: string | null }>();
+    for (const a of agreements) {
+      const v = effectiveAt(a.versions, today, now)!;
+      const ends: number[] = [];
+      if (v.validTo) ends.push(v.validTo.getTime());
+      for (const later of a.versions)
+        if (later.effectiveFrom > today && later.customerId !== payerCustomerId)
+          ends.push(later.effectiveFrom.getTime() - 86_400_000);
+      out.set(a.hotelId, {
+        checkedRevision: a.versions.length,
+        operationsUntil:
+          ends.length === 0 ? null : new Date(Math.min(...ends)).toISOString().slice(0, 10),
+      });
+    }
+    return out;
   }
 }
