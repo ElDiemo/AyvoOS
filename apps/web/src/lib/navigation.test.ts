@@ -37,6 +37,11 @@ describe('AYVO OS navigation (doc 019)', () => {
         ?.pages.map((p) => p.id);
     expect(pages(['hotels:read'], 'hotels')).toEqual(['list']);
     expect(pages(['hotels:read', 'hotels:manage'], 'hotels')).toEqual(['list', 'new']);
+    // Hotel portal accounts: only for the grant administrators.
+    expect(pages(['hotels:read', 'identity:portal_grants_manage'], 'hotels')).toEqual([
+      'list',
+      'users',
+    ]);
     expect(pages(['orders:read', 'orders:pick'], 'dispatch')).toEqual(['orders']);
     expect(pages(['orders:read', 'orders:manage'], 'dispatch')).toEqual(['orders', 'new']);
     expect(ids(['orders:pick'])).not.toContain('dispatch'); // picking needs the order view too
@@ -67,7 +72,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(visibleModules(['identity:users_read']).map((m) => m.id)).toEqual(['admin']);
   });
 
-  it('SALES sees only Obchod with its three pages (doc 034)', () => {
+  it('SALES sees only Obchod with its pages (doc 034), the calendar included', () => {
     const modules = visibleModules(['sales:work']);
     expect(modules.map((m) => m.id)).toEqual(['sales']);
     expect(modules[0]!.section).toBe('sales');
@@ -75,7 +80,9 @@ describe('AYVO OS navigation (doc 019)', () => {
       '/sales',
       '/sales/prospects',
       '/sales/tasks',
+      '/sales/calendar',
     ]);
+    expect(locate('/sales/calendar').page?.id).toBe('calendar');
     expect(locate('/sales/prospects/AKV-000001').page?.id).toBe('prospects');
     expect(locate('/sales').page?.id).toBe('overview');
   });

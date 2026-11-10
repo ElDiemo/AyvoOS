@@ -490,6 +490,31 @@ export const taskPageSchema = z.object({
 export type TaskPage = z.infer<typeof taskPageSchema>;
 
 /**
+ * "Kalendář" (sales): the tasks due in one month (Europe/Prague days), open and closed, for the
+ * same people as the task list ("me", or — with sales:manage — "all" or one salesperson), and how
+ * many open tasks are overdue before that month. At most SALES_CALENDAR_MAX tasks.
+ */
+export const SALES_CALENDAR_MAX = 1000;
+export const salesCalendarQuerySchema = z.object({
+  month: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'YYYY-MM')
+    .optional(),
+  assignee: z.union([z.literal('me'), z.literal('all'), z.uuid()]).default('me'),
+});
+export type SalesCalendarQuery = z.infer<typeof salesCalendarQuerySchema>;
+export const salesCalendarSchema = z.object({
+  month: z.string(),
+  today: salesDateSchema,
+  items: z.array(taskSchema),
+  /** Open tasks due before the first day of this month. */
+  overdueBefore: z.number().int(),
+  /** More tasks than SALES_CALENDAR_MAX were due in the month (the rest are not shown). */
+  truncated: z.boolean(),
+});
+export type SalesCalendar = z.infer<typeof salesCalendarSchema>;
+
+/**
  * "Výsledky obchodu" (sales:manage): the funnel now and what moved in the last `days` days, read
  * from the existing records only — prospects (stage, owner, archive), the append-only stage
  * changes, the current version of each activity (a corrected one counts once, a withdrawn one

@@ -109,6 +109,12 @@ export const MODULES: readonly NavModule[] = [
         permission: 'sales:work',
       },
       { id: 'tasks', href: '/sales/tasks', label: s.pages.tasks, permission: 'sales:work' },
+      {
+        id: 'calendar',
+        href: '/sales/calendar',
+        label: s.pages.calendar,
+        permission: 'sales:work',
+      },
       // The owner's view of everyone's work (sales:manage).
       { id: 'results', href: '/sales/results', label: s.pages.results, permission: 'sales:manage' },
     ],
@@ -365,6 +371,13 @@ export const MODULES: readonly NavModule[] = [
     pages: [
       { id: 'list', href: '/hotels', label: h.pages.list, permission: 'hotels:read' },
       { id: 'new', href: '/hotels/new', label: h.pages.new, permission: 'hotels:manage' },
+      // Hotel portal accounts (never internal users) and their grants.
+      {
+        id: 'users',
+        href: '/hotels/users',
+        label: h.pages.users,
+        permission: 'identity:portal_grants_manage',
+      },
     ],
   },
   {
@@ -441,13 +454,13 @@ export type ProductionPageId =
   | 'catalog'
   | 'setup';
 export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
-export type HotelsPageId = 'list' | 'new';
+export type HotelsPageId = 'list' | 'new' | 'users';
 /** Finance (doc 042): one strip of work pages, the settings apart; views inside two pages. */
 export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'exports' | 'settings';
 export type FinanceViewId =
   'invoices' | 'billing' | 'customers' | 'bank' | 'payments' | 'company' | 'prices';
 export type DispatchPageId = 'orders' | 'new';
-export type SalesPageId = 'overview' | 'prospects' | 'tasks' | 'results';
+export type SalesPageId = 'overview' | 'prospects' | 'tasks' | 'calendar' | 'results';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports

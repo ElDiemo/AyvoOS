@@ -152,10 +152,33 @@ http://{$DEV_DOMAIN} {
 		abort
 	}
 
+	# The hotel profile save (doc 053): POST on exactly /hotels/<uuid>/profile, nothing else under
+	# /hotels. Its body (eleven fields, UTF-8) may exceed 4 KiB, so it alone gets 8 KiB; the same
+	# read timeouts. Portal-web enforces its own 8 KiB / 5 s limits and the CSRF check again.
+	@profile_save {
+		method POST
+		path_regexp ^/hotels/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/profile$
+	}
+	handle @profile_save {
+		route {
+			timeouts {
+				read_timeout 5s 819
+			}
+			request_body {
+				max_size 8KiB
+			}
+			reverse_proxy portal-web:3200 {
+				header_up X-Forwarded-For {remote_host}
+				header_down -X-Powered-By
+			}
+		}
+	}
+
 	@portal_request `method('GET', 'HEAD') || (method('POST') && path('/auth', '/auth/*'))`
 	handle {
 		route {
-			# Limit every proxied body, including GETs. Only auth endpoints accept POST.
+			# Limit every proxied body, including GETs. Only auth endpoints (and the profile save
+			# above) accept POST.
 			# Portal-web imposes a separate total five-second auth body deadline.
 			timeouts {
 				read_timeout 5s 819
