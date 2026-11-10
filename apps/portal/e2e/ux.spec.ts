@@ -198,4 +198,36 @@ test.describe('hotel portal: invoices and sign-in UX', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     expect(await actions.evaluate((el) => getComputedStyle(el).position)).toBe('static');
   });
+
+  test('the AYVO favicon (the same as AYVO OS) on the sign-in and on signed-in pages', async ({
+    page,
+  }) => {
+    const iconOf = async () => {
+      const href = await page.locator('head link[rel="icon"]').first().getAttribute('href');
+      expect(href).toMatch(/^\/icon\.svg/);
+      return href!;
+    };
+    await page.goto('/login');
+    const loginIcon = await iconOf();
+    const res = await page.request.get(loginIcon);
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toContain('image/svg+xml');
+    expect(await res.text()).toContain('The A from the supplied AYVO wordmark');
+    await signIn(page);
+    await iconOf();
+    await page.goto('/invoices');
+    expect(await iconOf()).toBe(loginIcon);
+    // The browser itself loads it (no CSP or proxy refusal).
+    const loaded = await page.evaluate(
+      (src) =>
+        new Promise<boolean>((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve(img.naturalWidth > 0);
+          img.onerror = () => resolve(false);
+          img.src = src;
+        }),
+      loginIcon,
+    );
+    expect(loaded).toBe(true);
+  });
 });
