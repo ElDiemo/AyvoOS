@@ -33,7 +33,6 @@ export default async function EditHotelPage({ params }: { params: Promise<{ id: 
         </p>
       </div>
       <ProfileForm profile={profile} />
-      <p className="text-xs text-stone-500">{cs.profile.managed}</p>
     </Shell>
   );
 }

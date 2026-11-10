@@ -4,7 +4,7 @@ import { cs } from '@/i18n/cs';
 
 export default function Page() {
   return (
-    <AuthPage title={cs.reset.title}>
+    <AuthPage title={cs.reset.title} back>
       <ResetForm />
     </AuthPage>
   );
