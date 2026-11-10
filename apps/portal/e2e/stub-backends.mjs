@@ -99,6 +99,8 @@ const zipBytes = Buffer.from([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)])
 
 const state = {
   financeDown: false,
+  /** 'ok' | 'empty' (no invoice issued to the session yet). */
+  invoicesMode: 'ok',
   /** 'ok' | 'down' (503) | 'lost' (the session is ended, then the answer is lost). */
   logoutMode: 'ok',
   /** 'ok' | 'oversize' (Content-Length over 10 MB) | 'disposition' (an unexpected header). */
@@ -280,7 +282,9 @@ function finance(req, res, path) {
     return send(
       res,
       200,
-      { items: invoices, total: invoices.length, page: 1, pageSize: 20 },
+      state.invoicesMode === 'empty'
+        ? { items: [], total: 0, page: 1, pageSize: 20 }
+        : { items: invoices, total: invoices.length, page: 1, pageSize: 20 },
       portalInvoicePageSchema,
     );
   const found = invoices.find((i) => i.id === id);

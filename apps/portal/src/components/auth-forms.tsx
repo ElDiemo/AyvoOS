@@ -4,9 +4,9 @@ import { useState, useSyncExternalStore } from 'react';
 import { cs } from '@/i18n/cs';
 
 const input =
-  'block w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-stone-500';
+  'block w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-emerald-800 focus:ring-2 focus:ring-emerald-800/20';
 const button =
-  'rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50';
+  'rounded-lg bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-800 disabled:cursor-not-allowed disabled:opacity-50';
 
 /** One step to portal-web's own route (same origin; the cookies stay HttpOnly). */
 async function post(

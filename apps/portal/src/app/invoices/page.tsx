@@ -36,59 +36,27 @@ export default async function InvoicesPage({
   return (
     <Shell user={view.user} active="invoices" testInvoices={portalEnv().APP_ENV !== 'production'}>
       <h1 className="text-xl font-semibold">{cs.invoices.title}</h1>
-      {list && list.total > 0 && (
-        <section
-          aria-labelledby="package-title"
-          className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white p-5 shadow-sm"
-          data-testid="invoice-package"
-        >
-          <div>
-            <h2 id="package-title" className="text-base font-semibold text-stone-900">
-              {cs.invoices.package.title}
-            </h2>
-            <p className="text-xs text-stone-500">{cs.invoices.package.help}</p>
-          </div>
-          {reason && (
-            <p role="alert" className="text-sm text-amber-900">
-              {reason}
-            </p>
-          )}
-          <form method="get" action="/invoices/package" className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1 text-sm">
-              <span>{cs.invoices.package.from}</span>
-              <input
-                type="month"
-                name="from"
-                required
-                defaultValue={monthOr(params.from, threeBack)}
-                className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span>{cs.invoices.package.to}</span>
-              <input
-                type="month"
-                name="to"
-                required
-                defaultValue={monthOr(params.to, thisMonth)}
-                className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
-              />
-            </label>
-            <button
-              type="submit"
-              className="rounded-lg bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
-            >
-              {cs.invoices.package.submit}
-            </button>
-          </form>
-        </section>
-      )}
       {!list ? (
         <p role="alert" className="text-sm text-amber-900" data-testid="invoices-unavailable">
           {cs.invoices.unavailable}
         </p>
       ) : list.items.length === 0 ? (
-        <p className="text-sm text-stone-600">{cs.invoices.none}</p>
+        <section
+          className="flex flex-col gap-2 rounded-xl border border-dashed border-stone-300 bg-white p-5 text-sm"
+          data-testid="invoices-empty"
+        >
+          <p className="font-medium text-stone-900">{cs.invoices.none}</p>
+          <p className="text-stone-600">
+            {cs.invoices.noneHelp}{' '}
+            <a
+              href={`mailto:${cs.invoices.billingEmail}`}
+              className="font-medium text-emerald-900 underline underline-offset-2"
+            >
+              {cs.invoices.billingEmail}
+            </a>
+            .
+          </p>
+        </section>
       ) : (
         <>
           <ul className="flex flex-col gap-2" data-testid="portal-invoices">
@@ -120,6 +88,64 @@ export default async function InvoicesPage({
             </nav>
           )}
         </>
+      )}
+      {list && list.total > 0 && (
+        <details
+          open={reason !== undefined}
+          className="group rounded-xl border border-stone-200 bg-white shadow-sm"
+          data-testid="invoice-package"
+        >
+          <summary
+            className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-5 py-4 text-sm font-semibold text-stone-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-800 [&::-webkit-details-marker]:hidden"
+            data-testid="invoice-package-open"
+          >
+            <span id="package-title">{cs.invoices.package.open}</span>
+            <span aria-hidden className="text-stone-500 transition-transform group-open:rotate-180">
+              ▾
+            </span>
+          </summary>
+          <div className="flex flex-col gap-3 border-t border-stone-100 px-5 pt-3 pb-5">
+            <p className="text-xs text-stone-500">{cs.invoices.package.help}</p>
+            {reason && (
+              <p role="alert" className="text-sm text-amber-900">
+                {reason}
+              </p>
+            )}
+            <form
+              method="get"
+              action="/invoices/package"
+              aria-labelledby="package-title"
+              className="flex flex-wrap items-end gap-3"
+            >
+              <label className="flex flex-col gap-1 text-sm">
+                <span>{cs.invoices.package.from}</span>
+                <input
+                  type="month"
+                  name="from"
+                  required
+                  defaultValue={monthOr(params.from, threeBack)}
+                  className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span>{cs.invoices.package.to}</span>
+                <input
+                  type="month"
+                  name="to"
+                  required
+                  defaultValue={monthOr(params.to, thisMonth)}
+                  className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
+                />
+              </label>
+              <button
+                type="submit"
+                className="rounded-lg bg-emerald-900 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-800"
+              >
+                {cs.invoices.package.submit}
+              </button>
+            </form>
+          </div>
+        </details>
       )}
     </Shell>
   );
