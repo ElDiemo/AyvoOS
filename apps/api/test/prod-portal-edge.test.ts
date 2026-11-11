@@ -102,7 +102,12 @@ describe.skipIf(!hasCompose)('hotel portal on PROD: the rendered topology', () =
     const deadline = Number(cfg.services['portal-web']!.environment!.PORTAL_PACKAGE_DEADLINE_MS);
     const write = Number(/write (\d+)s/.exec(code(read('deploy/prod/Caddyfile.qr')))![1]) * 1000;
     expect(write).toBe(30_000);
-    expect(Number(fin.FINANCE_PORTAL_PACKAGE_MAX_BYTES)).toBeLessThanOrEqual(20 * 1024 * 1024);
+    // The DEV acceptance (portal-a1-acceptance.e2e.test.ts): 16 MiB arrive at 8 Mbit/s within
+    // Finance's own deadline, whose transfer time must fit with a margin.
+    expect(Number(fin.FINANCE_PORTAL_PACKAGE_MAX_BYTES)).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect((Number(fin.FINANCE_PORTAL_PACKAGE_MAX_BYTES) / 1_000_000) * 1000).toBeLessThan(
+      Number(fin.FINANCE_PORTAL_PACKAGE_TIMEOUT_MS) * 0.9,
+    );
     expect(Number(fin.FINANCE_PORTAL_PACKAGE_MAX_BYTES)).toBeLessThanOrEqual(
       PORTAL_PACKAGE_MAX_ZIP_BYTES,
     );
