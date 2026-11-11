@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useSyncExternalStore } from 'react';
+import { type FormEvent, type ReactNode, useState, useSyncExternalStore } from 'react';
 import { cs } from '@/i18n/cs';
 
 const input =
@@ -44,6 +44,37 @@ function readFragment(): string | null {
 const noSubscription = () => () => {};
 function useFragmentToken(): string | null | undefined {
   return useSyncExternalStore(noSubscription, readFragment, () => undefined);
+}
+
+/** true once React runs in the browser (false in the server HTML and during hydration). */
+const onTheClient = () => true;
+const onTheServer = () => false;
+function useInteractive(): boolean {
+  return useSyncExternalStore(noSubscription, onTheClient, onTheServer);
+}
+
+/**
+ * Every sign-in step's form (CI 43020769648). Until React handles it, a submit would be the
+ * browser's own — a GET with the e-mail and the password in the URL (history, server logs), then
+ * a fresh page without the next step. So the fields stay disabled until the page is interactive
+ * (a fieldset disables them all; a disabled default button also blocks Enter), and the method is
+ * POST even then: a credential never goes into a URL.
+ */
+function AuthForm({
+  onSubmit,
+  children,
+}: {
+  onSubmit: (e: FormEvent<HTMLFormElement>) => void;
+  children: ReactNode;
+}) {
+  const interactive = useInteractive();
+  return (
+    <form method="post" onSubmit={onSubmit}>
+      <fieldset disabled={!interactive} className="flex min-w-0 flex-col gap-3">
+        {children}
+      </fieldset>
+    </form>
+  );
 }
 
 /** A full load: the new cookies (set by portal-web's route) apply to everything that follows. */
@@ -107,8 +138,7 @@ function SecondFactor({ confirm, after }: { confirm: string; after: 'portal' | '
       </div>
     );
   return (
-    <form
-      className="flex flex-col gap-3"
+    <AuthForm
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
@@ -133,7 +163,7 @@ function SecondFactor({ confirm, after }: { confirm: string; after: 'portal' | '
       <button type="submit" disabled={busy} className={button}>
         {confirm}
       </button>
-    </form>
+    </AuthForm>
   );
 }
 
@@ -145,8 +175,7 @@ export function LoginForm({ reset }: { reset: boolean }) {
   const [mfa, setMfa] = useState(false);
   if (mfa) return <SecondFactor confirm={cs.login.confirm} after="portal" />;
   return (
-    <form
-      className="flex flex-col gap-3"
+    <AuthForm
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
@@ -181,7 +210,7 @@ export function LoginForm({ reset }: { reset: boolean }) {
       <a href="/forgot-password" className="text-sm underline">
         {cs.login.forgot}
       </a>
-    </form>
+    </AuthForm>
   );
 }
 
@@ -217,8 +246,7 @@ function LinkAction({ kind }: { kind: 'activate' | 'reset' }) {
       </div>
     );
   return (
-    <form
-      className="flex flex-col gap-3"
+    <AuthForm
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
@@ -248,7 +276,7 @@ function LinkAction({ kind }: { kind: 'activate' | 'reset' }) {
       <button type="submit" disabled={busy} className={button}>
         {t.submit}
       </button>
-    </form>
+    </AuthForm>
   );
 }
 
@@ -267,8 +295,7 @@ export function ForgotForm() {
       </p>
     );
   return (
-    <form
-      className="flex flex-col gap-3"
+    <AuthForm
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
@@ -284,6 +311,6 @@ export function ForgotForm() {
       <button type="submit" disabled={busy} className={button}>
         {cs.forgot.submit}
       </button>
-    </form>
+    </AuthForm>
   );
 }
