@@ -134,6 +134,10 @@ PORTAL_RELEASE=""
 PORTAL_ENABLED=false
 PORTAL_DOMAIN=""
 PORTAL_PUBLIC=""
+PORTAL_OUTCOME=""
+PORTAL_FAILED=""
+PORTAL_PREVIOUS_IMAGE=""
+PORTAL_PREVIOUS_PUBLIC=false
 FINANCE_RELEASE=""
 FINANCE_IMAGE=""
 FINANCE_MIGRATE_IMAGE=""
@@ -791,6 +795,104 @@ recorded_portal() {
     "$PROD_DIR/state/portal.log"
 }
 
+# --- the public portal fails closed (review 5858165597 P1) -------------------------------------
+#
+# The public site (PORTAL_PUBLIC=on) serves whatever portal-web runs. A portal that fails its public
+# check is never left open: it goes back to an image that was verified as public (and is verified
+# again), otherwise only portal-web is stopped — the portal route then answers only the edge's own
+# 503. Neither the edges nor the OS, Finance, QR, ID or marketing are restarted, and they are
+# checked again afterwards. The same "fast stop" as doc 064 §3, done automatically.
+
+# The last portal record as "<status> <image> <public>" (empty without one).
+last_portal_record() {
+  [[ -f $PROD_DIR/state/portal.log ]] || return 0
+  awk '{ l = $0 } END { if (l == "") exit; n = split(l, f, " "); s = f[3]
+    for (i = 4; i <= n; i++) { if (f[i] ~ /^image=/) m = substr(f[i], 7); if (f[i] ~ /^public=/) p = substr(f[i], 8) }
+    print s, m, p }' "$PROD_DIR/state/portal.log"
+}
+# The image was the last one verified over valid HTTPS as the public portal.
+portal_verified_public() {
+  local status image public
+  read -r status image public <<<"$(last_portal_record)" || true
+  [[ -n ${1:-} && ($status == SUCCESS || $status == RESTORED) && $image == "$1" && $public == on ]]
+}
+
+stop_portal_web() {
+  [[ -n $(docker ps -aq --filter "name=^$PROJECT-portal-web-1\$") ]] || return 0
+  docker stop "$PROJECT-portal-web-1" >/dev/null && docker rm "$PROJECT-portal-web-1" >/dev/null
+}
+
+# Closed: no portal-web, and the public portal host serves no portal page — only the edge's 503
+# (or nothing at all).
+verify_portal_closed() {
+  local pub4=$1 code
+  [[ -z $(docker ps -aq --filter "name=^$PROJECT-portal-web-1\$") ]] || return 1
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$PORTAL_DOMAIN:443:$pub4" "https://$PORTAL_DOMAIN/login" || true)"
+  [[ $code == 503 || $code == 000 ]]
+}
+
+# After the portal was closed or restored: the staff OS (tailnet), QR, ID and marketing unchanged.
+verify_other_hosts() {
+  local pub4=$1 unknown code
+  STEP="verify that only the portal changed: the OS, QR, ID and marketing still answer"
+  log "$STEP"
+  code="$(edge_status "https://$DOMAIN/login" || true)"
+  [[ $code == 200 ]] || die "after closing the portal, https://$DOMAIN/login (tailnet) answered '$code'"
+  unknown="$(head -c 16 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$QR_DOMAIN:443:$pub4" "https://$QR_DOMAIN/$unknown" || true)"
+  [[ $code == 404 ]] || die "after closing the portal, https://$QR_DOMAIN/<unknown token> answered '$code'"
+  verify_id_edge "$pub4"
+  if [[ -n ${MARKETING_RELEASE:-} ]]; then verify_marketing_release "$pub4"; else verify_marketing_edge "$pub4"; fi
+  ok "the OS sign-in, the QR passport, ID and marketing answer as before"
+}
+
+# Close (or restore) only the portal route. Sets PORTAL_OUTCOME; the caller fails the step.
+close_portal_route() {
+  local pub4=$1 failed=$2 previous=${PORTAL_PREVIOUS_IMAGE:-} restore
+  STEP="the public portal failed its check: close only the portal route"
+  warn "$STEP (image $failed)"
+  # PORTAL_PREVIOUS_PUBLIC: the previous image was the verified public portal when this run began.
+  if [[ -n $previous && $previous != "$failed" && $PORTAL_PREVIOUS_PUBLIC == true ]]; then
+    restore="restore-${previous:7:12}"
+    PORTAL_RELEASE=$restore
+    if docker tag "$previous" "$IMAGE_PREFIX/portal-web:$restore" &&
+      compose --profile portal up -d --no-build --no-deps portal-web && wait_healthy portal-web &&
+      [[ $(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null) == "$previous" ]] &&
+      (verify_portal_private) && (verify_portal_release "$pub4"); then
+      record_portal RESTORED "$previous"
+      verify_other_hosts "$pub4"
+      PORTAL_OUTCOME="the previous public portal image $previous runs again, verified over HTTPS"
+      return 0
+    fi
+    warn "the previous public portal image $previous did not verify again: closing the portal route"
+  fi
+  stop_portal_web || die "portal-web could not be stopped: the portal route may be OPEN — stop it by hand (doc 064 §3)"
+  verify_portal_closed "$pub4" ||
+    die "https://$PORTAL_DOMAIN still serves a page after portal-web was stopped: close it by hand (doc 064 §3)"
+  PORTAL_RELEASE=${PORTAL_RELEASE:-none}
+  record_portal CLOSED none
+  verify_other_hosts "$pub4"
+  PORTAL_OUTCOME="portal-web stopped, the portal route is closed (the edge answers 503); everything else unchanged"
+}
+
+# An OS deployment with PORTAL_PUBLIC=on (re)creates the public edge with the portal site: a running
+# portal-web that was never verified as public is stopped BEFORE that, so the edge never opens an
+# unverified portal. `--portal` then starts and verifies it (and closes the route if that fails).
+hold_unverified_portal() {
+  [[ $PORTAL_ENABLED == true && $PORTAL_PUBLIC == on ]] || return 0
+  local running
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null || true)"
+  [[ -n $running ]] || return 0
+  portal_verified_public "$running" && return 0
+  STEP="hold the portal: portal-web ($running) was never verified as the public portal"
+  log "$STEP"
+  stop_portal_web || die "portal-web could not be stopped before its public site opens"
+  PORTAL_RELEASE=${PORTAL_RELEASE:-none}
+  record_portal CLOSED none
+  PORTAL_RELEASE=""
+  ok "portal-web stopped: the public site serves the portal only after --portal verifies it"
+}
+
 # Replace only portal-web (profile "portal"); the OS, Finance and the edges are not restarted. If the
 # new container does not become healthy as the expected image, the previous image is started again.
 start_portal() {
@@ -801,6 +903,13 @@ start_portal() {
     [[ $(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null) == "$image" ]]; then
     ok "portal-web $PORTAL_RELEASE running: image $image"
     return 0
+  fi
+  # Public (review 5858165597 P1): whatever now runs may be served publicly — back only to an image
+  # verified as public (and verified again), else the portal route is closed.
+  if [[ $PORTAL_PUBLIC == on ]]; then
+    record_portal UNVERIFIED "$image"
+    close_portal_route "$PROD_PUBLIC_IPV4" "$image"
+    die "the portal release did not start: $PORTAL_OUTCOME"
   fi
   if [[ -n $previous_image && $previous_image != "$image" ]]; then
     restore="restore-${previous_image:7:12}"
@@ -875,6 +984,20 @@ verify_portal_edge() {
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$PORTAL_DOMAIN:80:$pub4" \
     "http://$PORTAL_DOMAIN/.well-known/acme-challenge/ayvo-deploy-check" || true)"
   [[ $code =~ ^[1-5][0-9][0-9]$ ]] || die "the ACME challenge path of $PORTAL_DOMAIN does not reach the public edge (got '$code')"
+  # A portal-web still running here was verified as public before (hold_unverified_portal): it is
+  # verified again behind the new edge, and closed if that fails (review 5858165597 P1).
+  local running
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null || true)"
+  if [[ -n $running ]]; then
+    if (verify_portal_release "$pub4"); then
+      ok "the public portal ($PORTAL_RELEASE) verified again behind the new edge"
+      return 0
+    fi
+    record_portal UNVERIFIED "$running"
+    PORTAL_PREVIOUS_IMAGE="" PORTAL_PREVIOUS_PUBLIC=false close_portal_route "$pub4" "$running"
+    PORTAL_FAILED="the public portal failed its check after the OS deployment: $PORTAL_OUTCOME"
+    return 0
+  fi
   rc=0
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$PORTAL_DOMAIN:443:$pub4" "https://$PORTAL_DOMAIN/login" 2>/dev/null)" || rc=$?
   if ((rc != 0)); then
@@ -1483,12 +1606,14 @@ case $MODE in
     wait_healthy redis || die "redis did not become healthy"
     backup_before_migration
     migrate
+    hold_unverified_portal
     start_services
     verify
     record_release
     remove_old_images
     ok "production runs $RELEASE"
     os_ahead_note
+    [[ -z $PORTAL_FAILED ]] || die "$PORTAL_FAILED (the OS release itself is verified and recorded)"
     echo "Next: the external negative test (doc 036 §5) after the first installation and every edge change."
     ;;
   rollback)
@@ -1502,11 +1627,13 @@ case $MODE in
     RELEASE=$(<"$(release_dir "$ROLLBACK")/.ayvo-release")
     AYVO_RELEASE=$ROLLBACK
     validate_compose
+    hold_unverified_portal
     start_services
     verify
     record_release
     ok "production runs $RELEASE again"
     os_ahead_note
+    [[ -z $PORTAL_FAILED ]] || die "$PORTAL_FAILED (the OS release itself is verified and recorded)"
     ;;
   marketing)
     [[ $EXPECT_IMAGE =~ ^sha256:[0-9a-f]{64}$ ]] ||
@@ -1567,6 +1694,7 @@ case $MODE in
       die "the Finance unit is not running: deploy it (--finance) with the portal keys first"
     # The running image's ID before anything is loaded or tagged (the restore point).
     PORTAL_PREVIOUS_IMAGE="$(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null || true)"
+    if portal_verified_public "$PORTAL_PREVIOUS_IMAGE"; then PORTAL_PREVIOUS_PUBLIC=true; fi
     if [[ $MODE == portal ]]; then
       [[ $EXPECT_IMAGE =~ ^sha256:[0-9a-f]{64}$ ]] ||
         die "--portal needs --expect-image sha256:<id> (the portal-web image accepted on DEV)"
@@ -1589,10 +1717,13 @@ case $MODE in
     fi
     validate_compose
     start_portal "$image"
-    verify_portal_private
-    if ! (verify_portal_release "$PROD_PUBLIC_IPV4"); then
+    if ! (verify_portal_private) || ! (verify_portal_release "$PROD_PUBLIC_IPV4"); then
       record_portal UNVERIFIED "$image"
-      die "portal-web $PORTAL_RELEASE runs but the public portal is NOT verified over HTTPS: recorded UNVERIFIED"
+      [[ $PORTAL_PUBLIC == on ]] ||
+        die "portal-web $PORTAL_RELEASE runs privately but is NOT verified: recorded UNVERIFIED (no public site)"
+      # Review 5858165597 P1: never left open — back to the verified public image or closed.
+      close_portal_route "$PROD_PUBLIC_IPV4" "$image"
+      die "portal-web $PORTAL_RELEASE failed the public check: $PORTAL_OUTCOME"
     fi
     record_portal SUCCESS "$image"
     ok "the hotel portal runs $PORTAL_RELEASE ($image; public: ${PORTAL_PUBLIC:-off}); the OS was not restarted"
