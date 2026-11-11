@@ -18,10 +18,13 @@ import type {
   OrderShipment,
   OrderSummary,
   OrderView,
+  PortalDeliveries,
+  PortalDelivery,
   RemoveOrderCrateRequest,
   RescheduleOrderRequest,
   SiteDependency,
 } from '@ayvo/types';
+import { PORTAL_DELIVERED_MAX } from '@ayvo/types';
 import { AuditService } from '../audit/audit.service.js';
 import { Inject, Injectable, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { RecipesService } from '../catalog/recipes.service.js';
@@ -176,6 +179,88 @@ export class OrdersService implements OnModuleInit {
       pageSize,
       total: total[view],
       counts: total,
+    };
+  }
+
+  /**
+   * The hotel portal's "Dodávky" (doc 056): a hotel's real orders in three groups, through the
+   * caller's client (the portal's pool), across every site (the hotel sees its deliveries, not our
+   * sites). Only what a hotel may see: the order code, a state, the planned ship day, whether it
+   * came from the supply plan, products with whole crates and bottles, and when it was handed to
+   * the carrier and delivered (the carrier-proven events). Cancelled orders are left out.
+   */
+  async portalDeliveries(
+    hotelId: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<Omit<PortalDeliveries, 'upcoming'>> {
+    const select = {
+      id: true,
+      code: true,
+      status: true,
+      requestedShipDate: true,
+      origin: true,
+      lines: {
+        select: { crates: true, bottles: true, product: { select: { name: true } } },
+        orderBy: { lineNo: 'asc' },
+      },
+    } satisfies Prisma.OrderSelect;
+    // One query at a time: the portal pool is small (PORTAL_DB_POOL_MAX, 2 by default), and one
+    // hotel page must not hold every connection while its other calls wait for one.
+    const open = await db.order.findMany({
+      where: {
+        hotelId,
+        status: { in: ['OPEN', 'READY_TO_DISPATCH', 'READY_FOR_PICKUP', 'HANDED_TO_CARRIER'] },
+      },
+      select,
+      orderBy: [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
+    });
+    const delivered = await db.order.findMany({
+      where: { hotelId, status: 'DELIVERED' },
+      select,
+      orderBy: [{ requestedShipDate: 'desc' }, { serial: 'desc' }],
+      take: PORTAL_DELIVERED_MAX,
+    });
+    const all = [...open, ...delivered];
+    const events = await db.orderEvent.findMany({
+      where: {
+        orderId: { in: all.map((o) => o.id) },
+        type: { in: ['HANDED_TO_CARRIER', 'DELIVERED'] },
+      },
+      select: { orderId: true, type: true, occurredAt: true, payload: true },
+      orderBy: { occurredAt: 'asc' },
+    });
+    const at = new Map<string, Date>();
+    for (const e of events) {
+      // A hand-over whose pickup time the carrier never reported carries the moment tracking
+      // established it (TRACK39-R1): never shown to the hotel as the hand-over time.
+      const unknown = (e.payload as { pickupTimeUnknown?: unknown } | null)?.pickupTimeUnknown;
+      if (e.type === 'HANDED_TO_CARRIER' && unknown === true) continue;
+      at.set(`${e.orderId}:${e.type}`, e.occurredAt);
+    }
+    const view = (o: (typeof all)[number]): PortalDelivery => ({
+      code: o.code,
+      state: PORTAL_STATE[o.status as keyof typeof PORTAL_STATE],
+      shipDate: o.requestedShipDate.toISOString().slice(0, 10),
+      fromPlan: o.origin === 'SUPPLY_PLAN',
+      lines: o.lines.map((l) => ({
+        product: l.product.name,
+        crates: l.crates,
+        bottles: l.bottles,
+      })),
+      handedOverAt: at.get(`${o.id}:HANDED_TO_CARRIER`)?.toISOString() ?? null,
+      deliveredAt: at.get(`${o.id}:DELIVERED`)?.toISOString() ?? null,
+    });
+    const deliveredView = delivered
+      .map(view)
+      .sort((a, b) => (b.deliveredAt ?? b.shipDate).localeCompare(a.deliveredAt ?? a.shipDate));
+    return {
+      planned: open
+        .filter((o) => o.status === 'OPEN' || o.status === 'READY_TO_DISPATCH')
+        .map(view),
+      inProgress: open
+        .filter((o) => o.status === 'READY_FOR_PICKUP' || o.status === 'HANDED_TO_CARRIER')
+        .map(view),
+      delivered: deliveredView,
     };
   }
 
@@ -1168,3 +1253,12 @@ function toSummary(row: SummaryRecord): OrderSummary {
     createdAt: row.createdAt.toISOString(),
   };
 }
+
+/** An order's state as the hotel portal names it (cancelled orders are never shown). */
+const PORTAL_STATE = {
+  OPEN: 'PLANNED',
+  READY_TO_DISPATCH: 'PREPARED',
+  READY_FOR_PICKUP: 'READY_FOR_PICKUP',
+  HANDED_TO_CARRIER: 'IN_TRANSIT',
+  DELIVERED: 'DELIVERED',
+} as const satisfies Record<string, PortalDelivery['state']>;

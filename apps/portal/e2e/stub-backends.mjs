@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   portalChallengeStepSchema,
   portalContractSchema,
+  portalDeliveriesSchema,
   portalHotelProfileRequestSchema,
   portalHotelProfileSchema,
   portalHotelSchema,
@@ -103,6 +104,38 @@ export const CONTRACT = {
   startOn: '2026-11-01',
   byteSize: contractPdf.length,
 };
+const delivery = (code, state, shipDate, over = {}) => ({
+  code,
+  state,
+  shipDate,
+  fromPlan: false,
+  lines: [{ product: 'Mýdlo na ruce AYVO 330 ml', crates: 2, bottles: 80 }],
+  handedOverAt: null,
+  deliveredAt: null,
+  ...over,
+});
+/** The hotel's deliveries (synthetic): one of each group's states. */
+export const DELIVERIES = {
+  planned: [
+    delivery('OR-000910', 'PREPARED', '2026-11-12'),
+    delivery('OR-000911', 'PLANNED', '2026-11-20', { fromPlan: true }),
+  ],
+  inProgress: [
+    delivery('OR-000909', 'IN_TRANSIT', '2026-11-09', {
+      handedOverAt: '2026-11-09T08:15:00.000Z',
+    }),
+  ],
+  upcoming: [
+    { shipDate: '2026-12-05', lines: [{ product: 'Mýdlo na ruce AYVO 330 ml', crates: 2 }] },
+    { shipDate: '2026-12-20', lines: [{ product: 'Mýdlo na ruce AYVO 330 ml', crates: 2 }] },
+  ],
+  delivered: [
+    delivery('OR-000905', 'DELIVERED', '2026-10-28', {
+      handedOverAt: '2026-10-28T07:40:00.000Z',
+      deliveredAt: '2026-10-29T10:05:00.000Z',
+    }),
+  ],
+};
 /** Another hotel's signed contract: never reachable from this session. */
 export const FOREIGN_CONTRACT_ID = randomUUID();
 /** An empty but valid ZIP (end of central directory only). */
@@ -130,6 +163,8 @@ const state = {
   /** 'ok' | 'empty' (NO_INVOICES) | 'large' (PACKAGE_TOO_LARGE). */
   packageMode: 'ok',
   lastPackageQuery: null,
+  /** 'ok' | 'none' (no delivery at all) | 'plan-only' (only upcoming plan days) | 'down'. */
+  deliveriesMode: 'ok',
 };
 
 const send = (res, status, body, schema) => {
@@ -242,6 +277,22 @@ async function core(req, res, path) {
       [hotel].map((h) => portalHotelSchema.parse(h)),
     );
   if (path === `hotels/${hotel.id}`) return send(res, 200, hotel, portalHotelSchema);
+  const deliveriesMatch = path.match(/^hotels\/([^/]+)\/deliveries$/);
+  if (deliveriesMatch) {
+    if (deliveriesMatch[1] !== hotel.id || !state.profileGrant)
+      return refuse(res, 404, 'HOTEL_NOT_FOUND');
+    if (state.deliveriesMode === 'down') {
+      req.socket.destroy();
+      return;
+    }
+    const value =
+      state.deliveriesMode === 'none'
+        ? { planned: [], inProgress: [], delivered: [], upcoming: [] }
+        : state.deliveriesMode === 'plan-only'
+          ? { planned: [], inProgress: [], delivered: [], upcoming: DELIVERIES.upcoming }
+          : DELIVERIES;
+    return send(res, 200, value, portalDeliveriesSchema);
+  }
   const contractsMatch = path.match(/^hotels\/([^/]+)\/contracts$/);
   if (contractsMatch) {
     if (contractsMatch[1] !== hotel.id || !state.profileGrant)
@@ -371,6 +422,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         state.profile = freshProfile();
         state.profileGrant = true;
         state.contractsMode = 'ok';
+        state.deliveriesMode = 'ok';
         delete body.resetProfile;
       }
       if (body.touchProfile) {
