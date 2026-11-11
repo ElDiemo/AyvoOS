@@ -289,6 +289,8 @@ describe.skipIf(!hasDatabase)('hotel portal A2 — independent review negatives 
     const rows = await f.core.prisma.portalGrantHotel.findMany({ where: { grantId: a.grantId } });
     expect(rows.map((r) => [r.hotelId, r.access])).toEqual([[h.id, 'INVOICES']]);
     expect(await reach(a.session, h.id)).toEqual(CLOSED);
+    // An invoices-only hotel: no deliveries either (#149 on #148).
+    expect((await portal('get', `hotels/${h.id}/deliveries`, a.session)).status).toBe(404);
     const pdf = await invoices(`/${old.id}/pdf`, a.session).expect(200);
     expect(sha(pdf.body as Buffer)).toBe(old.pdfSha256);
 
@@ -342,7 +344,7 @@ describe.skipIf(!hasDatabase)('hotel portal A2 — independent review negatives 
     ]);
   });
 
-  it('the old payer’s signed contracts after a change of payer: list and PDF 404, the new payer’s check opens them', async () => {
+  it('the old payer’s signed contracts and deliveries after a change of payer: 404, the new payer’s check opens them', async () => {
     const A = await payer(f, 'Plátce A smlouvy');
     const Bp = await payer(f, 'Plátce B smlouvy');
     const h = await hotel(f, 'Hotel se smlouvou');
@@ -356,9 +358,12 @@ describe.skipIf(!hasDatabase)('hotel portal A2 — independent review negatives 
     });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect((await portal('get', `hotels/${h.id}/contracts`, a.session)).status).toBe(404);
+    // …and its deliveries (#149 on #148): not found for the fenced payer either.
+    expect((await portal('get', `hotels/${h.id}/deliveries`, a.session)).status).toBe(404);
     // A contract id the old payer may have kept from before: its PDF is not found either.
     expect((await portal('get', `contracts/${randomUUID()}/pdf`, a.session)).status).toBe(404);
     const b = await grantOf(Bp.id, [h.id]);
     expect((await portal('get', `hotels/${h.id}/contracts`, b.session)).status).toBe(200);
+    expect((await portal('get', `hotels/${h.id}/deliveries`, b.session)).status).toBe(200);
   });
 });

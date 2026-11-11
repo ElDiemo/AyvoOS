@@ -9,6 +9,7 @@ import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.
 import { crateFactory, createHotel, createOrder } from './support/order-fixtures.js';
 import { RETURN_ENV } from './support/return-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { operationsCheck } from './support/portal-check.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
 const PASSWORD = 'Dlouhe portalove heslo AYVO 789';
@@ -56,7 +57,7 @@ describe.skipIf(!hasDatabase)(
         payerCustomerId: randomUUID(),
         hotelIds,
         reason: 'synthetic portal grant',
-        financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
+        financeCheck: operationsCheck(hotelIds),
       });
 
     async function account() {
