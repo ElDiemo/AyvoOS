@@ -9,6 +9,18 @@ import {
 } from './slots';
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+/** Waits until `cond` holds (each macrotask), at most `ms`. */
+async function until(cond: () => boolean, ms = 2000) {
+  const end = Date.now() + ms;
+  while (!cond() && Date.now() < end) await tick(1);
+  return cond();
+}
+/** A cancellation that completes only when the test says so (no timing assumption). */
+function gate() {
+  let open!: () => void;
+  const opened = new Promise<void>((r) => (open = r));
+  return { opened, open };
+}
 
 /**
  * An upstream body of n chunks that records its cancellation. `cancelMs` makes the cancellation
@@ -16,7 +28,7 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
  */
 function upstream(
   chunks: number,
-  opts: { delayMs?: number; cancelMs?: number; size?: number } = {},
+  opts: { delayMs?: number; cancelMs?: number; cancelGate?: Promise<void>; size?: number } = {},
 ) {
   const state = { cancelling: false, cancelled: false, served: 0 };
   const body = new ReadableStream<Uint8Array>(
@@ -30,6 +42,7 @@ function upstream(
       async cancel() {
         state.cancelling = true;
         if (opts.cancelMs) await tick(opts.cancelMs);
+        if (opts.cancelGate) await opts.cancelGate;
         state.cancelled = true;
       },
     },
@@ -108,7 +121,8 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
   it('the browser going away aborts the upstream and releases only after the cancellation settled', async () => {
     const slots = new SlotLimit(1);
     const release = slots.acquire()!;
-    const up = upstream(1000, { cancelMs: 20 });
+    const g = gate();
+    const up = upstream(1000, { cancelGate: g.opened });
     let aborted = false;
     const reader = boundedPassThrough(up.body, {
       stop: never(),
@@ -118,8 +132,10 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
     }).getReader();
     await reader.read();
     const leaving = reader.cancel();
-    await tick(2);
+    expect(await until(() => up.state.cancelling)).toBe(true);
+    // The upstream's cancellation has not settled: the slot is still held.
     expect([slots.inFlight, aborted, up.state.cancelled]).toEqual([1, true, false]);
+    g.open();
     await leaving;
     expect([slots.inFlight, up.state.cancelled]).toEqual([0, true]);
   });
@@ -127,7 +143,8 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
   it('one deadline: a receiver that never reads off is cut, the upstream cancelled, then the slot released', async () => {
     const slots = new SlotLimit(1);
     const release = slots.acquire()!;
-    const up = upstream(1000, { cancelMs: 20 });
+    const g = gate();
+    const up = upstream(1000, { cancelGate: g.opened });
     const stop = deadline(50);
     const body = boundedPassThrough(up.body, {
       stop: stop.signal,
@@ -135,10 +152,12 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
       release,
       abortUpstream: () => {},
     });
-    await tick(60);
-    expect([up.state.cancelling, up.state.cancelled, slots.inFlight]).toEqual([true, false, 1]);
-    await tick(40);
-    expect([up.state.cancelled, slots.inFlight]).toEqual([true, 0]);
+    // The deadline cuts it: the upstream is being cancelled, the slot still held until it settled.
+    expect(await until(() => up.state.cancelling)).toBe(true);
+    expect([up.state.cancelled, slots.inFlight]).toEqual([false, 1]);
+    g.open();
+    expect(await until(() => slots.inFlight === 0)).toBe(true);
+    expect(up.state.cancelled).toBe(true);
     await expect(body.getReader().read()).rejects.toMatchObject({ reason: 'DEADLINE' });
   });
 
