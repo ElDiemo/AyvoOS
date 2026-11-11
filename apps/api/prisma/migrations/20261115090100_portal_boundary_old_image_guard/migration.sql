@@ -6,11 +6,14 @@
 -- account are not subject to it). A connection of this image and later says so with the setting
 -- `ayvo.portal_boundary = 'v6'` (PrismaService and PortalPrismaService, connection options) and
 -- sees every row, as before: it applies the read rule itself (portal-fences.service.ts). Any other
--- connection — an older image — sees a grant's hotel only while each fence of its payer × hotel
--- still allows it by the same rule (today ≤ ends_on, or resolved and checked in the restore
+-- connection — an older image — sees a grant's hotel only when it is OPERATIONS (an older image
+-- does not know `access` and would open an invoices-only hotel too — e.g. of a payer whose change
+-- was written before A2, with no fence; independent review of #180) and each fence of its payer ×
+-- hotel still allows it by the same rule (today ≤ ends_on, or resolved and checked in the restore
 -- revision or later) and its own end of operations has not passed. So after such a return a fenced
--- hotel is simply not part of the old payer's grant (no detail, profile, contracts or deliveries;
--- its invoices wait for the newer image again); every other hotel works as that image knew it.
+-- or invoices-only hotel is simply not part of the grant (no detail, profile, contracts or
+-- deliveries; its invoices wait for the newer image again); every other hotel works as that image
+-- knew it.
 -- An older image cannot write a grant's hotel at all (no `access`; and the insert policy below).
 --
 -- The setting is a version marker, not a credential: the role, its password and the network stay
@@ -42,7 +45,8 @@ ALTER TABLE "portal_grant_hotels" ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "portal_grant_hotels_read" ON "portal_grant_hotels" FOR SELECT USING (
   current_setting('ayvo.portal_boundary', true) = 'v6'
-  OR portal_grant_hotel_within_fences("grant_id", "hotel_id", "checked_revision", "operations_until")
+  OR ("access" = 'OPERATIONS'
+      AND portal_grant_hotel_within_fences("grant_id", "hotel_id", "checked_revision", "operations_until"))
 );
 
 -- Grant hotels are never changed or deleted: such a statement reaches the history trigger, which
