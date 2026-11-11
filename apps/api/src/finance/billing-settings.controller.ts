@@ -1,5 +1,16 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
+import {
+  billingRestoreRequestSchema,
   createBillingAgreementSchema,
   createBillingCustomerSchema,
   effectiveTermsQuerySchema,
@@ -11,6 +22,8 @@ import {
   type BillingAgreementDetail,
   type BillingCustomer,
   type BillingCustomerDetail,
+  type BillingRestoreRequest,
+  type BillingRestoreResult,
   type BillingRunSettingsPage,
   type BillingSummary,
   type CreateBillingAgreementRequest,
@@ -30,6 +43,7 @@ import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
 import { BillingSettingsService } from './billing-settings.service.js';
+import { BillingTermsService } from './billing-terms.service.js';
 import { CoreClient } from './core-client.js';
 import { Caller, type FinanceCaller } from './finance-access.guard.js';
 
@@ -46,6 +60,7 @@ const AGREEMENT = new ZodValidationPipe(z.string().regex(/^BA-\d{6,}$/));
 export class BillingSettingsController {
   constructor(
     private readonly billing: BillingSettingsService,
+    private readonly terms: BillingTermsService,
     private readonly core: CoreClient,
   ) {}
 
@@ -171,6 +186,53 @@ export class BillingSettingsController {
     body: NewBillingAgreementVersionRequest,
     @Caller() caller: FinanceCaller,
   ): Promise<BillingAgreementDetail> {
-    return this.billing.newAgreementVersion(code, body, caller);
+    return this.terms.newAgreementVersion(code, body, caller);
+  }
+
+  /** "Dokončit" a reserved change of payer (v6): its fence, then its terms as reserved. */
+  @RequirePermission('finance:billing_manage')
+  @Post('agreements/:code/transfers/:revision/finish')
+  @HttpCode(200)
+  finishTransfer(
+    @Param('code', AGREEMENT) code: string,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Caller() caller: FinanceCaller,
+  ): Promise<BillingAgreementDetail> {
+    return this.terms.finishTransfer(code, revision, caller);
+  }
+
+  /** "Zrušit" a reserved change of payer: its terms are never written; a fence written stays. */
+  @RequirePermission('finance:billing_manage')
+  @Post('agreements/:code/transfers/:revision/abandon')
+  @HttpCode(200)
+  abandonTransfer(
+    @Param('code', AGREEMENT) code: string,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Caller() caller: FinanceCaller,
+  ): Promise<BillingAgreementDetail> {
+    return this.terms.abandonTransfer(code, revision, caller);
+  }
+
+  /** "Obnovit provoz" of a fenced payer (v6 RESTORE): committed here, then sent to the core. */
+  @RequirePermission('finance:billing_manage')
+  @Post('agreements/:code/restores')
+  restore(
+    @Param('code', AGREEMENT) code: string,
+    @Body(new ZodValidationPipe(billingRestoreRequestSchema)) body: BillingRestoreRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<BillingRestoreResult> {
+    return this.terms.restore(code, body, caller);
+  }
+
+  /** A committed restore sent to the core again (only a RESTORE revision; else 409). */
+  @RequirePermission('finance:billing_manage')
+  @Post('agreements/:code/restores/:revision/send')
+  @HttpCode(200)
+  sendRestore(
+    @Param('code', AGREEMENT) code: string,
+    @Param('revision', ParseIntPipe) revision: number,
+    @Caller() caller: FinanceCaller,
+  ): Promise<BillingRestoreResult> {
+    return this.terms.sendRestore(code, revision, caller);
   }
 }

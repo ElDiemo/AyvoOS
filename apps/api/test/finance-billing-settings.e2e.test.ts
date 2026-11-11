@@ -256,9 +256,10 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
       await expect(
         owner.$executeRawUnsafe(
           `INSERT INTO finance.agreement_versions (revision, agreement_id, effective_from, customer_id, billed_rooms,
-             currency, payment_terms_days, billing_timing, valid_from, reason, recorded_by, recorded_by_name, request_id)
+             currency, payment_terms_days, billing_timing, valid_from, reason, recorded_by, recorded_by_name, request_id,
+             terms_revision)
            VALUES (${await nextRevision(owner)}, '${zero.id}', '2026-03-15', '${c.id}', 5, 'CZK', 14, 'ARREARS', '2026-01-01', 'x',
-             '${randomUUID()}', 'x', '${randomUUID()}')`,
+             '${randomUUID()}', 'x', '${randomUUID()}', 99)`,
         ),
       ).rejects.toThrow(/check constraint/);
     } finally {
@@ -358,10 +359,11 @@ describe.skipIf(!hasDatabase)('finance hotel billing settings (N3A-1)', () => {
       owner.$executeRaw`
         INSERT INTO finance.agreement_versions (revision, agreement_id, effective_from, customer_id,
           billed_rooms, own_price_per_room_month, currency, payment_terms_days, billing_timing,
-          valid_from, reason, recorded_at, recorded_by, recorded_by_name, request_id)
+          valid_from, reason, recorded_at, recorded_by, recorded_by_name, request_id, terms_revision)
         VALUES (${revision}, ${agreementId}::uuid, '2026-02-01', ${customerId}::uuid, 40,
           ${own}::numeric, 'CZK', 14, 'ARREARS', '2026-01-01', 'tie test', ${at},
-          ${randomUUID()}::uuid, 'test', ${randomUUID()}::uuid)`;
+          ${randomUUID()}::uuid, 'test', ${randomUUID()}::uuid,
+          (SELECT max(terms_revision) + 1 FROM finance.agreement_versions WHERE agreement_id = ${agreementId}::uuid))`;
     try {
       // Price list: the higher revision inserted first (A), then last (B).
       for (const [cur, firstIsHigher] of [

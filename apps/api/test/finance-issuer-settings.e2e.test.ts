@@ -644,10 +644,12 @@ describe.skipIf(!hasDatabase)('finance issuer and invoice bank accounts (N3A-2a)
         await tx.$executeRaw`
           INSERT INTO finance.agreement_versions (revision, agreement_id, effective_from, customer_id,
             contract_number, billed_rooms, own_price_per_room_month, currency, payment_terms_days,
-            billing_timing, valid_from, valid_to, reason, recorded_by, recorded_by_name, request_id)
+            billing_timing, valid_from, valid_to, reason, recorded_by, recorded_by_name, request_id,
+            terms_revision)
           SELECT ${v}, agreement_id, effective_from, customer_id, contract_number, billed_rooms,
             999.00, currency, payment_terms_days, billing_timing, valid_from, valid_to,
-            'Souběžná změna (test)', recorded_by, recorded_by_name, gen_random_uuid()
+            'Souběžná změna (test)', recorded_by, recorded_by_name, gen_random_uuid(),
+            terms_revision + 1
           FROM finance.agreement_versions
           WHERE revision = ${seen[0]!.agreementRevision}`;
         issuing = issueLines(seen).then((r) => r);

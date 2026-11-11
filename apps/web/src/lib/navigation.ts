@@ -109,6 +109,12 @@ export const MODULES: readonly NavModule[] = [
         permission: 'sales:work',
       },
       { id: 'tasks', href: '/sales/tasks', label: s.pages.tasks, permission: 'sales:work' },
+      {
+        id: 'calendar',
+        href: '/sales/calendar',
+        label: s.pages.calendar,
+        permission: 'sales:work',
+      },
     ],
   },
   {
@@ -215,7 +221,7 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'warehouse',
     section: 'operations',
-    permissions: ['inventory:read', 'inventory:stock_summary', 'returns:receive'],
+    permissions: ['inventory:read', 'inventory:stock_summary'],
     label: w.label,
     href: '/warehouse',
     description: w.description,
@@ -258,18 +264,6 @@ export const MODULES: readonly NavModule[] = [
         label: w.pages.suppliers,
         permission: 'inventory:read',
       },
-      {
-        id: 'returns',
-        href: '/warehouse/returns',
-        label: w.pages.returns,
-        permission: 'returns:receive',
-      },
-      {
-        id: 'after-wash',
-        href: '/warehouse/after-wash',
-        label: w.pages.afterWash,
-        permission: 'returns:receive',
-      },
     ],
   },
   {
@@ -285,6 +279,7 @@ export const MODULES: readonly NavModule[] = [
       'production:fill',
       'production:label_apply',
       'production:workstations_manage',
+      'returns:receive',
     ],
     label: p.label,
     href: '/production',
@@ -304,6 +299,15 @@ export const MODULES: readonly NavModule[] = [
         group: 'work',
         // The station page admits either mode (issue #11 UI-15).
         anyOf: ['production:label_apply', 'production:fill'],
+      },
+      {
+        // Oběh lahví (owner 2026-11-09): Příjem vratek and Po mytí of the active site in one
+        // place; the former warehouse URLs redirect here (next.config.ts).
+        id: 'cycle',
+        href: '/production/cycle',
+        label: p.pages.cycle,
+        group: 'work',
+        permission: 'returns:receive',
       },
       {
         id: 'crates',
@@ -363,6 +367,13 @@ export const MODULES: readonly NavModule[] = [
     pages: [
       { id: 'list', href: '/hotels', label: h.pages.list, permission: 'hotels:read' },
       { id: 'new', href: '/hotels/new', label: h.pages.new, permission: 'hotels:manage' },
+      // Hotel portal accounts (never internal users) and their grants.
+      {
+        id: 'users',
+        href: '/hotels/users',
+        label: h.pages.users,
+        permission: 'identity:portal_grants_manage',
+      },
     ],
   },
   {
@@ -420,32 +431,25 @@ export const MODULES: readonly NavModule[] = [
 ];
 
 export type WarehousePageId =
-  | 'overview'
-  | 'new-receipt'
-  | 'receipts'
-  | 'stock'
-  | 'availability'
-  | 'movements'
-  | 'suppliers'
-  | 'returns'
-  | 'after-wash';
+  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
 export type ProductionPageId =
   | 'overview'
   | 'bottles'
   | 'templates'
   | 'station'
+  | 'cycle'
   | 'crates'
   | 'workstations'
   | 'catalog'
   | 'setup';
 export type AdminPageId = 'users' | 'roles' | 'sites' | 'carriers';
-export type HotelsPageId = 'list' | 'new';
+export type HotelsPageId = 'list' | 'new' | 'users';
 /** Finance (doc 042): one strip of work pages, the settings apart; views inside two pages. */
 export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'exports' | 'settings';
 export type FinanceViewId =
   'invoices' | 'billing' | 'customers' | 'bank' | 'payments' | 'company' | 'prices';
 export type DispatchPageId = 'orders' | 'new';
-export type SalesPageId = 'overview' | 'prospects' | 'tasks';
+export type SalesPageId = 'overview' | 'prospects' | 'tasks' | 'calendar';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports
