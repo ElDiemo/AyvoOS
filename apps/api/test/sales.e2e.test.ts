@@ -7,6 +7,7 @@ import type {
   ProspectDetail,
   ProspectPage,
   SalesOverview,
+  SalesResults,
   TaskPage,
 } from '@ayvo/types';
 import request from 'supertest';
@@ -934,6 +935,80 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
     );
     for (const q of ['?month=2026-13', '?month=26-01', '?assignee=nobody'])
       expect((await a.get(`/tasks/calendar${q}`)).status, q).toBe(400);
+  });
+
+  it('Výsledky obchodu: the funnel, stage changes, current activities and people — owner only', async () => {
+    const a = as(people.a.cookie);
+    const results = async () =>
+      (await as(admin).get('/results?days=7').expect(200)).body as SalesResults;
+    const row = (r: SalesResults) => r.people.find((x) => x.id === people.a.id)!;
+    const before = await results();
+    expect(before).toMatchObject({ days: 7, today: today(), since: addDays(today(), -6) });
+
+    const d = await create(people.a.cookie, `Výsledky A ${tag}`);
+    const contacted = (
+      await a
+        .post(`/prospects/${d.code}/stage`, {
+          revision: d.revision,
+          stage: 'CONTACTED',
+          reason: null,
+          lostReason: null,
+        })
+        .expect(200)
+    ).body as ProspectDetail;
+    const at = `${addDays(today(), -1)}T10:00`;
+    const activity = (kind: string, content: string) =>
+      a
+        .post(`/prospects/${d.code}/activities`, {
+          kind,
+          occurredAt: at,
+          contactId: null,
+          content,
+          outcome: null,
+          followUp: null,
+        })
+        .expect(200);
+    await activity('CALL', 'Telefonát (výsledky)');
+    const withMeeting = (await activity('MEETING', 'Schůzka (výsledky)')).body as ProspectDetail;
+    const withNote = (await activity('NOTE', 'Omylem (výsledky)')).body as ProspectDetail;
+    // A corrected activity counts once (its current version); a withdrawn one never.
+    const meeting = withMeeting.activities.find((x) => x.content === 'Schůzka (výsledky)')!;
+    await a
+      .post(`/prospects/${d.code}/activities/${meeting.id}/correct`, {
+        withdraw: false,
+        kind: 'MEETING',
+        occurredAt: at,
+        contactId: null,
+        content: 'Schůzka s ředitelem (výsledky)',
+        outcome: null,
+        reason: 'Upřesnění',
+      })
+      .expect(200);
+    const note = withNote.activities.find((x) => x.content === 'Omylem (výsledky)')!;
+    await a
+      .post(`/prospects/${d.code}/activities/${note.id}/correct`, {
+        withdraw: true,
+        reason: 'Zapsáno omylem',
+      })
+      .expect(200);
+
+    const after = await results();
+    expect(after.created - before.created).toBe(1);
+    expect(after.funnel.CONTACTED - before.funnel.CONTACTED).toBe(1);
+    expect(after.reached.CONTACTED - before.reached.CONTACTED).toBe(1);
+    expect(after.activities.CALL - before.activities.CALL).toBe(1);
+    expect(after.activities.MEETING - before.activities.MEETING).toBe(1);
+    expect(after.activities.NOTE - before.activities.NOTE).toBe(0);
+    expect(after.withoutNextStep - before.withoutNextStep).toBe(1); // in progress, no task
+    expect(row(after).calls - (row(before)?.calls ?? 0)).toBe(1);
+    expect(row(after).meetings - (row(before)?.meetings ?? 0)).toBe(1);
+    expect(row(after).inProgress - (row(before)?.inProgress ?? 0)).toBe(1);
+    void contacted;
+
+    // Owner only; the period is 7, 30 or 90 days.
+    expect((await a.get('/results')).status).toBe(403);
+    expect((await as(admin).get('/results?days=14')).status).toBe(400);
+    expect(((await as(admin).get('/results').expect(200)).body as SalesResults).days).toBe(30);
   });
 
   it("Přehled: the prospects in progress without a next step, only in the person's scope; the list filter", async () => {

@@ -55,6 +55,7 @@ export const shellCs = {
         prospects: 'Akvizice',
         tasks: 'Úkoly',
         calendar: 'Kalendář',
+        results: 'Výsledky',
       },
     },
     warehouse: {
