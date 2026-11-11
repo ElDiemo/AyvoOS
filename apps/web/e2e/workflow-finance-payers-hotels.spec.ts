@@ -1,8 +1,7 @@
-import { readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { withFinanceDown } from './finance-control';
 const ADMIN_STATE = 'e2e/.auth/admin.json';
 const OPERATOR_STATE = 'e2e/.auth/operator.json';
 const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
@@ -14,8 +13,6 @@ const INITIAL_SITE_ID = '01990000-0000-7000-8000-000000000001';
  * the issuer and a CZK default account (workflow-finance-issuer.spec.ts runs before).
  */
 const screenshots = resolve(import.meta.dirname, '../../../docs/screenshots/finance');
-const serverPid = () =>
-  Number(readFileSync(join(tmpdir(), 'ayvo-e2e-server-4100.pid'), 'utf8').trim());
 const financeReady = async (request: APIRequestContext) =>
   (await request.get('/api/admin/finance/health/ready').catch(() => null))?.status() ?? 0;
 
@@ -276,10 +273,9 @@ test.describe.serial('Karta hotelu a Finance', () => {
     page,
     request,
   }) => {
-    await expect.poll(() => financeReady(request), { timeout: 30_000 }).toBe(200);
-    process.kill(serverPid(), 'SIGUSR2');
-    try {
-      await expect.poll(() => financeReady(request), { timeout: 15_000 }).not.toBe(200);
+    expect(await financeReady(request)).toBe(200);
+    await withFinanceDown(async () => {
+      expect(await financeReady(request)).not.toBe(200);
       await page.goto(`/hotels/${hotelA}`);
       await expect(page.getByRole('heading', { level: 1 })).toContainText('Hotel Plátce A');
       await expect(page.getByTestId('hotel-address')).toBeVisible();
@@ -289,10 +285,8 @@ test.describe.serial('Karta hotelu a Finance', () => {
       await expect(panel).not.toContainText('žádnou fakturu');
       await expect(panel.getByTestId('hotel-billing-rooms')).toHaveCount(0);
       await shots(page, 'ux2-hotel-finance-down');
-    } finally {
-      process.kill(serverPid(), 'SIGUSR1');
-      await expect.poll(() => financeReady(request), { timeout: 30_000 }).toBe(200);
-    }
+    });
+    expect(await financeReady(request)).toBe(200);
     await page.goto(`/hotels/${hotelA}`);
     await expect(page.getByTestId('hotel-billing-rooms')).toHaveText('12');
   });
