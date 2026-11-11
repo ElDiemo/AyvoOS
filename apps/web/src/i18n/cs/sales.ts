@@ -302,6 +302,56 @@ export const salesCs = {
     recorded: (by: string, at: string) => `zapsal(a) ${by} ${at}`,
   },
 
+  visit: {
+    start: 'Zahájit návštěvu',
+    title: 'Návštěva hotelu',
+    intro: 'Projděte body během schůzky. Uloží se jako běžná aktivita Schůzka.',
+    progress: (done: number, all: number) => `${done}/${all} hotovo`,
+    steps: [
+      {
+        key: 'who',
+        title: 'Zjisti, s kým mluvíš',
+        help: 'Je to majitel, ředitel, provozní manažer, nebo recepce?',
+        field: 'S kým jste mluvili (role)',
+      },
+      {
+        key: 'box',
+        title: 'Ukaž prezentační krabičku',
+        help: 'Vysvětli princip výměny lahviček a paušální služby.',
+        field: null,
+      },
+      {
+        key: 'now',
+        title: 'Zeptej se na současnou kosmetiku',
+        help: 'Co používají, kolik je to stojí a co jim nevyhovuje?',
+        field: 'Současná kosmetika',
+      },
+      {
+        key: 'objections',
+        title: 'Zjisti případné námitky',
+        help: 'Cena, vzhled, logistika, současný dodavatel, termín spuštění.',
+        field: 'Námitky',
+      },
+      {
+        key: 'next',
+        title: 'Domluv další krok',
+        help: 'Schůzka, nabídka, telefonát nebo jednání o pilotu.',
+        field: null,
+      },
+    ],
+    notes: 'Poznámky ze schůzky',
+    save: 'Uložit návštěvu',
+    done: 'Probráno',
+    contentLines: {
+      who: 'S kým',
+      box: 'Prezentační krabička ukázána',
+      now: 'Současná kosmetika',
+      objections: 'Námitky',
+      next: 'Další krok domluven',
+      notes: 'Poznámky',
+    },
+    empty: 'Vyplňte aspoň jeden bod nebo poznámku.',
+  },
   task: {
     title: 'Přidat úkol',
     what: 'Co udělat',
