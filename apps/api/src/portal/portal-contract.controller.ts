@@ -337,8 +337,9 @@ export class PortalContractController {
   // --- "Dodávky" (real orders, read only) -------------------------------------------------
 
   /**
-   * A granted hotel's deliveries in three groups and its upcoming plan days; any other id is "not
-   * found".
+   * An operational granted hotel's deliveries in three groups and its upcoming plan days; any other
+   * id — also a hotel the grant opens for its invoices only, or one a fence closes — is "not
+   * found" (v6: deliveries are operations).
    */
   @PortalServiceAccess()
   @Get('hotels/:id/deliveries')
@@ -349,7 +350,7 @@ export class PortalContractController {
     return this.slots.run(async () => {
       const session = await this.portalSession(token);
       const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
-        g.hotelIds.includes(id),
+        g.operationalHotelIds.includes(id),
       );
       if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
       // Sequential, as every portal call: at most one portal connection per request.
