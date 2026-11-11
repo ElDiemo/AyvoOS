@@ -21,6 +21,55 @@ export class SlotLimit {
   }
 }
 
+/**
+ * Slots counted globally AND per key (e.g. per portal account): `acquire(key)` takes one of each
+ * or none — refused at once when either is full. The release (idempotent) frees both.
+ */
+export class KeyedSlotLimit {
+  private active = 0;
+  private readonly perKey = new Map<string, number>();
+  constructor(
+    private readonly max: number,
+    private readonly maxPerKey: number,
+  ) {}
+
+  get inFlight(): number {
+    return this.active;
+  }
+  inFlightOf(key: string): number {
+    return this.perKey.get(key) ?? 0;
+  }
+
+  acquire(key: string): (() => void) | null {
+    if (this.active >= this.max || this.inFlightOf(key) >= this.maxPerKey) return null;
+    this.active++;
+    this.perKey.set(key, this.inFlightOf(key) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active--;
+      const left = this.inFlightOf(key) - 1;
+      if (left > 0) this.perKey.set(key, left);
+      else this.perKey.delete(key);
+    };
+  }
+}
+
+/** The slot of one package: held at least `bytes / rate` from now. */
+export function heldAtLeast(
+  release: () => void,
+  rateBps: number,
+  now: () => number = Date.now,
+): (bytes: number) => void {
+  const started = now();
+  return (bytes) => {
+    const wait = started + (bytes / rateBps) * 1000 - now();
+    if (wait <= 0) return release();
+    setTimeout(release, wait).unref?.();
+  };
+}
+
 /** Why a bounded transfer ended early (the stream is errored with it). */
 export class TransferCut extends Error {
   constructor(readonly reason: 'DEADLINE' | 'TOO_LARGE' | 'UPSTREAM' | 'CLIENT') {

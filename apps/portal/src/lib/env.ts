@@ -24,6 +24,24 @@ const schema = z
     /** At most this many PDFs pass through at once (§8: as Finance's own limit). */
     PORTAL_PDF_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(8).default(2),
     /**
+     * Invoice packages in transfer at once in this process (their own slots — a package never
+     * takes a PDF's), and at most one per portal account (review of #178, #169 sprint). A package
+     * holds its slot until its body has been pulled into the connection or the transfer is cut.
+     */
+    PORTAL_PACKAGE_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(4).default(2),
+    /**
+     * A package's slot is held at least as long as its size takes at this rate (B/s), even when its
+     * bytes left portal-web sooner — buffers between here and the browser (kernel, proxies, the
+     * edge) can take most of a package at once, so "pulled" is not "delivered". Default: A1's
+     * design rate, 8 Mbit/s (16 MiB ≈ 17 s, doc 064 §2). Measured in portal-a1-acceptance.
+     */
+    PORTAL_PACKAGE_HOLD_RATE_BPS: z.coerce
+      .number()
+      .int()
+      .min(10_000)
+      .max(100_000_000)
+      .default(1_000_000),
+    /**
      * One deadline for the invoice package (fetch, transfer, answer). Behind an edge with a write
      * limit it must end below that limit (PROD's public edge: 30 s → 25 s, doc 064 §2); never
      * longer than Finance's ceiling plus the grace.

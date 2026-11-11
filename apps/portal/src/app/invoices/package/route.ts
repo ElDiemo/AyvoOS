@@ -1,8 +1,26 @@
-import { PORTAL_PACKAGE_MAX_ZIP_BYTES, portalInvoicePackageQuerySchema } from '@ayvo/types';
+import {
+  PORTAL_PACKAGE_MAX_ZIP_BYTES,
+  portalInvoicePackageQuerySchema,
+  portalSessionViewSchema,
+} from '@ayvo/types';
+import { contractJson, PortalUnauthenticated } from '@/lib/backend';
 import { portalEnv } from '@/lib/env';
 import { passFile } from '@/lib/pdf-proxy';
+import { readCookie, SESSION_COOKIE } from '@/lib/session';
+import { heldAtLeast, KeyedSlotLimit } from '@/lib/slots';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Packages in transfer: PORTAL_PACKAGE_MAX_IN_FLIGHT in this process, ONE per portal account —
+ * so a slow or repeating client of one account can neither hold every package slot nor the PDFs'
+ * (which have their own). A slot is held until the body has been pulled into the connection or the
+ * transfer cut, AND at least `size / PORTAL_PACKAGE_HOLD_RATE_BPS` from the start: what left
+ * portal-web is not yet delivered (buffers on the way can hold most of a package), so the number
+ * of packages a client can have parked stays bounded whatever the buffering. Refused at once:
+ * PACKAGE_BUSY, before any byte.
+ */
+let packages: KeyedSlotLimit | null = null;
 
 /** Finance names the package by its period. */
 const DISPOSITION = /^attachment; filename="AYVO-faktury-\d{4}-\d{2}-\d{4}-\d{2}\.zip"$/;
@@ -30,7 +48,28 @@ export async function GET(request: Request) {
     to: url.searchParams.get('to'),
   });
   if (!q.success) return back('INVALID_PERIOD');
+  // The account, from the core now (the package's slot is counted per account, never per session).
+  const session = await readCookie(SESSION_COOKIE);
+  let account: string | null = null;
+  if (session) {
+    try {
+      account = (await contractJson('core', 'session', portalSessionViewSchema, { session })).user
+        .id;
+    } catch (error) {
+      if (error instanceof PortalUnauthenticated)
+        return new Response('Přihlaste se prosím znovu.', {
+          status: 401,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+      return back('UNAVAILABLE');
+    }
+  }
+  packages ??= new KeyedSlotLimit(portalEnv().PORTAL_PACKAGE_MAX_IN_FLIGHT, 1);
   return passFile(request, {
+    acquire: () => {
+      const release = account ? packages!.acquire(account) : null;
+      return release ? heldAtLeast(release, portalEnv().PORTAL_PACKAGE_HOLD_RATE_BPS) : null;
+    },
     unit: 'finance',
     path: `invoices/package?from=${q.data.from}&to=${q.data.to}`,
     type: 'application/zip',

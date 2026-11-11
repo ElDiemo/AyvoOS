@@ -41,8 +41,20 @@ it, bounds a streamed response (isolated test on Caddy 2.11.7 and 2.11.9, doc 06
    at their limit — also a plain `file_server` with `write 5s` sent 20 MB for 36 s. A client that
    leaves ends its transfer at once, and the next package completes; Finance's one-package slot is
    free as soon as the bytes have left Finance, so packages in transfer are not limited in number.
-   Open before the public switch: a bound for parked transfers (resource use) — #178.
-4. **Private first, public last** (doc 064 §3): the portal unit (keys, contracts, `portal-web`) may
+   **Measured bound on parked transfers** (#169 sprint): the edge stops writing at `write 30s` and
+   only what was buffered then drains (an extreme 20 kB/s client was cut after ~500 s at ~10 MB).
+   How many transfers can be parked at once depends on the buffers on the way, not on portal-web's
+   slot: with the real image 6 staggered slow clients were all served (kernel TCP memory up to
+   92 MiB, Caddy +34 MiB).
+4. **Packages in transfer are limited (proposed, awaiting the owner's approval)**: their own slots
+   in portal-web (`PORTAL_PACKAGE_MAX_IN_FLIGHT`, default 2 — never a PDF's), **one per portal
+   account**, and each slot held at least `size / PORTAL_PACKAGE_HOLD_RATE_BPS` (default A1's
+   design rate, 8 Mbit/s) even when its bytes left sooner; refused at once with `PACKAGE_BUSY`,
+   before any byte. Measured with it: of 6 slow clients of one account 1 served, 5 refused; kernel
+   TCP memory 6.6 MiB (HTTP/2) / 15.4 MiB (HTTP/1.1). Bound: per slot at most
+   1 + 30 s / (size / rate) packages parked (≈ 3 at 16 MiB), so ≤ ~6 in total. portal-web is one
+   process; more replicas would need a shared counter.
+5. **Private first, public last** (doc 064 §3): the portal unit (keys, contracts, `portal-web`) may
    run without any public route; the public site is a separate switch (`PORTAL_PUBLIC=on`).
 
 ## Consequences

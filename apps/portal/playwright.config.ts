@@ -12,6 +12,9 @@ const env = {
   FINANCE_INTERNAL_URL: 'http://127.0.0.1:4311',
   PORTAL_CORE_TOKEN: 'c'.repeat(43),
   PORTAL_FINANCE_TOKEN: 'f'.repeat(43),
+  // Two package slots here, so the per-account and the global limit can be told apart.
+  PORTAL_PACKAGE_MAX_IN_FLIGHT: '2',
+  PORTAL_PACKAGE_HOLD_RATE_BPS: '1000000',
 };
 
 export default defineConfig({

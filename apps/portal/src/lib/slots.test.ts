@@ -3,6 +3,8 @@ import {
   boundedPassThrough,
   contentLengthWithin,
   deadline,
+  heldAtLeast,
+  KeyedSlotLimit,
   readBounded,
   SlotLimit,
   TransferCut,
@@ -240,5 +242,59 @@ describe('bounded reads', () => {
     browser.abort();
     expect(d.signal.aborted).toBe(true);
     expect((d.signal.reason as TransferCut).reason).toBe('CLIENT');
+  });
+});
+
+describe('KeyedSlotLimit: per key and in total (packages per account, #178 review)', () => {
+  it('one per key, the total bounded; a release frees both, once', () => {
+    const l = new KeyedSlotLimit(2, 1);
+    const a = l.acquire('a')!;
+    expect(l.acquire('a')).toBeNull(); // the same account again
+    const b = l.acquire('b')!;
+    expect(l.acquire('c')).toBeNull(); // the total is full
+    expect([l.inFlight, l.inFlightOf('a'), l.inFlightOf('b')]).toEqual([2, 1, 1]);
+    a();
+    a(); // idempotent
+    expect([l.inFlight, l.inFlightOf('a')]).toEqual([1, 0]);
+    expect(l.acquire('c')).not.toBeNull();
+    expect(l.acquire('a')).toBeNull(); // total full again (b, c)
+    b();
+    expect(l.acquire('a')).not.toBeNull();
+  });
+});
+
+/** Waits until `cond` holds (each macrotask), at most `ms`. */
+async function until(cond: () => boolean, ms = 2000) {
+  const end = Date.now() + ms;
+  while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 5));
+  return cond();
+}
+
+describe('heldAtLeast: a package slot is held at least size / rate (#178 review, #169 sprint)', () => {
+  it('released at once when the transfer took longer; else only after size / rate', async () => {
+    let t = 1_000;
+    let released = 0;
+    const slow = heldAtLeast(
+      () => released++,
+      1_000_000,
+      () => t,
+    );
+    t += 5_000; // 5 s for 2 MB: slower than 1 MB/s
+    slow(2_000_000);
+    expect(released).toBe(1);
+    const fast = heldAtLeast(
+      () => released++,
+      1_000_000,
+      () => t,
+    );
+    t += 10; // 2 MB pulled in 10 ms (into buffers)
+    fast(2_000_000);
+    expect(released).toBe(1); // still held
+    expect(await until(() => released === 2, 3_000)).toBe(true);
+  });
+  it('a refusal (0 bytes) releases at once', () => {
+    let released = 0;
+    heldAtLeast(() => released++, 1_000_000)(0);
+    expect(released).toBe(1);
   });
 });
