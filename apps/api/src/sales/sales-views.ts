@@ -94,6 +94,8 @@ export class SalesViews {
       stage: p.stage as ProspectDetail['stage'],
       lostReason: p.lostReason,
       note: p.note,
+      currentAmenities: p.currentAmenities,
+      mainObjection: p.mainObjection,
       owner: { id: p.owner.id, name: p.owner.displayName },
       revision: p.revision,
       archived:

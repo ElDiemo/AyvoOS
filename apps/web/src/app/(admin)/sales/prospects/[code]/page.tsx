@@ -260,6 +260,12 @@ export default async function ProspectPage({
                 <Field label={d.firstContact}>
                   {p.firstContactAt ? salesDateTime(p.firstContactAt) : d.noContactYet}
                 </Field>
+                <Field label={d.currentAmenities}>
+                  <span data-testid="prospect-amenities">{p.currentAmenities ?? t.unknown}</span>
+                </Field>
+                <Field label={d.mainObjection}>
+                  <span data-testid="prospect-objection">{p.mainObjection ?? t.unknown}</span>
+                </Field>
                 <Field label={d.note}>
                   <span className="whitespace-pre-line">{p.note ?? '—'}</span>
                 </Field>

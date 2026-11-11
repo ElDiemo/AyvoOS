@@ -39,6 +39,8 @@ const TEXT = [
   'source',
   'priority',
   'note',
+  'currentAmenities',
+  'mainObjection',
   'ownerId',
   'contactLabel',
   'contactPosition',
@@ -65,6 +67,8 @@ function initialValues(p: ProspectDetail | null): Values {
     source: p?.source ?? '',
     priority: p?.priority ?? '',
     note: p?.note ?? '',
+    currentAmenities: p?.currentAmenities ?? '',
+    mainObjection: p?.mainObjection ?? '',
     ownerId: '',
     contactLabel: '',
     contactPosition: '',
@@ -143,6 +147,8 @@ export function ProspectForm({
       source: orNull(v.source),
       priority: (orNull(v.priority) as ProspectDetail['priority']) ?? null,
       note: orNull(v.note),
+      currentAmenities: orNull(v.currentAmenities),
+      mainObjection: orNull(v.mainObjection),
     };
     if (prospect) {
       const body = { revision: prospect.revision, ...profile };
@@ -307,6 +313,16 @@ export function ProspectForm({
             ])}
             {input('source', f.source, { help: f.sourceHelp, max: 200 })}
             {input('website', f.website, { wide: true, max: 300, placeholder: 'https://' })}
+            {input('currentAmenities', f.currentAmenities, {
+              wide: true,
+              max: 500,
+              help: f.currentAmenitiesHelp,
+            })}
+            {input('mainObjection', f.mainObjection, {
+              wide: true,
+              max: 500,
+              help: f.mainObjectionHelp,
+            })}
           </>,
         )}
         {section(

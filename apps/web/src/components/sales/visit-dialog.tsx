@@ -1,11 +1,13 @@
 'use client';
 
-import type { ProspectDetail } from '@ayvo/types';
+import { prospectDetailSchema, type ProspectDetail } from '@ayvo/types';
+import { useRouter } from 'next/navigation';
 import { useId, useState } from 'react';
 import { fieldClass, FormField } from '@/components/catalog/form-kit';
 import { salesCs } from '@/i18n/cs/sales';
 import { FormDialog } from './sales-dialog';
 import { salesNowLocal } from './sales-format';
+import { apiSend } from '@/lib/client-api';
 import { dialogError, useSalesSend } from './use-sales-send';
 
 type Contact = { id: string; label: string };
@@ -26,12 +28,15 @@ export function VisitDialog({
   open,
   onClose,
   onSaved,
+  onCardFailed,
 }: {
   code: string;
   contacts: Contact[];
   open: boolean;
   onClose: () => void;
   onSaved?: (detail: ProspectDetail) => void;
+  /** The visit is saved, but copying its answers into the hotel's card failed. */
+  onCardFailed?: () => void;
 }) {
   const id = useId();
   const blank = () => ({
@@ -42,12 +47,53 @@ export function VisitDialog({
     notes: '',
     outcome: '',
     followUp: false,
+    toCard: true,
     followTitle: '',
     followDue: '',
   });
   const [s, setS] = useState(blank);
   const [invalid, setInvalid] = useState<string | null>(null);
   const { busy, error, setError, send } = useSalesSend();
+  const router = useRouter();
+  const cardText = (k: 'now' | 'objections') => (s.text[k] ?? '').trim() || null;
+  /**
+   * After the confirmed Schůzka: copy "Současná kosmetika" and "Námitky" into the hotel's card
+   * (the ordinary profile edit on the revision the save returned). A separate write: when it fails
+   * the Schůzka stays saved (never sent twice) and the page says the card was not updated.
+   */
+  async function copyToCard(
+    detail: ProspectDetail,
+    amenities: string | null,
+    objection: string | null,
+  ) {
+    const currentAmenities = amenities ?? detail.currentAmenities;
+    const mainObjection = objection ?? detail.mainObjection;
+    if (currentAmenities === detail.currentAmenities && mainObjection === detail.mainObjection)
+      return;
+    try {
+      await apiSend('POST', `admin/sales/prospects/${code}/update`, prospectDetailSchema, {
+        requestId: crypto.randomUUID(),
+        revision: detail.revision,
+        name: detail.name,
+        countryCode: detail.countryCode,
+        city: detail.city,
+        addressLine1: detail.addressLine1,
+        addressLine2: detail.addressLine2,
+        postalCode: detail.postalCode,
+        roomsEstimate: detail.roomsEstimate,
+        accommodationType: detail.accommodationType,
+        website: detail.website,
+        source: detail.source,
+        priority: detail.priority,
+        note: detail.note,
+        currentAmenities,
+        mainObjection,
+      });
+      router.refresh();
+    } catch {
+      onCardFailed?.();
+    }
+  }
   /** Any edit clears the last refusal (it no longer describes the form). */
   const update = (patch: Partial<ReturnType<typeof blank>>) => {
     setInvalid(null);
@@ -105,9 +151,13 @@ export function VisitDialog({
               : null,
           },
           (detail) => {
+            const amenities = cardText('now');
+            const objection = cardText('objections');
+            const toCard = s.toCard && (amenities !== null || objection !== null);
             setS(blank());
             close();
             onSaved?.(detail);
+            if (toCard) void copyToCard(detail, amenities, objection);
           },
         );
       }}
@@ -205,6 +255,17 @@ export function VisitDialog({
           data-testid="visit-outcome"
         />
       </FormField>
+      {(cardText('now') || cardText('objections')) && (
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={s.toCard}
+            onChange={(e) => update({ toCard: e.target.checked })}
+            data-testid="visit-to-card"
+          />
+          {v.toCard}
+        </label>
+      )}
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
