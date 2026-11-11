@@ -277,3 +277,82 @@ export const issuerSettingsSchema = z.object({
   readiness: z.array(z.object({ currency: z.string(), gaps: z.array(issuerGapSchema) })),
 });
 export type IssuerSettings = z.infer<typeof issuerSettingsSchema>;
+
+// --- the default VAT rate of domestic invoices (owner 2026-11-03, doc 040 §17) -------------
+
+/**
+ * A rate in percent as entered by the administrator: "21", "12.5" — at most two decimals, more
+ * than 0 and less than 100. Never a default, never hard-coded; prices per room are without VAT.
+ */
+export const vatRatePercentSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{1,2}(\.\d{1,2})?$/, 'Sazbu zadejte v procentech (nejvýš 2 desetinná místa).')
+  .refine((v) => Number(v) > 0, 'Sazba musí být větší než 0 %.');
+
+/** POST /api/admin/finance/issuer/vat-rates: a rate valid from a day, made from the newest seen. */
+export const newDomesticVatRateSchema = z.strictObject({
+  requestId: z.uuid(),
+  /** The newest revision the form saw; null = none existed yet. */
+  expectedRevision: z.number().int().min(1).nullable(),
+  /** The first day (a tax point, Europe/Prague) the rate applies to. */
+  validFrom: z.iso.date('Zadejte datum, od kterého sazba platí.'),
+  ratePercent: vatRatePercentSchema,
+  reason: reasonSchema,
+});
+export type NewDomesticVatRateRequest = z.infer<typeof newDomesticVatRateSchema>;
+
+export const domesticVatRateSchema = z.object({
+  revision: z.number().int(),
+  validFrom: z.iso.date(),
+  /** Exact, two decimals ("21.00"). */
+  ratePercent: z.string(),
+  reason: z.string(),
+  recordedAt: z.iso.datetime(),
+  recordedByName: z.string(),
+});
+export type DomesticVatRate = z.infer<typeof domesticVatRateSchema>;
+
+/**
+ * POST /api/admin/finance/issuer/vat-rates/withdrawals: cancels the rate of a start day that is
+ * still in the future (Europe/Prague, decided by the server when writing) — a new revision with a
+ * reason, never an edit or a deletion. The previous start day then applies, or none; an older
+ * revision of the same day never comes back. Explicitly confirmed.
+ */
+export const withdrawDomesticVatRateSchema = z.strictObject({
+  requestId: z.uuid(),
+  /** The newest revision the form saw (something exists to withdraw). */
+  expectedRevision: z.number().int().min(1),
+  validFrom: z.iso.date(),
+  reason: reasonSchema,
+  confirm: z.literal(true, 'Zrušení potvrďte.'),
+});
+export type WithdrawDomesticVatRateRequest = z.infer<typeof withdrawDomesticVatRateSchema>;
+
+export const VAT_RATE_REVISION_KINDS = ['RATE', 'WITHDRAWAL'] as const;
+
+/** One revision of the history: a rate from a day, or the withdrawal of a future one (no rate). */
+export const domesticVatRateRevisionSchema = z.object({
+  revision: z.number().int(),
+  validFrom: z.iso.date(),
+  kind: z.enum(VAT_RATE_REVISION_KINDS),
+  ratePercent: z.string().nullable(),
+  reason: z.string(),
+  recordedAt: z.iso.datetime(),
+  recordedByName: z.string(),
+});
+export type DomesticVatRateRevision = z.infer<typeof domesticVatRateRevisionSchema>;
+
+/**
+ * GET /api/admin/finance/issuer/vat-rates. `effective`: one entry per start day (a later
+ * revision of the same day corrects it; a withdrawn day has none), newest start first; `current` applies today (Prague),
+ * `null` = no rate — a live domestic invoice would be refused (DOMESTIC_VAT_RATE_MISSING). TEST
+ * invoices compute no VAT and never wait for it.
+ */
+export const domesticVatRatePageSchema = z.object({
+  today: z.iso.date(),
+  current: domesticVatRateSchema.nullable(),
+  effective: z.array(domesticVatRateSchema),
+  versions: z.array(domesticVatRateRevisionSchema),
+});
+export type DomesticVatRatePage = z.infer<typeof domesticVatRatePageSchema>;

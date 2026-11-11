@@ -1,9 +1,14 @@
-import { issuerSettingsSchema, type IssuerBankAccount } from '@ayvo/types';
+import {
+  domesticVatRatePageSchema,
+  issuerSettingsSchema,
+  type IssuerBankAccount,
+} from '@ayvo/types';
 import { AccountForm, DefaultAccountForm, IssuerForm } from '@/components/finance/issuer-forms';
+import { VatRateCard } from '@/components/finance/vat-rate-card';
 import { Card, EmptyState, Notice } from '@/components/ui';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { issuerCs as t } from '@/i18n/cs/finance-issuer';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiGetPanel } from '@/lib/api';
 import { requirePermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -31,7 +36,11 @@ const domestic = (a: IssuerBankAccount['current']['account']) =>
  */
 export default async function CompanySettingsPage() {
   await requirePermission('finance:issuer_manage');
-  const s = await apiGet('admin/finance/issuer', issuerSettingsSchema);
+  const [s, vat] = await Promise.all([
+    apiGet('admin/finance/issuer', issuerSettingsSchema),
+    // Its own panel: an older Finance (404) or an outage of it never takes this page down.
+    apiGetPanel('admin/finance/issuer/vat-rates', domesticVatRatePageSchema),
+  ]);
   return (
     <>
       <FinanceHeader active="settings" view="company" title={t.title} subtitle={t.subtitle} />
@@ -114,6 +123,8 @@ export default async function CompanySettingsPage() {
             </div>
           </details>
         </Card>
+
+        <VatRateCard panel={vat} />
 
         <Card title={t.defaults.title} testId="issuer-defaults">
           <ul className="flex flex-col gap-4 text-sm">
