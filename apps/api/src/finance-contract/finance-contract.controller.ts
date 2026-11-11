@@ -17,6 +17,7 @@ import {
   financeSupplierLookupSchema,
   portalAccountRequestSchema,
   portalFenceRequestSchema,
+  portalFenceSettleRequestSchema,
   portalFenceResolutionRequestSchema,
   portalGrantRequestLookupSchema,
   portalGrantIssueRequestSchema,
@@ -31,6 +32,8 @@ import {
   type PortalAccount,
   type PortalFence,
   type PortalFenceRequest,
+  type PortalFenceSettleRequest,
+  type PortalFenceSettleResult,
   type PortalFenceResolutionRequest,
   type PortalFenceResolutionResult,
   type PortalGrantRequestLookup,
@@ -236,7 +239,19 @@ export class FinanceContractController {
     @CurrentPrincipal() p: Principal,
   ): Promise<PortalFence> {
     require(p, 'finance:billing_manage');
-    return this.portalFences.fence(p.userId, body);
+    return this.portalFences.fence(body);
+  }
+
+  /** Finance abandons a transfer: the fence of its request, or that request settled for good. */
+  @ServiceAccess('finance')
+  @Post('portal-fences/settle')
+  @HttpCode(200)
+  portalFenceSettle(
+    @Body(new ZodValidationPipe(portalFenceSettleRequestSchema)) body: PortalFenceSettleRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalFenceSettleResult> {
+    require(p, 'finance:billing_manage');
+    return this.portalFences.settle(body.requestId);
   }
 
   /** The resolution of named fences by one committed explicit restore (typed evidence only). */
@@ -249,7 +264,7 @@ export class FinanceContractController {
     @CurrentPrincipal() p: Principal,
   ): Promise<PortalFenceResolutionResult> {
     require(p, 'finance:billing_manage');
-    return this.portalFences.resolve(p.userId, body);
+    return this.portalFences.resolve(body);
   }
 
   /** The PORTAL account of an e-mail (created when new) — Finance's first step of a new grant. */

@@ -3,10 +3,16 @@ import type {
   PortalFenceRequest,
   PortalFenceResolutionRequest,
   PortalFenceResolutionResult,
+  PortalFenceSettleResult,
 } from '@ayvo/types';
 import { Injectable } from '@nestjs/common';
-import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
-import { OperationRequestsService } from '../database/operation-requests.service.js';
+import {
+  domainError,
+  domainErrorWithDetails,
+  idempotencyConflict,
+} from '../common/domain-error.js';
+import { OperationRequestsService, payloadHash } from '../database/operation-requests.service.js';
+import { PrismaService } from '../database/prisma.service.js';
 import type { Prisma } from '../generated/prisma/client.js';
 
 type Tx = Prisma.TransactionClient;
@@ -73,18 +79,21 @@ const toView = (f: {
  */
 @Injectable()
 export class PortalFencesService {
-  constructor(private readonly operations: OperationRequestsService) {}
+  constructor(
+    private readonly operations: OperationRequestsService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   /**
    * A fence, before Finance commits the change of payer. A retry with the same request id (the
    * answer was lost, or Finance had not stored the fence id yet) returns the same fence.
    */
-  async fence(actorId: string, input: PortalFenceRequest): Promise<PortalFence> {
-    const meaning = { actorId, ...input };
+  async fence(input: PortalFenceRequest): Promise<PortalFence> {
+    // The meaning is the request alone: another Finance user may finish the same transfer.
     const { result } = await this.operations.run(
       'PORTAL_FENCE_WRITE',
       input.requestId,
-      meaning,
+      input,
       async (tx) => {
         await lockHotels(tx, [input.hotelId]);
         const fence = await tx.portalOperationalFence.create({
@@ -109,12 +118,10 @@ export class PortalFencesService {
    * operation; otherwise 409 and nothing is written. The same restore again (its replay) gets the
    * stored result: one resolution per fence.
    */
-  async resolve(
-    actorId: string,
-    input: PortalFenceResolutionRequest,
-  ): Promise<PortalFenceResolutionResult> {
+  async resolve(input: PortalFenceResolutionRequest): Promise<PortalFenceResolutionResult> {
     const fenceIds = [...input.fenceIds].sort();
-    const meaning = { actorId, ...input, fenceIds };
+    // As for a fence: the evidence alone, so a resend by another Finance user replays it.
+    const meaning = { ...input, fenceIds };
     const { result } = await this.operations.run(
       'PORTAL_FENCE_RESOLVE',
       input.restoreRequestId,
@@ -165,5 +172,27 @@ export class PortalFencesService {
       },
     );
     return result as unknown as PortalFenceResolutionResult;
+  }
+
+  /**
+   * Finance abandons a transfer whose fence answer it may never have got: the fence written under
+   * `requestId`, or — none — the request id taken for good (kind PORTAL_FENCE_SETTLE), so a fence
+   * request arriving later is IDEMPOTENCY_CONFLICT and writes nothing. A fence write in flight
+   * holds the request row: this waits for it and then returns its fence. Repeatable.
+   */
+  async settle(requestId: string): Promise<PortalFenceSettleResult> {
+    const settleHash = payloadHash('PORTAL_FENCE_SETTLE', {});
+    return this.prisma.$transaction(async (tx) => {
+      const inserted = await tx.$executeRaw`
+        INSERT INTO "operation_requests" ("request_id", "kind", "payload_sha256", "result")
+        VALUES (${requestId}::uuid, 'PORTAL_FENCE_SETTLE'::"OperationKind", ${settleHash}, '{"fence":null}'::jsonb)
+        ON CONFLICT ("request_id") DO NOTHING`;
+      if (inserted === 1) return { fence: null };
+      const row = await tx.operationRequest.findUnique({ where: { requestId } });
+      if (row?.kind === 'PORTAL_FENCE_SETTLE') return { fence: null };
+      if (row?.kind === 'PORTAL_FENCE_WRITE' && row.result !== null)
+        return { fence: row.result as unknown as PortalFence };
+      throw idempotencyConflict();
+    });
   }
 }

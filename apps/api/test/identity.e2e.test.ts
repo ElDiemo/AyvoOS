@@ -267,6 +267,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       // resolution by its committed explicit restore.
       'POST /api/internal/v1/finance/portal-fence-resolutions',
       'POST /api/internal/v1/finance/portal-fences',
+      'POST /api/internal/v1/finance/portal-fences/settle',
       'POST /api/internal/v1/finance/portal-grants',
       'POST /api/internal/v1/finance/portal-grants/:id/replace',
       'POST /api/internal/v1/finance/portal-grants/requests/lookup',

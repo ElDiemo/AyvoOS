@@ -1,6 +1,7 @@
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { ENV, type Env } from '../config/env.js';
+import { CORE_CONNECTION_OPTIONS } from '../database/prisma.service.js';
 import { PrismaClient } from '../generated/prisma/client.js';
 
 /**
@@ -16,6 +17,7 @@ export class PortalPrismaService extends PrismaClient implements OnModuleDestroy
     super({
       adapter: new PrismaPg({
         connectionString: env.DATABASE_URL,
+        options: CORE_CONNECTION_OPTIONS,
         max: env.PORTAL_DB_POOL_MAX,
         // Waiting for a free portal connection is bounded…
         connectionTimeoutMillis: env.PORTAL_DB_ACQUIRE_TIMEOUT_MS,
