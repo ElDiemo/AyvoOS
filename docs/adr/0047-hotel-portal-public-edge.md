@@ -31,8 +31,17 @@ it, bounds a streamed response (isolated test on Caddy 2.11.7 and 2.11.9, doc 06
    `portal-a1-acceptance.e2e.test.ts`: real Finance, portal-web and Caddy with the public edge's
    options) built a full 16 MiB package and delivered it whole at 8 Mbit/s within the 20 s; at
    20 MiB the transfer took 20.5 s — past Finance's deadline, through only by buffering — hence
-   16 MiB, not 20. The edge alone cuts 40 MiB at 30 s. Slower clients get the package cut (by
-   Finance at 20 s at the latest); a shorter period helps.
+   16 MiB, not 20. A package over the cap is refused before its first byte (0.2 s, "Zvolte kratší
+   období").
+   **What the deadlines do not bound** (measured on DEV, #169 sprint, Caddy 2.11.9): they end the
+   units' own work and their writes into the connection's buffers, not how long a slow client takes
+   to read what is already buffered (kernel send/receive buffers of several MiB, Caddy, portal-web).
+   A 0.8 Mbit/s client got the whole 16 MiB in 166 s over HTTP/1.1; over HTTP/2 its stream was
+   reset after 106 s; neither Finance (20 s), portal-web (25 s) nor the edge's `write 30s` ended it
+   at their limit — also a plain `file_server` with `write 5s` sent 20 MB for 36 s. A client that
+   leaves ends its transfer at once, and the next package completes; Finance's one-package slot is
+   free as soon as the bytes have left Finance, so packages in transfer are not limited in number.
+   Open before the public switch: a bound for parked transfers (resource use) — #178.
 4. **Private first, public last** (doc 064 §3): the portal unit (keys, contracts, `portal-web`) may
    run without any public route; the public site is a separate switch (`PORTAL_PUBLIC=on`).
 

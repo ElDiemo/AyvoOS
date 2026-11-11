@@ -24,9 +24,9 @@ services:
     environment:
       # The only form of PORTAL_FINANCE_TOKEN Finance gets.
       PORTAL_FINANCE_TOKEN_SHA256: ${PORTAL_FINANCE_TOKEN_SHA256:?set in /opt/ayvo/secrets/prod.env}
-      # The public Caddy cuts every response at 30 s (its unchanged `write`, doc 064 §2): the
-      # invoice package is built and sent well within it — lower than the shared ceiling, never
-      # higher (finance-env refuses more). Finance's deadline lasts until its last byte has left,
+      # The public Caddy's unchanged `write` (30 s, doc 064 §2) bounds its writes, not a slow
+      # client's reading of what is buffered (ADR 0047 §3): the invoice package is built and sent
+      # well within it — lower than the shared ceiling, never higher (finance-env refuses more). Finance's deadline lasts until its last byte has left,
       # so the cap is what an 8 Mbit/s client receives within it without relying on buffers:
       # 16 MiB ≈ 17 s (measured on DEV, review 5858165597; 20 MiB took 20.5 s, over the 20 s).
       FINANCE_PORTAL_PACKAGE_MAX_BYTES: '16777216'

@@ -130,6 +130,7 @@ describe.skipIf(!enabled)(
     let ca: Buffer;
     let cfg: ReturnType<typeof prodConfig>;
     const issued = new Map<string, string>(); // number → PDF sha256
+    const issuedIn = new Map<string, Map<string, string>>(); // month → number → sha256
     const report: Record<string, unknown> = {};
     let session = '';
 
@@ -204,8 +205,10 @@ describe.skipIf(!enabled)(
      * The package through the edge by curl at `rate` B/s (0 = unlimited). Asynchronous: the core
      * and Finance run in this process and must keep serving while curl waits.
      */
-    async function download(from: string, to: string, rate: number) {
-      const out = join(work, `package-${rate}.zip`);
+    let downloads = 0;
+    async function download(from: string, to: string, rate: number, maxTimeS?: number) {
+      const n = ++downloads;
+      const out = join(work, `package-${n}.zip`);
       const started = Date.now();
       const child = spawn(
         'curl',
@@ -218,8 +221,10 @@ describe.skipIf(!enabled)(
           '-H',
           `cookie: __Host-ayvo_portal=${session}`,
           ...(rate ? ['--limit-rate', String(rate)] : []),
+          ...(maxTimeS ? ['--max-time', String(maxTimeS)] : []),
+          ...(process.env.PORTAL_A1_HTTP1 ? ['--http1.1'] : []),
           '-D',
-          join(work, `headers-${rate}.txt`),
+          join(work, `headers-${n}.txt`),
           '-o',
           out,
           '-w',
@@ -235,7 +240,14 @@ describe.skipIf(!enabled)(
       const exit = await new Promise<number | null>((r) => child.on('exit', r));
       const res = { status: exit, stdout, stderr };
       const [code, size, ttfb, total] = res.stdout.trim().split(' ');
-      const headers = readFileSync(join(work, `headers-${rate}.txt`), 'utf8');
+      const read = (f: string) => {
+        try {
+          return readFileSync(f);
+        } catch {
+          return Buffer.alloc(0);
+        }
+      };
+      const headers = read(join(work, `headers-${n}.txt`)).toString();
       return {
         curlExit: res.status,
         curlError: res.stderr.trim(),
@@ -246,7 +258,7 @@ describe.skipIf(!enabled)(
         firstByteS: Number(ttfb),
         totalS: Number(total),
         wallS: (Date.now() - started) / 1000,
-        zip: readFileSync(out),
+        zip: read(out),
       };
     }
 
@@ -304,6 +316,25 @@ describe.skipIf(!enabled)(
       );
       expect(run.status, run.stderr).toBe(0);
       report.caddy = docker('exec', caddyName, 'caddy', 'version').stdout.trim();
+      report.caddyImage = {
+        ref: CADDY_IMAGE,
+        id: docker('image', 'inspect', '--format', '{{.Id}}', CADDY_IMAGE).stdout.trim(),
+        repoDigests: docker(
+          'image',
+          'inspect',
+          '--format',
+          '{{json .RepoDigests}}',
+          CADDY_IMAGE,
+        ).stdout.trim(),
+      };
+      report.source = {
+        revision: spawnSync('git', ['rev-parse', 'HEAD'], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+        }).stdout.trim(),
+        command:
+          'PORTAL_A1_ACCEPTANCE=1 PORTAL_A1_REPORT=<file> pnpm --filter @ayvo/api exec vitest run test/portal-a1-acceptance.e2e.test.ts',
+      };
 
       portal = spawn(
         resolve(portalDir, 'node_modules/.bin/next'),
@@ -376,8 +407,29 @@ describe.skipIf(!enabled)(
         const pdf = Buffer.concat([body, Buffer.from('\n%%EOF')]);
         const inv = await invoice(f, [a.code], months[i % 12]!, pdf);
         issued.set(inv.number, inv.pdfSha256);
+        if (!issuedIn.has(months[i % 12]!)) issuedIn.set(months[i % 12]!, new Map());
+        issuedIn.get(months[i % 12]!)!.set(inv.number, inv.pdfSha256);
       }
-      report.invoices = { count, pdfBytes: pdfSize, months: [months[0], months[11]] };
+      // Beyond the main period: three large invoices of the next month, so a half-year period
+      // holds fewer invoices than the cap allows but more bytes than it (refused while reading).
+      const over = (() => {
+        const d = new Date(Date.UTC(2025, 9 + 12, 1));
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      })();
+      for (let i = 0; i < 3; i++)
+        await invoice(
+          f,
+          [a.code],
+          over,
+          Buffer.concat([Buffer.from('%PDF-1.4\n'), randomBytes(6 * 1024 * 1024)]),
+        );
+      report.invoices = {
+        count,
+        pdfBytes: pdfSize,
+        months: [months[0], months[11]],
+        overLimitPeriod: [months[6], over],
+        smallPeriod: months[0],
+      };
 
       // The account through Finance and portal-web (memory mail): activation, then a session.
       const email = `a1-${runId}@ayvo.test`;
@@ -415,7 +467,11 @@ describe.skipIf(!enabled)(
       rmSync(work, { recursive: true, force: true });
     });
 
-    const check = (r: Awaited<ReturnType<typeof download>>, label: string) => {
+    const check = (
+      r: Awaited<ReturnType<typeof download>>,
+      label: string,
+      expected: Map<string, string> = issued,
+    ) => {
       const { zip, ...measured } = r;
       report[label] = measured;
       expect(r.curlExit, `${label}: ${r.curlError}`).toBe(0);
@@ -424,11 +480,13 @@ describe.skipIf(!enabled)(
       expect(r.bytes).toBeLessThanOrEqual(Number(cfg.finance.FINANCE_PORTAL_PACKAGE_MAX_BYTES));
       const files = unzip(zip);
       const pdfs = [...files].filter(([n]) => n.startsWith('faktury/'));
-      expect(pdfs).toHaveLength(issued.size);
-      expect(pdfs.map(([, b]) => sha(b)).sort()).toEqual([...issued.values()].sort());
+      expect(pdfs).toHaveLength(expected.size);
+      expect(pdfs.map(([, b]) => sha(b)).sort()).toEqual([...expected.values()].sort());
       const manifest = files.get('manifest.csv')?.toString() ?? '';
-      for (const number of issued.keys()) expect(manifest).toContain(number);
+      for (const number of expected.keys()) expect(manifest).toContain(number);
       report[`${label}-zipSha256`] = sha(zip);
+      report[`${label}-pdfs`] = { count: pdfs.length, sha256: pdfs.map(([, b]) => sha(b)).sort() };
+      report[`${label}-manifestLines`] = manifest.trim().split('\n').length;
     };
 
     it('the session works through the edge: the invoice list', async () => {
@@ -456,6 +514,69 @@ describe.skipIf(!enabled)(
       expect(Number(cfg.finance.FINANCE_PORTAL_PACKAGE_TIMEOUT_MS)).toBeLessThan(
         Number(cfg.portal.PORTAL_PACKAGE_DEADLINE_MS),
       );
+    });
+
+    const inv = () =>
+      report.invoices as { overLimitPeriod: string[]; smallPeriod: string; months: string[] };
+    /** The small package (one month) completes at 8 Mbit/s — retried briefly while a slot frees. */
+    async function smallPackage(label: string) {
+      const m = inv().smallPeriod;
+      const started = Date.now();
+      for (;;) {
+        const r = await download(m, m, RATE);
+        if (r.status === 200 || Date.now() - started > 10_000) {
+          check(r, label, issuedIn.get(m)!);
+          return { ...r, afterS: (Date.now() - started) / 1000 };
+        }
+        report[`${label}-retry`] = r.location;
+        await new Promise((ok) => setTimeout(ok, 500));
+      }
+    }
+
+    it('over the cap: refused before the first byte of a ZIP, with its reason', async () => {
+      const [from, to] = inv().overLimitPeriod;
+      const r = await download(from!, to!, RATE);
+      const { zip, ...measured } = r;
+      report['over-limit'] = measured;
+      expect(r.status).toBe(303);
+      expect(r.location).toMatch(/balicek=PACKAGE_TOO_LARGE/);
+      expect(r.bytes).toBe(0);
+      expect(zip.length).toBe(0);
+      expect(r.totalS).toBeLessThan(5);
+    });
+
+    it('a client that leaves mid-transfer: the transfer stops; a smaller ZIP then completes', async () => {
+      const m = inv().months;
+      const leaving = download(m[0]!, m[1]!, 50_000, 4); // 0.4 Mbit/s, gone after 4 s
+      await new Promise((ok) => setTimeout(ok, 1500));
+      // Measured, not required: Finance's one package slot is free once its bytes have left it
+      // (the rest is in portal-web's, the kernel's and the edge's buffers).
+      const meanwhile = await download(inv().smallPeriod, inv().smallPeriod, RATE);
+      report['while-in-transfer'] = { status: meanwhile.status, location: meanwhile.location };
+      const gone = await leaving;
+      const { zip, ...measured } = gone;
+      report['client-left'] = measured;
+      expect(gone.curlExit).toBe(28); // curl's own --max-time: the client went away
+      expect(zip.length).toBeLessThan(gone.contentLength);
+      expect(() => unzip(zip)).toThrow();
+      const next = await smallPackage('after-client-left');
+      report['after-client-left-s'] = next.afterS;
+    });
+
+    it('an extremely slow client that stays: never a whole-looking ZIP; a smaller ZIP completes after', async () => {
+      const m = inv().months;
+      const slow = await download(m[0]!, m[1]!, 100_000); // 0.8 Mbit/s: 16 MiB would need ~170 s
+      const { zip, ...measured } = slow;
+      report[`slow-client${process.env.PORTAL_A1_HTTP1 ? '-http1.1' : ''}`] = measured;
+      if (slow.bytes === slow.contentLength) {
+        // Delivered whole after all (no unit or edge cut it): then it must be intact.
+        check(slow, 'slow-client-whole');
+      } else {
+        expect(slow.curlExit).not.toBe(0);
+        expect(() => unzip(zip)).toThrow();
+      }
+      const next = await smallPackage('after-slow-client');
+      report['after-slow-client-s'] = next.afterS;
     });
   },
 );
