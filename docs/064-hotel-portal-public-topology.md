@@ -2,8 +2,12 @@
 
 Status: **proposal**, nothing implemented on PROD. No PROD, DNS, account or invitation change
 comes from this document, and no endpoint or network is added to the live PROD during
-preparation. Each step marked _approval_ needs the owner's explicit approval; PROD and DNS are
-carried out by Codex from the reviewed plan (CLAUDE.md, Workflow). Builds on ADR 0045 (§6–§8),
+preparation. Each step marked _approval_ needs the owner's explicit approval. Roles (the owner's
+rules, 2026-11-11): Claude implements, watches CI, merges and carries out the authorized
+deployments — PROD and DNS included, each only after that step's explicit approval, from this
+reviewed plan with its checks and rollback; Codex verifies independently (review, the checks of
+§4 from outside). Green CI, the independent verification and the owner's approval stay separate
+conditions. Builds on ADR 0045 (§6–§8),
 doc 036 (PROD), doc 052 (DEV portal) and the overlays for ID (`compose.id.yml`) and marketing
 (`compose.marketing.yml`, ADR 0040). Review 5847937038 recommends option A; this revision answers
 its three points.
@@ -61,7 +65,7 @@ Options (_approval_):
 
 |                      | What                                                                                                                                                                                                                                                                                                                    | QR/ID/marketing                           | Portal ZIP                                                              |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------- |
-| **A1 (recommended)** | Keep `write 30s` untouched; the public portal's package stays within it: Finance `FINANCE_PORTAL_PACKAGE_TIMEOUT_MS` and `…_MAX_BYTES` set lower on PROD (allowed — only ever lower than the shared ceiling), portal-web's package deadline from a new `PORTAL_PACKAGE_DEADLINE_MS` (≤ the edge's write minus a margin) | unchanged (static test of `Caddyfile.qr`) | ZIP ≤ 20 MiB within 25 s end to end; beyond that "Zvolte kratší období" |
+| **A1 (recommended)** | Keep `write 30s` untouched; the public portal's package stays within it: Finance `FINANCE_PORTAL_PACKAGE_TIMEOUT_MS` and `…_MAX_BYTES` set lower on PROD (allowed — only ever lower than the shared ceiling), portal-web's package deadline from a new `PORTAL_PACKAGE_DEADLINE_MS` (≤ the edge's write minus a margin) | unchanged (static test of `Caddyfile.qr`) | ZIP ≤ 16 MiB within 20 s end to end; beyond that "Zvolte kratší období" |
 | A2                   | Raise the server `write` to 70 s                                                                                                                                                                                                                                                                                        | changed — excluded by the review          | full 40 MiB / 60 s                                                      |
 | B                    | Second public IPv4, its own portal edge with `write 70s`                                                                                                                                                                                                                                                                | unchanged                                 | full 40 MiB / 60 s                                                      |
 
@@ -70,10 +74,26 @@ configuration with the client throttled to 8 Mbit/s completes; one above the cei
 before sending (the existing 422); a static test asserts the `servers` block of `Caddyfile.qr` is
 unchanged.
 
+**DEV acceptance (review 5858165597, #178 `portal-a1-acceptance.e2e.test.ts`, DEV server,
+2026-11-11).** The real core, Finance and built portal-web (test DB, synthetic payer invited and
+activated through the portal with memory mail — no DEV preview data, account or mail) behind a
+real Caddy 2.11.9 with `Caddyfile.qr`'s global options verbatim and `sites/portal.caddy` (only
+`tls internal` instead of ACME); Finance's limits and portal-web's deadline read from the rendered
+PROD Compose; 60 TEST invoices filling the cap; curl at 1 000 000 B/s (8 Mbit/s); every PDF in the
+ZIP byte-identical to the issued one, the manifest complete.
+
+| Package               | Built (first byte) | Whole at 8 Mbit/s | Result                                                     |
+| --------------------- | ------------------ | ----------------- | ---------------------------------------------------------- |
+| 16 MiB (16 731 587 B) | 0.13 s             | 17.0–17.7 s       | within Finance 20 s, portal-web 25 s, edge 30 s — accepted |
+| 20 MiB (20 925 887 B) | 0.16 s             | 20.5–21.7 s       | past Finance's 20 s, through only by buffering — rejected  |
+
+Finance's deadline lasts until its last byte has left; so the PROD cap is **16 MiB**
+(`FINANCE_PORTAL_PACKAGE_MAX_BYTES=16777216`, ADR 0047 §3), not 20.
+
 ## 3. Release order (review point 2) — private first, public last, fully reversible
 
 1. **#148** implemented, independently reviewed, merged and accepted on DEV (second payer, §5).
-2. **Private contracts on PROD** (_approval_, Codex):
+2. **Private contracts on PROD** (_approval_; Claude carries it out, Codex verifies):
    - generate on the PROD host `PORTAL_CORE_TOKEN` and `PORTAL_FINANCE_TOKEN` (43–128 URL-safe
      chars, different from each other and from `FINANCE_SERVICE_TOKEN`; never DEV's);
    - set in the core `PORTAL_PUBLIC_ORIGIN=https://portal.ayvo.co` and
@@ -99,15 +119,25 @@ unchanged.
    redeploy core and Finance — their portal contracts refuse every call;
 4. revoke the PORTAL sessions in the core; rotate the tokens before any re-enable.
 
-**Fast stop** (incident): stop only portal-web; the portal host answers 502, everything else is
-untouched; then the complete disable if needed.
+**Fast stop** (incident): stop only portal-web; the portal host answers the edge's own 503,
+everything else is untouched; then the complete disable if needed.
+
+**Fails closed** (review 5858165597 P1, automatic in `deploy-prod.sh`): with `PORTAL_PUBLIC=on` a
+portal that fails its private or public check (or never becomes healthy) is not left open — it
+goes back to the image that was the verified public portal when the run began (verified again),
+otherwise only portal-web is stopped and the closed route is checked (the edge's 503); then the OS
+sign-in (tailnet), QR, ID and marketing are checked again; `portal.log` records RESTORED or
+CLOSED and the run fails. An OS deployment with `PORTAL_PUBLIC=on` first stops a running
+portal-web that was never verified as public, and verifies a verified one again behind the new
+edge (closing it if that fails).
 
 ### Commands (implementation in #178, all on the PROD host, each step approved)
 
 | Step               | Command / change                                                                                                                                                                                                                                                 | Check                                                                                                                           |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | Private contracts  | `prod.env`: `PORTAL_DOMAIN`, `PORTAL_CORE_TOKEN`, `PORTAL_FINANCE_TOKEN`, `PORTAL_SERVICE_TOKEN_SHA256`, `PORTAL_FINANCE_TOKEN_SHA256` (no `PORTAL_PUBLIC`); `deploy-prod.sh --check --release <commit>`, then the OS release and `--finance --release <commit>` | `--check` validates all five without printing them                                                                              |
-| Private portal-web | `deploy-prod.sh --portal --image-archive <file> --expect-image sha256:<id>`                                                                                                                                                                                      | from inside portal-web: `/login` 200; `api`, `finance` reachable; `postgres`, `redis`, `web`, `caddy` not; `portal.log` SUCCESS |
+| DEV archive        | on DEV, of the accepted tag: `docker save ayvo-dev-preview/portal-web:<tag> \| gzip -n > portal-web-<tag>.tar.gz`, `sha256sum` of the file and `docker image inspect --format '{{.Id}}'` of the tag — the two values go into the approval                        | one image, one tag (`<revision12>-<UTC time>`)                                                                                  |
+| Private portal-web | `deploy-prod.sh --portal --image-archive <file> --expect-image sha256:<id> --expect-archive sha256:<file hash>`                                                                                                                                                  | from inside portal-web: `/login` 200; `api`, `finance` reachable; `postgres`, `redis`, `web`, `caddy` not; `portal.log` SUCCESS |
 | Rollback rehearsal | `deploy-prod.sh --portal-rollback <revision12>-<image12>` and back                                                                                                                                                                                               | same checks                                                                                                                     |
 | Public switch      | `PORTAL_PUBLIC=on`, OS release (prepares the edge), then `--portal …` again                                                                                                                                                                                      | valid HTTPS, `/login` 200 with nonce CSP, `/api*` aborted, PUT 405, the OS host 421                                             |
 | Fast stop          | `deploy-prod.sh --portal-stop`                                                                                                                                                                                                                                   | portal host 503; OS, QR, ID, marketing unchanged                                                                                |
@@ -172,7 +202,8 @@ DEV stack gets the same network shape and the checks of §4, tailnet only. Walk 
 
 ## 9. Decisions for the owner
 
-1. A1 (public ZIP within 30 s, ≤ 20 MiB) or B (second public IPv4 for full ZIPs)?
+1. ~~A1 or B~~ — decided: A1 (owner, review 5848102779); its cap is 16 MiB after the DEV
+   acceptance (§2).
 2. The ADR 0045 amendment for option A.
 
 ## Appendix A — the isolated Caddy test
