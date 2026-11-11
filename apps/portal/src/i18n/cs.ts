@@ -2,7 +2,25 @@
 export const cs = {
   brand: 'AYVO – hotelový portál',
   portalName: 'Hotelový portál',
-  nav: { label: 'Hlavní navigace', hotels: 'Moje hotely', invoices: 'Faktury', logout: 'Odhlásit' },
+  nav: {
+    label: 'Hlavní navigace',
+    hotels: 'Moje hotely',
+    deliveries: 'Dodávky',
+    contracts: 'Smlouvy',
+    invoices: 'Faktury',
+    logout: 'Odhlásit',
+  },
+  allDeliveries: {
+    title: 'Dodávky',
+    intro:
+      'Dodávky všech vašich hotelů podle skutečných objednávek a orientační dny podle plánu zásobování. Plánované odeslání není termín doručení.',
+    unavailable: 'Dodávky tohoto hotelu se teď nepodařilo načíst.',
+    hotel: 'Profil hotelu',
+  },
+  allContracts: {
+    title: 'Smlouvy',
+    intro: 'Podepsané smlouvy vašich hotelů. Rozpracované návrhy se tu neukazují.',
+  },
   login: {
     title: 'Přihlášení',
     email: 'E-mail',
@@ -108,6 +126,20 @@ export const cs = {
     },
   },
   hotelTabs: { label: 'Hotel', profile: 'Profil', deliveries: 'Dodávky' },
+  switcher: { label: 'Vaše hotely' },
+  home: {
+    nextDispatch: 'Nejbližší expedice (plánované odeslání)',
+    asap: 'Odešleme co nejdřív',
+    noDispatch: 'Žádná expedice zatím není naplánovaná.',
+    latest: 'Poslední zásilky',
+    lastShipment: 'Poslední zásilka',
+    handedOver: (at: string) => `předáno dopravci ${at}`,
+    planned: (day: string) => `plánované odeslání ${day}`,
+    more: (n: number) => (n === 1 ? 'a 1 další na cestě' : `a ${n} další na cestě`),
+    lastDelivered: (at: string) => `Poslední doručení ${at}`,
+    noShipments: 'Zatím žádná zásilka.',
+    unavailable: 'Stav dodávek se teď nepodařilo načíst.',
+  },
   deliveries: {
     title: 'Dodávky',
     intro:

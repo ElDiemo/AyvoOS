@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { PortalInvoicePage } from '@ayvo/types';
 import { Shell } from '@/components/shell';
@@ -8,6 +9,7 @@ import { formatDate, formatMoney } from '@/lib/format';
 import { myInvoices, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Faktury' };
 
 /** "Faktury": the invoices the session's grants cover (Finance's one predicate), paged. */
 export default async function InvoicesPage({

@@ -8,16 +8,26 @@ const size = (bytes: number) =>
     : `${Math.max(1, Math.round(bytes / 1024))} kB`;
 
 /** "Smlouvy": the hotel's signed originals (never drafts), each downloadable as PDF. */
-export function ContractsCard({ contracts }: { contracts: PortalContract[] | null }) {
+export function ContractsCard({
+  contracts,
+  heading = cs.contracts.title,
+  headingId = 'contracts-title',
+}: {
+  contracts: PortalContract[] | null;
+  /** The card's title (the hotel's name on the all-hotels page). */
+  heading?: string;
+  /** Unique per card on a page with several. */
+  headingId?: string;
+}) {
   return (
     <section
-      aria-labelledby="contracts-title"
+      aria-labelledby={headingId}
       data-testid="profile-contracts"
       className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white p-5 shadow-sm"
     >
       <div>
-        <h2 id="contracts-title" className="text-base font-semibold text-stone-900">
-          {cs.contracts.title}
+        <h2 id={headingId} className="text-base font-semibold text-stone-900">
+          {heading}
         </h2>
         <p className="text-xs text-stone-500">{cs.contracts.help}</p>
       </div>

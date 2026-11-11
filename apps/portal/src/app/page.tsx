@@ -1,15 +1,27 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
+import { HotelDispatch, pragueToday } from '@/components/home-overview';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
 import { portalEnv } from '@/lib/env';
-import { myHotels, portalSession } from '@/lib/portal';
+import { perHotel } from '@/lib/per-hotel';
+import { myDeliveries, myHotels, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Moje hotely' };
 
-/** "Moje hotely": the hotels of the session's active grants, each leading to its profile. */
+/**
+ * "Moje hotely": the hotels of the session's active grants, each leading to its profile, with
+ * its dispatch at a glance (owner 2026-11-10).
+ */
 export default async function HotelsPage() {
   const { token, view } = await portalSession();
   const hotels = await myHotels(token);
+  const deliveries = await perHotel(
+    hotels.map((h) => h.id),
+    (id) => myDeliveries(token, id),
+  );
+  const today = pragueToday();
   return (
     <Shell user={view.user} active="hotels" testInvoices={portalEnv().APP_ENV !== 'production'}>
       <div className="flex flex-col gap-1">
@@ -33,6 +45,7 @@ export default async function HotelsPage() {
                 <span className="text-sm text-stone-600">
                   {h.addressLine1}, {h.postalCode} {h.city}
                 </span>
+                <HotelDispatch deliveries={deliveries.get(h.id) ?? null} today={today} />
                 <span className="mt-auto pt-2 text-sm font-medium text-emerald-800 group-hover:underline">
                   {cs.hotels.open} <span aria-hidden="true">→</span>
                 </span>

@@ -1,6 +1,8 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { DeliveryGroups } from '@/components/deliveries';
+import { HotelSwitcher } from '@/components/hotel-switcher';
 import { HotelTabs } from '@/components/hotel-tabs';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
@@ -9,6 +11,7 @@ import { portalEnv } from '@/lib/env';
 import { myDeliveries, myHotelProfile, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Dodávky hotelu' };
 
 /** "Dodávky": a granted hotel's deliveries from its real orders, in three groups. */
 export default async function DeliveriesPage({ params }: { params: Promise<{ id: string }> }) {
@@ -36,6 +39,7 @@ export default async function DeliveriesPage({ params }: { params: Promise<{ id:
         </h1>
         <p className="text-sm text-stone-600">{cs.deliveries.intro}</p>
       </div>
+      <HotelSwitcher token={token} view={view} current={id} section="deliveries" />
       <HotelTabs hotelId={id} active="deliveries" />
       {deliveries === null ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">

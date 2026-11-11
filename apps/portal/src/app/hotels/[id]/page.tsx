@@ -1,7 +1,10 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ContractsCard } from '@/components/contracts-card';
 import { NextDeliveryCard } from '@/components/deliveries';
+import { pragueToday } from '@/components/home-overview';
+import { HotelSwitcher } from '@/components/hotel-switcher';
 import { HotelTabs } from '@/components/hotel-tabs';
 import { HotelHero, ProfileGroups } from '@/components/profile-view';
 import { Shell } from '@/components/shell';
@@ -11,6 +14,7 @@ import { portalEnv } from '@/lib/env';
 import { myContracts, myDeliveries, myHotelProfile, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Profil hotelu' };
 
 /** "Profil hotelu": a granted hotel's own profile in three groups. */
 export default async function HotelPage({
@@ -64,8 +68,9 @@ export default async function HotelPage({
           </Link>
         }
       />
+      <HotelSwitcher token={token} view={view} current={id} section="profile" />
       <HotelTabs hotelId={id} active="profile" />
-      <NextDeliveryCard hotelId={id} deliveries={deliveries} />
+      <NextDeliveryCard hotelId={id} deliveries={deliveries} today={pragueToday()} />
       <ProfileGroups profile={profile} />
       <ContractsCard contracts={contracts} />
       <p className="text-xs text-stone-500">{cs.profile.managed}</p>

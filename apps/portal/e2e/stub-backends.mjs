@@ -37,6 +37,8 @@ const hotel = {
   city: 'Olomouc',
   countryCode: 'CZ',
 };
+/** A second hotel of the same account, granted only with `state.secondHotel` (the switcher). */
+const secondHotel = { ...hotel, id: randomUUID(), code: 'H-000902', name: 'Hotel Druhý E2E' };
 /** A hotel of another account: never reachable from this session. */
 export const FOREIGN_HOTEL_ID = randomUUID();
 const freshProfile = () => ({
@@ -163,8 +165,10 @@ const state = {
   /** 'ok' | 'empty' (NO_INVOICES) | 'large' (PACKAGE_TOO_LARGE). */
   packageMode: 'ok',
   lastPackageQuery: null,
-  /** 'ok' | 'none' (no delivery at all) | 'plan-only' (only upcoming plan days) | 'down'. */
+  /** 'ok' | 'none' | 'plan-only' (only upcoming plan days) | 'late' (a past ship day) | 'down'. */
   deliveriesMode: 'ok',
+  /** The account also manages a second hotel (two hotels in its grant). */
+  secondHotel: false,
 };
 
 const send = (res, status, body, schema) => {
@@ -266,7 +270,13 @@ async function core(req, res, path) {
         user,
         idleExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         absoluteExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-        grants: [{ id: randomUUID(), payerCustomerId: randomUUID(), hotelIds: [hotel.id] }],
+        grants: [
+          {
+            id: randomUUID(),
+            payerCustomerId: randomUUID(),
+            hotelIds: state.secondHotel ? [hotel.id, secondHotel.id] : [hotel.id],
+          },
+        ],
       },
       portalSessionViewSchema,
     );
@@ -274,7 +284,7 @@ async function core(req, res, path) {
     return send(
       res,
       200,
-      [hotel].map((h) => portalHotelSchema.parse(h)),
+      (state.secondHotel ? [hotel, secondHotel] : [hotel]).map((h) => portalHotelSchema.parse(h)),
     );
   if (path === `hotels/${hotel.id}`) return send(res, 200, hotel, portalHotelSchema);
   const deliveriesMatch = path.match(/^hotels\/([^/]+)\/deliveries$/);
@@ -290,7 +300,15 @@ async function core(req, res, path) {
         ? { planned: [], inProgress: [], delivered: [], upcoming: [] }
         : state.deliveriesMode === 'plan-only'
           ? { planned: [], inProgress: [], delivered: [], upcoming: DELIVERIES.upcoming }
-          : DELIVERIES;
+          : state.deliveriesMode === 'late'
+            ? {
+                // A planned order whose ship day has passed (not dispatched yet).
+                planned: [delivery('OR-000912', 'PLANNED', '2020-01-06')],
+                inProgress: [],
+                delivered: [],
+                upcoming: [],
+              }
+            : DELIVERIES;
     return send(res, 200, value, portalDeliveriesSchema);
   }
   const contractsMatch = path.match(/^hotels\/([^/]+)\/contracts$/);
@@ -414,6 +432,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         contract: CONTRACT,
         foreignContractId: FOREIGN_CONTRACT_ID,
         hotelId: hotel.id,
+        secondHotelId: secondHotel.id,
         invoices,
       });
     if (req.url === '/__control') {
