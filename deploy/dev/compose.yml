@@ -256,6 +256,10 @@ services:
     build:
       context: ../..
       dockerfile: apps/portal/Dockerfile
+      # The source commit (full SHA): PROD's `deploy-prod.sh --portal` loads only an image whose
+      # revision is on origin/main, and refuses one without it. Unset = a local build PROD refuses.
+      labels:
+        org.opencontainers.image.revision: ${PORTAL_IMAGE_REVISION:-none}
     profiles:
       - portal
     read_only: true
