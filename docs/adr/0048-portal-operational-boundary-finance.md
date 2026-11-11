@@ -1,7 +1,7 @@
 # ADR 0048: The hotel portal's operational boundary — Finance terms revisions and a guard for older images
 
-- **Status:** Proposed — awaiting the owner's three decisions (§ Decisions for the owner). Nothing
-  is migrated outside per-run test databases.
+- **Status:** Accepted — the owner decided all three questions (§ Decisions, 2026-11-11, #180
+  comment 6800978787). A PROD migration or deployment still needs its own approval.
 - **Date:** 2026-11-11
 - **Deciders:** the owner (AYVO); proposed by Claude Code, independently reviewed in #169
 - **Supersedes / Superseded by:** — (complements ADR 0045 §6–§8, the portal's data boundary)
@@ -45,15 +45,16 @@ what the boundary closed.
    network stay the boundary). An older Finance image cannot write terms (`terms_revision` NOT
    NULL), so never a change of payer without its fence.
 
-## Decisions for the owner (not decided by this ADR)
+## Decisions
 
-| #   | Question                                                                         | Today's code              | Independent review's recommendation                |
-| --- | -------------------------------------------------------------------------------- | ------------------------- | -------------------------------------------------- |
-| 1   | The RLS guard of §4 as the DB safeguard for a return to an older Core image      | in #180                   | yes, with this ADR and its tests                   |
-| 2   | An earlier end of the terms (`validTo`) counts as the payer leaving (a TRANSFER) | yes (`leavingPayer`)      | yes — fail-closed for operations after the new end |
-| 3   | RESTORE only for the payer whose terms are in effect today                       | yes (`RESTORE_NOT_PAYER`) | yes — never rights back for a historical payer     |
+| #   | Question                                                                         | Today's code              | Independent review's recommendation                | Decided                                   |
+| --- | -------------------------------------------------------------------------------- | ------------------------- | -------------------------------------------------- | ----------------------------------------- |
+| 1   | The RLS guard of §4 as the DB safeguard for a return to an older Core image      | in #180                   | yes, with this ADR and its tests                   | yes — owner 2026-11-11, review 6800978787 |
+| 2   | An earlier end of the terms (`validTo`) counts as the payer leaving (a TRANSFER) | yes (`leavingPayer`)      | yes — fail-closed for operations after the new end | yes — owner 2026-11-11, review 6800978787 |
+| 3   | RESTORE only for the payer whose terms are in effect today                       | yes (`RESTORE_NOT_PAYER`) | yes — never rights back for a historical payer     | yes — owner 2026-11-11, review 6800978787 |
 
-Until these are answered A2 is not accepted, and its migrations run nowhere but in tests.
+The owner approved these three rules, not any later diff: the existing regressions and migrations
+stay as they are, and a change to them goes back to the owner.
 
 ## Evidence (synthetic data, per-run test databases)
 
