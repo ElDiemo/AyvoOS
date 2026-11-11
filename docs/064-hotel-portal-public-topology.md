@@ -57,7 +57,9 @@ up to 60 s at Finance (65 s at portal-web). An isolated test (Appendix A) on `ca
 host is not possible on the shared listener**:
 
 - with the server's `write` kept, a route's `timeouts { write_timeout … }` cannot extend it — a slow
-  download is cut at the server limit on every host, the portal's package route included;
+  **upstream** is cut at the server limit on every host, the portal's package route included
+  (Appendix A); a slow **client** reading an already-buffered response is not (below, "What the
+  deadlines do not bound");
 - without the server's `write`, a route's `write_timeout` does not bound a streamed response's
   total time — QR/ID/marketing would lose their limit. Rejected.
 
@@ -89,6 +91,24 @@ ZIP byte-identical to the issued one, the manifest complete.
 
 Finance's deadline lasts until its last byte has left; so the PROD cap is **16 MiB**
 (`FINANCE_PORTAL_PACKAGE_MAX_BYTES=16777216`, ADR 0047 §3), not 20.
+
+**More cases (#169 sprint, the same acceptance, #178 `9926cd4`):**
+
+| Case                                     | Measured                                                                          |
+| ---------------------------------------- | --------------------------------------------------------------------------------- |
+| Over the cap (33 invoices, 26 MB)        | 303 `PACKAGE_TOO_LARGE` in 0.2 s, no byte of a ZIP                                |
+| Client leaves after 4 s (0.4 Mbit/s)     | transfer ends; the next one-month ZIP completes whole 2 s later                   |
+| A second package during a transfer       | served (200): Finance's one-package slot is free once the bytes have left Finance |
+| Extremely slow client stays (0.8 Mbit/s) | HTTP/2: reset after 106 s at 10.6 MB; HTTP/1.1: whole 16 MiB intact in 166 s      |
+| Isolated `file_server`, `write 5s`       | 20 MB to a 4 Mbit/s client for 36 s                                               |
+
+**What the deadlines do not bound.** Finance's 20 s, portal-web's 25 s and the edge's `write 30s`
+end the units' work and their writes into the connection's buffers (kernel send and receive
+buffers of several MiB, Caddy, portal-web) — not how long a slow client takes to read what is
+buffered. A slow client therefore often still gets the whole ZIP, and a transfer can last minutes.
+**Open before the public switch** (a decision, not changed here): a bound for transfers parked in
+buffers — e.g. portal-web holding its package slot and deadline until the client has read the
+body, and/or a per-session package limit; the number of packages in transfer is not limited today.
 
 ## 3. Release order (review point 2) — private first, public last, fully reversible
 
