@@ -79,7 +79,7 @@ function unzip(zip: Buffer): Map<string, Buffer> {
 }
 
 /** The PROD configuration of the two units, from the real Compose files (fictional secrets). */
-function prodConfig() {
+function prodConfig(): { finance: Record<string, string>; portal: Record<string, string> } {
   const c = 'p'.repeat(43);
   const q = 'q'.repeat(43);
   const secrets = prodSecrets(
@@ -96,14 +96,19 @@ function prodConfig() {
     const services = (
       r.config as unknown as { services: Record<string, { environment?: Record<string, string> }> }
     ).services;
-    const pick = (env: Record<string, string>, re: RegExp) =>
+    const pick = (env: Record<string, string>, re: RegExp): Record<string, string> =>
       Object.fromEntries(Object.entries(env).filter(([k]) => re.test(k)));
     return {
       finance: pick(services.finance!.environment!, /^FINANCE_PORTAL_/),
-      portal: pick(
-        services['portal-web']!.environment!,
-        /^PORTAL_(PACKAGE|PDF)_|^PORTAL_TRUST_PROXY$/,
-      ),
+      // The package is off in the first public release (PORTAL_PACKAGE_ENABLED=0 and an edge
+      // refusal); this acceptance measures it as the later release that turns it on would run it.
+      portal: {
+        ...pick(
+          services['portal-web']!.environment!,
+          /^PORTAL_(PACKAGE|PDF)_|^PORTAL_TRUST_PROXY$/,
+        ),
+        PORTAL_PACKAGE_ENABLED: '1' as string,
+      },
     };
   } finally {
     rmSync(secrets, { recursive: true, force: true });
@@ -118,8 +123,14 @@ function edgeCaddyfile() {
   expect(global).toMatch(/write 30s/);
   const site = readFileSync(join(repoRoot, 'deploy/prod/sites/portal.caddy'), 'utf8');
   const acme = '\ttls {\n\t\tissuer acme\n\t}\n';
-  expect(site.split(acme)).toHaveLength(2); // the only change below
-  return { text: `${global}\n${site.replace(acme, '\ttls internal\n')}`, global };
+  expect(site.split(acme)).toHaveLength(2); // the only changes below
+  // Without the first release's refusal of the package (see `portal` above).
+  const block = /\n\t@package path [^\n]*\n\thandle @package \{\n(?:\t\t[^\n]*\n)*\t\}\n/;
+  expect(site).toMatch(block);
+  return {
+    text: `${global}\n${site.replace(acme, '\ttls internal\n').replace(block, '\n')}`,
+    global,
+  };
 }
 
 const docker = (...args: string[]) => spawnSync('docker', args, { encoding: 'utf8' });

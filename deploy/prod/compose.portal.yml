@@ -66,6 +66,9 @@ services:
       PORTAL_TRUST_PROXY: '1'
       # One deadline for the invoice package through the edge: below its 30 s write limit.
       PORTAL_PACKAGE_DEADLINE_MS: '25000'
+      # The invoice package is off in the first public release (owner 2026-11-11); the edge
+      # refuses its path too. Turned on only in a later release, after its own acceptance.
+      PORTAL_PACKAGE_ENABLED: '0'
     networks:
       - portal-contracts
       - portal-edge

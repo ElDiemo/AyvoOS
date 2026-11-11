@@ -275,6 +275,7 @@ function finance(req, res, path) {
   if (id === 'package') {
     const q = new URLSearchParams(path.split('?')[1] ?? '');
     state.lastPackageQuery = Object.fromEntries(q);
+    state.packageRequests = (state.packageRequests ?? 0) + 1;
     if (!/^\d{4}-\d{2}$/.test(q.get('from') ?? '') || !/^\d{4}-\d{2}$/.test(q.get('to') ?? ''))
       return refuse(res, 400, 'VALIDATION');
     if (state.packageMode === 'empty') return refuse(res, 404, 'NO_INVOICES');
@@ -354,6 +355,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         profileSaves: state.profileSaves,
         lastPackageQuery: state.lastPackageQuery,
         heldPackages: heldPackages.length,
+        packageRequests: state.packageRequests ?? 0,
         lastProfileBody: state.lastProfileBody,
         foreignHotelId: FOREIGN_HOTEL_ID,
         hotelId: hotel.id,

@@ -14,7 +14,20 @@ const env = {
   PORTAL_FINANCE_TOKEN: 'f'.repeat(43),
   // Two package slots here, so the per-account and the global limit can be told apart.
   PORTAL_PACKAGE_MAX_IN_FLIGHT: '2',
-  PORTAL_PACKAGE_HOLD_RATE_BPS: '1000000',
+  // Start quotas off here (the other specs download repeatedly); package-quota.spec uses the
+  // second server below with the defaults.
+  PORTAL_PACKAGE_ACCOUNT_INTERVAL_MINUTES: '0',
+  PORTAL_PACKAGE_ACCOUNT_PER_DAY: '1000',
+  PORTAL_PACKAGE_GLOBAL_PER_DAY: '10000',
+};
+/** The second server: the package start quotas as configured by default (10 min, 4/day); the
+ * third (3302) has the package switched off. */
+const quotaEnv = {
+  ...env,
+  PORTAL_PUBLIC_ORIGIN: 'http://localhost:3301',
+  PORTAL_PACKAGE_ACCOUNT_INTERVAL_MINUTES: '10',
+  PORTAL_PACKAGE_ACCOUNT_PER_DAY: '4',
+  PORTAL_PACKAGE_GLOBAL_PER_DAY: '30',
 };
 
 export default defineConfig({
@@ -46,6 +59,20 @@ export default defineConfig({
       command: 'next start --port 3300',
       port: 3300,
       env,
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: 'next start --port 3301',
+      port: 3301,
+      env: quotaEnv,
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: 'next start --port 3302',
+      port: 3302,
+      env: { ...env, PORTAL_PUBLIC_ORIGIN: 'http://localhost:3302', PORTAL_PACKAGE_ENABLED: '0' },
       reuseExistingServer: false,
       timeout: 120_000,
     },

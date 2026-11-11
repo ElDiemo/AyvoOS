@@ -30,17 +30,18 @@ const schema = z
      */
     PORTAL_PACKAGE_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(4).default(2),
     /**
-     * A package's slot is held at least as long as its size takes at this rate (B/s), even when its
-     * bytes left portal-web sooner — buffers between here and the browser (kernel, proxies, the
-     * edge) can take most of a package at once, so "pulled" is not "delivered". Default: A1's
-     * design rate, 8 Mbit/s (16 MiB ≈ 17 s, doc 064 §2). Measured in portal-a1-acceptance.
+     * The invoice package (ZIP) on or off ('0': its route answers 404 and "Faktury" offers no
+     * package; single PDFs are unaffected). The first PROD release turns it off (doc 064 §2).
      */
-    PORTAL_PACKAGE_HOLD_RATE_BPS: z.coerce
-      .number()
-      .int()
-      .min(10_000)
-      .max(100_000_000)
-      .default(1_000_000),
+    PORTAL_PACKAGE_ENABLED: z.enum(['0', '1']).default('1'),
+    /**
+     * Package starts (StartQuota): per account at most one per this many minutes and this many in
+     * 24 h, and this many in 24 h in total (owner 2026-11-11: about once or twice a month).
+     * 0 minutes only for a test server.
+     */
+    PORTAL_PACKAGE_ACCOUNT_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(1440).default(10),
+    PORTAL_PACKAGE_ACCOUNT_PER_DAY: z.coerce.number().int().min(1).max(1000).default(4),
+    PORTAL_PACKAGE_GLOBAL_PER_DAY: z.coerce.number().int().min(1).max(10_000).default(30),
     /**
      * One deadline for the invoice package (fetch, transfer, answer). Behind an edge with a write
      * limit it must end below that limit (PROD's public edge: 30 s → 25 s, doc 064 §2); never

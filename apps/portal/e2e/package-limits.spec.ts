@@ -95,22 +95,4 @@ test.describe('hotel portal: packages in transfer are limited per account and in
     expect((await packageOf(c.cookie)).status).toBe(200);
     for (const x of [a, b, c]) await x.context.close();
   });
-
-  test('pulled is not delivered: a 2 MB package keeps its account’s slot for 2 MB at 1 MB/s', async ({
-    browser,
-    request,
-  }) => {
-    test.skip(test.info().project.name !== 'desktop-1440', 'one width is enough');
-    const a = await account(browser);
-    await control(request, { packageMode: 'big' });
-    const started = Date.now();
-    const first = await get(PERIOD, a.cookie);
-    expect(first.status).toBe(200);
-    expect((await first.arrayBuffer()).byteLength).toBe(2_000_000);
-    // All its bytes have left portal-web, yet the account's slot is held for ~2 s.
-    expect(await packageOf(a.cookie)).toEqual(BUSY);
-    await expect.poll(async () => (await packageOf(a.cookie)).status, { timeout: 5_000 }).toBe(200);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
-    await a.context.close();
-  });
 });

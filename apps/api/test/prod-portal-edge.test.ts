@@ -161,6 +161,15 @@ describe('hotel portal on PROD: the edge files', () => {
     expect(site).toContain('respond 405');
   });
 
+  it('the invoice package is off in the first public release: refused on the edge and in portal-web', () => {
+    expect(site).toMatch(
+      /@package path \/invoices\/package \/invoices\/package\/\*\n\thandle @package \{\n\t\theader Cache-Control no-store\n\t\trespond "Nenalezeno" 404/,
+    );
+    // Before the general handler (Caddy's handle blocks are tried in order of their matchers).
+    expect(site.indexOf('handle @package')).toBeLessThan(site.indexOf('@portal_request'));
+    expect(code(read('deploy/prod/compose.portal.yml'))).toMatch(/PORTAL_PACKAGE_ENABLED: '0'/);
+  });
+
   it('the internal Caddy forwards only the portal’s ACME challenges to qr-edge, else → https', () => {
     const acme = code(read('deploy/prod/acme.d/portal.caddy'));
     expect(acme).toContain('http://{$PORTAL_DOMAIN} {');

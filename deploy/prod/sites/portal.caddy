@@ -23,6 +23,15 @@
 		abort
 	}
 
+	# The invoice package (ZIP) is off in the first public release (owner 2026-11-11, #178 comment
+	# 6803472593): refused here before portal-web, which has it off as well
+	# (PORTAL_PACKAGE_ENABLED=0 in compose.portal.yml). Single PDFs are unaffected.
+	@package path /invoices/package /invoices/package/*
+	handle @package {
+		header Cache-Control no-store
+		respond "Nenalezeno" 404
+	}
+
 	# The hotel profile save (doc 053): POST on exactly /hotels/<uuid>/profile. Its body may exceed
 	# 4 KiB, so it alone gets 8 KiB; portal-web enforces its own 8 KiB / 5 s limits and CSRF check.
 	@profile_save {

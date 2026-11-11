@@ -3,10 +3,10 @@ import {
   boundedPassThrough,
   contentLengthWithin,
   deadline,
-  heldAtLeast,
   KeyedSlotLimit,
   readBounded,
   SlotLimit,
+  StartQuota,
   TransferCut,
 } from './slots';
 
@@ -263,38 +263,44 @@ describe('KeyedSlotLimit: per key and in total (packages per account, #178 revie
   });
 });
 
-/** Waits until `cond` holds (each macrotask), at most `ms`. */
-async function until(cond: () => boolean, ms = 2000) {
-  const end = Date.now() + ms;
-  while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 5));
-  return cond();
-}
-
-describe('heldAtLeast: a package slot is held at least size / rate (#178 review, #169 sprint)', () => {
-  it('released at once when the transfer took longer; else only after size / rate', async () => {
-    let t = 1_000;
-    let released = 0;
-    const slow = heldAtLeast(
-      () => released++,
-      1_000_000,
-      () => t,
-    );
-    t += 5_000; // 5 s for 2 MB: slower than 1 MB/s
-    slow(2_000_000);
-    expect(released).toBe(1);
-    const fast = heldAtLeast(
-      () => released++,
-      1_000_000,
-      () => t,
-    );
-    t += 10; // 2 MB pulled in 10 ms (into buffers)
-    fast(2_000_000);
-    expect(released).toBe(1); // still held
-    expect(await until(() => released === 2, 3_000)).toBe(true);
+describe('StartQuota: package starts per account and day (review 6800881871, owner 2026-11-11)', () => {
+  const limits = { minIntervalMs: 600_000, perKeyPerDay: 4, globalPerDay: 5 };
+  it('one start per account per 10 minutes; another account is not affected', () => {
+    let t = 0;
+    const q = new StartQuota(limits, () => t);
+    expect(typeof q.take('a')).toBe('object');
+    expect(q.take('a')).toBe('RATE');
+    t += 599_999;
+    expect(q.take('a')).toBe('RATE');
+    expect(typeof q.take('b')).toBe('object');
+    t += 1;
+    expect(typeof q.take('a')).toBe('object');
   });
-  it('a refusal (0 bytes) releases at once', () => {
-    let released = 0;
-    heldAtLeast(() => released++, 1_000_000)(0);
-    expect(released).toBe(1);
+  it('at most 4 a day per account, and the global ceiling; both free again after 24 h', () => {
+    let t = 0;
+    const q = new StartQuota(limits, () => t);
+    for (let i = 0; i < 4; i++) {
+      expect(typeof q.take('a')).toBe('object');
+      t += 600_000;
+    }
+    expect(q.take('a')).toBe('DAILY');
+    expect(typeof q.take('b')).toBe('object'); // the 5th start in total
+    expect(q.take('c')).toBe('GLOBAL');
+    t += 86_400_000;
+    expect(typeof q.take('a')).toBe('object');
+    expect(typeof q.take('c')).toBe('object');
+  });
+  it('a start given back (nothing passed on) costs nothing, once only', () => {
+    let t = 0;
+    const q = new StartQuota(limits, () => t);
+    const s = q.take('a');
+    if (typeof s !== 'object') throw new Error('expected a start');
+    s.giveBack();
+    s.giveBack();
+    const again = q.take('a');
+    expect(typeof again).toBe('object');
+    expect(q.take('a')).toBe('RATE');
+    t += 600_000;
+    expect(typeof q.take('a')).toBe('object');
   });
 });
