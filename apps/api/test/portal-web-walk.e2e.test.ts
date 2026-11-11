@@ -29,7 +29,13 @@ import {
   type FinanceTestApp,
 } from './support/finance-app.js';
 import { agreement, hotel, invoice, payer } from './support/finance-portal.js';
-import { crateFactory, createOrder } from './support/order-fixtures.js';
+import {
+  completeOrder,
+  crateFactory,
+  createOrder,
+  pragueToday,
+  scanCrate,
+} from './support/order-fixtures.js';
 import { deliver, pickUp, RETURN_ENV, shipCrates } from './support/return-fixtures.js';
 import { createTestApp, hasDatabase, TEST_APP_ORIGIN, type TestApp } from './support/test-app.js';
 
@@ -228,7 +234,14 @@ describe.skipIf(!enabled)(
       /** H1's signed original (and an unsigned draft that never shows). */
       contract: { id: string; pdfSha256: string };
       /** Orders of H1 by state, and one planned order of H3. */
-      orders: { planned: string; transit: string; delivered: string; h3: string };
+      orders: {
+        planned: string;
+        prepared: string;
+        ready: string;
+        transit: string;
+        delivered: string;
+        h3: string;
+      };
       A1: { id: string; number: string; pdfSha256: string };
       A2: { id: string; number: string; pdfSha256: string };
       B1: { id: string; number: string; pdfSha256: string };
@@ -443,6 +456,33 @@ describe.skipIf(!enabled)(
       const factory = await crateFactory(ship, { capacity: 2 });
       const product = factory.kit.productCode;
       const planned = await createOrder(ship, d.H1.code, [{ productCode: product, crates: 1 }]);
+      // Picked and complete ("Připraveno k expedici", not labelled yet), and labelled, waiting for
+      // the carrier — each by the warehouse's own steps.
+      const prepared = await createOrder(ship, d.H1.code, [{ productCode: product, crates: 1 }]);
+      const scanned = await scanCrate(ship, prepared.code, (await factory.make()).crateUrl);
+      expect(scanned.status, JSON.stringify(scanned.body)).toBe(200);
+      const done = await completeOrder(ship, prepared.code);
+      expect(done.status, JSON.stringify(done.body)).toBe(200);
+      const ready = await shipCrates(ship, d.H1.code, product, [await factory.make()]);
+      // H1's switched-on supply plan: its next 60 days' plan days are the orientation days.
+      const plan = `/api/admin/orders/hotel/${d.H1.code}/supply-plan`;
+      await request(ship.app.getHttpServer())
+        .post(plan)
+        .send({
+          requestId: randomUUID(),
+          reason: 'plán podle smlouvy (syntetický)',
+          validFrom: pragueToday(),
+          validTo: null,
+          rules: [{ productCode: product, crates: 2, days: [5, 20] }],
+        })
+        .expect(200);
+      const { version } = (
+        await request(ship.app.getHttpServer()).get(`${plan}/preview`).expect(200)
+      ).body as { version: number };
+      await request(ship.app.getHttpServer())
+        .post(`${plan}/activate`)
+        .send({ requestId: randomUUID(), confirm: true, version })
+        .expect(200);
       const transit = await shipCrates(ship, d.H1.code, product, [await factory.make()]);
       await pickUp(ship, transit);
       const delivered = await shipCrates(ship, d.H1.code, product, [await factory.make()]);
@@ -451,6 +491,8 @@ describe.skipIf(!enabled)(
       const h3 = await createOrder(ship, d.H3.code, [{ productCode: product, crates: 1 }]);
       d.orders = {
         planned: planned.code,
+        prepared: prepared.code,
+        ready: ready.order,
         transit: transit.order,
         delivered: delivered.order,
         h3: h3.code,
@@ -569,12 +611,21 @@ describe.skipIf(!enabled)(
       expect(list.status).toBe(200);
       for (const [code, state] of [
         [d.orders.planned, 'Naplánováno'],
+        [d.orders.prepared, 'Připravujeme k odeslání'],
+        [d.orders.ready, 'Čeká na převzetí dopravcem'],
         [d.orders.transit, 'Na cestě'],
         [d.orders.delivered, 'Doručeno'],
       ] as const) {
         expect(list.text).toContain(code);
         expect(list.text).toContain(state);
       }
+      // The orientation days of the switched-on plan (next 60 days), apart from real orders.
+      expect(list.text).toContain('Další podle plánu zásobování');
+      expect(list.text).not.toContain('Žádný další den podle plánu zásobování.');
+      // Moje hotely: the nearest dispatch and the latest shipments of H1.
+      const home = await html(a, '/');
+      expect(home.text).toContain('Nejbližší expedice (plánované odeslání)');
+      expect(home.text).toContain('Poslední zásilky');
       expect(list.text).not.toContain(d.orders.h3);
       await shoot('a-hotel-H1', a.session, `/hotels/${d.H1.id}`);
       await shoot('a-deliveries-H1', a.session, `/hotels/${d.H1.id}/deliveries`);
@@ -636,6 +687,12 @@ describe.skipIf(!enabled)(
       expect((await html(a, '/')).text).toContain(d.H2.name);
       expect((await a.get(`/invoices/${d.A2.id}/pdf`)).status).toBe(200);
       await shoot('a-invoices-after-replace', a.session, '/invoices');
+      // Two hotels now: both on Moje hotely, the switcher on a hotel's pages; all deliveries and
+      // the signed contracts across the account's hotels.
+      await shoot('a-hotels-two', a.session, '/');
+      await shoot('a-hotel-H1-switcher', a.session, `/hotels/${d.H1.id}`);
+      await shoot('a-deliveries-all', a.session, '/deliveries');
+      await shoot('a-contracts', a.session, '/contracts');
     });
 
     it('5b. the ADMIN revokes A’s grant: A’s next request signs in again, the session is gone; signed in again A sees nothing', async () => {
