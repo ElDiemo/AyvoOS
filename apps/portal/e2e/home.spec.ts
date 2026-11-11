@@ -32,51 +32,65 @@ async function signIn(page: Page) {
 }
 
 /**
- * "Moje hotely" with each hotel's dispatch at a glance (owner 2026-11-10), against the core stub:
- * the nearest planned dispatch (an order, else a plan day "Podle plánu", a passed ship day
- * "Odešleme co nejdřív"), the shipments on the way with their hand-over and the last delivery —
- * planned dispatch and delivery labelled apart; deliveries unavailable never hide the hotel.
+ * "Moje hotely" (owner 2026-11-11): each card says whether the hotel has a current order and what
+ * is happening with it (the core's state; the planned ship day, or the carrier's hand-over), the
+ * next plan day without an order apart from it, and leads to the hotel's deliveries or profile.
+ * A passed ship day is "Odešleme co nejdřív"; deliveries unavailable never hide the hotel.
  */
-test.describe('hotel portal: dispatch on Moje hotely', () => {
+test.describe('hotel portal: Moje hotely', () => {
   test.afterEach(async ({ page }) => {
-    await control(page, { deliveriesMode: 'ok' });
+    await control(page, { deliveriesMode: 'ok', fleet: false });
   });
 
-  test('the nearest dispatch and the latest shipments, labelled apart', async ({ page }) => {
+  test('three hotels as on DEV: the current order, the plan day apart, the ways on', async ({
+    page,
+  }) => {
+    await control(page, { fleet: true });
     await signIn(page);
-    const card = page.getByTestId('portal-hotels').getByRole('listitem').first();
-    await expect(card.getByTestId('home-next-dispatch')).toContainText('Připravujeme k odeslání');
-    await expect(card).toContainText('Nejbližší expedice (plánované odeslání)');
-    const latest = card.getByTestId('home-latest');
-    await expect(latest).toContainText('Na cestě');
-    await expect(latest).toContainText('předáno dopravci 9. 11. 2026');
-    await expect(latest).toContainText('Poslední doručení 29. 10. 2026');
+    const cards = page.getByTestId('portal-hotels').getByRole('listitem');
+    await expect(cards).toHaveCount(3);
+    const abc = cards.filter({ hasText: 'Hotel ABC (syntetický)' });
+    await expect(abc.getByTestId('home-next-dispatch')).toContainText('Naplánováno');
+    await expect(abc.getByTestId('home-next-dispatch')).toContainText('plánované odeslání');
+    await expect(abc.getByTestId('home-next-dispatch')).toContainText('+ 3 další objednávky');
+    await expect(abc.getByTestId('home-next-plan')).toContainText('zatím bez objednávky');
+    const bellevue = cards.filter({ hasText: 'Hotel Bellevue (syntetický)' });
+    await expect(bellevue.getByTestId('home-next-dispatch')).toContainText(
+      'Připravujeme k odeslání',
+    );
+    await expect(bellevue.getByTestId('home-next-plan')).toHaveCount(0);
+    const lipa = cards.filter({ hasText: 'Penzion U Lípy (syntetický)' });
+    await expect(lipa.getByTestId('home-next-dispatch')).toContainText('Žádná aktuální objednávka');
     await noSideways(page);
-    await shot(page, 'home-dispatch');
-    // The card still leads to the hotel.
-    await card.getByRole('link').click();
-    await expect(page.getByTestId('profile-next-delivery')).toBeVisible();
+    await shot(page, 'home-hotels');
+    await abc.getByRole('link', { name: 'Zobrazit dodávky: Hotel ABC (syntetický)' }).click();
+    await expect(page.getByTestId('portal-hotel-name')).toHaveText('Hotel ABC (syntetický)');
   });
 
-  test('only plan days, a passed ship day, nothing, unavailable', async ({ page }) => {
+  test('on the way, a passed ship day, only plan days, nothing, unavailable', async ({ page }) => {
     await signIn(page);
     const next = page.getByTestId('home-next-dispatch');
-    await control(page, { deliveriesMode: 'plan-only' });
-    await page.reload();
-    await expect(next).toContainText('5. 12. 2026');
-    await expect(next).toContainText('Podle plánu');
-    await expect(page.getByTestId('home-latest')).toContainText('Zatím žádná zásilka.');
+    await expect(next).toContainText('Na cestě');
+    await expect(next).toContainText('předáno dopravci 9. 11. 2026');
     await control(page, { deliveriesMode: 'late' });
     await page.reload();
     await expect(next).toContainText('Odešleme co nejdřív');
     await expect(next).not.toContainText('2020');
+    await control(page, { deliveriesMode: 'plan-only' });
+    await page.reload();
+    await expect(next).toContainText('Žádná aktuální objednávka');
+    await expect(page.getByTestId('home-next-plan')).toContainText('5. 12. 2026');
     await control(page, { deliveriesMode: 'none' });
     await page.reload();
-    await expect(next).toContainText('Žádná expedice zatím není naplánovaná.');
+    await expect(next).toContainText('Žádná aktuální objednávka');
+    await expect(page.getByTestId('home-next-plan')).toHaveCount(0);
     await control(page, { deliveriesMode: 'down' });
     await page.reload();
     await expect(page.getByTestId('home-dispatch-unavailable')).toBeVisible();
     await expect(page.getByTestId('portal-hotels')).toContainText('Hotel Portál E2E');
+    // The profile is still one click away.
+    await page.getByRole('link', { name: 'Zobrazit profil: Hotel Portál E2E' }).click();
+    await expect(page.getByTestId('profile-next-delivery')).toBeVisible();
   });
 
   test('an account with two hotels: both on Moje hotely and a switcher on the hotel pages', async ({
@@ -103,7 +117,7 @@ test.describe('hotel portal: dispatch on Moje hotely', () => {
     }
     // One hotel: no switcher.
     await page.goto('/');
-    await page.getByTestId('portal-hotels').getByRole('link').first().click();
+    await page.getByRole('link', { name: 'Zobrazit profil: Hotel Portál E2E' }).click();
     await expect(page.getByTestId('profile-next-delivery')).toBeVisible();
     await expect(page.getByTestId('hotel-switcher')).toHaveCount(0);
   });
@@ -112,7 +126,7 @@ test.describe('hotel portal: dispatch on Moje hotely', () => {
     page,
   }) => {
     await signIn(page);
-    await page.getByTestId('portal-hotels').getByRole('link').first().click();
+    await page.getByRole('link', { name: 'Zobrazit profil: Hotel Portál E2E' }).click();
     const card = page.getByTestId('profile-next-delivery');
     const next = card.getByTestId('next-dispatch');
     await expect(next).toContainText('Připravujeme k odeslání');

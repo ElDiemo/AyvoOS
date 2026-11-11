@@ -13,9 +13,17 @@ export const cs = {
   allDeliveries: {
     title: 'Dodávky',
     intro:
-      'Dodávky všech vašich hotelů podle skutečných objednávek a orientační dny podle plánu zásobování. Plánované odeslání není termín doručení.',
+      'Další závoz každého hotelu. Objednávka je potvrzená, plán zásobování je jen orientační.',
     unavailable: 'Dodávky tohoto hotelu se teď nepodařilo načíst.',
     hotel: 'Profil hotelu',
+    columns: { hotel: 'Hotel', order: 'Nejbližší objednávka', plan: 'Orientačně podle plánu' },
+    order: 'Objednávka',
+    plan: 'Podle plánu',
+    noOrder: 'Žádná aktuální objednávka',
+    noPlan: 'Bez plánovaného termínu',
+    nothing: 'Žádná objednávka ani plán zásobování.',
+    planNote: 'zatím bez objednávky',
+    open: 'Zobrazit dodávky',
   },
   allContracts: {
     title: 'Smlouvy',
@@ -172,6 +180,32 @@ export const cs = {
     noUpcoming: 'Žádný další den podle plánu zásobování.',
     byPlan: 'Podle plánu',
     next: 'Nejbližší dodávka',
+    asap: 'Odešleme co nejdřív',
+    shipOn: (d: string) => `plánované odeslání ${d}`,
+    handedOverOn: (dt: string) => `předáno dopravci ${dt}`,
+    deliveredOn: (dt: string) => `doručeno ${dt}`,
+    moreProducts: (n: number) => `+ ${n} další`,
+    moreOrders: (n: number) =>
+      n === 1
+        ? '+ 1 další objednávka'
+        : n < 5
+          ? `+ ${n} další objednávky`
+          : `+ ${n} dalších objednávek`,
+    back: 'Všechny hotely',
+    eyebrow: 'Dodávky hotelu',
+    current: 'Aktuální objednávky',
+    currentHelp: 'Potvrzené objednávky a jejich stav. Datum je plánované odeslání, ne doručení.',
+    noCurrent: 'Žádná aktuální objednávka.',
+    planTitle: 'Plán zásobování · příštích 60 dní',
+    planHelp:
+      'Orientační termíny odeslání podle vašeho aktivního plánu. Nejsou to objednávky ani termíny doručení; objednávku z nich vytvoříme s předstihem.',
+    planBadge: 'Orientačně',
+    noPlanDays: 'Plán zásobování teď na příštích 60 dní žádný termín nemá.',
+    history: 'Historie doručení',
+    noHistory: 'Zatím žádná doručená zásilka.',
+    details: 'Podrobnosti',
+    nextOrder: 'Nejbližší objednávka',
+    nextPlan: 'Další termín podle plánu',
     none: 'Žádná dodávka není naplánovaná ani na cestě.',
     open: 'Zobrazit dodávky',
   },

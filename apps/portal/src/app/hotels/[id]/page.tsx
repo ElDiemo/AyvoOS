@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ContractsCard } from '@/components/contracts-card';
 import { NextDeliveryCard } from '@/components/deliveries';
-import { pragueToday } from '@/components/home-overview';
+import { pragueToday } from '@/components/delivery-summary';
 import { HotelSwitcher } from '@/components/hotel-switcher';
 import { HotelTabs } from '@/components/hotel-tabs';
 import { HotelHero, ProfileGroups } from '@/components/profile-view';

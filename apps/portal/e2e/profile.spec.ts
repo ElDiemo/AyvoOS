@@ -56,7 +56,7 @@ test.describe('hotel portal: the hotel profile', () => {
     await signIn(page);
     await noSideways(page);
     await shot(page, 'hotels');
-    await page.getByRole('link', { name: /Hotel Portál E2E/ }).click();
+    await page.getByRole('link', { name: 'Zobrazit profil: Hotel Portál E2E' }).click();
     await expect(page.getByTestId('portal-hotel-name')).toHaveText('Hotel Portál E2E');
     await expect(page.getByTestId('profile-address')).toContainText('Portálová 1');
     await expect(page.getByTestId('profile-contact')).toContainText('Marie Recepční');

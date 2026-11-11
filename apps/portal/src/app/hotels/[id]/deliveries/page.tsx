@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { DeliveryGroups } from '@/components/deliveries';
+import { pragueToday } from '@/components/delivery-summary';
+import { HotelDeliveryDetail } from '@/components/hotel-delivery-detail';
 import { HotelSwitcher } from '@/components/hotel-switcher';
 import { HotelTabs } from '@/components/hotel-tabs';
 import { Shell } from '@/components/shell';
@@ -13,7 +14,7 @@ import { myDeliveries, myHotelProfile, portalSession } from '@/lib/portal';
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Dodávky hotelu' };
 
-/** "Dodávky": a granted hotel's deliveries from its real orders, in three groups. */
+/** One hotel's deliveries (owner 2026-11-11, hotel-first); another hotel's id is "not found". */
 export default async function DeliveriesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/.test(id)) notFound();
@@ -29,15 +30,20 @@ export default async function DeliveriesPage({ params }: { params: Promise<{ id:
     }),
   ]);
   return (
-    <Shell user={view.user} active="hotels" testInvoices={portalEnv().APP_ENV !== 'production'}>
-      <Link href="/" className="w-fit text-sm text-stone-600 underline-offset-2 hover:underline">
-        <span aria-hidden="true">←</span> {cs.hotels.back}
+    <Shell user={view.user} active="deliveries" testInvoices={portalEnv().APP_ENV !== 'production'}>
+      <Link
+        href="/deliveries"
+        className="w-fit text-sm text-stone-600 underline-offset-2 hover:underline"
+      >
+        <span aria-hidden="true">←</span> {cs.deliveries.back}
       </Link>
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold text-stone-900">
-          {cs.deliveries.title} · <span data-testid="portal-hotel-name">{profile.name}</span>
+        <p className="text-xs font-medium tracking-wide text-stone-500 uppercase">
+          {cs.deliveries.eyebrow}
+        </p>
+        <h1 className="text-2xl font-semibold text-stone-900" data-testid="portal-hotel-name">
+          {profile.name}
         </h1>
-        <p className="text-sm text-stone-600">{cs.deliveries.intro}</p>
       </div>
       <HotelSwitcher token={token} view={view} current={id} section="deliveries" />
       <HotelTabs hotelId={id} active="deliveries" />
@@ -46,7 +52,7 @@ export default async function DeliveriesPage({ params }: { params: Promise<{ id:
           {cs.deliveries.unavailable}
         </p>
       ) : (
-        <DeliveryGroups deliveries={deliveries} />
+        <HotelDeliveryDetail deliveries={deliveries} today={pragueToday()} />
       )}
     </Shell>
   );

@@ -50,16 +50,16 @@ test.describe('hotel portal: navigation and icon', () => {
       'aria-current',
       'page',
     );
-    const section = page.locator('[data-testid^=all-deliveries-]');
-    await expect(section).toHaveCount(1);
-    await expect(section.getByRole('heading', { name: 'Hotel Portál E2E' })).toBeVisible();
-    await expect(section.getByTestId('deliveries-in-progress')).toContainText('Na cestě');
+    // One line per hotel (hotel-first), never every order of every hotel.
+    const row = page.locator('[data-testid^=deliveries-hotel-]');
+    await expect(row).toHaveCount(1);
+    await expect(row.getByRole('heading', { level: 2, name: 'Hotel Portál E2E' })).toBeVisible();
+    await expect(row.getByTestId('row-order')).toContainText('Na cestě');
+    await expect(page.getByTestId(/^order-/)).toHaveCount(0);
     await noSideways(page);
     await shot(page, 'all-deliveries');
-    // Accessible structure: the tab names the page; groups under the hotel's heading; no
-    // duplicate ids (several hotels' groups share the page).
+    // Accessible structure: the tab names the page; no duplicate ids.
     await expect(page).toHaveTitle('Dodávky – AYVO – hotelový portál');
-    await expect(section.getByRole('heading', { level: 3, name: /Probíhající/ })).toBeVisible();
     expect(
       await page.evaluate(() => {
         const ids = [...document.querySelectorAll('[id]')].map((e) => e.id);
@@ -68,7 +68,7 @@ test.describe('hotel portal: navigation and icon', () => {
     ).toBe(0);
     await control(page, { deliveriesMode: 'down' });
     await page.reload();
-    await expect(section).toContainText('Dodávky tohoto hotelu se teď nepodařilo načíst.');
+    await expect(row).toContainText('Dodávky tohoto hotelu se teď nepodařilo načíst.');
     await nav.getByRole('link', { name: 'Smlouvy' }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Smlouvy' })).toBeVisible();
     await expect(

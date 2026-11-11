@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
-import { DeliveryGroups } from '@/components/deliveries';
+import { pragueToday } from '@/components/delivery-summary';
+import { HotelDeliveriesList } from '@/components/hotel-deliveries-list';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
 import { portalEnv } from '@/lib/env';
@@ -11,9 +11,10 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Dodávky' };
 
 /**
- * "Dodávky" of every hotel of the account (main navigation): per hotel the same groups as its own
- * "Dodávky" page, through the same contract (the grant checked each time). One hotel unavailable
- * says so in its own section only.
+ * "Dodávky" (owner 2026-11-11, hotel-first): the account's hotels, one short line each — the next
+ * real order, the next plan day without an order — and the way to that hotel's deliveries. Never
+ * a feed of every order of every hotel. Each hotel through the same contract (the grant checked
+ * each time); one unavailable says so in its own line only.
  */
 export default async function AllDeliveriesPage() {
   const { token, view } = await portalSession();
@@ -32,34 +33,7 @@ export default async function AllDeliveriesPage() {
       {hotels.length === 0 ? (
         <p className="text-sm text-stone-600">{cs.hotels.none}</p>
       ) : (
-        hotels.map((h) => {
-          const d = deliveries.get(h.id) ?? null;
-          return (
-            <section
-              key={h.id}
-              aria-labelledby={`deliveries-${h.id}`}
-              className="flex flex-col gap-3"
-              data-testid={`all-deliveries-${h.id}`}
-            >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h2 id={`deliveries-${h.id}`} className="text-lg font-semibold text-stone-900">
-                  {h.name}
-                </h2>
-                <Link
-                  href={`/hotels/${h.id}`}
-                  className="text-sm text-emerald-800 underline-offset-2 hover:underline"
-                >
-                  {t.hotel}
-                </Link>
-              </div>
-              {d ? (
-                <DeliveryGroups deliveries={d} idPrefix={`h-${h.id}-`} />
-              ) : (
-                <p className="text-sm text-amber-800">{t.unavailable}</p>
-              )}
-            </section>
-          );
-        })
+        <HotelDeliveriesList hotels={hotels} deliveries={deliveries} today={pragueToday()} />
       )}
     </Shell>
   );

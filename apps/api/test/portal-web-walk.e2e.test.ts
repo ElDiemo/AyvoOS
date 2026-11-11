@@ -620,12 +620,16 @@ describe.skipIf(!enabled)(
         expect(list.text).toContain(state);
       }
       // The orientation days of the switched-on plan (next 60 days), apart from real orders.
-      expect(list.text).toContain('Další podle plánu zásobování');
-      expect(list.text).not.toContain('Žádný další den podle plánu zásobování.');
+      expect(list.text).toContain('Plán zásobování · příštích 60 dní');
+      expect(list.text).not.toContain('Plán zásobování teď na příštích 60 dní žádný termín nemá.');
       // Moje hotely: the nearest dispatch and the latest shipments of H1.
       const home = await html(a, '/');
-      expect(home.text).toContain('Nejbližší expedice (plánované odeslání)');
-      expect(home.text).toContain('Poslední zásilky');
+      expect(home.text).toContain('Nejbližší objednávka');
+      expect(home.text).toContain('zatím bez objednávky');
+      // "Dodávky": one line per hotel, the next order and plan day — never its orders listed.
+      const all = await html(a, '/deliveries');
+      expect(all.text).toContain('Zobrazit dodávky');
+      expect(all.text).not.toContain(d.orders.delivered);
       expect(list.text).not.toContain(d.orders.h3);
       await shoot('a-hotel-H1', a.session, `/hotels/${d.H1.id}`);
       await shoot('a-deliveries-H1', a.session, `/hotels/${d.H1.id}/deliveries`);

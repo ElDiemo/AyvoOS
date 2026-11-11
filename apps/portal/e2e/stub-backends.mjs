@@ -138,6 +138,58 @@ export const DELIVERIES = {
     }),
   ],
 };
+
+/** A calendar day `n` days from today in Prague (YYYY-MM-DD). */
+const dayFromToday = (n) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(
+    new Date(Date.now() + n * 86_400_000),
+  );
+/**
+ * Three hotels as on the DEV preview (`state.fleet`, owner 2026-11-11): ABC with four planned
+ * orders and four days of its supply plan; Bellevue with one order being prepared; a guest house
+ * with nothing at all.
+ */
+const fleetHotel = (code, name, addressLine1, postalCode, city) => ({
+  ...hotel,
+  id: randomUUID(),
+  code,
+  name,
+  addressLine1,
+  postalCode,
+  city,
+});
+const FLEET = [
+  fleetHotel('H-000941', 'Hotel ABC (syntetický)', 'Masarykova 12', '602 00', 'Brno'),
+  fleetHotel('H-000942', 'Hotel Bellevue (syntetický)', 'Nábřeží 4', '779 00', 'Olomouc'),
+  fleetHotel('H-000943', 'Penzion U Lípy (syntetický)', 'Lipová 9', '370 01', 'České Budějovice'),
+];
+const soap = [{ product: 'Tekuté mýdlo na ruce 330 ml', crates: 1, bottles: 40 }];
+const FLEET_DELIVERIES = {
+  [FLEET[0].id]: {
+    planned: [
+      delivery('ORD-000001', 'PLANNED', dayFromToday(2), { lines: soap }),
+      delivery('ORD-000002', 'PLANNED', dayFromToday(6), {
+        lines: [...soap, { product: 'Sprchový gel 330 ml', crates: 1, bottles: 40 }],
+      }),
+      delivery('ORD-000003', 'PLANNED', dayFromToday(9), { fromPlan: true, lines: soap }),
+      delivery('ORD-000004', 'PLANNED', dayFromToday(13), { lines: soap }),
+    ],
+    inProgress: [],
+    delivered: [],
+    upcoming: [24, 39, 54, 59].map((n) => ({
+      shipDate: dayFromToday(n),
+      lines: [{ product: 'Tekuté mýdlo na ruce 330 ml', crates: 2 }],
+    })),
+  },
+  [FLEET[1].id]: {
+    planned: [delivery('ORD-000005', 'PREPARED', dayFromToday(1), { lines: soap })],
+    inProgress: [],
+    delivered: [],
+    upcoming: [],
+  },
+  [FLEET[2].id]: { planned: [], inProgress: [], delivered: [], upcoming: [] },
+};
+const fleetOf = (id) => (state.fleet ? FLEET.find((h) => h.id === id) : undefined);
 /** Another hotel's signed contract: never reachable from this session. */
 export const FOREIGN_CONTRACT_ID = randomUUID();
 /** An empty but valid ZIP (end of central directory only). */
@@ -169,6 +221,8 @@ const state = {
   deliveriesMode: 'ok',
   /** The account also manages a second hotel (two hotels in its grant). */
   secondHotel: false,
+  /** The account manages the three hotels of the DEV preview (FLEET). */
+  fleet: false,
 };
 
 const send = (res, status, body, schema) => {
@@ -274,7 +328,11 @@ async function core(req, res, path) {
           {
             id: randomUUID(),
             payerCustomerId: randomUUID(),
-            hotelIds: state.secondHotel ? [hotel.id, secondHotel.id] : [hotel.id],
+            hotelIds: state.fleet
+              ? FLEET.map((h) => h.id)
+              : state.secondHotel
+                ? [hotel.id, secondHotel.id]
+                : [hotel.id],
           },
         ],
       },
@@ -284,10 +342,17 @@ async function core(req, res, path) {
     return send(
       res,
       200,
-      (state.secondHotel ? [hotel, secondHotel] : [hotel]).map((h) => portalHotelSchema.parse(h)),
+      (state.fleet ? FLEET : state.secondHotel ? [hotel, secondHotel] : [hotel]).map((h) =>
+        portalHotelSchema.parse(h),
+      ),
     );
   if (path === `hotels/${hotel.id}`) return send(res, 200, hotel, portalHotelSchema);
+  const fleetDetail = path.match(/^hotels\/([^/]+)$/);
+  if (fleetDetail && fleetOf(fleetDetail[1]))
+    return send(res, 200, fleetOf(fleetDetail[1]), portalHotelSchema);
   const deliveriesMatch = path.match(/^hotels\/([^/]+)\/deliveries$/);
+  if (deliveriesMatch && fleetOf(deliveriesMatch[1]))
+    return send(res, 200, FLEET_DELIVERIES[deliveriesMatch[1]], portalDeliveriesSchema);
   if (deliveriesMatch) {
     if (deliveriesMatch[1] !== hotel.id || !state.profileGrant)
       return refuse(res, 404, 'HOTEL_NOT_FOUND');
@@ -312,6 +377,7 @@ async function core(req, res, path) {
     return send(res, 200, value, portalDeliveriesSchema);
   }
   const contractsMatch = path.match(/^hotels\/([^/]+)\/contracts$/);
+  if (contractsMatch && fleetOf(contractsMatch[1])) return send(res, 200, []);
   if (contractsMatch) {
     if (contractsMatch[1] !== hotel.id || !state.profileGrant)
       return refuse(res, 404, 'HOTEL_NOT_FOUND');
@@ -340,6 +406,23 @@ async function core(req, res, path) {
     return;
   }
   const profileMatch = path.match(/^hotels\/([^/]+)\/profile$/);
+  const fleetProfile = profileMatch && req.method === 'GET' && fleetOf(profileMatch[1]);
+  if (fleetProfile)
+    return send(
+      res,
+      200,
+      {
+        ...profileView({
+          ...state.profile,
+          addressLine1: fleetProfile.addressLine1,
+          postalCode: fleetProfile.postalCode,
+          city: fleetProfile.city,
+        }),
+        id: fleetProfile.id,
+        name: fleetProfile.name,
+      },
+      portalHotelProfileSchema,
+    );
   if (profileMatch) {
     const granted = profileMatch[1] === hotel.id && state.profileGrant;
     if (req.method === 'GET') {
@@ -433,6 +516,7 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         foreignContractId: FOREIGN_CONTRACT_ID,
         hotelId: hotel.id,
         secondHotelId: secondHotel.id,
+        fleetIds: FLEET.map((h) => h.id),
         invoices,
       });
     if (req.url === '/__control') {
