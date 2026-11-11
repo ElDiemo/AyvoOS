@@ -9,6 +9,7 @@ import type {
 import { Injectable, Logger } from '@nestjs/common';
 import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { effectiveAt } from './billing-settings.service.js';
+import { checkedTermsRevision } from './billing-terms.js';
 import { CoreClient } from './core-client.js';
 import type { FinanceCaller } from './finance-access.guard.js';
 import { FinancePrismaService } from './finance-prisma.service.js';
@@ -60,17 +61,58 @@ export class FinancePortalGrantsService {
    */
   async ofPayer(caller: FinanceCaller, payerCustomerId: string): Promise<FinancePortalAccess> {
     await this.payer(payerCustomerId);
-    const [grants, hotels] = await Promise.all([
+    const [grants, hotels, restrictions] = await Promise.all([
       this.core.portalGrantsOfPayer(caller.sessionToken, payerCustomerId),
       this.payerHotels(payerCustomerId),
+      this.restrictions(payerCustomerId),
     ]);
     const names: Record<string, string> = Object.fromEntries(
       [...hotels.values()].map((h) => [h.id, h.name]),
     );
-    const unknown = [...new Set(grants.flatMap((g) => g.hotelIds))].filter((id) => !names[id]);
+    const unknown = [
+      ...new Set([...grants.flatMap((g) => g.hotelIds), ...restrictions.map((r) => r.hotelId)]),
+    ].filter((id) => !names[id]);
     for (const [id, h] of await this.core.lookupHotels(caller.sessionToken, unknown))
       names[id] = h.name;
-    return { grants, payerHotels: [...hotels.values()], hotelNames: names };
+    return { grants, payerHotels: [...hotels.values()], hotelNames: names, restrictions };
+  }
+
+  /**
+   * The payer's fences from Finance's own transfers (v6), each with the restore naming it — shown
+   * until a restore of it was accepted by the core. Finance's records only, no core read.
+   */
+  private async restrictions(
+    payerCustomerId: string,
+  ): Promise<FinancePortalAccess['restrictions']> {
+    const fenced = await this.prisma.billingTermsRevisionEvent.findMany({
+      where: { kind: 'FENCED', revision: { intent: 'TRANSFER', payerCustomerId } },
+      include: { revision: { include: { agreement: true } } },
+      orderBy: { recordedAt: 'asc' },
+    });
+    if (fenced.length === 0) return [];
+    const restores = await this.prisma.billingTermsRevision.findMany({
+      where: {
+        intent: 'RESTORE',
+        payerCustomerId,
+        resolvesFenceIds: { hasSome: fenced.map((e) => e.fenceId!) },
+      },
+      include: { events: { select: { kind: true } } },
+    });
+    return fenced
+      .map((e) => {
+        const r = restores.find((x) => x.resolvesFenceIds.includes(e.fenceId!));
+        return {
+          fenceId: e.fenceId!,
+          hotelId: e.revision.agreement.hotelId,
+          agreementCode: e.revision.agreement.code,
+          endsOn: e.revision.fenceEndsOn!.toISOString().slice(0, 10),
+          termsRevision: e.revision.revision,
+          restore: r
+            ? { termsRevision: r.revision, sent: r.events.some((x) => x.kind === 'RESOLVED_SENT') }
+            : null,
+        };
+      })
+      .filter((x) => !x.restore?.sent);
   }
 
   /**
@@ -289,9 +331,10 @@ export class FinancePortalGrantsService {
 
   /**
    * For each AGREEMENT hotel, from one read of its agreement: the terms revision checked (the
-   * number of the agreement's versions recorded so far — their order in the agreement) and the
-   * last day of operations: the earliest of the payer's terms' `validTo` and the day before any
-   * recorded later version that names another payer (a scheduled transfer away).
+   * agreement's highest terms revision, reserved or recorded — refused while a change of payer is
+   * reserved and not settled: TERMS_CHANGE_PENDING) and the last day of operations: the earliest
+   * of the payer's terms' `validTo` and the day before any recorded later version that names
+   * another payer (a scheduled transfer away).
    */
   private async operationalTerms(payerCustomerId: string, hotelIds: readonly string[]) {
     const today = pragueToday();
@@ -309,7 +352,7 @@ export class FinancePortalGrantsService {
         if (later.effectiveFrom > today && later.customerId !== payerCustomerId)
           ends.push(later.effectiveFrom.getTime() - 86_400_000);
       out.set(a.hotelId, {
-        checkedRevision: a.versions.length,
+        checkedRevision: await checkedTermsRevision(this.prisma, a.id),
         operationsUntil:
           ends.length === 0 ? null : new Date(Math.min(...ends)).toISOString().slice(0, 10),
       });

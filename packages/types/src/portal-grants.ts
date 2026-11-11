@@ -333,6 +333,21 @@ export const financePortalAccessSchema = z.object({
   payerHotels: z.array(financePortalPayerHotelSchema),
   /** Names of every hotel shown (also of a grant's hotel the payer no longer has). */
   hotelNames: z.record(z.string(), z.string()),
+  /**
+   * Fences of this payer from Finance's own transfers (v6): operations on the hotel end after
+   * `endsOn` until a committed restore names the fence and a grant is checked again after it.
+   * `restore`: the restore that names it (`sent` false: the core has not confirmed it yet).
+   */
+  restrictions: z.array(
+    z.object({
+      fenceId: z.uuid(),
+      hotelId: z.uuid(),
+      agreementCode: z.string(),
+      endsOn: z.iso.date(),
+      termsRevision: z.int(),
+      restore: z.object({ termsRevision: z.int(), sent: z.boolean() }).nullable(),
+    }),
+  ),
 });
 export type FinancePortalAccess = z.infer<typeof financePortalAccessSchema>;
 
@@ -364,6 +379,16 @@ export const portalFenceSchema = z.object({
   createdAt: z.iso.datetime(),
 });
 export type PortalFence = z.infer<typeof portalFenceSchema>;
+
+/**
+ * Finance → core, when Finance abandons a transfer whose fence answer it never got: the fence
+ * written under `requestId`, or — none yet — that request id settled for good, so a late arrival
+ * of the fence request writes nothing. Either way Finance then knows exactly what exists.
+ */
+export const portalFenceSettleRequestSchema = z.strictObject({ requestId: z.uuid() });
+export type PortalFenceSettleRequest = z.infer<typeof portalFenceSettleRequestSchema>;
+export const portalFenceSettleResultSchema = z.object({ fence: portalFenceSchema.nullable() });
+export type PortalFenceSettleResult = z.infer<typeof portalFenceSettleResultSchema>;
 
 /**
  * Finance → core: the typed evidence of ONE committed explicit restore (v6 §1–§2). Finance builds

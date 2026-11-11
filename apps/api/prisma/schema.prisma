@@ -1024,6 +1024,7 @@ enum OperationKind {
   PORTAL_GRANT_REPLACE
   PORTAL_FENCE_WRITE
   PORTAL_FENCE_RESOLVE
+  PORTAL_FENCE_SETTLE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
