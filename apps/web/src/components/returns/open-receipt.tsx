@@ -28,7 +28,7 @@ export function OpenReturnReceipt({ hotels }: { hotels: ReturnHotelOption[] }) {
           hotelCode: hotel || null,
         }),
       );
-      router.push(`/warehouse/returns/${receipt.code}`);
+      router.push(`/production/cycle/returns/${receipt.code}`);
     } catch (err) {
       setError(errorText(err));
       setBusy(false);

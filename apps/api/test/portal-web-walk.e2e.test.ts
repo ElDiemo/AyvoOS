@@ -59,6 +59,22 @@ const coreToken = randomBytes(32).toString('base64url');
 const financeToken = randomBytes(32).toString('base64url');
 const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
 const portalDir = resolve(import.meta.dirname, '../../portal');
+
+/** The entries of a STORE-only ZIP (as Finance writes it): name → bytes. */
+function unzip(zip: Buffer): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  let at = 0;
+  while (zip.readUInt32LE(at) === 0x04034b50) {
+    const size = zip.readUInt32LE(at + 18);
+    const nameLength = zip.readUInt16LE(at + 26);
+    const extra = zip.readUInt16LE(at + 28);
+    const name = zip.subarray(at + 30, at + 30 + nameLength).toString('utf8');
+    const start = at + 30 + nameLength + extra;
+    out.set(name, zip.subarray(start, start + size));
+    at = start + size;
+  }
+  return out;
+}
 const otp = (secret: string, offsetSteps = 0) =>
   new TOTP({ secret: Secret.fromBase32(secret), digits: 6, period: 30 }).generate({
     timestamp: Date.now() + offsetSteps * 30_000,
@@ -363,6 +379,19 @@ describe.skipIf(!enabled)(
       return b;
     }
 
+    /** "Balíček za období" through portal-web: the sorted hashes of the PDFs in the ZIP. */
+    const packageOf = async (b: Browser, from: string, to: string) => {
+      const res = await b.get(`/invoices/package?from=${from}&to=${to}`);
+      expect(res.status, res.status === 200 ? '' : await res.clone().text()).toBe(200);
+      expect(res.headers.get('content-type')).toBe('application/zip');
+      const files = unzip(Buffer.from(await res.arrayBuffer()));
+      expect(files.has('manifest.csv')).toBe(true);
+      return [...files.entries()]
+        .filter(([n]) => n.startsWith('faktury/'))
+        .map(([, bytes]) => sha(bytes))
+        .sort();
+    };
+
     const html = async (b: Browser, path: string) => {
       const res = await b.get(path);
       return { status: res.status, location: res.headers.get('location'), text: await res.text() };
@@ -558,6 +587,8 @@ describe.skipIf(!enabled)(
       expect(home.text).not.toContain(d.H1.name);
       const list = await html(b, '/invoices');
       expect(list.text).toContain(d.B1.number);
+      // B's package of Aug–Sep: B1 only, never A's invoices of the same months.
+      expect(await packageOf(b, '2026-08', '2026-09')).toEqual([d.B1.pdfSha256]);
       expect(list.text).not.toContain(d.A1.number);
       expect((await b.get(`/invoices/${d.A1.id}/pdf`)).status).toBe(404);
       const foreign = await html(b, `/invoices/${d.A1.id}`);
@@ -592,6 +623,16 @@ describe.skipIf(!enabled)(
       const list = await html(a, '/invoices');
       expect(list.text).toContain(d.A1.number);
       expect(list.text).toContain(d.A2.number);
+      // The package for Aug–Sep: A1 and A2, byte-identical to the issued PDFs; an invalid period
+      // goes back to the invoices with the reason.
+      expect(await packageOf(a, '2026-08', '2026-09')).toEqual(
+        [d.A1.pdfSha256, d.A2.pdfSha256].sort(),
+      );
+      const invalid = await a.get('/invoices/package?from=2026-09&to=2026-08');
+      expect([invalid.status, invalid.headers.get('location')]).toEqual([
+        303,
+        '/invoices?balicek=INVALID_PERIOD&from=2026-09&to=2026-08', // relative: never the listener
+      ]);
       expect((await html(a, '/')).text).toContain(d.H2.name);
       expect((await a.get(`/invoices/${d.A2.id}/pdf`)).status).toBe(200);
       await shoot('a-invoices-after-replace', a.session, '/invoices');
@@ -645,6 +686,10 @@ describe.skipIf(!enabled)(
       financeClosed = true;
       const list = await html(b, '/invoices');
       expect(list.text).toContain('Faktury nejsou dostupné');
+      // The package says so too, as a way back to the invoices — never an error page.
+      const pkg = await b.get('/invoices/package?from=2026-08&to=2026-09');
+      expect(pkg.status).toBe(303);
+      expect(pkg.headers.get('location')).toContain('balicek=UNAVAILABLE');
       expect((await b.get(`/invoices/${d.B1.id}/pdf`)).status).toBe(503);
       const home = await html(b, '/');
       expect(home.status).toBe(200);

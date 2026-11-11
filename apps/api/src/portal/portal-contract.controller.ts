@@ -1,3 +1,4 @@
+import type { ServerResponse } from 'node:http';
 import {
   PORTAL_SESSION_HEADER,
   portalActionRequestSchema,
@@ -25,14 +26,13 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   Headers,
   HttpCode,
   Inject,
   Param,
   ParseUUIDPipe,
   Post,
-  StreamableFile,
+  Res,
 } from '@nestjs/common';
 import QRCode from 'qrcode';
 import { AuditService } from '../audit/audit.service.js';
@@ -234,19 +234,22 @@ export class PortalContractController {
         user: session.user,
         idleExpiresAt: session.idleExpiresAt.toISOString(),
         absoluteExpiresAt: session.absoluteExpiresAt.toISOString(),
-        grants: await this.grants.activeOf(session.user.id, this.db),
+        grants: (await this.grants.activeOf(session.user.id, this.db)).map(scopeOf),
       };
     });
   }
 
-  /** The hotels of the session's active grants. */
+  /**
+   * The hotels of the session's active grants that are operational today (v6, #148): a hotel the
+   * grant opens for invoices only is not one of them (its invoices are in Finance).
+   */
   @PortalServiceAccess()
   @Get('hotels')
   myHotels(@Headers(PORTAL_SESSION_HEADER) token: string | undefined): Promise<PortalHotel[]> {
     return this.slots.run(async () => this.granted(await this.portalSession(token)));
   }
 
-  /** One granted hotel; any other id is "not found", exactly like a missing one. */
+  /** One operational granted hotel; any other id is "not found", exactly like a missing one. */
   @PortalServiceAccess()
   @Get('hotels/:id')
   myHotel(
@@ -262,7 +265,7 @@ export class PortalContractController {
 
   // --- "Profil hotelu" (the hotel's own profile) ------------------------------------------
 
-  /** A granted hotel's own profile; any other id is "not found", exactly like a missing one. */
+  /** An operational granted hotel's own profile; any other id is "not found" (as a missing one). */
   @PortalServiceAccess()
   @Get('hotels/:id/profile')
   profile(
@@ -272,7 +275,7 @@ export class PortalContractController {
     return this.slots.run(async () => {
       const session = await this.portalSession(token);
       const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
-        g.hotelIds.includes(id),
+        g.operationalHotelIds.includes(id),
       );
       const profile = allowed ? await this.hotels.portalProfile(id, this.db) : null;
       if (!profile) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
@@ -316,7 +319,7 @@ export class PortalContractController {
         if (live.revokedAt || live.idleExpiresAt <= now || live.absoluteExpiresAt <= now)
           throw sessionExpired();
         const grant = (await this.grants.activeOf(session.user.id, tx)).find((g) =>
-          g.hotelIds.includes(id),
+          g.operationalHotelIds.includes(id),
         );
         if (!grant) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
         return this.hotels.applyPortalProfile(tx, {
@@ -334,8 +337,9 @@ export class PortalContractController {
   // --- "Dodávky" (real orders, read only) -------------------------------------------------
 
   /**
-   * A granted hotel's deliveries in three groups and its upcoming plan days; any other id is "not
-   * found".
+   * An operational granted hotel's deliveries in three groups and its upcoming plan days; any other
+   * id — also a hotel the grant opens for its invoices only, or one a fence closes — is "not
+   * found" (v6: deliveries are operations).
    */
   @PortalServiceAccess()
   @Get('hotels/:id/deliveries')
@@ -346,7 +350,7 @@ export class PortalContractController {
     return this.slots.run(async () => {
       const session = await this.portalSession(token);
       const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
-        g.hotelIds.includes(id),
+        g.operationalHotelIds.includes(id),
       );
       if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
       // Sequential, as every portal call: at most one portal connection per request.
@@ -358,7 +362,10 @@ export class PortalContractController {
 
   // --- "Smlouvy" (signed originals only) -------------------------------------------------
 
-  /** A granted hotel's signed contracts (newest first); any other id is "not found". */
+  /**
+   * An operational granted hotel's signed contracts (newest first); any other id — also a hotel the
+   * grant opens for invoices only (v6) — is "not found".
+   */
   @PortalServiceAccess()
   @Get('hotels/:id/contracts')
   contractsOf(
@@ -368,7 +375,7 @@ export class PortalContractController {
     return this.slots.run(async () => {
       const session = await this.portalSession(token);
       const allowed = (await this.grants.activeOf(session.user.id, this.db)).some((g) =>
-        g.hotelIds.includes(id),
+        g.operationalHotelIds.includes(id),
       );
       if (!allowed) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
       return this.contracts.portalSigned(id, this.db);
@@ -378,32 +385,65 @@ export class PortalContractController {
   /**
    * One signed original as kept (hash checked), if its hotel is granted to the session now; any
    * other id is "not found". The download is recorded on the draft with the portal account.
+   *
+   * Bounded work (review 5841786998, as the Finance invoice PDF): one deadline
+   * (PORTAL_CONTRACT_PDF_TIMEOUT_MS) covers reading and sending, the client leaving stops the read
+   * in the storage, at most the upload limit is read, and the request slot is held until the
+   * bytes have left or the connection is cut — never while storage work still runs.
    */
   @PortalServiceAccess()
   @Get('contracts/:id/pdf')
-  @Header('Cache-Control', 'private, no-store')
-  @Header('Content-Security-Policy', "default-src 'none'; sandbox")
-  @Header('X-Content-Type-Options', 'nosniff')
   contractPdf(
     @Param('id', ParseUUIDPipe) id: string,
     @Headers(PORTAL_SESSION_HEADER) token: string | undefined,
-  ): Promise<StreamableFile> {
+    @Res() res: ServerResponse,
+  ): Promise<void> {
     return this.slots.run(async () => {
-      const session = await this.portalSession(token);
-      const hotels = new Set(
-        (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+      const stop = new AbortController();
+      const deadline = setTimeout(
+        () => stop.abort(new Error('PortalContractPdfDeadline')),
+        this.env.PORTAL_CONTRACT_PDF_TIMEOUT_MS,
       );
-      const { file, signedOn } = await this.contracts.portalSignedFile(
-        id,
-        hotels,
-        session.user.id,
-        this.db,
-      );
-      return new StreamableFile(file, {
-        type: 'application/pdf',
-        length: file.length,
-        disposition: `attachment; filename="AYVO-smlouva-${signedOn}.pdf"`,
-      });
+      const gone = () => {
+        if (!res.writableFinished) stop.abort(new Error('PortalContractPdfClientGone'));
+      };
+      res.once('close', gone);
+      try {
+        const session = await this.portalSession(token);
+        const hotels = new Set(
+          (await this.grants.activeOf(session.user.id, this.db)).flatMap(
+            (g) => g.operationalHotelIds,
+          ),
+        );
+        const { file, signedOn } = await this.contracts.portalSignedFile(
+          id,
+          hotels,
+          session.user.id,
+          { signal: stop.signal, maxBytes: this.env.SUPPLIER_DOCUMENT_MAX_BYTES },
+          this.db,
+        );
+        if (stop.signal.aborted) throw stop.signal.reason;
+        if (res.destroyed) return;
+        await new Promise<void>((resolve) => {
+          const done = () => resolve();
+          res.once('finish', done);
+          res.once('close', done);
+          // The deadline also bounds the sending: a receiver too slow is cut off.
+          stop.signal.addEventListener('abort', () => res.destroy(), { once: true });
+          res.writeHead(200, {
+            'Content-Type': 'application/pdf',
+            'Content-Length': String(file.length),
+            'Content-Disposition': `attachment; filename="AYVO-smlouva-${signedOn}.pdf"`,
+            'Cache-Control': 'private, no-store',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
+            'X-Content-Type-Options': 'nosniff',
+          });
+          res.end(file);
+        });
+      } finally {
+        clearTimeout(deadline);
+        res.off('close', gone);
+      }
     });
   }
 
@@ -419,7 +459,7 @@ export class PortalContractController {
 
   private async granted(session: { user: { id: string } }, only?: string): Promise<PortalHotel[]> {
     const ids = new Set(
-      (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.hotelIds),
+      (await this.grants.activeOf(session.user.id, this.db)).flatMap((g) => g.operationalHotelIds),
     );
     const wanted = only === undefined ? [...ids] : ids.has(only) ? [only] : [];
     return wanted.length === 0 ? [] : this.hotels.financeContractHotels(wanted, this.db);
@@ -468,3 +508,10 @@ export class PortalContractController {
     }
   }
 }
+
+/** A grant as the session view names it: the payer and all its hotels (unchanged contract). */
+const scopeOf = (g: { id: string; payerCustomerId: string; hotelIds: string[] }) => ({
+  id: g.id,
+  payerCustomerId: g.payerCustomerId,
+  hotelIds: g.hotelIds,
+});

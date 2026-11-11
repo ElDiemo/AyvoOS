@@ -10,6 +10,7 @@ import { testCarrierControl } from '../src/carriers/test-carrier.js';
 import { crateFactory, createHotel } from './support/order-fixtures.js';
 import { DELIVERED, look, PICKED_UP, RETURN_ENV, shipCrates } from './support/return-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { operationsCheck } from './support/portal-check.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
 const PASSWORD = 'Dlouhe portalove heslo AYVO 789';
@@ -111,7 +112,7 @@ describe.skipIf(!hasDatabase)('hotel portal: delivered only when proven', () => 
         payerCustomerId: randomUUID(),
         hotelIds: [h.id],
         reason: 'synthetic portal grant',
-        financeCheck: { payerVersion: 1, hotelIds: [h.id], checkedAt: new Date().toISOString() },
+        financeCheck: operationsCheck([h.id]),
       });
       const o = await shipCrates(su, h.code, factory.kit.productCode, [
         await factory.make(),

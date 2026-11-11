@@ -10,7 +10,7 @@ import { useRef, useState } from 'react';
 import { z } from 'zod';
 import { buttonClass, ErrorNote, inputClass } from '@/components/ui';
 import { portalAccessCs as t } from '@/i18n/cs/finance-portal';
-import { formatDateTimeCs } from '@/i18n/cs/format';
+import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
 import { apiSend, ClientApiError } from '@/lib/client-api';
 
 type Hotel = FinancePortalAccess['payerHotels'][number];
@@ -102,12 +102,23 @@ function HotelPicker({
   );
 }
 
-function NewAccess({ payerCustomerId, hotels }: { payerCustomerId: string; hotels: Hotel[] }) {
+function NewAccess({
+  payerCustomerId,
+  hotels,
+  preselect,
+}: {
+  payerCustomerId: string;
+  hotels: Hotel[];
+  /** A hotel of `hotels` to start with (coming from its card); the user still confirms. */
+  preselect: string | null;
+}) {
   const { busy, error, note, run, fresh } = useAction();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [reason, setReason] = useState('');
-  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [chosen, setChosen] = useState<Set<string>>(
+    () => new Set(preselect && hotels.some((h) => h.id === preselect) ? [preselect] : []),
+  );
   const edit =
     <T,>(set: (v: T) => void) =>
     (v: T) => {
@@ -295,18 +306,157 @@ function ActiveGrant({ grant, hotels }: { grant: PortalGrantListItem; hotels: Ho
   );
 }
 
+type Restriction = FinancePortalAccess['restrictions'][number];
+
+/**
+ * One restriction (v6): the payer's operations on the hotel end after `endsOn` (a change of payer
+ * in Finance). "Obnovit provoz" commits an explicit restore naming exactly this fence; a restore
+ * not yet taken over by the core is sent again.
+ */
+function RestrictionItem({
+  payerCustomerId,
+  restriction: r,
+  hotelName,
+}: {
+  payerCustomerId: string;
+  restriction: Restriction;
+  hotelName: string;
+}) {
+  const router = useRouter();
+  const requestId = useRef(crypto.randomUUID());
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const base = `admin/finance/billing/agreements/${r.agreementCode}/restores`;
+  async function send(path: string, body: Record<string, unknown>) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = (await apiSend('POST', path, z.unknown(), body)) as { sent?: boolean };
+      setNote(res.sent === false ? t.restrictions.notSent : t.restrictions.restored);
+      setOpen(false);
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof ClientApiError && err.code && t.errors[err.code]
+          ? t.errors[err.code]!
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <li className="flex flex-col gap-1 py-2" data-testid={`portal-restriction-${r.fenceId}`}>
+      <span className="font-medium">
+        {hotelName} · {t.restrictions.endsOn(formatDateCs(r.endsOn))}
+      </span>
+      {r.restore ? (
+        <>
+          <span className="text-stone-600">
+            {t.restrictions.pendingSend(r.restore.termsRevision)}
+          </span>
+          <button
+            type="button"
+            className={buttonClass.secondary}
+            disabled={busy}
+            onClick={() => void send(`${base}/${r.restore!.termsRevision}/send`, {})}
+            data-testid={`portal-restriction-send-${r.fenceId}`}
+          >
+            {t.restrictions.send}
+          </button>
+        </>
+      ) : open ? (
+        <div className="flex flex-col gap-2">
+          <label className="flex flex-col gap-1 text-sm">
+            {t.reason}
+            <input
+              className={inputClass}
+              value={reason}
+              onChange={(e) => {
+                setReason(e.target.value);
+                requestId.current = crypto.randomUUID();
+              }}
+              data-testid={`portal-restriction-reason-${r.fenceId}`}
+            />
+          </label>
+          <button
+            type="button"
+            className={buttonClass.primary}
+            disabled={busy || reason.trim() === ''}
+            onClick={() =>
+              void send(base, {
+                requestId: requestId.current,
+                payerCustomerId,
+                fenceIds: [r.fenceId],
+                reason,
+              })
+            }
+            data-testid={`portal-restriction-confirm-${r.fenceId}`}
+          >
+            {t.restrictions.confirmRestore}
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={buttonClass.secondary}
+          onClick={() => setOpen(true)}
+          data-testid={`portal-restriction-restore-${r.fenceId}`}
+        >
+          {t.restrictions.restore}
+        </button>
+      )}
+      {note && <p className="text-sm text-stone-600">{note}</p>}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </li>
+  );
+}
+
 /** The payer's hotel portal access: its grants, a new one, a change of hotels, revocation. */
 export function PortalAccess({
   payerCustomerId,
   access,
+  preselectHotelId = null,
 }: {
   payerCustomerId: string;
   access: FinancePortalAccess;
+  /**
+   * From a hotel's card (`?hotel=<id>`): that hotel is pre-selected in the new access — only if it
+   * is one of the hotels Finance verified for this payer; any other id selects nothing. The
+   * selection stays visible, the user confirms, and the server checks the pair again.
+   */
+  preselectHotelId?: string | null;
 }) {
-  const { grants, payerHotels: hotels, hotelNames } = access;
+  const { grants, payerHotels: hotels, hotelNames, restrictions } = access;
+  const preselect = hotels.find((h) => h.id === preselectHotelId) ?? null;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-stone-500">{t.help}</p>
+      {restrictions.length > 0 && (
+        <section
+          className="flex flex-col gap-1 rounded-md border border-amber-300 bg-amber-50 p-3"
+          data-testid="portal-restrictions"
+        >
+          <h3 className="text-sm font-semibold">{t.restrictions.title}</h3>
+          <p className="text-xs text-stone-600">{t.restrictions.help}</p>
+          <ul className="divide-y divide-amber-200 text-sm">
+            {restrictions.map((r) => (
+              <RestrictionItem
+                key={r.fenceId}
+                payerCustomerId={payerCustomerId}
+                restriction={r}
+                hotelName={hotelNames[r.hotelId] ?? r.hotelId}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
       {grants.length === 0 ? (
         <p className="text-sm text-stone-500">{t.none}</p>
       ) : (
@@ -341,12 +491,21 @@ export function PortalAccess({
       {hotels.length === 0 ? (
         <p className="text-sm text-stone-500">{t.noPayerHotels}</p>
       ) : (
-        <details>
+        <details open={preselect !== null}>
           <summary className="cursor-pointer text-sm font-medium" data-testid="portal-access-open">
             {t.newAccess}
           </summary>
-          <div className="mt-3">
-            <NewAccess payerCustomerId={payerCustomerId} hotels={hotels} />
+          <div className="mt-3 flex flex-col gap-3">
+            {preselect && (
+              <p className="text-xs text-stone-600" data-testid="portal-access-preselected">
+                {t.preselected(preselect.name)}
+              </p>
+            )}
+            <NewAccess
+              payerCustomerId={payerCustomerId}
+              hotels={hotels}
+              preselect={preselect?.id ?? null}
+            />
           </div>
         </details>
       )}

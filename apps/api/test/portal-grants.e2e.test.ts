@@ -5,6 +5,7 @@ import { SessionsService } from '../src/identity/sessions.service.js';
 import { createHotel } from './support/order-fixtures.js';
 import { prepareInvitedUser, sessionCookie } from './support/sign-in.js';
 import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
+import { operationsCheck } from './support/portal-check.js';
 
 const unique = (p: string) => `${p}-${randomUUID().slice(0, 8)}@ayvo.test`;
 const tokenOf = (cookie: string) => cookie.replace(/^ayvo_session=/, '');
@@ -45,7 +46,7 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
     payerCustomerId,
     hotelIds,
     reason: 'synthetic portal grant',
-    financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
+    financeCheck: operationsCheck(hotelIds),
   });
   const issue = async (userId: string, hotelIds: string[], payer: string = randomUUID()) => {
     const res = await contract('portal-grants').send({ userId, ...body(hotelIds, payer) });
@@ -288,10 +289,24 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       const empty = await contract('portal-grants').send({ userId: user.id, ...body([]) });
       expect(empty.status).toBe(400);
       const unconfirmed = body([hotels[0]!, hotels[1]!]);
-      unconfirmed.financeCheck.hotelIds = [hotels[0]!];
+      unconfirmed.financeCheck.hotels = unconfirmed.financeCheck.hotels.filter(
+        (h) => h.id === hotels[0],
+      );
       expect(
         (await contract('portal-grants').send({ userId: user.id, ...unconfirmed })).status,
       ).toBe(400);
+      // The check before the boundary (hotels without a basis) is refused for a new grant (v6).
+      const legacy = {
+        ...body([hotels[0]!]),
+        financeCheck: {
+          payerVersion: 1,
+          hotelIds: [hotels[0]!],
+          checkedAt: new Date().toISOString(),
+        },
+      };
+      expect((await contract('portal-grants').send({ userId: user.id, ...legacy })).status).toBe(
+        400,
+      );
       const missing = await contract('portal-grants').send({
         ...body([hotels[0]!]),
         userId: randomUUID(),
@@ -547,7 +562,10 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
       const again = await contract('portal-grants').send({
         ...payload,
         hotelIds: [hotels[1]!, hotels[0]!],
-        financeCheck: { ...payload.financeCheck, hotelIds: [hotels[1]!, hotels[0]!] },
+        financeCheck: {
+          ...payload.financeCheck,
+          hotels: [...payload.financeCheck.hotels].reverse(),
+        },
       });
       expect([again.status, again.body]).toEqual([201, first.body]);
       expect(await written(user.id)).toEqual({ grants: 1, audit: 1 });
@@ -597,11 +615,11 @@ describe.skipIf(!hasDatabase)('portal grants', () => {
     });
 
     /** Finance checks again before each attempt: the retry carries newer evidence of that check. */
-    const rechecked = <T extends { financeCheck: { hotelIds: string[] } }>(p: T) => ({
+    const rechecked = <T extends { financeCheck: { hotels: unknown[] } }>(p: T) => ({
       ...p,
       financeCheck: {
         payerVersion: 2,
-        hotelIds: p.financeCheck.hotelIds,
+        hotels: p.financeCheck.hotels,
         checkedAt: new Date(Date.now() + 60_000).toISOString(),
       },
     });

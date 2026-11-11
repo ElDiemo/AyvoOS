@@ -50,7 +50,12 @@ export const shellCs = {
     sales: {
       label: 'Obchod',
       description: 'Akvizice hotelů: zájemci, kontakty, co proběhlo a co je potřeba udělat dál.',
-      pages: { overview: 'Přehled obchodu', prospects: 'Akvizice', tasks: 'Úkoly' },
+      pages: {
+        overview: 'Přehled obchodu',
+        prospects: 'Akvizice',
+        tasks: 'Úkoly',
+        calendar: 'Kalendář',
+      },
     },
     warehouse: {
       label: 'Sklad',
@@ -63,20 +68,19 @@ export const shellCs = {
         availability: 'Dostupnost',
         movements: 'Pohyby',
         suppliers: 'Dodavatelé',
-        returns: 'Příjem vratek',
-        afterWash: 'Po mytí',
       },
     },
     production: {
       label: 'Výroba',
       description:
-        'Práce na pracovištích (lepení a plnění), evidence beden a lahví a nastavení výroby.',
+        'Práce na pracovištích (lepení a plnění), oběh lahví (vratky a mytí), evidence beden a lahví a nastavení výroby.',
       pages: {
         overview: 'Přehled výroby',
         bottles: 'Lahve',
         templates: 'Šablony etiket',
         labelActivation: 'Nalepení etiket',
         station: 'Pracovat na pracovišti',
+        cycle: 'Oběh lahví',
         crates: 'Bedny',
         workstations: 'Pracoviště a QR',
         catalog: 'Produkty a receptury',
@@ -92,7 +96,7 @@ export const shellCs = {
         setup: 'Nastavení výroby',
       },
       sectionHelp: {
-        work: 'Lepení a plnění na pracovišti',
+        work: 'Pracoviště, vratky a mytí',
         records: 'Záznamy a jejich historie',
         setup: 'Příprava, pracoviště, produkty',
       },
@@ -101,7 +105,7 @@ export const shellCs = {
     hotels: {
       label: 'Hotely',
       description: 'Hotely, jejich doručovací adresa, kontakt a obsluhující provozovna.',
-      pages: { list: 'Hotely', new: 'Nový hotel' },
+      pages: { list: 'Hotely', new: 'Nový hotel', users: 'Uživatelé' },
     },
     dispatch: {
       label: 'Expedice',
