@@ -1,0 +1,19 @@
+# AYVO OS — plain HTTP of the hotel portal's name on the internal Caddy (public IPv4 :80 belongs to
+# it). Mounted only by compose.portal-edge.yml (PORTAL_PUBLIC=on); imported by the internal
+# Caddyfile. ACME HTTP-01 challenges go to qr-edge's :80 over the small `acme` network (qr-edge
+# obtains and holds the certificate); every other request is redirected to HTTPS on the same name.
+http://{$PORTAL_DOMAIN} {
+	@challenge {
+		method GET
+		path_regexp ^/\.well-known/acme-challenge/[A-Za-z0-9_-]+$
+	}
+	handle @challenge {
+		reverse_proxy qr-edge:80 {
+			header_up -Cookie
+			header_up -Authorization
+		}
+	}
+	handle {
+		redir https://{host}{uri} 301
+	}
+}

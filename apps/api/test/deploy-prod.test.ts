@@ -755,6 +755,88 @@ describe('production deploy script', () => {
       }
     });
 
+    it('portal keys (doc 064): none = no portal; all five, Finance set, tokens matching and distinct; PORTAL_PUBLIC on/empty; nothing printed', () => {
+      const shaOf = (v: string) =>
+        spawnSync('sh', ['-c', `printf '%s' '${v}' | sha256sum | cut -d' ' -f1`], {
+          encoding: 'utf8',
+        }).stdout.trim();
+      const finToken = 'f'.repeat(43);
+      const fin =
+        `FINANCE_DB_PASSWORD=${'r'.repeat(32)}\nFINANCE_DB_OWNER_PASSWORD=${'o'.repeat(32)}\n` +
+        `FINANCE_SERVICE_TOKEN=${finToken}\nFINANCE_SERVICE_TOKEN_SHA256=${shaOf(finToken)}\n`;
+      const finS3 = 'AWS_ACCESS_KEY_ID=AKIAFINANCEFICTIONAL\nAWS_SECRET_ACCESS_KEY=z\n';
+      const core = 'p'.repeat(43);
+      const finance = 'q'.repeat(43);
+      const portal = (over: Record<string, string> = {}) =>
+        Object.entries({
+          PORTAL_DOMAIN: 'portal.example.test',
+          PORTAL_CORE_TOKEN: core,
+          PORTAL_FINANCE_TOKEN: finance,
+          PORTAL_SERVICE_TOKEN_SHA256: shaOf(core),
+          PORTAL_FINANCE_TOKEN_SHA256: shaOf(finance),
+          ...over,
+        })
+          .filter(([, v]) => v !== '')
+          .map(([k, v]) => `${k}=${v}\n`)
+          .join('');
+      const files = (extra: string, withFinance = true) => ({
+        ...good,
+        'prod.env': prod + (withFinance ? fin : '') + extra,
+        ...(withFinance ? { 'prod-finance-s3.env': finS3 } : {}),
+      });
+      const call = 'check_env_files; echo "PORTAL=$PORTAL_ENABLED PUBLIC=${PORTAL_PUBLIC:-off}"';
+      const none = check(files(''), 0o600, { call });
+      expect(none.status, none.stderr).toBe(0);
+      expect(none.stdout).toContain('portal keys not set');
+      expect(none.stdout).toContain('PORTAL=false');
+      const priv = check(files(portal()), 0o600, { call });
+      expect(priv.status, priv.stderr).toBe(0);
+      expect(priv.stdout).toContain('PORTAL=true PUBLIC=off');
+      const pub = check(files(portal() + 'PORTAL_PUBLIC=on\n'), 0o600, { call });
+      expect(pub.status, pub.stderr).toBe(0);
+      expect(pub.stdout).toContain('PORTAL=true PUBLIC=on');
+      for (const [why, f, msg] of [
+        ['only some keys', files(portal({ PORTAL_FINANCE_TOKEN: '' })), /all of/],
+        ['no Finance unit', files(portal(), false), /needs the Finance unit/],
+        ['public without keys', files('PORTAL_PUBLIC=on\n'), /PORTAL_PUBLIC is set/],
+        ['public not on', files(portal() + 'PORTAL_PUBLIC=yes\n'), /empty or 'on'/],
+        [
+          'a bad host',
+          files(portal({ PORTAL_DOMAIN: 'https://portal.example.test' })),
+          /plain host/,
+        ],
+        [
+          'the same token twice',
+          files(portal({ PORTAL_FINANCE_TOKEN: core, PORTAL_FINANCE_TOKEN_SHA256: shaOf(core) })),
+          /must differ \(one per receiver\)/,
+        ],
+        [
+          "Finance's own token",
+          files(
+            portal({ PORTAL_CORE_TOKEN: finToken, PORTAL_SERVICE_TOKEN_SHA256: shaOf(finToken) }),
+          ),
+          /must differ from FINANCE_SERVICE_TOKEN/,
+        ],
+        [
+          'a wrong core SHA',
+          files(portal({ PORTAL_SERVICE_TOKEN_SHA256: shaOf(finance) })),
+          /not the SHA-256 of PORTAL_CORE_TOKEN/,
+        ],
+        [
+          'a wrong Finance SHA',
+          files(portal({ PORTAL_FINANCE_TOKEN_SHA256: shaOf(core) })),
+          /not the SHA-256 of PORTAL_FINANCE_TOKEN/,
+        ],
+        ['a short token', files(portal({ PORTAL_CORE_TOKEN: 'short' })), /43-128/],
+      ] as const) {
+        const res = check(f as Record<string, string>);
+        expect([why, res.status]).toEqual([why, 1]);
+        expect(res.stderr, why).toMatch(msg);
+        for (const secret of [core, finance, finToken])
+          expect(res.stdout + res.stderr, why).not.toContain(secret);
+      }
+    });
+
     it('accepts an optional ID_DOMAIN in prod.env', () => {
       const res = check({ ...good, 'prod.env': `${prod}ID_DOMAIN=id.example.test\n` });
       expect(res.status, res.stderr).toBe(0);

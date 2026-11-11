@@ -29,6 +29,17 @@
 #   scripts/deploy-prod.sh --marketing-rollback <release> start an earlier marketing image again (the
 #                                                         same strict checks); <release> =
 #                                                         <revision12>-<image12> from marketing.log
+#   scripts/deploy-prod.sh --portal --image-archive <file> --expect-image <sha256:id>
+#                          --expect-archive <sha256:hex>
+#                                                         the hotel portal unit alone (doc 064 A1):
+#                                                         load EXACTLY the portal-web image accepted on
+#                                                         DEV, replace only `portal-web` (previous one
+#                                                         restored if it fails), verify it privately and
+#                                                         — with PORTAL_PUBLIC=on — over valid HTTPS
+#   scripts/deploy-prod.sh --portal-rollback <release>    start an earlier portal-web image again;
+#                                                         <release> = <revision12>-<image12> (portal.log)
+#   scripts/deploy-prod.sh --portal-stop                  stop and remove only `portal-web` (the fast
+#                                                         stop; the complete disable is doc 064 §3)
 #   scripts/deploy-prod.sh --finance --release <commit>   the Finance unit alone (ADR 0039): the SAME
 #                                                         commit the OS runs, its api image (never
 #                                                         built again); back up, set up the Finance
@@ -92,7 +103,11 @@ readonly QR_LABEL_KEYS="LABEL_QR_MIN_SIZE_MM LABEL_QR_ERROR_CORRECTION"
 # The Finance unit (ADR 0039, optional until it is installed): all four or none. Its runtime and
 # owner roles' passwords, its service token and that token's SHA-256 (the only form the API gets).
 readonly FINANCE_KEYS="FINANCE_DB_PASSWORD FINANCE_DB_OWNER_PASSWORD FINANCE_SERVICE_TOKEN FINANCE_SERVICE_TOKEN_SHA256"
-readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN $FINANCE_KEYS FINANCE_INVOICE_MAIL FINANCE_MAIL_TEST_RECIPIENTS RB_PREMIUM_ACCOUNTS"
+# The hotel portal (doc 064 option A1, optional): all five or none — its host, portal-web's two
+# tokens (one per receiver) and their SHA-256s (the only form the core and Finance get).
+# PORTAL_PUBLIC=on adds the public site on the public edge; unset = the portal stays private.
+readonly PORTAL_KEYS="PORTAL_DOMAIN PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN PORTAL_SERVICE_TOKEN_SHA256 PORTAL_FINANCE_TOKEN_SHA256"
+readonly ALLOW_PROD="$KEYS_PROD $QR_LABEL_KEYS CARRIER_CREDENTIALS_KEY ID_DOMAIN MARKETING_DOMAIN $FINANCE_KEYS FINANCE_INVOICE_MAIL FINANCE_MAIL_TEST_RECIPIENTS $PORTAL_KEYS PORTAL_PUBLIC RB_PREMIUM_ACCOUNTS"
 readonly KEYS_AUTH="AUTH_ENCRYPTION_KEY AUTH_MAIL_DRIVER AUTH_MAIL_FROM"
 readonly ALLOW_AUTH="$KEYS_AUTH AUTH_SMTP_HOST AUTH_SMTP_PORT AUTH_SMTP_USER AUTH_SMTP_PASSWORD"
 readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
@@ -111,10 +126,22 @@ MIGRATED=false
 PREVIOUS=""
 EXPECT_DIGEST=""
 EXPECT_IMAGE=""
+EXPECT_ARCHIVE=""
+PORTAL_ARCHIVE_TAG=""
+PORTAL_ARCHIVE_COPY=""
 IMAGE_ARCHIVE=""
 MARKETING_ROLLBACK=""
 MARKETING_RELEASE=""
 FINANCE_ROLLBACK=""
+PORTAL_ROLLBACK=""
+PORTAL_RELEASE=""
+PORTAL_ENABLED=false
+PORTAL_DOMAIN=""
+PORTAL_PUBLIC=""
+PORTAL_OUTCOME=""
+PORTAL_FAILED=""
+PORTAL_PREVIOUS_IMAGE=""
+PORTAL_PREVIOUS_PUBLIC=false
 FINANCE_RELEASE=""
 FINANCE_IMAGE=""
 FINANCE_MIGRATE_IMAGE=""
@@ -130,11 +157,12 @@ die() {
   printf '\033[1;31mFAILED\033[0m at "%s": %s\n' "$STEP" "$*" >&2
   exit 1
 }
-usage() { sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,63p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 on_exit() {
   local code=$?
   trap - ERR
+  [[ -z ${PORTAL_ARCHIVE_COPY:-} ]] || rm -f -- "$PORTAL_ARCHIVE_COPY"
   ((code == 0)) && return
   {
     echo
@@ -406,6 +434,57 @@ check_finance_env() {
   ok "Finance keys set; the token matches its SHA-256; its own S3 identity"
 }
 
+# The hotel portal (doc 064 option A1). None of PORTAL_KEYS: no portal at all (the core's and
+# Finance's portal contracts refuse every call). All of them: the portal unit may run (privately
+# until PORTAL_PUBLIC=on). The host is checked like the other public hosts; each token is checked
+# against its SHA-256 and differs from the other one and from Finance's own token (one token per
+# receiver, ADR 0045 §6). Values are never printed.
+check_portal_env() {
+  local file=$SECRETS/prod.env key set=() core fin
+  for key in $PORTAL_KEYS; do [[ -n $(env_value "$file" "$key") ]] && set+=("$key"); done
+  PORTAL_PUBLIC="$(env_value "$file" PORTAL_PUBLIC || true)"
+  if ((${#set[@]} == 0)); then
+    [[ -z $PORTAL_PUBLIC ]] || die "PORTAL_PUBLIC is set but the portal keys are not (doc 064)"
+    ok "portal keys not set: no hotel portal (its contracts refuse every call)"
+    return
+  fi
+  ((${#set[@]} == 5)) || die "prod.env sets only ${set[*]}: set all of $PORTAL_KEYS or none (doc 064)"
+  [[ $FINANCE_ENABLED == true ]] || die "the hotel portal needs the Finance unit (its invoices): set the Finance keys first"
+  [[ -z $PORTAL_PUBLIC || $PORTAL_PUBLIC == on ]] || die "PORTAL_PUBLIC must be empty or 'on'"
+  PORTAL_DOMAIN="$(env_value "$file" PORTAL_DOMAIN)"
+  [[ $PORTAL_DOMAIN =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ||
+    die "PORTAL_DOMAIN must be a plain host name (e.g. portal.ayvo.co)"
+  core="$(env_value "$file" PORTAL_CORE_TOKEN)"
+  fin="$(env_value "$file" PORTAL_FINANCE_TOKEN)"
+  for key in PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN; do
+    [[ $(env_value "$file" "$key") =~ ^[A-Za-z0-9_-]{43,128}$ ]] ||
+      die "$key must be 43-128 characters of base64url (try: openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+  done
+  [[ $core != "$fin" ]] || die "PORTAL_CORE_TOKEN and PORTAL_FINANCE_TOKEN must differ (one per receiver)"
+  for key in PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN; do
+    [[ $(env_value "$file" "$key") != "$(env_value "$file" FINANCE_SERVICE_TOKEN)" ]] ||
+      die "$key must differ from FINANCE_SERVICE_TOKEN"
+  done
+  [[ $(printf '%s' "$core" | sha256sum | cut -d' ' -f1) == "$(env_value "$file" PORTAL_SERVICE_TOKEN_SHA256)" ]] ||
+    die "PORTAL_SERVICE_TOKEN_SHA256 is not the SHA-256 of PORTAL_CORE_TOKEN"
+  [[ $(printf '%s' "$fin" | sha256sum | cut -d' ' -f1) == "$(env_value "$file" PORTAL_FINANCE_TOKEN_SHA256)" ]] ||
+    die "PORTAL_FINANCE_TOKEN_SHA256 is not the SHA-256 of PORTAL_FINANCE_TOKEN"
+  PORTAL_ENABLED=true
+  ok "portal keys set: the two tokens differ and match their SHA-256s (public site: ${PORTAL_PUBLIC:-off})"
+}
+
+# The portal host must differ from every other host (after qr_domain / id_domain / marketing_domain).
+portal_domain() {
+  [[ $PORTAL_ENABLED == true ]] || return 0
+  local other
+  for other in "$DOMAIN" "$QR_DOMAIN" "${ID_DOMAIN:-}" "${MARKETING_DOMAIN:-}"; do
+    [[ -n $other ]] || continue
+    [[ $PORTAL_DOMAIN != "$other" ]] || die "PORTAL_DOMAIN must differ from $other"
+  done
+  [[ -z ${MARKETING_DOMAIN:-} || $PORTAL_DOMAIN != "www.$MARKETING_DOMAIN" ]] ||
+    die "PORTAL_DOMAIN must differ from www.$MARKETING_DOMAIN"
+}
+
 # Optional: Finance reads bank transactions from RB Premium API (doc 041, doc 036 §10a). Switched
 # on only by RB_PREMIUM_ACCOUNTS in prod.env (which accounts — not a secret); the client ID, the
 # certificate and its passphrase are files the owner stored in $SECRETS/rb-premium, mounted
@@ -478,6 +557,7 @@ check_env_files() {
     die "prod-s3.env holds the backup identity: the application uses its own S3 identity (ADR 0032)"
   fi
   check_finance_env
+  check_portal_env
   check_rb_premium
   check_invoice_mail
   if [[ -f $SECRETS/prod-workos-client.env ]]; then
@@ -539,6 +619,14 @@ compose_files() {
   if [[ -n ${MARKETING_DOMAIN:-} && -f $dir/deploy/prod/compose.marketing.yml ]]; then
     printf '%s\n' -f "$dir/deploy/prod/compose.marketing.yml"
   fi
+  # The hotel portal (doc 064): its private unit only when its keys are set and the release has it;
+  # its public site on top only with PORTAL_PUBLIC=on.
+  if [[ $PORTAL_ENABLED == true && -f $dir/deploy/prod/compose.portal.yml ]]; then
+    printf '%s\n' -f "$dir/deploy/prod/compose.portal.yml"
+    if [[ $PORTAL_PUBLIC == on && -f $dir/deploy/prod/compose.portal-edge.yml ]]; then
+      printf '%s\n' -f "$dir/deploy/prod/compose.portal-edge.yml"
+    fi
+  fi
 }
 
 compose() {
@@ -548,6 +636,7 @@ compose() {
   PROD_DOMAIN=$DOMAIN PROD_TAILNET_IPV4=$PROD_TAILNET_IPV4 AYVO_RELEASE=$AYVO_RELEASE \
     PROD_PUBLIC_IPV4=$PROD_PUBLIC_IPV4 QR_DOMAIN=$QR_DOMAIN ID_DOMAIN=${ID_DOMAIN:-} \
     MARKETING_DOMAIN=${MARKETING_DOMAIN:-} MARKETING_RELEASE=${MARKETING_RELEASE:-none} \
+    PORTAL_DOMAIN=${PORTAL_DOMAIN:-} PORTAL_RELEASE=${PORTAL_RELEASE:-none} \
     FINANCE_IMAGE=${FINANCE_IMAGE:-$IMAGE_PREFIX/api:none} \
     FINANCE_MIGRATE_IMAGE=${FINANCE_MIGRATE_IMAGE:-$IMAGE_PREFIX/api-migrate:none} \
     AYVO_RELEASE_DIR=$dir AYVO_PROD_SECRETS_DIR=$SECRETS \
@@ -592,6 +681,7 @@ current_finance() {
   id="$(docker inspect --format '{{.Image}}' "$PROJECT-finance-1" 2>/dev/null)" || return 0
   awk -v id="$id" '$2 == id { r = $1 } END { if (r) print r }' "$PROD_DIR/state/finance.log" 2>/dev/null
 }
+current_portal() { docker inspect --format '{{.Config.Image}}' "$PROJECT-portal-web-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/portal-web:||p"; }
 current_marketing() { docker inspect --format '{{.Config.Image}}' "$PROJECT-marketing-1" 2>/dev/null | sed -n "s|^$IMAGE_PREFIX/marketing:||p"; }
 
 # --- the marketing site (ADR 0040) -------------------------------------------------------------
@@ -670,6 +760,311 @@ start_marketing() {
     die "the marketing release did not start AND the previous image $previous_image did not come back: the site is unavailable"
   fi
   die "the marketing release did not start (no other previous image to restore): the site is unavailable"
+}
+
+# --- the hotel portal unit (doc 064 option A1) -------------------------------------------------
+
+# The portal-web image accepted on DEV: a `docker save` archive of exactly one DEV tag (no
+# registry), approved by its SHA-256 and identified by its image ID; the production tag names its
+# revision AND the image, like the marketing site's. Nothing is built.
+#
+# Review 5858165597 P2: `docker load` sets every name an archive carries before anything could be
+# checked, so the archive is checked FIRST, on a private copy that cannot change after its check:
+# - its SHA-256 is the approved one (--expect-archive);
+# - it holds exactly one image, the expected ID (manifest.json and index.json agree);
+# - it names exactly one tag, a DEV portal-web tag ($PORTAL_ARCHIVE_REPO:<revision12>-<UTC time>) —
+#   in manifest.json, in index.json's annotations and in a legacy `repositories` file alike;
+# - that tag names no other image here yet.
+# So no archive can rename a production image (the running one, a rollback or a restore tag).
+readonly PORTAL_ARCHIVE_REPO=ayvo-dev-preview/portal-web
+check_portal_archive() {
+  local file=$1 expected=$2 digest=$3 entries manifest index tag repos ids existing
+  [[ $(sha256sum "$file" | cut -d' ' -f1) == "${digest#sha256:}" ]] ||
+    die "the archive is not the approved one (SHA-256 differs from $digest): refused, nothing loaded"
+  entries="$(tar -tf "$file")" || die "the archive is not a readable tar: refused, nothing loaded"
+  [[ $(grep -cx 'manifest.json' <<<"$entries") == 1 && $(grep -cx 'index.json' <<<"$entries") -le 1 &&
+    $(grep -cx 'repositories' <<<"$entries") -le 1 ]] ||
+    die "the archive must hold exactly one manifest.json (and at most one index.json / repositories): refused"
+  manifest="$(tar -xOf "$file" manifest.json)" || die "cannot read the archive's manifest.json"
+  jq -e 'type == "array" and length == 1 and (.[0].RepoTags | type == "array" and length == 1)' <<<"$manifest" >/dev/null ||
+    die "the archive must hold exactly one image with exactly one tag: refused, nothing loaded"
+  tag="$(jq -r '.[0].RepoTags[0]' <<<"$manifest")"
+  [[ $tag =~ ^${PORTAL_ARCHIVE_REPO//./\.}:[0-9a-f]{12}-[0-9]{8}T[0-9]{6}Z$ ]] ||
+    die "the archive's tag '$tag' is not a DEV portal-web tag ($PORTAL_ARCHIVE_REPO:<revision12>-<time>): refused"
+  ids="sha256:$(jq -r '.[0].Config | sub("^blobs/sha256/"; "") | sub("\\.json$"; "")' <<<"$manifest")"
+  if grep -qx 'index.json' <<<"$entries"; then
+    index="$(tar -xOf "$file" index.json)" || die "cannot read the archive's index.json"
+    jq -e --arg t "$tag" '(.manifests | type == "array" and length == 1) and
+      ((.manifests[0].annotations // {}) as $a
+        | ($a["io.containerd.image.name"] // $t) as $n | ($n == $t or $n == "docker.io/" + $t)
+        and (($a["org.opencontainers.image.ref.name"] // ($t | split(":") | last)) == ($t | split(":") | last)))' \
+      <<<"$index" >/dev/null || die "the archive's index.json names another or a second image: refused, nothing loaded"
+    ids="$ids $(jq -r '.manifests[0].digest' <<<"$index")"
+  fi
+  if grep -qx 'repositories' <<<"$entries"; then
+    repos="$(tar -xOf "$file" repositories)" || die "cannot read the archive's repositories"
+    jq -e --arg r "${tag%:*}" --arg t "${tag##*:}" 'keys == [$r] and (.[$r] | keys == [$t])' <<<"$repos" >/dev/null ||
+      die "the archive's repositories file names another tag: refused, nothing loaded"
+  fi
+  # The image ID is the config digest (classic store) or the index digest (containerd store).
+  [[ " $ids " == *" $expected "* ]] || die "the archive holds image $ids, not the accepted $expected: refused, nothing loaded"
+  existing="$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null || true)"
+  [[ -z $existing || $existing == "$expected" ]] ||
+    die "$tag already names image $existing here: refused, nothing loaded"
+  PORTAL_ARCHIVE_TAG=$tag
+}
+
+load_portal_image() {
+  local archive=$1 expected=$2 digest=$3 copy loaded id revision existing mode
+  STEP="load the accepted portal-web image"
+  [[ -f $archive && ! -L $archive ]] || die "--image-archive: $archive is not a regular file"
+  mode="$(stat -c '%a' "$archive")"
+  (((8#$mode & 8#022) == 0)) || die "--image-archive: $archive must not be writable by group or others"
+  mkdir -p "$PROD_DIR/state"
+  copy="$(umask 077 && mktemp "$PROD_DIR/state/portal-archive.XXXXXX")" || die "cannot make a private copy of the archive"
+  PORTAL_ARCHIVE_COPY=$copy # removed by on_exit on any failure
+  cp -- "$archive" "$copy" || die "cannot copy $archive"
+  check_portal_archive "$copy" "$expected" "$digest"
+  loaded="$(docker load -i "$copy" | sed -n 's/^Loaded image: //p')" || die "docker load of $archive failed"
+  rm -f -- "$copy"
+  PORTAL_ARCHIVE_COPY=""
+  [[ $loaded == "$PORTAL_ARCHIVE_TAG" ]] || die "docker load reported '$loaded', not exactly $PORTAL_ARCHIVE_TAG"
+  id="$(docker image inspect --format '{{.Id}}' "$loaded")" || die "cannot inspect $loaded"
+  [[ $id == "$expected" ]] || die "the archive holds image $id, not the accepted $expected: refused"
+  revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$loaded")"
+  [[ $revision =~ ^[0-9a-f]{40}$ ]] || die "the image carries no source revision label"
+  PORTAL_IMAGE_REVISION=$revision
+  PORTAL_RELEASE="${revision:0:12}-${id:7:12}"
+  existing="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/portal-web:$PORTAL_RELEASE" 2>/dev/null || true)"
+  [[ -z $existing || $existing == "$id" ]] ||
+    die "$IMAGE_PREFIX/portal-web:$PORTAL_RELEASE already names image $existing: refused"
+  docker tag "$id" "$IMAGE_PREFIX/portal-web:$PORTAL_RELEASE" || die "cannot tag the accepted image"
+  ok "image $id (revision $revision) loaded as $IMAGE_PREFIX/portal-web:$PORTAL_RELEASE"
+}
+
+record_portal() {
+  mkdir -p "$PROD_DIR/state"
+  printf '%s %s %s image=%s public=%s\n' "$PORTAL_RELEASE" "$(date -u +%FT%TZ)" "$1" "$2" "${PORTAL_PUBLIC:-off}" \
+    >>"$PROD_DIR/state/portal.log"
+}
+recorded_portal() {
+  # The image of the last SUCCESS of that release.
+  [[ -f $PROD_DIR/state/portal.log ]] || return 0
+  awk -v t="$1" '$1 == t && $3 == "SUCCESS" { for (i = 4; i <= NF; i++) if ($i ~ /^image=/) m = substr($i, 7) } END { if (m) print m }' \
+    "$PROD_DIR/state/portal.log"
+}
+
+# --- the public portal fails closed (review 5858165597 P1) -------------------------------------
+#
+# The public site (PORTAL_PUBLIC=on) serves whatever portal-web runs. A portal that fails its public
+# check is never left open: it goes back to an image that was verified as public (and is verified
+# again), otherwise only portal-web is stopped — the portal route then answers only the edge's own
+# 503. Neither the edges nor the OS, Finance, QR, ID or marketing are restarted, and they are
+# checked again afterwards. The same "fast stop" as doc 064 §3, done automatically.
+
+# The last portal record as "<status> <image> <public>" (empty without one).
+last_portal_record() {
+  [[ -f $PROD_DIR/state/portal.log ]] || return 0
+  awk '{ l = $0 } END { if (l == "") exit; n = split(l, f, " "); s = f[3]
+    for (i = 4; i <= n; i++) { if (f[i] ~ /^image=/) m = substr(f[i], 7); if (f[i] ~ /^public=/) p = substr(f[i], 8) }
+    print s, m, p }' "$PROD_DIR/state/portal.log"
+}
+# The image was the last one verified over valid HTTPS as the public portal.
+portal_verified_public() {
+  local status image public
+  read -r status image public <<<"$(last_portal_record)" || true
+  [[ -n ${1:-} && ($status == SUCCESS || $status == RESTORED) && $image == "$1" && $public == on ]]
+}
+
+stop_portal_web() {
+  [[ -n $(docker ps -aq --filter "name=^$PROJECT-portal-web-1\$") ]] || return 0
+  docker stop "$PROJECT-portal-web-1" >/dev/null && docker rm "$PROJECT-portal-web-1" >/dev/null
+}
+
+# Closed: no portal-web, and the public portal host serves no portal page — only the edge's 503
+# (or nothing at all).
+verify_portal_closed() {
+  local pub4=$1 code
+  [[ -z $(docker ps -aq --filter "name=^$PROJECT-portal-web-1\$") ]] || return 1
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$PORTAL_DOMAIN:443:$pub4" "https://$PORTAL_DOMAIN/login" || true)"
+  [[ $code == 503 || $code == 000 ]]
+}
+
+# After the portal was closed or restored: the staff OS (tailnet), QR, ID and marketing unchanged.
+verify_other_hosts() {
+  local pub4=$1 unknown code
+  STEP="verify that only the portal changed: the OS, QR, ID and marketing still answer"
+  log "$STEP"
+  code="$(edge_status "https://$DOMAIN/login" || true)"
+  [[ $code == 200 ]] || die "after closing the portal, https://$DOMAIN/login (tailnet) answered '$code'"
+  unknown="$(head -c 16 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$QR_DOMAIN:443:$pub4" "https://$QR_DOMAIN/$unknown" || true)"
+  [[ $code == 404 ]] || die "after closing the portal, https://$QR_DOMAIN/<unknown token> answered '$code'"
+  verify_id_edge "$pub4"
+  if [[ -n ${MARKETING_RELEASE:-} ]]; then verify_marketing_release "$pub4"; else verify_marketing_edge "$pub4"; fi
+  ok "the OS sign-in, the QR passport, ID and marketing answer as before"
+}
+
+# Close (or restore) only the portal route. Sets PORTAL_OUTCOME; the caller fails the step.
+close_portal_route() {
+  local pub4=$1 failed=$2 previous=${PORTAL_PREVIOUS_IMAGE:-} restore
+  STEP="the public portal failed its check: close only the portal route"
+  warn "$STEP (image $failed)"
+  # PORTAL_PREVIOUS_PUBLIC: the previous image was the verified public portal when this run began.
+  if [[ -n $previous && $previous != "$failed" && $PORTAL_PREVIOUS_PUBLIC == true ]]; then
+    restore="restore-${previous:7:12}"
+    PORTAL_RELEASE=$restore
+    if docker tag "$previous" "$IMAGE_PREFIX/portal-web:$restore" &&
+      compose --profile portal up -d --no-build --no-deps portal-web && wait_healthy portal-web &&
+      [[ $(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null) == "$previous" ]] &&
+      (verify_portal_private) && (verify_portal_release "$pub4"); then
+      record_portal RESTORED "$previous"
+      verify_other_hosts "$pub4"
+      PORTAL_OUTCOME="the previous public portal image $previous runs again, verified over HTTPS"
+      return 0
+    fi
+    warn "the previous public portal image $previous did not verify again: closing the portal route"
+  fi
+  stop_portal_web || die "portal-web could not be stopped: the portal route may be OPEN — stop it by hand (doc 064 §3)"
+  verify_portal_closed "$pub4" ||
+    die "https://$PORTAL_DOMAIN still serves a page after portal-web was stopped: close it by hand (doc 064 §3)"
+  PORTAL_RELEASE=${PORTAL_RELEASE:-none}
+  record_portal CLOSED none
+  verify_other_hosts "$pub4"
+  PORTAL_OUTCOME="portal-web stopped, the portal route is closed (the edge answers 503); everything else unchanged"
+}
+
+# An OS deployment with PORTAL_PUBLIC=on (re)creates the public edge with the portal site: a running
+# portal-web that was never verified as public is stopped BEFORE that, so the edge never opens an
+# unverified portal. `--portal` then starts and verifies it (and closes the route if that fails).
+hold_unverified_portal() {
+  [[ $PORTAL_ENABLED == true && $PORTAL_PUBLIC == on ]] || return 0
+  local running
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null || true)"
+  [[ -n $running ]] || return 0
+  portal_verified_public "$running" && return 0
+  STEP="hold the portal: portal-web ($running) was never verified as the public portal"
+  log "$STEP"
+  stop_portal_web || die "portal-web could not be stopped before its public site opens"
+  PORTAL_RELEASE=${PORTAL_RELEASE:-none}
+  record_portal CLOSED none
+  PORTAL_RELEASE=""
+  ok "portal-web stopped: the public site serves the portal only after --portal verifies it"
+}
+
+# Replace only portal-web (profile "portal"); the OS, Finance and the edges are not restarted. If the
+# new container does not become healthy as the expected image, the previous image is started again.
+start_portal() {
+  local image=$1 previous_image=${PORTAL_PREVIOUS_IMAGE:-} restore
+  STEP="start only portal-web ($PORTAL_RELEASE)"
+  log "$STEP"
+  if compose --profile portal up -d --no-build --no-deps portal-web && wait_healthy portal-web &&
+    [[ $(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null) == "$image" ]]; then
+    ok "portal-web $PORTAL_RELEASE running: image $image"
+    return 0
+  fi
+  # Public (review 5858165597 P1): whatever now runs may be served publicly — back only to an image
+  # verified as public (and verified again), else the portal route is closed.
+  if [[ $PORTAL_PUBLIC == on ]]; then
+    record_portal UNVERIFIED "$image"
+    close_portal_route "$PROD_PUBLIC_IPV4" "$image"
+    die "the portal release did not start: $PORTAL_OUTCOME"
+  fi
+  if [[ -n $previous_image && $previous_image != "$image" ]]; then
+    restore="restore-${previous_image:7:12}"
+    docker tag "$previous_image" "$IMAGE_PREFIX/portal-web:$restore" ||
+      die "portal-web did not start AND the previous image $previous_image is gone: the portal is unavailable"
+    warn "the new portal-web failed: restoring image $previous_image"
+    PORTAL_RELEASE=$restore
+    if compose --profile portal up -d --no-build --no-deps portal-web && wait_healthy portal-web &&
+      [[ $(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null) == "$previous_image" ]]; then
+      die "the portal release did not start; the previous image $previous_image runs again"
+    fi
+    die "the portal release did not start AND the previous image $previous_image did not come back"
+  fi
+  die "the portal release did not start (no previous image to restore): the portal is unavailable"
+}
+
+# Privately, from inside portal-web (nothing public needed): its own page, its two contracts' hosts
+# reachable, and no database, Redis or the staff web on its networks (doc 064 §4).
+verify_portal_private() {
+  STEP="verify portal-web privately (its page, its contracts, its isolation)"
+  log "$STEP"
+  docker exec "$PROJECT-portal-web-1" node -e "
+    const net = require('node:net');
+    const reach = (host, port) => new Promise((ok) => {
+      const s = net.connect({ host, port, timeout: 2000 }, () => { s.destroy(); ok(true); });
+      s.on('error', () => ok(false)); s.on('timeout', () => { s.destroy(); ok(false); });
+    });
+    (async () => {
+      const page = await fetch('http://127.0.0.1:3200/login').then((r) => r.status, () => 0);
+      if (page !== 200) throw new Error('portal-web /login answered ' + page);
+      for (const [h, p] of [['api', 4000], ['finance', 4010]])
+        if (!(await reach(h, p))) throw new Error(h + ':' + p + ' is not reachable');
+      for (const [h, p] of [['postgres', 5432], ['redis', 6379], ['web', 3000], ['caddy', 443]])
+        if (await reach(h, p)) throw new Error(h + ':' + p + ' must not be reachable from portal-web');
+    })().then(() => process.exit(0), (e) => { console.error(e.message); process.exit(1); });" ||
+    die "portal-web is not private as required (doc 064 §4)"
+  ok "portal-web: /login 200; api and finance reachable; postgres, redis, web and caddy not"
+}
+
+# The public portal (PORTAL_PUBLIC=on): valid HTTPS (never -k), the sign-in page with the portal's
+# own nonce CSP, no /api at all, only the allowed methods, no other host behind the name.
+verify_portal_release() {
+  [[ $PORTAL_PUBLIC == on ]] || return 0
+  local pub4=$1 out path headers
+  STEP="verify the public portal over valid HTTPS"
+  log "$STEP"
+  pt() { curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 --resolve "$PORTAL_DOMAIN:443:$pub4" "$@"; }
+  headers="$(curl -sS -D - -o /dev/null --max-time 10 --resolve "$PORTAL_DOMAIN:443:$pub4" "https://$PORTAL_DOMAIN/login")" ||
+    die "https://$PORTAL_DOMAIN: no valid HTTPS (certificate or connection)"
+  grep -qE '^HTTP/[0-9.]+ 200' <<<"$headers" || die "https://$PORTAL_DOMAIN/login did not answer 200"
+  grep -qiE "^content-security-policy:.*'nonce-" <<<"$headers" || die "the portal's sign-in page has no nonce CSP"
+  for path in /api /api/health /api/internal/v1/portal/session /api/admin/hotels; do
+    if out="$(pt "https://$PORTAL_DOMAIN$path" 2>/dev/null)"; then
+      die "https://$PORTAL_DOMAIN$path must be aborted, got '$out'"
+    fi
+  done
+  out="$(pt -X PUT "https://$PORTAL_DOMAIN/login")" || die "https://$PORTAL_DOMAIN: no valid HTTPS"
+  [[ $out == "405 " ]] || die "PUT https://$PORTAL_DOMAIN/login must be refused (405), got '$out'"
+  out="$(pt -H "Host: $DOMAIN" "https://$PORTAL_DOMAIN/")" || die "https://$PORTAL_DOMAIN: no valid HTTPS"
+  [[ $out == "421 " ]] || die "a request for $DOMAIN through $PORTAL_DOMAIN must be refused (421), got '$out'"
+  ok "https://$PORTAL_DOMAIN: valid certificate, sign-in with nonce CSP, no API, only allowed methods"
+}
+
+# After an OS deployment with PORTAL_PUBLIC=on: the edge is PREPARED (its :80 challenge path and
+# https redirect); HTTPS only as a named not-ready state until portal-web runs (--portal).
+verify_portal_edge() {
+  [[ $PORTAL_ENABLED == true && $PORTAL_PUBLIC == on && -f $(release_dir "$AYVO_RELEASE")/deploy/prod/compose.portal-edge.yml ]] || return 0
+  local pub4=$1 code rc
+  STEP="verify (local hint only): the portal edge is prepared"
+  code="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 5 --resolve "$PORTAL_DOMAIN:80:$pub4" "http://$PORTAL_DOMAIN/login" || true)"
+  [[ $code == "301 https://$PORTAL_DOMAIN/login" ]] || die "http://$PORTAL_DOMAIN/login via the public IPv4 must redirect to https (got '$code')"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$PORTAL_DOMAIN:80:$pub4" \
+    "http://$PORTAL_DOMAIN/.well-known/acme-challenge/ayvo-deploy-check" || true)"
+  [[ $code =~ ^[1-5][0-9][0-9]$ ]] || die "the ACME challenge path of $PORTAL_DOMAIN does not reach the public edge (got '$code')"
+  # A portal-web still running here was verified as public before (hold_unverified_portal): it is
+  # verified again behind the new edge, and closed if that fails (review 5858165597 P1).
+  local running
+  running="$(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null || true)"
+  if [[ -n $running ]]; then
+    if (verify_portal_release "$pub4"); then
+      ok "the public portal ($PORTAL_RELEASE) verified again behind the new edge"
+      return 0
+    fi
+    record_portal UNVERIFIED "$running"
+    PORTAL_PREVIOUS_IMAGE="" PORTAL_PREVIOUS_PUBLIC=false close_portal_route "$pub4" "$running"
+    PORTAL_FAILED="the public portal failed its check after the OS deployment: $PORTAL_OUTCOME"
+    return 0
+  fi
+  rc=0
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$PORTAL_DOMAIN:443:$pub4" "https://$PORTAL_DOMAIN/login" 2>/dev/null)" || rc=$?
+  if ((rc != 0)); then
+    warn "portal edge PREPARED, NOT LIVE: https://$PORTAL_DOMAIN has no valid certificate yet (curl exit $rc)"
+  elif [[ $code == 503 ]]; then
+    warn "portal edge PREPARED, NOT LIVE: https://$PORTAL_DOMAIN answers 503 (deploy portal-web: --portal)"
+  fi
+  ok "portal edge prepared on $pub4 (:80 challenge path and https redirect; release state above)"
 }
 
 # --- deploy steps -----------------------------------------------------------------------------
@@ -897,6 +1292,7 @@ verify() {
   ok "public $pub4: only GET /<token> of $QR_DOMAIN; $DOMAIN and other paths refused (local hint; the external test is doc 037 §5)"
   verify_id_edge "$pub4"
   verify_marketing_edge "$pub4"
+  verify_portal_edge "$pub4"
 }
 
 # The public ID edge (only when enabled). Its certificate may not exist yet (DNS still on the old
@@ -1156,12 +1552,23 @@ while (($#)); do
       ;;
     --bootstrap-admin) MODE=bootstrap ;;
     --marketing) MODE=marketing ;;
+    --portal) MODE=portal ;;
+    --portal-rollback)
+      MODE=portal-rollback
+      PORTAL_ROLLBACK=${2:-}
+      shift
+      ;;
+    --portal-stop) MODE=portal-stop ;;
     --expect-digest)
       EXPECT_DIGEST=${2:-}
       shift
       ;;
     --expect-image)
       EXPECT_IMAGE=${2:-}
+      shift
+      ;;
+    --expect-archive)
+      EXPECT_ARCHIVE=${2:-}
       shift
       ;;
     --image-archive)
@@ -1205,7 +1612,8 @@ not_dev_server
 not_dev_preview
 check_runner
 if [[ $MODE == deploy || $MODE == rollback || $MODE == marketing || $MODE == marketing-rollback ||
-  $MODE == finance || $MODE == finance-rollback ]]; then
+  $MODE == finance || $MODE == finance-rollback || $MODE == portal || $MODE == portal-rollback ||
+  $MODE == portal-stop ]]; then
   mkdir -p "$PROD_DIR"
   exec > >(tee -a "$PROD_DIR/deploy.log") 2>&1
 fi
@@ -1216,12 +1624,15 @@ check_env_files
 qr_domain
 id_domain
 marketing_domain
+portal_domain
 mkdir -p "$PROD_DIR"
 exec 9>"$PROD_DIR/.deploy.lock"
 flock -n 9 || die "another production deployment is running"
 PREVIOUS="$(current_release || true)"
 # An OS deployment keeps whatever marketing image runs (it never builds, starts or stops it).
 MARKETING_RELEASE="$(current_marketing || true)"
+# Likewise the portal unit: an OS deployment keeps whatever portal-web image runs (never starts it).
+PORTAL_RELEASE="$(current_portal || true)"
 # Likewise for the Finance unit: an OS deployment keeps whatever Finance image runs.
 FINANCE_RELEASE="$(current_finance || true)"
 
@@ -1258,12 +1669,14 @@ case $MODE in
     wait_healthy redis || die "redis did not become healthy"
     backup_before_migration
     migrate
+    hold_unverified_portal
     start_services
     verify
     record_release
     remove_old_images
     ok "production runs $RELEASE"
     os_ahead_note
+    [[ -z $PORTAL_FAILED ]] || die "$PORTAL_FAILED (the OS release itself is verified and recorded)"
     echo "Next: the external negative test (doc 036 §5) after the first installation and every edge change."
     ;;
   rollback)
@@ -1277,11 +1690,13 @@ case $MODE in
     RELEASE=$(<"$(release_dir "$ROLLBACK")/.ayvo-release")
     AYVO_RELEASE=$ROLLBACK
     validate_compose
+    hold_unverified_portal
     start_services
     verify
     record_release
     ok "production runs $RELEASE again"
     os_ahead_note
+    [[ -z $PORTAL_FAILED ]] || die "$PORTAL_FAILED (the OS release itself is verified and recorded)"
     ;;
   marketing)
     [[ $EXPECT_IMAGE =~ ^sha256:[0-9a-f]{64}$ ]] ||
@@ -1331,6 +1746,65 @@ case $MODE in
     fi
     record_marketing SUCCESS "$image" "$digest"
     ok "the marketing site runs $MARKETING_ROLLBACK again"
+    ;;
+  portal | portal-rollback)
+    [[ $PORTAL_ENABLED == true ]] || die "the portal keys are not set in prod.env (doc 064)"
+    [[ -n $PREVIOUS ]] || die "production is not running: deploy the OS release first"
+    AYVO_RELEASE=$PREVIOUS
+    [[ -f $(release_dir "$AYVO_RELEASE")/deploy/prod/compose.portal.yml ]] ||
+      die "the running OS release $AYVO_RELEASE has no compose.portal.yml: deploy an OS release with it first"
+    [[ -n $(docker ps -q --filter "name=^$PROJECT-finance-1\$") ]] ||
+      die "the Finance unit is not running: deploy it (--finance) with the portal keys first"
+    # The running image's ID before anything is loaded or tagged (the restore point).
+    PORTAL_PREVIOUS_IMAGE="$(docker inspect --format '{{.Image}}' "$PROJECT-portal-web-1" 2>/dev/null || true)"
+    if portal_verified_public "$PORTAL_PREVIOUS_IMAGE"; then PORTAL_PREVIOUS_PUBLIC=true; fi
+    if [[ $MODE == portal ]]; then
+      [[ $EXPECT_IMAGE =~ ^sha256:[0-9a-f]{64}$ ]] ||
+        die "--portal needs --expect-image sha256:<id> (the portal-web image accepted on DEV)"
+      [[ -n $IMAGE_ARCHIVE ]] || die "--portal needs --image-archive <file> (the image accepted on DEV)"
+      [[ $EXPECT_ARCHIVE =~ ^sha256:[0-9a-f]{64}$ ]] ||
+        die "--portal needs --expect-archive sha256:<SHA-256 of the archive> (the approved archive)"
+      log "portal-web image $EXPECT_IMAGE at $(date -u +%FT%TZ) (OS stays $AYVO_RELEASE; portal now: ${PORTAL_RELEASE:-nothing})"
+      load_portal_image "$IMAGE_ARCHIVE" "$EXPECT_IMAGE" "$EXPECT_ARCHIVE"
+      # Only merged (approved) source: the image's revision must be on origin/main.
+      RELEASE=$PORTAL_IMAGE_REVISION
+      check_release
+      image=$EXPECT_IMAGE
+    else
+      [[ $PORTAL_ROLLBACK =~ ^[0-9a-f]{12}-[0-9a-f]{12}$ ]] ||
+        die "--portal-rollback needs the release <revision12>-<image12> of an earlier portal deployment"
+      image="$(recorded_portal "$PORTAL_ROLLBACK")"
+      [[ -n $image ]] || die "no successful portal release $PORTAL_ROLLBACK is recorded"
+      [[ $(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/portal-web:$PORTAL_ROLLBACK" 2>/dev/null) == "$image" ]] ||
+        die "image $IMAGE_PREFIX/portal-web:$PORTAL_ROLLBACK is gone or is not the recorded $image"
+      PORTAL_RELEASE=$PORTAL_ROLLBACK
+      log "portal rollback to $PORTAL_ROLLBACK (OS stays $AYVO_RELEASE)"
+    fi
+    validate_compose
+    start_portal "$image"
+    if ! (verify_portal_private) || ! (verify_portal_release "$PROD_PUBLIC_IPV4"); then
+      record_portal UNVERIFIED "$image"
+      [[ $PORTAL_PUBLIC == on ]] ||
+        die "portal-web $PORTAL_RELEASE runs privately but is NOT verified: recorded UNVERIFIED (no public site)"
+      # Review 5858165597 P1: never left open — back to the verified public image or closed.
+      close_portal_route "$PROD_PUBLIC_IPV4" "$image"
+      die "portal-web $PORTAL_RELEASE failed the public check: $PORTAL_OUTCOME"
+    fi
+    record_portal SUCCESS "$image"
+    ok "the hotel portal runs $PORTAL_RELEASE ($image; public: ${PORTAL_PUBLIC:-off}); the OS was not restarted"
+    ;;
+  portal-stop)
+    [[ -n $PREVIOUS ]] || die "production is not running"
+    AYVO_RELEASE=$PREVIOUS
+    STEP="stop and remove only portal-web"
+    log "$STEP"
+    if [[ -n $(docker ps -aq --filter "name=^$PROJECT-portal-web-1\$") ]]; then
+      docker stop "$PROJECT-portal-web-1" >/dev/null || die "portal-web could not be stopped"
+      docker rm "$PROJECT-portal-web-1" >/dev/null || die "portal-web could not be removed"
+    fi
+    PORTAL_RELEASE=${PORTAL_RELEASE:-none}
+    record_portal STOPPED none
+    ok "portal-web stopped; the OS, Finance and the edges were not touched (complete disable: doc 064 §3)"
     ;;
   finance)
     [[ -n $RELEASE ]] || die "--finance needs --release <commit> (the commit the OS runs)"

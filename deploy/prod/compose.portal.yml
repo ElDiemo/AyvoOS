@@ -1,0 +1,82 @@
+# AYVO OS — the hotel portal unit on PROD (ADR 0045, doc 064 option A1). Added to compose.yml by
+# scripts/deploy-prod.sh ONLY when the portal keys are set in prod.env (all of them: the two
+# tokens, their SHA-256s and PORTAL_DOMAIN); without them nothing here exists and the core's and
+# Finance's portal contracts refuse every call. This file is PRIVATE: it creates no public route.
+# The public site is a separate overlay (compose.portal-edge.yml, PORTAL_PUBLIC=on).
+#
+#   portal-web ─(portal-contracts, internal)─▶ api:4000      /api/internal/v1/portal/*    (PORTAL_CORE_TOKEN)
+#              └──────────────────────────────▶ finance:4010 /api/internal/v1/portal/invoices* (PORTAL_FINANCE_TOKEN)
+#
+# portal-web is the image accepted on DEV, loaded from its archive (deploy-prod.sh --portal); it is
+# never built here. It reaches only api and finance — never postgres, redis, web or caddy — and has
+# no published port and no egress. The OS deployment never starts or stops it (profile "portal").
+services:
+  api:
+    environment:
+      # Links of PORTAL accounts point there; another host than os.ayvo.co (ADR 0045 §7).
+      PORTAL_PUBLIC_ORIGIN: https://${PORTAL_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+      # The only form of PORTAL_CORE_TOKEN the core gets.
+      PORTAL_SERVICE_TOKEN_SHA256: ${PORTAL_SERVICE_TOKEN_SHA256:?set in /opt/ayvo/secrets/prod.env}
+    networks:
+      - portal-contracts
+
+  finance:
+    environment:
+      # The only form of PORTAL_FINANCE_TOKEN Finance gets.
+      PORTAL_FINANCE_TOKEN_SHA256: ${PORTAL_FINANCE_TOKEN_SHA256:?set in /opt/ayvo/secrets/prod.env}
+      # The public Caddy's unchanged `write` (30 s, doc 064 §2) bounds its writes, not a slow
+      # client's reading of what is buffered (ADR 0047 §3): the invoice package is built and sent
+      # well within it — lower than the shared ceiling, never higher (finance-env refuses more). Finance's deadline lasts until its last byte has left,
+      # so the cap is what an 8 Mbit/s client receives within it without relying on buffers:
+      # 16 MiB ≈ 17 s (measured on DEV, review 5858165597; 20 MiB took 20.5 s, over the 20 s).
+      FINANCE_PORTAL_PACKAGE_MAX_BYTES: '16777216'
+      FINANCE_PORTAL_PACKAGE_TIMEOUT_MS: '20000'
+    networks:
+      - portal-contracts
+
+  portal-web:
+    image: ayvo-prod/portal-web:${PORTAL_RELEASE:-none}
+    profiles:
+      - portal
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Reserved resources (ADR 0045 §8): the portal can never take what the OS needs.
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    environment:
+      APP_ENV: production
+      PORTAL_PUBLIC_ORIGIN: https://${PORTAL_DOMAIN:?set by scripts/deploy-prod.sh from prod.env}
+      CORE_INTERNAL_URL: http://api:4000
+      FINANCE_INTERNAL_URL: http://finance:4010
+      PORTAL_CORE_TOKEN: ${PORTAL_CORE_TOKEN:?set in /opt/ayvo/secrets/prod.env}
+      PORTAL_FINANCE_TOKEN: ${PORTAL_FINANCE_TOKEN:?set in /opt/ayvo/secrets/prod.env}
+      # The visitor's address comes from the public edge only (portal-edge network).
+      PORTAL_TRUST_PROXY: '1'
+      # One deadline for the invoice package through the edge: below its 30 s write limit.
+      PORTAL_PACKAGE_DEADLINE_MS: '25000'
+      # The invoice package is off in the first public release (owner 2026-11-11); the edge
+      # refuses its path too. Turned on only in a later release, after its own acceptance.
+      PORTAL_PACKAGE_ENABLED: '0'
+    networks:
+      - portal-contracts
+      - portal-edge
+
+networks:
+  # portal-web ↔ api, finance only; no egress.
+  portal-contracts:
+    internal: true
+  # The public edge ↔ portal-web only (joined by qr-edge in compose.portal-edge.yml); no egress.
+  portal-edge:
+    internal: true

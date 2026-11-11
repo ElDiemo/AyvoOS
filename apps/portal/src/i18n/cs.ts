@@ -230,6 +230,9 @@ export const cs = {
         NO_INVOICES: 'V tomto období nejsou žádné faktury, které můžete vidět.',
         PACKAGE_TOO_LARGE: 'Balíček by byl příliš velký. Zvolte kratší období.',
         PACKAGE_BUSY: 'Balíček se právě připravuje. Zkuste to za chvíli.',
+        PACKAGE_RATE: 'Balíček jste před chvílí stahovali. Další je možný nejdříve za 10 minut.',
+        PACKAGE_DAILY:
+          'Denní počet balíčků je vyčerpaný. Zkuste to zítra; jednotlivá PDF stáhnete hned.',
         UNAVAILABLE: 'Balíček se teď nepodařilo připravit. Zkuste to prosím později.',
       } as Record<string, string>,
     },

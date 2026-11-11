@@ -91,7 +91,7 @@ export default async function InvoicesPage({
           )}
         </>
       )}
-      {list && list.total > 0 && (
+      {list && list.total > 0 && portalEnv().PORTAL_PACKAGE_ENABLED === '1' && (
         <details
           open={reason !== undefined}
           className="group rounded-xl border border-stone-200 bg-white shadow-sm"

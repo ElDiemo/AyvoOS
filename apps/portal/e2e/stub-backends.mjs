@@ -27,6 +27,14 @@ export const STUB = {
   code: '123456',
 };
 const user = { id: randomUUID(), email: STUB.email, displayName: 'Recepce E2E' };
+/** Other accounts (a session gets one when `nextAccount` names it before its sign-in). */
+const otherUsers = {
+  second: { id: randomUUID(), email: 'druhy@hotel-e2e.test', displayName: 'Druhý účet E2E' },
+  third: { id: randomUUID(), email: 'treti@hotel-e2e.test', displayName: 'Třetí účet E2E' },
+};
+const sessionUsers = new Map();
+/** Packages held open (packageMode 'hold'): their responses, ended by releasePackages. */
+const heldPackages = [];
 const hotel = {
   id: randomUUID(),
   code: 'H-000901',
@@ -289,6 +297,8 @@ async function core(req, res, path) {
       state.pending.delete(body.challenge);
       const token = randomUUID();
       state.sessions.add(token);
+      sessionUsers.set(token, otherUsers[state.nextAccount] ?? user);
+      state.nextAccount = null;
       return send(
         res,
         200,
@@ -321,7 +331,7 @@ async function core(req, res, path) {
       res,
       200,
       {
-        user,
+        user: sessionUsers.get(s) ?? user,
         idleExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         absoluteExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
         grants: [
@@ -458,10 +468,37 @@ function finance(req, res, path) {
   if (id === 'package') {
     const q = new URLSearchParams(path.split('?')[1] ?? '');
     state.lastPackageQuery = Object.fromEntries(q);
+    state.packageRequests = (state.packageRequests ?? 0) + 1;
     if (!/^\d{4}-\d{2}$/.test(q.get('from') ?? '') || !/^\d{4}-\d{2}$/.test(q.get('to') ?? ''))
       return refuse(res, 400, 'VALIDATION');
     if (state.packageMode === 'empty') return refuse(res, 404, 'NO_INVOICES');
     if (state.packageMode === 'large') return refuse(res, 422, 'PACKAGE_TOO_LARGE');
+    if (state.packageMode === 'big') {
+      // 2 MB at once (a fast client): its slot is still held for 2 MB / the hold rate.
+      const body = Buffer.concat([zipBytes, Buffer.alloc(2_000_000 - zipBytes.length)]);
+      res.writeHead(200, {
+        'content-type': 'application/zip',
+        'content-length': String(body.length),
+        'content-disposition': `attachment; filename="AYVO-faktury-${q.get('from')}-${q.get('to')}.zip"`,
+        'cache-control': 'private, no-store',
+      });
+      res.end(body);
+      return;
+    }
+    if (state.packageMode === 'hold') {
+      // A package whose client reads slowly: headers and its first bytes now, the rest only on
+      // releasePackages — portal-web holds the package's slot meanwhile.
+      const body = Buffer.concat([zipBytes, Buffer.alloc(64 * 1024)]);
+      res.writeHead(200, {
+        'content-type': 'application/zip',
+        'content-length': String(body.length),
+        'content-disposition': `attachment; filename="AYVO-faktury-${q.get('from')}-${q.get('to')}.zip"`,
+        'cache-control': 'private, no-store',
+      });
+      res.write(body.subarray(0, 1024));
+      heldPackages.push(() => res.end(body.subarray(1024)));
+      return;
+    }
     res.writeHead(200, {
       'content-type': 'application/zip',
       'content-length': String(zipBytes.length),
@@ -510,6 +547,8 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         profile: state.profile,
         profileSaves: state.profileSaves,
         lastPackageQuery: state.lastPackageQuery,
+        heldPackages: heldPackages.length,
+        packageRequests: state.packageRequests ?? 0,
         lastProfileBody: state.lastProfileBody,
         foreignHotelId: FOREIGN_HOTEL_ID,
         contract: CONTRACT,
@@ -527,6 +566,10 @@ export function startStubs(corePort = 4301, financePort = 4311) {
         state.contractsMode = 'ok';
         state.deliveriesMode = 'ok';
         delete body.resetProfile;
+      }
+      if (body.releasePackages) {
+        for (const end of heldPackages.splice(0)) end();
+        delete body.releasePackages;
       }
       if (body.touchProfile) {
         // Another account saved meanwhile.
