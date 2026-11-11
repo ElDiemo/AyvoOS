@@ -8,22 +8,24 @@ import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { z } from 'zod';
 import { buttonClass, Card, CardLink, EmptyState, Notice } from '@/components/ui';
+import { WarehouseQuickActions } from '@/components/warehouse/quick-actions';
 import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
 import { formatDateTimeCs, formatDeltaCs, formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { warehouseCs } from '@/i18n/cs/warehouse';
 import { apiGet } from '@/lib/api';
-import { siteTimeZone } from '@/lib/session';
+import { currentUser, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const o = warehouseCs.overview;
 const th = 'py-2 pr-4 font-medium';
 
 /**
- * Sklad → Přehled skladu (doc 019): current stock, what needs attention, recent receipts and
- * movements, and the next useful action. Read-only; every figure comes from the API.
+ * Sklad → Přehled skladu (doc 019): the quick daily actions on top, current stock, what needs
+ * attention, recent receipts and movements, and the next useful action. Read-only; every figure
+ * comes from the API.
  */
 export default async function WarehouseOverviewPage() {
-  const tz = await siteTimeZone();
+  const [tz, user] = await Promise.all([siteTimeZone(), currentUser()]);
   const [stock, receipts, pending, movements, suppliers] = await Promise.all([
     apiGet('admin/inventory/stock', stockOverviewSchema),
     apiGet('admin/goods-receipts', goodsReceiptPageSchema, { page: 1, pageSize: 5 }),
@@ -76,6 +78,7 @@ export default async function WarehouseOverviewPage() {
         }
       />
       <div className="flex flex-col gap-6">
+        <WarehouseQuickActions user={user} />
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <Card
             title={`${o.stock} – ${stock.location.name}`}
