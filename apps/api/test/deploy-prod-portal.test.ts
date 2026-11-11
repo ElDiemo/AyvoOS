@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
  * The hotel portal steps of scripts/deploy-prod.sh (doc 064 A1, review 5858165597), run as the real
@@ -13,9 +14,14 @@ import { describe, expect, it } from 'vitest';
  *   An OS deployment never opens a portal-web that was not verified as public. Docker, Compose
  *   and curl are test doubles that record every call (no production project is touched); the
  *   public check itself is the real verify_portal_release, made to fail by the edge's answers.
+ * - P2: the archive is checked BEFORE `docker load` (real Docker: CI or AYVO_DOCKER_TESTS=1): its
+ *   approved SHA-256, exactly one image of the expected ID and exactly one DEV portal-web tag —
+ *   an archive carrying the running or a rollback tag, in any of the three places `docker load`
+ *   takes names from, is refused and those tags keep their images.
  */
 const root = resolve(import.meta.dirname, '../../..');
 const script = readFileSync(join(root, 'scripts/deploy-prod.sh'), 'utf8');
+const WANT_DOCKER = !!(process.env.CI || process.env.AYVO_DOCKER_TESTS);
 const bash = (body: string) =>
   spawnSync('bash', ['-c', body], { encoding: 'utf8', env: { ...process.env } });
 
@@ -351,3 +357,189 @@ echo "FAILED=$PORTAL_FAILED"`);
     );
   });
 });
+
+describe.skipIf(!WANT_DOCKER)(
+  'P2: the archive is checked before docker load (review 5858165597)',
+  () => {
+    const id = randomBytes(4).toString('hex');
+    const dir = mkdtempSync(join(tmpdir(), 'ayvo-portal-p2-'));
+    const PREFIX = `ayvo-ptest-${id}`; // stands in for ayvo-prod
+    const REPO = `ayvo-ptest-${id}-dev/portal-web`; // stands in for ayvo-dev-preview/portal-web
+    const GOOD_TAG = `${REPO}:${'c'.repeat(12)}-20261111T120000Z`;
+    const RUNNING_TAG = `${PREFIX}/portal-web:${'d'.repeat(12)}-${'1'.repeat(12)}`;
+    const RESTORE_TAG = `${PREFIX}/portal-web:restore-${'2'.repeat(12)}`;
+    const revision = 'e'.repeat(40);
+    const d = (...a: string[]) => spawnSync('docker', a, { encoding: 'utf8' });
+    const imageId = (ref: string) =>
+      d('image', 'inspect', '--format', '{{.Id}}', ref).stdout.trim();
+    const sha = (file: string) =>
+      `sha256:${createHash('sha256').update(readFileSync(file)).digest('hex')}`;
+    const images: Record<'running' | 'restore' | 'fresh' | 'evil', string> = {
+      running: '',
+      restore: '',
+      fresh: '',
+      evil: '',
+    };
+    const build = (name: string, tag: string) => {
+      const ctx = join(dir, name);
+      mkdirSync(ctx, { recursive: true });
+      writeFileSync(join(ctx, 'f'), `${name}-${id}\n`);
+      writeFileSync(
+        join(ctx, 'Dockerfile'),
+        `FROM scratch\nCOPY f /f\nLABEL org.opencontainers.image.revision=${revision}\n`,
+      );
+      expect(d('build', '-q', '-t', tag, ctx).status).toBe(0);
+      return imageId(tag);
+    };
+    const save = (file: string, ...refs: string[]) => {
+      expect(d('save', '-o', join(dir, file), ...refs).status).toBe(0);
+      chmodSync(join(dir, file), 0o644);
+      return join(dir, file);
+    };
+    /** Rewrites one JSON member of an archive (a tampered archive, approved by its own SHA-256). */
+    const tamper = (src: string, out: string, member: string, jq: string) => {
+      const x = join(dir, `x-${out}`);
+      const res = spawnSync('bash', [
+        '-c',
+        `set -e; mkdir -p ${x}; tar -xf ${src} -C ${x}; jq -c '${jq}' ${x}/${member} > ${x}/m.tmp; mv ${x}/m.tmp ${x}/${member}; ` +
+          `cd ${x}; tar -cf ${join(dir, out)} $(tar -tf ${src} | grep -v '/$' | tr '\\n' ' ')`,
+      ]);
+      expect(res.status, res.stderr.toString()).toBe(0);
+      chmodSync(join(dir, out), 0o644);
+      return join(dir, out);
+    };
+    const prodDir = join(dir, 'prod');
+    const load = (file: string, expected: string, digest = sha(file)) =>
+      bash(
+        `${HELPERS}\nIMAGE_PREFIX=${PREFIX}; PROD_DIR=${prodDir}; PORTAL_ARCHIVE_TAG=""; PORTAL_ARCHIVE_COPY=""\n` +
+          `${fn('check_portal_archive').replace('readonly ', '')}\n${fn('load_portal_image')}\n` +
+          `PORTAL_ARCHIVE_REPO=${REPO}\n` +
+          `load_portal_image ${file} ${expected} ${digest}; echo "LOADED $PORTAL_RELEASE"`,
+      );
+    /** The running and the rollback tags still name their own images. */
+    const untouched = () => {
+      expect(imageId(RUNNING_TAG)).toBe(images.running);
+      expect(imageId(RESTORE_TAG)).toBe(images.restore);
+    };
+    let good = '';
+
+    beforeAll(() => {
+      images.running = build('running', RUNNING_TAG);
+      images.restore = build('restore', RESTORE_TAG);
+      images.fresh = build('fresh', GOOD_TAG);
+      images.evil = build('evil', `${PREFIX}-evil:x`);
+      good = save('good.tar', GOOD_TAG);
+      // Remove the good tag again: PROD has never seen it.
+      expect(d('image', 'rm', GOOD_TAG).status).toBe(0);
+    }, 300_000);
+
+    afterAll(() => {
+      spawnSync('bash', [
+        '-c',
+        `docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^ayvo-ptest-${id}' | xargs -r docker image rm -f >/dev/null 2>&1`,
+      ]);
+    });
+
+    it('the approved archive: exactly its one image, tagged for production', () => {
+      const r = load(good, images.fresh);
+      expect(r.stdout, r.stdout + r.stderr).toContain(
+        `LOADED ${'e'.repeat(12)}-${images.fresh.slice(7, 19)}`,
+      );
+      expect(imageId(GOOD_TAG)).toBe(images.fresh);
+      untouched();
+      // The private copy is gone (on a refusal the script's on_exit removes it).
+      expect(
+        spawnSync('bash', ['-c', `ls ${prodDir}/state | grep -c portal-archive || true`], {
+          encoding: 'utf8',
+        }).stdout.trim(),
+      ).toBe('0');
+      expect(script).toMatch(
+        /\[\[ -z \$\{PORTAL_ARCHIVE_COPY:-\} \]\] \|\| rm -f -- "\$PORTAL_ARCHIVE_COPY"/,
+      );
+      d('image', 'rm', GOOD_TAG);
+    });
+
+    it('another SHA-256 than the approved one: refused before docker load', () => {
+      const r = load(good, images.fresh, `sha256:${'0'.repeat(64)}`);
+      expect(r.stdout).toMatch(/DIE the archive is not the approved one/);
+      expect(imageId(GOOD_TAG)).toBe('');
+    });
+
+    it('a second image carrying the RUNNING tag: refused, the running tag keeps its image', () => {
+      // An archive with the good image AND another image under the running production tag.
+      expect(d('tag', images.evil, RUNNING_TAG).status).toBe(0);
+      expect(d('tag', images.fresh, GOOD_TAG).status).toBe(0);
+      const bad = save('two-images.tar', GOOD_TAG, RUNNING_TAG);
+      expect(d('tag', images.running, RUNNING_TAG).status).toBe(0);
+      d('image', 'rm', GOOD_TAG);
+      untouched();
+      const r = load(bad, images.fresh);
+      expect(r.stdout).toMatch(/DIE the archive must hold exactly one image with exactly one tag/);
+      untouched();
+      expect(imageId(GOOD_TAG)).toBe('');
+    });
+
+    it('the good image with a second tag (a ROLLBACK tag): refused, the rollback tag keeps its image', () => {
+      expect(d('tag', images.fresh, GOOD_TAG).status).toBe(0);
+      expect(d('tag', images.fresh, RESTORE_TAG).status).toBe(0);
+      const bad = save('two-tags.tar', GOOD_TAG, RESTORE_TAG);
+      expect(d('tag', images.restore, RESTORE_TAG).status).toBe(0);
+      d('image', 'rm', GOOD_TAG);
+      const r = load(bad, images.fresh);
+      expect(r.stdout).toMatch(/DIE the archive must hold exactly one image with exactly one tag/);
+      untouched();
+    });
+
+    it('index.json renamed to the rollback tag (manifest.json still right): refused before load', () => {
+      const bad = tamper(
+        good,
+        'index-renamed.tar',
+        'index.json',
+        `.manifests[0].annotations["io.containerd.image.name"] = "docker.io/${RESTORE_TAG}"`,
+      );
+      const r = load(bad, images.fresh);
+      expect(r.stdout).toMatch(/DIE the archive's index.json names another or a second image/);
+      untouched();
+      expect(imageId(GOOD_TAG)).toBe('');
+    });
+
+    it('a legacy repositories file naming the running tag: refused before load', () => {
+      const x = join(dir, 'legacy');
+      const res = spawnSync('bash', [
+        '-c',
+        `set -e; mkdir -p ${x}; tar -xf ${good} -C ${x}; ` +
+          `printf '{"${RUNNING_TAG.split(':')[0]}":{"${RUNNING_TAG.split(':')[1]}":"x"}}' > ${x}/repositories; ` +
+          `cd ${x}; tar -cf ${join(dir, 'legacy.tar')} $(tar -tf ${good} | grep -v '/$' | tr '\\n' ' ') repositories`,
+      ]);
+      expect(res.status).toBe(0);
+      chmodSync(join(dir, 'legacy.tar'), 0o644);
+      const r = load(join(dir, 'legacy.tar'), images.fresh);
+      expect(r.stdout).toMatch(/DIE the archive's repositories file names another tag/);
+      untouched();
+    });
+
+    it('a production tag in the archive itself (not a DEV portal-web tag): refused', () => {
+      expect(
+        d('tag', images.fresh, `${PREFIX}/portal-web:${'f'.repeat(12)}-${'3'.repeat(12)}`).status,
+      ).toBe(0);
+      const bad = save('prod-tag.tar', `${PREFIX}/portal-web:${'f'.repeat(12)}-${'3'.repeat(12)}`);
+      d('image', 'rm', `${PREFIX}/portal-web:${'f'.repeat(12)}-${'3'.repeat(12)}`);
+      const r = load(bad, images.fresh);
+      expect(r.stdout).toMatch(/is not a DEV portal-web tag/);
+    });
+
+    it('another image than the accepted ID: refused before load', () => {
+      const r = load(good, images.evil);
+      expect(r.stdout).toMatch(/DIE the archive holds image .* not the accepted/);
+      expect(imageId(GOOD_TAG)).toBe('');
+    });
+
+    it('its DEV tag already names another image here: refused, that tag unchanged', () => {
+      expect(d('tag', images.evil, GOOD_TAG).status).toBe(0);
+      const r = load(good, images.fresh);
+      expect(r.stdout).toMatch(/already names image .* here: refused, nothing loaded/);
+      expect(imageId(GOOD_TAG)).toBe(images.evil);
+      d('image', 'rm', GOOD_TAG);
+    });
+  },
+);

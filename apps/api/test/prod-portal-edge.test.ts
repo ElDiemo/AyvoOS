@@ -169,6 +169,7 @@ describe('hotel portal on PROD: the edge files', () => {
     const start = script.split('start_services() {')[1]!.split('\n}\n')[0]!;
     expect(start).not.toContain('portal');
     expect(script).toMatch(/--portal needs --expect-image sha256:<id>/);
+    expect(script).toMatch(/--portal needs --expect-archive sha256:<SHA-256 of the archive>/);
     expect(script).toMatch(/compose --profile portal up -d --no-build --no-deps portal-web/);
     expect(script).toMatch(
       /PORTAL_PUBLIC == on && -f \$dir\/deploy\/prod\/compose\.portal-edge\.yml/,

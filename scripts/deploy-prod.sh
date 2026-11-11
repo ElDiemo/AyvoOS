@@ -30,6 +30,7 @@
 #                                                         same strict checks); <release> =
 #                                                         <revision12>-<image12> from marketing.log
 #   scripts/deploy-prod.sh --portal --image-archive <file> --expect-image <sha256:id>
+#                          --expect-archive <sha256:hex>
 #                                                         the hotel portal unit alone (doc 064 A1):
 #                                                         load EXACTLY the portal-web image accepted on
 #                                                         DEV, replace only `portal-web` (previous one
@@ -125,6 +126,9 @@ MIGRATED=false
 PREVIOUS=""
 EXPECT_DIGEST=""
 EXPECT_IMAGE=""
+EXPECT_ARCHIVE=""
+PORTAL_ARCHIVE_TAG=""
+PORTAL_ARCHIVE_COPY=""
 IMAGE_ARCHIVE=""
 MARKETING_ROLLBACK=""
 MARKETING_RELEASE=""
@@ -158,6 +162,7 @@ usage() { sed -n '2,63p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 on_exit() {
   local code=$?
   trap - ERR
+  [[ -z ${PORTAL_ARCHIVE_COPY:-} ]] || rm -f -- "$PORTAL_ARCHIVE_COPY"
   ((code == 0)) && return
   {
     echo
@@ -759,17 +764,71 @@ start_marketing() {
 
 # --- the hotel portal unit (doc 064 option A1) -------------------------------------------------
 
-# The portal-web image accepted on DEV: a `docker save` archive (no registry), identified by its
-# image ID; the tag names its revision AND the image, like the marketing site's. Nothing is built.
+# The portal-web image accepted on DEV: a `docker save` archive of exactly one DEV tag (no
+# registry), approved by its SHA-256 and identified by its image ID; the production tag names its
+# revision AND the image, like the marketing site's. Nothing is built.
+#
+# Review 5858165597 P2: `docker load` sets every name an archive carries before anything could be
+# checked, so the archive is checked FIRST, on a private copy that cannot change after its check:
+# - its SHA-256 is the approved one (--expect-archive);
+# - it holds exactly one image, the expected ID (manifest.json and index.json agree);
+# - it names exactly one tag, a DEV portal-web tag ($PORTAL_ARCHIVE_REPO:<revision12>-<UTC time>) —
+#   in manifest.json, in index.json's annotations and in a legacy `repositories` file alike;
+# - that tag names no other image here yet.
+# So no archive can rename a production image (the running one, a rollback or a restore tag).
+readonly PORTAL_ARCHIVE_REPO=ayvo-dev-preview/portal-web
+check_portal_archive() {
+  local file=$1 expected=$2 digest=$3 entries manifest index tag repos ids existing
+  [[ $(sha256sum "$file" | cut -d' ' -f1) == "${digest#sha256:}" ]] ||
+    die "the archive is not the approved one (SHA-256 differs from $digest): refused, nothing loaded"
+  entries="$(tar -tf "$file")" || die "the archive is not a readable tar: refused, nothing loaded"
+  [[ $(grep -cx 'manifest.json' <<<"$entries") == 1 && $(grep -cx 'index.json' <<<"$entries") -le 1 &&
+    $(grep -cx 'repositories' <<<"$entries") -le 1 ]] ||
+    die "the archive must hold exactly one manifest.json (and at most one index.json / repositories): refused"
+  manifest="$(tar -xOf "$file" manifest.json)" || die "cannot read the archive's manifest.json"
+  jq -e 'type == "array" and length == 1 and (.[0].RepoTags | type == "array" and length == 1)' <<<"$manifest" >/dev/null ||
+    die "the archive must hold exactly one image with exactly one tag: refused, nothing loaded"
+  tag="$(jq -r '.[0].RepoTags[0]' <<<"$manifest")"
+  [[ $tag =~ ^${PORTAL_ARCHIVE_REPO//./\.}:[0-9a-f]{12}-[0-9]{8}T[0-9]{6}Z$ ]] ||
+    die "the archive's tag '$tag' is not a DEV portal-web tag ($PORTAL_ARCHIVE_REPO:<revision12>-<time>): refused"
+  ids="sha256:$(jq -r '.[0].Config | sub("^blobs/sha256/"; "") | sub("\\.json$"; "")' <<<"$manifest")"
+  if grep -qx 'index.json' <<<"$entries"; then
+    index="$(tar -xOf "$file" index.json)" || die "cannot read the archive's index.json"
+    jq -e --arg t "$tag" '(.manifests | type == "array" and length == 1) and
+      ((.manifests[0].annotations // {}) as $a
+        | ($a["io.containerd.image.name"] // $t) as $n | ($n == $t or $n == "docker.io/" + $t)
+        and (($a["org.opencontainers.image.ref.name"] // ($t | split(":") | last)) == ($t | split(":") | last)))' \
+      <<<"$index" >/dev/null || die "the archive's index.json names another or a second image: refused, nothing loaded"
+    ids="$ids $(jq -r '.manifests[0].digest' <<<"$index")"
+  fi
+  if grep -qx 'repositories' <<<"$entries"; then
+    repos="$(tar -xOf "$file" repositories)" || die "cannot read the archive's repositories"
+    jq -e --arg r "${tag%:*}" --arg t "${tag##*:}" 'keys == [$r] and (.[$r] | keys == [$t])' <<<"$repos" >/dev/null ||
+      die "the archive's repositories file names another tag: refused, nothing loaded"
+  fi
+  # The image ID is the config digest (classic store) or the index digest (containerd store).
+  [[ " $ids " == *" $expected "* ]] || die "the archive holds image $ids, not the accepted $expected: refused, nothing loaded"
+  existing="$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null || true)"
+  [[ -z $existing || $existing == "$expected" ]] ||
+    die "$tag already names image $existing here: refused, nothing loaded"
+  PORTAL_ARCHIVE_TAG=$tag
+}
+
 load_portal_image() {
-  local archive=$1 expected=$2 loaded id revision existing mode
+  local archive=$1 expected=$2 digest=$3 copy loaded id revision existing mode
   STEP="load the accepted portal-web image"
   [[ -f $archive && ! -L $archive ]] || die "--image-archive: $archive is not a regular file"
   mode="$(stat -c '%a' "$archive")"
   (((8#$mode & 8#022) == 0)) || die "--image-archive: $archive must not be writable by group or others"
-  loaded="$(docker load -i "$archive" | sed -n 's/^Loaded image: //p' | head -n1)" ||
-    die "docker load of $archive failed"
-  [[ -n $loaded ]] || die "$archive contains no tagged image"
+  mkdir -p "$PROD_DIR/state"
+  copy="$(umask 077 && mktemp "$PROD_DIR/state/portal-archive.XXXXXX")" || die "cannot make a private copy of the archive"
+  PORTAL_ARCHIVE_COPY=$copy # removed by on_exit on any failure
+  cp -- "$archive" "$copy" || die "cannot copy $archive"
+  check_portal_archive "$copy" "$expected" "$digest"
+  loaded="$(docker load -i "$copy" | sed -n 's/^Loaded image: //p')" || die "docker load of $archive failed"
+  rm -f -- "$copy"
+  PORTAL_ARCHIVE_COPY=""
+  [[ $loaded == "$PORTAL_ARCHIVE_TAG" ]] || die "docker load reported '$loaded', not exactly $PORTAL_ARCHIVE_TAG"
   id="$(docker image inspect --format '{{.Id}}' "$loaded")" || die "cannot inspect $loaded"
   [[ $id == "$expected" ]] || die "the archive holds image $id, not the accepted $expected: refused"
   revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$loaded")"
@@ -1508,6 +1567,10 @@ while (($#)); do
       EXPECT_IMAGE=${2:-}
       shift
       ;;
+    --expect-archive)
+      EXPECT_ARCHIVE=${2:-}
+      shift
+      ;;
     --image-archive)
       IMAGE_ARCHIVE=${2:-}
       shift
@@ -1699,8 +1762,10 @@ case $MODE in
       [[ $EXPECT_IMAGE =~ ^sha256:[0-9a-f]{64}$ ]] ||
         die "--portal needs --expect-image sha256:<id> (the portal-web image accepted on DEV)"
       [[ -n $IMAGE_ARCHIVE ]] || die "--portal needs --image-archive <file> (the image accepted on DEV)"
+      [[ $EXPECT_ARCHIVE =~ ^sha256:[0-9a-f]{64}$ ]] ||
+        die "--portal needs --expect-archive sha256:<SHA-256 of the archive> (the approved archive)"
       log "portal-web image $EXPECT_IMAGE at $(date -u +%FT%TZ) (OS stays $AYVO_RELEASE; portal now: ${PORTAL_RELEASE:-nothing})"
-      load_portal_image "$IMAGE_ARCHIVE" "$EXPECT_IMAGE"
+      load_portal_image "$IMAGE_ARCHIVE" "$EXPECT_IMAGE" "$EXPECT_ARCHIVE"
       # Only merged (approved) source: the image's revision must be on origin/main.
       RELEASE=$PORTAL_IMAGE_REVISION
       check_release
