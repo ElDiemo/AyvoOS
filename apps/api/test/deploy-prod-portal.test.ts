@@ -509,12 +509,19 @@ describe.skipIf(!WANT_DOCKER)(
         '-c',
         `set -e; mkdir -p ${x}; tar -xf ${good} -C ${x}; ` +
           `printf '{"${RUNNING_TAG.split(':')[0]}":{"${RUNNING_TAG.split(':')[1]}":"x"}}' > ${x}/repositories; ` +
-          `cd ${x}; tar -cf ${join(dir, 'legacy.tar')} $(tar -tf ${good} | grep -v '/$' | tr '\\n' ' ') repositories`,
+          // A classic store's `docker save` already has one: it is replaced, never doubled.
+          `cd ${x}; tar -cf ${join(dir, 'legacy.tar')} $(tar -tf ${good} | grep -v '/$' | grep -vx repositories | tr '\\n' ' ') repositories; ` +
+          // And an archive with two repositories entries (which one would docker load use?).
+          `tar -cf ${join(dir, 'legacy-twice.tar')} $(tar -tf ${good} | grep -v '/$' | grep -vx repositories | tr '\\n' ' ') repositories repositories`,
       ]);
-      expect(res.status).toBe(0);
+      expect(res.status, res.stderr.toString()).toBe(0);
       chmodSync(join(dir, 'legacy.tar'), 0o644);
+      chmodSync(join(dir, 'legacy-twice.tar'), 0o644);
       const r = load(join(dir, 'legacy.tar'), images.fresh);
       expect(r.stdout).toMatch(/DIE the archive's repositories file names another tag/);
+      untouched();
+      const twice = load(join(dir, 'legacy-twice.tar'), images.fresh);
+      expect(twice.stdout).toMatch(/DIE the archive must hold exactly one manifest.json/);
       untouched();
     });
 
