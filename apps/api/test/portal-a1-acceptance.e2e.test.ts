@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import type { AddressInfo } from 'node:net';
+import { connect, createServer, type AddressInfo, type Server } from 'node:net';
 import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -37,6 +37,12 @@ import { hasDatabase } from './support/test-app.js';
  */
 const enabled = hasDatabase && process.env.PORTAL_A1_ACCEPTANCE === '1';
 const CADDY_IMAGE = process.env.PORTAL_A1_CADDY_IMAGE ?? 'caddy:2.11.9-alpine';
+/**
+ * Optional: portal-web as its real image (a container with PROD's limits: read-only, no
+ * capabilities, 256 MiB, 0.5 CPU) instead of `next start` — e.g. an image already on the DEV host.
+ * Its memory is then the container's cgroup (memory.current, incl. socket buffers).
+ */
+const PORTAL_IMAGE = process.env.PORTAL_A1_PORTAL_IMAGE;
 const DOMAIN = 'portal.a1-acceptance.test';
 const EDGE_PORT = 18443;
 const PORTAL_PORT = 3200; // as in PROD (portal-web:3200)
@@ -128,6 +134,8 @@ describe.skipIf(!enabled)(
     const work = mkdtempSync(join(tmpdir(), 'ayvo-a1-'));
     const caddyName = `ayvo-a1-acceptance-${randomBytes(3).toString('hex')}`;
     let ca: Buffer;
+    let portalContainer = '';
+    const proxies: Server[] = [];
     let cfg: ReturnType<typeof prodConfig>;
     const issued = new Map<string, string>(); // number → PDF sha256
     const issuedIn = new Map<string, Map<string, string>>(); // month → number → sha256
@@ -336,9 +344,63 @@ describe.skipIf(!enabled)(
           'PORTAL_A1_ACCEPTANCE=1 PORTAL_A1_REPORT=<file> pnpm --filter @ayvo/api exec vitest run test/portal-a1-acceptance.e2e.test.ts',
       };
 
+      /** A plain TCP forward on the Docker gateway to a unit on loopback (for the container). */
+      const forward = async (target: number) => {
+        const srv = createServer((c) => {
+          const u = connect(target, '127.0.0.1');
+          c.pipe(u);
+          u.pipe(c);
+          c.on('error', () => u.destroy());
+          u.on('error', () => c.destroy());
+        });
+        await new Promise<void>((ok) => srv.listen(0, gateway, ok));
+        proxies.push(srv);
+        return (srv.address() as AddressInfo).port;
+      };
+      if (PORTAL_IMAGE) {
+        const [cp, fp] = [await forward(corePort), await forward(financePort)];
+        portalContainer = `${caddyName}-portal`;
+        const env = {
+          APP_ENV: 'production',
+          PORTAL_PUBLIC_ORIGIN: BASE,
+          CORE_INTERNAL_URL: `http://${gateway}:${cp}`,
+          FINANCE_INTERNAL_URL: `http://${gateway}:${fp}`,
+          PORTAL_CORE_TOKEN: coreToken,
+          PORTAL_FINANCE_TOKEN: financeToken,
+          ...cfg.portal,
+        };
+        const started = docker(
+          'run',
+          '-d',
+          '--name',
+          portalContainer,
+          '--read-only',
+          '--tmpfs',
+          '/tmp',
+          '--cap-drop',
+          'ALL',
+          '--security-opt',
+          'no-new-privileges:true',
+          '--memory',
+          '256m',
+          '--cpus',
+          '0.5',
+          '--pids-limit',
+          '128',
+          '-p',
+          `${gateway}:${PORTAL_PORT}:3200`,
+          ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
+          PORTAL_IMAGE,
+        );
+        expect(started.status, started.stderr).toBe(0);
+        report.portalImage = {
+          ref: PORTAL_IMAGE,
+          id: docker('image', 'inspect', '--format', '{{.Id}}', PORTAL_IMAGE).stdout.trim(),
+        };
+      }
       portal = spawn(
-        resolve(portalDir, 'node_modules/.bin/next'),
-        ['start', '--hostname', gateway, '--port', String(PORTAL_PORT)],
+        PORTAL_IMAGE ? 'sleep' : resolve(portalDir, 'node_modules/.bin/next'),
+        PORTAL_IMAGE ? ['3600'] : ['start', '--hostname', gateway, '--port', String(PORTAL_PORT)],
         {
           cwd: portalDir,
           env: {
@@ -461,6 +523,13 @@ describe.skipIf(!enabled)(
     afterAll(async () => {
       portal?.kill('SIGTERM');
       docker('rm', '-f', caddyName);
+      if (portalContainer) {
+        report.portalContainerLog = docker('logs', '--tail', '20', portalContainer).stderr.slice(
+          -2000,
+        );
+        docker('rm', '-f', portalContainer);
+      }
+      for (const p of proxies) p.close();
       await f?.close();
       if (process.env.PORTAL_A1_REPORT)
         writeFileSync(process.env.PORTAL_A1_REPORT, `${JSON.stringify(report, null, 2)}\n`);
@@ -578,5 +647,140 @@ describe.skipIf(!enabled)(
       const next = await smallPackage('after-slow-client');
       report['after-slow-client-s'] = next.afterS;
     });
+
+    /** RSS in KiB of a process and all its descendants (/proc), 0 when gone. */
+    function treeRssKiB(pid: number): number {
+      let total = 0;
+      const visit = (p: number) => {
+        try {
+          const status = readFileSync(`/proc/${p}/status`, 'utf8');
+          total += Number(/^VmRSS:\s+(\d+)/m.exec(status)?.[1] ?? 0);
+          const kids = readFileSync(`/proc/${p}/task/${p}/children`, 'utf8').trim();
+          for (const k of kids ? kids.split(/\s+/) : []) visit(Number(k));
+        } catch {
+          // gone
+        }
+      };
+      visit(pid);
+      return total;
+    }
+    const tcpMemPages = () =>
+      Number(/^TCP:.* mem (\d+)/m.exec(readFileSync('/proc/net/sockstat', 'utf8'))?.[1] ?? 0);
+    const cgroup = (name: string, file: string) =>
+      readFileSync(
+        `/sys/fs/cgroup/system.slice/docker-${docker('inspect', '-f', '{{.Id}}', name).stdout.trim()}.scope/${file}`,
+        'utf8',
+      );
+    const caddyMemMiB = () => Number(cgroup(caddyName, 'memory.current')) / 1024 / 1024;
+    /** The portal container: its whole cgroup memory and the socket part of it (MiB). */
+    const portalCgroup = () => {
+      const stat = cgroup(portalContainer, 'memory.stat');
+      const field = (k: string) =>
+        Number(new RegExp(`^${k} (\\d+)`, 'm').exec(stat)?.[1] ?? 0) / 1024 / 1024;
+      return {
+        currentMiB: Number(cgroup(portalContainer, 'memory.current')) / 1024 / 1024,
+        anonMiB: field('anon'),
+        sockMiB: field('sock'),
+      };
+    };
+
+    const parked = Number(process.env.PORTAL_A1_PARKED ?? 0);
+    it.runIf(parked > 0)(
+      `measured: ${parked} slow clients started 1.5 s apart (0.8 Mbit/s, gone after 60 s) — bounded, memory per unit, then recovery`,
+      async () => {
+        const m = inv().months;
+        const sample = () => ({
+          atS: 0,
+          portalWebMiB: portalContainer
+            ? portalCgroup().currentMiB
+            : treeRssKiB(portal.pid!) / 1024,
+          portalAnonMiB: portalContainer ? portalCgroup().anonMiB : NaN,
+          portalSockMiB: portalContainer ? portalCgroup().sockMiB : NaN,
+          coreAndFinanceMiB: process.memoryUsage().rss / 1024 / 1024,
+          caddyMiB: (() => {
+            try {
+              return caddyMemMiB();
+            } catch {
+              return NaN;
+            }
+          })(),
+          tcpMiB: (tcpMemPages() * 4096) / 1024 / 1024,
+        });
+        const before = sample();
+        const started = Date.now();
+        // Started one after another (1.5 s apart): concurrent starts are refused by Finance's one
+        // package slot (busy while it builds), a staggered start after the bytes left is not.
+        const clients: ReturnType<typeof download>[] = [];
+        for (let i = 0; i < parked; i++) {
+          clients.push(download(m[0]!, m[1]!, 100_000, 60));
+          await new Promise((ok) => setTimeout(ok, 1500));
+        }
+        const samples: ReturnType<typeof sample>[] = [];
+        const timer = setInterval(
+          () => samples.push({ ...sample(), atS: (Date.now() - started) / 1000 }),
+          2000,
+        );
+        const results = await Promise.all(clients);
+        clearInterval(timer);
+        await new Promise((ok) => setTimeout(ok, 5000));
+        const after = sample();
+        const peak = (k: keyof ReturnType<typeof sample>) =>
+          Math.max(...samples.map((x) => x[k] as number));
+        report[`parked-${parked}${process.env.PORTAL_A1_HTTP1 ? '-http1.1' : ''}`] = {
+          before,
+          peak: {
+            portalWebMiB: peak('portalWebMiB'),
+            portalAnonMiB: peak('portalAnonMiB'),
+            portalSockMiB: peak('portalSockMiB'),
+            coreAndFinanceMiB: peak('coreAndFinanceMiB'),
+            caddyMiB: peak('caddyMiB'),
+            tcpMiB: peak('tcpMiB'),
+          },
+          after,
+          clients: results.map((r) => ({
+            exit: r.curlExit,
+            status: r.status,
+            bytes: r.bytes,
+            location: r.location,
+          })),
+          samples,
+        };
+        // Bounded today by portal-web's file slots (PORTAL_PDF_MAX_IN_FLIGHT, held until the body is
+        // pulled into the socket) and Finance's one package at a time: a few are served, the others
+        // are refused before any byte; none got a whole-looking ZIP in 60 s at 0.8 Mbit/s.
+        const served = results.filter((r) => r.status === 200);
+        const refused = results.filter((r) => r.status !== 200);
+        expect(served.length).toBeGreaterThan(0);
+        expect(served.length).toBeLessThanOrEqual(
+          Number(cfg.portal.PORTAL_PDF_MAX_IN_FLIGHT ?? 2) + 1,
+        );
+        for (const r of served) expect(() => unzip(r.zip)).toThrow();
+        for (const r of refused) {
+          expect(r.status).toBe(303);
+          expect(r.location).toMatch(/balicek=PACKAGE_BUSY/);
+          expect(r.bytes).toBe(0);
+        }
+        // After they left: a normal package completes.
+        await smallPackage(`after-parked-${parked}`);
+      },
+      240_000,
+    );
+
+    const extreme = Number(process.env.PORTAL_A1_EXTREME_BPS ?? 0);
+    it.runIf(extreme > 0)(
+      `measured: how long one client at ${extreme} B/s keeps a package transfer alive (nothing cuts it?)`,
+      async () => {
+        const m = inv().months;
+        const r = await download(m[0]!, m[1]!, extreme, 900);
+        const { zip, ...measured } = r;
+        report[`extreme-${extreme}${process.env.PORTAL_A1_HTTP1 ? '-http1.1' : ''}`] = {
+          ...measured,
+          zipBytes: zip.length,
+        };
+        expect(r.status).toBe(200);
+        await smallPackage(`after-extreme-${extreme}`);
+      },
+      1_000_000,
+    );
   },
 );
