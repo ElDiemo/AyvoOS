@@ -65,6 +65,8 @@ test.describe('hotel portal: deliveries, hotel-first', () => {
       .getByRole('link', { name: 'Dodávky' })
       .click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dodávky');
+    // An order that exists is not presented as commercially confirmed (review 6802296654).
+    await expect(page.getByText(/potvrzen/i)).toHaveCount(0);
     const rows = page.getByTestId('deliveries-hotels').getByRole('listitem');
     await expect(rows).toHaveCount(3);
 
@@ -114,6 +116,7 @@ test.describe('hotel portal: deliveries, hotel-first', () => {
     const [abc, bellevue, lipa] = (await stubState(page)).fleetIds as [string, string, string];
     await page.goto(`/hotels/${abc}/deliveries`);
     await expect(page.getByTestId('portal-hotel-name')).toHaveText('Hotel ABC (syntetický)');
+    await expect(page.getByText(/potvrzen/i)).toHaveCount(0);
     const summary = page.getByTestId('detail-summary');
     await expect(summary.getByTestId('summary-order')).toContainText('Naplánováno');
     await expect(summary.getByTestId('summary-order')).toContainText('plánované odeslání');

@@ -12,8 +12,7 @@ export const cs = {
   },
   allDeliveries: {
     title: 'Dodávky',
-    intro:
-      'Další závoz každého hotelu. Objednávka je potvrzená, plán zásobování je jen orientační.',
+    intro: 'Skutečné objednávky a orientační plán zásobování každého hotelu.',
     unavailable: 'Dodávky tohoto hotelu se teď nepodařilo načíst.',
     hotel: 'Profil hotelu',
     columns: { hotel: 'Hotel', order: 'Nejbližší objednávka', plan: 'Orientačně podle plánu' },
@@ -194,7 +193,7 @@ export const cs = {
     back: 'Všechny hotely',
     eyebrow: 'Dodávky hotelu',
     current: 'Aktuální objednávky',
-    currentHelp: 'Potvrzené objednávky a jejich stav. Datum je plánované odeslání, ne doručení.',
+    currentHelp: 'Skutečné objednávky a jejich stav. Datum je plánované odeslání, ne doručení.',
     noCurrent: 'Žádná aktuální objednávka.',
     planTitle: 'Plán zásobování · příštích 60 dní',
     planHelp:
