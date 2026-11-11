@@ -1,4 +1,5 @@
 import {
+  bottleCirculationListSchema,
   bottleCodeSchema,
   bottleDetailSchema,
   bottlePhysicalSchema,
@@ -8,7 +9,11 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ProductionHeader } from '@/components/production/production-header';
 import { QrCode } from '@/components/qr-code';
-import { BottleStatusBadge } from '@/components/status';
+import {
+  BottleCrate,
+  BottleLocation,
+  BottleReadiness,
+} from '@/components/production/bottle-circulation';
 import { buttonClass, Card, Field, FieldList, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { productionCs } from '@/i18n/cs/production';
@@ -22,10 +27,13 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
   const { code } = await params;
   // A malformed code can never exist: answer 404 instead of asking the API (which says 400).
   if (!bottleCodeSchema.safeParse(code).success) notFound();
-  const [bottle, settings, physical] = await Promise.all([
+  const [bottle, settings, physical, circulation] = await Promise.all([
     apiGet(`admin/bottles/${encodeURIComponent(code)}`, bottleDetailSchema),
     apiGet('admin/label-designer/settings', labelDesignerSettingsSchema),
     apiGet(`admin/bottles/${encodeURIComponent(code)}/physical`, bottlePhysicalSchema),
+    apiGet('admin/bottle-circulation', bottleCirculationListSchema, { codes: code }).then(
+      (r) => r.items[0],
+    ),
   ]);
   const applied = physical.labelApplication;
   return (
@@ -41,7 +49,13 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
           <Card title={t.overview}>
             <FieldList>
               <Field label={t.status}>
-                <BottleStatusBadge status={bottle.status} />
+                <BottleReadiness status={bottle.status} source={circulation?.source} />
+              </Field>
+              <Field label={productionCs.circulation.crate}>
+                <BottleCrate circulation={circulation} />
+              </Field>
+              <Field label={productionCs.circulation.location}>
+                <BottleLocation circulation={circulation} />
               </Field>
               <Field label={t.reuseCycles}>
                 <span className="tabular-nums" data-testid="reuse-cycles">
