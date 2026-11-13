@@ -576,7 +576,12 @@ check_release() {
     die "$RELEASE is not on origin/main: only a merged (approved) commit is released"
   repo_git cat-file -e "$RELEASE:deploy/prod/compose.yml" 2>/dev/null ||
     die "$RELEASE has no deploy/prod/compose.yml"
-  repo_git show "$RELEASE:apps/api/src/config/env.ts" | grep -q "'s3'" ||
+  # Read the whole file first: `git show | grep -q` under pipefail fails when grep stops at the first
+  # match and git gets SIGPIPE — a valid release was refused (PROD GO-2, 2026-11-13).
+  local env_ts
+  env_ts="$(repo_git show "$RELEASE:apps/api/src/config/env.ts")" ||
+    die "$RELEASE: cannot read apps/api/src/config/env.ts"
+  grep -q "'s3'" <<<"$env_ts" ||
     die "$RELEASE has no S3 file storage (ADR 0032, #47): production cannot start on local storage"
   ok "$RELEASE is on origin/main ($(repo_git log -1 --format='%cs %s' "$RELEASE"))"
 }
