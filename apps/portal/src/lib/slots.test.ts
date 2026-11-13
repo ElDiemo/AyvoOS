@@ -3,12 +3,26 @@ import {
   boundedPassThrough,
   contentLengthWithin,
   deadline,
+  KeyedSlotLimit,
   readBounded,
   SlotLimit,
+  StartQuota,
   TransferCut,
 } from './slots';
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+/** Waits until `cond` holds (each macrotask), at most `ms`. */
+async function until(cond: () => boolean, ms = 2000) {
+  const end = Date.now() + ms;
+  while (!cond() && Date.now() < end) await tick(1);
+  return cond();
+}
+/** A cancellation that completes only when the test says so (no timing assumption). */
+function gate() {
+  let open!: () => void;
+  const opened = new Promise<void>((r) => (open = r));
+  return { opened, open };
+}
 
 /**
  * An upstream body of n chunks that records its cancellation. `cancelMs` makes the cancellation
@@ -16,7 +30,7 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
  */
 function upstream(
   chunks: number,
-  opts: { delayMs?: number; cancelMs?: number; size?: number } = {},
+  opts: { delayMs?: number; cancelMs?: number; cancelGate?: Promise<void>; size?: number } = {},
 ) {
   const state = { cancelling: false, cancelled: false, served: 0 };
   const body = new ReadableStream<Uint8Array>(
@@ -30,6 +44,7 @@ function upstream(
       async cancel() {
         state.cancelling = true;
         if (opts.cancelMs) await tick(opts.cancelMs);
+        if (opts.cancelGate) await opts.cancelGate;
         state.cancelled = true;
       },
     },
@@ -108,7 +123,8 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
   it('the browser going away aborts the upstream and releases only after the cancellation settled', async () => {
     const slots = new SlotLimit(1);
     const release = slots.acquire()!;
-    const up = upstream(1000, { cancelMs: 20 });
+    const g = gate();
+    const up = upstream(1000, { cancelGate: g.opened });
     let aborted = false;
     const reader = boundedPassThrough(up.body, {
       stop: never(),
@@ -118,8 +134,10 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
     }).getReader();
     await reader.read();
     const leaving = reader.cancel();
-    await tick(2);
+    expect(await until(() => up.state.cancelling)).toBe(true);
+    // The upstream's cancellation has not settled: the slot is still held.
     expect([slots.inFlight, aborted, up.state.cancelled]).toEqual([1, true, false]);
+    g.open();
     await leaving;
     expect([slots.inFlight, up.state.cancelled]).toEqual([0, true]);
   });
@@ -127,7 +145,8 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
   it('one deadline: a receiver that never reads off is cut, the upstream cancelled, then the slot released', async () => {
     const slots = new SlotLimit(1);
     const release = slots.acquire()!;
-    const up = upstream(1000, { cancelMs: 20 });
+    const g = gate();
+    const up = upstream(1000, { cancelGate: g.opened });
     const stop = deadline(50);
     const body = boundedPassThrough(up.body, {
       stop: stop.signal,
@@ -135,10 +154,12 @@ describe('PDF slots in portal-web (ADR 0045 §8)', () => {
       release,
       abortUpstream: () => {},
     });
-    await tick(60);
-    expect([up.state.cancelling, up.state.cancelled, slots.inFlight]).toEqual([true, false, 1]);
-    await tick(40);
-    expect([up.state.cancelled, slots.inFlight]).toEqual([true, 0]);
+    // The deadline cuts it: the upstream is being cancelled, the slot still held until it settled.
+    expect(await until(() => up.state.cancelling)).toBe(true);
+    expect([up.state.cancelled, slots.inFlight]).toEqual([false, 1]);
+    g.open();
+    expect(await until(() => slots.inFlight === 0)).toBe(true);
+    expect(up.state.cancelled).toBe(true);
     await expect(body.getReader().read()).rejects.toMatchObject({ reason: 'DEADLINE' });
   });
 
@@ -240,5 +261,65 @@ describe('bounded reads', () => {
     browser.abort();
     expect(d.signal.aborted).toBe(true);
     expect((d.signal.reason as TransferCut).reason).toBe('CLIENT');
+  });
+});
+
+describe('KeyedSlotLimit: per key and in total (packages per account, #178 review)', () => {
+  it('one per key, the total bounded; a release frees both, once', () => {
+    const l = new KeyedSlotLimit(2, 1);
+    const a = l.acquire('a')!;
+    expect(l.acquire('a')).toBeNull(); // the same account again
+    const b = l.acquire('b')!;
+    expect(l.acquire('c')).toBeNull(); // the total is full
+    expect([l.inFlight, l.inFlightOf('a'), l.inFlightOf('b')]).toEqual([2, 1, 1]);
+    a();
+    a(); // idempotent
+    expect([l.inFlight, l.inFlightOf('a')]).toEqual([1, 0]);
+    expect(l.acquire('c')).not.toBeNull();
+    expect(l.acquire('a')).toBeNull(); // total full again (b, c)
+    b();
+    expect(l.acquire('a')).not.toBeNull();
+  });
+});
+
+describe('StartQuota: package starts per account and day (review 6800881871, owner 2026-11-11)', () => {
+  const limits = { minIntervalMs: 600_000, perKeyPerDay: 4, globalPerDay: 5 };
+  it('one start per account per 10 minutes; another account is not affected', () => {
+    let t = 0;
+    const q = new StartQuota(limits, () => t);
+    expect(typeof q.take('a')).toBe('object');
+    expect(q.take('a')).toBe('RATE');
+    t += 599_999;
+    expect(q.take('a')).toBe('RATE');
+    expect(typeof q.take('b')).toBe('object');
+    t += 1;
+    expect(typeof q.take('a')).toBe('object');
+  });
+  it('at most 4 a day per account, and the global ceiling; both free again after 24 h', () => {
+    let t = 0;
+    const q = new StartQuota(limits, () => t);
+    for (let i = 0; i < 4; i++) {
+      expect(typeof q.take('a')).toBe('object');
+      t += 600_000;
+    }
+    expect(q.take('a')).toBe('DAILY');
+    expect(typeof q.take('b')).toBe('object'); // the 5th start in total
+    expect(q.take('c')).toBe('GLOBAL');
+    t += 86_400_000;
+    expect(typeof q.take('a')).toBe('object');
+    expect(typeof q.take('c')).toBe('object');
+  });
+  it('a start given back (nothing passed on) costs nothing, once only', () => {
+    let t = 0;
+    const q = new StartQuota(limits, () => t);
+    const s = q.take('a');
+    if (typeof s !== 'object') throw new Error('expected a start');
+    s.giveBack();
+    s.giveBack();
+    const again = q.take('a');
+    expect(typeof again).toBe('object');
+    expect(q.take('a')).toBe('RATE');
+    t += 600_000;
+    expect(typeof q.take('a')).toBe('object');
   });
 });

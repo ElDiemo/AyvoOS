@@ -17,7 +17,6 @@ import type {
   EffectiveTerms,
   EffectiveTermsPage,
   HotelBillingTerms,
-  NewBillingAgreementVersionRequest,
   NewBillingCustomerVersionRequest,
   NewBillingRunSettingsRequest,
   NewPriceListVersionRequest,
@@ -25,6 +24,7 @@ import type {
 } from '@ayvo/types';
 import { domainError } from '../common/domain-error.js';
 import { Prisma } from '../generated/finance-prisma/client.js';
+import { pendingTransferOf } from './billing-terms.js';
 import { CoreClient } from './core-client.js';
 import type { FinanceCaller } from './finance-access.guard.js';
 import { allocateFinanceSerial, FinanceOperations } from './finance-operations.js';
@@ -329,7 +329,11 @@ export class BillingSettingsService {
       },
     });
     if (!a) throw new NotFoundException('Smlouva nenalezena');
-    return { ...agreement(a), versions: a.versions.map(agreementVersion) };
+    return {
+      ...agreement(a),
+      versions: a.versions.map(agreementVersion),
+      pendingTransfer: await pendingTransferOf(this.prisma, a.id),
+    };
   }
 
   async createAgreement(
@@ -363,8 +367,38 @@ export class BillingSettingsService {
               requestId: req.requestId,
             },
           });
-          await tx.agreementVersion.create({
-            data: versionData(created.id, revision, req.terms, userId, displayName, req.requestId),
+          // The agreement's first terms revision (v6): a CHANGE, committed with its version.
+          const v = await tx.agreementVersion.create({
+            data: versionData(
+              created.id,
+              revision,
+              1,
+              req.terms,
+              userId,
+              displayName,
+              req.requestId,
+            ),
+          });
+          const r = await tx.billingTermsRevision.create({
+            data: {
+              agreementId: created.id,
+              revision: 1,
+              intent: 'CHANGE',
+              requestId: req.requestId,
+              payerCustomerId: req.terms.customerId,
+              reason: req.terms.reason,
+              recordedBy: userId,
+              recordedByName: displayName,
+            },
+          });
+          await tx.billingTermsRevisionEvent.create({
+            data: {
+              revisionId: r.id,
+              kind: 'COMMITTED',
+              agreementVersionId: v.id,
+              recordedBy: userId,
+              recordedByName: displayName,
+            },
           });
         } catch (e) {
           if (isUnique(e))
@@ -376,42 +410,6 @@ export class BillingSettingsService {
       },
     );
     return this.agreementDetail(result.code);
-  }
-
-  async newAgreementVersion(
-    code: string,
-    req: NewBillingAgreementVersionRequest,
-    caller: FinanceCaller,
-  ): Promise<BillingAgreementDetail> {
-    const { userId, displayName } = caller.principal;
-    await this.operations.run(
-      'BILLING_AGREEMENT_VERSION',
-      req.requestId,
-      { code, expectedRevision: req.expectedRevision, terms: req.terms, actorId: userId },
-      async (tx) => {
-        // The counter row is locked until commit: the check below sees every committed revision.
-        const revision = await allocateFinanceSerial(tx, 'billing_revision');
-        const a = await tx.billingAgreement.findUnique({
-          where: { code },
-          include: {
-            versions: { orderBy: { revision: 'desc' }, take: 1, select: { revision: true } },
-          },
-        });
-        if (!a) throw new NotFoundException('Smlouva nenalezena');
-        // The whole terms form edited from an older revision: refused, never written back.
-        if (Number(a.versions[0]!.revision) !== req.expectedRevision) throw concurrentChange();
-        try {
-          await tx.agreementVersion.create({
-            data: versionData(a.id, revision, req.terms, userId, displayName, req.requestId),
-          });
-        } catch (e) {
-          if (isForeignKey(e)) throw customerNotFound();
-          throw e;
-        }
-        return { code };
-      },
-    );
-    return this.agreementDetail(code);
   }
 
   // --- terms effective for a month ------------------------------------------------------
@@ -522,9 +520,9 @@ export class BillingSettingsService {
   }
 }
 
-const concurrentChange = () =>
+export const concurrentChange = () =>
   domainError(409, 'CONCURRENT_CHANGE', 'Údaje mezitím změnil někdo jiný. Načtěte je znovu.');
-const customerNotFound = () =>
+export const customerNotFound = () =>
   domainError(422, 'CUSTOMER_NOT_FOUND', 'Zvolený odběratel neexistuje.');
 
 function customerData(c: BillingCustomerFields) {
@@ -542,9 +540,10 @@ function customerData(c: BillingCustomerFields) {
   };
 }
 
-function versionData(
+export function versionData(
   agreementId: string,
   revision: bigint,
+  termsRevision: number,
   t: BillingAgreementTerms,
   userId: string,
   displayName: string,
@@ -552,6 +551,7 @@ function versionData(
 ): Prisma.AgreementVersionUncheckedCreateInput {
   return {
     revision,
+    termsRevision,
     agreementId,
     effectiveFrom: monthStart(t.effectiveFrom),
     customerId: t.customerId,

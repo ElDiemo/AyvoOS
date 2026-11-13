@@ -10,8 +10,8 @@ import { cspFor } from './lib/csp';
  * `connection()`), so no build-time page carries a stale nonce.
  *
  * The routes /auth/*, /hotels/<id>/profile (the profile save) and the files (/invoices/<id>/pdf,
- * /invoices/package) do NOT pass through here: a proxy makes Next.js buffer the request body for
- * it, which would bypass portal-web's own input limits on the sign-in steps and the profile save.
+ * /invoices/package, /contracts/<id>/pdf) do NOT pass through here: a proxy makes Next.js buffer
+ * the request body for it, which would bypass portal-web's own input limits on the sign-in steps and the profile save.
  * They answer JSON or a file and get a fixed, script-free policy from next.config.ts.
  */
 export function proxy(request: NextRequest) {
@@ -36,6 +36,6 @@ export function proxy(request: NextRequest) {
 // its own nonce policy like any other.
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|auth/|invoices/[^/]+/pdf|invoices/package|hotels/[^/]+/profile).*)',
+    '/((?!_next/static|_next/image|favicon.ico|auth/|invoices/[^/]+/pdf|invoices/package|contracts/[^/]+/pdf|hotels/[^/]+/profile).*)',
   ],
 };

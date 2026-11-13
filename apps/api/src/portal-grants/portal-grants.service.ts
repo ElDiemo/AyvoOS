@@ -7,7 +7,6 @@ import type {
   PortalGrantListItem,
   PortalInvitation,
   PortalGrant,
-  PortalGrantFinanceCheck,
   PortalGrantIssueRequest,
   PortalGrantReplaceRequest,
 } from '@ayvo/types';
@@ -20,6 +19,7 @@ import { Prisma, type AccountAudience } from '../generated/prisma/client.js';
 import { InvitationsService } from '../identity/invitations.service.js';
 import { MAIL_DELIVERY_ATTEMPTS } from '../identity/native-tokens.service.js';
 import { SessionsService } from '../identity/sessions.service.js';
+import { isOperational, lockHotels, pragueToday } from './portal-fences.service.js';
 
 type Tx = Prisma.TransactionClient;
 type GrantRow = Prisma.PortalGrantGetPayload<{ include: { hotels: true } }>;
@@ -33,7 +33,7 @@ const toView = (g: GrantRow): PortalGrant => ({
   payerCustomerId: g.payerCustomerId,
   hotelIds: g.hotels.map((h) => h.hotelId).sort(),
   reason: g.reason,
-  financeCheck: g.financeCheck as PortalGrantFinanceCheck,
+  financeCheck: g.financeCheck as PortalGrant['financeCheck'],
   grantedAt: g.grantedAt.toISOString(),
   grantedBy: g.grantedBy,
   replacesGrantId: g.replacesId,
@@ -392,7 +392,7 @@ export class PortalGrantsService {
     const meaning = { actorId, userId: input.userId, ...scopeOf(input) };
     return this.idempotent('PORTAL_GRANT_ISSUE', input.requestId, meaning, async (tx) => {
       await this.lockAccount(tx, input.userId);
-      await this.requireHotels(tx, input.hotelIds);
+      await this.lockChecked(tx, input);
       const open = await tx.portalGrant.findFirst({
         where: { userId: input.userId, payerCustomerId: input.payerCustomerId, revokedAt: null },
         select: { id: true },
@@ -431,7 +431,7 @@ export class PortalGrantsService {
       const old = await this.lockGrant(tx, grantId);
       if (old.payerCustomerId !== input.payerCustomerId)
         throw domainError(409, 'GRANT_PAYER_MISMATCH', 'A replacement keeps the payer');
-      await this.requireHotels(tx, input.hotelIds);
+      await this.lockChecked(tx, input);
       const previous = old.hotels.map((h) => h.hotelId).sort();
       await tx.portalGrant.update({
         where: { id: old.id },
@@ -495,21 +495,60 @@ export class PortalGrantsService {
 
   /**
    * The account's active grants now (read on every portal request). `db`: the caller's own client
-   * (the hotel portal reads through its reserved pool).
+   * (the hotel portal reads through its reserved pool). `hotelIds`: every hotel of the grant — the
+   * scope of the payer's invoices (Finance). `operationalHotelIds`: only those operational today
+   * (v6 §3) — the scope of the hotel's detail, profile, contracts and deliveries. Read from the
+   * core's own rows only, never from Finance.
    */
   async activeOf(
     userId: string,
     db: Tx = this.prisma,
-  ): Promise<{ id: string; payerCustomerId: string; hotelIds: string[] }[]> {
+  ): Promise<
+    { id: string; payerCustomerId: string; hotelIds: string[]; operationalHotelIds: string[] }[]
+  > {
     const rows = await db.portalGrant.findMany({
       where: { userId, revokedAt: null },
-      include: { hotels: { select: { hotelId: true } } },
+      include: {
+        hotels: {
+          select: { hotelId: true, access: true, checkedRevision: true, operationsUntil: true },
+        },
+      },
       orderBy: { grantedAt: 'asc' },
     });
+    const pairs = rows.flatMap((g) =>
+      g.hotels
+        .filter((h) => h.access === 'OPERATIONS')
+        .map((h) => ({ payerCustomerId: g.payerCustomerId, hotelId: h.hotelId })),
+    );
+    const fences =
+      pairs.length === 0
+        ? []
+        : await db.portalOperationalFence.findMany({
+            where: { OR: pairs },
+            select: {
+              payerCustomerId: true,
+              hotelId: true,
+              endsOn: true,
+              resolution: { select: { restoreRevision: true } },
+            },
+          });
+    const today = pragueToday();
     return rows.map((g) => ({
       id: g.id,
       payerCustomerId: g.payerCustomerId,
       hotelIds: g.hotels.map((h) => h.hotelId).sort(),
+      operationalHotelIds: g.hotels
+        .filter((h) =>
+          isOperational(
+            h,
+            fences.filter(
+              (f) => f.payerCustomerId === g.payerCustomerId && f.hotelId === h.hotelId,
+            ),
+            today,
+          ),
+        )
+        .map((h) => h.hotelId)
+        .sort(),
     }));
   }
 
@@ -593,9 +632,35 @@ export class PortalGrantsService {
     return grant;
   }
 
-  private async requireHotels(tx: Tx, hotelIds: readonly string[]) {
-    const found = await tx.hotel.count({ where: { id: { in: [...hotelIds] } } });
-    if (found !== hotelIds.length) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+  /**
+   * The grant's hotels, locked (the lock a fence takes too), and Finance's check against the
+   * pair's fences: an OPERATIONS hotel checked in a revision older than a fence of this payer ×
+   * hotel is STALE_TERMS — Finance checks again (v3 §3; the read rule would refuse it anyway).
+   */
+  private async lockChecked(tx: Tx, input: PortalGrantReplaceRequest) {
+    await lockHotels(tx, input.hotelIds);
+    const operational = input.financeCheck.hotels.filter((h) => h.basis === 'AGREEMENT');
+    if (operational.length === 0) return;
+    const fences = await tx.portalOperationalFence.groupBy({
+      by: ['hotelId'],
+      where: {
+        payerCustomerId: input.payerCustomerId,
+        hotelId: { in: operational.map((h) => h.id) },
+      },
+      _max: { termsRevision: true },
+    });
+    const newest = new Map(fences.map((f) => [f.hotelId, f._max.termsRevision ?? 0]));
+    const stale = operational
+      .filter((h) => h.checkedRevision! < (newest.get(h.id) ?? 0))
+      .map((h) => h.id)
+      .sort();
+    if (stale.length > 0)
+      throw domainErrorWithDetails(
+        409,
+        'STALE_TERMS',
+        'The terms changed since Finance checked these hotels; check again',
+        { hotelIds: stale },
+      );
   }
 
   private async create(
@@ -613,7 +678,20 @@ export class PortalGrantsService {
         reason: input.reason,
         financeCheck: input.financeCheck,
         replacesId,
-        hotels: { create: input.hotelIds.map((hotelId) => ({ hotelId })) },
+        hotels: {
+          create: input.financeCheck.hotels.map((h) =>
+            h.basis === 'AGREEMENT'
+              ? {
+                  hotelId: h.id,
+                  access: 'OPERATIONS' as const,
+                  checkedRevision: h.checkedRevision,
+                  operationsUntil: h.operationsUntil
+                    ? new Date(`${h.operationsUntil}T00:00:00.000Z`)
+                    : null,
+                }
+              : { hotelId: h.id, access: 'INVOICES' as const },
+          ),
+        },
       },
       include: { hotels: true },
     });
