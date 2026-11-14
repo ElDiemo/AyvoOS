@@ -79,6 +79,16 @@ export const pickupsCs = {
   planNote:
     'Dnešní stav balíku není potvrzením, že ho převzal právě tento svoz – balík mohl odejít s jiným svozem.',
   pickedUp: (n: number) => `převzato ${n}`,
+  toCollect: (n: number) => `ke svozu ${n}`,
+  problems: {
+    NO_ANSWER:
+      'Odpověď dopravce se nepodařilo získat. Požadavek se znovu neodešle – zjistěte stav u dopravce.',
+    PICKUP_DAY_PASSED: 'Neodesláno: den svozu minul dřív, než se požadavek odeslal.',
+    PICKUP_PLAN_CHANGED:
+      'Neodesláno: plán už neplatil (balík převzal dopravce nebo se změnila objednávka či zásilka).',
+    PPL_UNAVAILABLE: 'PPL nebylo dostupné – nic se neodeslalo.',
+    PPL_AUTH: 'PPL odmítlo přihlášení serveru – nic se neodeslalo.',
+  } as Record<string, string>,
   carrierNumber: 'Číslo svozu u dopravce',
   plan: 'Plán (co se mělo předat)',
   orderStatus: {

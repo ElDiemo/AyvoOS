@@ -210,9 +210,9 @@ export class FakePpl {
     Object.assign(this.mode, FakePpl.fresh());
   }
 
-  async start(): Promise<void> {
+  async start(port = 0): Promise<void> {
     this.server = createServer((req, res) => void this.handle(req, res));
-    await new Promise<void>((r) => this.server.listen(0, '127.0.0.1', r));
+    await new Promise<void>((r) => this.server.listen(port, '127.0.0.1', r));
     this.base = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}${BASE_PATH}`;
   }
 
@@ -238,6 +238,19 @@ export class FakePpl {
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://x');
+    // Test control (browser walkthrough only): set modes, show cancellations, reset. Outside the
+    // simulated API's path; nothing like it exists at PPL.
+    if (req.method === 'POST' && url.pathname === '/__fake-ppl/control') {
+      const body = JSON.parse((await this.body(req)) || '{}') as {
+        reset?: boolean;
+        mode?: Partial<Mode>;
+        showCancelled?: boolean;
+      };
+      if (body.reset) this.reset();
+      if (body.mode) Object.assign(this.mode, body.mode);
+      if (body.showCancelled) for (const o of this.orders.values()) o.hiddenLooks = 0;
+      return this.json(res, 200, { ok: true });
+    }
     const path = url.pathname.slice(BASE_PATH.length);
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const client = this.tokenClient.get(token) ?? null;

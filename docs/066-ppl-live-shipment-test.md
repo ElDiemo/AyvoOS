@@ -127,3 +127,77 @@ Proves (variant A): real PPL label, real pickup order, tracking pickup and deliv
 identification (0 → 1) and "Po mytí" (no increase), with the same QR identities. Does **not** prove:
 an empty-packaging transport (variant B), a return flow inside AYVO (none exists), bottle refill
 (R3).
+
+## 7. The outbound live test from Přerov — prepared (2026-11-14; nothing run, no change on any server)
+
+Outbound only: label → pickup → hand-over → tracking. No fictitious site, no fake filling, no
+uncertain transport counted, no returns (§5 stays out of this). PPL is not contacted for it now.
+
+### 7.1 What is known, what was simulated, what only the first real run shows
+
+| Topic                          | Known from PPL's documentation (ppl-cpl-api.apidog.io, read 2026-11-14)                               | Verified with the simulation (doc 067)                                                     | Only the first real run shows                                                                                          |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Labels                         | `POST /shipment/batch` (live TEST runs 2026-10-19/-20, doc 029 §10)                                   | labels never create a pickup                                                               | production label, the physical print                                                                                   |
+| Pickup order                   | `POST /order/batch` `CollectionOrder`, 201 + `Location`, status `GET /order/batch/{id}`, `GET /order` | one POST, uncertain answers only looked up, recovery after a restart, parcels not with PPL | whether production accepts it with the contract's product and the registered address; real `orderNumber`, `orderState` |
+| Day / window                   | `sendDate` date-time; `sendTimeFrom/To` format undefined                                              | the window only in the note                                                                | which day/time PPL schedules; whether the note is read; cut-off                                                        |
+| Cancellation                   | `POST /order/cancel` (200, empty body); `OrderStates` includes `Canceled`                             | accepted ≠ confirmed; confirmed only by `Canceled`; held parcels; audited closing          | whether `orderReference` = our `referenceId`; how soon `Canceled` shows; until when it is possible                     |
+| Physical link pickup ↔ parcels | not documented: a collection order names no parcel numbers; `GET /order` returns `shipmentNumbers`    | not simulated (the simulation returns none)                                                | **whether `shipmentNumbers` of our order lists the label numbers handed over** (§7.3)                                  |
+| Pickup / delivery              | tracking codes (doc 031)                                                                              | partial pickup, delivery without a pickup scan (`CARRIER_IMPLIED`)                         | real event times and codes in production                                                                               |
+
+### 7.2 Requirements and checks before (each its own approval)
+
+1. **Owner:** the physical load (§7.5), the date, the owner's own delivery address for HT-000001.
+2. **PPL (owner or Codex, by phone/portal — not the API):** the registered collection address of the
+   account = CZ-PREROV-01; a regular pickup exists or not (then no order is needed that day); the
+   contract allows `CollectionOrder` with the chosen product; cut-off for the same / next day; the
+   window format; that `orderReference` matches our `referenceId` for cancelling.
+3. **PROD** (Codex, after the release with doc 029 §11 is deployed by its own approval): the site's
+   settings `PPL_PRODUCTION` with the sender **identical** to the registered address, "Ověřit
+   připojení" (token + product list, read-only), the product chosen from that list.
+4. Nothing else is prepared on PROD in advance (no test orders, no pickup).
+
+### 7.3 Order of the run and what to record
+
+1. Ordinary internal order of HT-000001 (the confirmed address), picking, **Vytvořit přepravní
+   štítky** → record the PPL **label numbers** (parcel numbers per crate). No pickup is created.
+2. Print, apply, **Připraveno k vyzvednutí**.
+3. Expedice → Svoz: select **only this order**, the agreed day, production environment shown,
+   confirm → record `SV-…`, the time of the click, PPL's **order number** and **state**, the
+   announced parcel count.
+4. Physical hand-over: record the **real time** the driver collected it and the **number of parcels
+   the driver took** (photo of the handed-over parcels, the driver's confirmation if any).
+5. Tracking: "Obnovit tracking" → record the first event's code and time per parcel ("Převzato"),
+   later "Doručeno".
+6. **The physical link** (for the owner's and PPL's assessment, read-only): after the pickup, read
+   the pickup order in PPL's portal — or, only with its own approval, one read-only `GET /order` by
+   our reference with the exchange log outside git — and record **whether its `shipmentNumbers`
+   contains exactly the label numbers of step 1**, its `realShipmentCount` and `realCollectionDate`.
+   The application stores only PPL's order number and state ("Zjistit stav u dopravce"), not
+   `shipmentNumbers`; it does not derive the link from tracking, and the history shows only "Stav
+   balíku dnes".
+7. Compare: announced count vs. `realShipmentCount` vs. what the driver took vs. tracking.
+
+### 7.4 Uncertain answer or a needed cancellation
+
+- **Uncertain order** (lost answer, time-out): never order again. "Zjistit stav u dopravce" after the
+  in-flight window; found → confirmed. Not found → ask PPL (portal/phone) whether the order with our
+  reference exists; only if PPL confirms it does not, close it as "neobjednaný" (reason) and then
+  order a new one.
+- **Cancellation needed:** "Zrušit svoz" once. Until PPL shows `Canceled`, the parcels stay held —
+  do not order another day. If the answer is lost or PPL keeps showing "Created" after the
+  automatic lookups: ask PPL; only when PPL confirms that the cancellation was not carried out and
+  will not be, close the attempt (`shipments:resolve_uncertain`, reason) and decide: request a new
+  cancellation, or let the pickup stand. A driver who comes anyway: hand over or not by the person's
+  decision; tracking then records what really happened.
+- **Driver does not come / takes fewer parcels:** the order stays "Připravená k vyzvednutí" for what
+  is left; plan a new pickup for the rest (the board offers only parcels not with PPL).
+
+### 7.5 Two options for the physical load (doc 066 §1)
+
+- **A — one real Hotovo crate** (the ordinary process, real consumption recorded as such; the current
+  products: 40 bottles, 13.2 l liquid, 40 pumps, 40 labels; a smaller crate only through an
+  owner-approved catalogue change). Proves AYVO's whole outbound flow including the crate cycle.
+- **C — one ordinary parcel outside AYVO OS** (PPL's own tools): verifies only PPL's pickup and
+  delivery, not AYVO's labels, pickup order or tracking — useful to learn PPL's real behaviour
+  (pickup window, driver, timings) before variant A.
+  (B — an empty-packaging test shipment — is not implemented; doc 066 §1.)

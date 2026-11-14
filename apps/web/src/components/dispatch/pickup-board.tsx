@@ -9,6 +9,10 @@ import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
 import { pickupsCs as t } from '@/i18n/cs/pickups';
 import { apiSend, ClientApiError } from '@/lib/client-api';
 
+/** The carrier's problem in Czech where its code is known; the carrier's own text otherwise. */
+const problemText = (code: string | null, message: string | null) =>
+  (code && t.problems[code]) ?? message ?? code ?? '';
+
 const errorText = (error: unknown) =>
   error instanceof ClientApiError
     ? ((error.code && t.errors[error.code]) ?? error.message)
@@ -47,6 +51,8 @@ export function PickupBoard({
   const max = board.carrier.maxParcels;
   const windowValid = (from === '' && to === '') || (from !== '' && to !== '' && from < to);
   const blocked = !!board.open || !board.carrier.available;
+  // The waiting pickup has its own card above; the history lists the others (each pickup once).
+  const history = board.pickups.filter((x) => x.code !== board.open?.code);
   const canSubmit =
     canOrder && !blocked && chosen.length > 0 && windowValid && (max === null || parcels <= max);
 
@@ -108,8 +114,11 @@ export function PickupBoard({
                   <span className="font-medium">{c.orderCode}</span> · {c.hotelName}, {c.city}
                   <span className="block text-xs text-stone-500">
                     {t.columns.shipDate}: {formatDateCs(c.requestedShipDate)} · {c.shipmentCode} ·{' '}
-                    {t.columns.parcels}: {c.eligible ? c.eligibleParcels.length : 0}/{c.parcelCount}
+                    {t.columns.parcels}: {c.parcelCount}
                     {c.pickedUpCount > 0 && <> · {t.pickedUp(c.pickedUpCount)}</>}
+                    {c.eligible && c.eligibleParcels.length !== c.parcelCount && (
+                      <> · {t.toCollect(c.eligibleParcels.length)}</>
+                    )}
                     {c.blockedBy === 'IN_PICKUP' && c.pickupCode && (
                       <> · {t.blocked.IN_PICKUP(c.pickupCode)}</>
                     )}
@@ -186,11 +195,11 @@ export function PickupBoard({
       </Card>
       <Card>
         <h2 className="mb-3 text-base font-semibold">{t.history}</h2>
-        {board.pickups.length === 0 ? (
+        {history.length === 0 ? (
           <EmptyState>{t.historyEmpty}</EmptyState>
         ) : (
           <ul className="space-y-4" data-testid="pickup-history">
-            {board.pickups.map((p) => (
+            {history.map((p) => (
               <li key={p.code}>
                 <PickupItem pickup={p} canOrder={canOrder} canResolve={canResolve} />
               </li>
@@ -380,7 +389,9 @@ function PickupItem({
           {p.carrierState && ` (${p.carrierState})`}
         </p>
       )}
-      {p.errorMessage && <p className="text-xs text-red-700">{p.errorMessage}</p>}
+      {(p.errorCode || p.errorMessage) && (
+        <p className="text-xs text-red-700">{problemText(p.errorCode, p.errorMessage)}</p>
+      )}
       {p.resolutionReason && <p className="text-xs text-stone-600">{p.resolutionReason}</p>}
       {c && (
         <p className="text-xs" data-testid={`pickup-cancel-${p.code}`}>
@@ -389,7 +400,9 @@ function PickupItem({
           </span>
           {' · '}
           {c.reason}
-          {c.errorMessage && <span className="block text-red-700">{c.errorMessage}</span>}
+          {(c.errorCode || c.errorMessage) && (
+            <span className="block text-red-700">{problemText(c.errorCode, c.errorMessage)}</span>
+          )}
           {c.resolutionReason && <span className="block text-stone-600">{c.resolutionReason}</span>}
         </p>
       )}
