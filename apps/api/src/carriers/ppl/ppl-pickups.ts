@@ -197,6 +197,49 @@ export class PplPickups implements CarrierPickups {
     };
   }
 
+  /**
+   * `POST /order/cancel?orderReference=<referenceId>` (documented: cancels a collection order or an
+   * order from any address, identified by customerReference or orderReference; 200 with an empty
+   * body). The 200 is taken as accepted only: the cancellation is confirmed when GET /order shows
+   * the documented state `Canceled` (see {@link find}).
+   */
+  async cancel(query: { clientReference: string }, signal: AbortSignal): Promise<'ACCEPTED'> {
+    try {
+      await this.client.accessToken(signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new CarrierRejectedError(
+        error instanceof PplAuthError ? 'PPL_AUTH' : 'PPL_UNAVAILABLE',
+        error instanceof PplAuthError
+          ? 'PPL refused the server credentials; nothing was sent'
+          : 'PPL could not be reached; nothing was sent',
+      );
+    }
+    const res = await this.client.request('POST', '/order/cancel', {
+      query: { orderReference: query.clientReference },
+      json: { note: null },
+      signal,
+      once: true,
+    });
+    if (res.status === 200) return 'ACCEPTED';
+    if (res.status === 400) throw new CarrierRejectedError('PPL_400', pplProblem(res.body));
+    if (res.status === 401 || res.status === 403) {
+      throw new CarrierRejectedError(`PPL_${res.status}`, 'PPL did not accept the access token');
+    }
+    throw new Error(`PPL answered HTTP ${res.status}`);
+  }
+
+  async find(query: { clientReference: string }, signal: AbortSignal) {
+    const found = await this.lookup(query.clientReference, signal);
+    if (!found) return null;
+    return {
+      orderNumber: found.orderNumber ?? null,
+      state: found.orderState ?? null,
+      // Documented OrderStates: None | Created | PickedUp | NotPickedUp | Canceled.
+      cancelled: found.orderState === 'Canceled',
+    };
+  }
+
   /** The pickup order with exactly this reference, or null. Throws when PPL cannot answer. */
   private async lookup(reference: string, signal: AbortSignal): Promise<OrderInfo | null> {
     const res = await this.client.request('GET', '/order', {

@@ -1,8 +1,10 @@
 import {
+  cancelPickupRequestSchema,
   lookupPickupRequestSchema,
   orderPickupRequestSchema,
   pickupCodeSchema,
   resolvePickupRequestSchema,
+  type CancelPickupRequest,
   type LookupPickupRequest,
   type ResolvePickupRequest,
   type OrderPickupRequest,
@@ -66,6 +68,22 @@ export class CarrierPickupsController {
     @OperationalSite() site: SiteContext,
   ): Promise<PickupView> {
     return this.pickups.lookup(site, code, body);
+  }
+
+  /**
+   * "Zrušit svoz": one cancellation at the carrier of a pickup it confirmed. The parcels stay
+   * blocked for another pickup until the carrier shows the order cancelled.
+   */
+  @RequirePermission('shipments:prepare')
+  @Post(':code/cancel')
+  @HttpCode(200)
+  cancel(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(cancelPickupRequestSchema)) body: CancelPickupRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<PickupView> {
+    return this.pickups.cancel(principal.userId, site, code, body);
   }
 
   /** The exceptional closing of an uncertain pickup, after checking with the carrier. */

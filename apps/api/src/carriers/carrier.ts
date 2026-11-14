@@ -208,6 +208,20 @@ export interface CarrierPickups {
     query: { clientReference: string; carrierRef: string | null },
     signal: AbortSignal,
   ): Promise<CarrierPickupOutcome>;
+  /**
+   * Asks the carrier to cancel a pickup order ONCE, by its own reference. ACCEPTED = the carrier
+   * took the request — the cancellation is confirmed only when {@link find} shows the order
+   * cancelled. A definitive refusal throws {@link CarrierRejectedError}; any other error is unknown.
+   */
+  cancel(query: { clientReference: string }, signal: AbortSignal): Promise<'ACCEPTED'>;
+  /**
+   * The pickup order with exactly this reference as the carrier shows it now (null = not shown);
+   * `cancelled` only from the carrier's documented state. Throws when the carrier cannot answer.
+   */
+  find(
+    query: { clientReference: string },
+    signal: AbortSignal,
+  ): Promise<{ orderNumber: string | null; state: string | null; cancelled: boolean } | null>;
 }
 
 export interface CarrierGateway {

@@ -1027,6 +1027,7 @@ enum OperationKind {
   PORTAL_FENCE_SETTLE
   CARRIER_PICKUP_ORDER
   CARRIER_PICKUP_RESOLVE
+  CARRIER_PICKUP_CANCEL
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1073,11 +1074,12 @@ model OperationRequest {
   workstationEvents        WorkstationEvent[]
   workstationSessionEvents WorkstationSessionEvent[]
 
-  shipments       Shipment[]               @relation("ShipmentOperation")
-  parcelWeighings ShipmentParcelWeighing[] @relation("ParcelWeighOperation")
-  carrierRequests ShipmentCarrierRequest[] @relation("CarrierRequestOperation")
-  printRequests   PrintRequest[]           @relation("PrintRequestOperation")
-  carrierPickups  CarrierPickup[]          @relation("CarrierPickupOperation")
+  shipments       Shipment[]                  @relation("ShipmentOperation")
+  parcelWeighings ShipmentParcelWeighing[]    @relation("ParcelWeighOperation")
+  carrierRequests ShipmentCarrierRequest[]    @relation("CarrierRequestOperation")
+  printRequests   PrintRequest[]              @relation("PrintRequestOperation")
+  carrierPickups  CarrierPickup[]             @relation("CarrierPickupOperation")
+  pickupCancels   CarrierPickupCancellation[] @relation("CarrierPickupCancelOperation")
 
   @@map("operation_requests")
 }
@@ -1201,29 +1203,30 @@ model User {
   printRequests             PrintRequest[]       @relation("PrintRequestedBy")
   printJobEvents            PrintJobEvent[]      @relation("PrintJobEventBy")
 
-  salesProspectsOwned    SalesProspect[]          @relation("SalesProspectOwner")
-  salesProspectsCreated  SalesProspect[]          @relation("SalesProspectCreatedBy")
-  salesProspectsUpdated  SalesProspect[]          @relation("SalesProspectUpdatedBy")
-  salesProspectsArchived SalesProspect[]          @relation("SalesProspectArchivedBy")
-  salesImportsOwned      SalesImport[]            @relation("SalesImportOwner")
-  salesImportsCreated    SalesImport[]            @relation("SalesImportCreatedBy")
-  salesContactsCreated   SalesContact[]           @relation("SalesContactCreatedBy")
-  salesContactsUpdated   SalesContact[]           @relation("SalesContactUpdatedBy")
-  salesContactsRetired   SalesContact[]           @relation("SalesContactRetiredBy")
-  salesActivities        SalesActivity[]          @relation("SalesActivityAuthor")
-  salesTasksAssigned     SalesTask[]              @relation("SalesTaskAssignee")
-  salesTasksCreated      SalesTask[]              @relation("SalesTaskCreatedBy")
-  salesTasksUpdated      SalesTask[]              @relation("SalesTaskUpdatedBy")
-  salesTasksClosed       SalesTask[]              @relation("SalesTaskClosedBy")
-  salesEvents            SalesEvent[]             @relation("SalesEventActor")
-  contractDraftsCreated  ContractDraft[]          @relation("ContractDraftCreatedBy")
-  contractDraftsUpdated  ContractDraft[]          @relation("ContractDraftUpdatedBy")
-  contractDraftsRemoved  ContractDraft[]          @relation("ContractDraftRemovedBy")
-  contractRevisions      ContractDraftRevision[]  @relation("ContractDraftRevisionCreatedBy")
-  contractDraftEvents    ContractDraftEvent[]     @relation("ContractDraftEventActor")
-  contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
-  carrierPickups         CarrierPickup[]          @relation("CarrierPickupBy")
-  carrierPickupsResolved CarrierPickup[]          @relation("CarrierPickupResolvedBy")
+  salesProspectsOwned    SalesProspect[]             @relation("SalesProspectOwner")
+  salesProspectsCreated  SalesProspect[]             @relation("SalesProspectCreatedBy")
+  salesProspectsUpdated  SalesProspect[]             @relation("SalesProspectUpdatedBy")
+  salesProspectsArchived SalesProspect[]             @relation("SalesProspectArchivedBy")
+  salesImportsOwned      SalesImport[]               @relation("SalesImportOwner")
+  salesImportsCreated    SalesImport[]               @relation("SalesImportCreatedBy")
+  salesContactsCreated   SalesContact[]              @relation("SalesContactCreatedBy")
+  salesContactsUpdated   SalesContact[]              @relation("SalesContactUpdatedBy")
+  salesContactsRetired   SalesContact[]              @relation("SalesContactRetiredBy")
+  salesActivities        SalesActivity[]             @relation("SalesActivityAuthor")
+  salesTasksAssigned     SalesTask[]                 @relation("SalesTaskAssignee")
+  salesTasksCreated      SalesTask[]                 @relation("SalesTaskCreatedBy")
+  salesTasksUpdated      SalesTask[]                 @relation("SalesTaskUpdatedBy")
+  salesTasksClosed       SalesTask[]                 @relation("SalesTaskClosedBy")
+  salesEvents            SalesEvent[]                @relation("SalesEventActor")
+  contractDraftsCreated  ContractDraft[]             @relation("ContractDraftCreatedBy")
+  contractDraftsUpdated  ContractDraft[]             @relation("ContractDraftUpdatedBy")
+  contractDraftsRemoved  ContractDraft[]             @relation("ContractDraftRemovedBy")
+  contractRevisions      ContractDraftRevision[]     @relation("ContractDraftRevisionCreatedBy")
+  contractDraftEvents    ContractDraftEvent[]        @relation("ContractDraftEventActor")
+  contractSignedUploads  ContractSignedDocument[]    @relation("ContractSignedDocumentUploadedBy")
+  carrierPickups         CarrierPickup[]             @relation("CarrierPickupBy")
+  carrierPickupsResolved CarrierPickup[]             @relation("CarrierPickupResolvedBy")
+  carrierPickupCancels   CarrierPickupCancellation[] @relation("CarrierPickupCancelBy")
 
   @@map("users")
 }
@@ -2539,7 +2542,7 @@ model Order {
   shipments        Shipment[]
   printRequests    PrintRequest[]
   printJobs        PrintJob[]
-  pickupPlans      CarrierPickupOrder[]
+  pickupPlans      CarrierPickupParcel[]
 
   @@index([siteId, requestedShipDate])
   @@index([hotelId])
@@ -2933,7 +2936,7 @@ model Shipment {
   tracking        ShipmentTracking?
   trackingEvents  ShipmentTrackingEvent[]
   parcelProgress  ShipmentParcelProgress[]
-  pickupPlans     CarrierPickupOrder[]
+  pickupPlans     CarrierPickupParcel[]
 
   @@index([orderId])
   @@map("shipments")
@@ -2960,6 +2963,22 @@ enum CarrierPickupStatus {
   /// An uncertain pickup closed by a person after checking with the carrier (who, why) — an
   /// audited, supervised resolution; never by the passing of time.
   NOT_CREATED
+  /// Written but never sent: before sending (also after a restart) its day had passed or its plan
+  /// no longer held (a parcel with the carrier, an order or shipment changed).
+  NOT_SENT
+}
+
+enum CarrierPickupCancelStatus {
+  /// Written (the person's request); not yet handed to the carrier.
+  PREPARED
+  /// Claimed for sending: the carrier may or may not have it — only a lookup resolves it.
+  SENT
+  /// The carrier accepted the cancellation request; confirmed only when it shows the pickup cancelled.
+  ACCEPTED
+  /// The carrier shows the pickup order cancelled.
+  CONFIRMED
+  /// The carrier refused the cancellation (the pickup stands).
+  REJECTED
 }
 
 /// One pickup order of one site, sent once. DB: what was ordered (site, carrier snapshot,
@@ -2994,6 +3013,8 @@ model CarrierPickup {
   createdAt          DateTime            @map("created_at") @db.Timestamptz(3)
   createdBy          String              @map("created_by") @db.Uuid
   operationRequestId String              @unique @map("operation_request_id") @db.Uuid
+  /// The transaction that wrote the pickup: its plan can be written only by it (database rule).
+  createdTxid        BigInt              @default(dbgenerated("((pg_current_xact_id())::text)::bigint")) @map("created_txid")
   sentAt             DateTime?           @map("sent_at") @db.Timestamptz(3)
   resolvedAt         DateTime?           @map("resolved_at") @db.Timestamptz(3)
   resolvedBy         String?             @map("resolved_by") @db.Uuid
@@ -3002,31 +3023,63 @@ model CarrierPickup {
   nextPollAt         DateTime?           @map("next_poll_at") @db.Timestamptz(3)
   pollCount          Int                 @default(0) @map("poll_count")
 
-  site      Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  creator   User                 @relation("CarrierPickupBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  resolver  User?                @relation("CarrierPickupResolvedBy", fields: [resolvedBy], references: [id], onDelete: Restrict)
-  operation OperationRequest     @relation("CarrierPickupOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
-  orders    CarrierPickupOrder[]
+  site          Site                        @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator       User                        @relation("CarrierPickupBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  resolver      User?                       @relation("CarrierPickupResolvedBy", fields: [resolvedBy], references: [id], onDelete: Restrict)
+  operation     OperationRequest            @relation("CarrierPickupOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  parcels       CarrierPickupParcel[]
+  cancellations CarrierPickupCancellation[]
 
   @@index([siteId, pickupDate])
   @@map("carrier_pickups")
 }
 
-/// A planned order of a pickup (written with it, never changed): the order, its labelled
-/// shipment and that shipment's parcel count. A plan for the operator, not a hand-over.
-model CarrierPickupOrder {
-  pickupId    String @map("pickup_id") @db.Uuid
-  orderId     String @map("order_id") @db.Uuid
-  shipmentId  String @map("shipment_id") @db.Uuid
-  parcelCount Int    @map("parcel_count")
+/// A planned parcel of a pickup (written only by the pickup's own transaction, never changed): the
+/// parcel, its shipment, order and carrier number. A plan for the operator, not a hand-over.
+model CarrierPickupParcel {
+  pickupId            String @map("pickup_id") @db.Uuid
+  parcelId            String @map("parcel_id") @db.Uuid
+  shipmentId          String @map("shipment_id") @db.Uuid
+  orderId             String @map("order_id") @db.Uuid
+  carrierParcelNumber String @map("carrier_parcel_number")
 
-  pickup   CarrierPickup @relation(fields: [pickupId], references: [id], onDelete: Restrict)
-  order    Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  shipment Shipment      @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  pickup   CarrierPickup  @relation(fields: [pickupId], references: [id], onDelete: Restrict)
+  parcel   ShipmentParcel @relation(fields: [parcelId], references: [id], onDelete: Restrict)
+  shipment Shipment       @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  order    Order          @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
-  @@id([pickupId, orderId])
+  @@id([pickupId, parcelId])
+  @@index([parcelId])
   @@index([orderId])
-  @@map("carrier_pickup_orders")
+  @@map("carrier_pickup_parcels")
+}
+
+/// A cancellation of a confirmed pickup at the carrier (doc 029 §11; one live per pickup — a refused
+/// one may be followed by a new request): recorded before the
+/// carrier is called, forward only, confirmed only by the carrier; never deleted. While it is not
+/// resolved, the pickup's parcels stay blocked for another pickup.
+model CarrierPickupCancellation {
+  id                 String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  pickupId           String                    @map("pickup_id") @db.Uuid
+  status             CarrierPickupCancelStatus @default(PREPARED)
+  reason             String
+  createdAt          DateTime                  @map("created_at") @db.Timestamptz(3)
+  createdBy          String                    @map("created_by") @db.Uuid
+  operationRequestId String                    @unique @map("operation_request_id") @db.Uuid
+  sentAt             DateTime?                 @map("sent_at") @db.Timestamptz(3)
+  resolvedAt         DateTime?                 @map("resolved_at") @db.Timestamptz(3)
+  carrierState       String?                   @map("carrier_state")
+  errorCode          String?                   @map("error_code")
+  errorMessage       String?                   @map("error_message")
+  nextPollAt         DateTime?                 @map("next_poll_at") @db.Timestamptz(3)
+  pollCount          Int                       @default(0) @map("poll_count")
+
+  pickup    CarrierPickup    @relation(fields: [pickupId], references: [id], onDelete: Restrict)
+  creator   User             @relation("CarrierPickupCancelBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  operation OperationRequest @relation("CarrierPickupCancelOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+
+  @@index([pickupId])
+  @@map("carrier_pickup_cancellations")
 }
 
 /// Tracking schedule of one labelled shipment (doc 031; current state): the next look, the last
@@ -3140,6 +3193,7 @@ model ShipmentParcel {
   printRequests    PrintRequest[]
   printJobs        PrintJob[]
   trackingEvents   ShipmentTrackingEvent[]
+  pickupPlans      CarrierPickupParcel[]
   progress         ShipmentParcelProgress?
 
   @@unique([shipmentId, parcelNo])

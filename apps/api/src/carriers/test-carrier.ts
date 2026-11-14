@@ -105,7 +105,13 @@ export const testCarrierControl = {
   /** Every pickup order sent, in order — tests assert that nothing is sent twice. */
   pickupCalls: [] as CarrierPickupRequest[],
   pickupLooks: 0,
-  pickups: new Map<string, { request: CarrierPickupRequest; fail: boolean; number: string }>(),
+  pickups: new Map<
+    string,
+    { request: CarrierPickupRequest; fail: boolean; number: string; cancelled: boolean }
+  >(),
+  /** How the next pickup cancellations answer: ACCEPT (shown cancelled at once), REFUSE, LOSE. */
+  pickupCancel: [] as ('ACCEPT' | 'REFUSE' | 'LOSE')[],
+  pickupCancelCalls: 0,
   /** Adds tracking events to a parcel number. */
   track(number: string, ...events: { statusId: number | null; at: string; name?: string }[]): void {
     this.tracking.set(number, [...(this.tracking.get(number) ?? []), ...events]);
@@ -136,6 +142,8 @@ export const testCarrierControl = {
     this.pickupCalls = [];
     this.pickupLooks = 0;
     this.pickups.clear();
+    this.pickupCancel = [];
+    this.pickupCancelCalls = 0;
   },
 };
 
@@ -158,6 +166,7 @@ class TestPickups implements CarrierPickups {
         request,
         fail: behaviour === 'FAIL_LATER',
         number: `TEST-SV-${++pickupSerial}`,
+        cancelled: false,
       });
       if (behaviour === 'LOSE_AFTER') throw new Error('test carrier: the answer was lost');
       return { kind: 'ACCEPTED', carrierRef: `PICKUP-${request.clientReference}` };
@@ -179,7 +188,37 @@ class TestPickups implements CarrierPickups {
       if (found.fail) {
         return { kind: 'REJECTED', code: 'TEST_IMPORT_ERROR', message: 'Refused on import' };
       }
-      return { kind: 'CONFIRMED', orderNumber: found.number, state: 'Created' };
+      return {
+        kind: 'CONFIRMED',
+        orderNumber: found.number,
+        state: found.cancelled ? 'Canceled' : 'Created',
+      };
+    });
+  }
+
+  cancel(query: { clientReference: string }, signal: AbortSignal): Promise<'ACCEPTED'> {
+    return abortable(signal, async () => {
+      testCarrierControl.pickupCancelCalls += 1;
+      const behaviour = testCarrierControl.pickupCancel.shift() ?? 'ACCEPT';
+      const found = testCarrierControl.pickups.get(query.clientReference);
+      if (behaviour === 'REFUSE' || !found) {
+        throw new CarrierRejectedError('TEST_REJECTED', 'Cancellation refused by the test carrier');
+      }
+      found.cancelled = true;
+      if (behaviour === 'LOSE') throw new Error('test carrier: the answer was lost');
+      return 'ACCEPTED' as const;
+    });
+  }
+
+  find(query: { clientReference: string }, signal: AbortSignal) {
+    return abortable(signal, async () => {
+      const found = testCarrierControl.pickups.get(query.clientReference);
+      if (!found || found.fail) return null;
+      return {
+        orderNumber: found.number,
+        state: found.cancelled ? 'Canceled' : 'Created',
+        cancelled: found.cancelled,
+      };
     });
   }
 }

@@ -2,3 +2,4 @@
 -- own migration (PostgreSQL cannot use a value added in the same transaction). Additive only.
 ALTER TYPE "OperationKind" ADD VALUE 'CARRIER_PICKUP_ORDER';
 ALTER TYPE "OperationKind" ADD VALUE 'CARRIER_PICKUP_RESOLVE';
+ALTER TYPE "OperationKind" ADD VALUE 'CARRIER_PICKUP_CANCEL';

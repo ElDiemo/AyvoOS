@@ -18,7 +18,17 @@ export const pickupStatusSchema = z.enum([
   'REJECTED',
   /** An uncertain pickup closed by a person after checking with the carrier. */
   'NOT_CREATED',
+  /** Written but never sent: its day passed or its plan no longer held before sending. */
+  'NOT_SENT',
 ]);
+export const pickupCancelStatusSchema = z.enum([
+  'PREPARED',
+  'SENT',
+  'ACCEPTED',
+  'CONFIRMED',
+  'REJECTED',
+]);
+export type PickupCancelStatus = z.infer<typeof pickupCancelStatusSchema>;
 export type PickupStatus = z.infer<typeof pickupStatusSchema>;
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'HH:MM');
@@ -59,6 +69,14 @@ export const resolvePickupRequestSchema = z.strictObject({
 });
 export type ResolvePickupRequest = z.infer<typeof resolvePickupRequestSchema>;
 
+/** "Zrušit svoz": one cancellation request at the carrier (its parcels stay blocked until confirmed). */
+export const cancelPickupRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  reason: z.string().trim().min(5).max(500),
+  confirmed: z.literal(true),
+});
+export type CancelPickupRequest = z.infer<typeof cancelPickupRequestSchema>;
+
 export const pickupViewSchema = z.object({
   code: pickupCodeSchema,
   status: pickupStatusSchema,
@@ -81,14 +99,31 @@ export const pickupViewSchema = z.object({
   resolutionReason: z.string().nullable(),
   /** An uncertain pickup (answer lost) can be looked up from this time on. */
   lookupFrom: z.iso.datetime().nullable(),
-  /** The plan: what was meant to be handed over (not evidence of it). */
-  orders: z.array(
+  /** The latest cancellation at the carrier, if one was requested. */
+  cancellation: z
+    .object({
+      status: pickupCancelStatusSchema,
+      reason: z.string(),
+      createdAt: z.iso.datetime(),
+      sentAt: z.iso.datetime().nullable(),
+      resolvedAt: z.iso.datetime().nullable(),
+      carrierState: z.string().nullable(),
+      errorCode: z.string().nullable(),
+      errorMessage: z.string().nullable(),
+      lookupFrom: z.iso.datetime().nullable(),
+    })
+    .nullable(),
+  /** The plan: the concrete parcels meant to be handed over (not evidence of it). */
+  parcels: z.array(
     z.object({
       orderCode: orderCodeSchema,
       shipmentCode: shipmentCodeSchema,
       hotelName: z.string(),
-      parcelCount: z.number().int(),
-      /** The order's state now — handed over only by tracking or the manual hand-over. */
+      parcelNo: z.number().int(),
+      carrierParcelNumber: z.string(),
+      /** With the carrier now (its tracking, or the manual hand-over) — never because of the pickup. */
+      pickedUp: z.boolean(),
+      /** The order's state now. */
       orderStatus: orderStatusSchema,
     }),
   ),
@@ -101,12 +136,19 @@ export const pickupCandidateSchema = z.object({
   hotelName: z.string(),
   city: z.string(),
   requestedShipDate: isoDate,
+  /** Parcels of the shipment and those already with the carrier (tracking or manual hand-over). */
   parcelCount: z.number().int(),
-  /** Can be planned into a new pickup now. */
+  pickedUpCount: z.number().int(),
+  /** The parcels a new pickup of this order would announce now (not with the carrier, not blocked). */
+  eligibleParcels: z.array(
+    z.object({ parcelNo: z.number().int(), carrierParcelNumber: z.string() }),
+  ),
+  /** Can be planned into a new pickup now (at least one eligible parcel). */
   eligible: z.boolean(),
   /**
    * Why not: labelled with another carrier connection / environment / account than the site's
-   * current one, or already planned in a pickup that is pending or for today or later.
+   * current one, or its remaining parcels are planned in a pickup that is pending, uncertain, for
+   * today or later, or whose cancellation is not confirmed yet.
    */
   blockedBy: z.enum(['OTHER_CARRIER', 'IN_PICKUP']).nullable(),
   pickupCode: pickupCodeSchema.nullable(),

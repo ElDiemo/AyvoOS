@@ -24,7 +24,7 @@ export const pickupsCs = {
     parcels: 'Balíky',
   },
   blocked: {
-    IN_PICKUP: (code: string) => `Už ve svozu ${code}`,
+    IN_PICKUP: (code: string) => `Ve svozu ${code}`,
     OTHER_CARRIER: 'Štítky jiného připojení dopravce',
   },
   date: 'Den svozu',
@@ -51,7 +51,24 @@ export const pickupsCs = {
     CONFIRMED: 'Potvrzeno dopravcem',
     REJECTED: 'Odmítnuto dopravcem',
     NOT_CREATED: 'Uzavřeno – svoz nebyl objednán',
+    NOT_SENT: 'Neodesláno – termín nebo plán už neplatil',
   } as Record<string, string>,
+  cancelStatus: {
+    PREPARED: 'Storno se odesílá',
+    SENT: 'Storno nejisté – odpověď dopravce se ztratila; balíky zůstávají blokované',
+    ACCEPTED: 'Storno čeká na potvrzení dopravce; balíky zůstávají blokované',
+    CONFIRMED: 'Svoz zrušen dopravcem – balíky lze zařadit do jiného svozu',
+    REJECTED: 'Storno dopravce odmítl – svoz platí',
+  } as Record<string, string>,
+  cancel: 'Zrušit svoz',
+  cancelTitle: 'Zrušit svoz u dopravce',
+  cancelText:
+    'Dopravce dostane jednu žádost o zrušení tohoto svozu. Dokud zrušení nepotvrdí, balíky nelze zařadit do jiného svozu. Svoz, jeho balíky a historie zůstanou zachované.',
+  cancelCheck: 'Rozumím, že dopravce opravdu dostane žádost o zrušení svozu.',
+  cancelConfirm: 'Požádat o zrušení',
+  parcel: 'balík',
+  parcelPickedUp: 'převzato dopravcem',
+  pickedUp: (n: number) => `převzato ${n}`,
   carrierNumber: 'Číslo svozu u dopravce',
   plan: 'Plán (co se mělo předat)',
   orderStatus: {
@@ -80,5 +97,8 @@ export const pickupsCs = {
     PICKUP_NOT_UNCERTAIN: 'Svoz už není nejistý.',
     CARRIER_NOT_CONFIGURED: 'Dopravce není pro provozovnu připravený.',
     PICKUP_UNSUPPORTED: 'Tento dopravce nemá objednávku svozu.',
+    ORDER_NOTHING_TO_COLLECT: 'Všechny balíky objednávky už má dopravce.',
+    PICKUP_NOT_CANCELLABLE: 'Zrušit lze jen svoz potvrzený dopravcem.',
+    PICKUP_CANCEL_EXISTS: 'O zrušení tohoto svozu už bylo požádáno.',
   } as Record<string, string>,
 };

@@ -42,7 +42,8 @@ export function PickupBoard({
   const { busy, run } = useAttempt();
 
   const chosen = eligible.filter((c) => selected.has(c.orderCode));
-  const parcels = chosen.reduce((n, c) => n + c.parcelCount, 0);
+  // The pickup announces the parcels not yet with the carrier and not held by another pickup.
+  const parcels = chosen.reduce((n, c) => n + c.eligibleParcels.length, 0);
   const max = board.carrier.maxParcels;
   const windowValid = (from === '' && to === '') || (from !== '' && to !== '' && from < to);
   const blocked = !!board.open || !board.carrier.available;
@@ -107,7 +108,8 @@ export function PickupBoard({
                   <span className="font-medium">{c.orderCode}</span> · {c.hotelName}, {c.city}
                   <span className="block text-xs text-stone-500">
                     {t.columns.shipDate}: {formatDateCs(c.requestedShipDate)} · {c.shipmentCode} ·{' '}
-                    {t.columns.parcels}: {c.parcelCount}
+                    {t.columns.parcels}: {c.eligible ? c.eligibleParcels.length : 0}/{c.parcelCount}
+                    {c.pickedUpCount > 0 && <> · {t.pickedUp(c.pickedUpCount)}</>}
                     {c.blockedBy === 'IN_PICKUP' && c.pickupCode && (
                       <> · {t.blocked.IN_PICKUP(c.pickupCode)}</>
                     )}
@@ -282,11 +284,38 @@ function PickupItem({
   const [closing, setClosing] = useState(false);
   const [reason, setReason] = useState('');
   const [checked, setChecked] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelChecked, setCancelChecked] = useState(false);
   const { busy, run } = useAttempt();
+  const c = p.cancellation;
+  const cancelOpen =
+    !!c && (c.status === 'PREPARED' || c.status === 'SENT' || c.status === 'ACCEPTED');
   const lookable =
     p.status === 'ACCEPTED' ||
     p.status === 'SENT' ||
-    (p.status === 'CONFIRMED' && !p.carrierOrderNumber);
+    (p.status === 'CONFIRMED' && !p.carrierOrderNumber) ||
+    cancelOpen;
+  // One cancellation at a time; a refused one may be followed by a new request.
+  const cancellable =
+    p.status === 'CONFIRMED' && p.carrierState !== 'Canceled' && (!c || c.status === 'REJECTED');
+
+  async function requestCancel() {
+    const invalid = reasonError(cancelReason);
+    setError(invalid);
+    if (invalid) return;
+    const body = { reason: cancelReason.trim(), confirmed: true as const };
+    const result = await run(`cancel:${JSON.stringify(body)}`, (requestId) =>
+      apiSend('POST', `admin/dispatch/pickups/${p.code}/cancel`, pickupViewSchema, {
+        requestId,
+        ...body,
+      }),
+    );
+    if (result.ok) {
+      setCancelling(false);
+      router.refresh();
+    } else if (result.error) setError(errorText(result.error));
+  }
 
   async function lookup() {
     const result = await run(`lookup:${p.code}`, (requestId) =>
@@ -329,16 +358,41 @@ function PickupItem({
       )}
       {p.errorMessage && <p className="text-xs text-red-700">{p.errorMessage}</p>}
       {p.resolutionReason && <p className="text-xs text-stone-600">{p.resolutionReason}</p>}
+      {c && (
+        <p className="text-xs" data-testid={`pickup-cancel-${p.code}`}>
+          <span className={c.status === 'CONFIRMED' ? 'text-stone-700' : 'text-amber-800'}>
+            {t.cancelStatus[c.status] ?? c.status}
+          </span>
+          {' · '}
+          {c.reason}
+          {c.errorMessage && <span className="block text-red-700">{c.errorMessage}</span>}
+        </p>
+      )}
       <p className="mt-1 text-xs text-stone-500">{t.plan}:</p>
       <ul className="text-xs text-stone-700">
-        {p.orders.map((o) => (
-          <li key={o.orderCode}>
-            {o.orderCode} · {o.hotelName} · {o.parcelCount} bal. ·{' '}
-            {t.orderStatus[o.orderStatus] ?? o.orderStatus}
+        {p.parcels.map((x) => (
+          <li key={x.carrierParcelNumber}>
+            {x.orderCode} · {x.hotelName} · {t.parcel} {x.parcelNo} ({x.carrierParcelNumber}) ·{' '}
+            {x.pickedUp ? t.parcelPickedUp : (t.orderStatus[x.orderStatus] ?? x.orderStatus)}
           </li>
         ))}
       </ul>
       <p className="text-xs text-stone-400">{formatDateTimeCs(p.createdAt)}</p>
+      {canOrder && cancellable && (
+        <div className="mt-2">
+          <button
+            type="button"
+            className={buttonClass.secondary}
+            onClick={() => {
+              setError(null);
+              setCancelling(true);
+            }}
+            data-testid={`pickup-cancel-button-${p.code}`}
+          >
+            {t.cancel}
+          </button>
+        </div>
+      )}
       {canOrder && lookable && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
@@ -350,9 +404,9 @@ function PickupItem({
           >
             {t.lookup}
           </button>
-          {p.lookupFrom && (
+          {(p.lookupFrom ?? c?.lookupFrom) && (
             <span className="text-xs text-stone-500">
-              {t.lookupFrom(formatDateTimeCs(p.lookupFrom))}
+              {t.lookupFrom(formatDateTimeCs(p.lookupFrom ?? c?.lookupFrom))}
             </span>
           )}
           {/* Too early is refused by the API (PICKUP_IN_FLIGHT) and said so. */}
@@ -368,7 +422,7 @@ function PickupItem({
           )}
         </div>
       )}
-      {error && !closing && (
+      {error && !closing && !cancelling && (
         <p role="alert" className="mt-1 text-xs text-red-700">
           {error}
         </p>
@@ -394,6 +448,35 @@ function PickupItem({
             onChange={(e) => setChecked(e.target.checked)}
           />
           {t.resolveCheck}
+        </label>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={cancelling}
+        title={t.cancelTitle}
+        confirmLabel={t.cancelConfirm}
+        danger
+        busy={busy}
+        confirmDisabled={!cancelChecked}
+        onConfirm={requestCancel}
+        onCancel={() => setCancelling(false)}
+        testId={`pickup-cancel-dialog-${p.code}`}
+      >
+        <p>{t.cancelText}</p>
+        <ReasonField
+          id={`${id}-cancel-reason`}
+          value={cancelReason}
+          onChange={setCancelReason}
+          error={error}
+        />
+        <label className="mt-3 flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-5 w-5"
+            checked={cancelChecked}
+            onChange={(e) => setCancelChecked(e.target.checked)}
+            data-testid={`pickup-cancel-check-${p.code}`}
+          />
+          {t.cancelCheck}
         </label>
       </ConfirmDialog>
     </div>

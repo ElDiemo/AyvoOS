@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type {
+  CancelPickupRequest,
   LookupPickupRequest,
   OrderPickupRequest,
   PickupBoard,
@@ -14,6 +15,7 @@ import {
   type CarrierGateway,
   type CarrierPickupOutcome,
   type CarrierPickupRequest,
+  type CarrierPickups,
   type CarrierRegistry,
 } from '../carriers/carrier.js';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
@@ -30,7 +32,7 @@ type Tx = Prisma.TransactionClient;
 
 /** The error code of a call (or lookup) whose outcome is unknown (never re-sent). */
 export const PICKUP_NO_ANSWER = 'NO_ANSWER';
-/** Bounded automatic lookups of an accepted pickup (back-off 10 s … 5 min, in SQL). */
+/** Bounded automatic lookups of an accepted pickup or cancellation (back-off 10 s … 5 min). */
 export const PICKUP_MAX_POLLS = 30;
 const LEASE_SECONDS = 60;
 const RECENT = 20;
@@ -39,28 +41,52 @@ const UNRESOLVED = ['PREPARED', 'SENT', 'ACCEPTED'] as const;
 const notFound = () => new NotFoundException('Pickup not found');
 
 const pickupInclude = {
-  orders: {
+  parcels: {
     include: {
       order: { select: { serial: true, hotelName: true, status: true } },
       shipment: { select: { code: true } },
+      parcel: { select: { parcelNo: true, progress: { select: { pickedUpAt: true } } } },
     },
   },
+  cancellations: { orderBy: { createdAt: 'desc' }, take: 1 },
 } satisfies Prisma.CarrierPickupInclude;
 type PickupRow = Prisma.CarrierPickupGetPayload<{ include: typeof pickupInclude }>;
 
 /**
+ * Where a parcel's plan still holds it: a pickup that waits for the carrier (pending or
+ * uncertain); a confirmed one whose cancellation is not resolved (whatever its day); a confirmed one
+ * for today or later that is not confirmed as cancelled. A confirmed past pickup, a refused, closed
+ * or unsent one, or a confirmed cancellation releases it (planned again with the same labels).
+ */
+const holding = (today: string): Prisma.CarrierPickupWhereInput => ({
+  OR: [
+    { status: { in: [...UNRESOLVED] } },
+    { status: 'CONFIRMED', cancellations: { some: { status: { in: [...UNRESOLVED] } } } },
+    {
+      status: 'CONFIRMED',
+      pickupDate: { gte: new Date(`${today}T00:00:00Z`) },
+      cancellations: { none: { status: 'CONFIRMED' } },
+    },
+  ],
+});
+
+/**
  * Pickup orders at the carrier — "svoz" (doc 029 §11). One explicit "Objednat svoz" of the active
- * site writes the pickup (PREPARED) with its planned orders in one transaction, then sends it ONCE
- * (claimed PREPARED → SENT first, outside any transaction, with a time limit). An accepted pickup
- * is looked up (bounded, state in the database); a lost answer stays SENT — uncertain — and is
- * only looked up by its own reference, never sent again; a new pickup of the site waits until it
- * is resolved (also a database rule). Confirmed only by the carrier's answer. A pickup never
- * changes an order or a shipment, and never confirms a hand-over: that stays the carrier's
- * tracking per parcel (doc 031) or the manual "Předáno dopravci".
+ * site writes the pickup (PREPARED) with its plan of concrete parcels — those of the selected orders
+ * that are not with the carrier yet (tracking or the manual hand-over) and not held by another
+ * pickup — in one transaction under the orders' locks; the plan is fixed at commit (also in the
+ * database). The pickup is then claimed and sent ONCE: the claim re-checks its day and plan under
+ * the same locks, so a pickup recovered after a restart is sent only if both still hold (else
+ * NOT_SENT). An accepted pickup is looked up (bounded); a lost answer stays SENT — uncertain —
+ * and is only looked up by its own reference. "Zrušit svoz" is a separate request at the carrier,
+ * confirmed only when the carrier shows the order cancelled; until then its parcels stay blocked.
+ * A pickup never changes an order or a shipment and never confirms a hand-over.
  */
 @Injectable()
 export class CarrierPickupsService {
   private readonly log = new Logger(CarrierPickupsService.name);
+  /** The clock of the site's "today" (pickup days); replaceable in tests only. */
+  clock: () => Date = () => new Date();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -95,46 +121,40 @@ export class CarrierPickupsService {
     const orders = await this.prisma.order.findMany({
       where: { siteId: site.siteId, status: 'READY_FOR_PICKUP' },
       orderBy: [{ requestedShipDate: 'asc' }, { serial: 'asc' }],
-      select: {
-        id: true,
-        serial: true,
-        hotelName: true,
-        city: true,
-        requestedShipDate: true,
-        shipments: {
-          where: { status: 'LABELED' },
-          select: {
-            code: true,
-            carrierCode: true,
-            carrierConnection: true,
-            carrierEnvironment: true,
-            carrierAccount: true,
-            _count: { select: { parcels: true } },
-          },
-        },
-      },
+      select: { id: true, serial: true, hotelName: true, city: true, requestedShipDate: true },
     });
-    const planned = await this.plannedOrders(
+    const state = await this.parcelState(
       this.prisma,
       orders.map((o) => o.id),
       today,
     );
     const candidates: PickupCandidate[] = orders.flatMap((o) => {
-      const s = o.shipments[0];
+      const s = state.get(o.id);
       if (!s) return [];
-      const inPickup = planned.get(o.id) ?? null;
-      const sameCarrier = !!gateway && sameConnection(s, gateway);
+      const sameCarrier = !!gateway && sameConnection(s.shipment, gateway);
+      const open = s.parcels.filter((p) => !p.pickedUp);
+      const free = open.filter((p) => !p.heldBy);
+      const heldBy = open.find((p) => p.heldBy)?.heldBy ?? null;
       return [
         {
           orderCode: formatCode(CODE_PREFIX.order, o.serial),
-          shipmentCode: s.code,
+          shipmentCode: s.shipment.code,
           hotelName: o.hotelName,
           city: o.city,
           requestedShipDate: o.requestedShipDate.toISOString().slice(0, 10),
-          parcelCount: s._count.parcels,
-          eligible: !inPickup && sameCarrier && !!pickups,
-          blockedBy: inPickup ? 'IN_PICKUP' : sameCarrier ? null : 'OTHER_CARRIER',
-          pickupCode: inPickup,
+          parcelCount: s.parcels.length,
+          pickedUpCount: s.parcels.length - open.length,
+          eligibleParcels:
+            sameCarrier && pickups
+              ? free.map((p) => ({ parcelNo: p.parcelNo, carrierParcelNumber: p.number }))
+              : [],
+          eligible: sameCarrier && !!pickups && free.length > 0,
+          blockedBy: !sameCarrier
+            ? 'OTHER_CARRIER'
+            : free.length === 0 && heldBy
+              ? 'IN_PICKUP'
+              : null,
+          pickupCode: heldBy,
         },
       ];
     });
@@ -179,11 +199,11 @@ export class CarrierPickupsService {
   // --- ordering ------------------------------------------------------------------------------
 
   /**
-   * "Objednat svoz PPL": one pickup of the active site for the selected orders (all of them
-   * ready for pickup, labelled with the site's current carrier connection, environment and
-   * account), the stated day and optional window, announcing their parcels. A repeated click
-   * (same request id) returns the same pickup and sends nothing again; another request while a
-   * pickup of the site waits for the carrier is refused (also by the database).
+   * "Objednat svoz PPL": one pickup of the active site for the selected orders' parcels that are
+   * not with the carrier and not held by another pickup (all of them labelled with the site's
+   * current carrier connection, environment and account), the stated day and optional window. A
+   * repeated click (same request id) returns the same pickup and sends nothing again; another
+   * request while a pickup of the site waits for the carrier is refused (also by the database).
    */
   async order(actorId: string, site: SiteContext, input: OrderPickupRequest): Promise<PickupView> {
     const choice = await this.carriers.forSite(site.siteId);
@@ -228,7 +248,7 @@ export class CarrierPickupsService {
         if (gateway.rules.senderAddress === 'REQUIRED' && !choice.settings.sender) {
           throw domainError(422, 'PICKUP_SENDER_MISSING', 'The site has no sender address');
         }
-        const plan: { orderId: string; shipmentId: string; parcelCount: number }[] = [];
+        const ids: string[] = [];
         for (const code of orderCodes) {
           const serial = parseCodeSerial(CODE_PREFIX.order, code);
           const found =
@@ -244,23 +264,21 @@ export class CarrierPickupsService {
               order: code,
             });
           }
-          await tx.$executeRaw`SELECT 1 FROM "orders" WHERE "id" = ${found.id}::uuid FOR UPDATE`;
+          ids.push(found.id);
+        }
+        // The orders' locks — the same the tracking takes before recording a parcel's pickup.
+        await this.lockOrders(tx, ids);
+        const state = await this.parcelState(tx, ids, today);
+        const plan: { parcelId: string; shipmentId: string; orderId: string; number: string }[] =
+          [];
+        for (const [i, id] of ids.entries()) {
+          const code = orderCodes[i]!;
           const order = await tx.order.findUniqueOrThrow({
-            where: { id: found.id },
-            select: { id: true, status: true },
+            where: { id },
+            select: { status: true },
           });
-          const shipment = await tx.shipment.findFirst({
-            where: { orderId: order.id, status: 'LABELED' },
-            select: {
-              id: true,
-              carrierCode: true,
-              carrierConnection: true,
-              carrierEnvironment: true,
-              carrierAccount: true,
-              _count: { select: { parcels: true } },
-            },
-          });
-          if (order.status !== 'READY_FOR_PICKUP' || !shipment) {
+          const s = state.get(id);
+          if (order.status !== 'READY_FOR_PICKUP' || !s) {
             throw domainErrorWithDetails(
               409,
               'ORDER_NOT_READY_FOR_PICKUP',
@@ -268,7 +286,7 @@ export class CarrierPickupsService {
               { order: code, status: order.status },
             );
           }
-          if (!sameConnection(shipment, gateway)) {
+          if (!sameConnection(s.shipment, gateway)) {
             throw domainErrorWithDetails(
               409,
               'PICKUP_OTHER_CARRIER',
@@ -276,32 +294,34 @@ export class CarrierPickupsService {
               { order: code },
             );
           }
-          plan.push({
-            orderId: order.id,
-            shipmentId: shipment.id,
-            parcelCount: shipment._count.parcels,
-          });
+          const open = s.parcels.filter((p) => !p.pickedUp);
+          const held = open.filter((p) => p.heldBy);
+          if (held.length > 0) {
+            throw domainErrorWithDetails(
+              409,
+              'ORDER_IN_PICKUP',
+              'A parcel of the order is held by a pending, uncertain, coming or cancelling pickup',
+              { order: code, pickups: [...new Set(held.map((p) => p.heldBy))] },
+            );
+          }
+          if (open.length === 0) {
+            throw domainErrorWithDetails(
+              409,
+              'ORDER_NOTHING_TO_COLLECT',
+              'Every parcel of the order is already with the carrier',
+              { order: code },
+            );
+          }
+          for (const p of open) {
+            plan.push({ parcelId: p.id, shipmentId: s.shipment.id, orderId: id, number: p.number });
+          }
         }
-        const inPickup = await this.plannedOrders(
-          tx,
-          plan.map((p) => p.orderId),
-          today,
-        );
-        if (inPickup.size > 0) {
-          throw domainErrorWithDetails(
-            409,
-            'ORDER_IN_PICKUP',
-            'An order is already planned for a pending or coming pickup',
-            { pickups: [...new Set(inPickup.values())] },
-          );
-        }
-        const parcelCount = plan.reduce((n, p) => n + p.parcelCount, 0);
-        if (parcelCount > pickups.maxParcels) {
+        if (plan.length > pickups.maxParcels) {
           throw domainErrorWithDetails(
             422,
             'PICKUP_TOO_LARGE',
             'The carrier takes fewer parcels in one pickup order',
-            { parcelCount, maxParcels: pickups.maxParcels },
+            { parcelCount: plan.length, maxParcels: pickups.maxParcels },
           );
         }
         const { first: serial } = await allocateSerials(tx, 'carrier_pickup', 1);
@@ -313,7 +333,7 @@ export class CarrierPickupsService {
           pickupCode: code,
           date: input.date,
           window: input.window,
-          parcelCount,
+          parcelCount: plan.length,
           settings: choice.settings,
         };
         const pickup = await tx.carrierPickup.create({
@@ -329,7 +349,7 @@ export class CarrierPickupsService {
             pickupDate: new Date(`${input.date}T00:00:00Z`),
             windowFrom: input.window?.from ?? null,
             windowTo: input.window?.to ?? null,
-            parcelCount,
+            parcelCount: plan.length,
             payload: JSON.parse(JSON.stringify(payload)),
             createdAt: new Date(),
             createdBy: actorId,
@@ -337,30 +357,41 @@ export class CarrierPickupsService {
           },
           select: { id: true, code: true },
         });
-        await tx.carrierPickupOrder.createMany({
-          data: plan.map((p) => ({ pickupId: pickup.id, ...p })),
+        await tx.carrierPickupParcel.createMany({
+          data: plan.map((p) => ({
+            pickupId: pickup.id,
+            parcelId: p.parcelId,
+            shipmentId: p.shipmentId,
+            orderId: p.orderId,
+            carrierParcelNumber: p.number,
+          })),
         });
         return { id: pickup.id, code: pickup.code };
       },
     );
-    // Sent after the commit; a replay drives the same pickup (PREPARED is claimed only once).
+    // Sent after the commit; a replay drives the same pickup (it is claimed only once).
     await this.drive(result.id);
     return this.view(site, result.code);
   }
 
   /**
    * "Zjistit stav u dopravce": a read-only lookup of an accepted pickup, of an uncertain one (its
-   * answer lost — only after the in-flight window, by its own reference), or of a confirmed one
-   * still without the carrier's number. Never sends the pickup again.
+   * answer lost — only after the in-flight window, by its own reference), of a confirmed one still
+   * without the carrier's number, and of its unresolved cancellation. Never sends anything again.
    */
   async lookup(site: SiteContext, code: string, input: LookupPickupRequest): Promise<PickupView> {
     void input;
     const row = await this.find(this.prisma, site.siteId, code);
     if (!row) throw notFound();
-    if (row.status === 'SENT' && !(await this.settled(row.id))) {
-      throw domainError(409, 'PICKUP_IN_FLIGHT', 'The carrier may still be answering');
-    }
+    const c = row.cancellations[0];
+    const inFlight =
+      (row.status === 'SENT' && !(await this.settled('carrier_pickups', row.id))) ||
+      (c?.status === 'SENT' && !(await this.settled('carrier_pickup_cancellations', c.id)));
+    if (inFlight) throw domainError(409, 'PICKUP_IN_FLIGHT', 'The carrier may still be answering');
     await this.drive(row.id, true);
+    if (c && (UNRESOLVED as readonly string[]).includes(c.status)) {
+      await this.driveCancel(c.id, true);
+    }
     return this.view(site, code);
   }
 
@@ -379,7 +410,7 @@ export class CarrierPickupsService {
     const row = await this.find(this.prisma, site.siteId, code);
     if (!row) throw notFound();
     if (row.status === 'SENT') {
-      if (!(await this.settled(row.id))) {
+      if (!(await this.settled('carrier_pickups', row.id))) {
         throw domainError(409, 'PICKUP_IN_FLIGHT', 'The carrier may still be answering');
       }
       // The carrier's own answer first: found = confirmed, never closed by a person.
@@ -413,11 +444,159 @@ export class CarrierPickupsService {
     return this.view(site, code);
   }
 
+  // --- cancelling ----------------------------------------------------------------------------
+
+  /**
+   * "Zrušit svoz": one cancellation of a pickup the carrier confirmed, recorded before the carrier
+   * is called and sent once, by the pickup's own reference with its own connection and account. A
+   * replay returns the same; a second request while one is live is refused. The pickup, its plan
+   * and history stay; its parcels stay blocked until the carrier shows the order cancelled.
+   */
+  async cancel(
+    actorId: string,
+    site: SiteContext,
+    code: string,
+    input: CancelPickupRequest,
+  ): Promise<PickupView> {
+    const { result } = await this.operations.run<{ id: string }>(
+      'CARRIER_PICKUP_CANCEL',
+      input.requestId,
+      { actorId, siteId: site.siteId, code, reason: input.reason },
+      async (tx) => {
+        const row = await this.find(tx, site.siteId, code);
+        if (!row) throw notFound();
+        await tx.$executeRaw`SELECT 1 FROM "carrier_pickups" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
+        const p = await tx.carrierPickup.findUniqueOrThrow({
+          where: { id: row.id },
+          select: { status: true, carrierState: true },
+        });
+        if (p.status !== 'CONFIRMED' || p.carrierState === 'Canceled') {
+          throw domainErrorWithDetails(
+            409,
+            'PICKUP_NOT_CANCELLABLE',
+            'Only a pickup the carrier confirmed (and has not cancelled) is cancelled',
+            { status: p.status },
+          );
+        }
+        const live = await tx.carrierPickupCancellation.findFirst({
+          where: { pickupId: row.id, status: { not: 'REJECTED' } },
+          select: { status: true },
+        });
+        if (live) {
+          throw domainErrorWithDetails(
+            409,
+            'PICKUP_CANCEL_EXISTS',
+            'The cancellation of this pickup was requested already',
+            { status: live.status },
+          );
+        }
+        const c = await tx.carrierPickupCancellation.create({
+          data: {
+            pickupId: row.id,
+            reason: input.reason,
+            createdAt: new Date(),
+            createdBy: actorId,
+            operationRequestId: input.requestId,
+          },
+          select: { id: true },
+        });
+        return { id: c.id };
+      },
+    );
+    await this.driveCancel(result.id);
+    return this.view(site, code);
+  }
+
+  /** Moves one cancellation forward: sent once (claimed), confirmed only by the carrier's state. */
+  async driveCancel(id: string, lookup = false): Promise<void> {
+    const c = await this.prisma.carrierPickupCancellation.findUniqueOrThrow({
+      where: { id },
+      include: { pickup: true },
+    });
+    const pickups = await this.pickupsOf(c.pickup);
+    if (!pickups) return;
+    const ref = { clientReference: c.pickup.clientReference };
+    if (c.status === 'PREPARED') {
+      const claimed = await this.prisma.$executeRaw`
+        UPDATE "carrier_pickup_cancellations" SET "status" = 'SENT', "sent_at" = now()
+         WHERE "id" = ${id}::uuid AND "status" = 'PREPARED'`;
+      if (claimed !== 1) return;
+      try {
+        await this.call((signal) => pickups.cancel(ref, signal));
+      } catch (error) {
+        if (error instanceof CarrierRejectedError) {
+          await this.prisma.$executeRaw`
+            UPDATE "carrier_pickup_cancellations"
+               SET "status" = 'REJECTED', "resolved_at" = now(),
+                   "error_code" = ${error.code.slice(0, 100)}, "error_message" = ${error.message.slice(0, 1000)}
+             WHERE "id" = ${id}::uuid AND "status" = 'SENT'`;
+        } else {
+          this.log.warn(`Pickup cancellation ${id}: no usable answer from the carrier`);
+          await this.prisma.$executeRaw`
+            UPDATE "carrier_pickup_cancellations"
+               SET "error_code" = ${PICKUP_NO_ANSWER}, "error_message" = 'The carrier did not answer usably'
+             WHERE "id" = ${id}::uuid AND "status" = 'SENT'`;
+        }
+        return;
+      }
+      await this.prisma.$executeRaw`
+        UPDATE "carrier_pickup_cancellations"
+           SET "status" = 'ACCEPTED', "error_code" = NULL, "error_message" = NULL,
+               "next_poll_at" = now() + make_interval(secs => ${LEASE_SECONDS}), "poll_count" = 0
+         WHERE "id" = ${id}::uuid AND "status" = 'SENT'`;
+      // One immediate look; the carrier's state confirms it.
+      await this.driveCancel(id);
+      return;
+    }
+    if (!(c.status === 'ACCEPTED' || (lookup && c.status === 'SENT'))) return;
+    let found: Awaited<ReturnType<CarrierPickups['find']>>;
+    try {
+      found = await this.call((signal) => pickups.find(ref, signal));
+    } catch {
+      this.log.warn(`Pickup cancellation ${id}: lookup failed`);
+      await this.scheduleCancel(id);
+      return;
+    }
+    if (found?.cancelled) {
+      const state = found.state?.slice(0, 100) ?? null;
+      await this.prisma.$transaction(async (tx) => {
+        const moved = await tx.$executeRaw`
+          UPDATE "carrier_pickup_cancellations"
+             SET "status" = 'CONFIRMED', "resolved_at" = now(), "next_poll_at" = NULL,
+                 "carrier_state" = ${state}, "error_code" = NULL, "error_message" = NULL
+           WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED')`;
+        if (moved === 1) {
+          await tx.$executeRaw`
+            UPDATE "carrier_pickups" SET "carrier_state" = ${state}
+             WHERE "id" = ${c.pickupId}::uuid AND "status" = 'CONFIRMED'`;
+        }
+      });
+      return;
+    }
+    // Not (yet) shown cancelled: an accepted request is looked up again; an uncertain one stays.
+    await this.prisma.$executeRaw`
+      UPDATE "carrier_pickup_cancellations" SET "carrier_state" = ${found?.state?.slice(0, 100) ?? null}
+       WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED')`;
+    await this.scheduleCancel(id);
+  }
+
+  private async scheduleCancel(id: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE "carrier_pickup_cancellations"
+         SET "poll_count" = "poll_count" + 1,
+             "next_poll_at" = CASE WHEN "poll_count" + 1 >= ${PICKUP_MAX_POLLS} THEN NULL
+                                   ELSE now() + make_interval(secs => LEAST(5 * power(2, "poll_count" + 1), 300)) END
+       WHERE "id" = ${id}::uuid AND "status" = 'ACCEPTED'`;
+  }
+
   // --- talking to the carrier ----------------------------------------------------------------
 
-  /** Moves one pickup forward (see {@link order}, {@link lookup}). */
-  async drive(id: string, lookup = false): Promise<void> {
-    const p = await this.prisma.carrierPickup.findUniqueOrThrow({ where: { id } });
+  private async pickupsOf(p: {
+    carrierCode: string;
+    carrierConnection: string;
+    carrierEnvironment: string;
+    carrierAccount: string;
+  }): Promise<CarrierPickups | null> {
     const gateway = await this.carriers.forConnection({
       carrierCode: p.carrierCode,
       connection: p.carrierConnection,
@@ -425,13 +604,84 @@ export class CarrierPickupsService {
       account: p.carrierAccount,
     });
     // Only its own connection, environment and account — never a fallback.
-    const pickups = gateway?.pickups;
-    if (!pickups) return;
-    if (p.status === 'PREPARED') {
-      const claimed = await this.prisma.$executeRaw`
+    return gateway?.pickups ?? null;
+  }
+
+  /**
+   * Claims a written pickup for sending — exactly one caller wins (row lock + status check). Under
+   * the orders' locks, its day must not have passed and its plan must still hold (every order ready
+   * for pickup, every shipment labelled, no planned parcel with the carrier); otherwise it is closed
+   * as NOT_SENT and never sent.
+   */
+  private async claim(id: string): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<{ status: string }[]>`
+        SELECT "status"::text AS "status" FROM "carrier_pickups" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      if (row?.status !== 'PREPARED') return false;
+      const p = await tx.carrierPickup.findUniqueOrThrow({
+        where: { id },
+        select: {
+          siteId: true,
+          pickupDate: true,
+          parcels: { select: { orderId: true, parcelId: true, shipmentId: true } },
+        },
+      });
+      const today = await this.today(p.siteId, tx);
+      const orderIds = [...new Set(p.parcels.map((x) => x.orderId))];
+      await this.lockOrders(tx, orderIds);
+      let problem: { code: string; message: string } | null = null;
+      if (p.pickupDate.toISOString().slice(0, 10) < today) {
+        problem = {
+          code: 'PICKUP_DAY_PASSED',
+          message: 'The pickup day passed before it was sent',
+        };
+      } else {
+        const orders = await tx.order.count({
+          where: { id: { in: orderIds }, status: 'READY_FOR_PICKUP' },
+        });
+        const shipments = await tx.shipment.count({
+          where: {
+            id: { in: [...new Set(p.parcels.map((x) => x.shipmentId))] },
+            status: 'LABELED',
+          },
+        });
+        const picked = await tx.shipmentParcelProgress.count({
+          where: { parcelId: { in: p.parcels.map((x) => x.parcelId) }, pickedUpAt: { not: null } },
+        });
+        if (
+          orders !== orderIds.length ||
+          shipments !== new Set(p.parcels.map((x) => x.shipmentId)).size ||
+          picked > 0
+        ) {
+          problem = {
+            code: 'PICKUP_PLAN_CHANGED',
+            message:
+              'Its plan no longer held before it was sent (an order, shipment or parcel changed)',
+          };
+        }
+      }
+      if (problem) {
+        await tx.$executeRaw`
+          UPDATE "carrier_pickups"
+             SET "status" = 'NOT_SENT', "resolved_at" = now(),
+                 "error_code" = ${problem.code}, "error_message" = ${problem.message}
+           WHERE "id" = ${id}::uuid AND "status" = 'PREPARED'`;
+        return false;
+      }
+      await tx.$executeRaw`
         UPDATE "carrier_pickups" SET "status" = 'SENT', "sent_at" = now()
          WHERE "id" = ${id}::uuid AND "status" = 'PREPARED'`;
-      if (claimed !== 1) return; // someone else is sending it
+      return true;
+    });
+  }
+
+  /** Moves one pickup forward (see {@link order}, {@link lookup}). */
+  async drive(id: string, lookup = false): Promise<void> {
+    const p = await this.prisma.carrierPickup.findUniqueOrThrow({ where: { id } });
+    const pickups = await this.pickupsOf(p);
+    if (!pickups) return;
+    if (p.status === 'PREPARED') {
+      if (!(await this.claim(id))) return; // someone else sends it, or it no longer holds
       let outcome: CarrierPickupOutcome;
       try {
         outcome = await this.call((signal) =>
@@ -532,8 +782,35 @@ export class CarrierPickupsService {
        WHERE "id" = ${id}::uuid AND "status" = 'ACCEPTED'`;
   }
 
-  /** Background lookups of accepted pickups (several API processes share them: SKIP LOCKED). */
+  /**
+   * Background work (several API processes share it): written pickups and cancellations not sent
+   * yet — e.g. after a restart between the commit and the call — are claimed and sent (or closed as
+   * NOT_SENT); accepted ones are looked up (bounded, SKIP LOCKED).
+   */
   async pollDue(limit = 5): Promise<number> {
+    const grace = this.env.CARRIER_SETTLE_SECONDS;
+    const written = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "carrier_pickups"
+       WHERE "status" = 'PREPARED' AND "created_at" <= now() - make_interval(secs => ${grace})
+       ORDER BY "created_at" LIMIT ${limit}`;
+    for (const r of written) {
+      try {
+        await this.drive(r.id);
+      } catch (error) {
+        this.log.warn(`Pickup ${r.id} not sent: ${String(error)}`);
+      }
+    }
+    const cancels = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "carrier_pickup_cancellations"
+       WHERE "status" = 'PREPARED' AND "created_at" <= now() - make_interval(secs => ${grace})
+       ORDER BY "created_at" LIMIT ${limit}`;
+    for (const r of cancels) {
+      try {
+        await this.driveCancel(r.id);
+      } catch (error) {
+        this.log.warn(`Pickup cancellation ${r.id} not sent: ${String(error)}`);
+      }
+    }
     const due = await this.prisma.$queryRaw<{ id: string; lease: Date }[]>`
       UPDATE "carrier_pickups" p
          SET "next_poll_at" = now() + make_interval(secs => ${LEASE_SECONDS})
@@ -553,37 +830,119 @@ export class CarrierPickupsService {
       });
       if (untouched) await this.schedule(r.id);
     }
-    return due.length;
+    const dueCancels = await this.prisma.$queryRaw<{ id: string; lease: Date }[]>`
+      UPDATE "carrier_pickup_cancellations" c
+         SET "next_poll_at" = now() + make_interval(secs => ${LEASE_SECONDS})
+       WHERE c."id" IN (SELECT q."id" FROM "carrier_pickup_cancellations" q
+                         WHERE q."status" = 'ACCEPTED' AND q."next_poll_at" <= now()
+                         ORDER BY q."next_poll_at" LIMIT ${limit} FOR UPDATE SKIP LOCKED)
+      RETURNING c."id", c."next_poll_at" AS "lease"`;
+    for (const r of dueCancels) {
+      try {
+        await this.driveCancel(r.id);
+      } catch (error) {
+        this.log.warn(`Pickup cancellation lookup ${r.id} failed: ${String(error)}`);
+      }
+      const untouched = await this.prisma.carrierPickupCancellation.count({
+        where: { id: r.id, nextPollAt: r.lease, status: 'ACCEPTED' },
+      });
+      if (untouched) await this.scheduleCancel(r.id);
+    }
+    return written.length + cancels.length + due.length + dueCancels.length;
   }
 
   // --- helpers -------------------------------------------------------------------------------
 
-  /**
-   * Orders already planned in a pickup that waits for the carrier, or that is confirmed for today
-   * or later (order id → pickup code). A past confirmed pickup does not block: what it did not
-   * collect is planned again.
-   */
-  private async plannedOrders(db: Tx, orderIds: string[], today: string) {
-    if (orderIds.length === 0) return new Map<string, string>();
-    const rows = await db.carrierPickupOrder.findMany({
-      where: {
-        orderId: { in: orderIds },
-        pickup: {
-          OR: [
-            { status: { in: [...UNRESOLVED] } },
-            { status: 'CONFIRMED', pickupDate: { gte: new Date(`${today}T00:00:00Z`) } },
-          ],
-        },
-      },
-      select: { orderId: true, pickup: { select: { code: true } } },
-    });
-    return new Map(rows.map((r) => [r.orderId, r.pickup.code]));
+  private async lockOrders(tx: Tx, ids: string[]): Promise<void> {
+    for (const id of [...new Set(ids)].sort()) {
+      await tx.$executeRaw`SELECT 1 FROM "orders" WHERE "id" = ${id}::uuid FOR UPDATE`;
+    }
   }
 
-  private async settled(id: string): Promise<boolean> {
-    const [row] = await this.prisma.$queryRaw<{ settled: boolean }[]>`
-      SELECT ("sent_at" + make_interval(secs => ${this.env.CARRIER_SETTLE_SECONDS})) <= now() AS settled
-        FROM "carrier_pickups" WHERE "id" = ${id}::uuid`;
+  /**
+   * Per order: its labelled shipment and each parcel — number, with the carrier or not (the
+   * tracking's progress, or the manual hand-over), and the pickup still holding it (see
+   * {@link holding}).
+   */
+  private async parcelState(db: Tx, orderIds: string[], today: string) {
+    const out = new Map<
+      string,
+      {
+        shipment: {
+          id: string;
+          code: string;
+          carrierCode: string | null;
+          carrierConnection: string | null;
+          carrierEnvironment: string | null;
+          carrierAccount: string | null;
+        };
+        parcels: {
+          id: string;
+          parcelNo: number;
+          number: string;
+          pickedUp: boolean;
+          heldBy: string | null;
+        }[];
+      }
+    >();
+    if (orderIds.length === 0) return out;
+    const shipments = await db.shipment.findMany({
+      where: { orderId: { in: orderIds }, status: 'LABELED' },
+      select: {
+        id: true,
+        orderId: true,
+        code: true,
+        carrierCode: true,
+        carrierConnection: true,
+        carrierEnvironment: true,
+        carrierAccount: true,
+        parcels: {
+          orderBy: { parcelNo: 'asc' },
+          select: {
+            id: true,
+            parcelNo: true,
+            carrierParcelNumber: true,
+            progress: { select: { pickedUpAt: true } },
+          },
+        },
+      },
+    });
+    const held = await db.carrierPickupParcel.findMany({
+      where: {
+        parcelId: { in: shipments.flatMap((s) => s.parcels.map((p) => p.id)) },
+        pickup: holding(today),
+      },
+      select: { parcelId: true, pickup: { select: { code: true } } },
+    });
+    const heldBy = new Map(held.map((h) => [h.parcelId, h.pickup.code]));
+    for (const s of shipments) {
+      out.set(s.orderId, {
+        shipment: s,
+        parcels: s.parcels.map((p) => ({
+          id: p.id,
+          parcelNo: p.parcelNo,
+          number: p.carrierParcelNumber ?? '',
+          pickedUp: !!p.progress?.pickedUpAt,
+          heldBy: heldBy.get(p.id) ?? null,
+        })),
+      });
+    }
+    return out;
+  }
+
+  private async settled(
+    table: 'carrier_pickups' | 'carrier_pickup_cancellations',
+    id: string,
+  ): Promise<boolean> {
+    const secs = this.env.CARRIER_SETTLE_SECONDS;
+    const [row] =
+      table === 'carrier_pickups'
+        ? await this.prisma.$queryRaw<{ settled: boolean }[]>`
+            SELECT ("sent_at" + make_interval(secs => ${secs})) <= now() AS settled
+              FROM "carrier_pickups" WHERE "id" = ${id}::uuid`
+        : await this.prisma.$queryRaw<{ settled: boolean }[]>`
+            SELECT ("sent_at" + make_interval(secs => ${secs})) <= now() AS settled
+              FROM "carrier_pickup_cancellations" WHERE "id" = ${id}::uuid`;
     return row?.settled ?? false;
   }
 
@@ -598,10 +957,17 @@ export class CarrierPickupsService {
       where: { id: siteId },
       select: { timeZone: true },
     });
-    return localDate(new Date(), timeZone);
+    return localDate(this.clock(), timeZone);
+  }
+
+  private lookupFrom(sentAt: Date | null): string | null {
+    return sentAt
+      ? new Date(sentAt.getTime() + this.env.CARRIER_SETTLE_SECONDS * 1000).toISOString()
+      : null;
   }
 
   private toView(r: PickupRow): PickupView {
+    const c = r.cancellations[0] ?? null;
     return {
       code: r.code,
       status: r.status,
@@ -620,19 +986,31 @@ export class CarrierPickupsService {
       sentAt: r.sentAt?.toISOString() ?? null,
       resolvedAt: r.resolvedAt?.toISOString() ?? null,
       resolutionReason: r.resolutionReason,
-      lookupFrom:
-        r.status === 'SENT' && r.sentAt
-          ? new Date(r.sentAt.getTime() + this.env.CARRIER_SETTLE_SECONDS * 1000).toISOString()
-          : null,
-      orders: r.orders
-        .map((o) => ({
-          orderCode: formatCode(CODE_PREFIX.order, o.order.serial),
-          shipmentCode: o.shipment.code,
-          hotelName: o.order.hotelName,
-          parcelCount: o.parcelCount,
-          orderStatus: o.order.status,
+      lookupFrom: r.status === 'SENT' ? this.lookupFrom(r.sentAt) : null,
+      cancellation: c
+        ? {
+            status: c.status,
+            reason: c.reason,
+            createdAt: c.createdAt.toISOString(),
+            sentAt: c.sentAt?.toISOString() ?? null,
+            resolvedAt: c.resolvedAt?.toISOString() ?? null,
+            carrierState: c.carrierState,
+            errorCode: c.errorCode,
+            errorMessage: c.errorMessage,
+            lookupFrom: c.status === 'SENT' ? this.lookupFrom(c.sentAt) : null,
+          }
+        : null,
+      parcels: r.parcels
+        .map((p) => ({
+          orderCode: formatCode(CODE_PREFIX.order, p.order.serial),
+          shipmentCode: p.shipment.code,
+          hotelName: p.order.hotelName,
+          parcelNo: p.parcel.parcelNo,
+          carrierParcelNumber: p.carrierParcelNumber,
+          pickedUp: !!p.parcel.progress?.pickedUpAt,
+          orderStatus: p.order.status,
         }))
-        .sort((a, b) => a.orderCode.localeCompare(b.orderCode)),
+        .sort((a, b) => a.orderCode.localeCompare(b.orderCode) || a.parcelNo - b.parcelNo),
     };
   }
 }

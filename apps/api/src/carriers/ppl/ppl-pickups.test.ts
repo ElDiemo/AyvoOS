@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PplClient } from './ppl-client.js';
 import { CarrierRejectedError, type CarrierPickupRequest } from '../carrier.js';
 import { orderBatchId, PPL_PICKUP_MAX_PARCELS, PplPickups } from './ppl-pickups.js';
 
@@ -79,5 +80,56 @@ describe('orderBatchId (Location of POST /order/batch)', () => {
     expect(orderBatchId(`/ecs/ppl/myapi2/shipment/batch/${id}`)).toBeNull();
     expect(orderBatchId('/ecs/ppl/myapi2/order/batch/not-a-uuid')).toBeNull();
     expect(orderBatchId(`/order/batch/${id}/extra`)).toBeNull();
+  });
+});
+
+describe('PPL pickup cancellation (POST /order/cancel) and lookup', () => {
+  const client = (answers: { status: number; body?: unknown }[]) => {
+    const calls: { method: string; path: string; query?: unknown; json?: unknown }[] = [];
+    const fake = {
+      accessToken: async () => 'token',
+      request: async (method: string, path: string, opts: { query?: unknown; json?: unknown }) => {
+        calls.push({ method, path, query: opts.query, json: opts.json });
+        const a = answers.shift()!;
+        return { status: a.status, headers: new Headers(), body: a.body ?? null };
+      },
+    };
+    return { calls, pickups: new PplPickups(fake as unknown as PplClient) };
+  };
+  const signal = new AbortController().signal;
+
+  it('one POST by the original reference; 200 = accepted only, confirmed by the state Canceled', async () => {
+    const c = client([
+      { status: 200, body: {} },
+      { status: 200, body: [{ referenceId: 'R-1', orderNumber: '7', orderState: 'Canceled' }] },
+    ]);
+    expect(await c.pickups.cancel({ clientReference: 'R-1' }, signal)).toBe('ACCEPTED');
+    expect(c.calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/order/cancel',
+      query: { orderReference: 'R-1' },
+    });
+    expect(await c.pickups.find({ clientReference: 'R-1' }, signal)).toEqual({
+      orderNumber: '7',
+      state: 'Canceled',
+      cancelled: true,
+    });
+  });
+
+  it('400 refuses; anything else is unknown; another reference is never matched', async () => {
+    const refused = client([{ status: 400, body: { title: 'cannot' } }]);
+    await expect(refused.pickups.cancel({ clientReference: 'R-1' }, signal)).rejects.toBeInstanceOf(
+      CarrierRejectedError,
+    );
+    const unknown = client([{ status: 503 }]);
+    await expect(
+      unknown.pickups.cancel({ clientReference: 'R-1' }, signal),
+    ).rejects.not.toBeInstanceOf(CarrierRejectedError);
+    const other = client([{ status: 200, body: [{ referenceId: 'R-2', orderState: 'Canceled' }] }]);
+    expect(await other.pickups.find({ clientReference: 'R-1' }, signal)).toBeNull();
+    const created = client([
+      { status: 200, body: [{ referenceId: 'R-1', orderState: 'Created' }] },
+    ]);
+    expect((await created.pickups.find({ clientReference: 'R-1' }, signal))!.cancelled).toBe(false);
   });
 });

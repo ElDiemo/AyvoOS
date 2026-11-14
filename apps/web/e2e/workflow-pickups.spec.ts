@@ -161,8 +161,24 @@ test('svoz: the ready order selected, one confirmed pickup order; the order is n
   await expect(item).toContainText('čeká na předání');
   // Planned now: not offered again for a coming pickup.
   await expect(mine).toBeDisabled();
-  await expect(page.getByText(/Už ve svozu SV-/).first()).toBeVisible();
+  await expect(page.getByText(/Ve svozu SV-/).first()).toBeVisible();
+  await expect(item).toContainText('balík 1');
   await page.setViewportSize({ width: 320, height: 740 });
+  await noOverflow(page);
+
+  // "Zrušit svoz": one request, confirmed by the (test) carrier — the parcels are free again, the
+  // pickup and its plan stay in the history.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const code = (await item.getAttribute('data-testid'))!.replace('pickup-', '');
+  await page.getByTestId(`pickup-cancel-button-${code}`).click();
+  const cancelDialog = page.getByTestId(`pickup-cancel-dialog-${code}`);
+  await cancelDialog.getByRole('textbox').fill('Svoz už nepotřebujeme');
+  await expect(cancelDialog.getByRole('button', { name: 'Požádat o zrušení' })).toBeDisabled();
+  await page.getByTestId(`pickup-cancel-check-${code}`).check();
+  await cancelDialog.getByRole('button', { name: 'Požádat o zrušení' }).click();
+  await expect(page.getByTestId(`pickup-cancel-${code}`)).toContainText('Svoz zrušen dopravcem');
+  await expect(mine).toBeEnabled();
+  await expect(page.getByTestId(`pickup-${code}`)).toContainText(orderCode);
   await noOverflow(page);
 
   // The pickup is a plan, not a hand-over.

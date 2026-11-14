@@ -80,6 +80,13 @@ type Mode = {
   orderImportError: boolean;
   /** GET /order does not (yet) show the order. */
   orderHidden: boolean;
+  /** POST /order/cancel: 400 refusal / 500 before applying / applied then 500 / applied, no answer. */
+  cancelOrderRefuse: boolean;
+  cancelOrderError: boolean;
+  cancelOrderLost: boolean;
+  cancelOrderHang: boolean;
+  /** GET /order shows a cancelled order as Canceled only after this many further lookups. */
+  cancelOrderShownAfter: number;
 };
 
 /** A pickup order (CollectionOrder) PPL received. */
@@ -89,6 +96,9 @@ interface PickupOrder {
   polls: number;
   number: string;
   failed: boolean;
+  /** Cancelled at PPL; shown as Canceled after `hiddenLooks` more GET /order lookups. */
+  cancelled: boolean;
+  hiddenLooks: number;
 }
 
 /** The shipment-level CUST of a set, if one was sent (PPL then returns it for every parcel). */
@@ -188,6 +198,11 @@ export class FakePpl {
       orderProcessingPolls: 0,
       orderImportError: false,
       orderHidden: false,
+      cancelOrderRefuse: false,
+      cancelOrderError: false,
+      cancelOrderLost: false,
+      cancelOrderHang: false,
+      cancelOrderShownAfter: 0,
     };
   }
 
@@ -568,6 +583,8 @@ export class FakePpl {
         polls: 0,
         number: String(this.serial++),
         failed: this.mode.orderImportError,
+        cancelled: false,
+        hiddenLooks: 0,
       });
       if (this.mode.orderHang) return; // the order exists; the answer never comes
       return this.json(
@@ -611,14 +628,32 @@ export class FakePpl {
         : refs
             .map((r) => [r, this.orders.get(r)] as const)
             .filter((x): x is readonly [string, PickupOrder] => !!x[1] && !x[1].failed)
-            .map(([r, o]) => ({
+            .map(([r, o]) => {
+              const shown = o.cancelled && o.hiddenLooks-- <= 0;
+              return [r, o, shown] as const;
+            })
+            .map(([r, o, shown]) => ({
               referenceId: r,
               orderNumber: o.number,
-              orderState: 'Created',
+              orderState: shown ? 'Canceled' : 'Created',
               orderType: o.body.orderType,
               shipmentCount: o.body.shipmentCount,
             }));
       return this.json(res, 200, found, { 'x-paging-total-items-count': String(found.length) });
+    }
+    if (req.method === 'POST' && path === '/order/cancel') {
+      // Documented: customerReference or orderReference (query), optional body { note }; 200.
+      const ref = url.searchParams.get('orderReference');
+      const o = ref ? this.orders.get(ref) : undefined;
+      if (this.mode.cancelOrderRefuse || !o) {
+        return this.json(res, 400, { title: 'Order cannot be cancelled', status: 400 });
+      }
+      if (this.mode.cancelOrderError) return this.json(res, 500, { title: 'Internal error' });
+      o.cancelled = true;
+      o.hiddenLooks = this.mode.cancelOrderShownAfter;
+      if (this.mode.cancelOrderHang) return;
+      if (this.mode.cancelOrderLost) return this.json(res, 500, { title: 'Internal error' });
+      return this.json(res, 200, {});
     }
     return this.json(res, 404, { title: 'Not found' });
   }
