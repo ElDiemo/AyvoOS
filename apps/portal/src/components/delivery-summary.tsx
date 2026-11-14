@@ -21,25 +21,57 @@ export function summarize(d: PortalDeliveries) {
   };
 }
 
-const tone: Record<PortalDelivery['state'], string> = {
-  PLANNED: 'bg-stone-100 text-stone-800 ring-stone-300',
-  PREPARED: 'bg-amber-50 text-amber-900 ring-amber-200',
-  READY_FOR_PICKUP: 'bg-amber-50 text-amber-900 ring-amber-200',
-  IN_TRANSIT: 'bg-sky-50 text-sky-900 ring-sky-200',
-  DELIVERED: 'bg-emerald-50 text-emerald-900 ring-emerald-200',
+const tone: Record<PortalDelivery['state'], { pill: string; dot: string }> = {
+  PLANNED: { pill: 'bg-stone-50 text-stone-700 ring-stone-200', dot: 'bg-stone-400' },
+  PREPARED: { pill: 'bg-amber-50 text-amber-900 ring-amber-200/80', dot: 'bg-amber-500' },
+  READY_FOR_PICKUP: { pill: 'bg-amber-50 text-amber-900 ring-amber-200/80', dot: 'bg-amber-500' },
+  IN_TRANSIT: { pill: 'bg-sky-50 text-sky-900 ring-sky-200/80', dot: 'bg-sky-500' },
+  DELIVERED: { pill: 'bg-emerald-50 text-emerald-900 ring-emerald-200/80', dot: 'bg-emerald-600' },
 };
 
 /** The order's state as the hotel sees it (the core's, from real events). */
 export function StatePill({ state }: { state: PortalDelivery['state'] }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset ${tone[state]}`}
+      className={`inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset ${tone[state].pill}`}
       data-testid="state"
     >
+      <span aria-hidden="true" className={`size-1.5 rounded-full ${tone[state].dot}`} />
       {t.states[state]}
     </span>
   );
 }
+
+/** The same words as `orderWhen`, its date set apart in weight (no other change of text). */
+export function OrderWhen({ d, today }: { d: PortalDelivery; today: string }) {
+  const text = orderWhen(d, today);
+  const m = /^(.*?)(\d{1,2}\. \d{1,2}\. \d{4}(?: \d{1,2}:\d{2})?)$/.exec(text);
+  if (!m) return <span className="font-medium text-stone-900">{text}</span>;
+  return (
+    <span className="text-stone-600">
+      {m[1]}
+      <span className="font-semibold text-stone-900 tabular-nums">{m[2]}</span>
+    </span>
+  );
+}
+
+/** The marker of a supply-plan day: indicative, never an order. */
+export function PlanBadge() {
+  return (
+    <span className="inline-flex h-5 items-center rounded-md border border-dashed border-stone-400/80 px-1.5 text-[11px] font-medium text-stone-600">
+      {t.planBadge}
+    </span>
+  );
+}
+
+/** The portal's two button weights (one look for every card and line). */
+export const primaryButton =
+  'inline-flex h-10 items-center justify-center rounded-lg bg-emerald-900 px-4 text-sm font-semibold whitespace-nowrap text-white shadow-sm transition-colors hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-800';
+/** A white surface: soft border and shadow, rounded. */
+export const surface =
+  'rounded-2xl border border-stone-200/80 bg-white shadow-[0_1px_2px_rgba(28,25,23,0.04),0_1px_3px_rgba(28,25,23,0.05)]';
+/** A small section label. */
+export const label = 'text-[11px] font-medium tracking-wider text-stone-500 uppercase';
 
 /**
  * When, for an order — always the PLANNED SHIP day, never an arrival: handed to the carrier (its
