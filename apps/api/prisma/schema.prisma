@@ -1025,6 +1025,8 @@ enum OperationKind {
   PORTAL_FENCE_WRITE
   PORTAL_FENCE_RESOLVE
   PORTAL_FENCE_SETTLE
+  CARRIER_PICKUP_ORDER
+  CARRIER_PICKUP_RESOLVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1075,6 +1077,7 @@ model OperationRequest {
   parcelWeighings ShipmentParcelWeighing[] @relation("ParcelWeighOperation")
   carrierRequests ShipmentCarrierRequest[] @relation("CarrierRequestOperation")
   printRequests   PrintRequest[]           @relation("PrintRequestOperation")
+  carrierPickups  CarrierPickup[]          @relation("CarrierPickupOperation")
 
   @@map("operation_requests")
 }
@@ -1219,6 +1222,8 @@ model User {
   contractRevisions      ContractDraftRevision[]  @relation("ContractDraftRevisionCreatedBy")
   contractDraftEvents    ContractDraftEvent[]     @relation("ContractDraftEventActor")
   contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
+  carrierPickups         CarrierPickup[]          @relation("CarrierPickupBy")
+  carrierPickupsResolved CarrierPickup[]          @relation("CarrierPickupResolvedBy")
 
   @@map("users")
 }
@@ -1616,6 +1621,8 @@ model Site {
   dispatchPrintJobs PrintJob[]
 
   supplyPlans SupplyPlan[]
+
+  carrierPickups CarrierPickup[]
 
   @@map("sites")
 }
@@ -2532,6 +2539,7 @@ model Order {
   shipments        Shipment[]
   printRequests    PrintRequest[]
   printJobs        PrintJob[]
+  pickupPlans      CarrierPickupOrder[]
 
   @@index([siteId, requestedShipDate])
   @@index([hotelId])
@@ -2925,9 +2933,100 @@ model Shipment {
   tracking        ShipmentTracking?
   trackingEvents  ShipmentTrackingEvent[]
   parcelProgress  ShipmentParcelProgress[]
+  pickupPlans     CarrierPickupOrder[]
 
   @@index([orderId])
   @@map("shipments")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pickup orders at the carrier ("svoz", doc 029 §11, owner 2026-11-14): the carrier is asked to
+// collect a number of parcels at the site's registered sender address on a day. The planned
+// orders say what the operator means to hand over; a pickup never changes an order or a shipment
+// and never proves a hand-over (only the carrier's tracking or the manual hand-over does).
+// ---------------------------------------------------------------------------------------------
+
+enum CarrierPickupStatus {
+  /// Written; not yet handed to the carrier (safe to send).
+  PREPARED
+  /// Claimed for sending: the carrier may or may not have it — only a lookup resolves it.
+  SENT
+  /// The carrier acknowledged it (PPL batch id) and is still processing: looked up, never re-sent.
+  ACCEPTED
+  /// The carrier confirmed the pickup order (its import is complete / it is found by reference).
+  CONFIRMED
+  /// The carrier refused it (nothing ordered).
+  REJECTED
+  /// An uncertain pickup closed by a person after checking with the carrier (who, why) — an
+  /// audited, supervised resolution; never by the passing of time.
+  NOT_CREATED
+}
+
+/// One pickup order of one site, sent once. DB: what was ordered (site, carrier snapshot,
+/// reference, day, window, parcel count, payload) never changes; status only forward; at most one
+/// PREPARED / SENT / ACCEPTED per site; the parcel count = the sum of the planned orders; never
+/// deleted.
+model CarrierPickup {
+  id                 String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  serial             BigInt              @unique
+  code               String              @unique
+  siteId             String              @map("site_id") @db.Uuid
+  carrierCode        String              @map("carrier_code")
+  carrierConnection  String              @map("carrier_connection")
+  carrierEnvironment String              @map("carrier_environment")
+  carrierAccount     String              @map("carrier_account")
+  /// Unique at the carrier (PPL referenceId): the pickup is looked up by it after a lost answer.
+  clientReference    String              @unique @map("client_reference")
+  /// The pickup day in the site's time zone.
+  pickupDate         DateTime            @map("pickup_date") @db.Date
+  /// The wished window (HH:MM, site time) — both or none; recorded, sent only as a note.
+  windowFrom         String?             @map("window_from")
+  windowTo           String?             @map("window_to")
+  parcelCount        Int                 @map("parcel_count")
+  /// Exactly what was sent (no secrets).
+  payload            Json
+  status             CarrierPickupStatus @default(PREPARED)
+  carrierRef         String?             @map("carrier_ref")
+  carrierOrderNumber String?             @map("carrier_order_number")
+  carrierState       String?             @map("carrier_state")
+  errorCode          String?             @map("error_code")
+  errorMessage       String?             @map("error_message")
+  createdAt          DateTime            @map("created_at") @db.Timestamptz(3)
+  createdBy          String              @map("created_by") @db.Uuid
+  operationRequestId String              @unique @map("operation_request_id") @db.Uuid
+  sentAt             DateTime?           @map("sent_at") @db.Timestamptz(3)
+  resolvedAt         DateTime?           @map("resolved_at") @db.Timestamptz(3)
+  resolvedBy         String?             @map("resolved_by") @db.Uuid
+  resolutionReason   String?             @map("resolution_reason")
+  /// Bounded background lookups of an accepted pickup.
+  nextPollAt         DateTime?           @map("next_poll_at") @db.Timestamptz(3)
+  pollCount          Int                 @default(0) @map("poll_count")
+
+  site      Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  creator   User                 @relation("CarrierPickupBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  resolver  User?                @relation("CarrierPickupResolvedBy", fields: [resolvedBy], references: [id], onDelete: Restrict)
+  operation OperationRequest     @relation("CarrierPickupOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  orders    CarrierPickupOrder[]
+
+  @@index([siteId, pickupDate])
+  @@map("carrier_pickups")
+}
+
+/// A planned order of a pickup (written with it, never changed): the order, its labelled
+/// shipment and that shipment's parcel count. A plan for the operator, not a hand-over.
+model CarrierPickupOrder {
+  pickupId    String @map("pickup_id") @db.Uuid
+  orderId     String @map("order_id") @db.Uuid
+  shipmentId  String @map("shipment_id") @db.Uuid
+  parcelCount Int    @map("parcel_count")
+
+  pickup   CarrierPickup @relation(fields: [pickupId], references: [id], onDelete: Restrict)
+  order    Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  shipment Shipment      @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  @@id([pickupId, orderId])
+  @@index([orderId])
+  @@map("carrier_pickup_orders")
 }
 
 /// Tracking schedule of one labelled shipment (doc 031; current state): the next look, the last

@@ -68,7 +68,28 @@ type Mode = {
   variantDelayReads: number;
   /** The ZPL of the LAST set parcel prints "1/1" (as seen in the TEST environment, 2026-10-20). */
   zplWrongPosition: boolean;
+  /** POST /order/batch (pickup orders, doc 029 §11): 400 / 500 / 201 without a Location. */
+  orderReject: boolean;
+  orderError: boolean;
+  orderNoLocation: boolean;
+  /** POST /order/batch creates the order but never answers (the client's time limit aborts). */
+  orderHang: boolean;
+  /** Order batch status reads answering InProcess before Complete. */
+  orderProcessingPolls: number;
+  /** The order's import fails (importState Error with a code). */
+  orderImportError: boolean;
+  /** GET /order does not (yet) show the order. */
+  orderHidden: boolean;
 };
+
+/** A pickup order (CollectionOrder) PPL received. */
+interface PickupOrder {
+  batchId: string;
+  body: Record<string, unknown>;
+  polls: number;
+  number: string;
+  failed: boolean;
+}
 
 /** The shipment-level CUST of a set, if one was sent (PPL then returns it for every parcel). */
 function shipmentCust(b: Batch): string | null {
@@ -104,6 +125,8 @@ export class FakePpl {
   readonly mode: Mode = FakePpl.fresh();
   readonly batches = new Map<string, Batch>();
   readonly cancelled = new Set<string>();
+  /** Pickup orders received, by their referenceId. */
+  readonly orders = new Map<string, PickupOrder>();
   /** Every request seen: method + path (+ whether a Bearer token was present). */
   readonly seen: {
     method: string;
@@ -158,6 +181,13 @@ export class FakePpl {
       putRefuse: false,
       variantDelayReads: 0,
       zplWrongPosition: false,
+      orderReject: false,
+      orderError: false,
+      orderNoLocation: false,
+      orderHang: false,
+      orderProcessingPolls: 0,
+      orderImportError: false,
+      orderHidden: false,
     };
   }
 
@@ -509,6 +539,86 @@ export class FakePpl {
       }
       this.cancelled.add(n);
       return this.json(res, 202, {});
+    }
+    if (req.method === 'POST' && path === '/order/batch') {
+      // Documented: { orders: [...] } with orderType, referenceId, shipmentCount, sendDate.
+      const body = JSON.parse(await this.body(req)) as { orders?: Record<string, unknown>[] };
+      const order = body.orders?.[0];
+      if (this.mode.orderReject || !order || body.orders!.length !== 1) {
+        return this.json(res, 400, {
+          title: 'One or more validation errors occurred.',
+          status: 400,
+          errors: { 'orders[0].SendDate': ['Invalid value'] },
+        });
+      }
+      if (this.mode.orderError) return this.json(res, 500, { title: 'Internal error' });
+      for (const field of ['orderType', 'referenceId', 'shipmentCount', 'sendDate']) {
+        if (order[field] === undefined || order[field] === null) {
+          return this.json(res, 400, { title: 'Validation', errors: { [field]: ['Required'] } });
+        }
+      }
+      const count = Number(order.shipmentCount);
+      if (!Number.isInteger(count) || count < 1 || count > 50) {
+        return this.json(res, 400, { title: 'Validation', errors: { shipmentCount: ['Max 50'] } });
+      }
+      const batchId = randomUUID();
+      this.orders.set(String(order.referenceId), {
+        batchId,
+        body: order,
+        polls: 0,
+        number: String(this.serial++),
+        failed: this.mode.orderImportError,
+      });
+      if (this.mode.orderHang) return; // the order exists; the answer never comes
+      return this.json(
+        res,
+        201,
+        {},
+        this.mode.orderNoLocation
+          ? {}
+          : { [this.mode.locationHeader]: `${this.base}/order/batch/${batchId}` },
+      );
+    }
+    const orderBatch = /^\/order\/batch\/([0-9a-f-]{36})$/.exec(path);
+    if (req.method === 'GET' && orderBatch) {
+      const entry = [...this.orders.entries()].find(([, o]) => o.batchId === orderBatch[1]);
+      if (!entry) return this.json(res, 404, { title: 'Record Not Found' });
+      const [referenceId, o] = entry;
+      o.polls += 1;
+      const importState =
+        o.polls <= this.mode.orderProcessingPolls ? 'InProcess' : o.failed ? 'Error' : 'Complete';
+      return this.json(res, 200, {
+        items: [
+          {
+            referenceId,
+            importState,
+            ...(importState === 'Error'
+              ? { errorCode: 'SIM-ORDER-ERR', errorMessage: 'Simulated import error' }
+              : {}),
+          },
+        ],
+      });
+    }
+    if (req.method === 'GET' && path === '/order') {
+      // Documented: Limit (required, 1–1000), Offset (required), OrderReferences (max 50).
+      const limit = Number(url.searchParams.get('Limit'));
+      if (!url.searchParams.has('Offset') || !(limit >= 1 && limit <= 1000)) {
+        return this.json(res, 400, { title: 'Limit and Offset are required' });
+      }
+      const refs = url.searchParams.getAll('OrderReferences');
+      const found = this.mode.orderHidden
+        ? []
+        : refs
+            .map((r) => [r, this.orders.get(r)] as const)
+            .filter((x): x is readonly [string, PickupOrder] => !!x[1] && !x[1].failed)
+            .map(([r, o]) => ({
+              referenceId: r,
+              orderNumber: o.number,
+              orderState: 'Created',
+              orderType: o.body.orderType,
+              shipmentCount: o.body.shipmentCount,
+            }));
+      return this.json(res, 200, found, { 'x-paging-total-items-count': String(found.length) });
     }
     return this.json(res, 404, { title: 'Not found' });
   }

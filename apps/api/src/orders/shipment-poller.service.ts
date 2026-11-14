@@ -6,6 +6,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { ENV, type Env } from '../config/env.js';
+import { CarrierPickupsService } from './carrier-pickups.service.js';
 import { ShipmentCarrierFlow } from './shipment-carrier-flow.service.js';
 import { ShipmentTrackingService } from './shipment-tracking.service.js';
 
@@ -23,6 +24,7 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly flow: ShipmentCarrierFlow,
     private readonly tracking: ShipmentTrackingService,
+    private readonly pickups: CarrierPickupsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -45,6 +47,8 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
       await this.flow.variantsDue();
       // Tracking of labelled shipments at their carrier (doc 031).
       await this.tracking.due();
+      // Accepted pickup orders at their carrier (doc 029 §11).
+      await this.pickups.pollDue();
     } catch (error) {
       this.log.warn(`Carrier polling failed: ${String(error)}`);
     } finally {
