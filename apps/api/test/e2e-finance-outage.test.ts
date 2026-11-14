@@ -104,31 +104,41 @@ describe('e2e Finance outage control', () => {
     expect(await until(() => unexpected !== 'none')).toBe(true);
   });
 
-  it('a second stop during one shutdown never kills the replacement started after it', async () => {
-    // Review of 546d902: two stops set two timers; the first one, left running, later SIGKILLed the
-    // replacement through the shared `child` and the run ended as an unexpected Finance exit.
-    let unexpected = false;
-    const graceMs = 300;
-    const unit = financeOutageControl({
-      start: fake(false), // exits on SIGTERM, well within the grace
-      onUnexpectedExit: () => (unexpected = true),
-      graceMs,
-    });
-    const first = unit.child;
-    await ready(first);
-    unit.stop();
-    unit.stop();
-    unit.restart();
-    expect(await until(() => !alive(first), 2000)).toBe(true);
-    expect(first.signalCode).toBe('SIGTERM');
-    expect(await until(() => unit.child !== first, 2000)).toBe(true);
-    const second = unit.child;
-    await ready(second);
-    await sleep(graceMs * 2); // every timer of the first shutdown has run out
-    expect(alive(second)).toBe(true);
-    expect(unit.child).toBe(second);
-    expect(unexpected).toBe(false);
-  });
+  it.each([
+    ['stop, stop, restart', ['stop', 'stop', 'restart']],
+    ['stop, restart, stop', ['stop', 'restart', 'stop']],
+  ] as const)(
+    'a duplicate stop during one shutdown (%s) keeps the restart and never kills the replacement',
+    async (_, calls) => {
+      // Review of 546d902: two stops set two timers; the first one, left running, later SIGKILLed
+      // the replacement through the shared `child` (an unexpected Finance exit ended the run).
+      // Review of 8f6cb82: a duplicate stop after the restart request dropped that restart.
+      let unexpected = false;
+      let starts = 0;
+      const graceMs = 300;
+      const start = fake(false); // exits on SIGTERM, well within the grace
+      const unit = financeOutageControl({
+        start: () => (starts++, start()),
+        onUnexpectedExit: () => (unexpected = true),
+        graceMs,
+      });
+      const first = unit.child;
+      await ready(first);
+      for (const call of calls) unit[call]();
+      expect(alive(first)).toBe(true); // all calls happened during the one shutdown
+      expect(await until(() => !alive(first), 2000)).toBe(true);
+      expect(first.signalCode).toBe('SIGTERM');
+      expect(await until(() => unit.child !== first, 2000)).toBe(true);
+      expect(starts).toBe(2);
+      const second = unit.child;
+      await ready(second);
+      await sleep(graceMs * 2); // every timer of the first shutdown has run out
+      expect(alive(second)).toBe(true);
+      expect(unit.child).toBe(second);
+      expect(starts).toBe(2);
+      expect(unexpected).toBe(false);
+    },
+  );
 
   it('a restart without a stop does nothing', async () => {
     const unit = financeOutageControl({
