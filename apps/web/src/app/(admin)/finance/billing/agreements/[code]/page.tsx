@@ -10,6 +10,7 @@ import { AgreementForm } from '@/components/finance/billing-forms';
 import { financeAmount, financeDate, financeMonth } from '@/components/finance/finance-format';
 import { FinanceHeader } from '@/components/finance/finance-header';
 import { InvoiceList } from '@/components/finance/invoice-list';
+import { PendingTransfer } from '@/components/finance/pending-transfer';
 import { buttonClass, Card } from '@/components/ui';
 import { financeCs } from '@/i18n/cs/finance';
 import { billingCs as t } from '@/i18n/cs/finance-billing';
@@ -72,6 +73,15 @@ export default async function AgreementPage({
         }
       />
       <div className="flex flex-col gap-6">
+        {a.pendingTransfer && hasPermission(me, 'finance:billing_manage') && (
+          <Card title={t.pendingTransfer.title} testId="agreement-pending">
+            <PendingTransfer
+              code={a.code}
+              transfer={a.pendingTransfer}
+              payerName={name(a.pendingTransfer.leavingPayer.id)}
+            />
+          </Card>
+        )}
         <Card title={t.history} testId="agreement-history">
           <ul className="divide-y divide-stone-100 text-sm">
             {a.versions.map((v) => (

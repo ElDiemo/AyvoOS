@@ -1,0 +1,88 @@
+# AYVO OS — the public hotel portal on the public edge (ADR 0045 §7, doc 064 option A1),
+# https://<PORTAL_DOMAIN>. Mounted into qr-edge only by compose.portal-edge.yml (PORTAL_PUBLIC=on);
+# imported by Caddyfile.qr. The same rules as the DEV portal site (deploy/dev/Caddyfile), without
+# the tailnet guard: no /api at all (also no /api/internal), GET/HEAD to portal-web, POST only on
+# the sign-in steps and on exactly the profile save, small bodies with read deadlines. It reaches
+# only portal-web, on its own network — never web, the API, Finance or a database. portal-web sets
+# its own Content-Security-Policy (with a nonce) and security headers; this edge adds TLS and HSTS.
+# The global write limit (30 s) of this edge applies here too, unchanged (doc 064 §2).
+#
+# Certificate: HTTP-01 through the internal Caddy's challenge-only forward (acme.d/portal.caddy)
+# and TLS-ALPN-01 on this :443. The certificate and key exist only in this edge.
+{$PORTAL_DOMAIN} {
+	tls {
+		issuer acme
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	@blocked path /api /api/*
+	handle @blocked {
+		abort
+	}
+
+	# The invoice package (ZIP) is off in the first public release (owner 2026-11-11, #178 comment
+	# 6803472593): refused here before portal-web, which has it off as well
+	# (PORTAL_PACKAGE_ENABLED=0 in compose.portal.yml). Single PDFs are unaffected.
+	@package path /invoices/package /invoices/package/*
+	handle @package {
+		header Cache-Control no-store
+		respond "Nenalezeno" 404
+	}
+
+	# The hotel profile save (doc 053): POST on exactly /hotels/<uuid>/profile. Its body may exceed
+	# 4 KiB, so it alone gets 8 KiB; portal-web enforces its own 8 KiB / 5 s limits and CSRF check.
+	@profile_save {
+		method POST
+		path_regexp ^/hotels/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/profile$
+	}
+	handle @profile_save {
+		route {
+			timeouts {
+				read_timeout 5s 819
+			}
+			request_body {
+				max_size 8KiB
+			}
+			reverse_proxy portal-web:3200 {
+				header_up X-Forwarded-For {remote_host}
+				header_up -Forwarded
+				header_up -X-Forwarded-Host
+				header_down -X-Powered-By
+				@unavailable status 502 503 504
+				handle_response @unavailable {
+					respond "Hotelový portál je teď nedostupný. Zkuste to prosím za chvíli." 503
+				}
+			}
+		}
+	}
+
+	@portal_request `method('GET', 'HEAD') || (method('POST') && path('/auth', '/auth/*'))`
+	handle {
+		route {
+			# Every proxied body is limited, GETs included; only the sign-in steps (and the profile
+			# save above) accept POST. Portal-web imposes its own five-second body deadline.
+			timeouts {
+				read_timeout 5s 819
+			}
+			request_body {
+				max_size 4KiB
+			}
+			reverse_proxy @portal_request portal-web:3200 {
+				header_up X-Forwarded-For {remote_host}
+				header_up -Forwarded
+				header_up -X-Forwarded-Host
+				header_down -X-Powered-By
+				@unavailable status 502 503 504
+				handle_response @unavailable {
+					respond "Hotelový portál je teď nedostupný. Zkuste to prosím za chvíli." 503
+				}
+			}
+			# Unsupported methods: refused without draining an unfinished HTTP/1 upload.
+			header Connection close
+			respond 405
+		}
+	}
+}

@@ -138,7 +138,7 @@ test.describe('hotel portal: invoices and sign-in UX', () => {
   }) => {
     await control(page, { resetProfile: true, profileSaves: 0, lastProfileBody: null });
     await signIn(page);
-    await page.getByRole('link', { name: /Hotel Portál E2E/ }).click();
+    await page.getByRole('link', { name: 'Zobrazit profil: Hotel Portál E2E' }).click();
     await page.getByRole('link', { name: 'Upravit profil' }).click();
     await expect(page.getByRole('heading', { name: 'Upravit profil hotelu' })).toBeVisible();
     const actions = page.getByTestId('profile-actions');

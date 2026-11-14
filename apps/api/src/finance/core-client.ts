@@ -5,6 +5,9 @@ import {
   financeContractSupplierSchema,
   financePrincipalSchema,
   portalAccountSchema,
+  portalFenceResolutionResultSchema,
+  portalFenceSchema,
+  portalFenceSettleResultSchema,
   portalGrantListItemSchema,
   portalGrantPerformedSchema,
   portalGrantSchema,
@@ -18,6 +21,11 @@ import {
   type FinancePrincipalRequest,
   type PortalAccount,
   type PortalAccountRequest,
+  type PortalFence,
+  type PortalFenceRequest,
+  type PortalFenceResolutionRequest,
+  type PortalFenceResolutionResult,
+  type PortalFenceSettleResult,
   type PortalGrant,
   type PortalGrantIssueRequest,
   type PortalGrantListItem,
@@ -202,6 +210,41 @@ export class CoreClient {
       sessionToken,
       portalInvitationSchema,
       { requestId, retry },
+      true,
+    );
+  }
+
+  /**
+   * The operational boundary (v6): the fence of a transfer, before Finance commits it — the same
+   * `requestId` again (a lost answer) gets the same fence. The core's refusals are passed on.
+   */
+  portalFence(sessionToken: string, body: PortalFenceRequest): Promise<PortalFence> {
+    return this.json('POST', 'portal-fences', sessionToken, portalFenceSchema, body, true);
+  }
+
+  /** An abandoned transfer: its fence, or its fence request settled so it never writes one. */
+  settlePortalFence(sessionToken: string, requestId: string): Promise<PortalFenceSettleResult> {
+    return this.json(
+      'POST',
+      'portal-fences/settle',
+      sessionToken,
+      portalFenceSettleResultSchema,
+      { requestId },
+      true,
+    );
+  }
+
+  /** The evidence of one committed restore (built only from Finance's stored RESTORE). */
+  portalFenceResolution(
+    sessionToken: string,
+    body: PortalFenceResolutionRequest,
+  ): Promise<PortalFenceResolutionResult> {
+    return this.json(
+      'POST',
+      'portal-fence-resolutions',
+      sessionToken,
+      portalFenceResolutionResultSchema,
+      body,
       true,
     );
   }

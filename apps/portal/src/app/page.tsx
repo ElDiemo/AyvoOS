@@ -1,15 +1,27 @@
-import Link from 'next/link';
+import type { Metadata } from 'next';
+import { pragueToday } from '@/components/delivery-summary';
+import { HotelCard } from '@/components/hotel-card';
 import { Shell } from '@/components/shell';
 import { cs } from '@/i18n/cs';
 import { portalEnv } from '@/lib/env';
-import { myHotels, portalSession } from '@/lib/portal';
+import { perHotel } from '@/lib/per-hotel';
+import { myDeliveries, myHotels, portalSession } from '@/lib/portal';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Moje hotely' };
 
-/** "Moje hotely": the hotels of the session's active grants, each leading to its profile. */
+/**
+ * "Moje hotely": the hotels of the session's active grants, each with its current order and its
+ * next plan day at a glance, and the ways to its deliveries and profile (owner 2026-11-11).
+ */
 export default async function HotelsPage() {
   const { token, view } = await portalSession();
   const hotels = await myHotels(token);
+  const deliveries = await perHotel(
+    hotels.map((h) => h.id),
+    (id) => myDeliveries(token, id),
+  );
+  const today = pragueToday();
   return (
     <Shell user={view.user} active="hotels" testInvoices={portalEnv().APP_ENV !== 'production'}>
       <div className="flex flex-col gap-1">
@@ -22,21 +34,13 @@ export default async function HotelsPage() {
           <p className="mt-1 text-sm text-stone-600">{cs.hotels.noneHelp}</p>
         </div>
       ) : (
-        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="portal-hotels">
+        <ul
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          data-testid="portal-hotels"
+        >
           {hotels.map((h) => (
             <li key={h.id}>
-              <Link
-                href={`/hotels/${h.id}`}
-                className="group flex h-full flex-col gap-2 rounded-xl border border-stone-200 bg-white p-5 shadow-sm transition-colors hover:border-emerald-800"
-              >
-                <span className="text-lg font-semibold text-stone-900">{h.name}</span>
-                <span className="text-sm text-stone-600">
-                  {h.addressLine1}, {h.postalCode} {h.city}
-                </span>
-                <span className="mt-auto pt-2 text-sm font-medium text-emerald-800 group-hover:underline">
-                  {cs.hotels.open} <span aria-hidden="true">→</span>
-                </span>
-              </Link>
+              <HotelCard hotel={h} deliveries={deliveries.get(h.id) ?? null} today={today} />
             </li>
           ))}
         </ul>
