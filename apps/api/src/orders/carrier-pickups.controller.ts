@@ -3,8 +3,10 @@ import {
   lookupPickupRequestSchema,
   orderPickupRequestSchema,
   pickupCodeSchema,
+  resolvePickupCancelRequestSchema,
   resolvePickupRequestSchema,
   type CancelPickupRequest,
+  type ResolvePickupCancelRequest,
   type LookupPickupRequest,
   type ResolvePickupRequest,
   type OrderPickupRequest,
@@ -84,6 +86,22 @@ export class CarrierPickupsController {
     @OperationalSite() site: SiteContext,
   ): Promise<PickupView> {
     return this.pickups.cancel(principal.userId, site, code, body);
+  }
+
+  /**
+   * The exceptional closing of an uncertain cancellation attempt, after verifying with the carrier
+   * that it was not carried out; the pickup keeps its own state and a new request may follow.
+   */
+  @RequirePermission('shipments:resolve_uncertain')
+  @Post(':code/cancel/resolve')
+  @HttpCode(200)
+  resolveCancel(
+    @Param('code', CODE) code: string,
+    @Body(new ZodValidationPipe(resolvePickupCancelRequestSchema)) body: ResolvePickupCancelRequest,
+    @CurrentPrincipal() principal: Principal,
+    @OperationalSite() site: SiteContext,
+  ): Promise<PickupView> {
+    return this.pickups.resolveCancel(principal.userId, site, code, body);
   }
 
   /** The exceptional closing of an uncertain pickup, after checking with the carrier. */

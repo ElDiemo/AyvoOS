@@ -27,6 +27,8 @@ export const pickupCancelStatusSchema = z.enum([
   'ACCEPTED',
   'CONFIRMED',
   'REJECTED',
+  /** An uncertain attempt a person closed as not carried out (after checking with the carrier). */
+  'NOT_CREATED',
 ]);
 export type PickupCancelStatus = z.infer<typeof pickupCancelStatusSchema>;
 export type PickupStatus = z.infer<typeof pickupStatusSchema>;
@@ -77,6 +79,18 @@ export const cancelPickupRequestSchema = z.strictObject({
 });
 export type CancelPickupRequest = z.infer<typeof cancelPickupRequestSchema>;
 
+/**
+ * The exceptional closing of an uncertain cancellation attempt (its answer lost, or the carrier's
+ * lookups exhausted without showing it cancelled): only after the person verified with the carrier
+ * that the attempt was not carried out and will not be processed.
+ */
+export const resolvePickupCancelRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  reason: z.string().trim().min(5).max(500),
+  checkedWithCarrier: z.literal(true),
+});
+export type ResolvePickupCancelRequest = z.infer<typeof resolvePickupCancelRequestSchema>;
+
 export const pickupViewSchema = z.object({
   code: pickupCodeSchema,
   status: pickupStatusSchema,
@@ -111,6 +125,10 @@ export const pickupViewSchema = z.object({
       errorCode: z.string().nullable(),
       errorMessage: z.string().nullable(),
       lookupFrom: z.iso.datetime().nullable(),
+      /** Still looked up automatically (false once the bounded lookups ran out). */
+      lookingUp: z.boolean(),
+      /** The reason a person gave when closing an uncertain attempt. */
+      resolutionReason: z.string().nullable(),
     })
     .nullable(),
   /** The plan: the concrete parcels meant to be handed over (not evidence of it). */
@@ -121,8 +139,12 @@ export const pickupViewSchema = z.object({
       hotelName: z.string(),
       parcelNo: z.number().int(),
       carrierParcelNumber: z.string(),
-      /** With the carrier now (its tracking, or the manual hand-over) — never because of the pickup. */
-      pickedUp: z.boolean(),
+      /**
+       * TODAY's state of this parcel (its tracking or the manual hand-over), whichever pickup — or
+       * none — it went with. Never evidence that THIS pickup collected it: the carrier's physical
+       * link of a pickup to its parcels is not known to AYVO.
+       */
+      withCarrierNow: z.boolean(),
       /** The order's state now. */
       orderStatus: orderStatusSchema,
     }),

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { OrderShipment, PickupBoard, PickupView, VerifyCarrierResult } from '@ayvo/types';
+import type { OrderShipment, PickupBoard, PickupView } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CarrierSettingsSnapshot } from '../src/carriers/carrier.js';
+import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
 import { CarrierPickupsService } from '../src/orders/carrier-pickups.service.js';
 import { CARRIER_TEST_KEY, PPL_TEST_ACCOUNT } from './support/carrier-test-key.js';
 import { FakePpl } from './support/fake-ppl.js';
@@ -38,35 +40,26 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
   let factory: Awaited<ReturnType<typeof crateFactory>>;
   let hotel: string;
   const http = () => request(t.app.getHttpServer());
-  const settingsUrl = `/api/admin/sites/${INITIAL_SITE_ID}/carriers/ppl`;
-  const sender = {
-    name: 'AYVO Přerov (test)',
-    street: 'Průmyslová 1',
-    city: 'Přerov',
-    postalCode: '750 02',
-    country: 'CZ',
-    contact: 'Expedice',
-    phone: '+420 581 000 333',
-    email: 'expedice@ayvo.test',
+  /**
+   * The site's PPL settings as the registry gives them to a new request (doc 029 §9). Given to the
+   * registry of this test app directly — nothing is stored: test files share one database (in no
+   * fixed order) and site settings are never deleted, so ppl.e2e still starts from unsaved ones.
+   */
+  const SETTINGS: CarrierSettingsSnapshot = {
+    service: 'SIM-A',
+    label: { format: 'PDF', dpi: 203, complete: false },
+    sender: {
+      name: 'AYVO Přerov (test)',
+      addressLine1: 'Průmyslová 1',
+      addressLine2: null,
+      postalCode: '750 02',
+      city: 'Přerov',
+      countryCode: 'CZ',
+      contactName: 'Expedice',
+      phone: '+420 581 000 333',
+      email: 'expedice@ayvo.test',
+    },
   };
-  const save = (over: Record<string, unknown> = {}) =>
-    http()
-      .put(settingsUrl)
-      .send({
-        requestId: randomUUID(),
-        enabled: true,
-        connection: 'PPL_TEST',
-        sender,
-        productCode: 'SIM-A',
-        label: { layout: 'SINGLE' },
-        ...over,
-      });
-  async function settingsReady() {
-    await save({ productCode: null }).expect(200);
-    const v = await http().post(`${settingsUrl}/verify`).send({ requestId: randomUUID() });
-    expect((v.body as VerifyCarrierResult).ok).toBe(true);
-    await save().expect(200);
-  }
   const post = (order: string, path: string, body: object = {}) =>
     http()
       .post(`/api/admin/orders/${order}/shipment/${path}`)
@@ -155,6 +148,25 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     await post(orderCode, 'tracking/refresh').expect(200);
   }
 
+  /** PPL's tracking reports this parcel DELIVERED with no pickup scan (CARRIER_IMPLIED, no time). */
+  async function pplDeliversWithoutScan(orderCode: string, number: string) {
+    ppl.mode.events[number] = [
+      {
+        statusId: 450,
+        code: 'Delivered',
+        phase: 'Delivered',
+        group: 'Delivered',
+        eventDate: new Date(Date.now() - 60_000).toISOString(),
+        name: 'Zásilku jsme doručili příjemci.',
+      },
+    ];
+    await post(orderCode, 'tracking/refresh').expect(200);
+  }
+  const closeCancel = (code: string, requestId = randomUUID()) =>
+    http()
+      .post(`/api/admin/dispatch/pickups/${code}/cancel/resolve`)
+      .send({ requestId, reason: 'PPL potvrdila, že storno neprovedla', checkedWithCarrier: true });
+
   beforeAll(async () => {
     await ppl.start();
     t = await createTestApp({
@@ -168,9 +180,16 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     });
     factory = await crateFactory(t, { capacity: 2 });
     hotel = (await createHotel(t, { name: 'Hotel Svoz', city: 'Přerov' })).code;
-    // Test files share the database: ppl.e2e may have left PPL_TEST's administration credentials
-    // (the same synthetic account and key — support/carrier-test-key.ts); nothing is stored here.
-    await settingsReady();
+    // The real PPL adapter of the PPL_TEST connection (the simulation); ppl.e2e may have left its
+    // administration credentials — the same synthetic account and key (support/carrier-test-key.ts).
+    const registry = t.app.get(CarrierRegistryService);
+    const gateway = await registry.ppl('PPL_TEST');
+    expect(gateway).not.toBeNull();
+    vi.spyOn(registry, 'forSite').mockImplementation(async (siteId) =>
+      siteId === INITIAL_SITE_ID
+        ? { gateway: gateway!, settings: SETTINGS }
+        : { gateway: null, reason: 'NOT_CONFIGURED' },
+    );
   });
   afterAll(async () => {
     await t?.close();
@@ -223,7 +242,9 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     expect(p.parcels.map((x) => x.carrierParcelNumber).sort()).toEqual(
       [...a.numbers, ...b.numbers].sort(),
     );
-    expect(p.parcels.every((x) => !x.pickedUp && x.orderStatus === 'READY_FOR_PICKUP')).toBe(true);
+    expect(p.parcels.every((x) => !x.withCarrierNow && x.orderStatus === 'READY_FOR_PICKUP')).toBe(
+      true,
+    );
     // The pickup changes no order or shipment.
     const orders = await t.prisma.order.findMany({
       where: { code: { in: [a.code, b.code] } },
@@ -256,7 +277,7 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       blockedBy: 'IN_PICKUP',
     });
     const v = await view(first.code);
-    expect(v.parcels.map((x) => [x.carrierParcelNumber, x.pickedUp])).toEqual([
+    expect(v.parcels.map((x) => [x.carrierParcelNumber, x.withCarrierNow])).toEqual([
       [o.numbers[0], true],
       [o.numbers[1], false],
     ]);
@@ -502,6 +523,183 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     expect((await cancel(w.code)).body.code).toBe('PICKUP_NOT_CANCELLABLE');
     ppl.mode.orderProcessingPolls = 0;
     await pollNow();
+  });
+
+  it('a parcel delivered without a pickup scan (CARRIER_IMPLIED) is with the carrier: never planned', async () => {
+    // Recovery: a written pickup of both parcels; tracking learns only afterwards.
+    const o = await readyForPickup(2);
+    const w = await written([o.code]);
+    await pplDeliversWithoutScan(o.code, o.numbers[0]!);
+    // By its order and position — simulated parcel numbers repeat across test files.
+    const firstParcel = {
+      shipment: { order: { code: o.code }, status: 'LABELED' as const },
+      parcelNo: 1,
+    };
+    const progress = await t.prisma.shipmentParcelProgress.findFirstOrThrow({
+      where: { parcel: firstParcel },
+    });
+    expect(progress).toMatchObject({ pickedUpSource: 'CARRIER_IMPLIED', pickedUpAt: null });
+    const before = orderPosts();
+    await service().pollDue(5);
+    expect(await view(w.code)).toMatchObject({
+      status: 'NOT_SENT',
+      errorCode: 'PICKUP_PLAN_CHANGED',
+    });
+    expect(orderPosts()).toBe(before);
+    // The board and the API count it as with the carrier; a new pickup takes only the second.
+    expect(await candidate(o.code)).toMatchObject({ pickedUpCount: 1, eligible: true });
+    expect((await candidate(o.code))!.eligibleParcels.map((x) => x.carrierParcelNumber)).toEqual([
+      o.numbers[1],
+    ]);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    expect(p.parcels.map((x) => x.carrierParcelNumber)).toEqual([o.numbers[1]]);
+    expect([...ppl.orders.values()].at(-1)!.body.shipmentCount).toBe(1);
+    // The database refuses it too (a plan row for the implied parcel, in its own transaction).
+    const parcel = await t.prisma.shipmentParcel.findFirstOrThrow({
+      where: firstParcel,
+      include: { shipment: true },
+    });
+    expect(parcel.carrierParcelNumber).toBe(o.numbers[0]);
+    const tpl = await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: p.code } });
+    await withPrivileged(async (db) => {
+      await expect(
+        db.$transaction(async (tx) => {
+          const op = randomUUID();
+          await tx.$executeRaw`INSERT INTO "operation_requests" ("request_id", "kind", "payload_sha256")
+            VALUES (${op}::uuid, 'CARRIER_PICKUP_ORDER', ${'0'.repeat(64)})`;
+          const [row] = await tx.$queryRaw<{ id: string }[]>`
+            INSERT INTO "carrier_pickups" ("serial","code","site_id","carrier_code","carrier_connection","carrier_environment","carrier_account","client_reference","pickup_date","parcel_count","payload","created_at","created_by","operation_request_id")
+            VALUES (999998, 'SV-999998', ${tpl.siteId}::uuid, ${tpl.carrierCode}, ${tpl.carrierConnection}, ${tpl.carrierEnvironment}, ${tpl.carrierAccount}, 'SV-999998-x', ${tpl.pickupDate}, 1, '{}', now(), ${tpl.createdBy}::uuid, ${op}::uuid)
+            RETURNING "id"`;
+          await tx.$executeRaw`INSERT INTO "carrier_pickup_parcels" ("pickup_id","parcel_id","shipment_id","order_id","carrier_parcel_number")
+            VALUES (${row!.id}::uuid, ${parcel.id}::uuid, ${parcel.shipmentId}::uuid, ${parcel.shipment.orderId}::uuid, ${o.numbers[0]!})`;
+        }),
+      ).rejects.toThrow(/already with the carrier/);
+    });
+  });
+
+  it('closing an uncertain cancellation: verified by a person, then a new request; the pickup stands', async () => {
+    // A 500 before PPL carried it out: SENT for ever by itself — lookups and errors release nothing.
+    const o = await readyForPickup(1);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderError = true;
+    expect(((await cancel(p.code).expect(200)).body as PickupView).cancellation!.status).toBe(
+      'SENT',
+    );
+    ppl.mode.cancelOrderError = false;
+    ppl.mode.down = true;
+    await service().pollDue(5);
+    expect((await lookup(p.code).expect(200)).body.cancellation.status).toBe('SENT');
+    ppl.mode.down = false;
+    expect((await lookup(p.code).expect(200)).body.cancellation).toMatchObject({
+      status: 'SENT',
+      carrierState: 'Created',
+    });
+    expect((await cancel(p.code)).body.code).toBe('PICKUP_CANCEL_EXISTS');
+    expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+    const before = cancelPosts();
+    // Two people close it at once: one wins; the same request again is the same.
+    const ids = [randomUUID(), randomUUID()];
+    const both = await Promise.all(ids.map((id) => closeCancel(p.code, id)));
+    expect(both.map((r) => r.status).sort()).toEqual([200, 409]);
+    const requestId = ids[both.findIndex((r) => r.status === 200)]!;
+    const closed = both.find((r) => r.status === 200)!.body as PickupView;
+    expect(closed).toMatchObject({ status: 'CONFIRMED', parcelCount: 1 });
+    expect(closed.cancellation).toMatchObject({
+      status: 'NOT_CREATED',
+      resolutionReason: 'PPL potvrdila, že storno neprovedla',
+    });
+    await closeCancel(p.code, requestId).expect(200);
+    expect(cancelPosts()).toBe(before); // the closed attempt is never re-sent
+    // The pickup still governs its parcels (confirmed for tomorrow): not released by the closing.
+    expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+    // A new, confirmed request; concurrent duplicates make one.
+    const again = await Promise.all([cancel(p.code), cancel(p.code)]);
+    expect(again.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(cancelPosts()).toBe(before + 1);
+    expect((await view(p.code)).cancellation!.status).toBe('CONFIRMED');
+    expect(
+      (await order([o.code], { date: pragueToday(2) }).expect(200)).body.parcels[0]
+        .carrierParcelNumber,
+    ).toBe(o.numbers[0]);
+  });
+
+  it('PPL really cancelled meanwhile: its Canceled confirms — before the closing and after it', async () => {
+    // Before: the person's closing asks PPL once more; Canceled confirms, the closing is refused.
+    const a = await readyForPickup(1);
+    const p = (await order([a.code]).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderHang = true; // carried out, the answer never comes
+    expect(((await cancel(p.code).expect(200)).body as PickupView).cancellation!.status).toBe(
+      'SENT',
+    );
+    ppl.mode.cancelOrderHang = false;
+    const refused = await closeCancel(p.code);
+    expect(refused.body.code).toBe('PICKUP_CANCEL_NOT_UNCERTAIN');
+    expect((await view(p.code)).cancellation!.status).toBe('CONFIRMED');
+
+    // After: PPL showed it only later; the closed attempt stays closed; a new request that PPL
+    // refuses (already cancelled) is confirmed by PPL's own state.
+    const b = await readyForPickup(1);
+    const q = (await order([b.code]).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderHang = true;
+    ppl.mode.cancelOrderShownAfter = 1000;
+    await cancel(q.code).expect(200);
+    ppl.mode.cancelOrderHang = false;
+    expect(((await closeCancel(q.code).expect(200)).body as PickupView).cancellation!.status).toBe(
+      'NOT_CREATED',
+    );
+    const ref = (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: q.code } }))
+      .clientReference;
+    ppl.orders.get(ref)!.hiddenLooks = 0; // PPL now shows Canceled
+    ppl.mode.cancelOrderRefuse = true;
+    const mark = cancelPosts();
+    const n = (await cancel(q.code).expect(200)).body as PickupView;
+    expect(n.cancellation).toMatchObject({ status: 'CONFIRMED', carrierState: 'Canceled' });
+    expect(cancelPosts()).toBe(mark + 1);
+  });
+
+  it('accepted, lookups ran out without Canceled: still held; closed only by a person then', async () => {
+    const o = await readyForPickup(1);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderShownAfter = 1000;
+    const c = (await cancel(p.code).expect(200)).body as PickupView;
+    expect(c.cancellation).toMatchObject({ status: 'ACCEPTED', lookingUp: true });
+    expect((await closeCancel(p.code)).body.code).toBe('PICKUP_CANCEL_STILL_LOOKED_UP');
+    for (let i = 0; i < 40; i++) {
+      const row = await t.prisma.carrierPickupCancellation.findFirstOrThrow({
+        where: { pickup: { code: p.code } },
+      });
+      if (row.nextPollAt === null) break;
+      await pollNow();
+    }
+    const v = await view(p.code);
+    expect(v.cancellation).toMatchObject({
+      status: 'ACCEPTED',
+      lookingUp: false,
+      carrierState: 'Created',
+    });
+    // "Created" alone releases nothing.
+    expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+    expect(((await closeCancel(p.code).expect(200)).body as PickupView).cancellation!.status).toBe(
+      'NOT_CREATED',
+    );
+  });
+
+  it('history after a cancellation, a new pickup and the later collection: today’s state, not proof', async () => {
+    const o = await readyForPickup(1);
+    const first = (await order([o.code]).expect(200)).body as PickupView;
+    await cancel(first.code).expect(200);
+    expect((await view(first.code)).cancellation!.status).toBe('CONFIRMED');
+    const second = (await order([o.code], { date: pragueToday(2) }).expect(200)).body as PickupView;
+    await pplPicksUp(o.code, o.numbers[0]!);
+    // Both show the parcel's state TODAY — the cancelled one included; neither claims to have
+    // collected it (the field says "now", and the board labels it so).
+    const a = await view(first.code);
+    const b = await view(second.code);
+    expect(a.parcels[0]).toMatchObject({ carrierParcelNumber: o.numbers[0], withCarrierNow: true });
+    expect(b.parcels[0]).toMatchObject({ carrierParcelNumber: o.numbers[0], withCarrierNow: true });
+    expect(a.cancellation!.status).toBe('CONFIRMED');
+    expect(Object.keys(a.parcels[0]!)).not.toContain('pickedUp');
   });
 
   it('validation: a past day, an unknown or not-ready order', async () => {

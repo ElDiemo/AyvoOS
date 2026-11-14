@@ -459,9 +459,11 @@ the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/
 - The **plan is a list of concrete parcels** (written only by the transaction that writes the
   pickup — also while it is still `PREPARED`, a database rule via the pickup's `created_txid`; never
   changed): each parcel of a selected order "Připraveno k vyzvednutí" with its labelled shipment and
-  carrier number that is **not with the carrier yet** (the tracking's progress per parcel, doc 031,
-  or the manual hand-over — read under the orders' locks, the same the tracking takes) and not held
-  by another pickup. The pickup announces exactly their count (database rule); a parcel already
+  carrier number that is **not with the carrier yet** and not held by another pickup. "With the
+  carrier" is the canonical `pickedUpSource` of the parcel's progress (doc 031: `CARRIER`, `MANUAL`,
+  or `CARRIER_IMPLIED` when PPL reported the delivery without a pickup scan — its time stays unknown,
+  `pickedUpAt` is NULL), never `pickedUpAt`; the same rule in the API, the board, the claim of a
+  written pickup and the database. Read under the orders' locks, the same the tracking takes. The pickup announces exactly their count (database rule); a parcel already
   with the carrier is refused by the database too.
 - A pickup **changes no order and no shipment** and is **never a hand-over**: an order becomes
   "Převzatá dopravcem" only through the carrier's tracking per parcel (doc 031) or the manual
@@ -493,9 +495,22 @@ the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/
   account; a replay returns the same, a concurrent second request is refused. `POST /order/cancel`
   answering 200 is only **accepted**; the cancellation is **confirmed only when `GET /order` shows the
   documented state `Canceled`** for that reference (polled, bounded). A lost answer or a time-out is
-  uncertain (`SENT`): only looked up, never re-sent; the parcels stay held. The pickup, its plan, the
+  uncertain (`SENT`): only looked up, never re-sent; the parcels stay held. An error, a time-out, an
+  outage or PPL showing only `Created` releases nothing by itself. **Closing an uncertain attempt**
+  (`SENT` after the in-flight window, or `ACCEPTED` whose bounded lookups ran out) is a person's
+  audited decision with `shipments:resolve_uncertain` after verifying with PPL that the attempt was
+  not carried out and will not be processed (reason, who; active site only): PPL is asked once more
+  first — `Canceled` confirms it and the closing is refused. The closed attempt (`NOT_CREATED`) is
+  never sent again; **the pickup keeps its own state** (it is not cancelled by the closing — its
+  parcels follow the pickup's rules); a new, explicitly confirmed request may follow. If PPL refuses a
+  new request but shows the order `Canceled`, that confirmation is used. The pickup, its plan, the
   cancellation and who/why stay in the history. Ordering, cancelling and the real pickup (tracking)
   are separate records.
+- **History:** each planned parcel shows **today's state of the parcel** ("Stav balíku dnes", from
+  its tracking or the manual hand-over) — never evidence that this pickup collected it; a cancelled
+  pickup of a parcel collected later by another pickup shows the same "u dopravce" with that label.
+  The physical link of PPL's pickup to its `shipmentNumbers` is to be verified in the first live run
+  (doc 066), not derived from tracking.
 
 **Flow:** the board lists the active site's labelled orders ready for pickup, every eligible one
 selected (the selection can be changed), the day (today by default, never a past day in the site's

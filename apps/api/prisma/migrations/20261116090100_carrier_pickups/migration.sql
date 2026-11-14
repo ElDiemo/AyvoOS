@@ -6,7 +6,7 @@
 
 -- CreateEnum
 CREATE TYPE "CarrierPickupStatus" AS ENUM ('PREPARED', 'SENT', 'ACCEPTED', 'CONFIRMED', 'REJECTED', 'NOT_CREATED', 'NOT_SENT');
-CREATE TYPE "CarrierPickupCancelStatus" AS ENUM ('PREPARED', 'SENT', 'ACCEPTED', 'CONFIRMED', 'REJECTED');
+CREATE TYPE "CarrierPickupCancelStatus" AS ENUM ('PREPARED', 'SENT', 'ACCEPTED', 'CONFIRMED', 'REJECTED', 'NOT_CREATED');
 
 -- CreateTable
 CREATE TABLE "carrier_pickups" (
@@ -66,6 +66,8 @@ CREATE TABLE "carrier_pickup_cancellations" (
     "operation_request_id" UUID NOT NULL,
     "sent_at" TIMESTAMPTZ(3),
     "resolved_at" TIMESTAMPTZ(3),
+    "resolved_by" UUID,
+    "resolution_reason" TEXT,
     "carrier_state" TEXT,
     "error_code" TEXT,
     "error_message" TEXT,
@@ -84,9 +86,10 @@ CREATE INDEX "carrier_pickups_site_id_pickup_date_idx" ON "carrier_pickups"("sit
 CREATE INDEX "carrier_pickup_parcels_parcel_id_idx" ON "carrier_pickup_parcels"("parcel_id");
 CREATE INDEX "carrier_pickup_parcels_order_id_idx" ON "carrier_pickup_parcels"("order_id");
 CREATE INDEX "carrier_pickup_cancellations_pickup_id_idx" ON "carrier_pickup_cancellations"("pickup_id");
--- One live cancellation per pickup: a refused one may be followed by a new request.
+-- One live cancellation per pickup: a refused one, or an uncertain one a person closed as not
+-- carried out, may be followed by a new request.
 CREATE UNIQUE INDEX "carrier_pickup_cancellations_one_per_pickup" ON "carrier_pickup_cancellations"("pickup_id")
-  WHERE "status" <> 'REJECTED';
+  WHERE "status" NOT IN ('REJECTED', 'NOT_CREATED');
 CREATE UNIQUE INDEX "carrier_pickup_cancellations_operation_request_id_key" ON "carrier_pickup_cancellations"("operation_request_id");
 -- At most one pickup per site waits for the carrier: a pending or uncertain one blocks another
 -- (never a second POST beside an unresolved one).
@@ -103,6 +106,7 @@ ALTER TABLE "carrier_pickup_parcels" ADD CONSTRAINT "carrier_pickup_parcels_parc
 ALTER TABLE "carrier_pickup_parcels" ADD CONSTRAINT "carrier_pickup_parcels_shipment_id_fkey" FOREIGN KEY ("shipment_id") REFERENCES "shipments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "carrier_pickup_parcels" ADD CONSTRAINT "carrier_pickup_parcels_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "carrier_pickup_cancellations" ADD CONSTRAINT "carrier_pickup_cancellations_pickup_id_fkey" FOREIGN KEY ("pickup_id") REFERENCES "carrier_pickups"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "carrier_pickup_cancellations" ADD CONSTRAINT "carrier_pickup_cancellations_resolved_by_fkey" FOREIGN KEY ("resolved_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "carrier_pickup_cancellations" ADD CONSTRAINT "carrier_pickup_cancellations_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "carrier_pickup_cancellations" ADD CONSTRAINT "carrier_pickup_cancellations_operation_request_id_fkey" FOREIGN KEY ("operation_request_id") REFERENCES "operation_requests"("request_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
@@ -245,7 +249,9 @@ BEGIN
     RAISE EXCEPTION 'AYVO: a pickup plans only numbered parcels of labelled shipments of its site, carrier, environment and account' USING ERRCODE = 'check_violation';
   END IF;
   IF EXISTS (SELECT 1 FROM "shipment_parcel_progress" g
-              WHERE g."parcel_id" = NEW."parcel_id" AND g."picked_up_at" IS NOT NULL) THEN
+              -- With the carrier = a pickup source (CARRIER, MANUAL, or CARRIER_IMPLIED by a delivery
+              -- without a pickup scan, whose time stays unknown) — never by picked_up_at.
+              WHERE g."parcel_id" = NEW."parcel_id" AND g."picked_up_source" IS NOT NULL) THEN
     RAISE EXCEPTION 'AYVO: a parcel already with the carrier is not planned for a pickup' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -261,11 +267,17 @@ CREATE TRIGGER "carrier_pickup_parcels_no_truncate" BEFORE TRUNCATE ON "carrier_
 
 -- The cancellation of a confirmed pickup at the carrier: one live per pickup, recorded before the
 -- carrier is called; forward only (PREPARED → SENT → ACCEPTED → CONFIRMED / REJECTED; SENT →
--- ACCEPTED / CONFIRMED / REJECTED after a lookup); confirmed only by the carrier; never deleted.
+-- ACCEPTED / CONFIRMED / REJECTED after a lookup; SENT / ACCEPTED → NOT_CREATED when a person,
+-- after checking with the carrier, closed an uncertain attempt as not carried out — who, why);
+-- confirmed only by the carrier; never deleted.
 ALTER TABLE "carrier_pickup_cancellations"
   ADD CONSTRAINT "carrier_pickup_cancellations_reason_check" CHECK (btrim("reason") <> ''),
   ADD CONSTRAINT "carrier_pickup_cancellations_sent_check" CHECK (("status" = 'PREPARED') = ("sent_at" IS NULL)),
-  ADD CONSTRAINT "carrier_pickup_cancellations_resolved_check" CHECK (("status" IN ('CONFIRMED', 'REJECTED')) = ("resolved_at" IS NOT NULL)),
+  ADD CONSTRAINT "carrier_pickup_cancellations_resolved_check" CHECK (("status" IN ('CONFIRMED', 'REJECTED', 'NOT_CREATED')) = ("resolved_at" IS NOT NULL)),
+  ADD CONSTRAINT "carrier_pickup_cancellations_closed_check" CHECK (
+    ("status" = 'NOT_CREATED') = ("resolved_by" IS NOT NULL)
+    AND ("resolved_by" IS NULL) = ("resolution_reason" IS NULL)
+    AND ("resolution_reason" IS NULL OR btrim("resolution_reason") <> '')),
   ADD CONSTRAINT "carrier_pickup_cancellations_rejected_check" CHECK ("status" <> 'REJECTED' OR "error_code" IS NOT NULL),
   ADD CONSTRAINT "carrier_pickup_cancellations_poll_check" CHECK ("next_poll_at" IS NULL OR "status" = 'ACCEPTED');
 
@@ -297,11 +309,11 @@ BEGIN
   END IF;
   IF NEW."status" <> OLD."status" AND NOT (
        (OLD."status" = 'PREPARED' AND NEW."status" = 'SENT')
-    OR (OLD."status" = 'SENT' AND NEW."status" IN ('ACCEPTED', 'CONFIRMED', 'REJECTED'))
-    OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('CONFIRMED', 'REJECTED'))) THEN
+    OR (OLD."status" = 'SENT' AND NEW."status" IN ('ACCEPTED', 'CONFIRMED', 'REJECTED', 'NOT_CREATED'))
+    OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('CONFIRMED', 'REJECTED', 'NOT_CREATED'))) THEN
     RAISE EXCEPTION 'AYVO: cancellation status % cannot become %', OLD."status", NEW."status" USING ERRCODE = 'check_violation';
   END IF;
-  IF OLD."status" IN ('CONFIRMED', 'REJECTED') AND ROW(NEW.*) IS DISTINCT FROM ROW(OLD.*) THEN
+  IF OLD."status" IN ('CONFIRMED', 'REJECTED', 'NOT_CREATED') AND ROW(NEW.*) IS DISTINCT FROM ROW(OLD.*) THEN
     RAISE EXCEPTION 'AYVO: a resolved cancellation is closed' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;

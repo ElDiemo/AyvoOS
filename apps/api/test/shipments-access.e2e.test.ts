@@ -399,6 +399,83 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
     expect((await handOver(handler.cookie)).status).toBe(200);
   });
 
+  it('pickups: closing an uncertain cancellation needs shipments:resolve_uncertain, at the active site only', async () => {
+    const order = await completed();
+    await as(admin)
+      .post(`/api/admin/orders/${order}/shipment/labels`, { requestId: randomUUID() })
+      .expect(200);
+    await as(admin)
+      .post(`/api/admin/orders/${order}/shipment/ready`, {
+        requestId: randomUUID(),
+        labelsApplied: true,
+      })
+      .expect(200);
+    const tomorrow = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', {
+      timeZone: 'Europe/Prague',
+    });
+    const p = (
+      await as(admin)
+        .post('/api/admin/dispatch/pickups', {
+          requestId: randomUUID(),
+          date: tomorrow,
+          window: null,
+          orders: [order],
+          confirmed: true,
+        })
+        .expect(200)
+    ).body as { code: string; status: string };
+    expect(p.status).toBe('CONFIRMED');
+    // The cancellation's answer is lost before the carrier carried it out: uncertain.
+    testCarrierControl.pickupCancel = ['FAIL'];
+    const c = await as(admin)
+      .post(`/api/admin/dispatch/pickups/${p.code}/cancel`, {
+        requestId: randomUUID(),
+        reason: 'Svoz už nepotřebujeme',
+        confirmed: true,
+      })
+      .expect(200);
+    expect(c.body.cancellation.status).toBe('SENT');
+    // Past the in-flight window (database time moved for the test only).
+    await ra.prisma
+      .$executeRaw`UPDATE "carrier_pickup_cancellations" SET "sent_at" = now() - interval '1 hour'
+      WHERE "pickup_id" = (SELECT "id" FROM "carrier_pickups" WHERE "code" = ${p.code})`;
+    const close = { reason: 'PPL potvrdila, že storno neprovedla', checkedWithCarrier: true };
+    const url = `/api/admin/dispatch/pickups/${p.code}/cancel/resolve`;
+    // Reading and preparing are not enough.
+    const dispatcher = await createUser([
+      await role(['orders:read', 'shipments:read', 'shipments:prepare']),
+    ]);
+    expect(
+      (await as(dispatcher.cookie).post(url, { requestId: randomUUID(), ...close })).status,
+    ).toBe(403);
+    // Another active site: the pickup does not exist there.
+    await activeSite(admin, other.id);
+    expect((await as(admin).post(url, { requestId: randomUUID(), ...close })).status).toBe(404);
+    expect((await as(admin).get(`/api/admin/dispatch/pickups/${p.code}`)).status).toBe(404);
+    await activeSite(admin, INITIAL_SITE_ID);
+    const resolver = await createUser([
+      await role(['orders:read', 'shipments:read', 'shipments:resolve_uncertain']),
+    ]);
+    const requestId = randomUUID();
+    const done = await as(resolver.cookie)
+      .post(url, { requestId, ...close })
+      .expect(200);
+    expect(done.body.cancellation).toMatchObject({
+      status: 'NOT_CREATED',
+      resolutionReason: close.reason,
+    });
+    expect(done.body.status).toBe('CONFIRMED'); // the pickup itself stands
+    // The same request again is the same; never sent again.
+    await as(resolver.cookie)
+      .post(url, { requestId, ...close })
+      .expect(200);
+    expect(testCarrierControl.pickupCancelCalls).toBe(1);
+    const row = await ra.prisma.carrierPickupCancellation.findFirstOrThrow({
+      where: { pickup: { code: p.code } },
+    });
+    expect(row.resolvedBy).toBe(resolver.id);
+  });
+
   it('another site’s shipment is not found, whatever is asked', async () => {
     const order = await completed();
     await activeSite(admin, other.id);

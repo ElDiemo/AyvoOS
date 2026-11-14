@@ -109,8 +109,11 @@ export const testCarrierControl = {
     string,
     { request: CarrierPickupRequest; fail: boolean; number: string; cancelled: boolean }
   >(),
-  /** How the next pickup cancellations answer: ACCEPT (shown cancelled at once), REFUSE, LOSE. */
-  pickupCancel: [] as ('ACCEPT' | 'REFUSE' | 'LOSE')[],
+  /**
+   * How the next pickup cancellations answer: ACCEPT (shown cancelled at once), REFUSE, LOSE
+   * (carried out, answer lost), FAIL (not carried out, answer lost).
+   */
+  pickupCancel: [] as ('ACCEPT' | 'REFUSE' | 'LOSE' | 'FAIL')[],
   pickupCancelCalls: 0,
   /** Adds tracking events to a parcel number. */
   track(number: string, ...events: { statusId: number | null; at: string; name?: string }[]): void {
@@ -201,6 +204,7 @@ class TestPickups implements CarrierPickups {
       testCarrierControl.pickupCancelCalls += 1;
       const behaviour = testCarrierControl.pickupCancel.shift() ?? 'ACCEPT';
       const found = testCarrierControl.pickups.get(query.clientReference);
+      if (behaviour === 'FAIL') throw new Error('test carrier: connection lost');
       if (behaviour === 'REFUSE' || !found) {
         throw new CarrierRejectedError('TEST_REJECTED', 'Cancellation refused by the test carrier');
       }

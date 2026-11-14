@@ -1028,6 +1028,7 @@ enum OperationKind {
   CARRIER_PICKUP_ORDER
   CARRIER_PICKUP_RESOLVE
   CARRIER_PICKUP_CANCEL
+  CARRIER_PICKUP_CANCEL_RESOLVE
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1203,30 +1204,31 @@ model User {
   printRequests             PrintRequest[]       @relation("PrintRequestedBy")
   printJobEvents            PrintJobEvent[]      @relation("PrintJobEventBy")
 
-  salesProspectsOwned    SalesProspect[]             @relation("SalesProspectOwner")
-  salesProspectsCreated  SalesProspect[]             @relation("SalesProspectCreatedBy")
-  salesProspectsUpdated  SalesProspect[]             @relation("SalesProspectUpdatedBy")
-  salesProspectsArchived SalesProspect[]             @relation("SalesProspectArchivedBy")
-  salesImportsOwned      SalesImport[]               @relation("SalesImportOwner")
-  salesImportsCreated    SalesImport[]               @relation("SalesImportCreatedBy")
-  salesContactsCreated   SalesContact[]              @relation("SalesContactCreatedBy")
-  salesContactsUpdated   SalesContact[]              @relation("SalesContactUpdatedBy")
-  salesContactsRetired   SalesContact[]              @relation("SalesContactRetiredBy")
-  salesActivities        SalesActivity[]             @relation("SalesActivityAuthor")
-  salesTasksAssigned     SalesTask[]                 @relation("SalesTaskAssignee")
-  salesTasksCreated      SalesTask[]                 @relation("SalesTaskCreatedBy")
-  salesTasksUpdated      SalesTask[]                 @relation("SalesTaskUpdatedBy")
-  salesTasksClosed       SalesTask[]                 @relation("SalesTaskClosedBy")
-  salesEvents            SalesEvent[]                @relation("SalesEventActor")
-  contractDraftsCreated  ContractDraft[]             @relation("ContractDraftCreatedBy")
-  contractDraftsUpdated  ContractDraft[]             @relation("ContractDraftUpdatedBy")
-  contractDraftsRemoved  ContractDraft[]             @relation("ContractDraftRemovedBy")
-  contractRevisions      ContractDraftRevision[]     @relation("ContractDraftRevisionCreatedBy")
-  contractDraftEvents    ContractDraftEvent[]        @relation("ContractDraftEventActor")
-  contractSignedUploads  ContractSignedDocument[]    @relation("ContractSignedDocumentUploadedBy")
-  carrierPickups         CarrierPickup[]             @relation("CarrierPickupBy")
-  carrierPickupsResolved CarrierPickup[]             @relation("CarrierPickupResolvedBy")
-  carrierPickupCancels   CarrierPickupCancellation[] @relation("CarrierPickupCancelBy")
+  salesProspectsOwned          SalesProspect[]             @relation("SalesProspectOwner")
+  salesProspectsCreated        SalesProspect[]             @relation("SalesProspectCreatedBy")
+  salesProspectsUpdated        SalesProspect[]             @relation("SalesProspectUpdatedBy")
+  salesProspectsArchived       SalesProspect[]             @relation("SalesProspectArchivedBy")
+  salesImportsOwned            SalesImport[]               @relation("SalesImportOwner")
+  salesImportsCreated          SalesImport[]               @relation("SalesImportCreatedBy")
+  salesContactsCreated         SalesContact[]              @relation("SalesContactCreatedBy")
+  salesContactsUpdated         SalesContact[]              @relation("SalesContactUpdatedBy")
+  salesContactsRetired         SalesContact[]              @relation("SalesContactRetiredBy")
+  salesActivities              SalesActivity[]             @relation("SalesActivityAuthor")
+  salesTasksAssigned           SalesTask[]                 @relation("SalesTaskAssignee")
+  salesTasksCreated            SalesTask[]                 @relation("SalesTaskCreatedBy")
+  salesTasksUpdated            SalesTask[]                 @relation("SalesTaskUpdatedBy")
+  salesTasksClosed             SalesTask[]                 @relation("SalesTaskClosedBy")
+  salesEvents                  SalesEvent[]                @relation("SalesEventActor")
+  contractDraftsCreated        ContractDraft[]             @relation("ContractDraftCreatedBy")
+  contractDraftsUpdated        ContractDraft[]             @relation("ContractDraftUpdatedBy")
+  contractDraftsRemoved        ContractDraft[]             @relation("ContractDraftRemovedBy")
+  contractRevisions            ContractDraftRevision[]     @relation("ContractDraftRevisionCreatedBy")
+  contractDraftEvents          ContractDraftEvent[]        @relation("ContractDraftEventActor")
+  contractSignedUploads        ContractSignedDocument[]    @relation("ContractSignedDocumentUploadedBy")
+  carrierPickups               CarrierPickup[]             @relation("CarrierPickupBy")
+  carrierPickupsResolved       CarrierPickup[]             @relation("CarrierPickupResolvedBy")
+  carrierPickupCancels         CarrierPickupCancellation[] @relation("CarrierPickupCancelBy")
+  carrierPickupCancelsResolved CarrierPickupCancellation[] @relation("CarrierPickupCancelResolvedBy")
 
   @@map("users")
 }
@@ -2979,6 +2981,9 @@ enum CarrierPickupCancelStatus {
   CONFIRMED
   /// The carrier refused the cancellation (the pickup stands).
   REJECTED
+  /// An uncertain attempt a person closed as not carried out, after checking with the carrier
+  /// (who, why). The pickup stands; a new request may follow — this attempt is never re-sent.
+  NOT_CREATED
 }
 
 /// One pickup order of one site, sent once. DB: what was ordered (site, carrier snapshot,
@@ -3068,6 +3073,8 @@ model CarrierPickupCancellation {
   operationRequestId String                    @unique @map("operation_request_id") @db.Uuid
   sentAt             DateTime?                 @map("sent_at") @db.Timestamptz(3)
   resolvedAt         DateTime?                 @map("resolved_at") @db.Timestamptz(3)
+  resolvedBy         String?                   @map("resolved_by") @db.Uuid
+  resolutionReason   String?                   @map("resolution_reason")
   carrierState       String?                   @map("carrier_state")
   errorCode          String?                   @map("error_code")
   errorMessage       String?                   @map("error_message")
@@ -3076,6 +3083,7 @@ model CarrierPickupCancellation {
 
   pickup    CarrierPickup    @relation(fields: [pickupId], references: [id], onDelete: Restrict)
   creator   User             @relation("CarrierPickupCancelBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  resolver  User?            @relation("CarrierPickupCancelResolvedBy", fields: [resolvedBy], references: [id], onDelete: Restrict)
   operation OperationRequest @relation("CarrierPickupCancelOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
 
   @@index([pickupId])
