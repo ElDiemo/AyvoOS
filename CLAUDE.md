@@ -61,6 +61,10 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   order `READY_FOR_PICKUP` / `HANDED_TO_CARRIER`, cycle `DISPATCHED` (not delivered);
   `shipments:read|prepare|handover` for ADMIN only. Carrier behind `carriers/carrier.ts`;
   `CARRIER_PROVIDER=test` only with `APP_ENV=test`. No delivery, returns or pickup ordering.
+  Pickup orders at the carrier ("svoz", doc 029 §11, requested by the owner 2026-11-14; table design
+  subject to review): `carrier_pickups` (one site, one day, a parcel count, sent once — PPL
+  `CollectionOrder`; uncertain = looked up by its own reference, never re-sent; one waiting pickup
+  per site, also DB) and its planned orders; never changes an order or shipment, never a hand-over.
   Site carrier settings (doc 029 §9, owner 2026-10-19): `site_carrier_settings` (PPL only,
   `sites:carrier_manage`, ADMIN), a server-side connection by code (`PPL_TEST`; `PPL_PRODUCTION` only
   with `APP_ENV=production` and an explicit per-site choice — doc 029 §9b, ADR 0042; URLs fixed in

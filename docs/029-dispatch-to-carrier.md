@@ -164,7 +164,8 @@ and the carrier of an **existing** request (its connection and environment only)
 - Latin characters only (examples contradict it) → diacritics are stripped in what is sent.
 - Cancel `POST /shipment/{number}/cancel` → `202` (asynchronous) → confirmed only when `GET /shipment`
   shows `Canceled`.
-- Pickup ordering is a separate endpoint (`/order/batch`) and is **not used**.
+- Pickup ordering is a separate endpoint (`/order/batch`), used only by the pickup order of §11
+  (owner 2026-11-14); creating labels never orders a pickup.
 
 **How the adapter handles what the documentation leaves open** (to be confirmed in the PPL test
 environment before any use):
@@ -442,3 +443,91 @@ in the TEST environment (see the later observation), but how long after the `Del
 event does `shipmentState` carry `Canceled` — in TEST and in production?
 (3) Label size: the TEST label is 127 × 101 mm (CZ) — matches the e-mail, not the documentation's
 127 × 110 mm.
+
+## 11. Pickup order at the carrier — "svoz" (owner 2026-11-14)
+
+The owner asked for the real PPL pickup in Expedice so that one live shipment can be verified from
+the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/pickups`).
+
+**Model (tables `carrier_pickups`, `carrier_pickup_orders`, migrations
+`20261116090000_carrier_pickups_enum_values`, `20261116090100_carrier_pickups`; additive):**
+
+- A **pickup** (`SV-000001`) belongs to one site and asks its carrier to collect a **number of
+  physical parcels** at the site's registered sender address on **one day**, optionally with a
+  wished time window. It records the carrier, connection, environment and account (snapshot), its
+  own unique reference, exactly what was sent, and the carrier's answer.
+- The **planned orders** (written with the pickup, never changed) are the operator's plan: each
+  order "Připraveno k vyzvednutí" with its labelled shipment and that shipment's parcel count. The
+  pickup announces exactly their sum (database rule).
+- A pickup **changes no order and no shipment** and is **never a hand-over**: an order becomes
+  "Převzatá dopravcem" only through the carrier's tracking per parcel (doc 031) or the manual
+  "Předáno dopravci" — the plan and what was really collected may differ (a parcel not handed
+  over stays ready and is planned into a later pickup).
+- Status: `PREPARED` → `SENT` (claimed before the call) → `ACCEPTED` (batch id) → `CONFIRMED`
+  (the carrier's answer) or `REJECTED`; `SENT` = uncertain (answer lost), looked up by its own
+  reference; `NOT_CREATED` = an uncertain pickup closed by a person after checking with the
+  carrier (who, why). Forward only, what was ordered never changes, never deleted (database).
+- **At most one waiting pickup per site** (`PREPARED` / `SENT` / `ACCEPTED`, partial unique
+  index): a pending or uncertain pickup blocks a second `POST` until it is resolved.
+- An order is offered for a new pickup unless it is planned in a waiting pickup or in a confirmed
+  one for today or later.
+
+**Flow:** the board lists the active site's labelled orders ready for pickup, every eligible one
+selected (the selection can be changed), the day (today by default, never a past day in the site's
+time zone), the optional window and the sum of parcels; **one explicit "Objednat svoz PPL"**,
+confirmed in a dialog with a check box and the environment shown (TEST = no real pickup). Only
+orders labelled with the site's **current** carrier connection, environment and account can be
+planned together (one site = one registered address, one account, one environment). The pickup is
+written in one transaction (advisory lock per site, orders locked), then sent **once** after the
+commit; a replay of the same request id returns the same pickup and sends nothing. An accepted
+pickup is looked up in the background (bounded, back-off, state in the database, `SKIP LOCKED`).
+
+**PPL (CPL API, ppl-cpl-api.apidog.io, read 2026-11-14):** `POST /order/batch` with one item
+`orderType: CollectionOrder` ("Objednávka svozu" — pickup from the registered address; the
+alternative `TransportOrder` from any address is not used) → `201`, the batch id (UUID) only in
+`Location` → `GET /order/batch/{batchId}` (`importState` Accepted | InProcess | Complete | Error,
+`errorCode`, `errorMessage` per `referenceId`) → `GET /order?OrderReferences=<referenceId>` (Limit,
+Offset required) for PPL's `orderNumber` and `orderState`. Sent: `referenceId` (our unique
+reference `SV-000001-<8 hex>` — unique also across AYVO environments sharing one PPL account),
+`customerReference` (the pickup code), `productType` (the site's verified service), `shipmentCount`
+(the planned parcels), `sendDate` (the day, `T00:00:00`), `note` (the pickup code and the wished
+window), `email` and `sender` (the site's sender address, Latin characters only, nothing cut —
+too long or other characters refuse before sending). **No recipient** ("nevyplňuje se" for a
+collection order), **no parcel numbers or labels**. At most **50** parcels (documented "Max: 50";
+the schema says int32 — the stricter value). The adapter is `apps/api/src/carriers/ppl/ppl-pickups.ts`.
+
+Like a shipment request: the token first (cannot be had → certainly not sent → refused), the
+`POST` is never repeated by the client (not after a 401 either), a 400 is a refusal, anything else
+or a time-out (`CARRIER_CALL_TIMEOUT_SECONDS`) is **uncertain**. Unlike shipments, PPL documents a
+lookup of an order by our reference (`OrderReferences` = `referenceId`), so an uncertain pickup is
+looked up — after the in-flight window (`CARRIER_SETTLE_SECONDS`) — and confirmed when PPL shows
+it. Not found is not proof of absence (the import is asynchronous): it stays uncertain until found
+or closed by a person (`shipments:resolve_uncertain`, reason, "checked with the carrier"); just
+before closing, the lookup runs once more.
+
+**Left open by PPL's documentation — not relied on (questions for PPL before the live run):**
+
+- `sendTimeFrom` / `sendTimeTo` have the undefined format "date-span" and no listed values: the
+  wished window is sent only in the note; the real window is what the account's regular pickup or
+  PPL dispatch agrees.
+- `sendDate` is a `date-time` without a stated time of day or zone; cut-off time, earliest/latest
+  day, weekends and holidays are not documented — PPL's import answers (Error) are shown as they are.
+- Whether the sender must equal the registered address of the account (`GET /customer/address`
+  exists; not used yet), and whether the contract allows collection orders with the chosen product.
+- What a repeated `referenceId` does (never relied on: sent once).
+- Cancelling a pickup (`POST /order/cancel` exists) is **not implemented** — by PPL's portal or
+  support if ever needed.
+
+**Permissions (existing, doc 029 §6):** reading `shipments:read`; ordering and "Zjistit stav u
+dopravce" `shipments:prepare`; the exceptional closing `shipments:resolve_uncertain`. Active site
+only; another site's order or pickup does not exist (404).
+
+**Tests:** `ppl-pickups.e2e.test.ts` (real adapter, simulated PPL — `test/support/fake-ppl.ts` now
+answers `/order/batch`, `/order/batch/{id}`, `GET /order`): labels and "ready for pickup" never call
+`/order/batch`; the exact body; confirmed only by PPL; replay and a concurrent second request — one
+`POST`; asynchronous processing with the poller; import error and 400 refusal (the order can be
+planned again); a lost answer (500), a time-out and a lost `Location` stay uncertain, are looked up by
+the same reference and never re-sent; the exceptional closing; plan vs. the real hand-over (orders
+unchanged by the pickup); past day, unknown and not-ready orders; database rules (immutability, no
+delete, one waiting pickup per site, no plan row after sending). `ppl-pickups.test.ts`: the body
+builder and the batch id. Nothing was run against the real PPL TEST or production API.
