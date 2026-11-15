@@ -1004,6 +1004,16 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
     expect(row(after).meetings - (row(before)?.meetings ?? 0)).toBe(1);
     expect(row(after).inProgress - (row(before)?.inProgress ?? 0)).toBe(1);
     void contacted;
+    // "Bez dalšího kroku" counts exactly what its link lists for the owner (the filter of #155):
+    // everyone's active prospects in progress without an open task; a person's row — their own.
+    const listed = async (q: string) =>
+      (
+        (await as(admin).get(`/prospects?next=none&phase=in-progress${q}`).expect(200)).body as {
+          total: number;
+        }
+      ).total;
+    expect(await listed('')).toBe(after.withoutNextStep);
+    expect(await listed(`&owner=${people.a.id}`)).toBe(row(after).withoutNextStep);
 
     // Owner only; the period is 7, 30 or 90 days.
     expect((await a.get('/results')).status).toBe(403);
