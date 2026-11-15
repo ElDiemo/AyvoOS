@@ -534,6 +534,9 @@ planned together (one site = one registered address, one account, one environmen
 written in one transaction (advisory lock per site, orders locked), then sent **once** after the
 commit; a replay of the same request id returns the same pickup and sends nothing. An accepted
 pickup is looked up in the background (bounded, back-off, state in the database, `SKIP LOCKED`).
+The pickups' round runs beside the shipments' round (labels, ZPL, tracking) in the same poller, each
+with its own single-flight guard and error handling: a pickup call waiting for PPL never makes the
+next rounds skip labels, ZPL or tracking, and two pickup rounds never run at once in one process.
 
 **PPL (CPL API, ppl-cpl-api.apidog.io, read 2026-11-14):** `POST /order/batch` with one item
 `orderType: CollectionOrder` ("Objednávka svozu" — pickup from the registered address; the

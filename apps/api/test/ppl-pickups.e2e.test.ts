@@ -6,6 +6,9 @@ import type { CarrierSettingsSnapshot } from '../src/carriers/carrier.js';
 import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
 import { PplPickups } from '../src/carriers/ppl/ppl-pickups.js';
 import { CarrierPickupsService } from '../src/orders/carrier-pickups.service.js';
+import { ShipmentCarrierFlow } from '../src/orders/shipment-carrier-flow.service.js';
+import { ShipmentPoller } from '../src/orders/shipment-poller.service.js';
+import { ShipmentTrackingService } from '../src/orders/shipment-tracking.service.js';
 import { CARRIER_TEST_KEY, PPL_TEST_ACCOUNT } from './support/carrier-test-key.js';
 import { FakePpl } from './support/fake-ppl.js';
 import {
@@ -875,6 +878,114 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       expect((await view(p.code)).cancellation).toBeNull();
       expect((await view(next.code)).status).toBe('CONFIRMED');
     });
+  });
+
+  it('the poller: a pickup lookup still waiting never holds back labels, ZPL or tracking; one pickup round at a time', async () => {
+    const o = await readyForPickup(2);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderShownAfter = 1000;
+    await cancel(p.code).expect(200);
+    const ref = (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: p.code } }))
+      .clientReference;
+    const poller = t.app.get(ShipmentPoller);
+    const flow = t.app.get(ShipmentCarrierFlow);
+    const tracking = t.app.get(ShipmentTrackingService);
+    const serial = Number(o.code.split('-').at(-1));
+    const due = async () => {
+      await t.prisma.$executeRaw`UPDATE "carrier_pickup_cancellations" SET "next_poll_at" = now()
+        WHERE "status" = 'ACCEPTED' AND "next_poll_at" IS NOT NULL`;
+      await t.prisma
+        .$executeRaw`UPDATE "shipment_tracking" SET "next_at" = now() - interval '1 day', "lease_until" = NULL
+        WHERE "shipment_id" IN (SELECT s."id" FROM "shipments" s JOIN "orders" o ON o."id" = s."order_id"
+                                 WHERE o."serial" = ${serial})`;
+    }; // first in line: earlier tests leave other shipments due too (one batch per round)
+    const tracked = async (n: number) =>
+      (
+        await t.prisma.shipmentParcelProgress.findFirst({
+          where: { parcel: { shipment: { order: { code: o.code } }, parcelNo: n } },
+        })
+      )?.pickedUpSource ?? null;
+    const pickedUp = {
+      statusId: 150,
+      code: 'PickedUp',
+      phase: 'InTransport',
+      group: 'PickedUp',
+      eventDate: new Date(Date.now() - 60_000).toISOString(),
+      name: 'Zásilku jsme převzali od odesílatele.',
+    };
+    // Every pickup lookup waits at a gate (as PPL hanging up to the call's time limit), then asks
+    // the simulation for real; how many run at once is counted.
+    const real = PplPickups.prototype.find;
+    let calls = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let entered!: () => void;
+    const reached = new Promise<void>((r) => (entered = r));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const find = vi.spyOn(PplPickups.prototype, 'find').mockImplementation(async function (
+      this: PplPickups,
+      ...args
+    ) {
+      calls++;
+      maxInFlight = Math.max(maxInFlight, ++inFlight);
+      entered();
+      try {
+        await gate;
+        return await real.apply(this, args);
+      } finally {
+        inFlight--;
+      }
+    });
+    const labelsDue = vi.spyOn(flow, 'pollDue');
+    const zplDue = vi.spyOn(flow, 'variantsDue');
+    const trackingDue = vi.spyOn(tracking, 'due');
+    try {
+      await due();
+      const first = poller.tick();
+      await reached;
+      // The first round's shipment work finishes on its own; only its pickup lookup waits.
+      await vi.waitFor(() => expect(trackingDue).toHaveBeenCalledTimes(1));
+      await trackingDue.mock.results[0]!.value;
+      await new Promise((r) => setImmediate(r));
+      labelsDue.mockClear();
+      zplDue.mockClear();
+      trackingDue.mockClear();
+
+      // The NEXT ordinary round: label requests, ZPL and tracking all run to the end.
+      ppl.mode.events[o.numbers[0]!] = [pickedUp];
+      await due();
+      await poller.tick();
+      expect(labelsDue).toHaveBeenCalledTimes(1);
+      expect(zplDue).toHaveBeenCalledTimes(1);
+      expect(trackingDue).toHaveBeenCalledTimes(1);
+      expect(await tracked(1)).toBe('CARRIER');
+      // …and no second pickup round started meanwhile.
+      await poller.tick();
+      expect(trackingDue).toHaveBeenCalledTimes(2);
+      expect(calls).toBe(1);
+      expect(inFlight).toBe(1);
+
+      // PPL answers again (still not Canceled): the first round ends, the attempt waits.
+      release();
+      await first;
+      expect((await view(p.code)).cancellation!.status).toBe('ACCEPTED');
+      // PPL shows Canceled: the next round's pickup lookup confirms it.
+      ppl.orders.get(ref)!.hiddenLooks = 0;
+      await due();
+      await poller.tick();
+      const v = await view(p.code);
+      expect(v.cancellation!.status).toBe('CONFIRMED');
+      expect(v.cancelledByCarrierAt).not.toBeNull();
+      expect(calls).toBe(2);
+      expect(maxInFlight).toBe(1);
+    } finally {
+      release();
+      find.mockRestore();
+      labelsDue.mockRestore();
+      zplDue.mockRestore();
+      trackingDue.mockRestore();
+    }
   });
 
   it('history after a cancellation, a new pickup and the later collection: today’s state, not proof', async () => {
