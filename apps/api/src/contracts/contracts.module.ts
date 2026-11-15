@@ -26,5 +26,7 @@ import { ContractDraftsService } from './contract-drafts.service.js';
   ],
   controllers: [ContractDraftsController],
   providers: [ContractDraftsService],
+  // The hotel portal reads a granted hotel's signed originals (never drafts).
+  exports: [ContractDraftsService],
 })
 export class ContractsModule {}

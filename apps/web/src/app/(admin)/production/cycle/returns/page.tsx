@@ -6,8 +6,8 @@ import {
 import Link from 'next/link';
 import { z } from 'zod';
 import { OpenReturnReceipt } from '@/components/returns/open-receipt';
-import { Card, EmptyState } from '@/components/ui';
-import { WarehouseHeader } from '@/components/warehouse/warehouse-header';
+import { CycleHeader } from '@/components/returns/cycle-header';
+import { buttonClass, Card, EmptyState } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { returnsCs } from '@/i18n/cs/returns';
 import { apiGet } from '@/lib/api';
@@ -16,7 +16,7 @@ import { requirePermission } from '@/lib/session';
 export const dynamic = 'force-dynamic';
 const t = returnsCs;
 
-/** Sklad → Příjem vratek (doc 047 §4.9): receipts of the active site, waiting bottles, issues. */
+/** Výroba → Oběh lahví → Příjem vratek (doc 047 §4.9): receipts of the active site, waiting bottles, issues. */
 export default async function ReturnsPage() {
   await requirePermission('returns:receive');
   const [list, overview, hotels] = await Promise.all([
@@ -26,7 +26,16 @@ export default async function ReturnsPage() {
   ]);
   return (
     <>
-      <WarehouseHeader active="returns" title={t.title} subtitle={t.subtitle} />
+      <CycleHeader
+        active="returns"
+        title={t.title}
+        subtitle={t.subtitle}
+        actions={
+          <Link href="/production/cycle/after-wash" className={buttonClass.secondary}>
+            {t.cycle.next}
+          </Link>
+        }
+      />
       <div className="flex flex-col gap-6">
         <Card title={t.open.title}>
           <OpenReturnReceipt hotels={hotels} />
@@ -50,7 +59,10 @@ export default async function ReturnsPage() {
                 {list.items.map((r) => (
                   <tr key={r.code}>
                     <td className="py-2 pr-4">
-                      <Link className="font-medium underline" href={`/warehouse/returns/${r.code}`}>
+                      <Link
+                        className="font-medium underline"
+                        href={`/production/cycle/returns/${r.code}`}
+                      >
                         {r.code}
                       </Link>
                     </td>
@@ -93,7 +105,7 @@ export default async function ReturnsPage() {
                       <span className="font-medium">{i.code}</span> · {t.issue.kind[i.kind]}
                       {i.bottleCode ? ` · ${i.bottleCode}` : ''}
                     </span>
-                    <Link className="underline" href={`/warehouse/returns/${i.receipt}`}>
+                    <Link className="underline" href={`/production/cycle/returns/${i.receipt}`}>
                       {t.overview.resolve} ({i.receipt})
                     </Link>
                   </li>

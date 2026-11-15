@@ -53,5 +53,25 @@ export const portalAccessCs = {
     GRANT_REVOKED: 'Přístup mezitím někdo odvolal.',
     IDEMPOTENCY_CONFLICT: 'Formulář se mezitím změnil – uložte ho znovu.',
     FINANCE_DEPENDENCY_UNAVAILABLE: 'AYVO OS je dočasně nedostupný; zkuste to za chvíli.',
+    TERMS_CHANGE_PENDING:
+      'Smlouva hotelu má rozpracovanou změnu plátce. Dokončete ji nebo zrušte na stránce smlouvy.',
+    STALE_TERMS: 'Podmínky se mezitím změnily – obnovte stránku a ověřte hotely znovu.',
+    RESTORE_NOT_PAYER: 'Obnovit provoz lze jen plátci, jehož podmínky u hotelu dnes platí.',
+    FENCE_NOT_OF_PAYER: 'Omezení nepatří tomuto plátci a hotelu.',
+    FENCE_ALREADY_RESTORED: 'Toto omezení už obnovila jiná obnova.',
   } as Record<string, string>,
+  /** Restrictions from Finance's changes of payer (v6, #148): operations end, invoices stay. */
+  restrictions: {
+    title: 'Omezený provoz v portálu',
+    help: 'Po změně plátce u hotelu tento plátce v portálu ztratil detail, profil, smlouvy a dodávky hotelu. Jeho vlastní faktury zůstávají. Provoz vrátí jen výslovná obnova a potom nové ověření hotelů u přístupu.',
+    endsOn: (day: string) => `provoz skončil / skončí po ${day}`,
+    restore: 'Obnovit provoz',
+    confirmRestore: 'Potvrdit obnovu',
+    pendingSend: (rev: number) =>
+      `Obnova (revize ${rev}) je uložená, ale AYVO OS ji ještě nepřevzal.`,
+    send: 'Odeslat obnovu znovu',
+    restored: 'Obnova uložena. Provoz se vrátí po novém ověření hotelů („Změnit hotely“ a uložit).',
+    notSent:
+      'Obnova je uložená ve Financích; AYVO OS je teď nedostupný – odešlete ji znovu později.',
+  },
 };

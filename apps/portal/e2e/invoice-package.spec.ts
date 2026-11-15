@@ -43,6 +43,10 @@ test.describe('hotel portal: invoice package for a period', () => {
     await signIn(page);
     await page.getByRole('link', { name: 'Faktury' }).click();
     const box = page.getByTestId('invoice-package');
+    // A secondary action after the list: collapsed until opened (from the keyboard as well).
+    await expect(box.getByLabel('Od měsíce')).toBeHidden();
+    await box.getByTestId('invoice-package-open').focus();
+    await page.keyboard.press('Enter');
     await box.getByLabel('Od měsíce').fill('2026-08');
     await box.getByLabel('Do měsíce').fill('2026-10');
     const download = page.waitForEvent('download');

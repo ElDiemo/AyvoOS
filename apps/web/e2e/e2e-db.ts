@@ -15,7 +15,9 @@ async function connect() {
   }
   const server = process.env.AYVO_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!server) throw new Error('No database server for the e2e database');
-  const url = Object.assign(new URL(server), { pathname: '/ayvo_e2e' }).toString();
+  const url = Object.assign(new URL(server), {
+    pathname: `/${process.env.E2E_DB_NAME ?? 'ayvo_e2e'}`,
+  }).toString();
   const require = createRequire(resolve(apiRoot, 'package.json'));
   const { PrismaPg } = (await import(require.resolve('@prisma/adapter-pg'))) as {
     PrismaPg: new (o: { connectionString: string }) => unknown;

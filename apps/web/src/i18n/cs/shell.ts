@@ -69,20 +69,19 @@ export const shellCs = {
         availability: 'Dostupnost',
         movements: 'Pohyby',
         suppliers: 'Dodavatelé',
-        returns: 'Příjem vratek',
-        afterWash: 'Po mytí',
       },
     },
     production: {
       label: 'Výroba',
       description:
-        'Práce na pracovištích (lepení a plnění), evidence beden a lahví a nastavení výroby.',
+        'Práce na pracovištích (lepení a plnění), oběh lahví (vratky a mytí), evidence beden a lahví a nastavení výroby.',
       pages: {
         overview: 'Přehled výroby',
         bottles: 'Lahve',
         templates: 'Šablony etiket',
         labelActivation: 'Nalepení etiket',
         station: 'Pracovat na pracovišti',
+        cycle: 'Oběh lahví',
         crates: 'Bedny',
         workstations: 'Pracoviště a QR',
         catalog: 'Produkty a receptury',
@@ -98,7 +97,7 @@ export const shellCs = {
         setup: 'Nastavení výroby',
       },
       sectionHelp: {
-        work: 'Lepení a plnění na pracovišti',
+        work: 'Pracoviště, vratky a mytí',
         records: 'Záznamy a jejich historie',
         setup: 'Příprava, pracoviště, produkty',
       },
@@ -112,7 +111,7 @@ export const shellCs = {
     dispatch: {
       label: 'Expedice',
       description: 'Ruční objednávky hotelů a kompletace hotových beden k expedici.',
-      pages: { orders: 'Objednávky', new: 'Nová objednávka' },
+      pages: { orders: 'Objednávky', new: 'Nová objednávka', pickups: 'Svoz' },
     },
   },
   home: {

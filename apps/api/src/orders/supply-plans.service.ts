@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { PORTAL_UPCOMING_DAYS } from '@ayvo/types';
 import type {
+  PortalDeliveries,
   ActivateSupplyPlanRequest,
   SavedSupplyPreview,
   PauseSupplyPlanRequest,
@@ -63,6 +65,53 @@ export class SupplyPlansService {
   ) {}
 
   // --- reading ------------------------------------------------------------------------------
+
+  /**
+   * The hotel portal's upcoming plan days (doc 056, owner 2026-11-09): the days a switched-on plan
+   * still has from today (the serving site's time zone) for PORTAL_UPCOMING_DAYS, without days
+   * that already have an occurrence — an order (shown as a delivery) or a day that could not be
+   * ordered (an internal matter). Products by name, whole crates. A paused or inactive plan, or
+   * none, has no upcoming days. Through the caller's client (the portal's pool).
+   */
+  async portalUpcoming(
+    hotelId: string,
+    db: Prisma.TransactionClient = this.prisma,
+    now = new Date(),
+  ): Promise<PortalDeliveries['upcoming']> {
+    const plan = await db.supplyPlan.findUnique({
+      where: { hotelId },
+      include: {
+        rules: {
+          include: { product: { select: { code: true, name: true } } },
+          orderBy: { position: 'asc' },
+        },
+        site: { select: { timeZone: true } },
+      },
+    });
+    if (!plan || plan.status !== 'ACTIVE') return [];
+    const today = localDate(now, plan.site.timeZone);
+    const to = addDays(today, PORTAL_UPCOMING_DAYS - 1);
+    const names = new Map(plan.rules.map((r) => [r.product.code, r.product.name]));
+    const { days } = plannedDays(
+      plan.rules.map((r) => ({ productCode: r.product.code, crates: r.crates, days: r.days })),
+      { from: today, to },
+      { validFrom: iso(plan.validFrom), validTo: plan.validTo ? iso(plan.validTo) : null },
+    );
+    const taken = new Set(
+      (
+        await db.supplyPlanOccurrence.findMany({
+          where: { planId: plan.id, shipDate: { gte: dateOf(today), lte: dateOf(to) } },
+          select: { shipDate: true },
+        })
+      ).map((o) => iso(o.shipDate)),
+    );
+    return days
+      .filter((d) => !taken.has(d.shipDate))
+      .map((d) => ({
+        shipDate: d.shipDate,
+        lines: d.lines.map((l) => ({ product: names.get(l.productCode)!, crates: l.crates })),
+      }));
+  }
 
   /** The hotel's plan (or null) — the hotel must be served by the active site. */
   async get(site: SiteContext, hotelCode: string, now = new Date()): Promise<SupplyPlan | null> {
