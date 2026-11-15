@@ -516,6 +516,11 @@ describe.skipIf(!enabled)(
             PORTAL_CORE_TOKEN: coreToken,
             PORTAL_FINANCE_TOKEN: financeToken,
             PORTAL_TRUST_PROXY: '1',
+            // Package start quotas off here: the walk downloads packages repeatedly with one account
+            // (the quotas have their own tests: slots.test, package-quota.spec).
+            PORTAL_PACKAGE_ACCOUNT_INTERVAL_MINUTES: '0',
+            PORTAL_PACKAGE_ACCOUNT_PER_DAY: '1000',
+            PORTAL_PACKAGE_GLOBAL_PER_DAY: '10000',
           },
           stdio: ['ignore', 'pipe', 'pipe'],
         },

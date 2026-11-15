@@ -17,9 +17,14 @@ async function slowScripts(page: Page) {
     await route.continue();
   });
 }
+const code = '123456';
+const token = 'A'.repeat(43);
+/** Any request whose URL carries a credential: by name, or by its value (also encoded). */
 const credentialUrls = (urls: string[]) =>
   urls.filter(
-    (u) => /[?&](password|email|code)=/.test(u) || u.includes(encodeURIComponent(password)),
+    (u) =>
+      /[?&](password|email|code|token)=/.test(u) ||
+      [password, encodeURIComponent(password), code, token].some((v) => u.includes(v)),
   );
 
 test.describe('hotel portal: forms before hydration', () => {
@@ -33,10 +38,35 @@ test.describe('hotel portal: forms before hydration', () => {
     await page.locator('[name=email]').fill(email);
     await page.locator('[name=password]').fill(password);
     await page.getByRole('button', { name: 'Pokračovat' }).click();
-    await page.locator('[name=code]').fill('123456');
+    await page.locator('[name=code]').fill(code);
     await page.getByRole('button', { name: 'Přihlásit' }).click();
     await expect(page.getByRole('heading', { name: 'Moje hotely' })).toBeVisible();
+    // Neither the password nor the second-factor code in any request URL, the page's own included.
     expect(credentialUrls(urls)).toEqual([]);
+    expect(credentialUrls([page.url()])).toEqual([]);
+  });
+
+  test('activation while the scripts are still loading: the link token, the new password and the code never reach a URL', async ({
+    page,
+  }) => {
+    const urls: string[] = [];
+    page.on('request', (r) => urls.push(r.url()));
+    await slowScripts(page);
+    // The token is in the fragment: never sent to a server; the page removes it from the address.
+    await page.goto(`/activate#token=${token}`, { waitUntil: 'commit' });
+    await page.locator('[name=password]').fill(password);
+    await page.getByRole('button', { name: 'Nastavit heslo' }).click();
+    await page.locator('[name=code]').fill(code);
+    await page.getByRole('button', { name: 'Dokončit aktivaci' }).click();
+    await expect(page.getByTestId('recovery-codes')).toBeVisible();
+    expect(credentialUrls(urls)).toEqual([]);
+    expect(page.url()).not.toContain(token);
+    // Every request that carried a credential was a POST body, never a GET.
+    const gets: string[] = [];
+    page.on('request', (r) => r.method() === 'GET' && gets.push(r.url()));
+    await page.getByRole('button', { name: 'Uloženo, pokračovat' }).click();
+    await expect(page.getByTestId('portal-hotels')).toBeVisible();
+    expect(credentialUrls(gets)).toEqual([]);
   });
 
   test('the forms are POST forms and disabled until interactive (server HTML)', async ({
