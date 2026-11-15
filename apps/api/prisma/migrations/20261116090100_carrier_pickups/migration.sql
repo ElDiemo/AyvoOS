@@ -28,6 +28,7 @@ CREATE TABLE "carrier_pickups" (
     "carrier_ref" TEXT,
     "carrier_order_number" TEXT,
     "carrier_state" TEXT,
+    "carrier_cancelled_at" TIMESTAMPTZ(3),
     "error_code" TEXT,
     "error_message" TEXT,
     "created_at" TIMESTAMPTZ(3) NOT NULL,
@@ -137,13 +138,17 @@ ALTER TABLE "carrier_pickups"
     AND ("resolution_reason" IS NULL OR btrim("resolution_reason") <> '')),
   ADD CONSTRAINT "carrier_pickups_accepted_check" CHECK ("status" <> 'ACCEPTED' OR "carrier_ref" IS NOT NULL),
   ADD CONSTRAINT "carrier_pickups_rejected_check" CHECK ("status" NOT IN ('REJECTED', 'NOT_SENT') OR "error_code" IS NOT NULL),
-  ADD CONSTRAINT "carrier_pickups_poll_check" CHECK ("next_poll_at" IS NULL OR "status" = 'ACCEPTED');
+  ADD CONSTRAINT "carrier_pickups_poll_check" CHECK ("next_poll_at" IS NULL OR "status" = 'ACCEPTED'),
+  -- The carrier showed the confirmed pickup cancelled (a fact about the pickup, whichever attempt
+  -- — or lookup — learnt it).
+  ADD CONSTRAINT "carrier_pickups_cancelled_check" CHECK ("carrier_cancelled_at" IS NULL OR "status" = 'CONFIRMED');
 
 -- The pickup itself: what was ordered never changes; the status only moves forward
 -- (PREPARED → SENT → ACCEPTED → CONFIRMED / REJECTED; SENT → CONFIRMED / REJECTED after a lookup,
 -- or NOT_CREATED when a person closed an uncertain one after checking with the carrier;
 -- PREPARED → NOT_SENT when its day or its plan no longer held before it was sent);
--- a confirmed pickup may still learn the carrier's number and state. Never deleted.
+-- a confirmed pickup may still learn the carrier's number and state, and once that the carrier shows
+-- it cancelled — then that fact and the state it was read with never change. Never deleted.
 CREATE FUNCTION carrier_pickups_guard() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
@@ -173,6 +178,11 @@ BEGIN
   END IF;
   IF OLD."status" IN ('REJECTED', 'NOT_CREATED', 'NOT_SENT') AND ROW(NEW.*) IS DISTINCT FROM ROW(OLD.*) THEN
     RAISE EXCEPTION 'AYVO: a refused, closed or unsent pickup is closed' USING ERRCODE = 'check_violation';
+  END IF;
+  IF OLD."carrier_cancelled_at" IS NOT NULL AND (
+       NEW."carrier_cancelled_at" IS DISTINCT FROM OLD."carrier_cancelled_at"
+    OR NEW."carrier_state" IS DISTINCT FROM OLD."carrier_state") THEN
+    RAISE EXCEPTION 'AYVO: a pickup the carrier showed cancelled stays cancelled' USING ERRCODE = 'check_violation';
   END IF;
   IF OLD."status" = 'CONFIRMED' AND (
        (OLD."carrier_order_number" IS NOT NULL AND NEW."carrier_order_number" IS DISTINCT FROM OLD."carrier_order_number")
@@ -269,10 +279,14 @@ CREATE TRIGGER "carrier_pickup_parcels_no_truncate" BEFORE TRUNCATE ON "carrier_
 -- carrier is called; forward only (PREPARED → SENT → ACCEPTED → CONFIRMED / REJECTED; SENT →
 -- ACCEPTED / CONFIRMED / REJECTED after a lookup; SENT / ACCEPTED → NOT_CREATED when a person,
 -- after checking with the carrier, closed an uncertain attempt as not carried out — who, why);
--- confirmed only by the carrier; never deleted.
+-- confirmed only together with the pickup's own "the carrier shows it cancelled" (PREPARED →
+-- CONFIRMED unsent when the carrier showed that before the attempt went out); once the pickup is
+-- shown cancelled no attempt starts and a live one only becomes CONFIRMED; never deleted.
 ALTER TABLE "carrier_pickup_cancellations"
   ADD CONSTRAINT "carrier_pickup_cancellations_reason_check" CHECK (btrim("reason") <> ''),
-  ADD CONSTRAINT "carrier_pickup_cancellations_sent_check" CHECK (("status" = 'PREPARED') = ("sent_at" IS NULL)),
+  ADD CONSTRAINT "carrier_pickup_cancellations_sent_check" CHECK (
+    ("status" <> 'PREPARED' OR "sent_at" IS NULL)
+    AND ("status" NOT IN ('SENT', 'ACCEPTED', 'REJECTED', 'NOT_CREATED') OR "sent_at" IS NOT NULL)),
   ADD CONSTRAINT "carrier_pickup_cancellations_resolved_check" CHECK (("status" IN ('CONFIRMED', 'REJECTED', 'NOT_CREATED')) = ("resolved_at" IS NOT NULL)),
   ADD CONSTRAINT "carrier_pickup_cancellations_closed_check" CHECK (
     ("status" = 'NOT_CREATED') = ("resolved_by" IS NOT NULL)
@@ -288,8 +302,9 @@ BEGIN
   IF NEW."status" <> 'PREPARED' OR NEW."sent_at" IS NOT NULL THEN
     RAISE EXCEPTION 'AYVO: a cancellation is written before it is sent' USING ERRCODE = 'check_violation';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM "carrier_pickups" p WHERE p."id" = NEW."pickup_id" AND p."status" = 'CONFIRMED') THEN
-    RAISE EXCEPTION 'AYVO: only a pickup confirmed by the carrier is cancelled at the carrier' USING ERRCODE = 'check_violation';
+  IF NOT EXISTS (SELECT 1 FROM "carrier_pickups" p WHERE p."id" = NEW."pickup_id" AND p."status" = 'CONFIRMED'
+                   AND p."carrier_cancelled_at" IS NULL) THEN
+    RAISE EXCEPTION 'AYVO: only a pickup confirmed by the carrier (and not shown cancelled) is cancelled at the carrier' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
 END
@@ -308,10 +323,14 @@ BEGIN
     RAISE EXCEPTION 'AYVO: a requested cancellation never changes' USING ERRCODE = 'check_violation';
   END IF;
   IF NEW."status" <> OLD."status" AND NOT (
-       (OLD."status" = 'PREPARED' AND NEW."status" = 'SENT')
+       (OLD."status" = 'PREPARED' AND NEW."status" IN ('SENT', 'CONFIRMED'))
     OR (OLD."status" = 'SENT' AND NEW."status" IN ('ACCEPTED', 'CONFIRMED', 'REJECTED', 'NOT_CREATED'))
     OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('CONFIRMED', 'REJECTED', 'NOT_CREATED'))) THEN
     RAISE EXCEPTION 'AYVO: cancellation status % cannot become %', OLD."status", NEW."status" USING ERRCODE = 'check_violation';
+  END IF;
+  IF NEW."status" <> OLD."status" AND (NEW."status" = 'CONFIRMED') <> EXISTS (
+       SELECT 1 FROM "carrier_pickups" p WHERE p."id" = NEW."pickup_id" AND p."carrier_cancelled_at" IS NOT NULL) THEN
+    RAISE EXCEPTION 'AYVO: a cancellation is confirmed exactly when the carrier shows its pickup cancelled' USING ERRCODE = 'check_violation';
   END IF;
   IF OLD."status" IN ('CONFIRMED', 'REJECTED', 'NOT_CREATED') AND ROW(NEW.*) IS DISTINCT FROM ROW(OLD.*) THEN
     RAISE EXCEPTION 'AYVO: a resolved cancellation is closed' USING ERRCODE = 'check_violation';

@@ -305,14 +305,17 @@ function PickupItem({
     p.status === 'SENT' ||
     (p.status === 'CONFIRMED' && !p.carrierOrderNumber) ||
     cancelOpen;
-  // One cancellation at a time; a refused one may be followed by a new request.
+  // One cancellation at a time; a refused one may be followed by a new request. Never once the
+  // carrier shows the pickup cancelled, and never after its day (its parcels may be planned again).
   const cancellable =
     p.status === 'CONFIRMED' &&
-    p.carrierState !== 'Canceled' &&
+    !p.cancelledByCarrierAt &&
+    !p.dayPassed &&
     (!c || c.status === 'REJECTED' || c.status === 'NOT_CREATED');
   // An uncertain attempt (answer lost, or lookups ran out): closed only by a person after checking.
   const cancelUncertain = !!c && (c.status === 'SENT' || (c.status === 'ACCEPTED' && !c.lookingUp));
-  const [closingCancel, setClosingCancel] = useState(false);
+  // The attempt the closing dialog was opened for — fixed then, never "the latest" at submit.
+  const [closingCancel, setClosingCancel] = useState<string | null>(null);
   const [cancelCloseReason, setCancelCloseReason] = useState('');
   const [cancelCloseChecked, setCancelCloseChecked] = useState(false);
 
@@ -320,7 +323,12 @@ function PickupItem({
     const invalid = reasonError(cancelCloseReason);
     setError(invalid);
     if (invalid) return;
-    const body = { reason: cancelCloseReason.trim(), checkedWithCarrier: true as const };
+    if (!closingCancel) return;
+    const body = {
+      cancellationId: closingCancel,
+      reason: cancelCloseReason.trim(),
+      checkedWithCarrier: true as const,
+    };
     const result = await run(`cancel-close:${JSON.stringify(body)}`, (requestId) =>
       apiSend('POST', `admin/dispatch/pickups/${p.code}/cancel/resolve`, pickupViewSchema, {
         requestId,
@@ -328,7 +336,7 @@ function PickupItem({
       }),
     );
     if (result.ok) {
-      setClosingCancel(false);
+      setClosingCancel(null);
       router.refresh();
     } else if (result.error) setError(errorText(result.error));
   }
@@ -393,6 +401,11 @@ function PickupItem({
         <p className="text-xs text-red-700">{problemText(p.errorCode, p.errorMessage)}</p>
       )}
       {p.resolutionReason && <p className="text-xs text-stone-600">{p.resolutionReason}</p>}
+      {p.cancelledByCarrierAt && (
+        <p className="text-xs text-stone-700" data-testid={`pickup-cancelled-${p.code}`}>
+          {t.cancelledByCarrier(formatDateTimeCs(p.cancelledByCarrierAt))}
+        </p>
+      )}
       {c && (
         <p className="text-xs" data-testid={`pickup-cancel-${p.code}`}>
           <span className={c.status === 'CONFIRMED' ? 'text-stone-700' : 'text-amber-800'}>
@@ -460,7 +473,7 @@ function PickupItem({
               className={buttonClass.secondary}
               onClick={() => {
                 setError(null);
-                setClosingCancel(true);
+                setClosingCancel(c.id);
               }}
               data-testid={`pickup-cancel-resolve-${p.code}`}
             >
@@ -480,7 +493,7 @@ function PickupItem({
           )}
         </div>
       )}
-      {error && !closing && !cancelling && !closingCancel && (
+      {error && !closing && !cancelling && closingCancel === null && (
         <p role="alert" className="mt-1 text-xs text-red-700">
           {error}
         </p>
@@ -538,14 +551,14 @@ function PickupItem({
         </label>
       </ConfirmDialog>
       <ConfirmDialog
-        open={closingCancel}
+        open={closingCancel !== null}
         title={t.cancelResolveTitle}
         confirmLabel={t.cancelResolveConfirm}
         danger
         busy={busy}
         confirmDisabled={!cancelCloseChecked}
         onConfirm={closeCancel}
-        onCancel={() => setClosingCancel(false)}
+        onCancel={() => setClosingCancel(null)}
         testId={`pickup-cancel-resolve-dialog-${p.code}`}
       >
         <p>{t.cancelResolveText}</p>

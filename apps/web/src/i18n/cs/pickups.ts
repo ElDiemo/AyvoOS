@@ -61,6 +61,8 @@ export const pickupsCs = {
     REJECTED: 'Storno dopravce odmítl – svoz platí',
     NOT_CREATED: 'Pokus o storno uzavřen jako neprovedený (ověřeno u dopravce) – svoz platí',
   } as Record<string, string>,
+  cancelledByCarrier: (at: string) =>
+    `Dopravce svoz zrušil (zjištěno ${at}) – balíky lze zařadit do jiného svozu.`,
   cancelResolve: 'Uzavřít pokus o storno jako neprovedený',
   cancelResolveTitle: 'Uzavřít nejistý pokus o storno',
   cancelResolveText:
@@ -118,7 +120,9 @@ export const pickupsCs = {
     CARRIER_NOT_CONFIGURED: 'Dopravce není pro provozovnu připravený.',
     PICKUP_UNSUPPORTED: 'Tento dopravce nemá objednávku svozu.',
     ORDER_NOTHING_TO_COLLECT: 'Všechny balíky objednávky už má dopravce.',
-    PICKUP_NOT_CANCELLABLE: 'Zrušit lze jen svoz potvrzený dopravcem.',
+    PICKUP_NOT_CANCELLABLE: 'Zrušit lze jen svoz potvrzený dopravcem, který ještě není zrušený.',
+    PICKUP_CANCEL_DAY_PASSED:
+      'Den svozu minul – jeho balíky už mohou být v jiném svozu, nové storno nelze zahájit.',
     PICKUP_CANCEL_EXISTS: 'O zrušení tohoto svozu už bylo požádáno.',
     PICKUP_CANCEL_NOT_UNCERTAIN: 'Pokus o storno už není nejistý.',
     PICKUP_CANCEL_STILL_LOOKED_UP:

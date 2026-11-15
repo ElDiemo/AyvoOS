@@ -3013,6 +3013,9 @@ model CarrierPickup {
   carrierRef         String?             @map("carrier_ref")
   carrierOrderNumber String?             @map("carrier_order_number")
   carrierState       String?             @map("carrier_state")
+  /// When AYVO learnt that the carrier shows this confirmed pickup cancelled (documented state, e.g.
+  /// PPL `Canceled`) — by whichever attempt or lookup; never cleared. Releases its parcels.
+  carrierCancelledAt DateTime?           @map("carrier_cancelled_at") @db.Timestamptz(3)
   errorCode          String?             @map("error_code")
   errorMessage       String?             @map("error_message")
   createdAt          DateTime            @map("created_at") @db.Timestamptz(3)

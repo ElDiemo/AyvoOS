@@ -439,7 +439,11 @@ describe.skipIf(!hasDatabase)('dispatch access and site isolation (real sign-in)
     await ra.prisma
       .$executeRaw`UPDATE "carrier_pickup_cancellations" SET "sent_at" = now() - interval '1 hour'
       WHERE "pickup_id" = (SELECT "id" FROM "carrier_pickups" WHERE "code" = ${p.code})`;
-    const close = { reason: 'PPL potvrdila, že storno neprovedla', checkedWithCarrier: true };
+    const close = {
+      cancellationId: c.body.cancellation.id as string,
+      reason: 'PPL potvrdila, že storno neprovedla',
+      checkedWithCarrier: true,
+    };
     const url = `/api/admin/dispatch/pickups/${p.code}/cancel/resolve`;
     // Reading and preparing are not enough.
     const dispatcher = await createUser([

@@ -485,25 +485,38 @@ the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/
   index): a pending or uncertain pickup blocks a second `POST` until it is resolved.
 - A parcel is **held** (not offered for a new pickup) while its pickup waits for the carrier
   (pending or uncertain), while a **cancellation** of its pickup is not resolved (whatever the day —
-  also after the original day), or while its pickup is confirmed for today or later and not
-  confirmed as cancelled. A confirmed past pickup, a refused / closed / unsent one, or a confirmed
-  cancellation releases it: it is planned again with the **same labels** (the same carrier numbers).
+  also after the original day), or while its pickup is confirmed for today or later — unless the
+  carrier shows that pickup cancelled. A confirmed past pickup, a refused / closed / unsent one, or a
+  pickup the carrier shows cancelled releases it: it is planned again with the **same labels** (the same carrier numbers).
   So when PPL collected 1 of 2 parcels, the next pickup contains and announces exactly the second.
-- **Cancellation ("Zrušit svoz")** of a pickup PPL confirmed: one live request per pickup (a refused
+- **Cancellation ("Zrušit svoz")** of a pickup PPL confirmed, **only up to the pickup's own day**
+  (afterwards its parcels may already be in another pickup — `PICKUP_CANCEL_DAY_PASSED`, the button
+  is hidden; the day is read under the site's pickup lock that every new pickup takes, so a
+  cancellation either starts first and holds the parcels, or is refused; one started in time is
+  still looked up and closed after the day): one live request per pickup (a refused
   one may be followed by a new one), recorded before the call (`PREPARED` → `SENT` → `ACCEPTED` →
   `CONFIRMED` / `REJECTED`), sent **once** by the pickup's own reference with its own connection and
   account; a replay returns the same, a concurrent second request is refused. `POST /order/cancel`
   answering 200 is only **accepted**; the cancellation is **confirmed only when `GET /order` shows the
-  documented state `Canceled`** for that reference (polled, bounded). A lost answer or a time-out is
+  documented state `Canceled`** for that reference (polled, bounded). That is a **fact about the
+  pickup** (`carrier_cancelled_at`), recorded once under the pickup's row lock by whichever lookup
+  read it — also one of an attempt a person closed meanwhile (that attempt's audit stays) — never
+  cleared or overwritten by a later "Created"; it confirms the live attempt with it (an unsent one is
+  never sent), releases the parcels and refuses any further cancellation (also in the database: a
+  cancellation is `CONFIRMED` exactly when its pickup is shown cancelled). A lost answer or a time-out is
   uncertain (`SENT`): only looked up, never re-sent; the parcels stay held. An error, a time-out, an
   outage or PPL showing only `Created` releases nothing by itself. **Closing an uncertain attempt**
   (`SENT` after the in-flight window, or `ACCEPTED` whose bounded lookups ran out) is a person's
   audited decision with `shipments:resolve_uncertain` after verifying with PPL that the attempt was
-  not carried out and will not be processed (reason, who; active site only): PPL is asked once more
-  first — `Canceled` confirms it and the closing is refused. The closed attempt (`NOT_CREATED`) is
+  not carried out and will not be processed (reason, who; active site only). It names **the attempt**
+  (`cancellationId`, fixed when the dialog opened; in the idempotency fingerprint) — never "the
+  latest": a late submit for an older attempt is refused and a newer one is not touched. PPL is
+  asked once more first — `Canceled` confirms it and the closing is refused; the closing itself
+  runs under the pickup's row lock and is refused once the pickup is shown cancelled. The closed attempt (`NOT_CREATED`) is
   never sent again; **the pickup keeps its own state** (it is not cancelled by the closing — its
-  parcels follow the pickup's rules); a new, explicitly confirmed request may follow. If PPL refuses a
-  new request but shows the order `Canceled`, that confirmation is used. The pickup, its plan, the
+  parcels follow the pickup's rules); a new, explicitly confirmed request may follow — PPL's state is
+  read first then (shown `Canceled` = confirmed without a `POST`). If PPL refuses a new request but
+  shows the order `Canceled`, that confirmation is used. The pickup, its plan, the
   cancellation and who/why stay in the history. Ordering, cancelling and the real pickup (tracking)
   are separate records.
 - **History:** each planned parcel shows **today's state of the parcel** ("Stav balíku dnes", from

@@ -4,6 +4,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CarrierSettingsSnapshot } from '../src/carriers/carrier.js';
 import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
+import { PplPickups } from '../src/carriers/ppl/ppl-pickups.js';
 import { CarrierPickupsService } from '../src/orders/carrier-pickups.service.js';
 import { CARRIER_TEST_KEY, PPL_TEST_ACCOUNT } from './support/carrier-test-key.js';
 import { FakePpl } from './support/fake-ppl.js';
@@ -162,10 +163,16 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     ];
     await post(orderCode, 'tracking/refresh').expect(200);
   }
-  const closeCancel = (code: string, requestId = randomUUID()) =>
-    http()
-      .post(`/api/admin/dispatch/pickups/${code}/cancel/resolve`)
-      .send({ requestId, reason: 'PPL potvrdila, že storno neprovedla', checkedWithCarrier: true });
+  /** The closing of exactly this attempt (its id fixed when the dialog opened). */
+  const closeCancel = (code: string, cancellationId: string, requestId = randomUUID()) =>
+    http().post(`/api/admin/dispatch/pickups/${code}/cancel/resolve`).send({
+      requestId,
+      cancellationId,
+      reason: 'PPL potvrdila, že storno neprovedla',
+      checkedWithCarrier: true,
+    });
+  /** The pickup's latest cancellation attempt, as the board shows it now. */
+  const attemptOf = async (code: string) => (await view(code)).cancellation!.id;
 
   beforeAll(async () => {
     await ppl.start();
@@ -464,6 +471,7 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       carrierState: 'Canceled',
       parcelCount: 2,
     });
+    expect(confirmed.cancelledByCarrierAt).not.toBeNull();
     expect(confirmed.parcels.map((x) => x.carrierParcelNumber)).toEqual(o.numbers);
     // Released: the same labels (the same parcel numbers) for the day after tomorrow.
     const again = (await order([o.code], { date: pragueToday(2) }).expect(200)).body as PickupView;
@@ -600,7 +608,8 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     const before = cancelPosts();
     // Two people close it at once: one wins; the same request again is the same.
     const ids = [randomUUID(), randomUUID()];
-    const both = await Promise.all(ids.map((id) => closeCancel(p.code, id)));
+    const attempt = await attemptOf(p.code);
+    const both = await Promise.all(ids.map((id) => closeCancel(p.code, attempt, id)));
     expect(both.map((r) => r.status).sort()).toEqual([200, 409]);
     const requestId = ids[both.findIndex((r) => r.status === 200)]!;
     const closed = both.find((r) => r.status === 200)!.body as PickupView;
@@ -609,7 +618,7 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       status: 'NOT_CREATED',
       resolutionReason: 'PPL potvrdila, že storno neprovedla',
     });
-    await closeCancel(p.code, requestId).expect(200);
+    await closeCancel(p.code, attempt, requestId).expect(200);
     expect(cancelPosts()).toBe(before); // the closed attempt is never re-sent
     // The pickup still governs its parcels (confirmed for tomorrow): not released by the closing.
     expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
@@ -633,7 +642,7 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       'SENT',
     );
     ppl.mode.cancelOrderHang = false;
-    const refused = await closeCancel(p.code);
+    const refused = await closeCancel(p.code, await attemptOf(p.code));
     expect(refused.body.code).toBe('PICKUP_CANCEL_NOT_UNCERTAIN');
     expect((await view(p.code)).cancellation!.status).toBe('CONFIRMED');
 
@@ -645,17 +654,24 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     ppl.mode.cancelOrderShownAfter = 1000;
     await cancel(q.code).expect(200);
     ppl.mode.cancelOrderHang = false;
-    expect(((await closeCancel(q.code).expect(200)).body as PickupView).cancellation!.status).toBe(
-      'NOT_CREATED',
-    );
+    expect(
+      ((await closeCancel(q.code, await attemptOf(q.code)).expect(200)).body as PickupView)
+        .cancellation!.status,
+    ).toBe('NOT_CREATED');
     const ref = (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: q.code } }))
       .clientReference;
     ppl.orders.get(ref)!.hiddenLooks = 0; // PPL now shows Canceled
     ppl.mode.cancelOrderRefuse = true;
     const mark = cancelPosts();
+    // After an attempt closed by a person, PPL's own state is read first: Canceled confirms the
+    // new request without a POST.
     const n = (await cancel(q.code).expect(200)).body as PickupView;
     expect(n.cancellation).toMatchObject({ status: 'CONFIRMED', carrierState: 'Canceled' });
-    expect(cancelPosts()).toBe(mark + 1);
+    expect(n.cancelledByCarrierAt).not.toBeNull();
+    expect(cancelPosts()).toBe(mark);
+    ppl.mode.cancelOrderRefuse = false;
+    // Shown cancelled: no further cancellation starts.
+    expect((await cancel(q.code)).body.code).toBe('PICKUP_NOT_CANCELLABLE');
   });
 
   it('accepted, lookups ran out without Canceled: still held; closed only by a person then', async () => {
@@ -664,7 +680,9 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     ppl.mode.cancelOrderShownAfter = 1000;
     const c = (await cancel(p.code).expect(200)).body as PickupView;
     expect(c.cancellation).toMatchObject({ status: 'ACCEPTED', lookingUp: true });
-    expect((await closeCancel(p.code)).body.code).toBe('PICKUP_CANCEL_STILL_LOOKED_UP');
+    expect((await closeCancel(p.code, await attemptOf(p.code))).body.code).toBe(
+      'PICKUP_CANCEL_STILL_LOOKED_UP',
+    );
     for (let i = 0; i < 40; i++) {
       const row = await t.prisma.carrierPickupCancellation.findFirstOrThrow({
         where: { pickup: { code: p.code } },
@@ -680,9 +698,183 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     });
     // "Created" alone releases nothing.
     expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
-    expect(((await closeCancel(p.code).expect(200)).body as PickupView).cancellation!.status).toBe(
-      'NOT_CREATED',
-    );
+    expect(
+      ((await closeCancel(p.code, await attemptOf(p.code)).expect(200)).body as PickupView)
+        .cancellation!.status,
+    ).toBe('NOT_CREATED');
+  });
+
+  /** PPL's answers to GET /order for the next lookups, in order — each held until released. */
+  type Shown = Awaited<ReturnType<PplPickups['find']>>;
+  function heldAnswer(shown: Shown) {
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (entered = r));
+    const answer = new Promise<Shown>((r) => (release = () => r(shown)));
+    return {
+      run: () => {
+        entered();
+        return answer;
+      },
+      reached,
+      release,
+    };
+  }
+  const CREATED: Shown = { orderNumber: '1', state: 'Created', cancelled: false };
+  const CANCELED: Shown = { orderNumber: '1', state: 'Canceled', cancelled: true };
+  /** An uncertain attempt (a 500 before PPL carried it out — PPL shows "Created"). */
+  async function uncertainCancel(code: string) {
+    ppl.mode.cancelOrderError = true;
+    const v = (await cancel(code).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderError = false;
+    expect(v.cancellation!.status).toBe('SENT');
+    return v.cancellation!.id;
+  }
+  const attemptRow = (id: string) =>
+    t.prisma.carrierPickupCancellation.findUniqueOrThrow({ where: { id } });
+
+  it('a late closing names its attempt: closing A after B exists leaves B and its hold untouched', async () => {
+    const o = await readyForPickup(1);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    const a = await uncertainCancel(p.code);
+    // Two people open the dialog for A; the second closes it and requests B (uncertain too).
+    expect((await closeCancel(p.code, a).expect(200)).body.cancellation.status).toBe('NOT_CREATED');
+    const auditA = await attemptRow(a);
+    const b = await uncertainCancel(p.code);
+    expect(b).not.toBe(a);
+    const before = await attemptRow(b);
+    const posts0 = cancelPosts();
+    // The first person's late submit for A: refused; A keeps its audit, B is not touched.
+    const late = await closeCancel(p.code, a);
+    expect(late.status).toBe(409);
+    expect(late.body).toMatchObject({ code: 'PICKUP_CANCEL_NOT_UNCERTAIN' });
+    expect(await attemptRow(a)).toEqual(auditA);
+    expect(await attemptRow(b)).toEqual(before);
+    expect((await view(p.code)).cancellation).toMatchObject({ id: b, status: 'SENT' });
+    expect(cancelPosts()).toBe(posts0);
+    // B still holds the parcels — after the pickup's day too.
+    await later(3, async () => {
+      expect((await order([o.code], { date: pragueToday(3) })).body.code).toBe('ORDER_IN_PICKUP');
+    });
+    // An unknown attempt does not exist (another pickup's: below).
+    expect((await closeCancel(p.code, randomUUID())).status).toBe(404);
+  });
+
+  it('Canceled read by a lookup and a closing based on "Created": the fact holds in both commit orders', async () => {
+    const find = vi.spyOn(PplPickups.prototype, 'find');
+    try {
+      // Order 1 — the closing (its look: Created) commits first; the lookup's Canceled after it.
+      const o = await readyForPickup(1);
+      const p = (await order([o.code]).expect(200)).body as PickupView;
+      const a = await uncertainCancel(p.code);
+      const late = heldAnswer(CANCELED);
+      find.mockImplementationOnce(late.run).mockResolvedValueOnce(CREATED);
+      const looking = lookup(p.code).then((r) => r);
+      await late.reached;
+      const closed = (await closeCancel(p.code, a).expect(200)).body as PickupView;
+      expect(closed.cancellation).toMatchObject({ id: a, status: 'NOT_CREATED' });
+      expect(closed.cancelledByCarrierAt).toBeNull();
+      // Still held until PPL's Canceled is recorded.
+      expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+      const audit = await attemptRow(a);
+      late.release();
+      expect((await looking).status).toBe(200);
+      const v = await view(p.code);
+      expect(v.cancelledByCarrierAt).not.toBeNull();
+      expect(v.carrierState).toBe('Canceled');
+      expect(await attemptRow(a)).toEqual(audit); // A's audit is not rewritten
+      // No further cancellation; released (same label).
+      const posts0 = cancelPosts();
+      expect((await cancel(p.code)).body.code).toBe('PICKUP_NOT_CANCELLABLE');
+      expect(cancelPosts()).toBe(posts0);
+      expect(
+        (await order([o.code], { date: pragueToday(2) }).expect(200)).body.parcels[0]
+          .carrierParcelNumber,
+      ).toBe(o.numbers[0]);
+
+      // Order 2 — the lookup's Canceled commits first; the closing's older "Created" arrives late.
+      const o2 = await readyForPickup(1);
+      const q = (await order([o2.code]).expect(200)).body as PickupView;
+      const a2 = await uncertainCancel(q.code);
+      // Another pickup's attempt is not this pickup's.
+      expect((await closeCancel(q.code, a)).status).toBe(404);
+      const stale = heldAnswer(CREATED);
+      find.mockImplementationOnce(stale.run).mockResolvedValueOnce(CANCELED);
+      const closing = closeCancel(q.code, a2).then((r) => r);
+      await stale.reached;
+      expect((await lookup(q.code).expect(200)).body.cancellation).toMatchObject({
+        id: a2,
+        status: 'CONFIRMED',
+      });
+      stale.release();
+      const refused = await closing;
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('PICKUP_CANCEL_NOT_UNCERTAIN');
+      const w = await view(q.code);
+      expect(w.cancellation).toMatchObject({ status: 'CONFIRMED', carrierState: 'Canceled' });
+      expect(w.cancelledByCarrierAt).not.toBeNull();
+      expect(w.carrierState).toBe('Canceled'); // the stale "Created" replaced nothing
+
+      // The same with B created between the closing of A and the late Canceled: B is confirmed
+      // with the pickup (never sent if not yet), A keeps its audit.
+      const o3 = await readyForPickup(1);
+      const r = (await order([o3.code]).expect(200)).body as PickupView;
+      const a3 = await uncertainCancel(r.code);
+      const late3 = heldAnswer(CANCELED);
+      find.mockImplementationOnce(late3.run).mockResolvedValueOnce(CREATED);
+      const looking3 = lookup(r.code).then((x) => x);
+      await late3.reached;
+      await closeCancel(r.code, a3).expect(200);
+      const audit3 = await attemptRow(a3);
+      // B: its pre-look (after a closed attempt) shows Created; sent; the answer is lost.
+      find.mockResolvedValueOnce(CREATED);
+      const b3 = await uncertainCancel(r.code);
+      late3.release();
+      expect((await looking3).status).toBe(200);
+      const x = await view(r.code);
+      expect(x.cancellation).toMatchObject({ id: b3, status: 'CONFIRMED' });
+      expect(x.cancelledByCarrierAt).not.toBeNull();
+      expect(await attemptRow(a3)).toEqual(audit3);
+    } finally {
+      find.mockRestore();
+    }
+    // The database: no attempt for a pickup shown cancelled; confirmed only with the pickup's fact.
+    const cancelled = await t.prisma.carrierPickup.findFirstOrThrow({
+      where: { carrierCancelledAt: { not: null } },
+    });
+    await withPrivileged(async (db) => {
+      await expect(
+        db.$transaction(async (tx) => {
+          const op = randomUUID();
+          await tx.$executeRaw`INSERT INTO "operation_requests" ("request_id", "kind", "payload_sha256")
+            VALUES (${op}::uuid, 'CARRIER_PICKUP_CANCEL', ${'0'.repeat(64)})`;
+          await tx.$executeRaw`INSERT INTO "carrier_pickup_cancellations" ("pickup_id","reason","created_at","created_by","operation_request_id")
+            VALUES (${cancelled.id}::uuid, 'znovu', now(), ${cancelled.createdBy}::uuid, ${op}::uuid)`;
+        }),
+      ).rejects.toThrow(/not shown cancelled/);
+      await expect(
+        db.$executeRaw`UPDATE "carrier_pickups" SET "carrier_state" = 'Created' WHERE "id" = ${cancelled.id}::uuid`,
+      ).rejects.toThrow(/stays cancelled/);
+    });
+  });
+
+  it('after its day no new cancellation starts: yesterday’s pickup, its parcel planned for tomorrow', async () => {
+    const o = await readyForPickup(1);
+    const p = (await order([o.code], { date: pragueToday(1) }).expect(200)).body as PickupView;
+    expect(p.status).toBe('CONFIRMED');
+    await later(2, async () => {
+      // "Yesterday's" confirmed pickup releases its parcel; it is planned for "tomorrow".
+      const next = (await order([o.code], { date: pragueToday(3) }).expect(200)).body as PickupView;
+      expect(next.parcels.map((x) => x.carrierParcelNumber)).toEqual(o.numbers);
+      expect((await view(p.code)).dayPassed).toBe(true);
+      const posts0 = cancelPosts();
+      const r = await cancel(p.code);
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('PICKUP_CANCEL_DAY_PASSED');
+      expect(cancelPosts()).toBe(posts0); // nothing was asked of PPL
+      expect((await view(p.code)).cancellation).toBeNull();
+      expect((await view(next.code)).status).toBe('CONFIRMED');
+    });
   });
 
   it('history after a cancellation, a new pickup and the later collection: today’s state, not proof', async () => {

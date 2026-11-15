@@ -71,27 +71,50 @@ above says it).
 - Disk: 150 GB, 102 GB used, **43 GB free** (71 %); Docker build cache 12.3 GB (8.9 GB reclaimable).
 - DEV has `APP_ENV=development` and the **real PPL TEST** credentials (key names only:
   `PPL_TEST_CLIENT_ID`, `PPL_TEST_CLIENT_SECRET`, `CARRIER_CREDENTIALS_KEY`). The simulated PPL API
-  is accepted **only with `APP_ENV=test`** (`PPL_TEST_API_BASE_URL_FOR_TESTS`, env.ts) — so **DEV
-  cannot use the simulation today**: on DEV, "Objednat svoz PPL" and "Zrušit svoz" would call the
-  real PPL TEST environment.
+  is accepted **only with `APP_ENV=test`** (`PPL_TEST_API_BASE_URL_FOR_TESTS`, env.ts) — so DEV
+  cannot use the simulation: on DEV, "Objednat svoz PPL" and "Zrušit svoz" call the PPL TEST
+  environment (own database, no real transport — §4).
 
-## 4. After approval: what goes to DEV and what may be clicked there
+## 4. After approval: DEV acceptance on the existing PPL TEST connection
 
-Plan (each its own approval; the deployment only by `scripts/deploy-dev.sh`):
+Owner 2026-11-15: DEV has its own PPL **TEST** credentials, and PPL documents that the TEST
+environment has its own database and carries out no real transport (ppl-cpl-api.apidog.io,
+"Obecné"). So the actions on DEV run against **PPL TEST**, not only the isolated simulation — no new
+infrastructure (no DEV simulation container). Outages, races and partial pickups stay deterministic
+in the isolated simulation (§2, API e2e); PPL TEST cannot be steered.
 
-1. Merge #188 (after Codex's approval), CI on main green.
-2. `scripts/deploy-dev.sh` → migrations `20261116090000_*`, `20261116090100_carrier_pickups`
-   (additive, new tables only).
-3. On DEV **without** a PPL TEST approval, only these actions are safe: open Expedice → Svoz, see the
-   candidates, the carrier card, the environment badge, an empty history; "Zjistit stav" has nothing
-   to look up. **Do not press "Objednat svoz PPL" or "Zrušit svoz"** (real PPL TEST calls).
-4. **New, not verified — needs a decision:** a DEV PPL simulation like the bank's `rb-simulation`
-   (a separate container serving the simulated PPL API on DEV, an explicit connection
-   `PPL_SIMULATION` usable only with `APP_ENV=development`, never in production). That is new
-   infrastructure and code (connections, env rules, compose) — not part of #188.
-   Alternatively one **owner-approved PPL TEST run** on DEV (like doc 029 §10): one pickup, one
-   cancellation, the exchange log outside git — the PPL TEST environment may not process pickups
-   like production.
+Order (each step its own approval): Codex's independent approval of #188 → merge (CI on main green)
+→ `scripts/deploy-dev.sh` (migrations `20261116090000_*`, `20261116090100_carrier_pickups`, additive)
+→ this checklist. Nothing on DEV before that.
+
+Checklist (one synthetic order, synthetic hotel/address; record into a note **outside git** — no
+credentials, tokens, or raw logs):
+
+1. **Environment.** Správa systému → Dopravci: the site's connection is `PPL_TEST` (the TEST
+   badge), credentials shown only as "uloženo" (never their values); Expedice → Svoz shows "Testovací
+   prostředí dopravce – žádný skutečný svoz" and the site's sender address. "Ověřit připojení"
+   passes.
+2. **Synthetic order → label.** A finished crate of the site, a synthetic order of a synthetic
+   hotel, "Vytvořit štítky" → the label (PDF preview; download, a reprint via the print queue if a
+   DEV agent exists — no physical printer needed), "Připraveno k vyzvednutí". Record the parcel
+   number(s). Check: **no pickup** exists for it (Svoz → history empty for it).
+3. **Pickup.** Svoz → the order selected alone → day = tomorrow (no window) → "Objednat svoz PPL" →
+   confirm. Record: our code `SV-…`, the status ("Potvrzeno dopravcem" or "Dopravce zpracovává"),
+   PPL's number and state when shown ("Zjistit stav u dopravce" if needed), the time it took.
+4. **Cancellation.** "Zrušit svoz" (reason) → record the status ("Storno čeká na potvrzení
+   dopravce" / confirmed), each "Zjistit stav" until **`Canceled`** is shown ("Dopravce svoz zrušil"),
+   how long it took. While it waits: the order is **not** selectable (held).
+5. **Same label again.** After `Canceled`: the order is selectable again; a new pickup for the day
+   after tomorrow lists **the same parcel number(s)** (do not cancel or keep — decide then; the TEST
+   environment carries nothing).
+6. **Write down** the observations, PPL TEST's real limits (e.g. pickups refused for TEST, `Canceled`
+   never shown, a cut-off, a missing number) and any concrete difference to the documented contract
+   (doc 029 §11) — into the morning report, not into a public PR comment.
+
+To repeat the purely simulated walkthrough (no PPL, no DEV): §2 (one command, about 40 s after
+`pnpm build`; screenshots of 2026-11-15: `/home/ayvo/svoz-walkthrough-20261115/`).
+
+Out of scope here: the physical pickup, PROD, returns.
 
 ## 5. Morning click-through (no setup)
 

@@ -55,19 +55,17 @@ type PickupRow = Prisma.CarrierPickupGetPayload<{ include: typeof pickupInclude 
 
 /**
  * Where a parcel's plan still holds it: a pickup that waits for the carrier (pending or
- * uncertain); a confirmed one whose cancellation is not resolved (whatever its day); a confirmed one
- * for today or later that is not confirmed as cancelled. A confirmed past pickup, a refused, closed
- * or unsent one, or a confirmed cancellation releases it (planned again with the same labels).
+ * uncertain); a confirmed one whose cancellation is not resolved (whatever its day — a new one
+ * starts only up to the pickup's day, under the site's pickup lock, see {@link CarrierPickupsService.cancel});
+ * a confirmed one for today or later. A confirmed past pickup, a refused, closed or unsent one, or
+ * one the carrier shows cancelled releases it (planned again with the same labels).
  */
 const holding = (today: string): Prisma.CarrierPickupWhereInput => ({
+  carrierCancelledAt: null,
   OR: [
     { status: { in: [...UNRESOLVED] } },
     { status: 'CONFIRMED', cancellations: { some: { status: { in: [...UNRESOLVED] } } } },
-    {
-      status: 'CONFIRMED',
-      pickupDate: { gte: new Date(`${today}T00:00:00Z`) },
-      cancellations: { none: { status: 'CONFIRMED' } },
-    },
+    { status: 'CONFIRMED', pickupDate: { gte: new Date(`${today}T00:00:00Z`) } },
   ],
 });
 
@@ -186,15 +184,15 @@ export class CarrierPickupsService {
           : null,
       },
       candidates,
-      open: open ? this.toView(open) : null,
-      pickups: rows.map((r) => this.toView(r)),
+      open: open ? this.toView(open, today) : null,
+      pickups: rows.map((r) => this.toView(r, today)),
     };
   }
 
   async view(site: SiteContext, code: string): Promise<PickupView> {
     const row = await this.find(this.prisma, site.siteId, code);
     if (!row) throw notFound();
-    return this.toView(row);
+    return this.toView(row, await this.today(site.siteId));
   }
 
   // --- ordering ------------------------------------------------------------------------------
@@ -450,8 +448,15 @@ export class CarrierPickupsService {
   /**
    * "Zrušit svoz": one cancellation of a pickup the carrier confirmed, recorded before the carrier
    * is called and sent once, by the pickup's own reference with its own connection and account. A
-   * replay returns the same; a second request while one is live is refused. The pickup, its plan
-   * and history stay; its parcels stay blocked until the carrier shows the order cancelled.
+   * replay returns the same; a second request while one is live is refused, and so is one for a
+   * pickup the carrier already shows cancelled. The pickup, its plan and history stay; its parcels
+   * stay blocked until the carrier shows the order cancelled.
+   *
+   * Only up to the pickup's own day: afterwards its parcels may already be planned into another
+   * pickup, so a new cancellation could not keep its promise to hold them. The day is read under
+   * the site's pickup lock — the one every new pickup takes before it reads which parcels are held
+   * — so a cancellation either starts before such a pickup (which then sees the parcels held) or
+   * is refused. A cancellation started in time is still looked up and closed after the day.
    */
   async cancel(
     actorId: string,
@@ -464,19 +469,29 @@ export class CarrierPickupsService {
       input.requestId,
       { actorId, siteId: site.siteId, code, reason: input.reason },
       async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`carrier_pickup:${site.siteId}`}, 0))`;
         const row = await this.find(tx, site.siteId, code);
         if (!row) throw notFound();
         await tx.$executeRaw`SELECT 1 FROM "carrier_pickups" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
         const p = await tx.carrierPickup.findUniqueOrThrow({
           where: { id: row.id },
-          select: { status: true, carrierState: true },
+          select: { status: true, carrierCancelledAt: true, pickupDate: true },
         });
-        if (p.status !== 'CONFIRMED' || p.carrierState === 'Canceled') {
+        if (p.status !== 'CONFIRMED' || p.carrierCancelledAt !== null) {
           throw domainErrorWithDetails(
             409,
             'PICKUP_NOT_CANCELLABLE',
-            'Only a pickup the carrier confirmed (and has not cancelled) is cancelled',
-            { status: p.status },
+            'Only a pickup the carrier confirmed (and does not show cancelled) is cancelled',
+            { status: p.status, cancelledByCarrier: p.carrierCancelledAt !== null },
+          );
+        }
+        const today = await this.today(site.siteId, tx);
+        if (p.pickupDate.toISOString().slice(0, 10) < today) {
+          throw domainErrorWithDetails(
+            409,
+            'PICKUP_CANCEL_DAY_PASSED',
+            'The pickup day has passed: its parcels may already be planned again',
+            { today },
           );
         }
         const live = await tx.carrierPickupCancellation.findFirst({
@@ -518,9 +533,27 @@ export class CarrierPickupsService {
     if (!pickups) return;
     const ref = { clientReference: c.pickup.clientReference };
     if (c.status === 'PREPARED') {
-      const claimed = await this.prisma.$executeRaw`
-        UPDATE "carrier_pickup_cancellations" SET "status" = 'SENT', "sent_at" = now()
-         WHERE "id" = ${id}::uuid AND "status" = 'PREPARED'`;
+      // After an attempt a person closed as not carried out, the carrier may still have cancelled
+      // the pickup: its own state first — shown Canceled = confirmed, nothing is sent again.
+      const closedBefore = await this.prisma.carrierPickupCancellation.count({
+        where: { pickupId: c.pickupId, status: 'NOT_CREATED' },
+      });
+      if (closedBefore > 0) {
+        const shown = await this.call((signal) => pickups.find(ref, signal)).catch(() => null);
+        if (shown?.cancelled) {
+          await this.markCancelled(c.pickupId, shown.state);
+          return;
+        }
+      }
+      // Claimed under the pickup's lock: never sent once the carrier shows the pickup cancelled.
+      const claimed = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT 1 FROM "carrier_pickups" WHERE "id" = ${c.pickupId}::uuid FOR UPDATE`;
+        return tx.$executeRaw`
+          UPDATE "carrier_pickup_cancellations" x SET "status" = 'SENT', "sent_at" = now()
+           WHERE x."id" = ${id}::uuid AND x."status" = 'PREPARED'
+             AND EXISTS (SELECT 1 FROM "carrier_pickups" p
+                          WHERE p."id" = x."pickup_id" AND p."carrier_cancelled_at" IS NULL)`;
+      });
       if (claimed !== 1) return;
       try {
         await this.call((signal) => pickups.cancel(ref, signal));
@@ -530,7 +563,7 @@ export class CarrierPickupsService {
           // uncertain): the carrier's own state decides — Canceled confirms, anything else refuses.
           const shown = await this.call((signal) => pickups.find(ref, signal)).catch(() => null);
           if (shown?.cancelled) {
-            await this.confirmCancel(id, c.pickupId, shown.state);
+            await this.markCancelled(c.pickupId, shown.state);
             return;
           }
           await this.prisma.$executeRaw`
@@ -566,7 +599,7 @@ export class CarrierPickupsService {
       return;
     }
     if (found?.cancelled) {
-      await this.confirmCancel(id, c.pickupId, found.state);
+      await this.markCancelled(c.pickupId, found.state);
       return;
     }
     // Not (yet) shown cancelled: an accepted request is looked up again; an uncertain one stays.
@@ -576,20 +609,26 @@ export class CarrierPickupsService {
     await this.scheduleCancel(id);
   }
 
-  /** The carrier shows the pickup cancelled: the live attempt is confirmed (only from SENT / ACCEPTED). */
-  private async confirmCancel(id: string, pickupId: string, carrierState: string | null) {
+  /**
+   * The carrier shows the pickup cancelled — a fact about the pickup, recorded once and kept
+   * whichever attempt's lookup read it, even one a person closed meanwhile (that attempt's audit
+   * stays as it is). Under the pickup's lock — the same a person's closing and a new cancellation
+   * take — so a closing based on an older "Created" either committed before (and stays, the
+   * pickup becomes cancelled anyway) or sees the pickup cancelled and is refused. The live attempt,
+   * if any, is confirmed with it (an unsent one is never sent).
+   */
+  private async markCancelled(pickupId: string, carrierState: string | null): Promise<void> {
     const state = carrierState?.slice(0, 100) ?? null;
     await this.prisma.$transaction(async (tx) => {
-      const moved = await tx.$executeRaw`
+      await tx.$executeRaw`SELECT 1 FROM "carrier_pickups" WHERE "id" = ${pickupId}::uuid FOR UPDATE`;
+      await tx.$executeRaw`
+        UPDATE "carrier_pickups" SET "carrier_cancelled_at" = now(), "carrier_state" = ${state}
+         WHERE "id" = ${pickupId}::uuid AND "status" = 'CONFIRMED' AND "carrier_cancelled_at" IS NULL`;
+      await tx.$executeRaw`
         UPDATE "carrier_pickup_cancellations"
            SET "status" = 'CONFIRMED', "resolved_at" = now(), "next_poll_at" = NULL,
                "carrier_state" = ${state}, "error_code" = NULL, "error_message" = NULL
-         WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED')`;
-      if (moved === 1) {
-        await tx.$executeRaw`
-          UPDATE "carrier_pickups" SET "carrier_state" = ${state}
-           WHERE "id" = ${pickupId}::uuid AND "status" = 'CONFIRMED'`;
-      }
+         WHERE "pickup_id" = ${pickupId}::uuid AND "status" IN ('PREPARED', 'SENT', 'ACCEPTED')`;
     });
   }
 
@@ -600,6 +639,10 @@ export class CarrierPickupsService {
    * that it was not carried out and will not be processed (reason recorded). The carrier is asked
    * once more first: shown Canceled = confirmed, never closed. The pickup keeps its own state (it is
    * not cancelled by this); a new cancellation may be requested; this attempt is never re-sent.
+   *
+   * The request names the attempt (`cancellationId`, fixed when the dialog opened) — never "the
+   * latest": a late closing of an older attempt never touches a newer one. The closing itself runs
+   * under the pickup's lock and is refused once the carrier shows the pickup cancelled.
    */
   async resolveCancel(
     actorId: string,
@@ -609,20 +652,30 @@ export class CarrierPickupsService {
   ): Promise<PickupView> {
     const row = await this.find(this.prisma, site.siteId, code);
     if (!row) throw notFound();
-    const c = row.cancellations[0];
-    const replay = await this.operations.peek('CARRIER_PICKUP_CANCEL_RESOLVE', input.requestId, {
+    // Only an attempt of this pickup of this site.
+    const c = await this.prisma.carrierPickupCancellation.findFirst({
+      where: { id: input.cancellationId, pickupId: row.id },
+    });
+    if (!c) throw new NotFoundException('Cancellation attempt not found');
+    const fingerprint = {
       actorId,
       siteId: site.siteId,
       code,
+      cancellationId: c.id,
       reason: input.reason,
-    });
+    };
+    const replay = await this.operations.peek(
+      'CARRIER_PICKUP_CANCEL_RESOLVE',
+      input.requestId,
+      fingerprint,
+    );
     if (!replay) {
-      if (!c || (c.status !== 'SENT' && c.status !== 'ACCEPTED')) {
+      if (c.status !== 'SENT' && c.status !== 'ACCEPTED') {
         throw domainErrorWithDetails(
           409,
           'PICKUP_CANCEL_NOT_UNCERTAIN',
           'Only an uncertain cancellation attempt is closed by a person',
-          { status: c?.status ?? null },
+          { status: c.status },
         );
       }
       if (c.status === 'SENT' && !(await this.settled('carrier_pickup_cancellations', c.id))) {
@@ -641,28 +694,28 @@ export class CarrierPickupsService {
     await this.operations.run(
       'CARRIER_PICKUP_CANCEL_RESOLVE',
       input.requestId,
-      { actorId, siteId: site.siteId, code, reason: input.reason },
+      fingerprint,
       async (tx) => {
-        const closed = c
-          ? await tx.$executeRaw`
-              UPDATE "carrier_pickup_cancellations"
-                 SET "status" = 'NOT_CREATED', "resolved_at" = now(), "next_poll_at" = NULL,
-                     "resolved_by" = ${actorId}::uuid, "resolution_reason" = ${input.reason}
-               WHERE "id" = ${c.id}::uuid
-                 AND ("status" = 'SENT' OR ("status" = 'ACCEPTED' AND "next_poll_at" IS NULL))`
-          : 0;
+        // The common authority with the carrier's "Canceled" (markCancelled) and a new attempt.
+        await tx.$executeRaw`SELECT 1 FROM "carrier_pickups" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
+        const closed = await tx.$executeRaw`
+          UPDATE "carrier_pickup_cancellations" x
+             SET "status" = 'NOT_CREATED', "resolved_at" = now(), "next_poll_at" = NULL,
+                 "resolved_by" = ${actorId}::uuid, "resolution_reason" = ${input.reason}
+           WHERE x."id" = ${c.id}::uuid
+             AND (x."status" = 'SENT' OR (x."status" = 'ACCEPTED' AND x."next_poll_at" IS NULL))
+             AND EXISTS (SELECT 1 FROM "carrier_pickups" p
+                          WHERE p."id" = x."pickup_id" AND p."carrier_cancelled_at" IS NULL)`;
         if (closed !== 1) {
-          const now = c
-            ? await tx.carrierPickupCancellation.findUniqueOrThrow({
-                where: { id: c.id },
-                select: { status: true },
-              })
-            : null;
+          const now = await tx.carrierPickupCancellation.findUniqueOrThrow({
+            where: { id: c.id },
+            select: { status: true },
+          });
           throw domainErrorWithDetails(
             409,
             'PICKUP_CANCEL_NOT_UNCERTAIN',
             'Only an uncertain cancellation attempt is closed by a person',
-            { status: now?.status ?? null },
+            { status: now.status },
           );
         }
         return { code };
@@ -838,9 +891,11 @@ export class CarrierPickupsService {
            WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED')`;
         if (moved === 0 && number !== null) {
           // Confirmed before without the carrier's number: it only learns it now.
+          // (A state read for a pickup the carrier already shows cancelled never replaces it.)
           await this.prisma.$executeRaw`
             UPDATE "carrier_pickups"
-               SET "carrier_order_number" = ${number}, "carrier_state" = ${state}
+               SET "carrier_order_number" = ${number},
+                   "carrier_state" = CASE WHEN "carrier_cancelled_at" IS NULL THEN ${state} ELSE "carrier_state" END
              WHERE "id" = ${id}::uuid AND "status" = 'CONFIRMED' AND "carrier_order_number" IS NULL`;
         }
         return;
@@ -1062,12 +1117,13 @@ export class CarrierPickupsService {
       : null;
   }
 
-  private toView(r: PickupRow): PickupView {
+  private toView(r: PickupRow, today: string): PickupView {
     const c = r.cancellations[0] ?? null;
+    const date = r.pickupDate.toISOString().slice(0, 10);
     return {
       code: r.code,
       status: r.status,
-      date: r.pickupDate.toISOString().slice(0, 10),
+      date,
       window: r.windowFrom && r.windowTo ? { from: r.windowFrom, to: r.windowTo } : null,
       parcelCount: r.parcelCount,
       carrier: {
@@ -1076,6 +1132,8 @@ export class CarrierPickupsService {
       },
       carrierOrderNumber: r.carrierOrderNumber,
       carrierState: r.carrierState,
+      cancelledByCarrierAt: r.carrierCancelledAt?.toISOString() ?? null,
+      dayPassed: date < today,
       errorCode: r.errorCode,
       errorMessage: r.errorMessage,
       createdAt: r.createdAt.toISOString(),
@@ -1085,6 +1143,7 @@ export class CarrierPickupsService {
       lookupFrom: r.status === 'SENT' ? this.lookupFrom(r.sentAt) : null,
       cancellation: c
         ? {
+            id: c.id,
             status: c.status,
             reason: c.reason,
             createdAt: c.createdAt.toISOString(),

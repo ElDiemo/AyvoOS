@@ -86,6 +86,8 @@ export type CancelPickupRequest = z.infer<typeof cancelPickupRequestSchema>;
  */
 export const resolvePickupCancelRequestSchema = z.strictObject({
   requestId: z.uuid(),
+  /** The one attempt the person checked (fixed when the dialog opened) — never "the latest". */
+  cancellationId: z.uuid(),
   reason: z.string().trim().min(5).max(500),
   checkedWithCarrier: z.literal(true),
 });
@@ -104,6 +106,13 @@ export const pickupViewSchema = z.object({
   /** The carrier's own number of the pickup order, once it gives one. */
   carrierOrderNumber: z.string().nullable(),
   carrierState: z.string().nullable(),
+  /**
+   * When AYVO learnt that the carrier shows this pickup cancelled (by whichever attempt or lookup);
+   * its parcels are free from then on and no further cancellation is sent.
+   */
+  cancelledByCarrierAt: z.iso.datetime().nullable(),
+  /** No new cancellation may start: its day has passed (its parcels may be planned again). */
+  dayPassed: z.boolean(),
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),
   createdAt: z.iso.datetime(),
@@ -116,6 +125,8 @@ export const pickupViewSchema = z.object({
   /** The latest cancellation at the carrier, if one was requested. */
   cancellation: z
     .object({
+      /** The attempt's own id: a closing names exactly this attempt. */
+      id: z.uuid(),
       status: pickupCancelStatusSchema,
       reason: z.string(),
       createdAt: z.iso.datetime(),
