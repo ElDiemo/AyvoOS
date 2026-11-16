@@ -79,26 +79,41 @@ last `SUCCESS` names an older one. The image is plain `caddy:<version>`, and the
 `com.ayvo.edge-commit` is the last change of `deploy/dev`, not the release's HEAD.
 
 **0. Read-only check before every deployment.** It changes nothing on DEV and stops on any doubt;
-a failing `git` is a stop, never a clean result:
+a failing `docker` or `git` is a stop, never a clean result. It reads Caddy exactly as
+`dev-edge-backup.sh` does: only the one **running** `caddy` service of the project (never a
+container by name — `docker inspect ayvo-dev-preview-caddy-1` also answers for a stopped one), and
+the file in its `config_files` label, which is the file the backup saves. Both sources create Caddy
+from `<working_dir>/compose.yml` (`deploy-dev.sh` and `dev-edge-backup.sh restore`), so any other
+value is a stop:
 
 ```bash
 bash <<'CHECK'
 set -uo pipefail
 stop() { echo "STOP: $*" >&2; exit 1; }
-dir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
-  ayvo-dev-preview-caddy-1)" || stop "Caddy is not running or has no Compose labels"
+project=ayvo-dev-preview
+ids="$(docker ps -q --filter "label=com.docker.compose.project=$project" \
+  --filter "label=com.docker.compose.service=caddy")" || stop "docker ps failed"
+[[ -n $ids && $(wc -l <<<"$ids") == 1 ]] || stop "expected exactly one running caddy in $project"
+label() { docker inspect --format "{{ index .Config.Labels \"$1\" }}" "$ids"; }
+dir="$(label com.docker.compose.project.working_dir)" || stop "cannot read Caddy's labels"
+file="$(label com.docker.compose.project.config_files)" || stop "cannot read Caddy's labels"
+[[ -n $dir && $file == "$dir/compose.yml" ]] ||
+  stop "Caddy's Compose file '$file' is not $dir/compose.yml"
+[[ -f $file ]] || stop "$file is missing"
 case "$dir" in
   /opt/ayvo/backups/dev-preview/edge-before-*)
     [[ -f $dir/COMPLETE ]] || stop "$dir is not a complete edge backup"
     (cd "$dir" && sha256sum --quiet -c SHA256SUMS) || stop "checksums in $dir do not match"
-    echo "OK backup $dir" ;;
+    grep -q '  ./compose.yml$' "$dir/SHA256SUMS" || stop "SHA256SUMS in $dir does not cover compose.yml"
+    echo "OK backup $dir caddy=$ids" ;;
   */deploy/dev)
     checkout="${dir%/deploy/dev}"
-    [[ -f $dir/compose.yml ]] || stop "$dir/compose.yml is missing"
     head="$(git -C "$checkout" rev-parse --short=12 HEAD)" || stop "git cannot read $checkout"
+    git -C "$checkout" ls-files --error-unmatch deploy/dev/compose.yml >/dev/null ||
+      stop "$file is not tracked in $checkout"
     changes="$(git -C "$checkout" status --porcelain)" || stop "git status failed in $checkout"
     [[ -z $changes ]] || stop "$checkout has local changes"
-    echo "OK checkout $checkout $head" ;;
+    echo "OK checkout $checkout $head caddy=$ids" ;;
   *) stop "unknown Caddy source: $dir" ;;
 esac
 CHECK
@@ -121,7 +136,8 @@ CHECK
 6. **The checkout is gone** (the check stops): restore it only if its commit is proven, otherwise
    stop and ask before any deployment. Proof: the checkout's name holds its commit
    (`AyvoOS-deploy-<sha7>`) and the first line after Caddy's creation time
-   (`docker inspect --format '{{.Created}}' ayvo-dev-preview-caddy-1`) in
+   (`docker inspect --format '{{.Created}}' <id>`, where `<id>` is the running Caddy the check selects:
+   `docker ps -q --filter label=com.docker.compose.project=ayvo-dev-preview --filter label=com.docker.compose.service=caddy`) in
    `/opt/ayvo/logs/deployments-dev-preview.log` — the run that recreated it, `SUCCESS` or
    `FAILED` — has a `git=` starting with the same `<sha7>`. Then
    `git worktree add --detach <that path> <that commit>`, run the check again. Never bypass or skip
