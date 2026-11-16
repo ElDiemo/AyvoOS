@@ -1025,6 +1025,7 @@ enum OperationKind {
   PORTAL_FENCE_WRITE
   PORTAL_FENCE_RESOLVE
   PORTAL_FENCE_SETTLE
+  SALES_COMMISSION_TERMS_RECORD
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1217,6 +1218,8 @@ model User {
   contractDraftsUpdated  ContractDraft[]          @relation("ContractDraftUpdatedBy")
   contractDraftsRemoved  ContractDraft[]          @relation("ContractDraftRemovedBy")
   contractRevisions      ContractDraftRevision[]  @relation("ContractDraftRevisionCreatedBy")
+  commissionTerms        SalesCommissionTerms[]   @relation("SalesCommissionTermsSalesperson")
+  commissionTermsBy      SalesCommissionTerms[]   @relation("SalesCommissionTermsRecordedBy")
   contractDraftEvents    ContractDraftEvent[]     @relation("ContractDraftEventActor")
   contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
 
@@ -4059,4 +4062,27 @@ model PortalOperationalFenceResolution {
 
   @@index([restoreRequestId])
   @@map("portal_operational_fence_resolutions")
+}
+
+/// Sales commissions PR 1a (doc 068 §3.1, ADR 0046 §2a; PROTOTYPE): one version of a salesperson's
+/// commission terms. Append-only (DB); versions 1, 2, … without gaps per salesperson; the newest is
+/// the valid version. Rates exact 0–100 with at most 2 decimals; N whole ≥ 1 (DB CHECK).
+model SalesCommissionTerms {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  salespersonId   String   @map("salesperson_id") @db.Uuid
+  version         Int
+  /// Percent, exact (numeric without typmod, scale <= 2: never rounded).
+  initialRate     Decimal  @map("initial_rate") @db.Decimal
+  initialMonths   Int      @map("initial_months")
+  maintenanceRate Decimal  @map("maintenance_rate") @db.Decimal
+  reason          String
+  recordedAt      DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy      String   @map("recorded_by") @db.Uuid
+  requestId       String   @unique @map("request_id") @db.Uuid
+
+  salesperson User @relation("SalesCommissionTermsSalesperson", fields: [salespersonId], references: [id], onDelete: Restrict)
+  recorder    User @relation("SalesCommissionTermsRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+
+  @@unique([salespersonId, version], map: "sales_commission_terms_salesperson_version_key")
+  @@map("sales_commission_terms")
 }

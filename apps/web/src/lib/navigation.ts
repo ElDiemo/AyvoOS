@@ -117,6 +117,13 @@ export const MODULES: readonly NavModule[] = [
       },
       // The owner's view of everyone's work (sales:manage).
       { id: 'results', href: '/sales/results', label: s.pages.results, permission: 'sales:manage' },
+      // Provize (doc 068, PR 1a PROTOTYPE): own terms for sales:work; Nastavení for the admin.
+      {
+        id: 'commissions',
+        href: '/sales/commissions',
+        label: s.pages.commissions,
+        permission: 'sales:work',
+      },
     ],
   },
   {
@@ -445,7 +452,8 @@ export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'ex
 export type FinanceViewId =
   'invoices' | 'billing' | 'customers' | 'bank' | 'payments' | 'company' | 'prices';
 export type DispatchPageId = 'orders' | 'new';
-export type SalesPageId = 'overview' | 'prospects' | 'tasks' | 'calendar' | 'results';
+export type SalesPageId =
+  'overview' | 'prospects' | 'tasks' | 'calendar' | 'results' | 'commissions';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports
