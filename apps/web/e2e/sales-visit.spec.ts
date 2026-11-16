@@ -7,6 +7,7 @@ test.describe.configure({ mode: 'serial' });
 
 const tag = Date.now().toString(36).slice(-5).toUpperCase();
 const V = { email: `e2e-navsteva-${tag}@ayvo.test`.toLowerCase(), name: 'Vera Obchodnice' };
+const W = { email: `e2e-navsteva-w-${tag}@ayvo.test`.toLowerCase(), name: 'Waldemar Obchodník' };
 let code = '';
 
 async function dialogSubmit(page: Page, id: string) {
@@ -21,18 +22,19 @@ async function dialogSubmit(page: Page, id: string) {
  */
 test.beforeAll(async ({ browser }) => {
   const admin = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
-  await json(
-    await admin.request.post('/api/admin/identity/users', {
-      data: {
-        email: V.email,
-        displayName: V.name,
-        roles: ['SALES'],
-        siteIds: [],
-        warehouseCodes: [],
-        reason: 'obchodník (E2E návštěva)',
-      },
-    }),
-  );
+  for (const u of [V, W])
+    await json(
+      await admin.request.post('/api/admin/identity/users', {
+        data: {
+          email: u.email,
+          displayName: u.name,
+          roles: ['SALES'],
+          siteIds: [],
+          warehouseCodes: [],
+          reason: 'obchodník (E2E návštěva)',
+        },
+      }),
+    );
   await admin.close();
   const page = await signIn(browser, V.email);
   const d = await json<ProspectDetail>(
@@ -133,5 +135,60 @@ test('a visit with its next task planned in the guide: no offer', async ({ brows
   await expect(page.getByTestId('prospect-next')).toContainText('Jednání o pilotu');
   await expect(page.getByTestId('next-step-offer')).toHaveCount(0);
   await shot(page, 'sales-visit-1280');
+  await page.context().close();
+});
+
+test('a lost answer: saving again continues the same write — exactly one more Schůzka (390 px)', async ({
+  browser,
+}) => {
+  const page = await signIn(browser, V.email);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const meetings = async () =>
+    (
+      await json<ProspectDetail>(await page.request.get(`/api/admin/sales/prospects/${code}`))
+    ).activities.filter((x) => x.kind === 'MEETING').length;
+  const before = await meetings();
+  await page.goto(`/sales/prospects/${code}`);
+  await page.getByTestId('start-visit').click();
+  const visit = page.getByTestId('visit-dialog');
+  await visit.getByTestId('visit-done-who').check();
+  await visit.getByTestId('visit-notes').fill('Ztracená odpověď.');
+  // The first save reaches the server, but its answer never reaches the browser.
+  let lost = false;
+  await page.route(`**/api/admin/sales/prospects/${code}/activities`, async (route) => {
+    if (lost || route.request().method() !== 'POST') return route.continue();
+    lost = true;
+    await route.fetch();
+    await route.abort('connectionreset');
+  });
+  await visit.getByTestId('visit-dialog-submit').click();
+  await expect.poll(() => lost).toBe(true);
+  await expect(visit).toBeVisible(); // the dialog keeps what was typed
+  await expect(visit.getByTestId('visit-notes')).toHaveValue('Ztracená odpověď.');
+  await dialogSubmit(page, 'visit-dialog');
+  expect(await meetings()).toBe(before + 1);
+  await noOverflow(page);
+  await page.context().close();
+});
+
+test("another salesperson never opens the visit on someone else's prospect", async ({
+  browser,
+}) => {
+  const page = await signIn(browser, W.email);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/sales/prospects/${code}`);
+  await expect(page.getByTestId('start-visit')).toHaveCount(0);
+  const res = await page.request.post(`/api/admin/sales/prospects/${code}/activities`, {
+    data: {
+      requestId: crypto.randomUUID(),
+      kind: 'MEETING',
+      occurredAt: `${pragueDay(-1)}T09:00`,
+      contactId: null,
+      content: 'cizí návštěva',
+      outcome: null,
+      followUp: null,
+    },
+  });
+  expect(res.status()).toBe(404);
   await page.context().close();
 });
