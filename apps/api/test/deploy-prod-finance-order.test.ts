@@ -61,6 +61,8 @@ function run(mode: string, opts: { previous: string; finance: string; apiImage?:
     'validate_compose',
     'check_core_holds_finance_contract',
     'backup_status',
+    'preflight_images',
+    'preflight_rollback_images',
     'build_images',
     'check_running_images',
     'wait_healthy',

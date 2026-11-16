@@ -9,8 +9,9 @@ import { afterAll, describe, expect, it } from 'vitest';
  * rebuilt its images, every build moved the tag <release> to a new image ID (a fresh attestation
  * index even on a full cache hit), the containerd image store forgot the previous ID while
  * api/web/Finance still ran it, and Compose kept those containers (same platform manifest). Since
- * then a revision already built is never built again, api/web are always recreated, and they must
- * run exactly the tagged and recorded IDs. The real functions of scripts/deploy-prod.sh run here
+ * then the images are checked before anything changes (--check, --release, --rollback), a revision
+ * already built is never built again, tags without a record stop, api/web are always recreated, and
+ * they must run exactly the tagged and recorded IDs. The real functions of scripts/deploy-prod.sh run here
  * against a fake docker/compose whose tags and containers live in files (reproduced with real
  * Docker 29 + Compose 5 on DEV, see the PR).
  */
@@ -24,6 +25,12 @@ const fn = (name: string) => {
   return script.slice(from, script.indexOf('}', from) + 1).join('\n');
 };
 
+const branch = (name: string) => {
+  const from = script.indexOf(`  ${name})`);
+  expect(from, name).toBeGreaterThan(-1);
+  return script.slice(from, script.indexOf('    ;;', from) + 1).join('\n');
+};
+
 const tmp = mkdtempSync(join(tmpdir(), 'ayvo-image-ids-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -35,12 +42,29 @@ type State = {
   recorded?: Record<string, string>; // state/images/<release>
   /** The fake compose ignores --force-recreate (Compose's own "same manifest → keep"). */
   composeKeeps?: boolean;
+  /** The build of this compose service fails (an interrupted build). */
+  failBuild?: string;
 };
+/** Steps with outside effects: recorded, never real. */
+const STUBS = [
+  'check_release',
+  'check_resources',
+  'export_release',
+  'check_qr_dns',
+  'id_dns_info',
+  'validate_compose',
+  'backup_status',
+  'hold_unverified_portal',
+  'verify',
+  'record_release',
+  'os_ahead_note',
+];
 
 function run(state: State, call: string) {
   const dir = mkdtempSync(join(tmp, 'run-'));
-  for (const sub of ['tags', 'ctr', 'prod/state/images'])
+  for (const sub of ['tags', 'ctr', 'prod/state/images', `prod/releases/${REL}`])
     mkdirSync(join(dir, sub), { recursive: true });
+  writeFileSync(join(dir, 'prod/releases', REL, '.ayvo-release'), 'f'.repeat(40));
   for (const [k, v] of Object.entries(state.tags)) writeFileSync(join(dir, 'tags', k), v);
   for (const [k, v] of Object.entries(state.containers)) writeFileSync(join(dir, 'ctr', k), v);
   if (state.recorded)
@@ -52,76 +76,164 @@ function run(state: State, call: string) {
     );
   const body = [
     'set -Eeuo pipefail',
-    `D=${dir}; PROD_DIR=$D/prod; AYVO_RELEASE=${REL}; IMAGE_PREFIX=ayvo-prod; PROJECT=ayvo-prod; STEP=`,
-    'log() { :; }; ok() { echo "OK $*"; }; die() { echo "DIE $*"; exit 1; }; wait_healthy() { :; }',
+    `D=${dir}; PROD_DIR=$D/prod; IMAGE_PREFIX=ayvo-prod; PROJECT=ayvo-prod; STEP=; IMAGES_ACTION=`,
+    `AYVO_RELEASE=${REL}; ROLLBACK=${REL}; RELEASE=${REL}${'0'.repeat(28)}; PREVIOUS=${'e'.repeat(12)}; PORTAL_FAILED=`,
+    'log() { :; }; warn() { :; }; ok() { echo "OK $*"; }; die() { echo "DIE $*"; exit 1; }; wait_healthy() { :; }',
+    'release_dir() { printf "%s/releases/%s" "$PROD_DIR" "${1:0:12}"; }',
+    ...STUBS.map((s) => `${s}() { echo "STEP ${s}"; }`),
     // docker image inspect --format '{{.Id}}' ayvo-prod/<image>:<rel>  |  docker inspect --format '{{.Image}}' ayvo-prod-<svc>-1
     'docker() {',
     '  local last=${!#}',
-    '  if [[ $1 == image ]]; then local n=${last#ayvo-prod/}; n=${n%%:*}; [[ ${last##*:} == "$AYVO_RELEASE" && -f $D/tags/$n ]] || return 1; cat "$D/tags/$n"; echo',
+    `  if [[ $1 == image ]]; then local n=\${last#ayvo-prod/}; n=\${n%%:*}; [[ \${last##*:} == ${REL} && -f $D/tags/$n ]] || return 1; cat "$D/tags/$n"; echo`,
     '  else local s=${last#ayvo-prod-}; s=${s%-1}; [[ -f $D/ctr/$s ]] || return 1; cat "$D/ctr/$s"; echo; fi',
     '}',
     'compose() {',
     '  case $1 in',
-    '    build) local n=$2; [[ $n == migrate ]] && n=api-migrate; echo "BUILD $2"; printf "sha256:%064x" $((RANDOM * 32768 + RANDOM)) >"$D/tags/$n" ;;',
-    `    up) local force=false s; for s in "$@"; do [[ $s == --force-recreate ]] && force=true; done`,
+    `    build) local n=$2; [[ $n == migrate ]] && n=api-migrate; echo "BUILD $2"; [[ $2 != "${state.failBuild ?? ''}" ]] || return 1; printf "sha256:%064x" $((RANDOM * 32768 + RANDOM)) >"$D/tags/$n" ;;`,
+    `    up) echo "UP $*"; local force=false s; for s in "$@"; do [[ $s == --force-recreate ]] && force=true; done`,
     `        ${state.composeKeeps ? 'force=false' : ':'}`,
     '        for s in "$@"; do case $s in api|web) if $force || [[ ! -f $D/ctr/$s ]]; then cp "$D/tags/$s" "$D/ctr/$s"; fi ;; esac; done ;;',
     '  esac',
     '}',
-    fn('reuse_recorded_images'),
+    // The state at the end, also after a stop (die exits).
+    'trap \'echo "TAGS $(cat $D/tags/api 2>/dev/null) $(cat $D/tags/web 2>/dev/null)"; echo "CTRS $(cat $D/ctr/api 2>/dev/null) $(cat $D/ctr/web 2>/dev/null)"; echo "RECORD $(tr "\\n" " " <$D/prod/state/images/$AYVO_RELEASE 2>/dev/null)"\' EXIT',
+    fn('preflight_images'),
+    fn('preflight_rollback_images'),
     fn('record_built_images'),
     fn('build_images'),
     fn('check_running_images'),
     fn('start_services'),
     call,
-    'echo "TAGS $(cat $D/tags/api) $(cat $D/tags/web)"',
-    'echo "CTRS $(cat $D/ctr/api 2>/dev/null) $(cat $D/ctr/web 2>/dev/null)"',
   ].join('\n');
   const file = join(dir, 'run.sh');
   writeFileSync(file, body);
   const out = spawnSync('bash', [file], { encoding: 'utf8' });
-  return { status: out.status, out: out.stdout + out.stderr };
+  return { status: out.status, out: out.stdout + out.stderr, dir };
 }
+const mode = (name: string) => `case ${name} in\n${branch(name)}\nesac`;
+const release = 'preflight_images; build_images';
 
 const BUILT = { api: id('a'), 'api-migrate': id('b'), web: id('c') };
 
-describe('deploy-prod: a release is built once and runs exactly its recorded image IDs', () => {
+describe('deploy-prod: images checked before any change, built once, run as recorded', () => {
   it('a second --release of the same revision reuses the recorded images (no build, tags unmoved)', () => {
-    const r = run({ tags: { ...BUILT }, containers: {}, recorded: BUILT }, 'build_images');
+    const r = run({ tags: { ...BUILT }, containers: {}, recorded: BUILT }, release);
     expect(r.status, r.out).toBe(0);
     expect(r.out).not.toContain('BUILD');
     expect(r.out).toContain('reused as recorded');
     expect(r.out).toContain(`TAGS ${BUILT.api} ${BUILT.web}`);
   });
 
-  it('a tag that no longer names its recorded ID is a stop, never rebuilt over', () => {
-    const r = run(
+  it('a moved tag or only some tags is a stop, never rebuilt over', () => {
+    const moved = run(
       { tags: { ...BUILT, web: id('d') }, containers: {}, recorded: BUILT },
-      'build_images',
+      release,
     );
-    expect(r.status).toBe(1);
-    expect(r.out).toMatch(/DIE ayvo-prod\/web:9dd2cf84c474 names .* not the recorded/);
-    expect(r.out).not.toContain('BUILD');
-  });
-
-  it('only some tags left is a stop; none left (an old release removed) or no record builds', () => {
-    const someTags = { api: BUILT.api, 'api-migrate': BUILT['api-migrate'] };
-    const partial = run({ tags: someTags, containers: {}, recorded: BUILT }, 'build_images');
+    expect(moved.status).toBe(1);
+    expect(moved.out).toMatch(/DIE ayvo-prod\/web:9dd2cf84c474 names .* not the recorded/);
+    const some = { api: BUILT.api, 'api-migrate': BUILT['api-migrate'] };
+    const partial = run({ tags: some, containers: {}, recorded: BUILT }, release);
     expect(partial.status).toBe(1);
     expect(partial.out).toContain('only some images');
-    for (const state of [
-      { tags: {}, containers: {}, recorded: BUILT },
-      { tags: {}, containers: {} },
-    ]) {
-      const r = run(state, 'build_images; cat $PROD_DIR/state/images/$AYVO_RELEASE');
-      expect(r.status, r.out).toBe(0);
-      expect(r.out.match(/BUILD (api|migrate|web)/g)).toHaveLength(3);
-      expect(r.out).toMatch(/^api sha256:[0-9a-f]{64}$/m);
+    for (const r of [moved, partial]) expect(r.out).not.toContain('BUILD');
+  });
+
+  it('tags without a record (interrupted build, missing evidence) stop without a build', () => {
+    for (const tags of [{ api: BUILT.api }, { ...BUILT }]) {
+      const r = run({ tags, containers: {} }, release);
+      expect(r.status).toBe(1);
+      expect(r.out).toContain('exist without a record in state/images');
+      expect(r.out).not.toContain('BUILD');
+      expect(r.out).toContain(`TAGS ${tags.api}`);
     }
   });
 
+  it('a clean first build builds and records; a record of removed images is replaced', () => {
+    for (const recorded of [undefined, BUILT]) {
+      const r = run({ tags: {}, containers: {}, recorded }, release);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out.match(/BUILD (api|migrate|web)/g)).toHaveLength(3);
+      expect(r.out).toMatch(/RECORD api sha256:[0-9a-f]{64} api-migrate sha256:[0-9a-f]{64} web /);
+      expect(r.out).not.toContain(`RECORD api ${BUILT.api}`);
+    }
+  });
+
+  it('an interrupted build leaves no record, the next run stops; the documented removal recovers', () => {
+    for (const recorded of [undefined, BUILT]) {
+      const broken = run({ tags: {}, containers: {}, recorded, failBuild: 'migrate' }, release);
+      expect(broken.status).toBe(1);
+      expect(broken.out).toContain('RECORD \n');
+      // What the interrupted build left: the api tag, no record.
+      const api = /TAGS (sha256:[0-9a-f]{64})/.exec(broken.out)![1]!;
+      const next = run({ tags: { api }, containers: {} }, release);
+      expect(next.status).toBe(1);
+      expect(next.out).toContain('exist without a record');
+      expect(next.out).not.toContain('BUILD');
+      // doc 036 §7: no container uses it → remove the tag → --check says "build" → --release.
+      const recovered = run({ tags: {}, containers: {} }, `${mode('check')}\n${release}`);
+      expect(recovered.status, recovered.out).toBe(0);
+      expect(recovered.out).toContain('images: build');
+      expect(recovered.out.match(/BUILD (api|migrate|web)/g)).toHaveLength(3);
+    }
+  });
+
+  it('--check runs the same preflight: no "ready" with a moved tag or tags without a record', () => {
+    for (const state of [
+      { tags: { ...BUILT, api: id('9') }, containers: {}, recorded: BUILT },
+      { tags: { web: BUILT.web }, containers: {} },
+    ]) {
+      const r = run(state, mode('check'));
+      expect(r.status).toBe(1);
+      expect(r.out).not.toContain('ready to deploy');
+      expect(r.out).not.toContain('STEP backup_status');
+    }
+    const fine = run({ tags: { ...BUILT }, containers: {}, recorded: BUILT }, mode('check'));
+    expect(fine.status, fine.out).toBe(0);
+    expect(fine.out).toContain('images: reuse');
+    expect(fine.out).not.toContain('BUILD');
+  });
+
+  it('--release checks the images before validation, the backup and the build', () => {
+    const deploy = branch('deploy');
+    const at = (s: string) => deploy.indexOf(s);
+    expect(at('preflight_images')).toBeGreaterThan(-1);
+    for (const later of ['validate_compose', 'backup_status', 'build_images', 'migrate'])
+      expect(at('preflight_images'), later).toBeLessThan(at(later));
+  });
+
+  it('--rollback with a moved tag or without a record stops before the portal hold and any start', () => {
+    for (const state of [
+      {
+        tags: { ...BUILT, web: id('d') },
+        containers: { api: id('e'), web: id('f') },
+        recorded: BUILT,
+      },
+      { tags: { ...BUILT }, containers: { api: id('e'), web: id('f') } },
+    ]) {
+      const r = run(state, mode('rollback'));
+      expect(r.status).toBe(1);
+      expect(r.out).toMatch(/DIE .*(not the recorded|no image IDs are recorded)/);
+      expect(r.out).not.toContain('STEP hold_unverified_portal');
+      expect(r.out).not.toContain('UP ');
+      expect(r.out).toContain(`CTRS ${id('e')} ${id('f')}`);
+    }
+  });
+
+  it('--rollback with the recorded tags recreates api/web onto the recorded IDs', () => {
+    const r = run(
+      { tags: { ...BUILT }, containers: { api: id('e'), web: id('f') }, recorded: BUILT },
+      mode('rollback'),
+    );
+    expect(r.status, r.out).toBe(0);
+    expect(r.out.indexOf('images of 9dd2cf84c474 are tagged as recorded')).toBeLessThan(
+      r.out.indexOf('STEP hold_unverified_portal'),
+    );
+    expect(r.out).toContain('UP up -d --no-build --force-recreate api web');
+    expect(r.out).toContain('api and web run the image IDs of 9dd2cf84c474');
+    expect(r.out).toContain(`CTRS ${BUILT.api} ${BUILT.web}`);
+  });
+
   it('start_services recreates api/web onto the tagged IDs although the old containers run (PROD state)', () => {
-    // The PROD state: tags = record, but api/web still run an older ID of the same content.
     const r = run(
       { tags: { ...BUILT }, containers: { api: id('e'), web: id('f') }, recorded: BUILT },
       'start_services',
@@ -131,7 +243,7 @@ describe('deploy-prod: a release is built once and runs exactly its recorded ima
     expect(r.out).toContain(`CTRS ${BUILT.api} ${BUILT.web}`);
   });
 
-  it('a container left on another ID (Compose kept it) fails the deployment', () => {
+  it('a container left on another ID (Compose kept it) fails after the start', () => {
     const r = run(
       {
         tags: { ...BUILT },
@@ -145,21 +257,12 @@ describe('deploy-prod: a release is built once and runs exactly its recorded ima
     expect(r.out).toMatch(/DIE api runs sha256:e+, not ayvo-prod\/api:9dd2cf84c474/);
   });
 
-  it('a tag moved away from the record fails even when the container follows the tag', () => {
+  it('a tag moved away from the record fails after the start even when the container follows it', () => {
     const r = run(
       { tags: { ...BUILT, api: id('9') }, containers: {}, recorded: BUILT },
       'start_services',
     );
     expect(r.status).toBe(1);
     expect(r.out).toContain('not the image 9dd2cf84c474 was built as');
-  });
-
-  it('the script recreates api/web and checks the IDs after every start (deploy and rollback)', () => {
-    const start = fn('start_services');
-    expect(start).toMatch(/compose up -d --no-build --force-recreate api web/);
-    expect(start.indexOf('check_running_images')).toBeGreaterThan(
-      start.indexOf('wait_healthy web'),
-    );
-    expect(fn('build_images').indexOf('reuse_recorded_images')).toBeGreaterThan(-1);
   });
 });

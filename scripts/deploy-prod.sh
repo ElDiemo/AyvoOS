@@ -143,6 +143,7 @@ PORTAL_FAILED=""
 PORTAL_PREVIOUS_IMAGE=""
 PORTAL_PREVIOUS_PUBLIC=false
 FINANCE_RELEASE=""
+IMAGES_ACTION="" # preflight_images: reuse | build
 FINANCE_IMAGE=""
 FINANCE_MIGRATE_IMAGE=""
 FINANCE_ENABLED=false
@@ -1078,32 +1079,64 @@ verify_portal_edge() {
 # build moves the tag <release> to a new image ID (BuildKit adds a fresh attestation index even on
 # a full cache hit), the containerd image store then forgets the previous ID although containers
 # still run it, Compose keeps those containers (same platform manifest), and Finance is pinned to
-# a vanished ID. The recorded images are reused when every tag still names its recorded ID; a tag
-# that moved is a stop, never silently rebuilt over.
-reuse_recorded_images() {
-  local file=$PROD_DIR/state/images/$AYVO_RELEASE image recorded tagged missing=0
-  [[ -f $file ]] || return 1
+# a vanished ID.
+#
+# preflight_images decides BEFORE anything changes (read-only; --check runs the same) and sets
+# IMAGES_ACTION: "reuse" when all three tags name their IDs in state/images/<release>, "build"
+# when none of the tags exists (the first build, or a release whose images were removed). Anything
+# else stops: a tag that moved, only some tags, or tags without a record (an interrupted build or
+# missing evidence) — never silently rebuilt over (doc 036 §7).
+preflight_images() {
+  STEP="check the images of $AYVO_RELEASE before anything changes"
+  local file=$PROD_DIR/state/images/$AYVO_RELEASE image recorded tagged present=0
   for image in api api-migrate web; do
-    recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
     tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$AYVO_RELEASE" 2>/dev/null || true)"
-    if [[ -z $tagged ]]; then
-      missing=$((missing + 1))
-      continue
+    [[ -n $tagged ]] || continue
+    present=$((present + 1))
+    if [[ -f $file ]]; then
+      recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
+      [[ $tagged == "$recorded" ]] ||
+        die "$IMAGE_PREFIX/$image:$AYVO_RELEASE names $tagged, not the recorded ${recorded:-nothing}: the tag moved since $AYVO_RELEASE was built; stop (doc 036 §7)"
     fi
-    [[ $tagged == "$recorded" ]] ||
-      die "$IMAGE_PREFIX/$image:$AYVO_RELEASE names $tagged, not the recorded $recorded: the tag moved since $AYVO_RELEASE was built; stop (doc 036 §7)"
   done
-  # None left (removed as an old release): an ordinary build. Some left: an unclear state, stop.
-  ((missing == 0)) && return 0
-  ((missing == 3)) && return 1
-  die "only some images of $AYVO_RELEASE are still tagged here: stop (doc 036 §7)"
+  if ((present == 0)); then
+    IMAGES_ACTION=build
+    ok "no images of $AYVO_RELEASE here: they will be built"
+    return 0
+  fi
+  [[ -f $file ]] ||
+    die "$present image tag(s) of $AYVO_RELEASE exist without a record in state/images (an interrupted build or missing evidence): stop; doc 036 §7 says how to remove unused tags deliberately"
+  ((present == 3)) || die "only some images of $AYVO_RELEASE are still tagged here: stop (doc 036 §7)"
+  IMAGES_ACTION=reuse
+  ok "images of $AYVO_RELEASE are tagged as recorded: they will be reused, not built again"
+}
+
+# --rollback: the images to start must be the ones recorded for that release, checked before the
+# portal is held or any service changes.
+preflight_rollback_images() {
+  STEP="check the images of $ROLLBACK before anything changes"
+  local file=$PROD_DIR/state/images/$ROLLBACK image recorded tagged
+  [[ -f $file ]] ||
+    die "no image IDs are recorded for $ROLLBACK (state/images): its images cannot be verified; stop"
+  for image in api web; do
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$ROLLBACK" 2>/dev/null || true)"
+    [[ -n $tagged ]] || die "image $IMAGE_PREFIX/$image:$ROLLBACK is gone"
+    recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
+    [[ $tagged == "$recorded" ]] ||
+      die "$IMAGE_PREFIX/$image:$ROLLBACK names $tagged, not the recorded ${recorded:-nothing}: stop before any change (doc 036 §7)"
+  done
+  ok "images of $ROLLBACK are tagged as recorded"
 }
 
 build_images() {
-  if reuse_recorded_images; then
+  [[ -n ${IMAGES_ACTION:-} ]] || die "preflight_images did not run"
+  if [[ $IMAGES_ACTION == reuse ]]; then
     ok "images of $AYVO_RELEASE already built here: reused as recorded, not built again"
     return 0
   fi
+  # A record of removed images must not outlive this build: interrupted, the tags it leaves then
+  # have no record and the next run stops (preflight_images) instead of building over them.
+  rm -f "$PROD_DIR/state/images/$AYVO_RELEASE"
   # One image at a time: the server has 4 GB RAM (doc 036 §2).
   local service
   for service in api migrate web; do
@@ -1702,9 +1735,10 @@ case $MODE in
     check_qr_dns
     id_dns_info
     AYVO_RELEASE=${RELEASE:0:12}
+    preflight_images
     validate_compose
     backup_status
-    ok "ready to deploy $RELEASE (running now: ${PREVIOUS:-nothing})"
+    ok "ready to deploy $RELEASE (running now: ${PREVIOUS:-nothing}; images: $IMAGES_ACTION)"
     ;;
   deploy)
     [[ -n $RELEASE ]] || die "--release <commit> is required (see --help)"
@@ -1716,6 +1750,7 @@ case $MODE in
     check_qr_dns
     id_dns_info
     AYVO_RELEASE=${RELEASE:0:12}
+    preflight_images
     validate_compose
     backup_status
     build_images
@@ -1738,9 +1773,7 @@ case $MODE in
   rollback)
     [[ $ROLLBACK =~ ^[0-9a-f]{12}$ ]] || die "--rollback needs the 12-character release of an earlier deployment"
     [[ -f $(release_dir "$ROLLBACK")/.ayvo-release ]] || die "release $ROLLBACK was never exported here"
-    for image in api web; do
-      docker image inspect "$IMAGE_PREFIX/$image:$ROLLBACK" >/dev/null 2>&1 || die "image $IMAGE_PREFIX/$image:$ROLLBACK is gone"
-    done
+    preflight_rollback_images
     log "rollback to $ROLLBACK at $(date -u +%FT%TZ) (running: ${PREVIOUS:-nothing}). No migration runs."
     warn "the database keeps its current schema: this is safe only if $ROLLBACK works with it (doc 036 §7)"
     RELEASE=$(<"$(release_dir "$ROLLBACK")/.ayvo-release")
