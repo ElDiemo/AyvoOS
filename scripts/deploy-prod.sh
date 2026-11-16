@@ -1074,7 +1074,36 @@ verify_portal_edge() {
 
 # --- deploy steps -----------------------------------------------------------------------------
 
+# A revision whose images were already built here is never built again (PROD 2026-11-16): every
+# build moves the tag <release> to a new image ID (BuildKit adds a fresh attestation index even on
+# a full cache hit), the containerd image store then forgets the previous ID although containers
+# still run it, Compose keeps those containers (same platform manifest), and Finance is pinned to
+# a vanished ID. The recorded images are reused when every tag still names its recorded ID; a tag
+# that moved is a stop, never silently rebuilt over.
+reuse_recorded_images() {
+  local file=$PROD_DIR/state/images/$AYVO_RELEASE image recorded tagged missing=0
+  [[ -f $file ]] || return 1
+  for image in api api-migrate web; do
+    recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$AYVO_RELEASE" 2>/dev/null || true)"
+    if [[ -z $tagged ]]; then
+      missing=$((missing + 1))
+      continue
+    fi
+    [[ $tagged == "$recorded" ]] ||
+      die "$IMAGE_PREFIX/$image:$AYVO_RELEASE names $tagged, not the recorded $recorded: the tag moved since $AYVO_RELEASE was built; stop (doc 036 §7)"
+  done
+  # None left (removed as an old release): an ordinary build. Some left: an unclear state, stop.
+  ((missing == 0)) && return 0
+  ((missing == 3)) && return 1
+  die "only some images of $AYVO_RELEASE are still tagged here: stop (doc 036 §7)"
+}
+
 build_images() {
+  if reuse_recorded_images; then
+    ok "images of $AYVO_RELEASE already built here: reused as recorded, not built again"
+    return 0
+  fi
   # One image at a time: the server has 4 GB RAM (doc 036 §2).
   local service
   for service in api migrate web; do
@@ -1212,11 +1241,33 @@ migrate() {
 start_services() {
   STEP="start api and web, then caddy, dns and the public QR edge"
   log "$STEP"
-  compose up -d --no-build api web || die "api/web did not start"
+  # Always recreated: Compose compares only the platform manifest, so a tag that names another
+  # image ID with the same content would leave the old container (and its ID) running.
+  compose up -d --no-build --force-recreate api web || die "api/web did not start"
   wait_healthy api || die "api did not become healthy"
   wait_healthy web || die "web did not become healthy"
+  check_running_images
   compose up -d --no-build caddy dns qr-edge || die "caddy/dns/qr-edge did not start"
   ok "services running $AYVO_RELEASE"
+}
+
+# api and web run exactly the image IDs their tags name — and, when recorded, the IDs this
+# release was built as (state/images, what Finance is pinned to).
+check_running_images() {
+  STEP="check the running image IDs of $AYVO_RELEASE"
+  local file=$PROD_DIR/state/images/$AYVO_RELEASE service running tagged recorded
+  for service in api web; do
+    running="$(docker inspect --format '{{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)"
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$service:$AYVO_RELEASE" 2>/dev/null || true)"
+    [[ -n $running && $running == "$tagged" ]] ||
+      die "$service runs ${running:-nothing}, not $IMAGE_PREFIX/$service:$AYVO_RELEASE (${tagged:-missing})"
+    if [[ -f $file ]]; then
+      recorded="$(awk -v s="$service" '$1 == s { print $2 }' "$file")"
+      [[ $running == "$recorded" ]] ||
+        die "$service runs $running, not the image $AYVO_RELEASE was built as ($recorded)"
+    fi
+  done
+  ok "api and web run the image IDs of $AYVO_RELEASE"
 }
 
 # --- verification -----------------------------------------------------------------------------

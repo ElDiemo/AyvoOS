@@ -194,6 +194,14 @@ e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism
 - Any failure stops at that step and reports it, the dump, whether migrations ran and the previous
   release. Nothing is undone silently, and **a database is never restored automatically** — an
   older backup is never written over newer data without the owner deciding (doc 035 §4).
+- **A revision is built once** (PROD 2026-11-16). A second `--release` of the same commit (for
+  example to apply a changed `prod.env`) reuses the images recorded in `state/images/<release>`
+  instead of building again. Every build moves the tag to a new image ID, and the containerd image
+  store then forgets the previous ID even while containers still run it. A tag that no longer names
+  its recorded ID stops the deployment and is never rebuilt over. api and web are always recreated
+  (`--force-recreate`), because Compose compares only the platform manifest. After the start they
+  must run exactly the tagged and recorded IDs, otherwise the deployment fails. The same holds for
+  `--rollback`.
 - `--rollback <12-character release>` starts the images of an earlier release again without
   building or migrating. Safe only when that code works with the current schema (migrations are
   additive by policy; check the release notes). Otherwise: fix forward, or a deliberate restore.
