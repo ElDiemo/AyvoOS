@@ -90,15 +90,17 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
   await expect(nav.getByRole('link')).toHaveText(['Přehled', 'Sklad']);
   await expect(colleaguePage.getByTestId('choose-site')).toBeVisible();
   await colleaguePage.goto('/warehouse/stock');
-  await expect(colleaguePage).toHaveURL(/\/select-site\?next=%2Fwarehouse%2Fstock$/);
+  // The former URL redirects first; the site is chosen for Zásoby.
+  await expect(colleaguePage).toHaveURL(/\/select-site\?next=%2Fwarehouse$/);
   await colleaguePage
     .getByTestId('site-choices')
     .locator('li', { hasText: 'Testovací provozovna DE' })
     .getByRole('button', { name: 'Pracovat zde' })
     .click();
-  await expect(colleaguePage).toHaveURL(/\/warehouse\/stock$/);
+  // The former Stav skladu URL leads to Zásoby (owner 2026-11-16).
+  await expect(colleaguePage).toHaveURL(/\/warehouse$/);
   await expect(colleaguePage.getByRole('heading', { level: 1 })).toHaveText(
-    'Stav skladu – Testovací sklad DE',
+    'Zásoby – Testovací sklad DE',
   );
 
   // Switching the site in the shell reloads the operational context of the other site.
@@ -106,7 +108,7 @@ test('ADMIN builds a custom role, assigns it with two sites; access follows at o
     .getByTestId('site-switcher')
     .selectOption({ label: 'CZ-PREROV-01 · Přerov 1' });
   await expect(colleaguePage.getByRole('heading', { level: 1 })).toHaveText(
-    'Stav skladu – Hlavní sklad',
+    'Zásoby – Hlavní sklad',
   );
   await expect(colleaguePage.locator('body')).not.toContainText('Testovací sklad DE');
   await colleaguePage.goto('/bottles');

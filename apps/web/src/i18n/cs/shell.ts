@@ -50,33 +50,36 @@ export const shellCs = {
     sales: {
       label: 'Obchod',
       description: 'Akvizice hotelů: zájemci, kontakty, co proběhlo a co je potřeba udělat dál.',
-      pages: { overview: 'Přehled obchodu', prospects: 'Akvizice', tasks: 'Úkoly' },
+      pages: {
+        overview: 'Přehled obchodu',
+        prospects: 'Akvizice',
+        tasks: 'Úkoly',
+        calendar: 'Kalendář',
+        results: 'Výsledky',
+      },
     },
     warehouse: {
       label: 'Sklad',
       description: 'Fyzické zásoby: příjem zboží, šarže, stav skladu, pohyby a dodavatelé.',
       pages: {
-        overview: 'Přehled skladu',
+        overview: 'Zásoby',
         newReceipt: 'Příjem zboží',
         receipts: 'Příjmy',
-        stock: 'Stav skladu',
-        availability: 'Dostupnost',
         movements: 'Pohyby',
         suppliers: 'Dodavatelé',
-        returns: 'Příjem vratek',
-        afterWash: 'Po mytí',
       },
     },
     production: {
       label: 'Výroba',
       description:
-        'Práce na pracovištích (lepení a plnění), evidence beden a lahví a nastavení výroby.',
+        'Práce na pracovištích (lepení a plnění), oběh lahví (vratky a mytí), evidence beden a lahví a nastavení výroby.',
       pages: {
         overview: 'Přehled výroby',
         bottles: 'Lahve',
         templates: 'Šablony etiket',
         labelActivation: 'Nalepení etiket',
         station: 'Pracovat na pracovišti',
+        cycle: 'Oběh lahví',
         crates: 'Bedny',
         workstations: 'Pracoviště a QR',
         catalog: 'Produkty a receptury',
@@ -92,7 +95,7 @@ export const shellCs = {
         setup: 'Nastavení výroby',
       },
       sectionHelp: {
-        work: 'Lepení a plnění na pracovišti',
+        work: 'Pracoviště, vratky a mytí',
         records: 'Záznamy a jejich historie',
         setup: 'Příprava, pracoviště, produkty',
       },
@@ -106,7 +109,7 @@ export const shellCs = {
     dispatch: {
       label: 'Expedice',
       description: 'Ruční objednávky hotelů a kompletace hotových beden k expedici.',
-      pages: { orders: 'Objednávky', new: 'Nová objednávka' },
+      pages: { orders: 'Objednávky', new: 'Nová objednávka', pickups: 'Svoz' },
     },
   },
   home: {
@@ -117,7 +120,7 @@ export const shellCs = {
     salesOverdue: 'Úkoly po termínu',
     salesToday: 'Úkoly na dnes',
     salesInProgress: 'Rozpracovaní zájemci',
-    openAvailability: 'Otevřít dostupnost',
+    openAvailability: 'Otevřít zásoby',
     availabilityDescription: 'Dostupnost zásob pro plánování (pouze pro čtení).',
     allAvailable: 'Všechny položky jsou nad minimální zásobou.',
     openProduction: 'Otevřít výrobu',
@@ -134,6 +137,7 @@ export const shellCs = {
     noSuppliers: 'Zatím není založen žádný dodavatel.',
     noBottles: 'Zatím nejsou vytvořeny žádné identity lahví.',
     lowStockWarning: (items: string) => `Pod minimální zásobou: ${items}.`,
+    noneAvailableWarning: (items: string) => `Nic k dispozici: ${items}.`,
     pendingInvoiceWarning: (n: number) =>
       n === 1 ? '1 příjem čeká na fakturu.' : `${n} příjmů čeká na fakturu.`,
     system: 'Stav systému',

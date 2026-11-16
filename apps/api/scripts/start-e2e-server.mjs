@@ -21,6 +21,7 @@ import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { financeOutageControl } from './e2e-finance-outage.mjs';
 import { createE2eStorage } from './e2e-storage.mjs';
 
 const apiRoot = resolve(import.meta.dirname, '..');
@@ -34,12 +35,19 @@ const storageDir = createE2eStorage(process.env.E2E_FILE_STORAGE_POINTER);
 const serverUrl = process.env.AYVO_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!serverUrl) throw new Error('Set DATABASE_URL (pnpm infra:up) or AYVO_TEST_DATABASE_URL');
 const withDb = (db) => Object.assign(new URL(serverUrl), { pathname: `/${db}` }).toString();
-const e2eUrl = withDb('ayvo_e2e');
+// E2E_DB_NAME: a second, isolated e2e set next to another one (ayvo_e2e_<suffix>, its own
+// cluster-wide runtime roles with the same suffix, so neither run resets the other's passwords).
+const dbName = process.env.E2E_DB_NAME ?? 'ayvo_e2e';
+const suffix = /^ayvo_e2e(_[a-z0-9]{1,20})?$/.exec(dbName)?.[1] ?? null;
+if (suffix === null && dbName !== 'ayvo_e2e')
+  throw new Error('E2E_DB_NAME must be ayvo_e2e[_suffix]');
+const roleSuffix = suffix ?? '';
+const e2eUrl = withDb(dbName);
 
 const { PrismaClient } = await import(resolve(apiRoot, 'dist/generated/prisma/client.js'));
 const admin = new PrismaClient({ adapter: new PrismaPg({ connectionString: withDb('postgres') }) });
-await admin.$executeRawUnsafe('DROP DATABASE IF EXISTS "ayvo_e2e" WITH (FORCE)');
-await admin.$executeRawUnsafe('CREATE DATABASE "ayvo_e2e"');
+await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+await admin.$executeRawUnsafe(`CREATE DATABASE "${dbName}"`);
 await admin.$disconnect();
 
 execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy'], {
@@ -51,9 +59,9 @@ execFileSync(resolve(apiRoot, 'node_modules/.bin/prisma'), ['migrate', 'deploy']
 // Finance unit (ADR 0039), exactly as deployed: its roles and schema (as the superuser), its
 // migrations as the schema owner. Fixed e2e role names; new passwords every run.
 const finance = {
-  ownerRole: 'ayvo_fin_e2e_owner',
+  ownerRole: `ayvo_fin_e2e${roleSuffix}_owner`,
   ownerPassword: randomBytes(24).toString('hex'),
-  runtimeRole: 'ayvo_fin_e2e',
+  runtimeRole: `ayvo_fin_e2e${roleSuffix}`,
   runtimePassword: randomBytes(24).toString('hex'),
   runtimeConnections: 10,
 };
@@ -79,7 +87,7 @@ const serviceToken = randomBytes(32).toString('base64url');
 // The core runtime role of this run (a fresh password each run; the role is cluster-wide).
 const { setupCoreDatabase } = await import(resolve(apiRoot, 'dist/database/core-db-setup.js'));
 const core = {
-  role: 'ayvo_core_e2e',
+  role: `ayvo_core_e2e${roleSuffix}`,
   password: randomBytes(24).toString('base64url'),
   connections: 50,
 };
@@ -96,7 +104,10 @@ const coreUrl = Object.assign(new URL(e2eUrl), {
 // fake credentials; the test-only base URL is refused by the API unless APP_ENV=test.
 const { FakePpl } = await import(resolve(apiRoot, 'test/support/fake-ppl.ts'));
 const fakePpl = new FakePpl('e2e-fake-ppl-client', 'e2e-fake-ppl-secret-never-shown');
-await fakePpl.start();
+// E2E_CARRIER=ppl (the isolated Svoz walkthrough only, workflow-pickups-ppl.spec.ts): the real PPL
+// adapter talks to this simulation, on a known port so the spec can steer it (test control route).
+const pplWalkthrough = process.env.E2E_CARRIER === 'ppl';
+await fakePpl.start(pplWalkthrough ? Number(process.env.E2E_FAKE_PPL_PORT ?? 4195) : 0);
 
 // A SIMULATED Raiffeisenbank Premium API (test/support/fake-rb.ts) for the browser tests of
 // Finance → Bankovní pohyby: its own CA and certificates per run, synthetic entries that live only
@@ -154,8 +165,10 @@ const testEnv = {
   ...process.env,
   APP_ENV: 'test',
   AUTH_PROVIDER: 'test',
-  // The fake carrier (doc 029): allowed only with APP_ENV=test; never on DEV or production.
-  CARRIER_PROVIDER: 'test',
+  // The fake carrier (doc 029): allowed only with APP_ENV=test; never on DEV or production. The
+  // isolated Svoz walkthrough uses the real PPL adapter against the simulation instead.
+  CARRIER_PROVIDER: pplWalkthrough ? 'none' : 'test',
+  ...(pplWalkthrough ? { CARRIER_SETTLE_SECONDS: '0', CARRIER_CALL_TIMEOUT_SECONDS: '3' } : {}),
   // Supply plans (doc 032): the real background round, often enough for the browser tests.
   SUPPLY_PLAN_SECONDS: '2',
   PPL_TEST_CLIENT_ID: fakePpl.clientId,
@@ -220,39 +233,31 @@ const startFinance = () =>
       ...fakeRb.env(`${e2eBankAccount}:CZK`),
     },
   });
-let financeChild = startFinance();
-// Test-only outage control (e2e/workflow-finance-outage.spec.ts): SIGUSR2 stops the Finance process
-// on purpose, SIGUSR1 starts it again; the core keeps running. The pid file names this server.
-let financeStopped = false;
+// Test-only outage control (the specs that stop Finance on purpose): SIGUSR2 stops the Finance
+// process (SIGKILL after a 5 s grace), SIGUSR1 starts it again — also when the stopped process has
+// not exited yet; the core keeps running. The pid file names this server.
+const financeUnit = financeOutageControl({
+  start: startFinance,
+  // An unexpected Finance exit ends the run (a broken unit must fail the tests).
+  onUnexpectedExit: (code) => {
+    child.kill('SIGTERM');
+    shutdown(code ?? 1);
+  },
+});
 const pidFile = join(tmpdir(), `ayvo-e2e-server-${port}.pid`);
 writeFileSync(pidFile, String(process.pid), { mode: 0o600 });
-process.on('SIGUSR2', () => {
-  financeStopped = true;
-  financeChild.kill('SIGTERM');
-});
-process.on('SIGUSR1', () => {
-  if (financeChild.exitCode === null && financeChild.signalCode === null) return;
-  financeStopped = false;
-  financeChild = startFinance();
-  financeChild.on('exit', onFinanceExit);
-});
+process.on('SIGUSR2', () => financeUnit.stop());
+process.on('SIGUSR1', () => financeUnit.restart());
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.on(signal, () => {
     child.kill(signal);
-    financeChild.kill(signal);
+    financeUnit.child.kill(signal);
   });
 const shutdown = (code) => {
   rmSync(pidFile, { force: true });
   process.exit(code);
 };
 child.on('exit', (code) => {
-  financeChild.kill('SIGTERM');
+  financeUnit.child.kill('SIGTERM');
   shutdown(code ?? 0);
 });
-// An unexpected Finance exit ends the run (a broken unit must fail the tests); a requested stop does not.
-function onFinanceExit(code) {
-  if (financeStopped) return;
-  child.kill('SIGTERM');
-  shutdown(code ?? 1);
-}
-financeChild.on('exit', onFinanceExit);

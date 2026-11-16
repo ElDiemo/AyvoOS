@@ -109,6 +109,14 @@ export const MODULES: readonly NavModule[] = [
         permission: 'sales:work',
       },
       { id: 'tasks', href: '/sales/tasks', label: s.pages.tasks, permission: 'sales:work' },
+      {
+        id: 'calendar',
+        href: '/sales/calendar',
+        label: s.pages.calendar,
+        permission: 'sales:work',
+      },
+      // The owner's view of everyone's work (sales:manage).
+      { id: 'results', href: '/sales/results', label: s.pages.results, permission: 'sales:manage' },
     ],
   },
   {
@@ -215,17 +223,19 @@ export const MODULES: readonly NavModule[] = [
   {
     id: 'warehouse',
     section: 'operations',
-    permissions: ['inventory:read', 'inventory:stock_summary', 'returns:receive'],
+    permissions: ['inventory:read', 'inventory:stock_summary'],
     label: w.label,
     href: '/warehouse',
     description: w.description,
     pages: [
       {
+        // Zásoby (owner 2026-11-16): one list for the warehouse (inventory:read) and the planning
+        // view (inventory:stock_summary); /warehouse/stock and /warehouse/availability redirect here.
         id: 'overview',
         href: '/warehouse',
         label: w.pages.overview,
         exact: true,
-        permission: 'inventory:read',
+        anyOf: ['inventory:read', 'inventory:stock_summary'],
       },
       {
         id: 'new-receipt',
@@ -239,13 +249,6 @@ export const MODULES: readonly NavModule[] = [
         label: w.pages.receipts,
         permission: 'inventory:read',
       },
-      { id: 'stock', href: '/warehouse/stock', label: w.pages.stock, permission: 'inventory:read' },
-      {
-        id: 'availability',
-        href: '/warehouse/availability',
-        label: w.pages.availability,
-        permission: 'inventory:stock_summary',
-      },
       {
         id: 'movements',
         href: '/warehouse/movements',
@@ -257,18 +260,6 @@ export const MODULES: readonly NavModule[] = [
         href: '/warehouse/suppliers',
         label: w.pages.suppliers,
         permission: 'inventory:read',
-      },
-      {
-        id: 'returns',
-        href: '/warehouse/returns',
-        label: w.pages.returns,
-        permission: 'returns:receive',
-      },
-      {
-        id: 'after-wash',
-        href: '/warehouse/after-wash',
-        label: w.pages.afterWash,
-        permission: 'returns:receive',
       },
     ],
   },
@@ -285,6 +276,7 @@ export const MODULES: readonly NavModule[] = [
       'production:fill',
       'production:label_apply',
       'production:workstations_manage',
+      'returns:receive',
     ],
     label: p.label,
     href: '/production',
@@ -304,6 +296,15 @@ export const MODULES: readonly NavModule[] = [
         group: 'work',
         // The station page admits either mode (issue #11 UI-15).
         anyOf: ['production:label_apply', 'production:fill'],
+      },
+      {
+        // Oběh lahví (owner 2026-11-09): Příjem vratek and Po mytí of the active site in one
+        // place; the former warehouse URLs redirect here (next.config.ts).
+        id: 'cycle',
+        href: '/production/cycle',
+        label: p.pages.cycle,
+        group: 'work',
+        permission: 'returns:receive',
       },
       {
         id: 'crates',
@@ -388,6 +389,13 @@ export const MODULES: readonly NavModule[] = [
         label: d.pages.new,
         permission: 'orders:manage',
       },
+      // Pickup orders at the carrier (doc 029 §11).
+      {
+        id: 'pickups',
+        href: '/dispatch/pickups',
+        label: d.pages.pickups,
+        permission: 'shipments:read',
+      },
     ],
   },
   {
@@ -426,21 +434,13 @@ export const MODULES: readonly NavModule[] = [
   },
 ];
 
-export type WarehousePageId =
-  | 'overview'
-  | 'new-receipt'
-  | 'receipts'
-  | 'stock'
-  | 'availability'
-  | 'movements'
-  | 'suppliers'
-  | 'returns'
-  | 'after-wash';
+export type WarehousePageId = 'overview' | 'new-receipt' | 'receipts' | 'movements' | 'suppliers';
 export type ProductionPageId =
   | 'overview'
   | 'bottles'
   | 'templates'
   | 'station'
+  | 'cycle'
   | 'crates'
   | 'workstations'
   | 'catalog'
@@ -451,8 +451,8 @@ export type HotelsPageId = 'list' | 'new' | 'users';
 export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'exports' | 'settings';
 export type FinanceViewId =
   'invoices' | 'billing' | 'customers' | 'bank' | 'payments' | 'company' | 'prices';
-export type DispatchPageId = 'orders' | 'new';
-export type SalesPageId = 'overview' | 'prospects' | 'tasks';
+export type DispatchPageId = 'orders' | 'new' | 'pickups';
+export type SalesPageId = 'overview' | 'prospects' | 'tasks' | 'calendar' | 'results';
 
 /**
  * The modules and pages the signed-in user may open, filtered by the permissions the API reports

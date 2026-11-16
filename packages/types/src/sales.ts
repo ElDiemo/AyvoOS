@@ -296,6 +296,11 @@ export const taskListQuerySchema = z.object({
   /** "me" (default), "all" or a user id — anything but "me" needs sales:manage. */
   assignee: z.union([z.literal('me'), z.literal('all'), z.uuid()]).default('me'),
   status: z.enum(['OPEN', 'CLOSED']).default('OPEN'),
+  /**
+   * "overdue": only the tasks "Výsledky" counts as overdue — open, due before today in the sales
+   * time zone, of a prospect not archived (the status is then OPEN whatever `status` says).
+   */
+  due: z.enum(['overdue']).optional(),
   page: z.coerce.number().int().min(1).max(10000).default(1),
 });
 export type TaskListQuery = z.infer<typeof taskListQuerySchema>;
@@ -488,6 +493,85 @@ export const taskPageSchema = z.object({
   today: salesDateSchema,
 });
 export type TaskPage = z.infer<typeof taskPageSchema>;
+
+/**
+ * "Kalendář" (sales): the tasks due in one month (Europe/Prague days), open and closed, for the
+ * same people as the task list ("me", or — with sales:manage — "all" or one salesperson), and how
+ * many open tasks are overdue before that month. At most SALES_CALENDAR_MAX tasks.
+ */
+export const SALES_CALENDAR_MAX = 1000;
+export const salesCalendarQuerySchema = z.object({
+  month: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'YYYY-MM')
+    .optional(),
+  assignee: z.union([z.literal('me'), z.literal('all'), z.uuid()]).default('me'),
+});
+export type SalesCalendarQuery = z.infer<typeof salesCalendarQuerySchema>;
+export const salesCalendarSchema = z.object({
+  month: z.string(),
+  today: salesDateSchema,
+  items: z.array(taskSchema),
+  /** Open tasks due before the first day of this month. */
+  overdueBefore: z.number().int(),
+  /** More tasks than SALES_CALENDAR_MAX were due in the month (the rest are not shown). */
+  truncated: z.boolean(),
+});
+export type SalesCalendar = z.infer<typeof salesCalendarSchema>;
+
+/**
+ * "Výsledky obchodu" (sales:manage): the funnel now and what moved in the last `days` days, read
+ * from the existing records only — prospects (stage, owner, archive), the append-only stage
+ * changes, the current version of each activity (a corrected one counts once, a withdrawn one
+ * never) and open tasks. In the sales time zone.
+ */
+export const salesResultsQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .refine((d) => d === 7 || d === 30 || d === 90, '7, 30 or 90')
+    .default(30),
+});
+export type SalesResultsQuery = z.infer<typeof salesResultsQuerySchema>;
+const stageCounts = z.object(
+  Object.fromEntries(PROSPECT_STAGES.map((s) => [s, z.number().int()])) as Record<
+    ProspectStage,
+    z.ZodNumber
+  >,
+);
+const activityCounts = z.object(
+  Object.fromEntries(ACTIVITY_KINDS.map((k) => [k, z.number().int()])) as Record<
+    ActivityKind,
+    z.ZodNumber
+  >,
+);
+export const salesResultsSchema = z.object({
+  days: z.number().int(),
+  since: salesDateSchema,
+  today: salesDateSchema,
+  /** Active (not archived) prospects by their stage now. */
+  funnel: stageCounts,
+  /** Prospects that reached each stage in the period (a stage change to it). */
+  reached: stageCounts,
+  /** New prospects created in the period. */
+  created: z.number().int(),
+  activities: activityCounts,
+  withoutNextStep: z.number().int(),
+  overdueTasks: z.number().int(),
+  people: z.array(
+    z.object({
+      id: z.uuid(),
+      name: z.string(),
+      inProgress: z.number().int(),
+      withoutNextStep: z.number().int(),
+      calls: z.number().int(),
+      meetings: z.number().int(),
+      offers: z.number().int(),
+      won: z.number().int(),
+    }),
+  ),
+});
+export type SalesResults = z.infer<typeof salesResultsSchema>;
 
 export const salesOverviewSchema = z.object({
   today: salesDateSchema,

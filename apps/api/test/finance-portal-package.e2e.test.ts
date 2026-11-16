@@ -10,6 +10,7 @@ import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.
 import { createFinanceTestApp, type FinanceTestApp } from './support/finance-app.js';
 import { agreement, hotel, invoice, payer } from './support/finance-portal.js';
 import { hasDatabase, withPrivileged } from './support/test-app.js';
+import { operationsCheck } from './support/portal-check.js';
 
 const portalToken = randomBytes(32).toString('base64url');
 const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
@@ -70,7 +71,7 @@ describe.skipIf(!hasDatabase)('hotel portal: invoice package for a period', () =
         payerCustomerId: g.payer,
         hotelIds: g.hotels,
         reason: 'synthetic portal grant',
-        financeCheck: { payerVersion: 1, hotelIds: g.hotels, checkedAt: new Date().toISOString() },
+        financeCheck: operationsCheck(g.hotels),
       });
     const identity = await f.core.prisma.userIdentity.create({
       data: { userId: user.id, provider: 'LOCAL', subject: user.id, emailAtLink: user.email },

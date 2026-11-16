@@ -124,11 +124,11 @@ test('receive new bottles: supplier, delivery note, internal lot, invoice pendin
   // The warehouse opens on its own overview (no redirect to label application).
   await page.goto('/warehouse');
   await expect(page).toHaveURL(/\/warehouse$/);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled skladu');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^Zásoby – /);
   await expect(
     page.getByRole('navigation', { name: 'Hlavní navigace' }).getByRole('link', { name: 'Sklad' }),
   ).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByTestId('next-action')).toHaveText('Založit dodavatele');
+  await expect(page.getByTestId('receive-goods')).toHaveText('Přijmout zboží');
   await expect(page.getByTestId('attention')).toContainText('není založen žádný dodavatel');
 
   await page
@@ -218,9 +218,9 @@ test('a consumable (ribbon roll) is received and issued to consumption by hand, 
   await page.getByRole('button', { name: 'Potvrdit příjem' }).click();
   await expect(page).toHaveURL(/\/warehouse\/receipts\/GR-\d{6}\?created=1$/);
 
-  // Issued by hand on the stock page: one roll, with a reason.
+  // Issued by hand on Zásoby (the item opened): one roll, with a reason.
   // The warehouse supervisor (this spec's user) has no inventory:consume: no form, refused.
-  await page.goto('/warehouse/stock');
+  await page.goto(`/warehouse?item=${code}`);
   await expect(page.getByTestId(`stock-${code}`)).toContainText('Ribbon zlatý 300 m');
   await expect(page.getByTestId(`issue-${code}`)).toHaveCount(0);
   // ADMIN issues it.
@@ -231,7 +231,7 @@ test('a consumable (ribbon roll) is received and issued to consumption by hand, 
 });
 
 async function issueAsAdmin(page: Page, code: string) {
-  await page.goto('/warehouse/stock');
+  await page.goto(`/warehouse?item=${code}`);
   const form = page.getByTestId(`issue-${code}`);
   await expect(form.getByTestId(`issue-${code}-quantity`)).toHaveValue('1');
   await form.getByTestId(`issue-${code}-reason`).fill('nová role do tiskárny etiket');
@@ -383,11 +383,13 @@ test('invoice linked later, stock and ledger, bottle physical facts, phone width
   await page.goto(`/bottles/${codes[2]}`);
   await expect(page.getByTestId('physical')).toContainText('zatím nebyla nalepena');
 
-  // The warehouse overview now reflects the receipt and the movements.
+  // Zásoby lists the item; receipts and movements are links, not repeated lists.
   await page.goto('/warehouse');
-  await expect(page.getByTestId('overview-receipts')).toContainText(receiptCode);
-  await expect(page.getByTestId('overview-movements')).toContainText('Nalepení etikety');
-  await expect(page.getByTestId('overview-stock-NEW_BOTTLE')).toContainText('Nová prázdná lahev');
+  await expect(page.getByTestId('stock-NEW_BOTTLE')).toContainText('Nová prázdná lahev');
+  await page.getByTestId('stock-NEW_BOTTLE').locator('summary').click();
+  await page.getByTestId('stock-movements-NEW_BOTTLE').click();
+  await expect(page).toHaveURL(/\/warehouse\/movements\?item=NEW_BOTTLE$/);
+  await expect(page.getByTestId('movements')).toContainText('Nalepení etikety');
 
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 900 });

@@ -72,7 +72,7 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(visibleModules(['identity:users_read']).map((m) => m.id)).toEqual(['admin']);
   });
 
-  it('SALES sees only Obchod with its three pages (doc 034)', () => {
+  it('SALES sees only Obchod with its pages (doc 034), the calendar included', () => {
     const modules = visibleModules(['sales:work']);
     expect(modules.map((m) => m.id)).toEqual(['sales']);
     expect(modules[0]!.section).toBe('sales');
@@ -80,46 +80,39 @@ describe('AYVO OS navigation (doc 019)', () => {
       '/sales',
       '/sales/prospects',
       '/sales/tasks',
+      '/sales/calendar',
     ]);
+    expect(locate('/sales/calendar').page?.id).toBe('calendar');
     expect(locate('/sales/prospects/AKV-000001').page?.id).toBe('prospects');
     expect(locate('/sales').page?.id).toBe('overview');
   });
 
-  it('a planning role sees only the availability page of the warehouse; the module link opens it', () => {
+  it('a planning role sees only Zásoby of the warehouse (the same tab as the warehouse); the module link opens it', () => {
     const [warehouse, ...rest] = visibleModules(['inventory:stock_summary']);
     expect(rest).toEqual([]);
     expect(warehouse!.id).toBe('warehouse');
-    expect(warehouse!.pages.map((p) => p.id)).toEqual(['availability']);
-    expect(warehouse!.href).toBe('/warehouse/availability');
-    // Full warehouse readers keep the overview as the module link and do not get the summary tab.
+    expect(warehouse!.pages.map((p) => p.id)).toEqual(['overview']);
+    expect(warehouse!.href).toBe('/warehouse');
+    // Full warehouse readers: the same Zásoby tab first, then the rest as before.
     const full = visibleModules(['inventory:read'])[0]!;
     expect(full.href).toBe('/warehouse');
-    expect(full.pages.map((p) => p.id)).toEqual([
-      'overview',
-      'receipts',
-      'stock',
-      'movements',
-      'suppliers',
-    ]);
+    expect(full.pages.map((p) => p.id)).toEqual(['overview', 'receipts', 'movements', 'suppliers']);
   });
 
   it('keeps label application out of the warehouse and inside production', () => {
     const warehouse = MODULES.find((m) => m.id === 'warehouse')!;
     const production = MODULES.find((m) => m.id === 'production')!;
     expect(warehouse.pages.map((p) => p.label)).toEqual([
-      'Přehled skladu',
+      'Zásoby',
       'Příjem zboží',
       'Příjmy',
-      'Stav skladu',
-      'Dostupnost',
       'Pohyby',
       'Dodavatelé',
-      'Příjem vratek',
-      'Po mytí',
     ]);
     expect(production.pages.map((p) => p.label)).toEqual([
       'Přehled výroby',
       'Pracovat na pracovišti',
+      'Oběh lahví',
       'Bedny',
       'Lahve',
       'Připravit výrobu',
@@ -206,8 +199,9 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/warehouse/receipts')).toBe('warehouse/receipts');
     expect(where('/warehouse/receipts/GR-000001')).toBe('warehouse/receipts');
     expect(where('/warehouse/receipts/new')).toBe('warehouse/new-receipt');
-    expect(where('/warehouse/stock')).toBe('warehouse/stock');
-    expect(where('/warehouse/availability')).toBe('warehouse/availability');
+    // Former pages (redirects to Zásoby since 2026-11-16) are no tab of their own.
+    expect(where('/warehouse/stock')).toBeNull();
+    expect(where('/warehouse/availability')).toBeNull();
     expect(where('/production')).toBe('production/overview');
     // Bottles, series and templates keep their URLs but belong to Production.
     expect(where('/bottles')).toBe('production/bottles');
@@ -221,6 +215,35 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/admin/users/x')).toBe('admin/users');
     expect(where('/admin/roles/new')).toBe('admin/roles');
     expect(where('/admin/sites/x')).toBe('admin/sites');
+    // Oběh lahví (owner 2026-11-09): the hub, Příjem vratek with its receipts, and Po mytí.
+    expect(where('/production/cycle')).toBe('production/cycle');
+    expect(where('/production/cycle/returns')).toBe('production/cycle');
+    expect(where('/production/cycle/returns/VR-000001')).toBe('production/cycle');
+    expect(where('/production/cycle/after-wash')).toBe('production/cycle');
+    // The former warehouse URLs are redirects (next.config.ts), never warehouse pages.
+    expect(where('/warehouse/returns')).toBeNull();
+    expect(where('/warehouse/after-wash')).toBeNull();
+  });
+
+  it('Oběh lahví is Výroba → Práce with returns:receive only; the warehouse no longer lists it', () => {
+    // An account with returns:receive alone: Výroba with just Oběh lahví, opened on it; no Sklad.
+    const modules = visibleModules(['returns:receive']);
+    expect(modules.map((m) => m.id)).toEqual(['production']);
+    expect(production(['returns:receive'])).toEqual(['cycle:work']);
+    expect(modules[0]!.href).toBe('/production/cycle');
+    // Next to the station for those who may work there; never for the station alone.
+    expect(production(['returns:receive', 'production:fill'])).toEqual([
+      'station:work',
+      'cycle:work',
+    ]);
+    expect(production(['production:fill', 'production:label_apply'])).toEqual(['station:work']);
+    for (const perms of [['inventory:read'], ['inventory:read', 'returns:receive']]) {
+      expect(
+        visibleModules(perms)
+          .find((m) => m.id === 'warehouse')!
+          .pages.map((p) => p.id),
+      ).not.toEqual(expect.arrayContaining(['returns']));
+    }
   });
 
   it('Finance (doc 042): five work pages, views by permission, the settings apart; every former URL kept', () => {
