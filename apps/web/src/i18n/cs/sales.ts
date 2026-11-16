@@ -341,6 +341,9 @@ export const salesCs = {
     ],
     notes: 'Poznámky ze schůzky',
     save: 'Uložit návštěvu',
+    verify: 'Ověřit uložení',
+    uncertain:
+      'Není jisté, zda se návštěva uložila (spojení selhalo). Formulář je uzamčen: „Ověřit uložení“ odešle přesně stejný zápis znovu a nevznikne druhá schůzka.',
     done: 'Probráno',
     contentLines: {
       who: 'S kým',

@@ -138,36 +138,75 @@ test('a visit with its next task planned in the guide: no offer', async ({ brows
   await page.context().close();
 });
 
-test('a lost answer: saving again continues the same write — exactly one more Schůzka (390 px)', async ({
+test('a lost answer: the form locks, "Ověřit uložení" resends the same write — one Schůzka, one task (390 px)', async ({
   browser,
 }) => {
   const page = await signIn(browser, V.email);
   await page.setViewportSize({ width: 390, height: 844 });
-  const meetings = async () =>
-    (
-      await json<ProspectDetail>(await page.request.get(`/api/admin/sales/prospects/${code}`))
-    ).activities.filter((x) => x.kind === 'MEETING').length;
-  const before = await meetings();
+  const read = async () =>
+    json<ProspectDetail>(await page.request.get(`/api/admin/sales/prospects/${code}`));
+  const before = await read();
+  const meetings = (d: ProspectDetail) => d.activities.filter((x) => x.kind === 'MEETING').length;
+  const tasks = (d: ProspectDetail) => d.openTasks.filter((x) => x.title === `Pilot ${tag}`).length;
   await page.goto(`/sales/prospects/${code}`);
   await page.getByTestId('start-visit').click();
   const visit = page.getByTestId('visit-dialog');
   await visit.getByTestId('visit-done-who').check();
   await visit.getByTestId('visit-notes').fill('Ztracená odpověď.');
-  // The first save reaches the server, but its answer never reaches the browser.
+  await visit.getByTestId('visit-follow-up').check();
+  await visit.getByTestId('visit-follow-title').fill(`Pilot ${tag}`);
+  await visit.getByTestId('visit-follow-due').fill(pragueDay(3));
+  // The first save reaches the server and is stored, but its answer never reaches the browser.
+  const sent: { requestId: string; content: string }[] = [];
   let lost = false;
   await page.route(`**/api/admin/sales/prospects/${code}/activities`, async (route) => {
-    if (lost || route.request().method() !== 'POST') return route.continue();
+    if (route.request().method() !== 'POST') return route.continue();
+    sent.push(route.request().postDataJSON() as { requestId: string; content: string });
+    if (lost) return route.continue();
     lost = true;
     await route.fetch();
     await route.abort('connectionreset');
   });
   await visit.getByTestId('visit-dialog-submit').click();
-  await expect.poll(() => lost).toBe(true);
-  await expect(visit).toBeVisible(); // the dialog keeps what was typed
+  await expect(visit.getByTestId('visit-uncertain')).toBeVisible();
+  // Locked: no edit of the visit before the original write is verified.
+  await expect(visit.getByTestId('visit-notes')).toBeDisabled();
   await expect(visit.getByTestId('visit-notes')).toHaveValue('Ztracená odpověď.');
-  await dialogSubmit(page, 'visit-dialog');
-  expect(await meetings()).toBe(before + 1);
+  await expect(visit.getByTestId('visit-dialog-submit')).toHaveText('Ověřit uložení');
   await noOverflow(page);
+  await dialogSubmit(page, 'visit-dialog');
+  const after = await read();
+  expect(meetings(after)).toBe(meetings(before) + 1);
+  expect(tasks(after)).toBe(tasks(before) + 1);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toEqual(sent[0]); // the same request id and the same body
+  await page.context().close();
+});
+
+test('a definite refusal leaves the visit editable to fix it', async ({ browser }) => {
+  const page = await signIn(browser, V.email);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/sales/prospects/${code}`);
+  await page.getByTestId('start-visit').click();
+  const visit = page.getByTestId('visit-dialog');
+  await visit.getByTestId('visit-done-box').check();
+  let refused = false;
+  await page.route(`**/api/admin/sales/prospects/${code}/activities`, async (route) => {
+    if (refused || route.request().method() !== 'POST') return route.continue();
+    refused = true;
+    await route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({ statusCode: 422, code: 'INVALID_TIME', message: 'Check the date' }),
+    });
+  });
+  await visit.getByTestId('visit-dialog-submit').click();
+  await expect.poll(() => refused).toBe(true);
+  await expect(visit.getByTestId('visit-uncertain')).toHaveCount(0);
+  await expect(visit.getByTestId('visit-notes')).toBeEnabled();
+  await visit.getByTestId('visit-notes').fill('Opraveno.');
+  await expect(visit.getByTestId('visit-dialog-submit')).toHaveText('Uložit návštěvu');
+  await dialogSubmit(page, 'visit-dialog');
   await page.context().close();
 });
 
