@@ -87,33 +87,25 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(locate('/sales').page?.id).toBe('overview');
   });
 
-  it('a planning role sees only the availability page of the warehouse; the module link opens it', () => {
+  it('a planning role sees only Zásoby of the warehouse (the same tab as the warehouse); the module link opens it', () => {
     const [warehouse, ...rest] = visibleModules(['inventory:stock_summary']);
     expect(rest).toEqual([]);
     expect(warehouse!.id).toBe('warehouse');
-    expect(warehouse!.pages.map((p) => p.id)).toEqual(['availability']);
-    expect(warehouse!.href).toBe('/warehouse/availability');
-    // Full warehouse readers keep the overview as the module link and do not get the summary tab.
+    expect(warehouse!.pages.map((p) => p.id)).toEqual(['overview']);
+    expect(warehouse!.href).toBe('/warehouse');
+    // Full warehouse readers: the same Zásoby tab first, then the rest as before.
     const full = visibleModules(['inventory:read'])[0]!;
     expect(full.href).toBe('/warehouse');
-    expect(full.pages.map((p) => p.id)).toEqual([
-      'overview',
-      'receipts',
-      'stock',
-      'movements',
-      'suppliers',
-    ]);
+    expect(full.pages.map((p) => p.id)).toEqual(['overview', 'receipts', 'movements', 'suppliers']);
   });
 
   it('keeps label application out of the warehouse and inside production', () => {
     const warehouse = MODULES.find((m) => m.id === 'warehouse')!;
     const production = MODULES.find((m) => m.id === 'production')!;
     expect(warehouse.pages.map((p) => p.label)).toEqual([
-      'Přehled skladu',
+      'Zásoby',
       'Příjem zboží',
       'Příjmy',
-      'Stav skladu',
-      'Dostupnost',
       'Pohyby',
       'Dodavatelé',
     ]);
@@ -207,8 +199,9 @@ describe('AYVO OS navigation (doc 019)', () => {
     expect(where('/warehouse/receipts')).toBe('warehouse/receipts');
     expect(where('/warehouse/receipts/GR-000001')).toBe('warehouse/receipts');
     expect(where('/warehouse/receipts/new')).toBe('warehouse/new-receipt');
-    expect(where('/warehouse/stock')).toBe('warehouse/stock');
-    expect(where('/warehouse/availability')).toBe('warehouse/availability');
+    // Former pages (redirects to Zásoby since 2026-11-16) are no tab of their own.
+    expect(where('/warehouse/stock')).toBeNull();
+    expect(where('/warehouse/availability')).toBeNull();
     expect(where('/production')).toBe('production/overview');
     // Bottles, series and templates keep their URLs but belong to Production.
     expect(where('/bottles')).toBe('production/bottles');
