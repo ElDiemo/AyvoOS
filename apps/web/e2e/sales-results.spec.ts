@@ -55,6 +55,20 @@ test.beforeAll(async ({ browser }) => {
         }),
       );
     codes[key] = d.code;
+    // A task due in the future: open, never overdue — the overdue list must not show it.
+    if (key === 'fresh')
+      await json(
+        await page.request.post(`/api/admin/sales/prospects/${d.code}/tasks`, {
+          data: {
+            requestId: crypto.randomUUID(),
+            title: `Budoucí úkol ${tag}`,
+            dueOn: new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10),
+            contactId: null,
+            assigneeId: null,
+            note: null,
+          },
+        }),
+      );
     await page.context().close();
   }
 });
@@ -96,6 +110,18 @@ test('the administrator: funnel, moves, people; the period; 1280 and 390 px', as
   await expect(page.getByTestId(`prospect-${codes.mine}`)).toBeVisible();
   await expect(page.getByTestId(`prospect-${codes.foreign}`)).toBeVisible(); // the owner: everyone
   await expect(page.getByTestId(`prospect-${codes.fresh}`)).toHaveCount(0); // NEW: not in progress
+  // "Úkoly po termínu" → only the overdue tasks: the list's total is the number shown.
+  await page.goto('/sales/results');
+  const overdue = (await page.getByTestId('results-overdue').textContent())?.trim();
+  await page.getByTestId('results-overdue-link').click();
+  await expect(page).toHaveURL(/due=overdue/);
+  await expect(page.getByTestId('task-filter-overdue')).toHaveClass(/bg-stone-900/);
+  await expect(page.getByTestId('task-page')).toContainText(`Po termínu (${overdue})`);
+  await expect(page.getByTestId('task-page')).not.toContainText(`Budoucí úkol ${tag}`);
+  // Without the filter the open list is as before, the future task included.
+  await page.getByTestId('task-filters').getByRole('link', { name: 'Otevřené' }).click();
+  await expect(page).not.toHaveURL(/due=/);
+  await expect(page.getByTestId('task-page')).toContainText(`Budoucí úkol ${tag}`);
   await admin.close();
 });
 

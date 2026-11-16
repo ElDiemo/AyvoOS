@@ -296,6 +296,11 @@ export const taskListQuerySchema = z.object({
   /** "me" (default), "all" or a user id — anything but "me" needs sales:manage. */
   assignee: z.union([z.literal('me'), z.literal('all'), z.uuid()]).default('me'),
   status: z.enum(['OPEN', 'CLOSED']).default('OPEN'),
+  /**
+   * "overdue": only the tasks "Výsledky" counts as overdue — open, due before today in the sales
+   * time zone, of a prospect not archived (the status is then OPEN whatever `status` says).
+   */
+  due: z.enum(['overdue']).optional(),
   page: z.coerce.number().int().min(1).max(10000).default(1),
 });
 export type TaskListQuery = z.infer<typeof taskListQuerySchema>;

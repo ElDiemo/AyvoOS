@@ -12,11 +12,14 @@ import { currentUser, hasPermission } from '@/lib/session';
 export const dynamic = 'force-dynamic';
 const t = salesCs.tasks;
 
-/** Úkoly (doc 034 §9): open tasks by due date (overdue first), or the closed ones. */
+/**
+ * Úkoly (doc 034 §9): open tasks by due date (overdue first), or the closed ones; `due=overdue`
+ * (the link from Výsledky) only the overdue ones — the same set Výsledky counts.
+ */
 export default async function SalesTasksPage({
   searchParams,
 }: {
-  searchParams: Promise<{ assignee?: string; status?: string; page?: string }>;
+  searchParams: Promise<{ assignee?: string; status?: string; due?: string; page?: string }>;
 }) {
   const raw = await searchParams;
   const me = await currentUser();
@@ -24,6 +27,7 @@ export default async function SalesTasksPage({
   const parsed = taskListQuerySchema.safeParse({
     assignee: canManage ? (raw.assignee ?? 'me') : 'me',
     status: raw.status,
+    due: raw.due,
     page: raw.page,
   });
   const q = parsed.success ? parsed.data : taskListQuerySchema.parse({});
@@ -31,12 +35,22 @@ export default async function SalesTasksPage({
     apiGet('admin/sales/tasks', taskPageSchema, {
       assignee: q.assignee,
       status: q.status,
+      due: q.due,
       page: q.page,
     }),
     canManage ? apiGet('admin/sales/salespeople', z.array(salespersonSchema)) : null,
   ]);
-  const href = (patch: Record<string, string>) =>
-    `/sales/tasks?${new URLSearchParams({ assignee: q.assignee, status: q.status, ...patch }).toString()}`;
+  const overdue = q.due === 'overdue';
+  // Keeps the filters (also `due`) across pages; an empty value in `patch` drops that filter.
+  const href = (patch: Record<string, string>) => {
+    const all: Record<string, string> = {
+      assignee: q.assignee,
+      status: q.status,
+      ...(q.due ? { due: q.due } : {}),
+      ...patch,
+    };
+    return `/sales/tasks?${new URLSearchParams(Object.entries(all).filter(([, v]) => v !== '')).toString()}`;
+  };
   const pill = (on: boolean) =>
     cn(
       'rounded-md px-3 py-1.5 text-sm font-medium',
@@ -50,12 +64,22 @@ export default async function SalesTasksPage({
       <SalesHeader active="tasks" title={t.title} subtitle={t.subtitle} />
       <div className="flex flex-col gap-6">
         <div className="flex flex-wrap gap-2" data-testid="task-filters">
-          <Link href={href({ status: 'OPEN', page: '1' })} className={pill(q.status === 'OPEN')}>
+          <Link
+            href={href({ status: 'OPEN', due: '', page: '1' })}
+            className={pill(!overdue && q.status === 'OPEN')}
+          >
             {t.open}
           </Link>
           <Link
-            href={href({ status: 'CLOSED', page: '1' })}
-            className={pill(q.status === 'CLOSED')}
+            href={href({ status: 'OPEN', due: 'overdue', page: '1' })}
+            className={pill(overdue)}
+            data-testid="task-filter-overdue"
+          >
+            {t.overdue}
+          </Link>
+          <Link
+            href={href({ status: 'CLOSED', due: '', page: '1' })}
+            className={pill(!overdue && q.status === 'CLOSED')}
           >
             {t.closed}
           </Link>
@@ -89,11 +113,13 @@ export default async function SalesTasksPage({
           )}
         </div>
         <Card
-          title={`${q.status === 'OPEN' ? t.open : t.closed} (${page.total})`}
+          title={`${overdue ? t.overdue : q.status === 'OPEN' ? t.open : t.closed} (${page.total})`}
           testId="task-page"
         >
           {page.items.length === 0 ? (
-            <EmptyState>{q.status === 'OPEN' ? t.empty : t.emptyClosed}</EmptyState>
+            <EmptyState>
+              {overdue ? t.emptyOverdue : q.status === 'OPEN' ? t.empty : t.emptyClosed}
+            </EmptyState>
           ) : (
             <TaskList
               tasks={page.items}

@@ -346,8 +346,10 @@ export const salesCs = {
     all: 'Všichni',
     open: 'Otevřené',
     closed: 'Uzavřené',
+    overdue: 'Po termínu',
     empty: 'Žádné otevřené úkoly. Další kroky přidáte v detailu zájemce.',
     emptyClosed: 'Zatím žádný uzavřený úkol.',
+    emptyOverdue: 'Žádný úkol po termínu.',
     prospect: 'Zájemce',
   },
 

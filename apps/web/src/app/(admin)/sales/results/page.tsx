@@ -134,7 +134,11 @@ export default async function SalesResultsPage({
                 >
                   {r.overdueTasks}
                 </span>
-                <Link href="/sales/tasks?assignee=all" className="underline">
+                <Link
+                  href="/sales/tasks?assignee=all&due=overdue"
+                  className="underline"
+                  data-testid="results-overdue-link"
+                >
                   {t.showList}
                 </Link>
               </span>

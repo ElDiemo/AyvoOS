@@ -28,6 +28,7 @@ import {
   dateOnly,
   salesEvent,
   salesInstant,
+  overdueTaskWhere,
   salesToday,
   visibleProspect,
   type Db,
@@ -344,8 +345,8 @@ export class SalesWorkService {
     if (q.assignee !== 'me' && !scope.all) {
       throw new ForbiddenException("Only an administrator sees other people's tasks");
     }
-    const where: Prisma.SalesTaskWhereInput = {
-      status: q.status === 'OPEN' ? 'OPEN' : { in: ['DONE', 'CANCELLED'] },
+    const today = salesToday();
+    const visible: Prisma.SalesTaskWhereInput = {
       ...(q.assignee === 'me'
         ? { assigneeId: scope.userId }
         : q.assignee === 'all'
@@ -353,11 +354,16 @@ export class SalesWorkService {
           : { assigneeId: q.assignee }),
       prospect: scope.all ? {} : { ownerId: scope.userId },
     };
+    const overdue = q.due === 'overdue';
+    const where: Prisma.SalesTaskWhereInput = overdue
+      ? { AND: [visible, overdueTaskWhere(today)] }
+      : { ...visible, status: q.status === 'OPEN' ? 'OPEN' : { in: ['DONE', 'CANCELLED'] } };
+    const closed = !overdue && q.status !== 'OPEN';
     const [items, total] = await Promise.all([
-      this.views.tasks(where, TASK_PAGE_SIZE, (q.page - 1) * TASK_PAGE_SIZE, q.status !== 'OPEN'),
+      this.views.tasks(where, TASK_PAGE_SIZE, (q.page - 1) * TASK_PAGE_SIZE, closed),
       this.prisma.salesTask.count({ where }),
     ]);
-    return { items, total, page: q.page, pageSize: TASK_PAGE_SIZE, today: salesToday() };
+    return { items, total, page: q.page, pageSize: TASK_PAGE_SIZE, today };
   }
 
   /**
