@@ -201,7 +201,9 @@ e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism
   - **Before anything changes**, `--check` and `--release` decide the same way (`preflight_images`;
     `--check` prints `images: reuse|build`):
     - all three tags name their recorded IDs → reuse;
-    - no tag of the release exists → build (the first build, or a release whose images were removed);
+    - no tag of the release exists → build (the first build, or a release whose images were removed).
+      Absence is decided only by one successful, exact listing; a Docker error is a stop that leaves
+      `state/images` and the images untouched;
     - otherwise stop: a moved tag, only some tags, or tags without a record.
   - `--rollback` first requires the release's record and api/web tags naming its IDs; only then is
     the portal held and a service touched.

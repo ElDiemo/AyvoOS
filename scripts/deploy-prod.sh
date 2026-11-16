@@ -1088,11 +1088,17 @@ verify_portal_edge() {
 # missing evidence) — never silently rebuilt over (doc 036 §7).
 preflight_images() {
   STEP="check the images of $AYVO_RELEASE before anything changes"
-  local file=$PROD_DIR/state/images/$AYVO_RELEASE image recorded tagged present=0
+  local file=$PROD_DIR/state/images/$AYVO_RELEASE image recorded tagged listed present=0
+  # Absent only by one successful, exact listing; a Docker error is a stop, never "no images"
+  # (that would build over the record).
+  listed="$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=$IMAGE_PREFIX/*:$AYVO_RELEASE")" ||
+    die "cannot list the images of $AYVO_RELEASE (docker): stop; state/images and the images stay untouched"
   for image in api api-migrate web; do
-    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$AYVO_RELEASE" 2>/dev/null || true)"
-    [[ -n $tagged ]] || continue
+    grep -qxF "$IMAGE_PREFIX/$image:$AYVO_RELEASE" <<<"$listed" || continue
     present=$((present + 1))
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$AYVO_RELEASE")" ||
+      die "cannot inspect $IMAGE_PREFIX/$image:$AYVO_RELEASE (docker): stop; state/images and the images stay untouched"
+    [[ $tagged =~ ^sha256:[0-9a-f]{64}$ ]] || die "$IMAGE_PREFIX/$image:$AYVO_RELEASE has no image ID: stop"
     if [[ -f $file ]]; then
       recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
       [[ $tagged == "$recorded" ]] ||
@@ -1115,12 +1121,15 @@ preflight_images() {
 # portal is held or any service changes.
 preflight_rollback_images() {
   STEP="check the images of $ROLLBACK before anything changes"
-  local file=$PROD_DIR/state/images/$ROLLBACK image recorded tagged
+  local file=$PROD_DIR/state/images/$ROLLBACK image recorded tagged listed
   [[ -f $file ]] ||
     die "no image IDs are recorded for $ROLLBACK (state/images): its images cannot be verified; stop"
+  listed="$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=$IMAGE_PREFIX/*:$ROLLBACK")" ||
+    die "cannot list the images of $ROLLBACK (docker): stop before any change"
   for image in api web; do
-    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$ROLLBACK" 2>/dev/null || true)"
-    [[ -n $tagged ]] || die "image $IMAGE_PREFIX/$image:$ROLLBACK is gone"
+    grep -qxF "$IMAGE_PREFIX/$image:$ROLLBACK" <<<"$listed" || die "image $IMAGE_PREFIX/$image:$ROLLBACK is gone"
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$ROLLBACK")" ||
+      die "cannot inspect $IMAGE_PREFIX/$image:$ROLLBACK (docker): stop before any change"
     recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
     [[ $tagged == "$recorded" ]] ||
       die "$IMAGE_PREFIX/$image:$ROLLBACK names $tagged, not the recorded ${recorded:-nothing}: stop before any change (doc 036 §7)"

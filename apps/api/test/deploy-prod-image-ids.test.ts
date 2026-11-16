@@ -44,6 +44,8 @@ type State = {
   composeKeeps?: boolean;
   /** The build of this compose service fails (an interrupted build). */
   failBuild?: string;
+  /** Docker fails: 'all' = the daemon is down, 'inspect' = only image inspect fails. */
+  dockerFails?: 'all' | 'inspect';
 };
 /** Steps with outside effects: recorded, never real. */
 const STUBS = [
@@ -58,6 +60,9 @@ const STUBS = [
   'verify',
   'record_release',
   'os_ahead_note',
+  'backup_before_migration',
+  'migrate',
+  'remove_old_images',
 ];
 
 function run(state: State, call: string) {
@@ -84,7 +89,10 @@ function run(state: State, call: string) {
     // docker image inspect --format '{{.Id}}' ayvo-prod/<image>:<rel>  |  docker inspect --format '{{.Image}}' ayvo-prod-<svc>-1
     'docker() {',
     '  local last=${!#}',
-    `  if [[ $1 == image ]]; then local n=\${last#ayvo-prod/}; n=\${n%%:*}; [[ \${last##*:} == ${REL} && -f $D/tags/$n ]] || return 1; cat "$D/tags/$n"; echo`,
+    `  [[ "${state.dockerFails ?? ''}" != all ]] || { echo "Cannot connect to the Docker daemon" >&2; return 1; }`,
+    // docker image ls --format … --filter reference=ayvo-prod/*:<rel>: the exact tags of that release
+    `  if [[ $1 == image && $2 == ls ]]; then local f; for f in "$D"/tags/*; do [[ -f $f && \${last##*:} == ${REL} ]] && echo "ayvo-prod/\${f##*/}:${REL}"; done; return 0; fi`,
+    `  if [[ $1 == image ]]; then [[ "${state.dockerFails ?? ''}" != inspect ]] || { echo "daemon error" >&2; return 1; }; local n=\${last#ayvo-prod/}; n=\${n%%:*}; [[ \${last##*:} == ${REL} && -f $D/tags/$n ]] || return 1; cat "$D/tags/$n"; echo`,
     '  else local s=${last#ayvo-prod-}; s=${s%-1}; [[ -f $D/ctr/$s ]] || return 1; cat "$D/ctr/$s"; echo; fi',
     '}',
     'compose() {',
@@ -230,6 +238,55 @@ describe('deploy-prod: images checked before any change, built once, run as reco
     );
     expect(r.out).toContain('UP up -d --no-build --force-recreate api web');
     expect(r.out).toContain('api and web run the image IDs of 9dd2cf84c474');
+    expect(r.out).toContain(`CTRS ${BUILT.api} ${BUILT.web}`);
+  });
+
+  it('a Docker error is never "no images": --check and --release stop, the record and the images stay', () => {
+    for (const dockerFails of ['all', 'inspect'] as const) {
+      for (const call of [mode('check'), mode('deploy')]) {
+        const r = run({ tags: { ...BUILT }, containers: {}, recorded: BUILT, dockerFails }, call);
+        expect(r.status, r.out).toBe(1);
+        expect(r.out).toMatch(
+          /DIE cannot (list|inspect) .*9dd2cf84c474.*state\/images and the images stay untouched/,
+        );
+        expect(r.out).not.toContain('BUILD');
+        expect(r.out).not.toContain('ready to deploy');
+        for (const step of [
+          'validate_compose',
+          'backup_status',
+          'backup_before_migration',
+          'migrate',
+        ])
+          expect(r.out).not.toContain(`STEP ${step}`);
+        expect(r.out).toContain(
+          `RECORD api ${BUILT.api} api-migrate ${BUILT['api-migrate']} web ${BUILT.web}`,
+        );
+        expect(r.out).toContain(`TAGS ${BUILT.api} ${BUILT.web}`);
+      }
+    }
+  });
+
+  it('a Docker error in --rollback stops before the portal hold and any start', () => {
+    for (const dockerFails of ['all', 'inspect'] as const) {
+      const r = run(
+        { tags: { ...BUILT }, containers: {}, recorded: BUILT, dockerFails },
+        mode('rollback'),
+      );
+      expect(r.status).toBe(1);
+      expect(r.out).toMatch(/DIE cannot (list|inspect) .*stop before any change/);
+      expect(r.out).not.toContain('STEP hold_unverified_portal');
+      expect(r.out).not.toContain('UP ');
+    }
+  });
+
+  it('a real --release reuses the recorded images and builds nothing', () => {
+    const r = run(
+      { tags: { ...BUILT }, containers: { api: id('e'), web: id('f') }, recorded: BUILT },
+      mode('deploy'),
+    );
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toContain('BUILD');
+    expect(r.out).toContain('reused as recorded');
     expect(r.out).toContain(`CTRS ${BUILT.api} ${BUILT.web}`);
   });
 
