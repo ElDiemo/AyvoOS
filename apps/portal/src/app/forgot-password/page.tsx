@@ -4,7 +4,7 @@ import { cs } from '@/i18n/cs';
 
 export default function Page() {
   return (
-    <AuthPage title={cs.forgot.title}>
+    <AuthPage title={cs.forgot.title} back>
       <ForgotForm />
     </AuthPage>
   );

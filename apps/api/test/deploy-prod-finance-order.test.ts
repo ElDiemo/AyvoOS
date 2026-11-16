@@ -72,13 +72,14 @@ function run(mode: string, opts: { previous: string; finance: string; apiImage?:
     'record_finance',
     'record_release',
     'remove_old_images',
+    'hold_unverified_portal',
   ].map((s) => `${s}() { echo "${s} $*" >>"$STEPS"; }`);
   const body = [
     'set -uo pipefail',
     `STEPS=${steps}; PROD_DIR=${dir}/prod; PROJECT=ayvo-prod; IMAGE_PREFIX=ayvo-prod`,
     `MODE=${mode}; RELEASE=${mode.includes('rollback') ? '' : NEW_FULL}`,
     `ROLLBACK=${OLD}; FINANCE_ROLLBACK=${OLD}; FINANCE_ENABLED=true`,
-    `PREVIOUS=${opts.previous}; FINANCE_RELEASE=${opts.finance}`,
+    `PREVIOUS=${opts.previous}; FINANCE_RELEASE=${opts.finance}; PORTAL_FAILED=""`,
     'die() { echo "DIED: $*"; exit 1; }; ok() { echo "ok: $*"; }; log() { :; }; warn() { echo "WARN: $*"; }',
     'compose() { echo "compose $*" >>"$STEPS"; }',
     'release_dir() { printf "%s/releases/%s" "$PROD_DIR" "${1:0:12}"; }',

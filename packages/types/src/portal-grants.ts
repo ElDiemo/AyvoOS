@@ -17,15 +17,55 @@ const hotelIdsSchema = z
 const sameSet = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((id) => b.includes(id));
 
+/**
+ * One hotel as Finance checked it for the payer (v6, #148): AGREEMENT — the payer's terms are in
+ * effect, so operations open, checked in the committed terms revision `checkedRevision` and at
+ * most until `operationsUntil` (null: no end known); INVOICE — only the payer's issued invoices
+ * name the hotel, so invoices only (no revision, no end). The core never derives this itself.
+ */
+export const portalGrantCheckedHotelSchema = z
+  .strictObject({
+    id: z.uuid(),
+    basis: z.enum(['AGREEMENT', 'INVOICE']),
+    checkedRevision: z.int().min(1).nullable(),
+    operationsUntil: z.iso.date().nullable(),
+  })
+  .refine(
+    (h) =>
+      h.basis === 'AGREEMENT'
+        ? h.checkedRevision !== null
+        : h.checkedRevision === null && h.operationsUntil === null,
+    { message: 'AGREEMENT carries its checked revision; INVOICE carries no revision or end' },
+  );
+export type PortalGrantCheckedHotel = z.infer<typeof portalGrantCheckedHotelSchema>;
+
 /** What Finance confirmed for this pair when it sent the grant (stored as it was sent). */
 export const portalGrantFinanceCheckSchema = z.strictObject({
   /** The payer's (Finance customer's) version Finance checked against — its version number. */
   payerVersion: z.int().min(1),
-  /** The hotels Finance confirmed as the payer's — exactly the grant's hotels. */
-  hotelIds: hotelIdsSchema,
+  /** The hotels Finance confirmed as the payer's, each with its basis — exactly the grant's. */
+  hotels: z
+    .array(portalGrantCheckedHotelSchema)
+    .min(1)
+    .max(500)
+    .refine((hs) => new Set(hs.map((h) => h.id)).size === hs.length, 'each hotel once'),
   checkedAt: z.iso.datetime({ offset: true }),
 });
 export type PortalGrantFinanceCheck = z.infer<typeof portalGrantFinanceCheckSchema>;
+
+/**
+ * A stored check as written before the boundary (the hotels without a basis): only read back, never
+ * accepted for a new grant (Finance sends the form above; the core refuses this one).
+ */
+export const portalGrantLegacyFinanceCheckSchema = z.strictObject({
+  payerVersion: z.int().min(1),
+  hotelIds: hotelIdsSchema,
+  checkedAt: z.iso.datetime({ offset: true }),
+});
+const storedFinanceCheckSchema = z.union([
+  portalGrantFinanceCheckSchema,
+  portalGrantLegacyFinanceCheckSchema,
+]);
 
 const grantBody = z.strictObject({
   /**
@@ -42,8 +82,11 @@ const grantBody = z.strictObject({
   financeCheck: portalGrantFinanceCheckSchema,
 });
 const confirmed = (b: { hotelIds: string[]; financeCheck: PortalGrantFinanceCheck }) =>
-  sameSet(b.hotelIds, b.financeCheck.hotelIds);
-const confirmedMessage = { message: 'financeCheck.hotelIds must be the grant hotels' };
+  sameSet(
+    b.hotelIds,
+    b.financeCheck.hotels.map((h) => h.id),
+  );
+const confirmedMessage = { message: 'financeCheck.hotels must be the grant hotels' };
 
 /** Finance → core: a new grant for a PORTAL account. */
 export const portalGrantIssueRequestSchema = grantBody
@@ -65,7 +108,7 @@ export const portalGrantSchema = z.object({
   payerCustomerId: z.uuid(),
   hotelIds: z.array(z.uuid()),
   reason: z.string(),
-  financeCheck: portalGrantFinanceCheckSchema,
+  financeCheck: storedFinanceCheckSchema,
   grantedAt: z.iso.datetime(),
   grantedBy: z.uuid(),
   replacesGrantId: z.uuid().nullable(),
@@ -290,5 +333,87 @@ export const financePortalAccessSchema = z.object({
   payerHotels: z.array(financePortalPayerHotelSchema),
   /** Names of every hotel shown (also of a grant's hotel the payer no longer has). */
   hotelNames: z.record(z.string(), z.string()),
+  /**
+   * Fences of this payer from Finance's own transfers (v6): operations on the hotel end after
+   * `endsOn` until a committed restore names the fence and a grant is checked again after it.
+   * `restore`: the restore that names it (`sent` false: the core has not confirmed it yet).
+   */
+  restrictions: z.array(
+    z.object({
+      fenceId: z.uuid(),
+      hotelId: z.uuid(),
+      agreementCode: z.string(),
+      endsOn: z.iso.date(),
+      termsRevision: z.int(),
+      restore: z.object({ termsRevision: z.int(), sent: z.boolean() }).nullable(),
+    }),
+  ),
 });
 export type FinancePortalAccess = z.infer<typeof financePortalAccessSchema>;
+
+// --- The operational boundary (v6, #148): fences and their resolutions, Finance → core ----------
+
+/**
+ * Finance → core, BEFORE Finance commits terms that move the hotel away from the payer (or end
+ * them): from the day after `endsOn` the payer's grants have no operations on the hotel. Written
+ * once per `requestId` (Finance's id of the transfer); a retry after a lost answer gets the same
+ * fence back. `termsRevision` is the revision Finance reserved for that transfer.
+ */
+export const portalFenceRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  payerCustomerId: z.uuid(),
+  hotelId: z.uuid(),
+  endsOn: z.iso.date(),
+  termsRevision: z.int().min(1),
+  reason: reasonSchema,
+});
+export type PortalFenceRequest = z.infer<typeof portalFenceRequestSchema>;
+
+export const portalFenceSchema = z.object({
+  id: z.uuid(),
+  payerCustomerId: z.uuid(),
+  hotelId: z.uuid(),
+  endsOn: z.iso.date(),
+  termsRevision: z.int(),
+  requestId: z.uuid(),
+  createdAt: z.iso.datetime(),
+});
+export type PortalFence = z.infer<typeof portalFenceSchema>;
+
+/**
+ * Finance → core, when Finance abandons a transfer whose fence answer it never got: the fence
+ * written under `requestId`, or — none yet — that request id settled for good, so a late arrival
+ * of the fence request writes nothing. Either way Finance then knows exactly what exists.
+ */
+export const portalFenceSettleRequestSchema = z.strictObject({ requestId: z.uuid() });
+export type PortalFenceSettleRequest = z.infer<typeof portalFenceSettleRequestSchema>;
+export const portalFenceSettleResultSchema = z.object({ fence: portalFenceSchema.nullable() });
+export type PortalFenceSettleResult = z.infer<typeof portalFenceSettleResultSchema>;
+
+/**
+ * Finance → core: the typed evidence of ONE committed explicit restore (v6 §1–§2). Finance builds
+ * it only from its stored RESTORE operation (a replay sends the same evidence again, the same
+ * `restoreRequestId`). The core checks, under the hotel's lock and without asking Finance, that
+ * every named fence is of exactly this payer × hotel, older than `restoreRevision` and not resolved
+ * by another operation — else 409 and nothing is written. Unknown fields are refused.
+ */
+export const portalFenceResolutionRequestSchema = z.strictObject({
+  kind: z.literal('RESTORE'),
+  restoreRequestId: z.uuid(),
+  payerCustomerId: z.uuid(),
+  hotelId: z.uuid(),
+  restoreRevision: z.int().min(1),
+  fenceIds: z
+    .array(z.uuid())
+    .min(1)
+    .max(100)
+    .refine((ids) => new Set(ids).size === ids.length, 'each fence once'),
+});
+export type PortalFenceResolutionRequest = z.infer<typeof portalFenceResolutionRequestSchema>;
+
+export const portalFenceResolutionResultSchema = z.object({
+  restoreRequestId: z.uuid(),
+  restoreRevision: z.int(),
+  fenceIds: z.array(z.uuid()),
+});
+export type PortalFenceResolutionResult = z.infer<typeof portalFenceResolutionResultSchema>;

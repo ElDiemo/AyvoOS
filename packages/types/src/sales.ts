@@ -296,6 +296,11 @@ export const taskListQuerySchema = z.object({
   /** "me" (default), "all" or a user id — anything but "me" needs sales:manage. */
   assignee: z.union([z.literal('me'), z.literal('all'), z.uuid()]).default('me'),
   status: z.enum(['OPEN', 'CLOSED']).default('OPEN'),
+  /**
+   * "overdue": only the tasks "Výsledky" counts as overdue — open, due before today in the sales
+   * time zone, of a prospect not archived (the status is then OPEN whatever `status` says).
+   */
+  due: z.enum(['overdue']).optional(),
   page: z.coerce.number().int().min(1).max(10000).default(1),
 });
 export type TaskListQuery = z.infer<typeof taskListQuerySchema>;
@@ -513,6 +518,60 @@ export const salesCalendarSchema = z.object({
   truncated: z.boolean(),
 });
 export type SalesCalendar = z.infer<typeof salesCalendarSchema>;
+
+/**
+ * "Výsledky obchodu" (sales:manage): the funnel now and what moved in the last `days` days, read
+ * from the existing records only — prospects (stage, owner, archive), the append-only stage
+ * changes, the current version of each activity (a corrected one counts once, a withdrawn one
+ * never) and open tasks. In the sales time zone.
+ */
+export const salesResultsQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .refine((d) => d === 7 || d === 30 || d === 90, '7, 30 or 90')
+    .default(30),
+});
+export type SalesResultsQuery = z.infer<typeof salesResultsQuerySchema>;
+const stageCounts = z.object(
+  Object.fromEntries(PROSPECT_STAGES.map((s) => [s, z.number().int()])) as Record<
+    ProspectStage,
+    z.ZodNumber
+  >,
+);
+const activityCounts = z.object(
+  Object.fromEntries(ACTIVITY_KINDS.map((k) => [k, z.number().int()])) as Record<
+    ActivityKind,
+    z.ZodNumber
+  >,
+);
+export const salesResultsSchema = z.object({
+  days: z.number().int(),
+  since: salesDateSchema,
+  today: salesDateSchema,
+  /** Active (not archived) prospects by their stage now. */
+  funnel: stageCounts,
+  /** Prospects that reached each stage in the period (a stage change to it). */
+  reached: stageCounts,
+  /** New prospects created in the period. */
+  created: z.number().int(),
+  activities: activityCounts,
+  withoutNextStep: z.number().int(),
+  overdueTasks: z.number().int(),
+  people: z.array(
+    z.object({
+      id: z.uuid(),
+      name: z.string(),
+      inProgress: z.number().int(),
+      withoutNextStep: z.number().int(),
+      calls: z.number().int(),
+      meetings: z.number().int(),
+      offers: z.number().int(),
+      won: z.number().int(),
+    }),
+  ),
+});
+export type SalesResults = z.infer<typeof salesResultsSchema>;
 
 export const salesOverviewSchema = z.object({
   today: salesDateSchema,

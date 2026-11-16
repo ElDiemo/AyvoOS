@@ -56,7 +56,7 @@ test.describe('hotel portal: the hotel profile', () => {
     await signIn(page);
     await noSideways(page);
     await shot(page, 'hotels');
-    await page.getByRole('link', { name: /Hotel Portál E2E/ }).click();
+    await page.getByRole('link', { name: 'Zobrazit profil: Hotel Portál E2E' }).click();
     await expect(page.getByTestId('portal-hotel-name')).toHaveText('Hotel Portál E2E');
     await expect(page.getByTestId('profile-address')).toContainText('Portálová 1');
     await expect(page.getByTestId('profile-contact')).toContainText('Marie Recepční');
@@ -65,7 +65,12 @@ test.describe('hotel portal: the hotel profile', () => {
     );
     await expect(page.getByTestId('profile-receiving')).toContainText('Bez pokynů k doručení.');
     const nav = page.getByRole('navigation', { name: 'Hlavní navigace' });
-    await expect(nav.getByRole('link')).toHaveText(['Moje hotely', 'Faktury']);
+    await expect(nav.getByRole('link')).toHaveText([
+      'Moje hotely',
+      'Dodávky',
+      'Smlouvy',
+      'Faktury',
+    ]);
     await noSideways(page);
     await shot(page, 'profile-empty');
   });

@@ -204,6 +204,32 @@ export const newBillingAgreementVersionSchema = z.object({
 });
 export type NewBillingAgreementVersionRequest = z.infer<typeof newBillingAgreementVersionSchema>;
 
+/**
+ * An explicit restore of a fenced payer's portal operations on the agreement's hotel (v6 §1): a
+ * terms revision of intent RESTORE, committed in Finance, naming fences of this agreement's
+ * transfers of that payer. The payer's terms must be in effect today. Operations return only with
+ * a new check of a grant after it.
+ */
+export const billingRestoreRequestSchema = z.strictObject({
+  requestId: z.uuid(),
+  payerCustomerId: z.uuid(),
+  fenceIds: z
+    .array(z.uuid())
+    .min(1)
+    .max(100)
+    .refine((ids) => new Set(ids).size === ids.length, 'each fence once'),
+  reason: reasonSchema,
+});
+export type BillingRestoreRequest = z.infer<typeof billingRestoreRequestSchema>;
+
+export const billingRestoreResultSchema = z.object({
+  termsRevision: z.number().int(),
+  fenceIds: z.array(z.uuid()),
+  /** The core accepted the resolution (false: committed in Finance, to be sent again). */
+  sent: z.boolean(),
+});
+export type BillingRestoreResult = z.infer<typeof billingRestoreResultSchema>;
+
 export const billingAgreementVersionSchema = z.object({
   id: z.uuid(),
   /** Unique, in commit order: of two versions effective the same month the higher one applies. */
@@ -234,9 +260,25 @@ export const billingAgreementSchema = z.object({
 });
 export type BillingAgreement = z.infer<typeof billingAgreementSchema>;
 
+/**
+ * A change that takes the hotel from its payer, reserved and not settled yet (v6, #148): the old
+ * payer's portal operations are being fenced. It is finished (the same terms) or abandoned; until
+ * then no other terms change of the agreement is accepted.
+ */
+export const billingPendingTransferSchema = z.object({
+  termsRevision: z.number().int(),
+  leavingPayer: z.object({ id: z.uuid(), code: z.string() }),
+  fenceEndsOn: isoDateSchema,
+  reason: z.string(),
+  recordedAt: z.iso.datetime(),
+  recordedByName: z.string(),
+});
+export type BillingPendingTransfer = z.infer<typeof billingPendingTransferSchema>;
+
 export const billingAgreementDetailSchema = billingAgreementSchema.extend({
   /** Every version, newest revision first. */
   versions: z.array(billingAgreementVersionSchema),
+  pendingTransfer: billingPendingTransferSchema.nullable(),
 });
 export type BillingAgreementDetail = z.infer<typeof billingAgreementDetailSchema>;
 

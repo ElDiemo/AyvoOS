@@ -9,6 +9,7 @@ import { NativeTokensService } from '../src/identity/native-tokens.service.js';
 import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
 import { crateFactory, createHotel, createOrder } from './support/order-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
+import { operationsCheck } from './support/portal-check.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
 const PASSWORD = 'Dlouhe portalove heslo AYVO 789';
@@ -94,7 +95,7 @@ describe.skipIf(!hasDatabase)('hotel portal: the hotel profile', () => {
       payerCustomerId: randomUUID(),
       hotelIds,
       reason: 'synthetic portal grant',
-      financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
+      financeCheck: operationsCheck(hotelIds),
     });
   const revoke = (grantId: string) =>
     t.app.get(PortalGrantsService).revoke(adminId, grantId, 'synthetic revocation');
