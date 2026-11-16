@@ -109,7 +109,7 @@ export const shellCs = {
     dispatch: {
       label: 'Expedice',
       description: 'Ruční objednávky hotelů a kompletace hotových beden k expedici.',
-      pages: { orders: 'Objednávky', new: 'Nová objednávka', pickups: 'Svoz' },
+      pages: { orders: 'Objednávky', new: 'Nová objednávka' },
     },
   },
   home: {

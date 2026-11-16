@@ -68,38 +68,7 @@ type Mode = {
   variantDelayReads: number;
   /** The ZPL of the LAST set parcel prints "1/1" (as seen in the TEST environment, 2026-10-20). */
   zplWrongPosition: boolean;
-  /** POST /order/batch (pickup orders, doc 029 §11): 400 / 500 / 201 without a Location. */
-  orderReject: boolean;
-  orderError: boolean;
-  orderNoLocation: boolean;
-  /** POST /order/batch creates the order but never answers (the client's time limit aborts). */
-  orderHang: boolean;
-  /** Order batch status reads answering InProcess before Complete. */
-  orderProcessingPolls: number;
-  /** The order's import fails (importState Error with a code). */
-  orderImportError: boolean;
-  /** GET /order does not (yet) show the order. */
-  orderHidden: boolean;
-  /** POST /order/cancel: 400 refusal / 500 before applying / applied then 500 / applied, no answer. */
-  cancelOrderRefuse: boolean;
-  cancelOrderError: boolean;
-  cancelOrderLost: boolean;
-  cancelOrderHang: boolean;
-  /** GET /order shows a cancelled order as Canceled only after this many further lookups. */
-  cancelOrderShownAfter: number;
 };
-
-/** A pickup order (CollectionOrder) PPL received. */
-interface PickupOrder {
-  batchId: string;
-  body: Record<string, unknown>;
-  polls: number;
-  number: string;
-  failed: boolean;
-  /** Cancelled at PPL; shown as Canceled after `hiddenLooks` more GET /order lookups. */
-  cancelled: boolean;
-  hiddenLooks: number;
-}
 
 /** The shipment-level CUST of a set, if one was sent (PPL then returns it for every parcel). */
 function shipmentCust(b: Batch): string | null {
@@ -135,8 +104,6 @@ export class FakePpl {
   readonly mode: Mode = FakePpl.fresh();
   readonly batches = new Map<string, Batch>();
   readonly cancelled = new Set<string>();
-  /** Pickup orders received, by their referenceId. */
-  readonly orders = new Map<string, PickupOrder>();
   /** Every request seen: method + path (+ whether a Bearer token was present). */
   readonly seen: {
     method: string;
@@ -191,18 +158,6 @@ export class FakePpl {
       putRefuse: false,
       variantDelayReads: 0,
       zplWrongPosition: false,
-      orderReject: false,
-      orderError: false,
-      orderNoLocation: false,
-      orderHang: false,
-      orderProcessingPolls: 0,
-      orderImportError: false,
-      orderHidden: false,
-      cancelOrderRefuse: false,
-      cancelOrderError: false,
-      cancelOrderLost: false,
-      cancelOrderHang: false,
-      cancelOrderShownAfter: 0,
     };
   }
 
@@ -210,9 +165,9 @@ export class FakePpl {
     Object.assign(this.mode, FakePpl.fresh());
   }
 
-  async start(port = 0): Promise<void> {
+  async start(): Promise<void> {
     this.server = createServer((req, res) => void this.handle(req, res));
-    await new Promise<void>((r) => this.server.listen(port, '127.0.0.1', r));
+    await new Promise<void>((r) => this.server.listen(0, '127.0.0.1', r));
     this.base = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}${BASE_PATH}`;
   }
 
@@ -238,19 +193,6 @@ export class FakePpl {
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://x');
-    // Test control (browser walkthrough only): set modes, show cancellations, reset. Outside the
-    // simulated API's path; nothing like it exists at PPL.
-    if (req.method === 'POST' && url.pathname === '/__fake-ppl/control') {
-      const body = JSON.parse((await this.body(req)) || '{}') as {
-        reset?: boolean;
-        mode?: Partial<Mode>;
-        showCancelled?: boolean;
-      };
-      if (body.reset) this.reset();
-      if (body.mode) Object.assign(this.mode, body.mode);
-      if (body.showCancelled) for (const o of this.orders.values()) o.hiddenLooks = 0;
-      return this.json(res, 200, { ok: true });
-    }
     const path = url.pathname.slice(BASE_PATH.length);
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const client = this.tokenClient.get(token) ?? null;
@@ -567,106 +509,6 @@ export class FakePpl {
       }
       this.cancelled.add(n);
       return this.json(res, 202, {});
-    }
-    if (req.method === 'POST' && path === '/order/batch') {
-      // Documented: { orders: [...] } with orderType, referenceId, shipmentCount, sendDate.
-      const body = JSON.parse(await this.body(req)) as { orders?: Record<string, unknown>[] };
-      const order = body.orders?.[0];
-      if (this.mode.orderReject || !order || body.orders!.length !== 1) {
-        return this.json(res, 400, {
-          title: 'One or more validation errors occurred.',
-          status: 400,
-          errors: { 'orders[0].SendDate': ['Invalid value'] },
-        });
-      }
-      if (this.mode.orderError) return this.json(res, 500, { title: 'Internal error' });
-      for (const field of ['orderType', 'referenceId', 'shipmentCount', 'sendDate']) {
-        if (order[field] === undefined || order[field] === null) {
-          return this.json(res, 400, { title: 'Validation', errors: { [field]: ['Required'] } });
-        }
-      }
-      const count = Number(order.shipmentCount);
-      if (!Number.isInteger(count) || count < 1 || count > 50) {
-        return this.json(res, 400, { title: 'Validation', errors: { shipmentCount: ['Max 50'] } });
-      }
-      const batchId = randomUUID();
-      this.orders.set(String(order.referenceId), {
-        batchId,
-        body: order,
-        polls: 0,
-        number: String(this.serial++),
-        failed: this.mode.orderImportError,
-        cancelled: false,
-        hiddenLooks: 0,
-      });
-      if (this.mode.orderHang) return; // the order exists; the answer never comes
-      return this.json(
-        res,
-        201,
-        {},
-        this.mode.orderNoLocation
-          ? {}
-          : { [this.mode.locationHeader]: `${this.base}/order/batch/${batchId}` },
-      );
-    }
-    const orderBatch = /^\/order\/batch\/([0-9a-f-]{36})$/.exec(path);
-    if (req.method === 'GET' && orderBatch) {
-      const entry = [...this.orders.entries()].find(([, o]) => o.batchId === orderBatch[1]);
-      if (!entry) return this.json(res, 404, { title: 'Record Not Found' });
-      const [referenceId, o] = entry;
-      o.polls += 1;
-      const importState =
-        o.polls <= this.mode.orderProcessingPolls ? 'InProcess' : o.failed ? 'Error' : 'Complete';
-      return this.json(res, 200, {
-        items: [
-          {
-            referenceId,
-            importState,
-            ...(importState === 'Error'
-              ? { errorCode: 'SIM-ORDER-ERR', errorMessage: 'Simulated import error' }
-              : {}),
-          },
-        ],
-      });
-    }
-    if (req.method === 'GET' && path === '/order') {
-      // Documented: Limit (required, 1–1000), Offset (required), OrderReferences (max 50).
-      const limit = Number(url.searchParams.get('Limit'));
-      if (!url.searchParams.has('Offset') || !(limit >= 1 && limit <= 1000)) {
-        return this.json(res, 400, { title: 'Limit and Offset are required' });
-      }
-      const refs = url.searchParams.getAll('OrderReferences');
-      const found = this.mode.orderHidden
-        ? []
-        : refs
-            .map((r) => [r, this.orders.get(r)] as const)
-            .filter((x): x is readonly [string, PickupOrder] => !!x[1] && !x[1].failed)
-            .map(([r, o]) => {
-              const shown = o.cancelled && o.hiddenLooks-- <= 0;
-              return [r, o, shown] as const;
-            })
-            .map(([r, o, shown]) => ({
-              referenceId: r,
-              orderNumber: o.number,
-              orderState: shown ? 'Canceled' : 'Created',
-              orderType: o.body.orderType,
-              shipmentCount: o.body.shipmentCount,
-            }));
-      return this.json(res, 200, found, { 'x-paging-total-items-count': String(found.length) });
-    }
-    if (req.method === 'POST' && path === '/order/cancel') {
-      // Documented: customerReference or orderReference (query), optional body { note }; 200.
-      const ref = url.searchParams.get('orderReference');
-      const o = ref ? this.orders.get(ref) : undefined;
-      if (this.mode.cancelOrderRefuse || !o) {
-        return this.json(res, 400, { title: 'Order cannot be cancelled', status: 400 });
-      }
-      if (this.mode.cancelOrderError) return this.json(res, 500, { title: 'Internal error' });
-      o.cancelled = true;
-      o.hiddenLooks = this.mode.cancelOrderShownAfter;
-      if (this.mode.cancelOrderHang) return;
-      if (this.mode.cancelOrderLost) return this.json(res, 500, { title: 'Internal error' });
-      return this.json(res, 200, {});
     }
     return this.json(res, 404, { title: 'Not found' });
   }
