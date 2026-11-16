@@ -41,7 +41,8 @@ test('without a session every page leads to the sign-in page and back to where i
   await expect(page.getByTestId('sign-in')).toHaveCount(0);
   await page.goto('/login?next=%2Fwarehouse%2Fstock');
   await signInWithForm(page, 'e2e-operator@ayvo.test');
-  await expect(page).toHaveURL(/\/warehouse\/stock$/);
+  // Back where it started: the former Stav skladu URL, which now leads to Zásoby.
+  await expect(page).toHaveURL(/\/warehouse$/);
   await expect(page.getByTestId('current-user')).toHaveText('E2E Operátor');
 });
 
@@ -188,18 +189,29 @@ test('a stock-summary role sees availability for planning and nothing operationa
   await expect(nav.getByRole('link')).toHaveText(['Přehled', 'Sklad']);
   await expect(page.getByTestId('module-availability')).toBeVisible();
   await nav.getByRole('link', { name: 'Sklad' }).click();
-  await expect(page).toHaveURL(/\/warehouse\/availability$/);
+  await expect(page).toHaveURL(/\/warehouse$/);
   await expect(page.getByRole('navigation', { name: 'Sklad' }).getByRole('link')).toHaveText([
-    'Dostupnost',
+    'Zásoby',
   ]);
   await expect(page.getByTestId('availability-NEW_BOTTLE')).toBeVisible();
   await expect(page.getByTestId('availability')).not.toContainText(/šarž|dodavatel|cena/i);
 
+  // Zásoby in the planning view: K dispozici, Rezervováno and the state only — never the
+  // warehouse's figures, lots, movements or planning (not in the HTML at all).
+  const html = await page.locator('main').innerHTML();
+  for (const text of ['Na skladě', 'Pohyby položky', 'Plánování zásob', 'Přijmout zboží'])
+    expect(html, text).not.toContain(text);
+  await expect(page.getByTestId('availability-NEW_BOTTLE')).toContainText('K dispozici');
+  await expect(page.getByTestId('availability-state-NEW_BOTTLE')).toBeVisible();
+  // The former availability URL leads to the same tab.
+  await page.goto('/warehouse/availability');
+  await expect(page).toHaveURL(/\/warehouse$/);
   for (const path of [
-    '/warehouse',
     '/warehouse/stock',
     '/warehouse/receipts',
     '/warehouse/receipts/new',
+    '/warehouse/movements',
+    '/warehouse/suppliers',
     '/bottles',
   ]) {
     await page.goto(path);
@@ -207,15 +219,33 @@ test('a stock-summary role sees availability for planning and nothing operationa
   }
   for (const path of [
     '/api/admin/inventory/stock',
+    '/api/admin/inventory/items',
+    '/api/admin/inventory/lots?item=NEW_BOTTLE',
+    '/api/admin/inventory/movements',
     '/api/admin/goods-receipts',
     '/api/admin/suppliers',
   ]) {
     expect((await page.request.get(path)).status(), path).toBe(403);
   }
+  // Another site: never chosen without a scope there, so never its summary.
+  expect(
+    (
+      await page.request.post('/api/auth/active-site', {
+        data: { siteId: '01990000-0000-7000-8000-0000000000e2' },
+      })
+    ).status(),
+  ).toBe(403);
+  expect(
+    (
+      (await (await page.request.get('/api/admin/inventory/stock-summary')).json()) as {
+        location: { code: string };
+      }
+    ).location.code,
+  ).toBe('MAIN');
   for (const width of [320, 390, 1280]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto('/warehouse/availability');
-    await noOverflow(page, `/warehouse/availability at ${width}px`);
+    await page.goto('/warehouse');
+    await noOverflow(page, `/warehouse at ${width}px`);
   }
   await sales.close();
 });

@@ -12,6 +12,32 @@ export const warehouseCs = {
     movements: 'Pohyby',
     suppliers: 'Dodavatelé',
   },
+  /** Sklad → Zásoby: one list of items for both views (the warehouse's and the planning one). */
+  inventory: {
+    title: 'Zásoby',
+    subtitle: 'Položky skladu aktivní provozovny. Stav vychází výhradně z knihy skladových pohybů.',
+    summarySubtitle:
+      'Dostupnost pro plánování. Pouze pro čtení – bez šarží, dodavatelů, cen, dokladů a pohybů.',
+    receive: 'Přijmout zboží',
+    item: 'Položka',
+    available: 'K dispozici',
+    reserved: 'Rezervováno',
+    onHand: 'Na skladě',
+    state: {
+      none: 'Nic k dispozici',
+      low: 'Pod minimem',
+      ok: 'V pořádku',
+    },
+    attention: 'Vyžaduje pozornost',
+    noneAvailable: (items: string) => `Nic k dispozici: ${items}.`,
+    belowMinimum: (items: string) => `Pod minimem: ${items}.`,
+    details: 'Podrobnosti',
+    itemMovements: 'Pohyby položky',
+    allReceipts: 'Všechny příjmy',
+    allMovements: 'Všechny pohyby',
+    noMinimum: 'Minimální zásoba není nastavená – stav „Pod minimem“ se u položky nevyhodnocuje.',
+    empty: 'Žádné položky.',
+  },
   overview: {
     title: 'Přehled skladu',
     subtitle: 'Co je na skladě, co vyžaduje pozornost a co se naposledy přijalo a pohnulo.',

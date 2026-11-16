@@ -229,11 +229,13 @@ export const MODULES: readonly NavModule[] = [
     description: w.description,
     pages: [
       {
+        // Zásoby (owner 2026-11-16): one list for the warehouse (inventory:read) and the planning
+        // view (inventory:stock_summary); /warehouse/stock and /warehouse/availability redirect here.
         id: 'overview',
         href: '/warehouse',
         label: w.pages.overview,
         exact: true,
-        permission: 'inventory:read',
+        anyOf: ['inventory:read', 'inventory:stock_summary'],
       },
       {
         id: 'new-receipt',
@@ -246,13 +248,6 @@ export const MODULES: readonly NavModule[] = [
         href: '/warehouse/receipts',
         label: w.pages.receipts,
         permission: 'inventory:read',
-      },
-      { id: 'stock', href: '/warehouse/stock', label: w.pages.stock, permission: 'inventory:read' },
-      {
-        id: 'availability',
-        href: '/warehouse/availability',
-        label: w.pages.availability,
-        permission: 'inventory:stock_summary',
       },
       {
         id: 'movements',
@@ -439,8 +434,7 @@ export const MODULES: readonly NavModule[] = [
   },
 ];
 
-export type WarehousePageId =
-  'overview' | 'new-receipt' | 'receipts' | 'stock' | 'availability' | 'movements' | 'suppliers';
+export type WarehousePageId = 'overview' | 'new-receipt' | 'receipts' | 'movements' | 'suppliers';
 export type ProductionPageId =
   | 'overview'
   | 'bottles'

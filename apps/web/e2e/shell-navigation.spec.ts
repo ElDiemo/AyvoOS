@@ -40,17 +40,16 @@ test('Warehouse and Production are separate; label application belongs to Produc
   await page.goto('/warehouse');
   const warehouse = page.getByRole('navigation', { name: 'Sklad' });
   await expect(warehouse.getByRole('link')).toHaveText([
-    'Přehled skladu',
+    'Zásoby',
     'Příjem zboží',
     'Příjmy',
-    'Stav skladu',
     'Pohyby',
     'Dodavatelé',
   ]);
   await expect(warehouse.getByRole('link', { name: 'Nalepení etiket' })).toHaveCount(0);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Přehled skladu');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^Zásoby – /);
   await expect(page.getByRole('navigation', { name: 'Umístění' })).toHaveText(
-    /Sklad\s*\/\s*Přehled skladu/,
+    /Sklad\s*\/\s*Zásoby/,
   );
 
   await page.goto('/production');
