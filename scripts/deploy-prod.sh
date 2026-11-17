@@ -143,6 +143,7 @@ PORTAL_FAILED=""
 PORTAL_PREVIOUS_IMAGE=""
 PORTAL_PREVIOUS_PUBLIC=false
 FINANCE_RELEASE=""
+IMAGES_ACTION="" # preflight_images: reuse | build
 FINANCE_IMAGE=""
 FINANCE_MIGRATE_IMAGE=""
 FINANCE_ENABLED=false
@@ -1074,7 +1075,77 @@ verify_portal_edge() {
 
 # --- deploy steps -----------------------------------------------------------------------------
 
+# A revision whose images were already built here is never built again (PROD 2026-11-16): every
+# build moves the tag <release> to a new image ID (BuildKit adds a fresh attestation index even on
+# a full cache hit), the containerd image store then forgets the previous ID although containers
+# still run it, Compose keeps those containers (same platform manifest), and Finance is pinned to
+# a vanished ID.
+#
+# preflight_images decides BEFORE anything changes (read-only; --check runs the same) and sets
+# IMAGES_ACTION: "reuse" when all three tags name their IDs in state/images/<release>, "build"
+# when none of the tags exists (the first build, or a release whose images were removed). Anything
+# else stops: a tag that moved, only some tags, or tags without a record (an interrupted build or
+# missing evidence) — never silently rebuilt over (doc 036 §7).
+preflight_images() {
+  STEP="check the images of $AYVO_RELEASE before anything changes"
+  local file=$PROD_DIR/state/images/$AYVO_RELEASE image recorded tagged listed present=0
+  # Absent only by one successful, exact listing; a Docker error is a stop, never "no images"
+  # (that would build over the record).
+  listed="$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=$IMAGE_PREFIX/*:$AYVO_RELEASE")" ||
+    die "cannot list the images of $AYVO_RELEASE (docker): stop; state/images and the images stay untouched"
+  for image in api api-migrate web; do
+    grep -qxF "$IMAGE_PREFIX/$image:$AYVO_RELEASE" <<<"$listed" || continue
+    present=$((present + 1))
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$AYVO_RELEASE")" ||
+      die "cannot inspect $IMAGE_PREFIX/$image:$AYVO_RELEASE (docker): stop; state/images and the images stay untouched"
+    [[ $tagged =~ ^sha256:[0-9a-f]{64}$ ]] || die "$IMAGE_PREFIX/$image:$AYVO_RELEASE has no image ID: stop"
+    if [[ -f $file ]]; then
+      recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
+      [[ $tagged == "$recorded" ]] ||
+        die "$IMAGE_PREFIX/$image:$AYVO_RELEASE names $tagged, not the recorded ${recorded:-nothing}: the tag moved since $AYVO_RELEASE was built; stop (doc 036 §7)"
+    fi
+  done
+  if ((present == 0)); then
+    IMAGES_ACTION=build
+    ok "no images of $AYVO_RELEASE here: they will be built"
+    return 0
+  fi
+  [[ -f $file ]] ||
+    die "$present image tag(s) of $AYVO_RELEASE exist without a record in state/images (an interrupted build or missing evidence): stop; doc 036 §7 says how to remove unused tags deliberately"
+  ((present == 3)) || die "only some images of $AYVO_RELEASE are still tagged here: stop (doc 036 §7)"
+  IMAGES_ACTION=reuse
+  ok "images of $AYVO_RELEASE are tagged as recorded: they will be reused, not built again"
+}
+
+# --rollback: the images to start must be the ones recorded for that release, checked before the
+# portal is held or any service changes.
+preflight_rollback_images() {
+  STEP="check the images of $ROLLBACK before anything changes"
+  local file=$PROD_DIR/state/images/$ROLLBACK image recorded tagged listed
+  [[ -f $file ]] ||
+    die "no image IDs are recorded for $ROLLBACK (state/images): its images cannot be verified; stop"
+  listed="$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=$IMAGE_PREFIX/*:$ROLLBACK")" ||
+    die "cannot list the images of $ROLLBACK (docker): stop before any change"
+  for image in api web; do
+    grep -qxF "$IMAGE_PREFIX/$image:$ROLLBACK" <<<"$listed" || die "image $IMAGE_PREFIX/$image:$ROLLBACK is gone"
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$image:$ROLLBACK")" ||
+      die "cannot inspect $IMAGE_PREFIX/$image:$ROLLBACK (docker): stop before any change"
+    recorded="$(awk -v s="$image" '$1 == s { print $2 }' "$file")"
+    [[ $tagged == "$recorded" ]] ||
+      die "$IMAGE_PREFIX/$image:$ROLLBACK names $tagged, not the recorded ${recorded:-nothing}: stop before any change (doc 036 §7)"
+  done
+  ok "images of $ROLLBACK are tagged as recorded"
+}
+
 build_images() {
+  [[ -n ${IMAGES_ACTION:-} ]] || die "preflight_images did not run"
+  if [[ $IMAGES_ACTION == reuse ]]; then
+    ok "images of $AYVO_RELEASE already built here: reused as recorded, not built again"
+    return 0
+  fi
+  # A record of removed images must not outlive this build: interrupted, the tags it leaves then
+  # have no record and the next run stops (preflight_images) instead of building over them.
+  rm -f "$PROD_DIR/state/images/$AYVO_RELEASE"
   # One image at a time: the server has 4 GB RAM (doc 036 §2).
   local service
   for service in api migrate web; do
@@ -1212,11 +1283,33 @@ migrate() {
 start_services() {
   STEP="start api and web, then caddy, dns and the public QR edge"
   log "$STEP"
-  compose up -d --no-build api web || die "api/web did not start"
+  # Always recreated: Compose compares only the platform manifest, so a tag that names another
+  # image ID with the same content would leave the old container (and its ID) running.
+  compose up -d --no-build --force-recreate api web || die "api/web did not start"
   wait_healthy api || die "api did not become healthy"
   wait_healthy web || die "web did not become healthy"
+  check_running_images
   compose up -d --no-build caddy dns qr-edge || die "caddy/dns/qr-edge did not start"
   ok "services running $AYVO_RELEASE"
+}
+
+# api and web run exactly the image IDs their tags name — and, when recorded, the IDs this
+# release was built as (state/images, what Finance is pinned to).
+check_running_images() {
+  STEP="check the running image IDs of $AYVO_RELEASE"
+  local file=$PROD_DIR/state/images/$AYVO_RELEASE service running tagged recorded
+  for service in api web; do
+    running="$(docker inspect --format '{{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)"
+    tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE_PREFIX/$service:$AYVO_RELEASE" 2>/dev/null || true)"
+    [[ -n $running && $running == "$tagged" ]] ||
+      die "$service runs ${running:-nothing}, not $IMAGE_PREFIX/$service:$AYVO_RELEASE (${tagged:-missing})"
+    if [[ -f $file ]]; then
+      recorded="$(awk -v s="$service" '$1 == s { print $2 }' "$file")"
+      [[ $running == "$recorded" ]] ||
+        die "$service runs $running, not the image $AYVO_RELEASE was built as ($recorded)"
+    fi
+  done
+  ok "api and web run the image IDs of $AYVO_RELEASE"
 }
 
 # --- verification -----------------------------------------------------------------------------
@@ -1651,9 +1744,10 @@ case $MODE in
     check_qr_dns
     id_dns_info
     AYVO_RELEASE=${RELEASE:0:12}
+    preflight_images
     validate_compose
     backup_status
-    ok "ready to deploy $RELEASE (running now: ${PREVIOUS:-nothing})"
+    ok "ready to deploy $RELEASE (running now: ${PREVIOUS:-nothing}; images: $IMAGES_ACTION)"
     ;;
   deploy)
     [[ -n $RELEASE ]] || die "--release <commit> is required (see --help)"
@@ -1665,6 +1759,7 @@ case $MODE in
     check_qr_dns
     id_dns_info
     AYVO_RELEASE=${RELEASE:0:12}
+    preflight_images
     validate_compose
     backup_status
     build_images
@@ -1687,9 +1782,7 @@ case $MODE in
   rollback)
     [[ $ROLLBACK =~ ^[0-9a-f]{12}$ ]] || die "--rollback needs the 12-character release of an earlier deployment"
     [[ -f $(release_dir "$ROLLBACK")/.ayvo-release ]] || die "release $ROLLBACK was never exported here"
-    for image in api web; do
-      docker image inspect "$IMAGE_PREFIX/$image:$ROLLBACK" >/dev/null 2>&1 || die "image $IMAGE_PREFIX/$image:$ROLLBACK is gone"
-    done
+    preflight_rollback_images
     log "rollback to $ROLLBACK at $(date -u +%FT%TZ) (running: ${PREVIOUS:-nothing}). No migration runs."
     warn "the database keeps its current schema: this is safe only if $ROLLBACK works with it (doc 036 §7)"
     RELEASE=$(<"$(release_dir "$ROLLBACK")/.ayvo-release")
