@@ -7,6 +7,15 @@
 -- The salesperson reads their own terms only. Versions are append-only; the newest is the valid
 -- version. A new version never touches hotels already bound (PR 1b). Additive: no existing table,
 -- trigger or constraint changes (doc 068 §8.2).
+--
+-- Atomic by an explicit transaction: Prisma does not roll this file back by itself — a forced
+-- failure after the catalogue writes left the permission, its ADMIN grant and the table behind
+-- (test/commission-terms-migration, verified on the prototype 1e0aca4). With BEGIN … COMMIT a
+-- failing statement aborts the transaction, the rest is skipped and nothing stays: no permission
+-- without its table, no grant, no table, function or trigger. The enum value is in the separate
+-- earlier migration (ALTER TYPE … ADD VALUE).
+
+BEGIN;
 
 -- --- The permission: ADMIN only, never a custom role (doc 068 §8.1) ----------------------------
 -- `security_admin` makes role_permissions_guard refuse it in every non-system role, as for
@@ -77,3 +86,5 @@ CREATE TRIGGER "sales_commission_terms_immutable" BEFORE UPDATE OR DELETE ON "sa
   FOR EACH ROW EXECUTE FUNCTION ayvo_reject_modification();
 CREATE TRIGGER "sales_commission_terms_no_truncate" BEFORE TRUNCATE ON "sales_commission_terms"
   FOR EACH STATEMENT EXECUTE FUNCTION ayvo_reject_modification();
+
+COMMIT;
