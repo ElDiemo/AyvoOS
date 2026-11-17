@@ -19,7 +19,6 @@ export const CODE_PREFIX = {
   contractDraft: 'SN-',
   returnReceipt: 'RR-',
   returnIssue: 'RI-',
-  carrierPickup: 'SV-',
 } as const;
 
 export function formatCode(prefix: string, serial: bigint): string {

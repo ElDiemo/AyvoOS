@@ -6,7 +6,6 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { ENV, type Env } from '../config/env.js';
-import { CarrierPickupsService } from './carrier-pickups.service.js';
 import { ShipmentCarrierFlow } from './shipment-carrier-flow.service.js';
 import { ShipmentTrackingService } from './shipment-tracking.service.js';
 
@@ -20,12 +19,10 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(ShipmentPoller.name);
   private timer: NodeJS.Timeout | null = null;
   private running = false;
-  private pickupsRunning = false;
 
   constructor(
     private readonly flow: ShipmentCarrierFlow,
     private readonly tracking: ShipmentTrackingService,
-    private readonly pickups: CarrierPickupsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -39,19 +36,7 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
-  /**
-   * One round: the shipments' work (label requests, ZPL, tracking) and the pickups' work (doc 029
-   * §11) side by side, each with its own single-flight guard and its own error handling — a pickup
-   * call still waiting for its carrier (up to CARRIER_CALL_TIMEOUT_SECONDS per call) never makes the
-   * next rounds skip labels, ZPL or tracking, and never starts a second pickup round meanwhile. The
-   * work itself stays owned in the database (leases, SKIP LOCKED, the operations' own limits), as
-   * between several API processes.
-   */
   async tick(): Promise<void> {
-    await Promise.all([this.shipmentsRound(), this.pickupsRound()]);
-  }
-
-  private async shipmentsRound(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
@@ -64,19 +49,6 @@ export class ShipmentPoller implements OnModuleInit, OnModuleDestroy {
       this.log.warn(`Carrier polling failed: ${String(error)}`);
     } finally {
       this.running = false;
-    }
-  }
-
-  private async pickupsRound(): Promise<void> {
-    if (this.pickupsRunning) return;
-    this.pickupsRunning = true;
-    try {
-      // Accepted pickup orders and cancellations at their carrier (doc 029 §11).
-      await this.pickups.pollDue();
-    } catch (error) {
-      this.log.warn(`Pickup polling failed: ${String(error)}`);
-    } finally {
-      this.pickupsRunning = false;
     }
   }
 }

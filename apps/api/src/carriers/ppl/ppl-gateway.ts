@@ -13,7 +13,6 @@ import {
   type CarrierTracking,
 } from '../carrier.js';
 import { pplProblem, PplAuthError, type PplClient } from './ppl-client.js';
-import { PplPickups } from './ppl-pickups.js';
 import { pplEvents } from './ppl-tracking.js';
 
 /**
@@ -92,7 +91,7 @@ const LIMITS = { name: 50, street: 60, city: 50, zipCode: 10, contact: 50, phone
  * The PPL address. Nothing is cut: a value PPL could not take (too long, non-Latin) refuses the
  * request before anything is sent — what is printed on the label is never silently changed.
  */
-export function address(
+function address(
   role: 'sender' | 'recipient',
   a: CarrierAddress & { contactName?: string | null; phone?: string | null; email?: string | null },
 ) {
@@ -192,8 +191,6 @@ export class PplGateway implements CarrierGateway {
     senderAddress: 'REQUIRED',
     canCancel: true,
   };
-  /** Pickup orders ("svoz", POST /order/batch CollectionOrder — doc 029 §11). */
-  readonly pickups: PplPickups;
 
   constructor(
     private readonly client: PplClient,
@@ -204,7 +201,6 @@ export class PplGateway implements CarrierGateway {
     this.connection = client.connection.code;
     this.environment = client.connection.environment;
     this.name = this.environment === 'TEST' ? 'PPL (testovací prostředí)' : 'PPL';
-    this.pickups = new PplPickups(client);
   }
 
   /**

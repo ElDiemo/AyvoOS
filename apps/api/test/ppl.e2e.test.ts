@@ -10,7 +10,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
 import { decryptSecret } from '../src/carriers/credentials-crypto.js';
 import { ShipmentCarrierFlow } from '../src/orders/shipment-carrier-flow.service.js';
-import { CARRIER_TEST_KEY, PPL_TEST_ACCOUNT } from './support/carrier-test-key.js';
 import { FakePpl } from './support/fake-ppl.js';
 import {
   completeOrder,
@@ -32,10 +31,10 @@ import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js'
  * 203 dpi, settings changed during a shipment (snapshot), token reuse, no secret in any answer or
  * audit, and sites kept apart. Synthetic data only.
  */
-const KEY = CARRIER_TEST_KEY;
+const KEY = randomBytes(32).toString('base64');
 
 describe.skipIf(!hasDatabase)('PPL adapter and site settings (simulated PPL)', () => {
-  const ppl = new FakePpl(PPL_TEST_ACCOUNT.id, PPL_TEST_ACCOUNT.secret);
+  const ppl = new FakePpl('ayvo-test-client', 'ayvo-test-secret-value');
   let t: TestApp;
   let factory: Awaited<ReturnType<typeof crateFactory>>;
   let hotel: string;

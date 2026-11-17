@@ -389,13 +389,6 @@ export const MODULES: readonly NavModule[] = [
         label: d.pages.new,
         permission: 'orders:manage',
       },
-      // Pickup orders at the carrier (doc 029 §11).
-      {
-        id: 'pickups',
-        href: '/dispatch/pickups',
-        label: d.pages.pickups,
-        permission: 'shipments:read',
-      },
     ],
   },
   {
@@ -451,7 +444,7 @@ export type HotelsPageId = 'list' | 'new' | 'users';
 export type FinancePageId = 'overview' | 'invoices' | 'documents' | 'bank' | 'exports' | 'settings';
 export type FinanceViewId =
   'invoices' | 'billing' | 'customers' | 'bank' | 'payments' | 'company' | 'prices';
-export type DispatchPageId = 'orders' | 'new' | 'pickups';
+export type DispatchPageId = 'orders' | 'new';
 export type SalesPageId = 'overview' | 'prospects' | 'tasks' | 'calendar' | 'results';
 
 /**
