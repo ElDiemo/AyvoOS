@@ -15,7 +15,7 @@ import type { Principal } from '../identity/principal.js';
 import { CommissionTermsService } from './commission-terms.service.js';
 
 /**
- * Obchod → Provize — commission terms (doc 068 §4.1, PR 1a PROTOTYPE). There is no PUT, PATCH or
+ * Obchod → Provize — commission terms (doc 068 §4.1, PR 1a). There is no PUT, PATCH or
  * DELETE: a change is a new version. The salesperson's own terms come only from the session.
  */
 @Controller(`${ADMIN_PREFIX}/sales/commission-terms`)

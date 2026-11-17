@@ -36,7 +36,7 @@ const rateInvalid = (field: string) =>
   );
 
 /**
- * Commission terms per salesperson (doc 068 §3.1, ADR 0046 §2a — PR 1a PROTOTYPE). Append-only
+ * Commission terms per salesperson (doc 068 §3.1, ADR 0046 §2a — PR 1a). Append-only
  * versions; the newest is the valid version. Only `sales:commission_terms_manage` (ADMIN only,
  * never a custom role — doc 068 §8.1) records or reads others' terms; a salesperson reads their
  * own through `mine`, always the session's user, never one named in the request.

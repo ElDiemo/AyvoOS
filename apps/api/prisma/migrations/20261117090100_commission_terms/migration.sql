@@ -1,6 +1,4 @@
 -- Sales commissions PR 1a — the commission terms of a salesperson (doc 068 §3.1, ADR 0046 §2a).
--- PROTOTYPE: the model waits for the owner's approval; this migration has run only in the per-run
--- test databases, never on DEV.
 --
 -- Owner, 2026-11-16: in Obchod → Provize → Nastavení the owner / an admin sets, per salesperson,
 -- the initial rate %, its length N in whole months and the maintenance rate % (from month N+1).
@@ -10,7 +8,7 @@
 --
 -- Atomic by an explicit transaction: Prisma does not roll this file back by itself — a forced
 -- failure after the catalogue writes left the permission, its ADMIN grant and the table behind
--- (test/commission-terms-migration, verified on the prototype 1e0aca4). With BEGIN … COMMIT a
+-- (test/commission-terms-migration, verified before this fix). With BEGIN … COMMIT a
 -- failing statement aborts the transaction, the rest is skipped and nothing stays: no permission
 -- without its table, no grant, no table, function or trigger. The enum value is in the separate
 -- earlier migration (ALTER TYPE … ADD VALUE).

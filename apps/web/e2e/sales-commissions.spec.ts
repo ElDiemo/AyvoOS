@@ -11,7 +11,7 @@ const C = { email: `e2e-provize-c-${tag}@ayvo.test`.toLowerCase(), name: `Cyril 
 let aId = '';
 
 /**
- * Obchod → Provize (doc 068, PR 1a PROTOTYPE): the administrator picks a salesperson, records
+ * Obchod → Provize (doc 068, PR 1a): the administrator picks a salesperson, records
  * terms with the keyboard and sees the history; a refused value is explained at its field; a
  * salesperson only reads their own terms (no form), a salesperson without terms sees the missing
  * state; 1440 and 390 px without sideways scrolling.

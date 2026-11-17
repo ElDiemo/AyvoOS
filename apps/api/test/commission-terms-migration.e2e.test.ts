@@ -27,7 +27,7 @@ function prisma(args: string[], url: string): number {
 }
 
 /**
- * The commission terms migration (doc 068 PR 1a, PROTOTYPE) is atomic: Prisma applies the file as
+ * The commission terms migration (doc 068 PR 1a) is atomic: Prisma applies the file as
  * one transaction, so a failure after its catalogue writes (the permission and its ADMIN grant)
  * leaves no permission without its table, no grant, no table, function or trigger, and the
  * catalogue switch off. Same mechanism as test/account-audience-migration (#136). The enum value

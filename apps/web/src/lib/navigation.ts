@@ -117,7 +117,7 @@ export const MODULES: readonly NavModule[] = [
       },
       // The owner's view of everyone's work (sales:manage).
       { id: 'results', href: '/sales/results', label: s.pages.results, permission: 'sales:manage' },
-      // Provize (doc 068, PR 1a PROTOTYPE): own terms for sales:work; Nastavení for the admin.
+      // Provize (doc 068, PR 1a): own terms for sales:work; Nastavení for the admin.
       {
         id: 'commissions',
         href: '/sales/commissions',

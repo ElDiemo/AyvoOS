@@ -1,8 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Sales commissions PR 1a (doc 068 §3.1, §4.1; ADR 0046 §2a — PROTOTYPE, the model awaits the
- * owner's approval). The commission terms of a salesperson: the initial rate %, its length N in
+ * Sales commissions PR 1a (doc 068 §3.1, §4.1; ADR 0046 §2a). The commission terms of a salesperson: the initial rate %, its length N in
  * whole months, and the maintenance rate % from month N+1. Managed only with
  * `sales:commission_terms_manage` (ADMIN only); a salesperson reads their own terms.
  */

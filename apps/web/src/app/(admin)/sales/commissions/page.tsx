@@ -81,7 +81,7 @@ function Valid({ terms }: { terms: CommissionTerms }) {
 }
 
 /**
- * Obchod → Provize (doc 068 §2, PR 1a PROTOTYPE). A salesperson reads their own terms; the admin
+ * Obchod → Provize (doc 068 §2, PR 1a). A salesperson reads their own terms; the admin
  * (`sales:commission_terms_manage`, ADMIN only) also picks a salesperson, sees the history and
  * records a new version. The API enforces the same; this page only hides what is refused.
  */

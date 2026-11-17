@@ -7,7 +7,7 @@ import { createTestApp, hasDatabase, withPrivileged, type TestApp } from './supp
 
 /**
  * Sales commissions PR 1a — commission terms per salesperson (doc 068 §3.1, §4.1, §8.1; ADR 0046
- * §2a; PROTOTYPE). Real sign-in: an ADMIN and two salespeople with the SALES role only. Only ADMIN
+ * §2a). Real sign-in: an ADMIN and two salespeople with the SALES role only. Only ADMIN
  * manages terms — never a salesperson, never a custom role; versions are append-only and
  * serialised; rates are refused, never rounded.
  */

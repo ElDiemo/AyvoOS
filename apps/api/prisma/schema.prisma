@@ -4064,7 +4064,7 @@ model PortalOperationalFenceResolution {
   @@map("portal_operational_fence_resolutions")
 }
 
-/// Sales commissions PR 1a (doc 068 §3.1, ADR 0046 §2a; PROTOTYPE): one version of a salesperson's
+/// Sales commissions PR 1a (doc 068 §3.1, ADR 0046 §2a): one version of a salesperson's
 /// commission terms. Append-only (DB); versions 1, 2, … without gaps per salesperson; the newest is
 /// the valid version. Rates exact 0–100 with at most 2 decimals; N whole ≥ 1 (DB CHECK).
 model SalesCommissionTerms {

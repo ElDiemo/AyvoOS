@@ -1,4 +1,4 @@
-/** Obchod → Provize (doc 068, PR 1a PROTOTYPE): commission terms per salesperson. */
+/** Obchod → Provize (doc 068, PR 1a): commission terms per salesperson. */
 export const commissionsCs = {
   title: 'Provize',
   subtitle: 'Podmínky provize obchodníků. Částky a výplaty přijdou z Financí v dalších krocích.',
