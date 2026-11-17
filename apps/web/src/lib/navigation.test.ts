@@ -81,8 +81,10 @@ describe('AYVO OS navigation (doc 019)', () => {
       '/sales/prospects',
       '/sales/tasks',
       '/sales/calendar',
+      '/sales/commissions',
     ]);
     expect(locate('/sales/calendar').page?.id).toBe('calendar');
+    expect(locate('/sales/commissions').page?.id).toBe('commissions');
     expect(locate('/sales/prospects/AKV-000001').page?.id).toBe('prospects');
     expect(locate('/sales').page?.id).toBe('overview');
   });
