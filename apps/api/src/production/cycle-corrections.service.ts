@@ -181,6 +181,15 @@ export class CycleCorrectionsService {
             { crate: elsewhere.cycle.crate.code },
           );
         }
+        // R1.1: freed with its returned crate, not scanned back itself — still at the hotel.
+        if (await this.cycles.stillAtHotel(tx, bottle.id)) {
+          throw domainErrorWithDetails(
+            409,
+            'BOTTLE_AT_HOTEL',
+            'This bottle is still at the hotel by the records: receive it in Příjem vratek first',
+            { bottle: bottle.code },
+          );
+        }
         const filled = status === 'FILLED';
         // The snapshot the bottle carries: a filled bottle that of its latest filling (a washed
         // bottle refilled with another recipe version, R3-b), an empty one that of its labelling.

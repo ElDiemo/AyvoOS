@@ -413,6 +413,52 @@ export class CrateCyclesService {
     });
   }
 
+  /**
+   * R1.1 (doc 047 §6.3 1, 3): the crate's return scan ends the binding of every still active
+   * member to it — released CRATE_RETURNED by that crate line. No bottle row or event is written;
+   * each bottle comes back only by its own scan. Returns how many were released.
+   */
+  async releaseWithCrate(
+    tx: Prisma.TransactionClient,
+    input: {
+      cycleId: string;
+      lineId: string;
+      actorId: string;
+      operationId: string;
+      occurredAt: Date;
+    },
+  ): Promise<number> {
+    const { count } = await tx.crateAssignment.updateMany({
+      where: { cycleId: input.cycleId, releasedAt: null },
+      data: {
+        releasedAt: input.occurredAt,
+        releasedBy: input.actorId,
+        releaseReason: 'CRATE_RETURNED',
+        releaseOperationId: input.operationId,
+        releasedByLineId: input.lineId,
+      },
+    });
+    return count;
+  }
+
+  /**
+   * R1.1: is the bottle still at the hotel by the records — its latest membership freed with its
+   * returned crate, and no own return scan (SORTED) of that cycle yet? Such a bottle joins no
+   * crate (also refused by the database).
+   */
+  async stillAtHotel(db: Prisma.TransactionClient, bottleId: string): Promise<boolean> {
+    const latest = await db.crateAssignment.findFirst({
+      where: { bottleId },
+      orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
+      select: { cycleId: true, releaseReason: true },
+    });
+    if (latest?.releaseReason !== 'CRATE_RETURNED') return false;
+    const sorted = await db.bottleEvent.count({
+      where: { bottleId, type: 'SORTED', crateCycleId: latest.cycleId },
+    });
+    return sorted === 0;
+  }
+
   /** Locks a cycle row (lock order: … → crate → cycle → bottle). */
   async lockCycle(tx: Prisma.TransactionClient, cycleId: string): Promise<void> {
     await tx.$executeRaw`SELECT 1 FROM "crate_cycles" WHERE "id" = ${cycleId}::uuid FOR UPDATE`;

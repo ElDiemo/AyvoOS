@@ -15,6 +15,7 @@ import {
 import { crateFactory, createHotel, type MadeCrate } from './support/order-fixtures.js';
 import { deliver, pickUp, RETURN_ENV, returnsApi, shipCrates } from './support/return-fixtures.js';
 import { createTestApp, hasDatabase, type TestApp } from './support/test-app.js';
+import { receiveItem } from './support/warehouse-fixtures.js';
 
 type Factory = Awaited<ReturnType<typeof crateFactory>>;
 
@@ -43,9 +44,8 @@ describe.skipIf(!hasDatabase)('R3-b: a washed bottle back into production', () =
     await pickUp(t, shipped);
     await deliver(t, shipped);
     const receipt = await api.open();
-    const line = (await api.scanCrate(receipt.code, crate.crateUrl)).body.lineId as string;
-    for (const url of crate.bottleUrls)
-      await api.scanBottle(receipt.code, line, url, 'GOOD').expect(200);
+    await api.scanCrate(receipt.code, crate.crateUrl).expect(200);
+    for (const url of crate.bottleUrls) await api.scanBottle(receipt.code, url, 'GOOD').expect(200);
     for (const url of crate.bottleUrls) expect((await wash(url)).status).toBe(200);
     return crate;
   }
@@ -236,8 +236,8 @@ describe.skipIf(!hasDatabase)('R3-b: a washed bottle back into production', () =
       await pickUp(t, shipped);
       await deliver(t, shipped);
       const receipt = await api.open();
-      const line = (await api.scanCrate(receipt.code, crate.crateUrl)).body.lineId as string;
-      await api.scanBottle(receipt.code, line, crate.bottleUrls[0]!, 'GOOD').expect(200);
+      await api.scanCrate(receipt.code, crate.crateUrl).expect(200);
+      await api.scanBottle(receipt.code, crate.bottleUrls[0]!, 'GOOD').expect(200);
       return crate.bottleIds[0]!;
     })();
     expect((await t.prisma.bottle.findUniqueOrThrow({ where: { id: back } })).status).toBe(
@@ -376,5 +376,120 @@ describe.skipIf(!hasDatabase)('R3-b: a washed bottle back into production', () =
     expect(c.recipeVersion.version).toBe(version);
     expect(c.assignments.map((m) => [m.bottleId, m.source])).toEqual([[reused.id, 'REPACKED']]);
     expect(await t.prisma.inventoryMovement.count()).toBe(movements);
+  });
+
+  it('R1.1 + R3: the same crate and the same bottle through two circulations — reuse 0 → 1 → 2; the crate scan never counts, stock only by real fillings', async () => {
+    const reuseOf = async (id: string) => {
+      const code = (await t.prisma.bottle.findUniqueOrThrow({ where: { id } })).code;
+      return (await http().get(`/api/admin/bottles/${code}`).expect(200)).body
+        .reuseCycles as number;
+    };
+    // Circulation 1: K with b and c, delivered.
+    const k = await factory.make();
+    const [b, c] = [
+      { id: k.bottleIds[0]!, url: k.bottleUrls[0]! },
+      { id: k.bottleIds[1]!, url: k.bottleUrls[1]! },
+    ];
+    expect(await reuseOf(b.id)).toBe(0);
+    const o1 = await shipCrates(t, hotel, factory.kit.productCode, [k]);
+    await pickUp(t, o1);
+    await deliver(t, o1);
+    const k1 = await t.prisma.crateCycle.findFirstOrThrow({
+      where: { crate: { code: k.crateCode } },
+      orderBy: { openedAt: 'desc' },
+    });
+    // The crate scan frees K and counts nothing; each bottle's own scan counts once.
+    const r1 = await api.open();
+    expect((await api.scanCrate(r1.code, k.crateUrl).expect(200)).body.freed).toBe(2);
+    expect(await reuseOf(b.id)).toBe(0);
+    await api.scanBottle(r1.code, b.url).expect(200);
+    await api.scanBottle(r1.code, c.url).expect(200);
+    expect(await reuseOf(b.id)).toBe(1);
+    await api.scanBottle(r1.code, b.url).expect(200); // a rescan: the first result, no second count
+    expect(await reuseOf(b.id)).toBe(1);
+    // Po mytí → K plnění.
+    expect((await wash(b.url)).status).toBe(200);
+    expect((await wash(c.url)).status).toBe(200);
+
+    // Circulation 2: the SAME crate K, the SAME QR codes, placed and filled the ordinary way.
+    const pumps = await balance(factory.kit.pumpItemId);
+    const liquid = await balance(factory.kit.liquidItemId);
+    const movements = await t.prisma.inventoryMovement.count();
+    const station = await factory.openStation({ withLot: false, crateUrl: k.crateUrl });
+    expect((await labelScan(t, station.sessionId, b.url)).body.outcome).toBe('PLACED');
+    const second = await labelScan(t, station.sessionId, c.url);
+    expect([second.body.outcome, second.body.cycle.status]).toEqual(['PLACED', 'READY_TO_FILL']);
+    expect(await t.prisma.inventoryMovement.count()).toBe(movements); // placing consumes nothing
+    const fs = await fillingSession(t, 'HAND_SOAP');
+    expect((await fillLoadCrate(t, fs, k.crateUrl)).status).toBe(200);
+    expect((await chooseLiquidLot(t, fs, await factory.receiveLiquid())).status).toBe(200);
+    const liquidReceived = await balance(factory.kit.liquidItemId);
+    for (const x of [b, c]) {
+      const r = await fillScan(t, fs, x.url);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
+    expect((await finishCrate(t, fs)).status).toBe(200);
+    // The real fillings: liquid of the reuse recipe for each, no new pump.
+    expect(await balance(factory.kit.pumpItemId)).toBe(pumps);
+    expect(Number(liquidReceived) - Number(await balance(factory.kit.liquidItemId))).toBe(2 * 330);
+    expect(Number(liquidReceived)).toBeGreaterThan(Number(liquid));
+    const k2 = await t.prisma.crateCycle.findFirstOrThrow({
+      where: { crate: { code: k.crateCode } },
+      orderBy: { openedAt: 'desc' },
+    });
+    expect(k2.id).not.toBe(k1.id);
+    const o2 = await shipCrates(t, hotel, factory.kit.productCode, [k]);
+    await pickUp(t, o2);
+    await deliver(t, o2);
+    expect(await reuseOf(b.id)).toBe(1); // a delivery completes nothing
+
+    // Back again: freed by K's scan, b identified for K2 — the counter is 2.
+    const r2 = await api.open();
+    expect((await api.scanCrate(r2.code, k.crateUrl).expect(200)).body.freed).toBe(2);
+    await api.scanBottle(r2.code, b.url).expect(200);
+    expect(await reuseOf(b.id)).toBe(2);
+    const sorted = await t.prisma.bottleEvent.findMany({
+      where: { bottleId: b.id, type: 'SORTED' },
+      orderBy: { id: 'asc' },
+    });
+    expect(sorted.map((e) => e.crateCycleId)).toEqual([k1.id, k2.id]);
+    // Both shipments keep their contents.
+    const allocations = await t.prisma.orderCrateAllocation.findMany({
+      where: { crate: { code: k.crateCode } },
+      include: { bottles: true, cycle: { select: { status: true } } },
+      orderBy: { allocatedAt: 'asc' },
+    });
+    expect(
+      allocations.map((a) => [a.cycle.status, a.bottles.map((x) => x.bottleId).sort()]),
+    ).toEqual([
+      ['CLOSED', [b.id, c.id].sort()],
+      ['CLOSED', [b.id, c.id].sort()],
+    ]);
+  });
+
+  it('stock availability: two refills at once with liquid for one bottle — one filled, the other refused, never negative', async () => {
+    const first = await washedCrate();
+    const station = await factory.openStation({ withLot: false });
+    for (const url of first.bottleUrls) {
+      expect((await labelScan(t, station.sessionId, url)).body.outcome).toBe('PLACED');
+    }
+    const lot = (await receiveItem(t, factory.kit.liquidItemId, 330)).lines[0]!.lot!.id;
+    const fs = await fillingSession(t, 'HAND_SOAP');
+    expect((await fillLoadCrate(t, fs, station.crateUrl)).status).toBe(200);
+    expect((await chooseLiquidLot(t, fs, lot)).status).toBe(200);
+    const results = await Promise.all(first.bottleUrls.map((url) => fillScan(t, fs, url)));
+    const answers = results.map((r) => (r.status === 200 ? 'OK' : r.body.code));
+    // Exactly one filled; the other refused because the lot no longer covers a bottle.
+    expect(answers.sort()).toEqual(['LOT_EXHAUSTED', 'OK']);
+    const onHand = await t.prisma.inventoryBalance.findMany({ where: { lotId: lot } });
+    expect(onHand.every((x) => !x.onHand.isNegative())).toBe(true);
+    expect(onHand.reduce((sum, x) => sum + Number(x.onHand), 0)).toBe(0);
+    // The refused bottle stays washed and placed — nothing half written.
+    const statuses = await Promise.all(
+      first.bottleIds.map(
+        async (id) => (await t.prisma.bottle.findUniqueOrThrow({ where: { id } })).status,
+      ),
+    );
+    expect(statuses.sort()).toEqual(['FILLED', 'READY_FOR_REUSE']);
   });
 });

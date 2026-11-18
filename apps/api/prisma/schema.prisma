@@ -2411,18 +2411,23 @@ model CrateAssignment {
   releaseOperationId String?                 @map("release_operation_id") @db.Uuid
   /// RETURN_IDENTIFIED: the bottle's SORTED of this cycle (doc 047 §4.3).
   releasedEventId    String?                 @unique @map("released_event_id") @db.Uuid
+  /// CRATE_RETURNED: the CRATE line of the same cycle whose scan freed the crate (doc 047 §6.3 3,
+  /// R1.1). Not unique: one line releases every remaining member; the DB checks the same cycle.
+  releasedByLineId   String?                 @map("released_by_line_id") @db.Uuid
 
-  cycle            CrateCycle        @relation(fields: [cycleId, cycleCapacity], references: [id, capacity], onDelete: Restrict)
-  releasedEvent    BottleEvent?      @relation("AssignmentReleaseEvent", fields: [releasedEventId], references: [id], onDelete: Restrict)
-  bottle           Bottle            @relation(fields: [bottleId], references: [id], onDelete: Restrict)
-  assigner         User              @relation("AssignedBy", fields: [assignedBy], references: [id], onDelete: Restrict)
-  releaser         User?             @relation("ReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
-  operation        OperationRequest  @relation("AssignOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
-  releaseOperation OperationRequest? @relation("ReleaseOperation", fields: [releaseOperationId], references: [requestId], onDelete: Restrict)
-  assignedEvent    BottleEvent       @relation("AssignmentEvent", fields: [assignedEventId], references: [id], onDelete: Restrict)
+  cycle            CrateCycle         @relation(fields: [cycleId, cycleCapacity], references: [id, capacity], onDelete: Restrict)
+  releasedEvent    BottleEvent?       @relation("AssignmentReleaseEvent", fields: [releasedEventId], references: [id], onDelete: Restrict)
+  releasedByLine   ReturnReceiptLine? @relation("AssignmentReleasedByLine", fields: [releasedByLineId], references: [id], onDelete: Restrict)
+  bottle           Bottle             @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  assigner         User               @relation("AssignedBy", fields: [assignedBy], references: [id], onDelete: Restrict)
+  releaser         User?              @relation("ReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+  operation        OperationRequest   @relation("AssignOperation", fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  releaseOperation OperationRequest?  @relation("ReleaseOperation", fields: [releaseOperationId], references: [requestId], onDelete: Restrict)
+  assignedEvent    BottleEvent        @relation("AssignmentEvent", fields: [assignedEventId], references: [id], onDelete: Restrict)
 
   @@index([cycleId])
   @@index([bottleId])
+  @@index([releasedByLineId])
   @@map("crate_assignments")
 }
 
@@ -2618,6 +2623,7 @@ model OrderCrateAllocation {
   order            Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
   completer        User?                   @relation("AllocationCompletedBy", fields: [completedBy], references: [id], onDelete: Restrict)
   completedLine    ReturnReceiptLine?      @relation("AllocationCompletedLine", fields: [completedLineId], references: [id], onDelete: Restrict)
+  anchoredIssues   ReturnReceiptIssue[]    @relation("IssueAnchorAllocation")
   returnLine       ReturnReceiptLine?      @relation("ReturnLineAllocation")
   line             OrderLine               @relation(fields: [lineId], references: [id], onDelete: Restrict)
   cycle            CrateCycle              @relation(fields: [cycleId], references: [id], onDelete: Restrict)
@@ -2629,6 +2635,7 @@ model OrderCrateAllocation {
   bottles          OrderAllocationBottle[]
   parcels          ShipmentParcel[]
 
+  @@unique([id, cycleId])
   @@index([orderId])
   @@index([cycleId])
   @@index([crateId])
@@ -3855,8 +3862,11 @@ enum ReturnReceiptState {
 enum ReturnLineKind {
   /// A returned crate scanned by its QR: completes its delivered cycle's allocation.
   CRATE
-  /// A box without a crate QR ("krabice bez kódu").
+  /// A box without a crate QR ("krabice bez kódu"). R1 history: R1.1 makes no new ones.
   CONTAINER
+  /// R1.1 (doc 047 §6.3 2): the receipt's one line of individually scanned bottles, made with its
+  /// first bottle scan; never emptied, no physical count.
+  BOTTLES
 }
 
 enum ReturnIssueKind {
@@ -3934,6 +3944,7 @@ model ReturnReceiptLine {
   emptyOperation      OperationRequest?     @relation("ReturnLineEmptyOperation", fields: [emptyOperationId], references: [requestId], onDelete: Restrict)
   sortedEvents        BottleEvent[]
   issues              ReturnReceiptIssue[]
+  releasedMembers     CrateAssignment[]     @relation("AssignmentReleasedByLine")
 
   @@index([receiptId])
   @@index([crateId])
@@ -3960,20 +3971,26 @@ model ReturnReceiptIssue {
   resolutionReason   String?                @map("resolution_reason")
   resolveOperationId String?                @map("resolve_operation_id") @db.Uuid
   resolvingEventId   String?                @unique @map("resolving_event_id") @db.Uuid
+  /// NOT_DELIVERED (R1.1, doc 047 §6.3 2): the circulation known at the first scan — the cycle and
+  /// its not yet delivered allocation; both or neither.
+  anchorCycleId      String?                @map("anchor_cycle_id") @db.Uuid
+  anchorAllocationId String?                @map("anchor_allocation_id") @db.Uuid
 
-  receipt          ReturnReceipt     @relation(fields: [receiptId], references: [id], onDelete: Restrict)
-  line             ReturnReceiptLine @relation(fields: [lineId], references: [id], onDelete: Restrict)
-  bottle           Bottle?           @relation(fields: [bottleId], references: [id], onDelete: Restrict)
-  recorder         User              @relation("ReturnIssueRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
-  resolver         User?             @relation("ReturnIssueResolvedBy", fields: [resolvedBy], references: [id], onDelete: Restrict)
-  recordOperation  OperationRequest  @relation("ReturnIssueRecordOperation", fields: [recordOperationId], references: [requestId], onDelete: Restrict)
-  resolveOperation OperationRequest? @relation("ReturnIssueResolveOperation", fields: [resolveOperationId], references: [requestId], onDelete: Restrict)
-  resolvingEvent   BottleEvent?      @relation("IssueResolvingEvent", fields: [resolvingEventId], references: [id], onDelete: Restrict)
-  resolvingSorted  BottleEvent?      @relation("SortedResolvesIssue")
+  receipt          ReturnReceipt         @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  line             ReturnReceiptLine     @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  bottle           Bottle?               @relation(fields: [bottleId], references: [id], onDelete: Restrict)
+  recorder         User                  @relation("ReturnIssueRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+  resolver         User?                 @relation("ReturnIssueResolvedBy", fields: [resolvedBy], references: [id], onDelete: Restrict)
+  recordOperation  OperationRequest      @relation("ReturnIssueRecordOperation", fields: [recordOperationId], references: [requestId], onDelete: Restrict)
+  resolveOperation OperationRequest?     @relation("ReturnIssueResolveOperation", fields: [resolveOperationId], references: [requestId], onDelete: Restrict)
+  resolvingEvent   BottleEvent?          @relation("IssueResolvingEvent", fields: [resolvingEventId], references: [id], onDelete: Restrict)
+  resolvingSorted  BottleEvent?          @relation("SortedResolvesIssue")
+  anchorAllocation OrderCrateAllocation? @relation("IssueAnchorAllocation", fields: [anchorAllocationId, anchorCycleId], references: [id, cycleId], onDelete: Restrict)
 
   @@index([receiptId])
   @@index([lineId])
   @@index([bottleId])
+  @@index([anchorAllocationId, anchorCycleId])
   @@map("return_receipt_issues")
 }
 

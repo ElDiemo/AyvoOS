@@ -158,12 +158,10 @@ test.beforeAll(async ({ browser }) => {
       data: { requestId: crypto.randomUUID(), ...data },
     });
   const receipt = await json<{ code: string }>(await post('/receipts', { hotelCode: null }));
-  const line = await json<{ lineId: string }>(
-    await post(`/receipts/${receipt.code}/crates`, { scannedValue: crate.url }),
-  );
+  await json(await post(`/receipts/${receipt.code}/crates`, { scannedValue: crate.url }));
   for (const url of washed) {
     await json(
-      await post(`/receipts/${receipt.code}/lines/${line.lineId}/bottles`, {
+      await post(`/receipts/${receipt.code}/bottles`, {
         scannedValue: url,
         outcome: 'GOOD',
       }),

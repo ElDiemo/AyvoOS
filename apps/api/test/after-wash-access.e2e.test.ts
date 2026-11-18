@@ -47,8 +47,8 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" access and site isolation (real sig
     await deliver(su, await shipCrates(su, hotel, factory.kit.productCode, [crate]));
     const api = returnsApi(su);
     const receipt = await api.open();
-    const line = (await api.scanCrate(receipt.code, crate.crateUrl)).body.lineId as string;
-    for (const url of crate.bottleUrls) await api.scanBottle(receipt.code, line, url).expect(200);
+    await api.scanCrate(receipt.code, crate.crateUrl).expect(200);
+    for (const url of crate.bottleUrls) await api.scanBottle(receipt.code, url).expect(200);
     codes = await Promise.all(
       crate.bottleIds.map(
         async (id) => (await su.prisma.bottle.findUniqueOrThrow({ where: { id } })).code,
