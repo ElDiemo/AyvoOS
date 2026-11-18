@@ -135,12 +135,14 @@ test('the admin attributes a hotel by hand and changes the salesperson later', a
   // is told so and must confirm it. (The panel stays open after the previous save.)
   if (!(await page.getByTestId('attribution-form').isVisible()))
     await panel.getByText('Změnit obchodníka').click();
-  await page.getByTestId('attribution-salesperson').selectOption({ label: A.name });
+  await page
+    .getByTestId('attribution-salesperson')
+    .selectOption({ label: 'Firemní hotel – bez provize' });
   await page.getByTestId('attribution-month').fill('2027-07');
   await expect(page.getByTestId('attribution-planned')).toContainText(
     `Od 9/2027 je naplánováno: ${B.name}. Tato změna bude platit jen do 8/2027`,
   );
-  await page.getByTestId('attribution-reason').fill('oprava: červenec a srpen ještě Alena');
+  await page.getByTestId('attribution-reason').fill('červenec a srpen firemní hotel');
   await page.getByTestId('attribution-confirm').check();
   await page.getByTestId('attribution-save').press('Enter');
   await expect(page.locator('#attribution-planned-error')).toBeVisible();
@@ -149,7 +151,7 @@ test('the admin attributes a hotel by hand and changes the salesperson later', a
   const timeline = page.getByTestId('attribution-timeline').locator('li');
   await expect(timeline).toHaveCount(3);
   await expect(timeline.nth(0)).toContainText(`6/2027–6/2027 · ${A.name}`);
-  await expect(timeline.nth(1)).toContainText(`7/2027–8/2027 · ${A.name}`);
+  await expect(timeline.nth(1)).toContainText('7/2027–8/2027 · Firemní hotel – bez provize');
   await expect(timeline.nth(2)).toContainText(`od 9/2027 · ${B.name}`);
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -164,12 +166,12 @@ test('each salesperson sees only their own hotels of the month, without amounts'
 }) => {
   const a = await signIn(browser, A.email);
   await a.setViewportSize({ width: 1440, height: 900 });
-  await a.goto('/sales/commissions?tab=portfolio&month=2027-07');
+  await a.goto('/sales/commissions?tab=portfolio&month=2027-06');
   await expect(a.getByTestId('portfolio-count')).toHaveText('1 hotel v tomto měsíci');
   const row = a.getByTestId('portfolio-rows').locator('li');
   await expect(row).toHaveCount(1);
   await expect(row).toContainText(hotel.name);
-  await expect(row).toContainText('Měsíc provize 2.');
+  await expect(row).toContainText('Měsíc provize 1.');
   await expect(row).toContainText('20,00 % (počáteční)');
   await expect(a.getByTestId('portfolio')).not.toContainText('Kč');
   await expect(a.getByTestId('portfolio-salesperson')).toHaveCount(0);
