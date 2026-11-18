@@ -195,15 +195,20 @@ BEGIN
           WHERE b."id" = NEW."bottle_id" AND b."site_id" = r."site_id") THEN
       RAISE EXCEPTION 'AYVO: an issue names only a bottle of the receipt''s site' USING ERRCODE = 'check_violation';
     END IF;
+    -- On the BOTTLES line it is always anchored. On an R1 line (CRATE / CONTAINER) the previous
+    -- image writes it without an anchor after a rollback before the first R1.1 write (doc 070 §5);
+    -- it is then resolved under R1's rule. An anchor, wherever it is, must be valid.
     IF NEW."kind" = 'NOT_DELIVERED' AND (
-         NEW."anchor_cycle_id" IS NULL
-         OR NOT EXISTS (
-           SELECT 1 FROM "order_crate_allocations" oa JOIN "crate_cycles" c ON c."id" = oa."cycle_id"
-            WHERE oa."id" = NEW."anchor_allocation_id" AND oa."cycle_id" = NEW."anchor_cycle_id"
-              AND oa."released_at" IS NULL AND oa."completed_at" IS NULL
-              AND c."status" IN ('ALLOCATED', 'DISPATCHED'))
-         OR (SELECT a."cycle_id" FROM "crate_assignments" a WHERE a."bottle_id" = NEW."bottle_id"
-              ORDER BY a."assigned_at" DESC, a."id" DESC LIMIT 1) IS DISTINCT FROM NEW."anchor_cycle_id") THEN
+         (NEW."anchor_cycle_id" IS NULL
+          AND (SELECT l."kind" FROM "return_receipt_lines" l WHERE l."id" = NEW."line_id") = 'BOTTLES')
+         OR (NEW."anchor_cycle_id" IS NOT NULL AND (
+           NOT EXISTS (
+             SELECT 1 FROM "order_crate_allocations" oa JOIN "crate_cycles" c ON c."id" = oa."cycle_id"
+              WHERE oa."id" = NEW."anchor_allocation_id" AND oa."cycle_id" = NEW."anchor_cycle_id"
+                AND oa."released_at" IS NULL AND oa."completed_at" IS NULL
+                AND c."status" IN ('ALLOCATED', 'DISPATCHED'))
+           OR (SELECT a."cycle_id" FROM "crate_assignments" a WHERE a."bottle_id" = NEW."bottle_id"
+                ORDER BY a."assigned_at" DESC, a."id" DESC LIMIT 1) IS DISTINCT FROM NEW."anchor_cycle_id"))) THEN
       RAISE EXCEPTION 'AYVO: a NOT_DELIVERED issue names the bottle''s current, not yet delivered circulation'
         USING ERRCODE = 'check_violation';
     END IF;
