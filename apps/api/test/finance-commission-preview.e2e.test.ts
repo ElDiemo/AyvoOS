@@ -227,7 +227,11 @@ describe.skipIf(!hasDatabase)('Finance: commission closing preview (doc 069 §5)
   });
 
   it('only a closed month; LIVE has nothing until a live invoice kind exists (O1)', async () => {
-    const open = await preview({ month: '2026-11' });
+    // The current month in Prague is never closed (not a fixed month: the test outlives it).
+    const current = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' })
+      .format(new Date())
+      .slice(0, 7);
+    const open = await preview({ month: current });
     expect([open.status, open.body.code]).toEqual([422, 'MONTH_NOT_CLOSED']);
     expect((await preview({ month: '2099-01' })).status).toBe(422);
     const live = await preview({ month: MONTH, mode: 'LIVE' });
