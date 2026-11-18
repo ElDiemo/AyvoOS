@@ -42,7 +42,13 @@ export class EmployeeCardsService {
   ) {}
 
   async get(userId: string) {
-    if (!(await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } })))
+    // Business cards are for staff only: a hotel portal account is unknown here.
+    if (
+      !(await this.prisma.user.findFirst({
+        where: { id: userId, audience: 'STAFF' },
+        select: { id: true },
+      }))
+    )
       throw missing();
     const card = await this.prisma.employeeCard.findUnique({ where: { userId } });
     return { card: card ? view(card) : null };
@@ -66,7 +72,7 @@ export class EmployeeCardsService {
       async (tx) => {
         const rows = await tx.$queryRaw<
           { id: string }[]
-        >`SELECT id FROM users WHERE id = ${userId}::uuid FOR NO KEY UPDATE`;
+        >`SELECT id FROM users WHERE id = ${userId}::uuid AND audience = 'STAFF' FOR NO KEY UPDATE`;
         if (!rows.length) throw missing();
         const previous = await tx.auditEvent.findFirst({
           where: {

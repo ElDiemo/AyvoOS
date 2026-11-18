@@ -11,6 +11,7 @@ import { MulterModule } from '@nestjs/platform-express';
 import { AccountingExportsService } from './accounting-exports.service.js';
 import { BillingSettingsController } from './billing-settings.controller.js';
 import { BillingSettingsService } from './billing-settings.service.js';
+import { BillingTermsService } from './billing-terms.service.js';
 import { InvoiceDeliveriesController } from './invoice-deliveries.controller.js';
 import { InvoiceDeliveriesService } from './invoice-deliveries.service.js';
 import { InvoiceDeliveryRunner } from './invoice-delivery-runner.service.js';
@@ -67,6 +68,7 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     FinanceDocumentsService,
     AccountingExportsService,
     BillingSettingsService,
+    BillingTermsService,
     IssuerSettingsService,
     InvoicesService,
     InvoiceDeliveriesService,

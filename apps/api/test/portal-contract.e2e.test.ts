@@ -17,6 +17,7 @@ import {
   type TestApp,
   withPrivileged,
 } from './support/test-app.js';
+import { operationsCheck } from './support/portal-check.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
 const PASSWORD = 'Dlouhe portalove heslo AYVO 789';
@@ -86,7 +87,7 @@ describe.skipIf(!hasDatabase)('hotel portal contract', () => {
       payerCustomerId: randomUUID(),
       hotelIds,
       reason: 'synthetic portal grant',
-      financeCheck: { payerVersion: 1, hotelIds, checkedAt: new Date().toISOString() },
+      financeCheck: operationsCheck(hotelIds),
     });
   const revoke = (grantId: string) =>
     t.app.get(PortalGrantsService).revoke(adminId, grantId, 'synthetic revocation');
@@ -314,11 +315,7 @@ describe.skipIf(!hasDatabase)('hotel portal contract', () => {
         payerCustomerId: g.payerCustomerId,
         hotelIds: [hotels[1]!],
         reason: 'narrowed',
-        financeCheck: {
-          payerVersion: 1,
-          hotelIds: [hotels[1]!],
-          checkedAt: new Date().toISOString(),
-        },
+        financeCheck: operationsCheck([hotels[1]!]),
       });
       expect((await get(`hotels/${hotels[0]}`, session)).status).toBe(404);
       expect((await get('hotels', session)).body.map((h: { id: string }) => h.id)).toEqual([

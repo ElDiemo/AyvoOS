@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  SalesCalendar,
   AdminUserDetail,
   CurrentUser,
   DuplicateHint,
   ProspectDetail,
   ProspectPage,
   SalesOverview,
+  SalesResults,
   TaskPage,
 } from '@ayvo/types';
 import request from 'supertest';
@@ -847,5 +849,335 @@ describe.skipIf(!hasDatabase)('Obchod (sales acquisition)', () => {
       items: [],
       total: 60,
     });
+  });
+
+  it('Kalendář: the tasks due in a month for the same people as the list; only really overdue ones counted', async () => {
+    const a = as(people.a.cookie);
+    const b = as(people.b.cookie);
+    const day = addDays(today(), 1);
+    const month = day.slice(0, 7);
+    const pa = await create(people.a.cookie, `Kalendář A ${tag}`);
+    const pb = await create(people.b.cookie, `Kalendář B ${tag}`);
+    const task = (cookie: string, code: string, title: string, dueOn: string) =>
+      as(cookie)
+        .post(`/prospects/${code}/tasks`, {
+          title,
+          dueOn,
+          contactId: null,
+          assigneeId: null,
+          note: null,
+        })
+        .expect(200);
+    await task(people.a.cookie, pa.code, `Zavolat ${tag}`, day);
+    await task(people.a.cookie, pa.code, `Poslat nabídku ${tag}`, day);
+    await task(people.a.cookie, pa.code, `Později ${tag}`, addDays(today(), 70));
+    await task(people.b.cookie, pb.code, `Bářin úkol ${tag}`, day);
+    const done = (await a.get(`/prospects/${pa.code}`).expect(200)).body as ProspectDetail;
+    const first = done.openTasks.find((x) => x.title === `Poslat nabídku ${tag}`)!;
+    await a.post(`/tasks/${first.id}/done`, { revision: first.revision, result: null }).expect(200);
+
+    const mine = (await a.get(`/tasks/calendar?month=${month}`).expect(200)).body as SalesCalendar;
+    const titles = mine.items.filter((x) => x.title.endsWith(tag)).map((x) => [x.title, x.status]);
+    expect(titles.sort()).toEqual(
+      [
+        [`Poslat nabídku ${tag}`, 'DONE'],
+        [`Zavolat ${tag}`, 'OPEN'],
+      ].sort(),
+    );
+    expect(mine).toMatchObject({ month, today: today(), truncated: false });
+    expect(mine.items.every((x) => x.dueOn.startsWith(month))).toBe(true);
+    // Without a month: the current one.
+    expect(((await a.get('/tasks/calendar').expect(200)).body as SalesCalendar).month).toBe(
+      today().slice(0, 7),
+    );
+    // Another salesperson's tasks: never for a SALES user, all of them for the administrator.
+    expect((await b.get('/tasks/calendar?assignee=all').expect(403)).status).toBe(403);
+    expect((await b.get(`/tasks/calendar?assignee=${people.a.id}`)).status).toBe(403);
+    const all = (await as(admin).get(`/tasks/calendar?month=${month}&assignee=all`).expect(200))
+      .body as SalesCalendar;
+    expect(all.items.map((x) => x.title)).toEqual(
+      expect.arrayContaining([`Zavolat ${tag}`, `Bářin úkol ${tag}`]),
+    );
+    expect(
+      ((await b.get(`/tasks/calendar?month=${month}`).expect(200)).body as SalesCalendar).items
+        .map((x) => x.title)
+        .filter((x) => x.endsWith(tag)),
+    ).toEqual([`Bářin úkol ${tag}`]);
+
+    // Overdue in a later month: only open tasks due before that month AND before today. A
+    // future task (tomorrow, still before the month viewed) is not late (review 5829337971);
+    // one really due three days ago is counted — neither is listed there.
+    const [yy, mm] = month.split('-').map(Number) as [number, number];
+    const nextMonth = mm === 12 ? `${yy + 1}-01` : `${yy}-${String(mm + 1).padStart(2, '0')}`;
+    const view = async (m: string) =>
+      (await a.get(`/tasks/calendar?month=${m}`).expect(200)).body as SalesCalendar;
+    const before = await view(nextMonth);
+    const beforeNow = await view(today().slice(0, 7));
+    await task(people.a.cookie, pa.code, `Zítra ${tag}`, day);
+    await task(people.a.cookie, pa.code, `Zpožděný ${tag}`, day);
+    const late = (
+      (await a.get(`/prospects/${pa.code}`).expect(200)).body as ProspectDetail
+    ).openTasks.find((x) => x.title === `Zpožděný ${tag}`)!;
+    // Test-only: a past due date cannot be entered through the API.
+    await t.prisma.salesTask.update({
+      where: { id: late.id },
+      data: { dueOn: new Date(`${addDays(today(), -3)}T00:00:00Z`), revision: { increment: 1 } },
+    });
+    const after = await view(nextMonth);
+    expect(after.overdueBefore).toBe(before.overdueBefore + 1);
+    expect(after.items.map((x) => x.title)).not.toContain(`Zítra ${tag}`);
+    expect(after.items.map((x) => x.title)).not.toContain(`Zpožděný ${tag}`);
+    // The current month: the late task counts there too when it fell in an earlier month;
+    // otherwise it is in the grid itself (red), not in the count.
+    const lateMonth = addDays(today(), -3).slice(0, 7);
+    expect((await view(today().slice(0, 7))).overdueBefore).toBe(
+      beforeNow.overdueBefore + (lateMonth < today().slice(0, 7) ? 1 : 0),
+    );
+    for (const q of ['?month=2026-13', '?month=26-01', '?assignee=nobody'])
+      expect((await a.get(`/tasks/calendar${q}`)).status, q).toBe(400);
+  });
+
+  it('Výsledky obchodu: the funnel, stage changes, current activities and people — owner only', async () => {
+    const a = as(people.a.cookie);
+    const results = async () =>
+      (await as(admin).get('/results?days=7').expect(200)).body as SalesResults;
+    const row = (r: SalesResults) => r.people.find((x) => x.id === people.a.id)!;
+    const before = await results();
+    expect(before).toMatchObject({ days: 7, today: today(), since: addDays(today(), -6) });
+
+    const d = await create(people.a.cookie, `Výsledky A ${tag}`);
+    const contacted = (
+      await a
+        .post(`/prospects/${d.code}/stage`, {
+          revision: d.revision,
+          stage: 'CONTACTED',
+          reason: null,
+          lostReason: null,
+        })
+        .expect(200)
+    ).body as ProspectDetail;
+    const at = `${addDays(today(), -1)}T10:00`;
+    const activity = (kind: string, content: string) =>
+      a
+        .post(`/prospects/${d.code}/activities`, {
+          kind,
+          occurredAt: at,
+          contactId: null,
+          content,
+          outcome: null,
+          followUp: null,
+        })
+        .expect(200);
+    await activity('CALL', 'Telefonát (výsledky)');
+    const withMeeting = (await activity('MEETING', 'Schůzka (výsledky)')).body as ProspectDetail;
+    const withNote = (await activity('NOTE', 'Omylem (výsledky)')).body as ProspectDetail;
+    // A corrected activity counts once (its current version); a withdrawn one never.
+    const meeting = withMeeting.activities.find((x) => x.content === 'Schůzka (výsledky)')!;
+    await a
+      .post(`/prospects/${d.code}/activities/${meeting.id}/correct`, {
+        withdraw: false,
+        kind: 'MEETING',
+        occurredAt: at,
+        contactId: null,
+        content: 'Schůzka s ředitelem (výsledky)',
+        outcome: null,
+        reason: 'Upřesnění',
+      })
+      .expect(200);
+    const note = withNote.activities.find((x) => x.content === 'Omylem (výsledky)')!;
+    await a
+      .post(`/prospects/${d.code}/activities/${note.id}/correct`, {
+        withdraw: true,
+        reason: 'Zapsáno omylem',
+      })
+      .expect(200);
+
+    const after = await results();
+    expect(after.created - before.created).toBe(1);
+    expect(after.funnel.CONTACTED - before.funnel.CONTACTED).toBe(1);
+    expect(after.reached.CONTACTED - before.reached.CONTACTED).toBe(1);
+    expect(after.activities.CALL - before.activities.CALL).toBe(1);
+    expect(after.activities.MEETING - before.activities.MEETING).toBe(1);
+    expect(after.activities.NOTE - before.activities.NOTE).toBe(0);
+    expect(after.withoutNextStep - before.withoutNextStep).toBe(1); // in progress, no task
+    expect(row(after).calls - (row(before)?.calls ?? 0)).toBe(1);
+    expect(row(after).meetings - (row(before)?.meetings ?? 0)).toBe(1);
+    expect(row(after).inProgress - (row(before)?.inProgress ?? 0)).toBe(1);
+    void contacted;
+    // "Bez dalšího kroku" counts exactly what its link lists for the owner (the filter of #155):
+    // everyone's active prospects in progress without an open task; a person's row — their own.
+    const listed = async (q: string) =>
+      (
+        (await as(admin).get(`/prospects?next=none&phase=in-progress${q}`).expect(200)).body as {
+          total: number;
+        }
+      ).total;
+    expect(await listed('')).toBe(after.withoutNextStep);
+    expect(await listed(`&owner=${people.a.id}`)).toBe(row(after).withoutNextStep);
+
+    // Owner only; the period is 7, 30 or 90 days.
+    expect((await a.get('/results')).status).toBe(403);
+    expect((await as(admin).get('/results?days=14')).status).toBe(400);
+    expect(((await as(admin).get('/results').expect(200)).body as SalesResults).days).toBe(30);
+  });
+
+  it('Výsledky / Úkoly po termínu: the count and its list (due=overdue) are the same set', async () => {
+    const a = as(people.a.cookie);
+    const p = await create(people.a.cookie, `Po termínu A ${tag}`);
+    const gone = await create(people.a.cookie, `Po termínu archiv ${tag}`);
+    const pb = await create(people.b.cookie, `Po termínu B ${tag}`);
+    const add = async (cookie: string, code: string, title: string, dueOn: string) => {
+      const d = (
+        await as(cookie)
+          .post(`/prospects/${code}/tasks`, {
+            title,
+            dueOn,
+            contactId: null,
+            assigneeId: null,
+            note: null,
+          })
+          .expect(200)
+      ).body as ProspectDetail;
+      return d.openTasks.find((x) => x.title === title)!;
+    };
+    // Test-only: a past due date cannot be entered through the API.
+    const backdate = (id: string, days: number) =>
+      t.prisma.salesTask.update({
+        where: { id },
+        data: {
+          dueOn: new Date(`${addDays(today(), days)}T00:00:00Z`),
+          revision: { increment: 1 },
+        },
+      });
+    const listAll = async (cookie: string, q: string) => {
+      const first = (await as(cookie).get(`/tasks?${q}`).expect(200)).body as TaskPage;
+      const items = [...first.items];
+      for (let page = 2; page <= Math.ceil(first.total / first.pageSize); page++)
+        items.push(
+          ...((await as(cookie).get(`/tasks?${q}&page=${page}`).expect(200)).body as TaskPage)
+            .items,
+        );
+      return { total: first.total, items };
+    };
+    const overdueOf = (r: SalesResults) => r.overdueTasks;
+    const here = [p.code, gone.code, pb.code];
+    const ours = (items: TaskPage['items']) =>
+      items.filter((x) => here.includes(x.prospect.code)).map((x) => x.title);
+    const before = overdueOf((await as(admin).get('/results').expect(200)).body as SalesResults);
+
+    // Yesterday (open) — overdue; today, in the future, yesterday but done — not.
+    const yesterday = await add(people.a.cookie, p.code, `Včera ${tag}`, today());
+    await backdate(yesterday.id, -1);
+    await add(people.a.cookie, p.code, `Dnes ${tag}`, today());
+    await add(people.a.cookie, p.code, `Budoucí ${tag}`, addDays(today(), 5));
+    const doneLate = await add(people.a.cookie, p.code, `Hotový ${tag}`, today());
+    await backdate(doneLate.id, -2);
+    await a
+      .post(`/tasks/${doneLate.id}/done`, { revision: doneLate.revision + 1, result: null })
+      .expect(200);
+    // An archived prospect's late task (it can only be archived once the task is resolved).
+    const archivedLate = await add(people.a.cookie, gone.code, `Archiv ${tag}`, today());
+    await backdate(archivedLate.id, -3);
+    const g = (
+      await a
+        .post(`/tasks/${archivedLate.id}/cancel`, {
+          requestId: randomUUID(),
+          revision: archivedLate.revision + 1,
+          reason: 'Hotel zavřel',
+        })
+        .expect(200)
+    ).body as ProspectDetail;
+    await a
+      .post(`/prospects/${gone.code}/archive`, {
+        requestId: randomUUID(),
+        revision: g.revision,
+        reason: 'Hotel zavřel',
+      })
+      .expect(200);
+    // Bára's own late task — someone else's for Adam.
+    const theirs = await add(people.b.cookie, pb.code, `Bářin včera ${tag}`, today());
+    await backdate(theirs.id, -1);
+
+    const after = overdueOf((await as(admin).get('/results').expect(200)).body as SalesResults);
+    expect(after - before).toBe(2); // Adam's yesterday + Bára's yesterday
+    const listed = await listAll(admin, 'assignee=all&due=overdue');
+    expect(listed.total).toBe(after);
+    expect(listed.items).toHaveLength(after);
+    expect(listed.items.every((x) => x.status === 'OPEN' && x.dueOn < today())).toBe(true);
+    expect(ours(listed.items).sort()).toEqual([`Bářin včera ${tag}`, `Včera ${tag}`].sort());
+    // `status` does not widen the filter; without `due` the list stays as it was (all open).
+    expect((await listAll(admin, 'assignee=all&status=CLOSED&due=overdue')).total).toBe(after);
+    const open = await listAll(admin, 'assignee=all');
+    expect(open.items.map((x) => x.title)).toEqual(
+      expect.arrayContaining([`Dnes ${tag}`, `Budoucí ${tag}`, `Včera ${tag}`]),
+    );
+    expect((await as(admin).get('/tasks?due=late')).status).toBe(400);
+
+    // A salesperson: only their own late tasks; never anyone else's.
+    const mine = await listAll(people.a.cookie, 'due=overdue');
+    expect(ours(mine.items)).toEqual([`Včera ${tag}`]);
+    expect(mine.items.every((x) => x.assignee.id === people.a.id)).toBe(true);
+    expect((await a.get('/tasks?assignee=all&due=overdue')).status).toBe(403);
+    expect((await a.get(`/tasks?assignee=${people.b.id}&due=overdue`)).status).toBe(403);
+    const bMine = await listAll(people.b.cookie, 'due=overdue');
+    expect(ours(bMine.items)).toEqual([`Bářin včera ${tag}`]);
+  });
+
+  it("Přehled: the prospects in progress without a next step, only in the person's scope; the list filter", async () => {
+    const a = as(people.a.cookie);
+    const b = as(people.b.cookie);
+    const contacted = async (cookie: string, name: string) => {
+      const d = await create(cookie, name);
+      return (
+        await as(cookie)
+          .post(`/prospects/${d.code}/stage`, {
+            revision: d.revision,
+            stage: 'CONTACTED',
+            reason: null,
+            lostReason: null,
+          })
+          .expect(200)
+      ).body as ProspectDetail;
+    };
+    const lonely = await contacted(people.a.cookie, `Bez kroku A ${tag}`);
+    const planned = await contacted(people.a.cookie, `S krokem A ${tag}`);
+    await a
+      .post(`/prospects/${planned.code}/tasks`, {
+        title: 'Zavolat',
+        dueOn: addDays(today(), 2),
+        contactId: null,
+        assigneeId: null,
+        note: null,
+      })
+      .expect(200);
+    const fresh = await create(people.a.cookie, `Nový bez kroku A ${tag}`); // NEW: not in progress
+    const foreign = await contacted(people.b.cookie, `Bez kroku B ${tag}`);
+
+    const mine = (await a.get('/overview').expect(200)).body as SalesOverview;
+    const codes = mine.withoutNextStep.map((p) => p.code);
+    expect(codes).toContain(lonely.code);
+    expect(codes).not.toContain(planned.code);
+    expect(codes).not.toContain(fresh.code);
+    expect(codes).not.toContain(foreign.code);
+    expect(mine.withoutNextStep.every((p) => p.nextTask === null)).toBe(true);
+    expect(mine.counts.withoutNextStep).toBeGreaterThanOrEqual(1);
+    // The other salesperson sees only theirs; the administrator, asking for everyone, both.
+    const theirs = (await b.get('/overview').expect(200)).body as SalesOverview;
+    expect(theirs.withoutNextStep.map((p) => p.code)).toContain(foreign.code);
+    expect(theirs.withoutNextStep.map((p) => p.code)).not.toContain(lonely.code);
+    const all = (await as(admin).get('/overview?scope=all').expect(200)).body as SalesOverview;
+    expect(all.withoutNextStep.map((p) => p.code)).toEqual(
+      expect.arrayContaining([lonely.code, foreign.code]),
+    );
+
+    // The list: in progress without a next step (never a NEW one), own only for a salesperson.
+    const list = (await a.get('/prospects?next=none&phase=in-progress').expect(200))
+      .body as ProspectPage;
+    const listed = list.items.map((p) => p.code);
+    expect(listed).toContain(lonely.code);
+    expect(listed).not.toContain(fresh.code);
+    expect(listed).not.toContain(planned.code);
+    expect(listed).not.toContain(foreign.code);
+    expect((await a.get('/prospects?phase=other')).status).toBe(400);
   });
 });

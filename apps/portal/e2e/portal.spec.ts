@@ -54,7 +54,7 @@ test.describe('hotel portal (portal-web)', () => {
     page,
   }) => {
     await signIn(page);
-    await page.getByRole('link', { name: 'Hotel Portál E2E' }).click();
+    await page.getByRole('link', { name: 'Zobrazit profil: Hotel Portál E2E' }).click();
     await expect(page.getByTestId('portal-hotel-name')).toHaveText('Hotel Portál E2E');
     await expect(page.getByText('Portálová 1')).toBeVisible();
 

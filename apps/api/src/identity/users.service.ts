@@ -14,7 +14,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { domainError, idempotencyConflict } from '../common/domain-error.js';
 import { canonicalJson } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import type { AccountAudience, Prisma } from '../generated/prisma/client.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { SitesService } from '../sites/sites.service.js';
 import { AccessService, toAccessibleSite } from './access.service.js';
@@ -70,8 +70,14 @@ export class UsersService {
     }));
   }
 
+  /**
+   * Internal (STAFF) accounts only. Hotel portal accounts are not internal users: they are listed
+   * and managed under Hotely → Uživatelé (portal-grants), never here — neither listed, nor shown,
+   * nor changed by any route of this service (each answers 404 for a PORTAL id).
+   */
   async list(): Promise<AdminUserSummary[]> {
     const users = await this.prisma.user.findMany({
+      where: { audience: 'STAFF' },
       include: {
         roles: {
           where: { revokedAt: null },
@@ -97,8 +103,8 @@ export class UsersService {
   }
 
   async get(id: string): Promise<AdminUserDetail> {
-    const user = await this.prisma.user.findUnique({
-      where: { id },
+    const user = await this.prisma.user.findFirst({
+      where: { id, audience: 'STAFF' },
       include: {
         roles: {
           where: { revokedAt: null },
@@ -204,16 +210,19 @@ export class UsersService {
   }
 
   async sendInvitation(actor: Actor, userId: string, requestId: string, reason: string) {
+    await this.requireStaff(userId);
     await this.invitations.send(actor.userId, userId, requestId, reason);
     return this.get(userId);
   }
 
   async resendInvitation(actor: Actor, userId: string, requestId: string, reason: string) {
+    await this.requireStaff(userId);
     await this.invitations.resend(actor.userId, userId, requestId, reason);
     return this.get(userId);
   }
 
   async revokeInvitation(actor: Actor, userId: string, requestId: string, reason: string) {
+    await this.requireStaff(userId);
     await this.invitations.revoke(actor.userId, userId, requestId, reason);
     return this.get(userId);
   }
@@ -414,14 +423,57 @@ export class UsersService {
   }
 
   async deactivate(actor: Actor, userId: string, reason: string) {
-    if (actor.userId === userId) {
+    await this.setActive(actor, userId, 'STAFF', false, reason);
+    return this.get(userId);
+  }
+
+  async reactivate(actor: Actor, userId: string, reason: string) {
+    await this.setActive(actor, userId, 'STAFF', true, reason);
+    return this.get(userId);
+  }
+
+  /**
+   * Deactivation and reactivation of a hotel portal account (Hotely → Uživatelé): the same rules,
+   * row lock, session revocation and audit types (USER_DEACTIVATED / USER_REACTIVATED) as for an
+   * internal account; a STAFF id is unknown here.
+   */
+  async setPortalAccountActive(actor: Actor, userId: string, active: boolean, reason: string) {
+    await this.setActive(actor, userId, 'PORTAL', active, reason);
+  }
+
+  private async setActive(
+    actor: Actor,
+    userId: string,
+    audience: AccountAudience,
+    active: boolean,
+    reason: string,
+  ) {
+    if (!active && actor.userId === userId) {
       throw domainError(409, 'CANNOT_DEACTIVATE_SELF', 'You cannot deactivate your own account');
     }
     await this.prisma.$transaction(async (tx) => {
-      const user = await this.requireUser(tx, userId);
+      const user = await this.requireUser(tx, userId, audience);
+      if (active) {
+        if (user.status === 'ACTIVE')
+          throw domainError(409, 'ALREADY_ACTIVE', 'The user is already active');
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            status: 'ACTIVE',
+            deactivatedAt: null,
+            deactivatedBy: null,
+            deactivationReason: null,
+          },
+        });
+        await this.audit.record(
+          { type: 'USER_REACTIVATED', actorUserId: actor.userId, targetUserId: userId, reason },
+          tx,
+        );
+        return;
+      }
       if (user.status !== 'ACTIVE')
         throw domainError(409, 'ALREADY_DEACTIVATED', 'The user is already deactivated');
-      await this.assertNotLastAdmin(tx, userId);
+      if (audience === 'STAFF') await this.assertNotLastAdmin(tx, userId);
       await tx.user.update({
         where: { id: userId },
         data: {
@@ -438,29 +490,6 @@ export class UsersService {
         tx,
       );
     });
-    return this.get(userId);
-  }
-
-  async reactivate(actor: Actor, userId: string, reason: string) {
-    await this.prisma.$transaction(async (tx) => {
-      const user = await this.requireUser(tx, userId);
-      if (user.status === 'ACTIVE')
-        throw domainError(409, 'ALREADY_ACTIVE', 'The user is already active');
-      await tx.user.update({
-        where: { id: userId },
-        data: {
-          status: 'ACTIVE',
-          deactivatedAt: null,
-          deactivatedBy: null,
-          deactivationReason: null,
-        },
-      });
-      await this.audit.record(
-        { type: 'USER_REACTIVATED', actorUserId: actor.userId, targetUserId: userId, reason },
-        tx,
-      );
-    });
-    return this.get(userId);
   }
 
   private async addRole(
@@ -698,12 +727,29 @@ export class UsersService {
     );
   }
 
-  private async requireUser(tx: Prisma.TransactionClient, userId: string) {
-    // Row lock: concurrent administrative changes of one user are serialised.
+  /**
+   * The account, locked: concurrent administrative changes of one user are serialised. Only of the
+   * given audience (internal routes: STAFF) — any other account is "not found".
+   */
+  private async requireUser(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    audience: AccountAudience = 'STAFF',
+  ) {
     const rows = await tx.$queryRaw<{ id: string; status: string }[]>`
-      SELECT "id", "status"::text AS "status" FROM "users" WHERE "id" = ${userId}::uuid FOR UPDATE`;
+      SELECT "id", "status"::text AS "status" FROM "users"
+      WHERE "id" = ${userId}::uuid AND "audience" = ${audience}::"AccountAudience" FOR UPDATE`;
     if (!rows[0]) throw notFound();
     return rows[0];
+  }
+
+  /** An internal account (no lock), or "not found" — e.g. before the invitation routes. */
+  private async requireStaff(userId: string) {
+    const found = await this.prisma.user.findFirst({
+      where: { id: userId, audience: 'STAFF' },
+      select: { id: true },
+    });
+    if (!found) throw notFound();
   }
 
   /**

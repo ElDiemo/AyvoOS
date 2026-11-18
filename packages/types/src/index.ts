@@ -28,6 +28,7 @@ export * from './portal-grants.js';
 export * from './printing.js';
 export * from './procurement.js';
 export * from './sales.js';
+export * from './commissions.js';
 export * from './sales-import.js';
 export * from './shipments.js';
 export * from './sites.js';

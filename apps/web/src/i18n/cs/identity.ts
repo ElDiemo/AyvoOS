@@ -94,6 +94,8 @@ export const identityCs = {
     'sales:work':
       'Pracovat s vlastními zájemci o spolupráci — zakládat, upravovat, kontakty, aktivity a úkoly',
     'sales:manage': 'Vidět všechny zájemce a úkoly obchodu a přidělovat je obchodníkům',
+    'sales:commission_terms_manage':
+      'Nastavovat podmínky provize obchodníků (počáteční sazba, její délka, udržovací sazba) — jen ADMIN',
     'finance:documents_read': 'Vidět přijaté doklady, jejich historii a stahovat originály',
     'finance:exports_manage': 'Vytvářet exporty dokladů pro účetní (ZIP s přehledem a originály)',
     'finance:documents_manage':

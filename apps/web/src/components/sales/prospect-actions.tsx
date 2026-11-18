@@ -2,6 +2,7 @@
 
 import {
   ACTIVITY_KINDS,
+  IN_PROGRESS_STAGES,
   PROSPECT_STAGES,
   stageChangeNeedsReason,
   type ActivityKind,
@@ -17,6 +18,7 @@ import { salesCs } from '@/i18n/cs/sales';
 import { FormDialog } from './sales-dialog';
 import { dueLabel, salesNowLocal } from './sales-format';
 import { dialogError, useSalesSend } from './use-sales-send';
+import { VisitDialog } from './visit-dialog';
 
 type Contact = { id: string; label: string };
 const a = salesCs.activity;
@@ -33,11 +35,14 @@ export function ActivityDialog({
   contacts,
   open,
   onClose,
+  onSaved,
 }: {
   code: string;
   contacts: Contact[];
   open: boolean;
   onClose: () => void;
+  /** The confirmed write's prospect (e.g. to offer the next step). */
+  onSaved?: (detail: ProspectDetail) => void;
 }) {
   const id = useId();
   const blank = () => ({
@@ -87,9 +92,10 @@ export function ActivityDialog({
               ? { title: v.followTitle.trim(), dueOn: v.followDue, contactId: v.contactId || null }
               : null,
           },
-          () => {
+          (detail) => {
             setV(blank());
             close();
+            onSaved?.(detail);
           },
         );
       }}
@@ -309,10 +315,12 @@ export function StageDialog({
   prospect,
   open,
   onClose,
+  onSaved,
 }: {
   prospect: Pick<ProspectDetail, 'code' | 'stage' | 'revision'>;
   open: boolean;
   onClose: () => void;
+  onSaved?: (detail: ProspectDetail) => void;
 }) {
   const id = useId();
   const st = salesCs.stageDialog;
@@ -351,7 +359,10 @@ export function StageDialog({
             reason: needsReason || reason.trim().length >= 3 ? reason.trim() : null,
             lostReason: stage === 'LOST' ? lostReason.trim() : null,
           },
-          close,
+          (detail) => {
+            close();
+            onSaved?.(detail);
+          },
         );
       }}
     >
@@ -633,9 +644,19 @@ export function ProspectActions({
   openTasks: Pick<SalesTask, 'id' | 'title' | 'dueOn'>[];
   today: string;
 }) {
-  const [open, setOpen] = useState<'activity' | 'task' | 'stage' | 'owner' | 'archive' | null>(
-    null,
-  );
+  const [open, setOpen] = useState<
+    'activity' | 'visit' | 'task' | 'stage' | 'owner' | 'archive' | null
+  >(null);
+  // After a confirmed activity or stage change: a prospect in progress without any open task gets
+  // a non-blocking offer to plan its next step (the ordinary task form). Decided from the write's
+  // own answer, so it holds even if the page's refresh fails.
+  const [offer, setOffer] = useState(false);
+  const offerIfMissing = (detail: ProspectDetail) =>
+    setOffer(
+      IN_PROGRESS_STAGES.includes(detail.stage) &&
+        detail.openTasks.length === 0 &&
+        !detail.archived,
+    );
   const d = salesCs.detail;
   return (
     <div className="flex flex-wrap gap-2" data-testid="prospect-actions">
@@ -646,6 +667,14 @@ export function ProspectActions({
         data-testid="record-activity"
       >
         {d.recordActivity}
+      </button>
+      <button
+        type="button"
+        className={buttonClass.secondary}
+        onClick={() => setOpen('visit')}
+        data-testid="start-visit"
+      >
+        {salesCs.visit.start}
       </button>
       <button
         type="button"
@@ -681,6 +710,34 @@ export function ProspectActions({
       >
         {d.archive}
       </button>
+      {offer && (
+        <div
+          role="status"
+          className="flex w-full flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          data-testid="next-step-offer"
+        >
+          <span className="w-full min-w-0 sm:w-auto sm:flex-1">{d.nextStepOffer}</span>
+          <button
+            type="button"
+            className={buttonClass.secondary}
+            onClick={() => {
+              setOffer(false);
+              setOpen('task');
+            }}
+            data-testid="next-step-plan"
+          >
+            {d.nextStepPlan}
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 underline"
+            onClick={() => setOffer(false)}
+            data-testid="next-step-later"
+          >
+            {d.nextStepLater}
+          </button>
+        </div>
+      )}
       <ArchiveDialog
         key={`archive-${prospect.revision}`}
         prospect={prospect}
@@ -694,6 +751,14 @@ export function ProspectActions({
         contacts={contacts}
         open={open === 'activity'}
         onClose={() => setOpen(null)}
+        onSaved={offerIfMissing}
+      />
+      <VisitDialog
+        code={prospect.code}
+        contacts={contacts}
+        open={open === 'visit'}
+        onClose={() => setOpen(null)}
+        onSaved={offerIfMissing}
       />
       <TaskDialog
         code={prospect.code}
@@ -707,6 +772,7 @@ export function ProspectActions({
         prospect={prospect}
         open={open === 'stage'}
         onClose={() => setOpen(null)}
+        onSaved={offerIfMissing}
       />
       {salespeople && (
         <OwnerDialog
