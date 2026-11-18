@@ -100,8 +100,11 @@ tests with these migrations applied before each file (doc 049 §2).
    `returned_cycle_id` = the assignment's cycle) and re-checked at commit by
    `ayvo_assert_crate_cycle`; a line's `returned_cycle_id` never changes (line guard), so the
    result is the same.
-2. **No new `CONTAINER` line** in R1.1 (refused by the database), as doc 047 §6.3 5 says "R1.1
-   makes no new ones".
+2. **No new `CONTAINER` line from R1.1** (no route), as doc 047 §6.3 5 says "R1.1 makes no new
+   ones". The database still accepts one: the previous image writes it after a rollback before the
+   first R1.1 write (§5), and it stays an R1 line (Vyprázdněno with its count). An earlier draft
+   refused it in the line guard; the rollback check found the previous image's "Krabice bez kódu"
+   answering 500 on the R1.1 schema (review fix, 2026-11-19).
 3. **"Bottle at the hotel" is enforced** (§2 read side, `BOTTLE_AT_HOTEL`): not spelled out in
    §6.3, but without it a bottle freed with its crate would look like a loose finished bottle and
    could be repacked without ever being returned.

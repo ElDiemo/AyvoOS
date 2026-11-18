@@ -105,7 +105,9 @@ $$;
 
 -- A new CRATE line: a crate of the receipt's site whose DELIVERED cycle is held by this live
 -- allocation, its parcel delivered BEFORE the receipt was opened (the receipt anchor, §6.3 1). R1.1
--- records no new CONTAINER line. A BOTTLES line has no crate (kind check).
+-- itself records no new CONTAINER line (no route), but the database still accepts one: the previous
+-- image writes it after a rollback before the first R1.1 write (doc 070 §5), and it stays an R1
+-- line (Vyprázdněno with a count). A BOTTLES line has no crate (kind check).
 CREATE OR REPLACE FUNCTION return_receipt_lines_guard() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
@@ -122,10 +124,6 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW."emptied_at" IS NOT NULL THEN
       RAISE EXCEPTION 'AYVO: a return line starts not emptied' USING ERRCODE = 'check_violation';
-    END IF;
-    IF NEW."kind" = 'CONTAINER' THEN
-      RAISE EXCEPTION 'AYVO: a returned bottle needs no container line (R1.1): scan it on its own'
-        USING ERRCODE = 'check_violation';
     END IF;
     IF NEW."kind" = 'CRATE' AND NOT EXISTS (
          SELECT 1 FROM "crates" c
