@@ -152,21 +152,17 @@ test.beforeAll(async ({ browser }) => {
       data: { requestId: crypto.randomUUID() },
     }),
   );
-  // A mixed return: crate K scanned back, in its line K's first bottle and L's first bottle.
+  // A mixed return: crate K scanned back (R1.1: freed at once), then K's first bottle and L's
+  // first bottle, each on its own.
   const post = (path: string, data: object) =>
     request.post(`/api/admin/returns${path}`, {
       data: { requestId: crypto.randomUUID(), ...data },
     });
   const receipt = await json<{ code: string }>(await post('/receipts', { hotelCode: null }));
-  const line = await json<{ lineId: string }>(
-    await post(`/receipts/${receipt.code}/crates`, { scannedValue: crates[0]!.url }),
-  );
+  await json(await post(`/receipts/${receipt.code}/crates`, { scannedValue: crates[0]!.url }));
   for (const url of [k[0]!, l[0]!]) {
     await json(
-      await post(`/receipts/${receipt.code}/lines/${line.lineId}/bottles`, {
-        scannedValue: url,
-        outcome: 'GOOD',
-      }),
+      await post(`/receipts/${receipt.code}/bottles`, { scannedValue: url, outcome: 'GOOD' }),
     );
   }
   const code = async (url: string) =>
