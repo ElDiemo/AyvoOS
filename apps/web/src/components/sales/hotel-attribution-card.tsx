@@ -70,7 +70,10 @@ export async function HotelAttributionCard({ hotel }: { hotel: string }) {
         {data.history.length > 0 && (
           <div className="overflow-x-auto">
             <h3 className="mb-1 text-sm font-medium">{t.history}</h3>
-            <table className="w-full min-w-[40rem] text-left text-sm" data-testid="attribution-history">
+            <table
+              className="w-full min-w-[40rem] text-left text-sm"
+              data-testid="attribution-history"
+            >
               <thead className="text-xs text-stone-500">
                 <tr>
                   <th scope="col" className="py-2 pr-4 font-medium">
