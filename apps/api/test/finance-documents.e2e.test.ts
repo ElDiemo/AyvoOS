@@ -545,6 +545,7 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
         { roleCode: 'ADMIN', permissionCode: 'finance:bank_sync' },
         { roleCode: 'ADMIN', permissionCode: 'finance:billing_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:billing_read' },
+        { roleCode: 'ADMIN', permissionCode: 'finance:commissions_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_read' },
         { roleCode: 'ADMIN', permissionCode: 'finance:exports_manage' },

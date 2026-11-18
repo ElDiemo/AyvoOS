@@ -115,6 +115,8 @@ export const identityCs = {
     'finance:bank_read':
       'Vidět pohyby na firemním bankovním účtu načtené z banky a stav propojení s bankou',
     'finance:bank_sync': 'Spustit načtení nových pohybů z banky (pouze čtení, žádné platby)',
+    'finance:commissions_manage':
+      'Kontrolovat a schvalovat měsíční podklady provizí obchodníků — jen ADMIN',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',
