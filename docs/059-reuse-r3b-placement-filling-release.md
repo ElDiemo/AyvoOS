@@ -14,9 +14,9 @@ The owner decided on 2026-11-09:
 
 **Migrations:**
 
-- `20261115090000_reuse_placement_enum_values` adds `CrateAssignmentSource += REUSE`, in its own
+- `20261119090100_reuse_placement_enum_values` adds `CrateAssignmentSource += REUSE`, in its own
   migration.
-- `20261115090100_reuse_placement_filling` changes these rules:
+- `20261119090200_reuse_placement_filling` changes these rules:
   - **Placement:** a `REUSE` membership goes only into `OPEN_ASSEMBLY`. At commit, a `REUSE`
     member must be a `READY_FOR_REUSE` bottle placed after its latest `REUSE_READY`. Every other
     source still takes only `LABELED_EMPTY` or `FILLED` members.
