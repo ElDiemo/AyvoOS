@@ -288,7 +288,11 @@ describe.skipIf(!hasDatabase)('Finance: approving a commission statement (doc 06
     expect([flagged.status, flagged.body.code]).toEqual([422, 'STATEMENT_FLAGGED']);
     const wrong = await approve({ ...bodyOf(sd, OCT), fingerprint: 'f'.repeat(64) });
     expect([wrong.status, wrong.body.code]).toEqual([409, 'STATEMENT_STALE']);
-    const open = await approve({ ...bodyOf(sd, OCT), month: '2026-11' });
+    // The current month in Prague is never closed (not a fixed month: the test outlives it).
+    const current = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' })
+      .format(new Date())
+      .slice(0, 7);
+    const open = await approve({ ...bodyOf(sd, OCT), month: current });
     expect([open.status, open.body.code]).toEqual([422, 'MONTH_NOT_CLOSED']);
     const none = await approve({ ...bodyOf(sd, OCT), salespersonId: randomUUID() });
     expect([none.status, none.body.code]).toEqual([422, 'NOTHING_TO_APPROVE']);
