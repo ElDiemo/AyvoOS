@@ -58,6 +58,8 @@ export const fillingCs = {
     WRONG_CATEGORY: 'V bedně je jiná kategorie produktu, než toto pracoviště plní.',
     NOT_IN_THIS_CRATE: 'Lahev není v žádné bedně. Odložte ji a řekněte vedoucímu.',
     IN_ANOTHER_CRATE: 'Lahev patří do jiné bedny – nic se nezapsalo. Vraťte ji do správné bedny.',
+    BOTTLE_AT_HOTEL:
+      'Lahev je podle evidence u hotelu (její bedna se vrátila bez ní) – nejdřív ji přijměte v Příjmu vratek. Nic se nezapsalo.',
     BOTTLE_NOT_LABELED: 'Lahev ještě nemá nalepenou etiketu.',
     NOT_PLACEABLE_YET:
       'Lahev je po mytí – do bedny ji zatím vložit nelze (přijde s dalším plněním), nic se nezapsalo.',

@@ -5,11 +5,12 @@ import { e2eRows, e2eSql } from './e2e-db';
 import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from './labeling-setup';
 
 /**
- * Příjem vratek R1 (doc 047 §4.9) on the real built app with synthetic data and the FAKE test
- * carrier: two crates delivered by SIMULATED carrier events (written into the recreated e2e
- * database only, PPL code 450), then the intake through the UI — crate K scanned back, its
- * bottle and a bottle of crate L (still delivered) identified in K, an unreadable piece, a
- * defective pump, the physical count, Vyprázdněno and the close — at 390 px and 1440 px. Then R2
+ * Příjem vratek R1.1 (doc 047 §4.9, §6.3) on the real built app with synthetic data and the FAKE
+ * test carrier: two crates delivered by SIMULATED carrier events (written into the recreated e2e
+ * database only, PPL code 450), then the intake through the UI — crate K scanned back and freed
+ * (no bottle confirmed), K's bottle and a bottle of crate L (never scanned) identified on their
+ * own, an unreadable piece, a defective pump and the close without any count — at 390 px and
+ * 1440 px. Then R2
  * "Po mytí" (doc 048 §2) of the good bottles, a repeated scan, a refused defective one, and a
  * revoked design set aside — screenshots in docs/screenshots/returns. The scan fields are
  * also driven like a keyboard scanner (codes typed into the field, never glued; unconfirmed
@@ -164,16 +165,21 @@ test.beforeAll(async ({ browser }) => {
   await context.close();
 });
 
-async function scanBottle(page: Page, line: string, url: string, defective = false) {
-  const card = page.getByTestId(line);
+async function scanBottle(page: Page, url: string, defective = false) {
+  const card = page.getByTestId('return-bottle-scan');
   if (defective) await card.getByLabel('Vadná → ke skartaci').check();
   else await card.getByLabel('Dobrá → čeká na mytí').check();
   await card.getByRole('textbox', { name: /Naskenujte lahev/ }).fill(url);
   await card.getByRole('button', { name: 'Zapsat lahev' }).click();
 }
 
+async function scanCrateIn(page: Page, url: string) {
+  await page.getByRole('textbox', { name: 'Naskenujte vrácenou bednu' }).fill(url);
+  await page.getByRole('button', { name: 'Uvolnit bednu' }).click();
+}
+
 for (const width of [390, 1440] as const) {
-  test(`intake at ${width} px: a mixed return, an unreadable piece, Vyprázdněno and the close`, async ({
+  test(`intake at ${width} px: the crate freed by its scan, each bottle on its own, an unreadable piece, the close without a count`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -184,69 +190,77 @@ for (const width of [390, 1440] as const) {
     await page.getByRole('button', { name: 'Otevřít příjem' }).click();
     await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
     await expect(page.getByTestId('receipt-state')).toContainText('Otevřený');
+    const bottles = page.getByTestId('return-line-bottles');
 
     if (width === 390) {
-      // Crate K back; K's bottle good, then L's bottle defective — found in K's container.
-      await page.getByRole('textbox', { name: 'Naskenujte vrácenou bednu' }).fill(k.url);
-      await page.getByRole('button', { name: 'Přidat bednu' }).click();
-      await expect(page.getByTestId('return-message')).toContainText(`Bedna ${k.code} přijata`);
-      const line = `return-line-${k.code}`;
-      await scanBottle(page, line, k.bottles[0]!);
+      // Crate K back: freed at once, its two bottles' binding ended — none confirmed.
+      await scanCrateIn(page, k.url);
+      await expect(page.getByTestId('return-message')).toContainText(
+        `Bedna ${k.code} přijata a uvolněna`,
+      );
+      const crate = page.getByTestId(`return-line-${k.code}`);
+      await expect(crate.getByTestId('line-freed')).toContainText('ukončena vazba 2 lahví');
+      // K's bottle good, then L's bottle defective — L itself is never scanned.
+      await scanBottle(page, k.bottles[0]!);
       await expect(page.getByTestId('return-message')).toContainText('Vrácená, čeká na mytí');
-      await scanBottle(page, line, l.bottles[0]!, true);
+      await scanBottle(page, l.bottles[0]!, true);
       await expect(page.getByTestId('return-message')).toContainText('Ke skartaci');
       // The same bottle again: the first result, nothing doubled.
-      await scanBottle(page, line, k.bottles[0]!);
+      await scanBottle(page, k.bottles[0]!);
       await expect(page.getByTestId('return-message')).toContainText('už zapsáno');
-      await page.getByTestId(line).getByRole('button', { name: 'Nečitelná lahev +1' }).click();
+      await page
+        .getByTestId('return-bottle-scan')
+        .getByRole('button', { name: 'Nečitelná lahev +1' })
+        .click();
       await expect(page.getByTestId('return-message')).toContainText('Nečitelná lahev');
       await page.getByRole('button', { name: 'Vadná pumpička −1' }).click();
       await expect(page.getByTestId('pump-count')).toHaveText('Vadné pumpičky: 1');
-      const card = page.getByTestId(line);
-      await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 3');
-      await expect(card.getByTestId('line-history')).toContainText('bez potvrzeného návratu 1');
+      await expect(page.getByTestId('receipt-counts')).toHaveText(
+        'Bedny 1 · přijaté lahve 2 (z toho ke skartaci 1) · nečitelné 1',
+      );
+      await expect(bottles.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 3');
+      await expect(crate.getByTestId('line-history')).toContainText('bez potvrzeného návratu 1');
+      await expect(page.getByRole('button', { name: 'Vyprázdněno' })).toHaveCount(0);
       await noOverflow(page);
-      await card.getByRole('textbox', { name: /Fyzicky vyjmuto/ }).fill('3');
-      await card.getByRole('button', { name: 'Vyprázdněno' }).click();
-      await expect(card.getByTestId('line-recorded')).toContainText('Vyprázdněno · fyzicky 3 ks');
+      await page.screenshot({ path: `${SHOTS}/intake-r11-${width}.png`, fullPage: true });
+      // No count, no Vyprázdněno: the receipt closes at once.
       await page.getByRole('button', { name: 'Uzavřít příjem' }).click();
       await expect(page.getByTestId('receipt-state')).toContainText('Uzavřený');
       // The unreadable piece stays an open issue that can still be resolved after the close.
-      await expect(card.getByTestId('line-issues')).toContainText('Nečitelná lahev');
+      await expect(bottles.getByTestId('line-issues')).toContainText('Nečitelná lahev');
       // Read later: it is K's cracked second bottle — resolved on the closed receipt as defective.
-      const issue = card.getByTestId('line-issues').locator('li').filter({ hasText: 'Nečitelná' });
+      const issue = bottles
+        .getByTestId('line-issues')
+        .locator('li')
+        .filter({ hasText: 'Nečitelná' });
       await issue.getByLabel('Vadná → ke skartaci').check();
       await issue.getByRole('textbox', { name: /Dořešit naskenováním lahve/ }).fill(k.bottles[1]!);
       await issue.getByRole('button', { name: 'Dořešit' }).click();
       await expect(page.getByTestId('return-message')).toContainText('Ke skartaci');
-      await expect(card.getByTestId('line-issues')).toContainText('Dořešeno identifikací');
-      await expect(card.getByTestId('line-bottles')).toContainText('Ke skartaci');
-      await expect(card.getByTestId('line-recorded')).toContainText('Zaznamenáno kusů: 3');
+      await expect(bottles.getByTestId('line-issues')).toContainText('Dořešeno identifikací');
+      await expect(bottles.getByTestId('line-bottles')).toContainText('Ke skartaci');
+      await expect(bottles.getByTestId('line-recorded')).toContainText('Zaznamenáno kusů: 3');
       await expect(page.getByTestId('receipt-state')).toContainText('Uzavřený');
     } else {
-      // Crate L (still delivered, one bottle already identified in K): its other bottle, a
-      // container without a code, the count that differs → COUNT_MISMATCH, never a block.
-      await page.getByRole('textbox', { name: 'Naskenujte vrácenou bednu' }).fill(l.url);
-      await page.getByRole('button', { name: 'Přidat bednu' }).click();
-      const line = `return-line-${l.code}`;
-      await scanBottle(page, line, l.bottles[1]!);
+      // Crate L (one bottle already received): freed with its one remaining binding; its other
+      // bottle on its own; a bottle already received in another receipt is refused.
+      await scanCrateIn(page, l.url);
+      await expect(
+        page.getByTestId(`return-line-${l.code}`).getByTestId('line-freed'),
+      ).toContainText('ukončena vazba 1 lahve');
+      await scanBottle(page, l.bottles[1]!);
       await expect(page.getByTestId('return-message')).toContainText('Vrácená, čeká na mytí');
-      // A bottle already received elsewhere is refused for this line.
-      await scanBottle(page, line, k.bottles[0]!);
-      await expect(page.getByTestId('return-message')).toContainText('přijata jinde');
-      const card = page.getByTestId(line);
-      await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 1');
-      await card.getByRole('textbox', { name: /Fyzicky vyjmuto/ }).fill('2');
-      await card.getByRole('button', { name: 'Vyprázdněno' }).click();
-      await expect(card.getByTestId('line-issues')).toContainText('Nesouhlasí počet kusů');
-      await expect(card.getByTestId('line-issues')).toContainText('fyzicky 2, zaznamenáno 1');
+      await scanBottle(page, k.bottles[0]!);
+      await expect(page.getByTestId('return-message')).toContainText('přijata v jiném příjmu');
+      await expect(bottles.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 1');
       await noOverflow(page);
+      await page.screenshot({ path: `${SHOTS}/intake-r11-${width}.png`, fullPage: true });
       await page.getByRole('button', { name: 'Uzavřít příjem' }).click();
       await expect(page.getByTestId('receipt-state')).toContainText('Uzavřený');
       // The overview: K's and L's good bottles wait for washing.
       await page.goto('/production/cycle/returns');
       await expect(page.getByTestId('waiting-for-wash').locator('li')).toHaveCount(2);
-      // The unreadable piece was resolved (defective); COUNT_MISMATCH is information, not open work.
+      // The unreadable piece was resolved (defective): no open work left.
       await expect(page.getByText('Žádná otevřená neshoda.')).toBeVisible();
       await noOverflow(page);
     }
@@ -277,16 +291,20 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
       await route.continue();
     }
   });
+  const unreadable = page
+    .getByTestId('return-bottle-scan')
+    .getByRole('button', { name: 'Nečitelná lahev +1' });
   failGets = 1;
-  await page.getByRole('button', { name: 'Krabice bez kódu' }).click();
+  await unreadable.click();
   await expect(page.getByTestId('refresh-failed')).toBeVisible();
   // While it is not refreshed, no action can be sent again.
-  await expect(page.getByRole('button', { name: 'Krabice bez kódu' })).toBeDisabled();
+  await expect(unreadable).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Vadná pumpička −1' })).toBeDisabled();
   await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
   await expect(page.getByTestId('refresh-failed')).toHaveCount(0);
-  await expect(page.getByTestId('return-line-box-1')).toBeVisible();
-  await expect(page.getByTestId('return-line-box-2')).toHaveCount(0);
+  await expect(page.getByTestId('return-line-bottles').getByTestId('line-recorded')).toHaveText(
+    'Zaznamenáno kusů: 1',
+  );
 
   failGets = 1;
   await page.getByRole('button', { name: 'Vadná pumpička −1' }).click();
@@ -295,18 +313,8 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
   await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
   await expect(page.getByTestId('pump-count')).toHaveText('Vadné pumpičky: 1');
 
-  failGets = 1;
-  await page
-    .getByTestId('return-line-box-1')
-    .getByRole('button', { name: 'Nečitelná lahev +1' })
-    .click();
-  await expect(page.getByTestId('refresh-failed')).toBeVisible();
-  await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
-  await expect(page.getByTestId('return-line-box-1').getByTestId('line-recorded')).toHaveText(
-    'Zaznamenáno kusů: 1',
-  );
   // Each committed once — the server agrees.
-  expect(posts).toEqual(['containers', 'pumps', 'unreadable']);
+  expect(posts).toEqual(['unreadable', 'pumps']);
   const detail = await (await page.request.get(`/api/admin/returns/receipts/${code}`)).json();
   expect([
     detail.lineDetails.length,
@@ -331,12 +339,12 @@ test('a scanner typing the next bottle while the detail refreshes: two exact cod
   await page.getByRole('button', { name: 'Otevřít příjem' }).click();
   await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
   const code = page.url().split('/').pop()!;
-  await page.getByRole('button', { name: 'Krabice bez kódu' }).click();
-  const card = page.getByTestId('return-line-box-1');
+  const card = page.getByTestId('return-bottle-scan');
   await expect(card).toBeVisible();
+  const recorded = page.getByTestId('return-line-bottles').getByTestId('line-recorded');
   const field = card.getByRole('textbox', { name: /Naskenujte lahev/ });
   const unconfirmed = card.getByTestId('unconfirmed-scan');
-  // The bottle form's own choice (the issues of the line have theirs).
+  // The bottle form's own choice (the issues of the BOTTLES line have theirs).
   const choice = (label: string) => card.locator('form').first().getByLabel(label);
   // Every bottle POST as sent: the whole payload.
   const sent: { scannedValue: string; outcome: string; requestId: string }[] = [];
@@ -376,12 +384,12 @@ test('a scanner typing the next bottle while the detail refreshes: two exact cod
   await expect(page.getByTestId('return-message')).toContainText('Lahev není v oběhu u hotelu');
   await scannerTypes(page, field, spare[1]!);
   releaseGet();
-  await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 1');
+  await expect(recorded).toHaveText('Zaznamenáno kusů: 1');
   // B alone in the field — never A+B; its Enter during the refresh sent nothing.
   await expect(field).toHaveValue(spare[1]!);
   expect(sent.map((x) => x.scannedValue)).toEqual([spare[0]]);
   await enter();
-  await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 2');
+  await expect(recorded).toHaveText('Zaznamenáno kusů: 2');
   await expect(field).toHaveValue('');
 
   // 2. A (good) unconfirmed while B is already typed; sending B first is held, not lost.
@@ -450,7 +458,7 @@ test('a scanner typing the next bottle while the detail refreshes: two exact cod
   await expect(submit).toBeEnabled();
   // Every code went out whole; the line counts two pieces (repeats name the same pieces).
   for (const x of sent) expect([spare[0], spare[1]]).toContain(x.scannedValue);
-  await expect(card.getByTestId('line-recorded')).toHaveText('Zaznamenáno kusů: 2');
+  await expect(recorded).toHaveText('Zaznamenáno kusů: 2');
   const detail = await (await page.request.get(`/api/admin/returns/receipts/${code}`)).json();
   expect(detail.lineDetails[0].issues.map((i: { kind: string }) => i.kind)).toEqual([
     'NOT_IN_CIRCULATION',
@@ -468,17 +476,16 @@ async function receiveBack(page: Page, back: Crate[]) {
     }),
   );
   for (const c of back) {
-    const { lineId } = await json<{ lineId: string }>(
+    await json(
       await page.request.post(`/api/admin/returns/receipts/${receipt.code}/crates`, {
         data: { requestId: crypto.randomUUID(), scannedValue: c.url },
       }),
     );
     for (const url of c.bottles) {
       await json(
-        await page.request.post(
-          `/api/admin/returns/receipts/${receipt.code}/lines/${lineId}/bottles`,
-          { data: { requestId: crypto.randomUUID(), scannedValue: url, outcome: 'GOOD' } },
-        ),
+        await page.request.post(`/api/admin/returns/receipts/${receipt.code}/bottles`, {
+          data: { requestId: crypto.randomUUID(), scannedValue: url, outcome: 'GOOD' },
+        }),
       );
     }
   }
@@ -595,17 +602,16 @@ test('"Po mytí": a bottle scanned while an answer is pending is kept; an uncert
     }),
   );
   for (const c of [m, n]) {
-    const { lineId } = await json<{ lineId: string }>(
+    await json(
       await page.request.post(`/api/admin/returns/receipts/${receipt.code}/crates`, {
         data: { requestId: crypto.randomUUID(), scannedValue: c.url },
       }),
     );
     for (const url of c.bottles) {
       await json(
-        await page.request.post(
-          `/api/admin/returns/receipts/${receipt.code}/lines/${lineId}/bottles`,
-          { data: { requestId: crypto.randomUUID(), scannedValue: url, outcome: 'GOOD' } },
-        ),
+        await page.request.post(`/api/admin/returns/receipts/${receipt.code}/bottles`, {
+          data: { requestId: crypto.randomUUID(), scannedValue: url, outcome: 'GOOD' },
+        }),
       );
     }
   }
