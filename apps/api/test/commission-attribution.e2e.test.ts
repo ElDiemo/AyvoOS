@@ -445,6 +445,74 @@ describe.skipIf(!hasDatabase)('hotel attribution and portfolio (Obchod → Provi
     expect(await t.prisma.salesHotelAttribution.count({ where: { hotelId: hid!.id } })).toBe(2);
   });
 
+  it('a change before a planned later one keeps the plan (review 1b-R1)', async () => {
+    // A from January, B planned from July, then C entered from April.
+    const h = await hotel('Hotel Plán');
+    await attribute(admin, h.code, {
+      salespersonId: people.a.id,
+      commissionStart: '2029-01',
+      confirmCommissionStart: true,
+    }).expect(201);
+    await attribute(admin, h.code, {
+      expectedRevision: 1,
+      salespersonId: people.b.id,
+      effectiveFrom: '2029-07',
+      reason: 'předání od července',
+    }).expect(201);
+    const fromApril = {
+      expectedRevision: 2,
+      salespersonId: people.c.id,
+      effectiveFrom: '2029-04',
+      reason: 'zástup od dubna',
+    };
+    // Never silently: without the confirmation the API names the plan and nothing is written.
+    const n = await counts();
+    const refused = await attribute(admin, h.code, fromApril);
+    expect([refused.status, refused.body.code]).toEqual([422, 'PLANNED_LATER_EXISTS']);
+    expect(refused.body.details).toEqual({
+      plannedFrom: '2029-07',
+      salesperson: { id: people.b.id, name: `Bohdan Smyšlený ${tag}` },
+      effectiveUntil: '2029-06',
+    });
+    expect(await counts()).toEqual(n);
+    const c = await attribute(admin, h.code, { ...fromApril, acknowledgePlannedLater: true });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    expect(
+      (c.body as HotelAttribution).history.map((r) => [
+        r.revision,
+        r.salesperson?.id,
+        r.effectiveFrom,
+        r.effectiveUntil,
+        r.supersededBy,
+      ]),
+    ).toEqual([
+      [3, people.c.id, '2029-04', '2029-06', null],
+      [2, people.b.id, '2029-07', null, null],
+      [1, people.a.id, '2029-01', '2029-03', null],
+    ]);
+    const who = async (month: string) =>
+      (await portfolio(admin, month)).rows.find((r) => r.hotel.code === h.code)?.salesperson?.id;
+    expect(await who('2029-03')).toBe(people.a.id);
+    expect(await who('2029-04')).toBe(people.c.id);
+    expect(await who('2029-06')).toBe(people.c.id);
+    // B is not silently lost: the plan from July stays.
+    expect(await who('2029-07')).toBe(people.b.id);
+    // To cancel the plan: a change from the plan's month (a correction of that month) — no
+    // later plan is in its way, and it supersedes B.
+    const cancel = await attribute(admin, h.code, {
+      expectedRevision: 3,
+      salespersonId: people.c.id,
+      effectiveFrom: '2029-07',
+      reason: 'předání Bohdanovi se ruší',
+    });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(201);
+    expect(
+      (cancel.body as HotelAttribution).history.find((r) => r.revision === 2)!.supersededBy,
+    ).toBe(4);
+    expect(await who('2029-07')).toBe(people.c.id);
+    expect(await who('2029-12')).toBe(people.c.id);
+  });
+
   it('a new terms version binds only hotels attributed after it; the snapshot stays', async () => {
     const x = await hotel('Hotel Před Verzí');
     await attribute(admin, x.code, {

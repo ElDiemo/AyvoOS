@@ -59,6 +59,12 @@ export const commissionsCs = {
     unavailable: 'Přiřazení obchodníka teď nelze načíst. Zbytek karty funguje.',
     none: 'Hotel zatím nikomu přiřazený není.',
     current: 'Přiřazeno',
+    timeline: 'Přiřazení v čase',
+    span: (from: string, until: string | null) => (until ? `${from}–${until}` : `od ${from}`),
+    supersededBy: (rev: number) => `nahrazeno opravou (revize ${rev})`,
+    plannedLater: (from: string, name: string, until: string) =>
+      `Od ${from} je naplánováno: ${name}. Tato změna bude platit jen do ${until}; plán zůstane. Chcete-li plán zrušit, zadejte změnu od ${from}.`,
+    acknowledgePlanned: (from: string) => `Rozumím, od ${from} zůstává naplánované přiřazení`,
     nobody: 'Nikdo (bez provize)',
     firstMonth: 'První zpoplatněný měsíc',
     source: 'Zdroj',
@@ -68,7 +74,10 @@ export const commissionsCs = {
     candidate: (code: string, rev: number, signed: string, start: string) =>
       `${code} rev. ${rev} · podepsáno ${signed} · začátek ${start}`,
     salesperson: 'Obchodník',
-    changedFromOffer: 'Změněno oproti nabídce ze smlouvy.',
+    changedFromOffer: 'Změněno oproti nabídce.',
+    offer: (name: string) =>
+      `Nabídka: současný vlastník akvizice ${name}. Kdo hotel získal v době podpisu, systém neví — ověřte skutečného získavatele.`,
+    noOffer: 'Akvizice nemá aktivního obchodníka; obchodníka vyberte sami.',
     fromContract: (start: string) =>
       `Ze smlouvy: začátek ${start}. Podpis neprokazuje první zpoplatněný měsíc.`,
     differs: 'Měsíc se liší od začátku smlouvy. V důvodu uveďte proč.',
@@ -88,7 +97,7 @@ export const commissionsCs = {
     saved: 'Přiřazení je zapsané.',
     history: 'Historie přiřazení',
     columns: {
-      from: 'Od',
+      from: 'Platí',
       who: 'Obchodník',
       source: 'Zdroj',
       terms: 'Podmínky',
@@ -96,7 +105,7 @@ export const commissionsCs = {
       recorded: 'Zapsáno',
     },
     sourceLabel: { CONTRACT: 'Smlouva', MANUAL: 'Ručně' },
-    offered: (name: string) => `nabídnuto: ${name}`,
+    offered: (name: string) => `nabídnut současný vlastník akvizice: ${name}`,
     startDiffers: (start: string) => `začátek smlouvy ${start}`,
     errors: {
       salesperson: 'Vyberte obchodníka.',
@@ -104,6 +113,8 @@ export const commissionsCs = {
       confirmMonth: 'Potvrďte první zpoplatněný měsíc.',
       reason: 'Uveďte důvod.',
       confirm: 'Potvrďte přiřazení.',
+      planned: 'Potvrďte, že naplánované přiřazení zůstává.',
+      PLANNED_LATER_EXISTS: 'Mezitím přibylo naplánované přiřazení. Načtěte stránku znovu.',
       COMMISSION_START_REQUIRED: 'Zadejte první zpoplatněný měsíc.',
       COMMISSION_START_NOT_CONFIRMED: 'Potvrďte první zpoplatněný měsíc.',
       COMMISSION_START_FIXED: 'První zpoplatněný měsíc se nemění.',

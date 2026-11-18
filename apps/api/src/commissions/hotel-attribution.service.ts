@@ -1,7 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
+  attributionTimeline,
   commissionMonthNumber,
   commissionPhase,
+  previousMonth,
   type AttributionCandidate,
   type HotelAttribution,
   type HotelAttributionRevision,
@@ -11,7 +13,7 @@ import {
   type PortfolioRow,
   type RecordHotelAttributionRequest,
 } from '@ayvo/types';
-import { domainError } from '../common/domain-error.js';
+import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { ContractDraftsService } from '../contracts/contract-drafts.service.js';
 import { HotelsService } from '../customers/hotels.service.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
@@ -66,6 +68,9 @@ export class HotelAttributionService {
       const people = await this.salespeople.list(tx);
       const names = await this.names(tx, rows);
       const drafts = await this.draftCodes(tx, rows);
+      const timeline = attributionTimeline(
+        rows.map((r) => ({ revision: r.revision, effectiveFrom: toMonth(r.effectiveFrom) })),
+      );
       const prospectCodes = new Map<string, string>();
       for (const id of new Set(rows.flatMap((r) => (r.prospectId ? [r.prospectId] : [])))) {
         const x = await this.prospects.visibleById(tx, id, p);
@@ -96,7 +101,7 @@ export class HotelAttributionService {
         hotel: { code: hotel.code, name: hotel.name },
         revision: rows[0]?.revision ?? 0,
         commissionStart: rows.length ? toMonth(rows[rows.length - 1]!.commissionStart) : null,
-        history: rows.map((r) => this.toRevision(r, { names, drafts, prospectCodes }, p)),
+        history: rows.map((r) => this.toRevision(r, { names, drafts, prospectCodes, timeline }, p)),
         candidates,
         salespeople: people.map((x) => {
           const t = valid.get(x.id);
@@ -170,6 +175,34 @@ export class HotelAttributionService {
               'Změna nemůže platit před prvním zpoplatněným měsícem.',
             );
           effectiveFrom = req.effectiveFrom;
+          // A later, already planned revision keeps deciding from its month (review 1b-R1): this
+          // change ends before it. Never silently — the admin confirms it knowingly.
+          const timeline = attributionTimeline(
+            rows.map((r) => ({ revision: r.revision, effectiveFrom: toMonth(r.effectiveFrom) })),
+          );
+          const planned = rows
+            .filter(
+              (r) =>
+                toMonth(r.effectiveFrom) > effectiveFrom &&
+                timeline.get(r.revision)!.supersededBy === null,
+            )
+            .sort((a, b) => a.effectiveFrom.getTime() - b.effectiveFrom.getTime())[0];
+          if (planned && req.acknowledgePlannedLater !== true) {
+            const plannedFrom = toMonth(planned.effectiveFrom);
+            const person = planned.salespersonId
+              ? await tx.user.findUnique({ where: { id: planned.salespersonId } })
+              : null;
+            throw domainErrorWithDetails(
+              422,
+              'PLANNED_LATER_EXISTS',
+              `Od ${plannedFrom} je už naplánované jiné přiřazení. Tato změna bude platit jen do ${previousMonth(plannedFrom)}.`,
+              {
+                plannedFrom,
+                salesperson: person ? { id: person.id, name: person.displayName } : null,
+                effectiveUntil: previousMonth(plannedFrom),
+              },
+            );
+          }
         }
 
         let contract: {
@@ -261,11 +294,12 @@ export class HotelAttributionService {
     const only = manage ? (q.salesperson ?? null) : p.userId;
     return this.prisma.$transaction(async (tx) => {
       const month = monthDate(q.month);
-      // The revision in force for the month: the largest revision among effective_from <= M.
+      // The revision in force for the month: the latest effective_from <= M; for the same month
+      // the highest revision (a correction). See attributionTimeline (review 1b-R1).
       const inForce = await tx.$queryRaw<{ id: string }[]>`
         SELECT DISTINCT ON ("hotel_id") "id" FROM "sales_hotel_attributions"
         WHERE "effective_from" <= ${month}::date
-        ORDER BY "hotel_id", "revision" DESC`;
+        ORDER BY "hotel_id", "effective_from" DESC, "revision" DESC`;
       const rows = (
         await tx.salesHotelAttribution.findMany({
           where: { id: { in: inForce.map((r) => r.id) } },
@@ -410,6 +444,7 @@ export class HotelAttributionService {
       names: Map<string, Person>;
       drafts: Map<string, string>;
       prospectCodes: Map<string, string>;
+      timeline: ReturnType<typeof attributionTimeline>;
     },
     p: Principal,
   ): HotelAttributionRevision {
@@ -418,6 +453,7 @@ export class HotelAttributionService {
     return {
       revision: r.revision,
       effectiveFrom: toMonth(r.effectiveFrom),
+      ...refs.timeline.get(r.revision)!,
       salesperson: r.salespersonId ? (names.get(r.salespersonId) ?? null) : null,
       source: r.source as HotelAttributionRevision['source'],
       contract:

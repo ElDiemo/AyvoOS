@@ -98,6 +98,38 @@ export function commissionPhase(
   return k <= initialMonths ? 'INITIAL' : 'MAINTENANCE';
 }
 
+/** The month before 'YYYY-MM'. */
+export function previousMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+}
+
+/**
+ * How attribution revisions lay out in time (doc 068 §3.2, review 1b-R1). For a service month
+ * the revision with the latest `effectiveFrom` not after it decides; several with the same month
+ * are corrections of each other and the highest revision wins. A change entered before a planned
+ * later one therefore ends where the plan starts — the plan is never lost silently.
+ * Returns, per revision, the last month it decides (null = open) or the revision replacing it.
+ */
+export function attributionTimeline(
+  revisions: readonly { revision: number; effectiveFrom: string }[],
+): Map<number, { effectiveUntil: string | null; supersededBy: number | null }> {
+  const top = new Map<string, number>();
+  for (const r of revisions)
+    top.set(r.effectiveFrom, Math.max(top.get(r.effectiveFrom) ?? 0, r.revision));
+  const months = [...top.keys()].sort();
+  const out = new Map<number, { effectiveUntil: string | null; supersededBy: number | null }>();
+  for (const r of revisions) {
+    const winner = top.get(r.effectiveFrom)!;
+    const next = months[months.indexOf(r.effectiveFrom) + 1];
+    out.set(r.revision, {
+      effectiveUntil: winner === r.revision && next ? previousMonth(next) : null,
+      supersededBy: winner === r.revision ? null : winner,
+    });
+  }
+  return out;
+}
+
 export const attributionSourceSchema = z.enum(['CONTRACT', 'MANUAL']);
 export type AttributionSource = z.infer<typeof attributionSourceSchema>;
 
@@ -122,6 +154,11 @@ export const recordHotelAttributionSchema = z.strictObject({
   confirmCommissionStart: z.boolean().optional(),
   /** Revision 2 and later: the first service month of the new salesperson. */
   effectiveFrom: commissionMonthSchema.optional(),
+  /**
+   * A change before a later, already planned revision ends where the plan starts (review 1b-R1).
+   * The admin confirms knowing that; otherwise PLANNED_LATER_EXISTS names the plan.
+   */
+  acknowledgePlannedLater: z.boolean().optional(),
   reason: z.string().trim().min(1, 'Uveďte důvod.').max(500),
   confirm: z.literal(true, 'Potvrďte.'),
 });
@@ -145,12 +182,17 @@ export type HotelTermsBinding = z.infer<typeof hotelTermsBindingSchema>;
 export const hotelAttributionRevisionSchema = z.object({
   revision: z.number().int(),
   effectiveFrom: z.string(),
+  /** The last month this revision decides; null = open-ended (or superseded). */
+  effectiveUntil: z.string().nullable(),
+  /** A later correction of the same month replaced it (it decides no month). */
+  supersededBy: z.number().int().nullable(),
   salesperson: personRefSchema.nullable(),
   source: attributionSourceSchema,
   contract: z
     .object({ draftCode: z.string(), revision: z.number().int(), startOn: z.string() })
     .nullable(),
   prospectCode: z.string().nullable(),
+  /** Who was offered: the prospect's owner when the attribution was recorded (not at signing). */
   prefilledSalesperson: personRefSchema.nullable(),
   commissionStart: z.string(),
   /** CONTRACT: the confirmed first paid month is not the month of the contract's start. */
@@ -171,7 +213,10 @@ export const attributionCandidateSchema = z.object({
   startOn: z.string(),
   prospectCode: z.string().nullable(),
   prospectName: z.string().nullable(),
-  /** The prospect's owner now, if still a salesperson; the admin may pick another. */
+  /**
+   * The prospect's CURRENT owner (if still a salesperson) — an offer only. The owner at the time
+   * of signing is not established; the admin verifies who really won the hotel.
+   */
   prefilledSalesperson: personRefSchema.nullable(),
   /** The month of `startOn`: offered, never proof of the first paid month (doc 068 §8.3). */
   prefilledMonth: z.string(),
@@ -231,3 +276,10 @@ export const portfolioSchema = z.object({
     .nullable(),
 });
 export type Portfolio = z.infer<typeof portfolioSchema>;
+
+/** PLANNED_LATER_EXISTS details: the plan the change would stop before. */
+export const plannedLaterSchema = z.object({
+  plannedFrom: z.string(),
+  salesperson: personRefSchema.nullable(),
+  effectiveUntil: z.string(),
+});

@@ -1,6 +1,6 @@
 'use client';
 
-import { hotelAttributionSchema, type HotelAttribution } from '@ayvo/types';
+import { hotelAttributionSchema, previousMonth, type HotelAttribution } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
@@ -20,7 +20,7 @@ const t = commissionsCs.attribution;
 const MANUAL = 'MANUAL';
 const NOBODY = 'NOBODY';
 type Errors = Partial<
-  Record<'salesperson' | 'month' | 'confirmMonth' | 'reason' | 'confirm', string>
+  Record<'salesperson' | 'month' | 'confirmMonth' | 'planned' | 'reason' | 'confirm', string>
 >;
 
 /**
@@ -68,6 +68,15 @@ export function HotelAttributionForm({ data }: { data: HotelAttribution }) {
     salesperson &&
     salesperson !== candidate.prefilledSalesperson.id;
   const differs = candidate && month && month !== candidate.prefilledMonth;
+  // A change before an already planned later revision ends where the plan starts (review 1b-R1).
+  const [ackPlanned, setAckPlanned] = useState(false);
+  const planned = first
+    ? undefined
+    : data.history
+        .filter(
+          (r) => r.supersededBy === null && /^\d{4}-\d{2}$/.test(month) && r.effectiveFrom > month,
+        )
+        .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom))[0];
 
   async function submit(ev: React.FormEvent) {
     ev.preventDefault();
@@ -77,6 +86,7 @@ export function HotelAttributionForm({ data }: { data: HotelAttribution }) {
     if (!salesperson) e.salesperson = t.errors.salesperson;
     if (!/^\d{4}-\d{2}$/.test(month)) e.month = t.errors.month;
     if (first && !confirmMonth) e.confirmMonth = t.errors.confirmMonth;
+    if (planned && !ackPlanned) e.planned = t.errors.planned;
     if (!reason.trim()) e.reason = t.errors.reason;
     if (!confirm) e.confirm = t.errors.confirm;
     if (first && !source) e.salesperson = e.salesperson ?? t.errors.salesperson;
@@ -91,7 +101,7 @@ export function HotelAttributionForm({ data }: { data: HotelAttribution }) {
         : {}),
       ...(first
         ? { commissionStart: month, confirmCommissionStart: true }
-        : { effectiveFrom: month }),
+        : { effectiveFrom: month, ...(planned ? { acknowledgePlannedLater: true } : {}) }),
       reason: reason.trim(),
       confirm: true as const,
     };
@@ -150,6 +160,9 @@ export function HotelAttributionForm({ data }: { data: HotelAttribution }) {
                     formatDateCs(c.startOn),
                   )}
                   {c.prospectCode && <span className="text-stone-500"> · {c.prospectCode}</span>}
+                  <span className="block text-xs text-stone-600">
+                    {c.prefilledSalesperson ? t.offer(c.prefilledSalesperson.name) : t.noOffer}
+                  </span>
                 </span>
               </label>
             );
@@ -238,6 +251,33 @@ export function HotelAttributionForm({ data }: { data: HotelAttribution }) {
         <p id="attribution-confirm-month-error" className="text-xs font-medium text-red-700">
           {errors.confirmMonth}
         </p>
+      )}
+      {planned && (
+        <div className="flex flex-col gap-2" data-testid="attribution-planned">
+          <Notice>
+            {t.plannedLater(
+              monthCs(planned.effectiveFrom),
+              planned.salesperson?.name ?? t.nobody,
+              monthCs(previousMonth(planned.effectiveFrom)),
+            )}
+          </Notice>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={ackPlanned}
+              aria-invalid={errors.planned ? true : undefined}
+              aria-describedby={errors.planned ? 'attribution-planned-error' : undefined}
+              onChange={(e) => setAckPlanned(e.target.checked)}
+              data-testid="attribution-acknowledge-planned"
+            />
+            <span>{t.acknowledgePlanned(monthCs(planned.effectiveFrom))}</span>
+          </label>
+          {errors.planned && (
+            <p id="attribution-planned-error" className="text-xs font-medium text-red-700">
+              {errors.planned}
+            </p>
+          )}
+        </div>
       )}
       {chosen && (
         <div className="text-sm" data-testid="attribution-terms">

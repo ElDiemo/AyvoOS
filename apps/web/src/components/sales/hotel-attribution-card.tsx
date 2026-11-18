@@ -23,20 +23,39 @@ export async function HotelAttributionCard({ hotel }: { hotel: string }) {
     );
   const data = res.data;
   const current = data.history[0];
+  // The revisions that decide some month, in time order (a later plan is never hidden).
+  const timeline = data.history
+    .filter((r) => r.supersededBy === null)
+    .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
   const bound = (b: (typeof data.history)[number]['binding'], hasPerson: boolean) =>
     b ? (termsLine(b) ?? t.termsHidden) : hasPerson ? commissionsCs.missing : '—';
   return (
     <Card title={t.title} testId="hotel-attribution">
       <div className="flex flex-col gap-4">
         {current ? (
-          <p className="text-sm" data-testid="attribution-current">
-            <span className="text-stone-600">{t.current}: </span>
-            <strong>{current.salesperson?.name ?? t.nobody}</strong>
-            {' · '}
-            {t.firstMonth.toLowerCase()} <strong>{monthCs(data.commissionStart!)}</strong>
-            {' · '}
-            {bound(current.binding, current.salesperson !== null)}
-          </p>
+          <div className="text-sm" data-testid="attribution-current">
+            <p>
+              <span className="text-stone-600">{t.firstMonth}: </span>
+              <strong>{monthCs(data.commissionStart!)}</strong>
+            </p>
+            <p className="mt-1 text-stone-600">{t.timeline}:</p>
+            <ul className="mt-1 flex flex-col gap-1" data-testid="attribution-timeline">
+              {timeline.map((r) => (
+                <li key={r.revision}>
+                  <span className="tabular-nums">
+                    {t.span(
+                      monthCs(r.effectiveFrom),
+                      r.effectiveUntil && monthCs(r.effectiveUntil),
+                    )}
+                  </span>
+                  {' · '}
+                  <strong>{r.salesperson?.name ?? t.nobody}</strong>
+                  {' · '}
+                  {bound(r.binding, r.salesperson !== null)}
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : (
           <p className="text-sm text-stone-600">{t.none}</p>
         )}
@@ -51,7 +70,7 @@ export async function HotelAttributionCard({ hotel }: { hotel: string }) {
         {data.history.length > 0 && (
           <div className="overflow-x-auto">
             <h3 className="mb-1 text-sm font-medium">{t.history}</h3>
-            <table className="w-full text-left text-sm" data-testid="attribution-history">
+            <table className="w-full min-w-[40rem] text-left text-sm" data-testid="attribution-history">
               <thead className="text-xs text-stone-500">
                 <tr>
                   <th scope="col" className="py-2 pr-4 font-medium">
@@ -77,7 +96,21 @@ export async function HotelAttributionCard({ hotel }: { hotel: string }) {
               <tbody className="divide-y divide-stone-100">
                 {data.history.map((r) => (
                   <tr key={r.revision}>
-                    <td className="py-2 pr-4 tabular-nums">{monthCs(r.effectiveFrom)}</td>
+                    <td className="py-2 pr-4 tabular-nums">
+                      {r.supersededBy !== null ? (
+                        <>
+                          <s>{monthCs(r.effectiveFrom)}</s>
+                          <span className="block text-xs text-stone-500">
+                            {t.supersededBy(r.supersededBy)}
+                          </span>
+                        </>
+                      ) : (
+                        t.span(
+                          monthCs(r.effectiveFrom),
+                          r.effectiveUntil && monthCs(r.effectiveUntil),
+                        )
+                      )}
+                    </td>
                     <td className="py-2 pr-4">
                       {r.salesperson?.name ?? t.nobody}
                       {r.prefilledSalesperson &&

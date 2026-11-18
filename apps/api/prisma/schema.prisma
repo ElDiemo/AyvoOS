@@ -4095,7 +4095,7 @@ model SalesCommissionTerms {
 }
 
 /// Who gets the commission for a hotel (doc 068 §3.2, PR 1b): append-only revisions per hotel. For
-/// month M the row with the largest revision among effective_from <= M decides. salesperson NULL =
+/// month M the latest effective_from <= M decides; the same month: the largest revision. salesperson NULL =
 /// explicitly nobody (a house account). The commission start is the first revision's for good (DB).
 model SalesHotelAttribution {
   id                     String    @id @default(dbgenerated("uuidv7()")) @db.Uuid

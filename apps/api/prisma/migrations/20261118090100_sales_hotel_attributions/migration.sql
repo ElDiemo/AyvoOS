@@ -20,8 +20,9 @@ CREATE TABLE "sales_hotel_attributions" (
     "id" UUID NOT NULL DEFAULT uuidv7(),
     "hotel_id" UUID NOT NULL,
     "revision" INTEGER NOT NULL,
-    -- In force from this service month (the 1st). For month M the row with the largest revision
-    -- among effective_from <= M decides (doc 068 §3.2, Q6).
+    -- In force from this service month (the 1st). For month M the row with the latest
+    -- effective_from <= M decides; for the same month the largest revision (a correction). A change
+    -- entered before a planned later one ends where the plan starts (doc 068 §3.2, review 1b-R1).
     "effective_from" DATE NOT NULL,
     -- NULL = explicitly nobody from that month (a house account), never "unknown".
     "salesperson_id" UUID,
@@ -30,7 +31,8 @@ CREATE TABLE "sales_hotel_attributions" (
     "contract_revision" INTEGER,
     -- The draft's prospect (the insert trigger keeps it equal to the draft's own, FK there).
     "prospect_id" UUID,
-    -- Who was offered (the prospect's owner at the time): "confirmed as offered" vs "changed".
+    -- Who was offered: the prospect's owner when this row was recorded (not at signing — that is
+    -- not established); kept so "confirmed as offered" vs "changed" stays visible.
     "prefilled_salesperson_id" UUID,
     -- The 1st of the first paid month, confirmed explicitly by the admin; never moves (trigger).
     "commission_start" DATE NOT NULL,

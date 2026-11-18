@@ -131,6 +131,27 @@ test('the admin attributes a hotel by hand and changes the salesperson later', a
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(1)).toContainText('20,00 % po 24 měsíců');
 
+  // A change before the planned September change (review 1b-R1): the plan stays, and the admin
+  // is told so and must confirm it. (The panel stays open after the previous save.)
+  if (!(await page.getByTestId('attribution-form').isVisible()))
+    await panel.getByText('Změnit obchodníka').click();
+  await page.getByTestId('attribution-salesperson').selectOption({ label: A.name });
+  await page.getByTestId('attribution-month').fill('2027-07');
+  await expect(page.getByTestId('attribution-planned')).toContainText(
+    `Od 9/2027 je naplánováno: ${B.name}. Tato změna bude platit jen do 8/2027`,
+  );
+  await page.getByTestId('attribution-reason').fill('oprava: červenec a srpen ještě Alena');
+  await page.getByTestId('attribution-confirm').check();
+  await page.getByTestId('attribution-save').press('Enter');
+  await expect(page.locator('#attribution-planned-error')).toBeVisible();
+  await page.getByTestId('attribution-acknowledge-planned').check();
+  await page.getByTestId('attribution-save').press('Enter');
+  const timeline = page.getByTestId('attribution-timeline').locator('li');
+  await expect(timeline).toHaveCount(3);
+  await expect(timeline.nth(0)).toContainText(`6/2027–6/2027 · ${A.name}`);
+  await expect(timeline.nth(1)).toContainText(`7/2027–8/2027 · ${A.name}`);
+  await expect(timeline.nth(2)).toContainText(`od 9/2027 · ${B.name}`);
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
   await noOverflow(page);
