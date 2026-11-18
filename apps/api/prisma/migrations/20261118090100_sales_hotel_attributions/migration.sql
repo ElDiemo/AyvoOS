@@ -28,6 +28,7 @@ CREATE TABLE "sales_hotel_attributions" (
     "source" TEXT NOT NULL,
     "contract_draft_id" UUID,
     "contract_revision" INTEGER,
+    -- The draft's prospect (the insert trigger keeps it equal to the draft's own, FK there).
     "prospect_id" UUID,
     -- Who was offered (the prospect's owner at the time): "confirmed as offered" vs "changed".
     "prefilled_salesperson_id" UUID,
@@ -72,8 +73,6 @@ ALTER TABLE "sales_hotel_attributions" ADD CONSTRAINT "sales_hotel_attributions_
   FOREIGN KEY ("prefilled_salesperson_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "sales_hotel_attributions" ADD CONSTRAINT "sales_hotel_attributions_recorded_by_fkey"
   FOREIGN KEY ("recorded_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "sales_hotel_attributions" ADD CONSTRAINT "sales_hotel_attributions_prospect_id_fkey"
-  FOREIGN KEY ("prospect_id") REFERENCES "sales_prospects"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 -- Only a signed revision can be the source.
 ALTER TABLE "sales_hotel_attributions" ADD CONSTRAINT "sales_hotel_attributions_contract_fkey"
   FOREIGN KEY ("contract_draft_id", "contract_revision")
@@ -134,8 +133,8 @@ CREATE TABLE "sales_hotel_commission_terms" (
     "initial_rate" NUMERIC NOT NULL,
     "initial_months" INTEGER NOT NULL,
     "maintenance_rate" NUMERIC NOT NULL,
+    -- Written in the attribution's transaction; who recorded it is the attribution's recorded_by.
     "recorded_at" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
-    "recorded_by" UUID NOT NULL,
 
     CONSTRAINT "sales_hotel_commission_terms_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "sales_hotel_commission_terms_kind_check" CHECK ("kind" = 'ON_ATTRIBUTION' AND "binding_no" = 1),
@@ -157,8 +156,6 @@ ALTER TABLE "sales_hotel_commission_terms" ADD CONSTRAINT "sales_hotel_commissio
   REFERENCES "sales_hotel_attributions"("hotel_id", "revision") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "sales_hotel_commission_terms" ADD CONSTRAINT "sales_hotel_commission_terms_terms_id_fkey"
   FOREIGN KEY ("terms_id") REFERENCES "sales_commission_terms"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "sales_hotel_commission_terms" ADD CONSTRAINT "sales_hotel_commission_terms_recorded_by_fkey"
-  FOREIGN KEY ("recorded_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- The binding belongs to its attribution's salesperson, from that attribution's month, and is an
 -- exact copy of that salesperson's valid (newest) terms version when written.

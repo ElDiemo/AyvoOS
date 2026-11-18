@@ -238,7 +238,6 @@ export class HotelAttributionService {
                 initialRate: terms.initialRate,
                 initialMonths: terms.initialMonths,
                 maintenanceRate: terms.maintenanceRate,
-                recordedBy: p.userId,
               },
             });
         }

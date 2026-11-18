@@ -1200,33 +1200,32 @@ model User {
   printRequests             PrintRequest[]       @relation("PrintRequestedBy")
   printJobEvents            PrintJobEvent[]      @relation("PrintJobEventBy")
 
-  salesProspectsOwned    SalesProspect[]             @relation("SalesProspectOwner")
-  salesProspectsCreated  SalesProspect[]             @relation("SalesProspectCreatedBy")
-  salesProspectsUpdated  SalesProspect[]             @relation("SalesProspectUpdatedBy")
-  salesProspectsArchived SalesProspect[]             @relation("SalesProspectArchivedBy")
-  salesImportsOwned      SalesImport[]               @relation("SalesImportOwner")
-  salesImportsCreated    SalesImport[]               @relation("SalesImportCreatedBy")
-  salesContactsCreated   SalesContact[]              @relation("SalesContactCreatedBy")
-  salesContactsUpdated   SalesContact[]              @relation("SalesContactUpdatedBy")
-  salesContactsRetired   SalesContact[]              @relation("SalesContactRetiredBy")
-  salesActivities        SalesActivity[]             @relation("SalesActivityAuthor")
-  salesTasksAssigned     SalesTask[]                 @relation("SalesTaskAssignee")
-  salesTasksCreated      SalesTask[]                 @relation("SalesTaskCreatedBy")
-  salesTasksUpdated      SalesTask[]                 @relation("SalesTaskUpdatedBy")
-  salesTasksClosed       SalesTask[]                 @relation("SalesTaskClosedBy")
-  salesEvents            SalesEvent[]                @relation("SalesEventActor")
-  contractDraftsCreated  ContractDraft[]             @relation("ContractDraftCreatedBy")
-  contractDraftsUpdated  ContractDraft[]             @relation("ContractDraftUpdatedBy")
-  contractDraftsRemoved  ContractDraft[]             @relation("ContractDraftRemovedBy")
-  contractRevisions      ContractDraftRevision[]     @relation("ContractDraftRevisionCreatedBy")
-  commissionTerms        SalesCommissionTerms[]      @relation("SalesCommissionTermsSalesperson")
-  commissionTermsBy      SalesCommissionTerms[]      @relation("SalesCommissionTermsRecordedBy")
-  hotelAttributions      SalesHotelAttribution[]     @relation("SalesHotelAttributionSalesperson")
-  hotelAttributionOffers SalesHotelAttribution[]     @relation("SalesHotelAttributionPrefilled")
-  hotelAttributionsBy    SalesHotelAttribution[]     @relation("SalesHotelAttributionRecordedBy")
-  hotelTermsBindingsBy   SalesHotelCommissionTerms[]
-  contractDraftEvents    ContractDraftEvent[]        @relation("ContractDraftEventActor")
-  contractSignedUploads  ContractSignedDocument[]    @relation("ContractSignedDocumentUploadedBy")
+  salesProspectsOwned    SalesProspect[]          @relation("SalesProspectOwner")
+  salesProspectsCreated  SalesProspect[]          @relation("SalesProspectCreatedBy")
+  salesProspectsUpdated  SalesProspect[]          @relation("SalesProspectUpdatedBy")
+  salesProspectsArchived SalesProspect[]          @relation("SalesProspectArchivedBy")
+  salesImportsOwned      SalesImport[]            @relation("SalesImportOwner")
+  salesImportsCreated    SalesImport[]            @relation("SalesImportCreatedBy")
+  salesContactsCreated   SalesContact[]           @relation("SalesContactCreatedBy")
+  salesContactsUpdated   SalesContact[]           @relation("SalesContactUpdatedBy")
+  salesContactsRetired   SalesContact[]           @relation("SalesContactRetiredBy")
+  salesActivities        SalesActivity[]          @relation("SalesActivityAuthor")
+  salesTasksAssigned     SalesTask[]              @relation("SalesTaskAssignee")
+  salesTasksCreated      SalesTask[]              @relation("SalesTaskCreatedBy")
+  salesTasksUpdated      SalesTask[]              @relation("SalesTaskUpdatedBy")
+  salesTasksClosed       SalesTask[]              @relation("SalesTaskClosedBy")
+  salesEvents            SalesEvent[]             @relation("SalesEventActor")
+  contractDraftsCreated  ContractDraft[]          @relation("ContractDraftCreatedBy")
+  contractDraftsUpdated  ContractDraft[]          @relation("ContractDraftUpdatedBy")
+  contractDraftsRemoved  ContractDraft[]          @relation("ContractDraftRemovedBy")
+  contractRevisions      ContractDraftRevision[]  @relation("ContractDraftRevisionCreatedBy")
+  commissionTerms        SalesCommissionTerms[]   @relation("SalesCommissionTermsSalesperson")
+  commissionTermsBy      SalesCommissionTerms[]   @relation("SalesCommissionTermsRecordedBy")
+  hotelAttributions      SalesHotelAttribution[]  @relation("SalesHotelAttributionSalesperson")
+  hotelAttributionOffers SalesHotelAttribution[]  @relation("SalesHotelAttributionPrefilled")
+  hotelAttributionsBy    SalesHotelAttribution[]  @relation("SalesHotelAttributionRecordedBy")
+  contractDraftEvents    ContractDraftEvent[]     @relation("ContractDraftEventActor")
+  contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
 
   @@map("users")
 }
@@ -2464,15 +2463,15 @@ model Hotel {
   receivingContactPhone String?         @map("receiving_contact_phone")
   receivingContactEmail String?         @map("receiving_contact_email")
 
-  fulfillmentSite   Site                     @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
-  creator           User                     @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  operation         OperationRequest         @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
-  orders            Order[]
-  supplyPlan        SupplyPlan?
-  contractDrafts    ContractDraft[]
-  portalGrants      PortalGrantHotel[]
-  portalFences      PortalOperationalFence[]
-  salesAttributions SalesHotelAttribution[]
+  fulfillmentSite Site                     @relation(fields: [fulfillmentSiteId], references: [id], onDelete: Restrict)
+  creator         User                     @relation("HotelCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  operation       OperationRequest         @relation(fields: [operationRequestId], references: [requestId], onDelete: Restrict)
+  orders          Order[]
+  supplyPlan      SupplyPlan?
+  contractDrafts  ContractDraft[]
+  portalGrants    PortalGrantHotel[]
+  portalFences    PortalOperationalFence[]
+  attributions    SalesHotelAttribution[]
 
   @@index([fulfillmentSiteId])
   @@map("hotels")
@@ -3548,17 +3547,16 @@ model SalesProspect {
   importId          String?   @map("import_id") @db.Uuid
   importRow         Int?      @map("import_row")
 
-  owner             User                    @relation("SalesProspectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  hotelAttributions SalesHotelAttribution[]
-  archiver          User?                   @relation("SalesProspectArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
-  import            SalesImport?            @relation(fields: [importId], references: [id], onDelete: Restrict)
-  creator           User                    @relation("SalesProspectCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  updater           User                    @relation("SalesProspectUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
-  contacts          SalesContact[]
-  activities        SalesActivity[]
-  tasks             SalesTask[]
-  events            SalesEvent[]
-  contractDrafts    ContractDraft[]
+  owner          User            @relation("SalesProspectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  archiver       User?           @relation("SalesProspectArchivedBy", fields: [archivedBy], references: [id], onDelete: Restrict)
+  import         SalesImport?    @relation(fields: [importId], references: [id], onDelete: Restrict)
+  creator        User            @relation("SalesProspectCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater        User            @relation("SalesProspectUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  contacts       SalesContact[]
+  activities     SalesActivity[]
+  tasks          SalesTask[]
+  events         SalesEvent[]
+  contractDrafts ContractDraft[]
 
   @@unique([importId, importRow])
   @@index([ownerId])
@@ -4109,6 +4107,7 @@ model SalesHotelAttribution {
   source                 String
   contractDraftId        String?   @map("contract_draft_id") @db.Uuid
   contractRevision       Int?      @map("contract_revision")
+  /// The draft's prospect (kept equal to the draft's by the insert trigger; no FK of its own).
   prospectId             String?   @map("prospect_id") @db.Uuid
   prefilledSalespersonId String?   @map("prefilled_salesperson_id") @db.Uuid
   commissionStart        DateTime  @map("commission_start") @db.Date
@@ -4122,7 +4121,6 @@ model SalesHotelAttribution {
   salesperson User?                       @relation("SalesHotelAttributionSalesperson", fields: [salespersonId], references: [id], onDelete: Restrict)
   prefilled   User?                       @relation("SalesHotelAttributionPrefilled", fields: [prefilledSalespersonId], references: [id], onDelete: Restrict, map: "sales_hotel_attributions_prefilled_fkey")
   recorder    User                        @relation("SalesHotelAttributionRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
-  prospect    SalesProspect?              @relation(fields: [prospectId], references: [id], onDelete: Restrict)
   signed      ContractSignedDocument?     @relation(fields: [contractDraftId, contractRevision], references: [draftId, revision], onDelete: Restrict, map: "sales_hotel_attributions_contract_fkey")
   bindings    SalesHotelCommissionTerms[]
 
@@ -4146,11 +4144,9 @@ model SalesHotelCommissionTerms {
   initialMonths       Int      @map("initial_months")
   maintenanceRate     Decimal  @map("maintenance_rate") @db.Decimal
   recordedAt          DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
-  recordedBy          String   @map("recorded_by") @db.Uuid
 
   attribution SalesHotelAttribution @relation(fields: [hotelId, attributionRevision], references: [hotelId, revision], onDelete: Restrict, map: "sales_hotel_commission_terms_attribution_fkey")
   terms       SalesCommissionTerms  @relation(fields: [termsId], references: [id], onDelete: Restrict)
-  recorder    User                  @relation(fields: [recordedBy], references: [id], onDelete: Restrict)
 
   @@unique([hotelId, attributionRevision, bindingNo], map: "sales_hotel_commission_terms_binding_key")
   @@index([termsId])

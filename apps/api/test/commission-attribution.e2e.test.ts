@@ -498,9 +498,9 @@ describe.skipIf(!hasDatabase)('hotel attribution and portfolio (Obchod → Provi
                     'x', ${adminId}::uuid, ${randomUUID()}::uuid)`;
           await tx.$executeRaw`INSERT INTO "sales_hotel_commission_terms"
             ("hotel_id", "attribution_revision", "binding_no", "kind", "effective_from", "terms_id",
-             "initial_rate", "initial_months", "maintenance_rate", "recorded_by")
+             "initial_rate", "initial_months", "maintenance_rate")
             VALUES (${yid!.id}::uuid, 2, 1, 'ON_ATTRIBUTION', '2027-05-01', ${termsId}::uuid,
-                    ${initialRate}, 12, 4, ${adminId}::uuid)`;
+                    ${initialRate}, 12, 4)`;
         }),
       );
     await expect(bind(v1!.id, 20)).rejects.toThrow(/snapshot of its salesperson/);
