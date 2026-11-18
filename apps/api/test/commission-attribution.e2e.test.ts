@@ -559,15 +559,20 @@ describe.skipIf(!hasDatabase)('hotel attribution and portfolio (Obchod → Provi
     const bind = (termsId: string, initialRate: number) =>
       withPrivileged((db) =>
         db.$transaction(async (tx) => {
-          await tx.$executeRaw`INSERT INTO "sales_hotel_attributions"
-            ("hotel_id", "revision", "effective_from", "salesperson_id", "source", "commission_start",
-             "reason", "recorded_by", "request_id")
-            VALUES (${yid!.id}::uuid, 2, '2027-05-01', ${people.a.id}::uuid, 'MANUAL', '2027-03-01',
-                    'x', ${adminId}::uuid, ${randomUUID()}::uuid)`;
+          // B from May (no binding), then A back from June with the snapshot under test.
+          for (const [rev, month, who] of [
+            [2, '2027-05-01', people.b.id],
+            [3, '2027-06-01', people.a.id],
+          ] as const)
+            await tx.$executeRaw`INSERT INTO "sales_hotel_attributions"
+              ("hotel_id", "revision", "effective_from", "salesperson_id", "source", "commission_start",
+               "reason", "recorded_by", "request_id")
+              VALUES (${yid!.id}::uuid, ${rev}, ${month}::date, ${who}::uuid, 'MANUAL', '2027-03-01',
+                      'x', ${adminId}::uuid, ${randomUUID()}::uuid)`;
           await tx.$executeRaw`INSERT INTO "sales_hotel_commission_terms"
             ("hotel_id", "attribution_revision", "binding_no", "kind", "effective_from", "terms_id",
              "initial_rate", "initial_months", "maintenance_rate")
-            VALUES (${yid!.id}::uuid, 2, 1, 'ON_ATTRIBUTION', '2027-05-01', ${termsId}::uuid,
+            VALUES (${yid!.id}::uuid, 3, 1, 'ON_ATTRIBUTION', '2027-06-01', ${termsId}::uuid,
                     ${initialRate}, 12, 4)`;
         }),
       );
@@ -685,6 +690,95 @@ describe.skipIf(!hasDatabase)('hotel attribution and portfolio (Obchod → Provi
       maintenanceRate: null,
     });
     expect(h.salespeople.find((x) => x.id === people.b.id)?.validTerms?.initialRate).toBeNull();
+  });
+
+  it('the same salesperson again never re-binds the hotel to newer terms (review 1b-P2)', async () => {
+    const d = await createUser(['SALES'], `Dana Sazba ${tag}`);
+    await terms(d.id, 0, { initialRate: '20', initialMonths: 24, maintenanceRate: '5' });
+    const x = await hotel('Hotel Sazba');
+    await attribute(admin, x.code, {
+      salespersonId: d.id,
+      commissionStart: '2030-01',
+      confirmCommissionStart: true,
+    }).expect(201);
+    // v2 at 30 % — for hotels attributed from now on only.
+    await terms(d.id, 1, { initialRate: '30', initialMonths: 24, maintenanceRate: '5' });
+    const n = await counts();
+    // The same recipient from a later month, or a "correction" of the same month: refused.
+    for (const effectiveFrom of ['2030-02', '2030-01']) {
+      const again = await attribute(admin, x.code, {
+        expectedRevision: 1,
+        salespersonId: d.id,
+        effectiveFrom,
+        reason: 'opakované přiřazení',
+      });
+      expect([again.status, again.body.code], effectiveFrom).toEqual([
+        422,
+        'SALESPERSON_UNCHANGED',
+      ]);
+    }
+    expect(await counts()).toEqual(n);
+    const rate = async (month: string) =>
+      (await portfolio(admin, month)).rows.find((r) => r.hotel.code === x.code)?.rate;
+    expect(await rate('2030-02')).toBe('20.00');
+    // The database refuses the same, also past the service.
+    const [xid] = await t.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "hotels" WHERE "code" = ${x.code}`;
+    await expect(
+      withPrivileged(
+        (db) =>
+          db.$executeRaw`INSERT INTO "sales_hotel_attributions"
+          ("hotel_id", "revision", "effective_from", "salesperson_id", "source", "commission_start",
+           "reason", "recorded_by", "request_id")
+          VALUES (${xid!.id}::uuid, 2, '2030-02-01', ${d.id}::uuid, 'MANUAL', '2030-01-01',
+                  'x', ${adminId}::uuid, ${randomUUID()}::uuid)`,
+      ),
+    ).rejects.toThrow(/changes the salesperson/);
+    // A real change of recipient stays possible; coming back later is a new attribution and takes
+    // the then valid version (doc 068 C3).
+    await attribute(admin, x.code, {
+      expectedRevision: 1,
+      salespersonId: people.b.id,
+      effectiveFrom: '2030-03',
+      reason: 'předání',
+    }).expect(201);
+    await attribute(admin, x.code, {
+      expectedRevision: 2,
+      salespersonId: d.id,
+      effectiveFrom: '2030-05',
+      reason: 'návrat',
+    }).expect(201);
+    expect(await rate('2030-02')).toBe('20.00');
+    expect(await rate('2030-03')).toBe('10.00');
+    expect(await rate('2030-05')).toBe('30.00');
+  });
+
+  it('a binding is written only with its attribution, never later (review 1b-P2)', async () => {
+    const e = await createUser(['SALES'], `Emil Pozdě ${tag}`);
+    const w = await hotel('Hotel Pozdě');
+    await attribute(admin, w.code, {
+      salespersonId: e.id,
+      commissionStart: '2030-01',
+      confirmCommissionStart: true,
+    }).expect(201);
+    // Terms only afterwards: the hotel stays without terms; no binding can be added later.
+    await terms(e.id, 0, { initialRate: '20', initialMonths: 24, maintenanceRate: '5' });
+    const v1 = await t.prisma.salesCommissionTerms.findFirstOrThrow({
+      where: { salespersonId: e.id },
+    });
+    const [wid] = await t.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "hotels" WHERE "code" = ${w.code}`;
+    const late = (db: { $executeRaw: typeof t.prisma.$executeRaw }) =>
+      db.$executeRaw`INSERT INTO "sales_hotel_commission_terms"
+        ("hotel_id", "attribution_revision", "binding_no", "kind", "effective_from", "terms_id",
+         "initial_rate", "initial_months", "maintenance_rate")
+        VALUES (${wid!.id}::uuid, 1, 1, 'ON_ATTRIBUTION', '2030-01-01', ${v1.id}::uuid, 20, 24, 5)`;
+    // As the running core (ayvo_core) and as the privileged role.
+    await expect(late(t.prisma)).rejects.toThrow(/written with its attribution/);
+    await expect(withPrivileged((db) => late(db))).rejects.toThrow(/written with its attribution/);
+    expect(await t.prisma.salesHotelCommissionTerms.count({ where: { hotelId: wid!.id } })).toBe(0);
+    const row = (await portfolio(admin, '2030-01')).rows.find((r) => r.hotel.code === w.code);
+    expect(row).toMatchObject({ state: 'MISSING_TERMS', rate: null });
   });
 
   it('two admins at once: one revision, one 409; a replay returns the same', async () => {

@@ -175,6 +175,20 @@ export class HotelAttributionService {
               'Změna nemůže platit před prvním zpoplatněným měsícem.',
             );
           effectiveFrom = req.effectiveFrom;
+          // A revision changes who gets the commission (review 1b-P2). The same recipient again —
+          // from a later month or as a "correction" of the same month — would only re-bind the
+          // hotel to the salesperson's newest terms, which is no allowed change of rates.
+          const inForce = rows
+            .filter((r) => toMonth(r.effectiveFrom) <= effectiveFrom)
+            .sort(
+              (a, b) =>
+                b.effectiveFrom.getTime() - a.effectiveFrom.getTime() || b.revision - a.revision,
+            )[0];
+          if (inForce && inForce.salespersonId === req.salespersonId)
+            throw invalid(
+              'SALESPERSON_UNCHANGED',
+              `Od ${effectiveFrom} už hotel tomuto příjemci patří. Přiřazení ani sazby se nemění.`,
+            );
           // A later, already planned revision keeps deciding from its month (review 1b-R1): this
           // change ends before it. Never silently — the admin confirms it knowingly.
           const timeline = attributionTimeline(

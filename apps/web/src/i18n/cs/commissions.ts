@@ -114,6 +114,8 @@ export const commissionsCs = {
       reason: 'Uveďte důvod.',
       confirm: 'Potvrďte přiřazení.',
       planned: 'Potvrďte, že naplánované přiřazení zůstává.',
+      SALESPERSON_UNCHANGED:
+        'Od tohoto měsíce už hotel tomuto příjemci patří. Přiřazení ani sazby se nemění.',
       PLANNED_LATER_EXISTS: 'Mezitím přibylo naplánované přiřazení. Načtěte stránku znovu.',
       COMMISSION_START_REQUIRED: 'Zadejte první zpoplatněný měsíc.',
       COMMISSION_START_NOT_CONFIRMED: 'Potvrďte první zpoplatněný měsíc.',

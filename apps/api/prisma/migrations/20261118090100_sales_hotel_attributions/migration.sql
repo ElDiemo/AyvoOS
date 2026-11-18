@@ -88,6 +88,7 @@ CREATE FUNCTION sales_hotel_attributions_insert() RETURNS trigger
   AS $$
 DECLARE
   first_start DATE;
+  in_force RECORD;
 BEGIN
   IF NEW."revision" <> COALESCE((SELECT max("revision") FROM "sales_hotel_attributions"
                                   WHERE "hotel_id" = NEW."hotel_id"), 0) + 1 THEN
@@ -98,6 +99,15 @@ BEGIN
       WHERE "hotel_id" = NEW."hotel_id" AND "revision" = 1;
     IF NEW."commission_start" IS DISTINCT FROM first_start THEN
       RAISE EXCEPTION 'AYVO: the commission start of a hotel never moves' USING ERRCODE = 'restrict_violation';
+    END IF;
+    -- A later revision changes who gets the commission from its month (review 1b-P2): the same
+    -- recipient again would only re-bind the hotel to newer terms, which no rule allows.
+    SELECT "salesperson_id" INTO in_force FROM "sales_hotel_attributions"
+      WHERE "hotel_id" = NEW."hotel_id" AND "effective_from" <= NEW."effective_from"
+      ORDER BY "effective_from" DESC, "revision" DESC LIMIT 1;
+    IF FOUND AND in_force."salesperson_id" IS NOT DISTINCT FROM NEW."salesperson_id" THEN
+      RAISE EXCEPTION 'AYVO: an attribution revision changes the salesperson of its month'
+        USING ERRCODE = 'restrict_violation';
     END IF;
   END IF;
   IF NEW."source" = 'CONTRACT' AND NOT EXISTS (
@@ -159,17 +169,27 @@ ALTER TABLE "sales_hotel_commission_terms" ADD CONSTRAINT "sales_hotel_commissio
 ALTER TABLE "sales_hotel_commission_terms" ADD CONSTRAINT "sales_hotel_commission_terms_terms_id_fkey"
   FOREIGN KEY ("terms_id") REFERENCES "sales_commission_terms"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- The binding belongs to its attribution's salesperson, from that attribution's month, and is an
--- exact copy of that salesperson's valid (newest) terms version when written.
+-- The binding belongs to its attribution's salesperson, from that attribution's month, is an
+-- exact copy of that salesperson's valid (newest) terms version when written, and is written only
+-- in the attribution's own transaction (review 1b-P2; as portal_grant_hotels): an attribution row
+-- is never updated, so its xmin is the inserting transaction — a later transaction can never bind
+-- an earlier revision (e.g. one recorded without terms) to terms that came afterwards.
 CREATE FUNCTION sales_hotel_commission_terms_insert() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
 DECLARE
   a RECORD;
   t RECORD;
+  a_xmin xid;
 BEGIN
   SELECT * INTO a FROM "sales_hotel_attributions"
     WHERE "hotel_id" = NEW."hotel_id" AND "revision" = NEW."attribution_revision";
+  SELECT x.xmin INTO a_xmin FROM "sales_hotel_attributions" x
+    WHERE x."hotel_id" = NEW."hotel_id" AND x."revision" = NEW."attribution_revision";
+  IF a_xmin IS DISTINCT FROM pg_current_xact_id()::xid THEN
+    RAISE EXCEPTION 'AYVO: a binding is written with its attribution, in the same transaction'
+      USING ERRCODE = 'restrict_violation';
+  END IF;
   SELECT * INTO t FROM "sales_commission_terms" WHERE "id" = NEW."terms_id";
   IF a."salesperson_id" IS NULL OR t."salesperson_id" IS DISTINCT FROM a."salesperson_id"
      OR NEW."effective_from" <> a."effective_from"
