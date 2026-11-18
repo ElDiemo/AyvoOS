@@ -8,6 +8,9 @@ import { createHash } from 'node:crypto';
 /** Live invoice kinds a LIVE statement accepts (O1): none exist today, so the list is empty. */
 export const LIVE_KINDS = Object.freeze([]);
 
+/** The core contract's limit of hotels per request (doc 069 §4). */
+export const CONTRACT_BATCH = 200;
+
 export class ClosingError extends Error {
   constructor(code, status, detail) {
     super(detail ? `${code}: ${detail}` : code);
@@ -105,6 +108,23 @@ function desiredOf(l, a) {
 }
 
 /**
+ * §4 Every hotel of one billed month through the core contract, in requests of at most
+ * CONTRACT_BATCH hotels. All requests must answer before anything is computed: any failed batch
+ * throws (CORE_UNAVAILABLE → 503), so a statement is never built from a partial answer.
+ */
+export function readCore(contract, period, hotelIds) {
+  const ids = [...hotelIds].sort();
+  const hotels = [];
+  const fingerprints = [];
+  for (let i = 0; i < ids.length; i += CONTRACT_BATCH) {
+    const answer = contract(period, ids.slice(i, i + CONTRACT_BATCH)); // may throw → nothing written
+    hotels.push(...answer.hotels);
+    fingerprints.push(answer.fingerprint);
+  }
+  return { month: period, fingerprint: sha(fingerprints), hotels };
+}
+
+/**
  * The preview of month M (no write). `lines`: Finance's own invoice lines; `contract(month,
  * hotelIds)`: the core contract (may throw ClosingError CORE_UNAVAILABLE). Returns the statements
  * per salesperson × currency due in M with their items, flags, balance and fingerprint, plus the
@@ -128,7 +148,7 @@ export function preview({ month, mode, lines, contract, store, today }) {
     byPeriod.set(l.periodMonth, [...(byPeriod.get(l.periodMonth) ?? []), l]);
   const answers = new Map();
   for (const [period, ls] of byPeriod)
-    answers.set(period, contract(period, [...new Set(ls.map((l) => l.hotelId))])); // may throw → nothing written
+    answers.set(period, readCore(contract, period, [...new Set(ls.map((l) => l.hotelId))]));
 
   const pending = []; // { sp, currency, earliest, item? , flag? }
   const unassigned = [];
@@ -458,8 +478,16 @@ export function approvedVsComputed(store, statementId, recomputedCents) {
   };
 }
 
-/** Payout plan (C12, O11): invoice received by the 10th of M+1 → the 15th of M+1, else the next run. */
+/**
+ * Payout plan (C12, O11): the first payout day (the 15th) whose cut-off (the 10th of the same
+ * month) the salesperson's invoice met, counted from its ACTUAL receipt — never before the 15th of
+ * M+1 and never before the invoice was received. Received on the 10th → the 15th of that month;
+ * from the 11th → the 15th of the next month, however many months late.
+ */
 export function payoutPlan(month, invoiceReceivedOn) {
-  const m1 = nextMonth(month);
-  return invoiceReceivedOn <= `${m1}-10` ? `${m1}-15` : `${nextMonth(m1)}-15`;
+  const received = invoiceReceivedOn.slice(0, 7);
+  const day = Number(invoiceReceivedOn.slice(8, 10));
+  const fromReceipt = day <= 10 ? received : nextMonth(received);
+  const earliest = nextMonth(month);
+  return `${fromReceipt > earliest ? fromReceipt : earliest}-15`;
 }

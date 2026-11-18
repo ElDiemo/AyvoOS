@@ -80,6 +80,14 @@ response: { month, fingerprint, hotels: [
 - `fingerprint` = SHA-256 of the canonical response (revisions, binding ids).
 - ADR 0039 §4: 2 s timeout, one retry (read). Unavailable → Finance answers **503 and writes
   nothing**.
+- **Batches (re-review 3b0e594).** The limit stays 200 hotels per request; the history is not
+  limited (O16). Finance sends one request per billed month involved and splits its hotels into
+  sorted batches of ≤ 200 (201 hotels → 200 + 1). **All batches must answer** before anything is
+  computed: one failed batch (also after its retry) → 503 for the whole preview or approval,
+  never a partial statement. The preview's fingerprint covers the batch fingerprints. Requests per
+  preview = Σ over billed months of ⌈hotels / 200⌉; with O16 unbounded this grows with the history
+  — the proposal is to measure it on DEV TEST data before LIVE and only then decide a bound
+  (e.g. corrections only for months after the latest attribution change the core reports).
 
 ## 5. Finance model and the order of writes (proposal for approval)
 
@@ -130,7 +138,7 @@ due by §5a, with the original service month.
 - **Cancellation after approval (O4):** −amount for the salesperson of the original item, cause
   `CANCELLED`. The DB uniqueness above makes a second storno of the same item impossible, also
   from a faulty or concurrent computation.
-- **A real later correction of the attribution (O15):** the old recipient gets −amount, the new
+- **A real later correction of the attribution (O15 — a proposal, owner to confirm):** the old recipient gets −amount, the new
   recipient +amount at **their** bound rate, cause `REATTRIBUTED:<revision>`; a Firemní hotel gets
   only the reversal. The approved statements stay as they are.
 - A line whose current sources are incomplete (missing terms …) is flagged; nothing is reversed
@@ -141,8 +149,8 @@ due by §5a, with the original service month.
 `closing = opening + total`. The salesperson is asked to invoice only `amount_to_invoice =
 max(0, closing)`. A negative `closing` is **not** an invoice request: the statement says
 "Nic k fakturaci" and carries `carried_forward = closing` as the `opening_balance` of their next
-statement, where it is netted against new items (**O13**). Ending the cooperation with a negative
-balance (**O14**) is never settled automatically: the balance stays visible to the admin as
+statement, where it is netted against new items (**O13 — a proposal, owner to confirm**). Ending the cooperation with a negative
+balance (**O14 — a proposal, owner to confirm**) is never settled automatically: the balance stays visible to the admin as
 "Nevypořádané saldo" until a later batch records a settlement event (write-off with a reason, or
 repayment) — the owner chooses which.
 
@@ -181,6 +189,12 @@ statement `sources_read_at`. A core change committed after that read — even be
 commit — is not part of the statement; it is a later correction (§5b) in the next due month. A
 new line issued between step 3 and the commit is not lost: its due month becomes the next one.
 
+**Payout plan (C12, O11).** The first payout day is the 15th of the first month whose cut-off
+(the 10th) the salesperson's invoice met, counted from its **actual receipt**, and never before
+the 15th of M+1: received on the 10th → the 15th of that month; from the 11th → the 15th of the
+next month, however many months late (July, received 18. 11. → 15. 12.; received 10. 1. → 15. 1., 11. 1. → 15. 2. across the year). A plan is never before the receipt. Only a positive
+`amount_to_invoice` gets a plan.
+
 **Salesperson view** `GET /api/finance/commissions/mine?month=` (`sales:work` through the core
 contract's current user): only the own approved statement — state and **one amount** ("K
 fakturaci" or "Nic k fakturaci" with the balance carried); before approval "Zpracovává se";
@@ -198,24 +212,24 @@ never a hotel's invoice number, payment, date or another person.
 
 ## 7. Open rules (smallest default proposed, nothing switched on)
 
-| #   | Question                                      | Proposed default                                                       |
-| --- | --------------------------------------------- | ---------------------------------------------------------------------- |
-| O1  | The live invoice kind(s) a statement accepts  | none until live issuing exists; listed, never "anything but TEST"      |
-| O2  | Base once VAT is introduced                   | the line's net amount without VAT                                      |
-| O3  | Credit notes / partial corrections            | not supported; only a whole cancellation                               |
-| O4  | Cancellation after approval                   | CORRECTION in the nearest admissible month (§5a), original M and rate  |
-| O5  | Invoice for M issued after approval (was Q16) | REGULAR item due by §5a, original M and rate                           |
-| O6  | Other currency                                | flag, excluded; CZK only                                               |
-| O7  | Pauses and N (Q7)                             | no line = no commission; k counts calendar months                      |
-| O8  | Approval permission                           | new `finance:commissions_manage`, ADMIN only (security administration) |
-| O9  | Rounding (Q3)                                 | per line half-up to 0.01; total = sum of lines; accountant to confirm  |
-| O10 | First incomplete month (Q17)                  | the admin's confirmed first paid month counts as k = 1                 |
-| O11 | Late salesperson invoice (Q2b)                | the next payout plan (15th of the following month)                     |
-| O12 | When M may be approved                        | from the 1st of M+1 (Europe/Prague); lines of M issued later go by O5  |
-| O13 | A negative balance                            | carried and netted in the next statement; accountant to confirm        |
-| O14 | Negative balance when the cooperation ends    | shown as unsettled; write-off or repayment recorded by hand later      |
-| O15 | Attribution corrected after approval          | reversal for the old, new item for the new recipient (§5b)             |
-| O16 | How far back corrections look                 | no limit in v1 (every booked line); revisit with the real volume       |
+| #   | Question                                      | Proposed default                                                                                  |
+| --- | --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| O1  | The live invoice kind(s) a statement accepts  | none until live issuing exists; listed, never "anything but TEST"                                 |
+| O2  | Base once VAT is introduced                   | the line's net amount without VAT                                                                 |
+| O3  | Credit notes / partial corrections            | not supported; only a whole cancellation                                                          |
+| O4  | Cancellation after approval                   | CORRECTION in the nearest admissible month (§5a), original M and rate                             |
+| O5  | Invoice for M issued after approval (was Q16) | REGULAR item due by §5a, original M and rate                                                      |
+| O6  | Other currency                                | flag, excluded; CZK only                                                                          |
+| O7  | Pauses and N (Q7)                             | no line = no commission; k counts calendar months                                                 |
+| O8  | Approval permission                           | new `finance:commissions_manage`, ADMIN only (security administration)                            |
+| O9  | Rounding (Q3)                                 | per line half-up to 0.01; total = sum of lines; accountant to confirm                             |
+| O10 | First incomplete month (Q17)                  | the admin's confirmed first paid month counts as k = 1                                            |
+| O11 | Late salesperson invoice (Q2b)                | the first 15th whose 10th cut-off the actual receipt met (§5d)                                    |
+| O12 | When M may be approved                        | from the 1st of M+1 (Europe/Prague); lines of M issued later go by O5                             |
+| O13 | A negative balance                            | **proposal, owner to confirm:** carried and netted in the next statement; accountant to confirm   |
+| O14 | Negative balance when the cooperation ends    | **proposal, owner to confirm:** shown as unsettled; write-off or repayment recorded by hand later |
+| O15 | Attribution corrected after approval          | **proposal, owner to confirm:** reversal for the old, new item for the new recipient (§5b)        |
+| O16 | How far back corrections look                 | **proposal, owner to confirm:** no limit in v1 (every booked line); revisit with the real volume  |
 
 ## 8. Isolated model and scenarios
 

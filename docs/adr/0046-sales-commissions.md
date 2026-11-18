@@ -72,7 +72,9 @@ Owner, 2026-11-18. Details, the map of real inputs and the open rules: doc 069.
   per original item is a DB uniqueness; a negative result is never an amount to invoice — it is
   carried to the next statement (O13, O14); a replay returns the stored result before any core
   call; the attribution version read at approval counts, a later correction becomes corrections
-  (O15).
+  (O15). O13–O16 are proposals for the owner to confirm. The payout plan counts from the actual
+  receipt of the salesperson's invoice (cut-off 10th → 15th); the core contract is read in batches
+  of ≤ 200 hotels and a failed batch gives no partial statement.
 
 ### 1. Who owns what
 

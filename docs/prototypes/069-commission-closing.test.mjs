@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  CONTRACT_BATCH,
   ClosingError,
   approve,
   approvedVsComputed,
@@ -381,6 +382,68 @@ test('payout plan: invoice by the 10th → the 15th; later → the next run', ()
   assert.equal(payoutPlan('2027-07', '2027-08-10'), '2027-08-15');
   assert.equal(payoutPlan('2027-07', '2027-08-11'), '2027-09-15');
   assert.equal(payoutPlan('2027-12', '2028-01-09'), '2028-01-15');
+});
+
+test('payout plan from the actual receipt: never before the invoice, also months late and across a year', () => {
+  // The re-review example: July, received 18. 11. → 15. 12. (was 15. 9., before the receipt).
+  assert.equal(payoutPlan('2026-07', '2026-11-18'), '2026-12-15');
+  // Cut-off 10th / 11th in a later month.
+  assert.equal(payoutPlan('2026-07', '2026-11-10'), '2026-11-15');
+  assert.equal(payoutPlan('2026-07', '2026-11-11'), '2026-12-15');
+  // Several months late, across the year end.
+  assert.equal(payoutPlan('2026-07', '2027-02-03'), '2027-02-15');
+  assert.equal(payoutPlan('2026-11', '2026-12-31'), '2027-01-15');
+  assert.equal(payoutPlan('2026-12', '2027-01-10'), '2027-01-15');
+  assert.equal(payoutPlan('2026-12', '2027-01-11'), '2027-02-15');
+  // Received early (before M+1, e.g. right after the approval on the 1st) → still the 15th of M+1.
+  assert.equal(payoutPlan('2026-07', '2026-08-01'), '2026-08-15');
+  // The plan is never before the receipt.
+  for (const [m, r] of [
+    ['2026-07', '2026-11-18'],
+    ['2026-07', '2027-03-10'],
+    ['2026-12', '2027-12-11'],
+  ])
+    assert.ok(payoutPlan(m, r) > r);
+});
+
+test('core contract: 201 hotels of one month in batches of 200; a failed second batch gives no partial statement', () => {
+  const lines = Array.from({ length: 201 }, (_, n) =>
+    line({ hotelId: `h-${String(n).padStart(3, '0')}`, hotelCode: `HT-${n}`, amount: '100.00' }),
+  );
+  const calls = [];
+  let failSecond = false;
+  const strict = contractOf(() => attr(A, plan('b1', 1, '20.00', 24, '5.00')), calls);
+  const contract = (month, ids) => {
+    if (ids.length < 1 || ids.length > CONTRACT_BATCH) throw new ClosingError('BATCH_INVALID', 400);
+    if (failSecond && calls.length === 1) throw new ClosingError('CORE_UNAVAILABLE', 503);
+    return strict(month, ids);
+  };
+  const d = { ...deps(lines, null), contract };
+  const [s] = preview({ ...d, month: '2027-07', mode: 'TEST' }).statements;
+  assert.deepEqual(
+    calls.map((c) => c.hotelIds.length),
+    [200, 1],
+  );
+  assert.equal(new Set(calls.flatMap((c) => c.hotelIds)).size, 201);
+  assert.deepEqual([s.items.length, s.total], [201, 201 * cents('20.00')]);
+
+  calls.length = 0;
+  failSecond = true;
+  assert.throws(
+    () => preview({ ...d, month: '2027-07', mode: 'TEST' }),
+    (e) => e.status === 503,
+  );
+  calls.length = 0;
+  assert.throws(
+    () => approve(reqOf({ ...s, periodMonth: '2027-07' }, 'rq-201'), d),
+    (e) => e.status === 503,
+  );
+  assert.equal(d.store.statements.length + d.store.items.length + d.store.operations.size, 0);
+  // With the core back, the same fingerprint the admin saw is approved in full.
+  failSecond = false;
+  calls.length = 0;
+  assert.equal(approve(reqOf(s, 'rq-201'), d).total, '4020.00');
+  assert.equal(d.store.items.length, 201);
 });
 
 // --- Codex re-review of #195 5cad285 ------------------------------------------------------------
