@@ -153,7 +153,8 @@ export const returnsCs = {
       'Design etikety už není pro produkt schválený. Lahev zůstává vrácená a čeká na výslovné rozhodnutí; nic se nevyřazuje automaticky.',
     withdrawnEmpty: 'Žádná vyčleněná lahev.',
     readyList: 'Připravené k plnění · Po mytí',
-    readyHint: 'Do bedny a k plnění přijdou až s dalším krokem (plnění vrácených lahví).',
+    readyHint:
+      'Na pracovišti je vložíte do bedny jako novou lahev (stejný QR, bez nové etikety) a naplníte běžnou cestou.',
     readyEmpty: 'Zatím žádná lahev po mytí.',
     count: (shown: number, total: number) => (shown < total ? `${shown} z ${total}` : `${total}`),
     since: 'od',
