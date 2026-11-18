@@ -11,7 +11,7 @@ The owner decided on 2026-11-09 (PR #128 comment 6744725588):
 
 ## What R3-a writes
 
-One migration, `20261114090000_bottle_fill_circulations`, in one transaction:
+One migration, `20261119090000_bottle_fill_circulations`, in one transaction:
 
 1. `LOCK TABLE bottle_events IN SHARE ROW EXCLUSIVE MODE`, so no `FILLED` is written meanwhile.
 2. It creates `bottle_fill_circulations (filled_event_id PK, circulation_event_id UNIQUE)`. Both
@@ -57,7 +57,7 @@ Run the preflight first. It decides whether this runbook applies at all.
 -- a) Migrations after R3-a. Any row: R3-b (or later) was deployed. Stop here.
 SELECT migration_name, finished_at, rolled_back_at
   FROM _prisma_migrations
- WHERE migration_name > '20261114090000_bottle_fill_circulations'
+ WHERE migration_name > '20261119090000_bottle_fill_circulations'
  ORDER BY migration_name;
 
 -- b) Both R3-b signals. Each must be 0. `::text` keeps the query valid before the R3-b enum
