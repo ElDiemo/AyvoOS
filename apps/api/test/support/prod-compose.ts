@@ -73,7 +73,8 @@ export function storeRbPremiumFiles(
 /** `docker compose config` of deploy/prod/compose.yml plus the given overrides, with profiles. */
 export function renderProd(
   secrets: string,
-  opts: { overrides?: string[]; profiles?: string[] } = {},
+  /** `env`: values deploy-prod.sh passes to Compose besides the env file (e.g. PORTAL_DOMAIN). */
+  opts: { overrides?: string[]; profiles?: string[]; env?: Record<string, string> } = {},
 ): { status: number | null; stderr: string; config: Rendered | null } {
   const prodDir = join(repoRoot, 'deploy/prod');
   const files = ['compose.yml', ...(opts.overrides ?? [])].flatMap((f) => ['-f', join(prodDir, f)]);
@@ -104,6 +105,7 @@ export function renderProd(
         FINANCE_MIGRATE_IMAGE: `sha256:${'2'.repeat(64)}`,
         AYVO_RELEASE_DIR: repoRoot,
         AYVO_PROD_SECRETS_DIR: secrets,
+        ...opts.env,
       },
     },
   );

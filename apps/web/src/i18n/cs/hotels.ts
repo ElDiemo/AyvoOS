@@ -29,6 +29,7 @@ export const hotelsCs = {
     sectionOrders: 'Objednávky',
     sectionDeliveries: 'Dodávky',
     sectionBilling: 'Fakturace',
+    sectionPortal: 'Přístup do portálu',
     billing: {
       title: 'Fakturace',
       unavailable: 'Fakturace dočasně nedostupná. Hotel a logistika fungují dál.',

@@ -30,6 +30,16 @@ export const billingCs = {
   ownPrice: 'vlastní cena',
   defaultPrice: 'dle ceníku',
   history: 'Historie verzí',
+  /** A reserved change of payer (v6, #148) not finished yet. */
+  pendingTransfer: {
+    title: 'Rozpracovaná změna plátce',
+    help: (payer: string, day: string) =>
+      `Změna podmínek bere hotel plátci ${payer}; jeho provoz v hotelovém portálu končí po ${day}. Změna ještě není zapsaná – dokončete ji, nebo ji zrušte. Do té doby nejde podmínky smlouvy měnit ani ověřit přístup do portálu.`,
+    finish: 'Dokončit změnu',
+    abandon: 'Zrušit změnu',
+    abandonNote:
+      'Zrušení podmínky nezapíše. Pokud už AYVO OS omezení provozu uložil, zůstane – vrátí ho jen obnova na stránce plátce.',
+  },
   version: (v: number) => `verze ${v}`,
   revision: (r: number) => `revize ${r}`,
   recorded: (at: string, by: string) => `${at}, ${by}`,

@@ -120,3 +120,43 @@ export const updateHotelPracticalRequestSchema = z
     { message: 'A receiving contact needs a name', path: ['receivingContactName'] },
   );
 export type UpdateHotelPracticalRequest = z.infer<typeof updateHotelPracticalRequestSchema>;
+
+const phone = z
+  .string()
+  .trim()
+  .regex(/^\+?[0-9 ()/-]{6,30}$/, 'Phone number');
+
+/**
+ * The hotel's own editable profile (portal "Profil hotelu"): the delivery address without the
+ * country, the main contact, the receiving contact and the delivery instructions. The same limits
+ * as creating a hotel and "Upravit praktické údaje". Never the name, country, code, id or serving
+ * site (strict: any other key is refused). Orders keep their own snapshot; a change applies to
+ * orders created afterwards.
+ */
+export const hotelProfileFieldsSchema = z
+  .strictObject({
+    addressLine1: text(200),
+    addressLine2: optionalText(200),
+    postalCode: text(20),
+    city: text(120),
+    contactName: text(160),
+    contactPhone: phone,
+    contactEmail: z.email().max(254),
+    receivingContactName: optionalText(160),
+    receivingContactPhone: z
+      .string()
+      .trim()
+      .regex(/^(\+?[0-9 ()/-]{6,30})?$/, 'Phone number')
+      .nullable()
+      .transform((v) => (v ? v : null)),
+    receivingContactEmail: z
+      .union([z.email().max(254), z.literal('')])
+      .nullable()
+      .transform((v) => (v ? v : null)),
+    deliveryNote: optionalText(500),
+  })
+  .refine(
+    (v) => !(v.receivingContactPhone || v.receivingContactEmail) || !!v.receivingContactName,
+    { message: 'A receiving contact needs a name', path: ['receivingContactName'] },
+  );
+export type HotelProfileFields = z.infer<typeof hotelProfileFieldsSchema>;

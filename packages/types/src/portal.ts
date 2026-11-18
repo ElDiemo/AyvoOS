@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hotelProfileFieldsSchema } from './hotels.js';
 
 /**
  * The core's hotel portal contract (ADR 0045 §3, §6): called only by portal-web's server side with
@@ -103,6 +104,112 @@ export const portalHotelSchema = z.object({
 });
 export type PortalHotel = z.infer<typeof portalHotelSchema>;
 
+/**
+ * "Profil hotelu": a granted hotel's own profile. The name and country are shown, not edited; the
+ * fingerprint names exactly these values, so a save made against older values is refused
+ * (PROFILE_STALE) instead of silently overwriting someone else's change.
+ */
+export const portalHotelProfileSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  countryCode: z.string(),
+  address: z.object({
+    addressLine1: z.string(),
+    addressLine2: z.string().nullable(),
+    postalCode: z.string(),
+    city: z.string(),
+  }),
+  contact: z.object({ name: z.string(), phone: z.string(), email: z.string() }),
+  receiving: z.object({
+    contactName: z.string().nullable(),
+    contactPhone: z.string().nullable(),
+    contactEmail: z.string().nullable(),
+    deliveryNote: z.string().nullable(),
+  }),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type PortalHotelProfile = z.infer<typeof portalHotelProfileSchema>;
+
+/**
+ * "Smlouvy": a signed original of a contract for a granted hotel — only documents signed and
+ * uploaded by AYVO (never a draft, a revision without a signed original, or the working template).
+ * The PDF is downloaded as kept (its hash checked).
+ */
+export const portalContractSchema = z.object({
+  id: z.uuid(),
+  signedOn: z.iso.date(),
+  /** The start of the service the signed revision names. */
+  startOn: z.iso.date(),
+  byteSize: z.int().min(1),
+});
+export type PortalContract = z.infer<typeof portalContractSchema>;
+
+/**
+ * "Dodávky": a granted hotel's real orders, as the hotel may see them — never the serving site,
+ * crates, bottles, labels, carrier accounts, people or internal notes. Cancelled orders are not
+ * shown. PLANNED (an open order), PREPARED (picked, the shipment being prepared), READY_FOR_PICKUP
+ * (labelled, waiting for the carrier), IN_TRANSIT (every parcel with the carrier), DELIVERED
+ * (every parcel delivered, proven by the carrier).
+ */
+export const portalDeliveryStateSchema = z.enum([
+  'PLANNED',
+  'PREPARED',
+  'READY_FOR_PICKUP',
+  'IN_TRANSIT',
+  'DELIVERED',
+]);
+export const portalDeliverySchema = z.object({
+  code: z.string(),
+  state: portalDeliveryStateSchema,
+  /** The planned ship day: a calendar day of the serving site's time zone (as the order stores it). */
+  shipDate: z.iso.date(),
+  /** From the hotel's supply plan (else ordered by hand). */
+  fromPlan: z.boolean(),
+  lines: z.array(z.object({ product: z.string(), crates: z.int(), bottles: z.int() })),
+  /** Null when not yet handed over, or when the carrier never reported the pickup time. */
+  handedOverAt: z.iso.datetime().nullable(),
+  deliveredAt: z.iso.datetime().nullable(),
+});
+export type PortalDelivery = z.infer<typeof portalDeliverySchema>;
+export const portalDeliveriesSchema = z.object({
+  /** Planned and being prepared, soonest first. */
+  planned: z.array(portalDeliverySchema),
+  /** Waiting for the carrier or on the way, soonest first. */
+  inProgress: z.array(portalDeliverySchema),
+  /** The latest delivered ones (at most PORTAL_DELIVERED_MAX), newest first. */
+  delivered: z.array(portalDeliverySchema),
+  /**
+   * Days the hotel's switched-on supply plan still has ahead (owner 2026-11-09: so the hotel
+   * knows roughly when the next ones come), for PORTAL_UPCOMING_DAYS from today, without days
+   * that already have an order (those are in `planned`) or that could not be ordered. Only ship
+   * days and whole crates; indicative, not an order.
+   */
+  upcoming: z.array(
+    z.object({
+      shipDate: z.iso.date(),
+      lines: z.array(z.object({ product: z.string(), crates: z.int() })),
+    }),
+  ),
+});
+export type PortalDeliveries = z.infer<typeof portalDeliveriesSchema>;
+export const PORTAL_DELIVERED_MAX = 20;
+export const PORTAL_UPCOMING_DAYS = 60;
+
+/** The browser → portal-web body of a profile save (whitelisted fields only). */
+export const portalHotelProfileUpdateSchema = z.strictObject({
+  expected: z.string().regex(/^[0-9a-f]{64}$/),
+  profile: hotelProfileFieldsSchema,
+  /** Why the hotel changes its details (owner 2026-11-09: required, kept in the audit). */
+  reason: z.string().trim().min(3).max(500),
+});
+export type PortalHotelProfileUpdate = z.infer<typeof portalHotelProfileUpdateSchema>;
+
+/** portal-web → core: the same, with the browser request the core checks again (CSRF). */
+export const portalHotelProfileRequestSchema = portalHotelProfileUpdateSchema.extend({
+  client: portalClientSchema,
+});
+export type PortalHotelProfileRequest = z.infer<typeof portalHotelProfileRequestSchema>;
+
 // --- Finance ↔ core: introspection of a portal session (ADR 0045 §5, §6) ------------------------
 
 /** What a PORTAL session may see now — its active grants (an empty list: nothing). */
@@ -123,6 +230,33 @@ export const portalInvoiceListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(PORTAL_INVOICE_PAGE_MAX).default(20),
 });
 export type PortalInvoiceListQuery = z.infer<typeof portalInvoiceListQuerySchema>;
+
+/**
+ * The one fixed ceiling of the invoice package between Finance and portal-web (review
+ * 5845096918): Finance may be configured lower, never higher, checks the finished ZIP (overhead
+ * included) against its own limit before sending, and portal-web cuts nothing a supported setting
+ * can produce. portal-web waits a little longer than Finance, so Finance's refusal arrives first.
+ */
+export const PORTAL_PACKAGE_MAX_ZIP_BYTES = 40 * 1024 * 1024;
+export const PORTAL_PACKAGE_MAX_MS = 60_000;
+export const PORTAL_PACKAGE_PORTAL_GRACE_MS = 5_000;
+
+/**
+ * "Balíček za období" (doc 040 §14): the visible invoices whose billed month lies in [from, to],
+ * at most PORTAL_PACKAGE_MAX_MONTHS months, as one ZIP of their PDFs and a manifest.csv. A
+ * summary invoice is included once. Bounded in documents and bytes (Finance's env).
+ */
+export const PORTAL_PACKAGE_MAX_MONTHS = 12;
+const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'YYYY-MM');
+const monthIndex = (m: string) => Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7)) - 1;
+export const portalInvoicePackageQuerySchema = z
+  .object({ from: month, to: month })
+  .refine((q) => q.from <= q.to, { message: 'from after to', path: ['from'] })
+  .refine((q) => monthIndex(q.to) - monthIndex(q.from) < PORTAL_PACKAGE_MAX_MONTHS, {
+    message: `at most ${PORTAL_PACKAGE_MAX_MONTHS} months`,
+    path: ['to'],
+  });
+export type PortalInvoicePackageQuery = z.infer<typeof portalInvoicePackageQuerySchema>;
 
 /** One invoice as issued (its snapshot), its payment state and whether it was cancelled. */
 export const portalInvoiceSchema = z.object({

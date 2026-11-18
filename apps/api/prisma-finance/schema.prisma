@@ -184,6 +184,7 @@ model Customer {
 
   versions          CustomerVersion[]
   agreementVersions AgreementVersion[]
+  termsRevisions    BillingTermsRevision[]
 
   @@map("customers")
   @@schema("finance")
@@ -272,8 +273,9 @@ model BillingAgreement {
   createdByName String   @map("created_by_name")
   requestId     String   @unique @map("request_id") @db.Uuid
 
-  versions     AgreementVersion[]
-  invoiceLines InvoiceLine[]
+  versions       AgreementVersion[]
+  invoiceLines   InvoiceLine[]
+  termsRevisions BillingTermsRevision[]
 
   @@map("billing_agreements")
   @@schema("finance")
@@ -302,15 +304,69 @@ model AgreementVersion {
   recordedBy           String    @map("recorded_by") @db.Uuid
   recordedByName       String    @map("recorded_by_name")
   requestId            String    @unique @map("request_id") @db.Uuid
+  /// The agreement's terms revision (1, 2, …; v6 #148) — its order among the agreement's terms.
+  termsRevision        Int       @map("terms_revision")
 
   agreement BillingAgreement @relation(fields: [agreementId], references: [id], onDelete: Restrict)
   customer  Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
-  invoiceLines InvoiceLine[]
+  invoiceLines        InvoiceLine[]
+  termsRevisionEvents BillingTermsRevisionEvent[]
 
+  @@unique([agreementId, termsRevision])
   @@index([agreementId, effectiveFrom, revision], map: "agreement_versions_lookup_idx")
   @@index([customerId], map: "agreement_versions_customer_idx")
   @@map("agreement_versions")
+  @@schema("finance")
+}
+
+/// A revision of an agreement's terms (v6, #148; review 5858166766). CHANGE: committed with its
+/// version at once. TRANSFER (the hotel leaves its payer): reserved, then the core's fence for the
+/// leaving payer, then committed with its version — or abandoned. RESTORE: committed at once,
+/// naming fences of this agreement's transfers of the payer; only it is sent to the core as a
+/// resolution. DB: append-only; the events' order is checked by a trigger.
+model BillingTermsRevision {
+  id               String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  agreementId      String    @map("agreement_id") @db.Uuid
+  revision         Int
+  /// CHANGE | TRANSFER | RESTORE
+  intent           String
+  requestId        String    @unique @map("request_id") @db.Uuid
+  payerCustomerId  String    @map("payer_customer_id") @db.Uuid
+  baseRevision     BigInt?   @map("base_revision")
+  terms            Json?
+  fenceEndsOn      DateTime? @map("fence_ends_on") @db.Date
+  resolvesFenceIds String[]  @default([]) @map("resolves_fence_ids") @db.Uuid
+  reason           String
+  recordedAt       DateTime  @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy       String    @map("recorded_by") @db.Uuid
+  recordedByName   String    @map("recorded_by_name")
+
+  agreement BillingAgreement            @relation(fields: [agreementId], references: [id], onDelete: Restrict)
+  payer     Customer                    @relation(fields: [payerCustomerId], references: [id], onDelete: Restrict)
+  events    BillingTermsRevisionEvent[]
+
+  @@unique([agreementId, revision])
+  @@map("billing_terms_revisions")
+  @@schema("finance")
+}
+
+/// FENCED (the core's fence id) | COMMITTED | ABANDONED | RESOLVED_SENT. DB: append-only, once each.
+model BillingTermsRevisionEvent {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  revisionId         String   @map("revision_id") @db.Uuid
+  kind               String
+  fenceId            String?  @map("fence_id") @db.Uuid
+  agreementVersionId String?  @map("agreement_version_id") @db.Uuid
+  recordedAt         DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy         String   @map("recorded_by") @db.Uuid
+  recordedByName     String   @map("recorded_by_name")
+
+  revision         BillingTermsRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  agreementVersion AgreementVersion?    @relation(fields: [agreementVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([revisionId, kind])
+  @@map("billing_terms_revision_events")
   @@schema("finance")
 }
 

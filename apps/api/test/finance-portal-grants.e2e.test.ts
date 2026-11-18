@@ -11,6 +11,7 @@ import { NativeTokensService } from '../src/identity/native-tokens.service.js';
 import { createFinanceTestApp, type FinanceTestApp } from './support/finance-app.js';
 import { agreement, hotel, invoice, newTerms, payer } from './support/finance-portal.js';
 import { hasDatabase } from './support/test-app.js';
+import { PortalGrantsService } from '../src/portal-grants/portal-grants.service.js';
 
 const PORTAL_ORIGIN = 'https://portal.example.test';
 const G = '/api/admin/finance/portal-grants';
@@ -76,7 +77,12 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
       grant: {
         payerCustomerId: a.id,
         hotelIds: [h1.id, h2.id].sort(),
-        financeCheck: { payerVersion: 1, hotelIds: [h1.id, h2.id].sort() },
+        financeCheck: {
+          payerVersion: 1,
+          hotels: [h1.id, h2.id]
+            .sort()
+            .map((id) => ({ id, basis: 'AGREEMENT', checkedRevision: 1 })),
+        },
       },
     });
     expect(await coreState(email)).toEqual({ user: 'PORTAL', grants: 1 });
@@ -167,10 +173,40 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
     await invoice(f, [ag.code], '2026-09');
     await newTerms(f, ag.code, { customerId: b.id, reason: 'Hotel přešel k jinému plátci' });
 
-    expect((await issue(a.id, [h.id])).status).toBe(201);
-    expect((await issue(b.id, [h.id])).status).toBe(201);
+    const ofA = await issue(a.id, [h.id]);
+    const ofB = await issue(b.id, [h.id]);
+    expect([ofA.status, ofB.status]).toEqual([201, 201]);
     const other = await issue(c.id, [h.id]);
     expect([other.status, other.body.code]).toEqual([409, 'HOTEL_NOT_OF_PAYER']);
+
+    // The boundary (v6, #148; the repro of review 5841786998): the old payer's grant opens the
+    // hotel for its invoices only, the new payer's also for operations — as Finance checked it.
+    const access = async (grantId: string) =>
+      f.core.prisma.portalGrantHotel.findMany({
+        where: { grantId },
+        select: { hotelId: true, access: true, checkedRevision: true },
+      });
+    expect(await access(ofA.body.grant.id)).toEqual([
+      { hotelId: h.id, access: 'INVOICES', checkedRevision: null },
+    ]);
+    expect(await access(ofB.body.grant.id)).toEqual([
+      { hotelId: h.id, access: 'OPERATIONS', checkedRevision: 2 },
+    ]);
+    const scope = async (grantId: string) => {
+      const g = await f.core.prisma.portalGrant.findUniqueOrThrow({ where: { id: grantId } });
+      return (await f.core.app.get(PortalGrantsService).activeOf(g.userId)).find(
+        (x) => x.id === grantId,
+      )!;
+    };
+    // Invoices: both see H; operations (detail, profile, contracts, deliveries): only B.
+    expect(await scope(ofA.body.grant.id)).toMatchObject({
+      hotelIds: [h.id],
+      operationalHotelIds: [],
+    });
+    expect(await scope(ofB.body.grant.id)).toMatchObject({
+      hotelIds: [h.id],
+      operationalHotelIds: [h.id],
+    });
   });
 
   it('a replacement goes through the same check against the grant’s own payer', async () => {
@@ -483,7 +519,7 @@ describe.skipIf(!hasDatabase)('hotel portal grants through Finance', () => {
       const first = (await f.post(G).send(req).expect(201)).body as FinancePortalGrantResult;
       // The answer is lost; meanwhile the account is deactivated.
       await request(f.core.app.getHttpServer())
-        .post(`/api/admin/identity/users/${first.account!.userId}/deactivate`)
+        .post(`/api/admin/identity/portal-accounts/${first.account!.userId}/deactivate`)
         .send({ reason: 'Konec spolupráce (syntetický)' })
         .expect(200);
       const user = await f.core.prisma.user.findUniqueOrThrow({ where: { email: req.email } });

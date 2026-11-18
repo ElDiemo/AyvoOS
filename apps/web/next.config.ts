@@ -31,6 +31,22 @@ const nextConfig: NextConfig = {
         destination: '/production/station',
         permanent: false,
       },
+      // Příjem vratek and Po mytí moved from Sklad to Výroba → Oběh lahví (owner 2026-11-09).
+      {
+        source: '/warehouse/returns',
+        destination: '/production/cycle/returns',
+        permanent: false,
+      },
+      {
+        source: '/warehouse/returns/:code',
+        destination: '/production/cycle/returns/:code',
+        permanent: false,
+      },
+      {
+        source: '/warehouse/after-wash',
+        destination: '/production/cycle/after-wash',
+        permanent: false,
+      },
     ];
   },
   experimental: {

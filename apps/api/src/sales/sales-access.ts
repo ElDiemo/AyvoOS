@@ -95,6 +95,16 @@ export function addDays(iso: string, days: number): string {
 export const dateOnly = (d: Date) => d.toISOString().slice(0, 10);
 export const asDate = (iso: string) => new Date(`${iso}T00:00:00Z`);
 
+/**
+ * An overdue task: open, due before today (sales time zone), of a prospect not archived. The one
+ * rule behind the count in "Výsledky" and the task list it links to (`due=overdue`).
+ */
+export const overdueTaskWhere = (today = salesToday()): Prisma.SalesTaskWhereInput => ({
+  status: 'OPEN',
+  dueOn: { lt: asDate(today) },
+  prospect: { archivedAt: null },
+});
+
 /** A wall-clock time of the sales time zone ("2026-10-20T14:30") as an instant (PostgreSQL). */
 export async function salesInstant(db: Db, local: string): Promise<Date> {
   const rows = await db.$queryRaw<{ t: Date }[]>`
