@@ -33,8 +33,8 @@ the commission, the bound rates) is implemented: PR 1a #192, PR 1b #193 (doc 068
 | Base without VAT                 | `invoice_lines.amount` = `billed_rooms × unit_price` (exact, 2 decimals)                                           | exists; **no VAT anywhere** on issued invoices (doc 040 §7.4 open) | base = `amount` of the line (**O2**: confirm it stays the net base once VAT exists)                                                                                |
 | Currency                         | `invoices.currency` (agreement version's currency)                                                                 | exists                                                             | v1 CZK only; another currency → flag, excluded (**O6**)                                                                                                            |
 | Credit note / partial correction | **does not exist** (only received documents have `CREDIT_NOTE`, doc 039)                                           | missing                                                            | none; partial corrections are open (**O3**, doc 040 §7.6)                                                                                                          |
-| Cancellation (storno)            | `finance.invoice_cancellations` (whole invoice, TEST) with `cancelled_at`                                          | exists                                                             | before approval: line excluded; after: negative correction in the next statement (**O4**)                                                                          |
-| Late issued invoice              | `issued_at` after the statement's approval                                                                         | exists                                                             | a REGULAR item in the next open statement with its original M and rate (**O5**, was Q16)                                                                           |
+| Cancellation (storno)            | `finance.invoice_cancellations` (whole invoice, TEST) with `cancelled_at`                                          | exists                                                             | before approval: line excluded; after: a CORRECTION due by §5a, once per item (DB) (**O4**)                                                                        |
+| Late issued invoice              | `issued_at` after the statement's approval                                                                         | exists                                                             | REGULAR item due by §5a: its own month, or after the salesperson's latest statement (**O5**)                                                                       |
 | Termination of an agreement      | `agreement_versions.valid_from` / `valid_to`                                                                       | exists                                                             | no input to the commission: no issued line = no commission                                                                                                         |
 | Pause                            | **does not exist** (no pause in Finance or the contract template)                                                  | missing                                                            | no line = no commission; whether paused months count to N stays open (**O7**, doc 068 Q7)                                                                          |
 | Recipient for M                  | core `sales_hotel_attributions` (#193): latest `effective_from ≤ M`, then highest revision; `NULL` = Firemní hotel | exists (core)                                                      | only through the contract §4                                                                                                                                       |
@@ -86,39 +86,105 @@ response: { month, fingerprint, hotels: [
 Tables in the `finance` schema (append-only, ADR 0006; no FK to the core):
 
 - `commission_statements`: `period_month`, `salesperson_id` + name snapshot, `currency`,
-  `mode` (TEST | LIVE), `total`, `fingerprint`, `approved_at/by`, `request_id`.
-  `UNIQUE (period_month, salesperson_id, currency, mode)`. Never updated or deleted.
-- `commission_statement_items`: `kind` REGULAR | CORRECTION, source `(invoice_id, line_no)` FK to
-  `invoice_lines`, service month, hotel snapshot, `base`, `attribution_revision`, `binding_id`,
-  `terms_version`, `k`, `rate`, `amount`. **I1:** `UNIQUE (invoice_id, line_no) WHERE kind =
-'REGULAR'`; a CORRECTION references its REGULAR item. Trigger: a LIVE statement never holds a
-  line of a TEST invoice.
+  `mode` (TEST | LIVE), `previous_statement_id`, `opening_balance`, `total` (sum of items),
+  `closing_balance`, `amount_to_invoice` (≥ 0), `carried_forward` (≤ 0), `fingerprint`,
+  `sources_read_at`, `approved_at/by`, `request_id`. `UNIQUE (period_month, salesperson_id,
+currency, mode)`; trigger: no statement at or before the salesperson's latest one (same
+  currency and mode) and `previous_statement_id` = that latest one. Never updated or deleted.
+- `commission_statement_items`: `kind` REGULAR | CORRECTION, `cause` (`REGULAR`, `CANCELLED`,
+  `REATTRIBUTED:<revision>`), source `(invoice_id, line_no)` FK to `invoice_lines`,
+  `salesperson_id` (= the statement's), service month, hotel snapshot, `base`,
+  `attribution_revision`, `binding_id`, `terms_version`, `k`, `rate`, `amount`.
+  **I1:** `UNIQUE (invoice_id, line_no, mode) WHERE kind = 'REGULAR'`; **one storno per original
+  item:** `UNIQUE (invoice_id, line_no, mode, salesperson_id, cause)`. Trigger: a LIVE statement
+  never holds a line of a TEST invoice.
 - `commission_statement_events`: APPROVED (with the insert), SALESPERSON_INVOICE_RECORDED
   (number, date, amount — doc 068 I3), PAYOUT_PLANNED (date). No PAID in this batch.
 
-**Preview (no write):** `GET /api/finance/commissions/preview?month=` (approval permission) —
-Finance reads its own lines of M, calls §4 once, computes per salesperson the items, the flags and
-the fingerprint of **that salesperson's own sources only** (line ids, bases, attribution
-revisions, binding ids, rates, amounts, flags) — approving one salesperson never makes another
-stale.
+### 5a. The due month — every item and flag has exactly one at a time
 
-**Approve one salesperson** `POST /api/finance/commissions/statements`
+Each pending item has an **earliest month E**: a never-included line → its billed month; a
+correction of a booked line → the month after the statement of the line's original REGULAR item
+(fixed; another salesperson's approval never moves it). It is **due** in
+`D = E`, unless the salesperson already has a statement at or after E (same currency, mode) — then
+`D` = the month after their **latest** statement. `D` is computed from Finance's own data only.
+
+- The preview of M shows, per salesperson, what is due in M. Anything due **before** M is listed to
+  the admin (flag `EARLIER_PERIOD_OPEN` with the month, invoice and hotel) and blocks only that
+  salesperson's M until that earlier month is approved. So statements of one salesperson are
+  approved strictly in order, and no item can be in two months.
+- **Late invoice without any statement of that salesperson (re-review 2):** E = its billed month
+  M0, D = M0. The admin sees it in every later preview as unresolved for M0 and approves the
+  salesperson's own M0 statement — no earlier or zero statement is needed. If the salesperson
+  already has a statement after M0, D = the month after their latest one (O5).
+- Lines without any attribution (`UNASSIGNED`) are listed in every preview ≥ their billed month
+  until the core has an attribution; they never block another salesperson.
+
+### 5b. Corrections of approved items
+
+For every line already in an approved statement, the preview compares what the sources say now
+(cancelled? recipient, binding, rate of the core answer for its billed month) with the approved
+items of that line, per salesperson; a non-zero difference is a CORRECTION for that salesperson,
+due by §5a, with the original service month.
+
+- **Cancellation after approval (O4):** −amount for the salesperson of the original item, cause
+  `CANCELLED`. The DB uniqueness above makes a second storno of the same item impossible, also
+  from a faulty or concurrent computation.
+- **A real later correction of the attribution (O15):** the old recipient gets −amount, the new
+  recipient +amount at **their** bound rate, cause `REATTRIBUTED:<revision>`; a Firemní hotel gets
+  only the reversal. The approved statements stay as they are.
+- A line whose current sources are incomplete (missing terms …) is flagged; nothing is reversed
+  silently.
+
+### 5c. The balance — never a negative amount to invoice
+
+`closing = opening + total`. The salesperson is asked to invoice only `amount_to_invoice =
+max(0, closing)`. A negative `closing` is **not** an invoice request: the statement says
+"Nic k fakturaci" and carries `carried_forward = closing` as the `opening_balance` of their next
+statement, where it is netted against new items (**O13**). Ending the cooperation with a negative
+balance (**O14**) is never settled automatically: the balance stays visible to the admin as
+"Nevypořádané saldo" until a later batch records a settlement event (write-off with a reason, or
+repayment) — the owner chooses which.
+
+### 5d. Approve one salesperson — the order
+
+**Preview (no write):** `GET /api/finance/commissions/preview?month=` (approval permission) —
+Finance reads its own lines and items, calls §4 once per billed month involved, and computes per
+salesperson the items, flags, balance and the fingerprint of **that salesperson's own sources
+only** (previous statement, opening balance, line ids, bases, attribution revisions, binding ids,
+rates, amounts, flags) — approving one salesperson never makes another stale.
+
+`POST /api/finance/commissions/statements`
 `{ requestId, month, salespersonId, currency, mode, fingerprint }`:
 
-1. Outside any transaction: read the own lines of M, call §4 (timeout → 503, nothing written),
-   compute; a different fingerprint than the admin saw → **409 STATEMENT_STALE**; any flag of
-   this salesperson → **422 STATEMENT_FLAGGED**.
-2. One Finance transaction: `operation_requests` (idempotency per `requestId`; a replay after a
-   lost answer returns the same statement); advisory lock
-   `commission:<month>:<salesperson>:<currency>:<mode>`; re-read the own lines and cancellations
-   and compare the Finance part of the fingerprint; an existing statement → **409
-   ALREADY_APPROVED** (the same one returned); insert statement, items, event APPROVED.
-3. The approved amount never changes (DB: no UPDATE/DELETE). Anything found later (late invoice,
-   cancellation, changed attribution) becomes an item of a later statement.
+0. **Permission** (O8) — 403 otherwise, also for a replay.
+1. **Replay:** a stored operation with this `requestId` — the same actor and content → its stored
+   result, **without calling the core** (also when the core is down or sources have changed since);
+   another actor or content → **409 IDEMPOTENCY_CONFLICT**.
+2. **Order (Finance only):** a statement of the salesperson for M → **409 ALREADY_APPROVED** (that
+   one returned); a later one → **409 PERIOD_ORDER**.
+3. **Outside any transaction:** read the core (§4; timeout → **503, nothing written**), compute;
+   a different fingerprint → **409 STATEMENT_STALE**; any flag (incl. `EARLIER_PERIOD_OPEN`) →
+   **422 STATEMENT_FLAGGED**; no item → 422.
+4. **One Finance transaction** under the advisory lock `commission:<mode>:<salesperson>` (all
+   months of one salesperson serialise): insert into `operation_requests` (a concurrent same
+   `requestId` waits and returns the stored result); repeat step 2; re-read Finance's part
+   (latest statement, the salesperson's items, cancellations of every line touched) — changed →
+   **409 STATEMENT_STALE**; insert statement, items (I1 and the storno uniqueness enforced by the
+   DB), event APPROVED.
+5. The approved amount never changes (DB: no UPDATE/DELETE). Anything found later becomes an item
+   of a later statement (§5a, §5b).
+
+**Which attribution version counts:** the core answer read in step 3, whose fingerprint equals the
+one the admin confirmed; each item stores its `attribution_revision` and `binding_id`, the
+statement `sources_read_at`. A core change committed after that read — even before the Finance
+commit — is not part of the statement; it is a later correction (§5b) in the next due month. A
+new line issued between step 3 and the commit is not lost: its due month becomes the next one.
 
 **Salesperson view** `GET /api/finance/commissions/mine?month=` (`sales:work` through the core
-contract's current user): only the own approved statement — state and **one amount**; before
-approval "Zpracovává se"; never a hotel's invoice number, payment, date or another person.
+contract's current user): only the own approved statement — state and **one amount** ("K
+fakturaci" or "Nic k fakturaci" with the balance carried); before approval "Zpracovává se";
+never a hotel's invoice number, payment, date or another person.
 
 ## 6. Transition
 
@@ -137,8 +203,8 @@ approval "Zpracovává se"; never a hotel's invoice number, payment, date or ano
 | O1  | The live invoice kind(s) a statement accepts  | none until live issuing exists; listed, never "anything but TEST"      |
 | O2  | Base once VAT is introduced                   | the line's net amount without VAT                                      |
 | O3  | Credit notes / partial corrections            | not supported; only a whole cancellation                               |
-| O4  | Cancellation after approval                   | negative CORRECTION in the next statement, original M and rate         |
-| O5  | Invoice for M issued after approval (was Q16) | REGULAR item in the next open statement, original M and rate           |
+| O4  | Cancellation after approval                   | CORRECTION in the nearest admissible month (§5a), original M and rate  |
+| O5  | Invoice for M issued after approval (was Q16) | REGULAR item due by §5a, original M and rate                           |
 | O6  | Other currency                                | flag, excluded; CZK only                                               |
 | O7  | Pauses and N (Q7)                             | no line = no commission; k counts calendar months                      |
 | O8  | Approval permission                           | new `finance:commissions_manage`, ADMIN only (security administration) |
@@ -146,6 +212,10 @@ approval "Zpracovává se"; never a hotel's invoice number, payment, date or ano
 | O10 | First incomplete month (Q17)                  | the admin's confirmed first paid month counts as k = 1                 |
 | O11 | Late salesperson invoice (Q2b)                | the next payout plan (15th of the following month)                     |
 | O12 | When M may be approved                        | from the 1st of M+1 (Europe/Prague); lines of M issued later go by O5  |
+| O13 | A negative balance                            | carried and netted in the next statement; accountant to confirm        |
+| O14 | Negative balance when the cooperation ends    | shown as unsettled; write-off or repayment recorded by hand later      |
+| O15 | Attribution corrected after approval          | reversal for the old, new item for the new recipient (§5b)             |
+| O16 | How far back corrections look                 | no limit in v1 (every booked line); revisit with the real volume       |
 
 ## 8. Isolated model and scenarios
 
@@ -153,17 +223,23 @@ approval "Zpracovává se"; never a hotel's invoice number, payment, date or ano
 the application; fixtures shaped like the real Finance rows of §2 and the contract of §4) and
 `node --test docs/prototypes/069-commission-closing.test.mjs`:
 
-| Scenario                                                            | Covered                                                                 |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Billed period, never the payment                                    | a paid and an unpaid line count the same; payment data are not an input |
-| Summary invoice with two hotels → two salespeople                   | ✓                                                                       |
-| Rate boundary k = 24 / 25 within one statement                      | ✓                                                                       |
-| Missing attribution, missing terms, Firemní hotel, before the start | flags / excluded, only that salesperson blocked                         |
-| Cancelled before approval; cancelled after approval                 | excluded; CORRECTION in the next statement                              |
-| Invoice issued after approval                                       | REGULAR in the next statement, original month and rate                  |
-| Double closing, concurrent approval, replay after a lost answer     | one statement; same result; ALREADY_APPROVED                            |
-| Stale fingerprint (source changed)                                  | STATEMENT_STALE                                                         |
-| Approved amount never silently changed                              | immutability + difference shown, never applied                          |
-| Source contract down                                                | 503, nothing written                                                    |
-| TEST line into a LIVE statement                                     | refused                                                                 |
-| Role isolation                                                      | salesperson projection: own statement only, one amount, no invoice data |
+| Scenario                                                                 | Covered                                                                 |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Billed period, never the payment                                         | a paid and an unpaid line count the same; payment data are not an input |
+| Summary invoice with two hotels → two salespeople                        | ✓                                                                       |
+| Rate boundary k = 24 / 25 within one statement                           | ✓                                                                       |
+| Missing attribution, missing terms, Firemní hotel, before the start      | flags / excluded, only that salesperson blocked                         |
+| Cancelled before approval; cancelled after approval                      | excluded; CORRECTION in the next statement                              |
+| Storno never in an earlier open month; a later month blocked until it    | `EARLIER_PERIOD_OPEN`; negative result carried, netted next month       |
+| Two months of one salesperson at once (both orders)                      | `PERIOD_ORDER` / `STATEMENT_STALE`; the late line due in the next month |
+| The same storno a second time (faulty or concurrent computation)         | `CORRECTION_DUPLICATE` (DB uniqueness)                                  |
+| Late invoice, no statement of that salesperson yet; unassigned lines     | shown in later previews; own month approvable; never skipped            |
+| Invoice issued after approval                                            | REGULAR in the next statement, original month and rate                  |
+| Double closing, concurrent approval, replay after a lost answer          | one statement; same result; ALREADY_APPROVED                            |
+| Replay with the core down or changed sources; other actor; no permission | stored result without a core call; IDEMPOTENCY_CONFLICT; FORBIDDEN      |
+| Attribution corrected in the core after the read / after approval        | statement keeps the read revision; reversal + new item next month       |
+| Stale fingerprint (source changed)                                       | STATEMENT_STALE                                                         |
+| Approved amount never silently changed                                   | immutability + difference shown, never applied                          |
+| Source contract down                                                     | 503, nothing written                                                    |
+| TEST line into a LIVE statement                                          | refused                                                                 |
+| Role isolation                                                           | salesperson projection: own statement only, one amount, no invoice data |

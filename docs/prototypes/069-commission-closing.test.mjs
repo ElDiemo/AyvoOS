@@ -7,10 +7,12 @@ import {
   approve,
   approvedVsComputed,
   cents,
+  commitApproval,
   commission,
   createStore,
   mine,
   payoutPlan,
+  prepareApproval,
   preview,
 } from './069-commission-closing.mjs';
 
@@ -379,4 +381,264 @@ test('payout plan: invoice by the 10th → the 15th; later → the next run', ()
   assert.equal(payoutPlan('2027-07', '2027-08-10'), '2027-08-15');
   assert.equal(payoutPlan('2027-07', '2027-08-11'), '2027-09-15');
   assert.equal(payoutPlan('2027-12', '2028-01-09'), '2028-01-15');
+});
+
+// --- Codex re-review of #195 5cad285 ------------------------------------------------------------
+
+const reqOf = (s, requestId, actorId = 'admin') => ({
+  requestId,
+  month: s.periodMonth,
+  salespersonId: s.salespersonId,
+  currency: s.currency,
+  mode: s.mode,
+  fingerprint: s.fingerprint,
+  actorId,
+});
+const stOf = (d, month, sp) =>
+  preview({ ...d, month, mode: 'TEST' }).statements.find((s) => s.salespersonId === sp);
+
+test('R1 storno after approval: only the nearest admissible month, never an earlier open one; a negative result is carried, not invoiced', () => {
+  const july = line({ invoiceId: 'inv-j' });
+  const sep = line({ invoiceId: 'inv-s', periodMonth: '2027-09', amount: '6000.00' });
+  const d = deps([july, sep], () => attr(A, plan('b1', 1, '20.00', 24, '5.00')));
+  approveAll(d, '2027-07');
+  july.cancelledAt = '2027-08-05T09:00:00Z';
+  d.today = '2027-10-01';
+
+  // An earlier month never takes the correction (was: any previewed month did).
+  assert.equal(preview({ ...d, month: '2027-06', mode: 'TEST' }).statements.length, 0);
+  // August is the nearest admissible month (after July, the latest statement holding the line).
+  const aug = stOf(d, '2027-08', 'sp-a');
+  assert.deepEqual(
+    aug.items.map((i) => [i.kind, i.cause, i.serviceMonth, i.amount]),
+    [['CORRECTION', 'CANCELLED', '2027-07', -cents('964.00')]],
+  );
+  // September shows the open August to the admin and cannot be approved before it.
+  const sepSt = stOf(d, '2027-09', 'sp-a');
+  assert.deepEqual(
+    sepSt.flags.map((f) => [f.code, f.dueMonth, f.invoiceNumber]),
+    [['EARLIER_PERIOD_OPEN', '2027-08', july.invoiceNumber]],
+  );
+  assert.equal(
+    sepSt.items.some((i) => i.kind === 'CORRECTION'),
+    false,
+  );
+  assert.throws(() => approve(reqOf(sepSt, 'rq-sep-early'), d), /STATEMENT_FLAGGED/);
+
+  // August: −964.00 → nothing to invoice, the balance is carried (§5c).
+  const a = approve(reqOf(aug, 'rq-aug'), d);
+  assert.deepEqual(a, { id: 'ST-2', total: '-964.00', amountToInvoice: '0.00' });
+  assert.deepEqual(mine(d.store, 'sp-a', '2027-08'), {
+    month: '2027-08',
+    state: 'NOTHING_TO_INVOICE',
+    balanceCarriedForward: '-964.00',
+    currency: 'CZK',
+  });
+  // September nets it: 1 200.00 − 964.00 = 236.00 to invoice; the correction is not repeated.
+  const sep2 = stOf(d, '2027-09', 'sp-a');
+  assert.deepEqual(
+    [sep2.opening, sep2.total, sep2.amountToInvoice, sep2.flags.length],
+    [-cents('964.00'), cents('1200.00'), cents('236.00'), 0],
+  );
+  approve(reqOf(sep2, 'rq-sep'), d);
+  assert.equal(mine(d.store, 'sp-a', '2027-09').amountToInvoice, '236.00');
+  d.today = '2027-11-01';
+  assert.equal(preview({ ...d, month: '2027-10', mode: 'TEST' }).statements.length, 0);
+});
+
+test('R1 two months of one salesperson at once: one lock, a strict order, nothing twice or lost', () => {
+  const lines = [line({}), line({ invoiceId: 'inv-sep', periodMonth: '2027-09' })];
+  const d = deps(lines, () => attr(A, plan('b1', 1, '20.00', 24, '5.00')));
+  approveAll(d, '2027-07');
+  d.today = '2027-10-01';
+
+  // (a) September is prepared; then a July invoice is issued late (due August) and August is
+  // prepared too. Both pass step 1 — the transaction decides.
+  const sepP = prepareApproval(reqOf(stOf(d, '2027-09', 'sp-a'), 'rq-sep'), d);
+  lines.push(line({ invoiceId: 'inv-late', issuedAt: '2027-10-01T07:00:00Z' }));
+  const augSt = stOf(d, '2027-08', 'sp-a');
+  assert.deepEqual(
+    augSt.items.map((i) => [i.kind, i.invoiceId, i.serviceMonth]),
+    [['REGULAR', 'inv-late', '2027-07']],
+  );
+  const augP = prepareApproval(reqOf(augSt, 'rq-aug'), d);
+  commitApproval(sepP, d); // September first
+  assert.throws(() => commitApproval(augP, d), /PERIOD_ORDER/); // no statement before a later one
+  // The late line is not lost: it is due in October (the month after the latest statement).
+  d.today = '2027-11-01';
+  const oct = stOf(d, '2027-10', 'sp-a');
+  assert.deepEqual(
+    oct.items.map((i) => [i.kind, i.invoiceId, i.serviceMonth, i.rate]),
+    [['REGULAR', 'inv-late', '2027-07', '20.00']],
+  );
+
+  // (b) The other order: August commits first → the September prepared earlier is stale.
+  const l2 = [
+    line({ hotelId: 'h-9' }),
+    line({ hotelId: 'h-9', invoiceId: 'inv-s2', periodMonth: '2027-09' }),
+  ];
+  const d2 = deps(l2, () => attr(B, plan('b2', 1, '10.00', 36, '3.00')));
+  approveAll(d2, '2027-07');
+  d2.today = '2027-10-01';
+  const sep2 = prepareApproval(reqOf(stOf(d2, '2027-09', 'sp-b'), 'rq-s2'), d2);
+  l2.push(line({ hotelId: 'h-9', invoiceId: 'inv-l2', issuedAt: '2027-10-01T07:00:00Z' }));
+  commitApproval(prepareApproval(reqOf(stOf(d2, '2027-08', 'sp-b'), 'rq-a2'), d2), d2);
+  assert.throws(() => commitApproval(sep2, d2), /STATEMENT_STALE/);
+  approve(reqOf(stOf(d2, '2027-09', 'sp-b'), 'rq-s2b'), d2);
+  assert.equal(d2.store.items.filter((i) => i.invoiceId === 'inv-l2').length, 1);
+});
+
+test('R1 one storno per original item is a DB uniqueness, not only the computation', () => {
+  const july = line({ invoiceId: 'inv-j' });
+  const d = deps([july, line({ invoiceId: 'inv-s', periodMonth: '2027-09' })], () =>
+    attr(A, plan('b1', 1, '20.00', 24, '5.00')),
+  );
+  approveAll(d, '2027-07');
+  july.cancelledAt = '2027-08-05T09:00:00Z';
+  d.today = '2027-10-01';
+  const aug = stOf(d, '2027-08', 'sp-a');
+  const storno = aug.items[0];
+  approve(reqOf(aug, 'rq-aug'), d);
+  // A faulty or concurrent computation that carries the same storno into September again.
+  const sepP = prepareApproval(reqOf(stOf(d, '2027-09', 'sp-a'), 'rq-sep'), d);
+  sepP.st.items.push(storno);
+  assert.throws(() => commitApproval(sepP, d), /CORRECTION_DUPLICATE/);
+  assert.equal(d.store.statements.length, 2);
+});
+
+test('R2 a late invoice with no earlier statement of that salesperson: shown, approvable, never skipped', () => {
+  const lines = [line({ hotelId: 'h-1' })];
+  const table = (h) =>
+    h === 'h-1'
+      ? attr(A, plan('b1', 1, '20.00', 24, '5.00'))
+      : attr(B, plan('b2', 1, '10.00', 36, '3.00'));
+  const d = deps(lines, table);
+  approveAll(d, '2027-07'); // only Alena had a July line
+  // Bohdan's July invoice is issued after July was closed; he has no statement at all.
+  lines.push(
+    line({
+      hotelId: 'h-2',
+      hotelCode: 'HT-000002',
+      invoiceId: 'inv-b',
+      issuedAt: '2027-08-20T09:00:00Z',
+    }),
+  );
+  // A July line without any attribution is shown too, in every later month until resolved.
+  lines.push(
+    line({
+      hotelId: 'h-x',
+      hotelCode: 'HT-X',
+      invoiceId: 'inv-x',
+      issuedAt: '2027-08-21T09:00:00Z',
+    }),
+  );
+  const noX = (h, m) => (h === 'h-x' ? null : table(h, m));
+  d.contract = contractOf(noX);
+  d.today = '2027-09-01';
+
+  const aug = preview({ ...d, month: '2027-08', mode: 'TEST' });
+  const b = aug.statements.find((s) => s.salespersonId === 'sp-b');
+  assert.deepEqual(
+    b.flags.map((f) => [f.code, f.dueMonth, f.what]),
+    [['EARLIER_PERIOD_OPEN', '2027-07', 'REGULAR:REGULAR']],
+  );
+  assert.deepEqual(
+    aug.unassigned.map((u) => [u.hotelCode, u.serviceMonth]),
+    [['HT-X', '2027-07']],
+  );
+  assert.throws(() => approve(reqOf(b, 'rq-b-aug'), d), /STATEMENT_FLAGGED/);
+  // The path: Bohdan's own July statement — no earlier or zero statement is needed.
+  const julB = stOf(d, '2027-07', 'sp-b');
+  assert.deepEqual(
+    julB.items.map((i) => [i.invoiceId, i.amount]),
+    [['inv-b', cents('482.00')]],
+  );
+  approve(reqOf(julB, 'rq-b-jul'), d);
+  assert.equal(mine(d.store, 'sp-b', '2027-07').amountToInvoice, '482.00');
+  assert.equal(
+    preview({ ...d, month: '2027-08', mode: 'TEST' }).statements.some(
+      (s) => s.salespersonId === 'sp-b',
+    ),
+    false,
+  );
+
+  // Once Bohdan has a later statement, a still later July invoice goes to the month after it.
+  lines.push(line({ hotelId: 'h-2', periodMonth: '2027-09', invoiceId: 'inv-b9' }));
+  d.today = '2027-10-01';
+  approve(reqOf(stOf(d, '2027-09', 'sp-b'), 'rq-b-sep'), d);
+  lines.push(line({ hotelId: 'h-2', invoiceId: 'inv-b-late', issuedAt: '2027-10-02T09:00:00Z' }));
+  d.today = '2027-11-01';
+  assert.deepEqual(
+    stOf(d, '2027-10', 'sp-b').items.map((i) => [i.invoiceId, i.serviceMonth]),
+    [['inv-b-late', '2027-07']],
+  );
+});
+
+test('R3 a replay: permission first, then the stored result — even with the core down or changed sources', () => {
+  let rate = '20.00';
+  let coreUp = true;
+  const table = () => attr(A, plan('b1', 1, rate, 24, '5.00'));
+  const calls = [];
+  const live = contractOf(table, calls);
+  const d = {
+    ...deps([line({})], table),
+    contract: (m, h) => {
+      if (!coreUp) throw new ClosingError('CORE_UNAVAILABLE', 503);
+      return live(m, h);
+    },
+    isApprover: (id) => id === 'admin' || id === 'admin-2',
+  };
+  const req = reqOf(stOf(d, '2027-07', 'sp-a'), 'rq-1');
+  const first = approve(req, d);
+  const n = calls.length;
+  coreUp = false;
+  assert.deepEqual(approve(req, d), first); // core down: the stored answer, no core call
+  coreUp = true;
+  rate = '30.00';
+  assert.deepEqual(approve(req, d), first); // sources changed: still the stored answer
+  assert.equal(calls.length, n);
+  assert.throws(() => approve({ ...req, actorId: 'sales-1' }, d), /FORBIDDEN/); // permission first
+  assert.throws(() => approve({ ...req, actorId: 'admin-2' }, d), /IDEMPOTENCY_CONFLICT/); // other actor
+  coreUp = false;
+  // A new request for the approved month: ALREADY_APPROVED from Finance alone, no core call.
+  assert.throws(() => approve({ ...req, requestId: 'rq-new' }, d), /ALREADY_APPROVED/);
+  // A new request for an open month needs the core: 503 and nothing written.
+  d.today = '2027-09-01';
+  assert.throws(
+    () => approve({ ...req, requestId: 'rq-aug', month: '2027-08' }, d),
+    (e) => e.status === 503,
+  );
+  assert.equal(d.store.statements.length, 1);
+  assert.equal(d.store.operations.size, 1);
+});
+
+test('R3 the attribution version that counts is the one read at approval; a later correction becomes corrections', () => {
+  let julyRecipient = 'A';
+  const table = (h, m) =>
+    m === '2027-07' && julyRecipient === 'B'
+      ? attr(B, plan('b2', 1, '10.00', 36, '3.00'), '2027-06', 2)
+      : attr(A, plan('b1', 1, '20.00', 24, '5.00'));
+  const d = deps([line({})], table);
+  // Step 1 reads revision 1; a correction committed in the core right after is not seen.
+  const p = prepareApproval(reqOf(stOf(d, '2027-07', 'sp-a'), 'rq-jul'), d);
+  julyRecipient = 'B';
+  commitApproval(p, d);
+  assert.deepEqual(
+    d.store.items.map((i) => [i.salespersonId, i.attributionRevision, i.amount]),
+    [['sp-a', 1, cents('964.00')]],
+  );
+  // The next month shows the difference per salesperson; July stays as approved.
+  d.today = '2027-09-01';
+  const aug = preview({ ...d, month: '2027-08', mode: 'TEST' });
+  const by = Object.fromEntries(
+    aug.statements.map((s) => [s.salespersonId, s.items.map((i) => [i.cause, i.rate, i.amount])]),
+  );
+  assert.deepEqual(by, {
+    'sp-a': [['REATTRIBUTED:2', '20.00', -cents('964.00')]],
+    'sp-b': [['REATTRIBUTED:2', '10.00', cents('482.00')]],
+  });
+  approveAll(d, '2027-08');
+  assert.equal(d.store.statements[0].total, cents('964.00'));
+  d.today = '2027-10-01';
+  assert.equal(preview({ ...d, month: '2027-09', mode: 'TEST' }).statements.length, 0); // settled once
 });

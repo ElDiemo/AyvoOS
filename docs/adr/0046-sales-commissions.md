@@ -67,6 +67,12 @@ Owner, 2026-11-18. Details, the map of real inputs and the open rules: doc 069.
 - **Kept:** I1–I3, one statement per salesperson × month × currency, TEST never in a LIVE
   statement, idempotent and serialised approval, an approved amount never changed (later facts
   become items of a later statement).
+- **Re-review 2026-11-18 (doc 069 §5a–§5d):** every later fact has exactly one due month (the
+  salesperson's statements are approved strictly in order, one lock per salesperson); one storno
+  per original item is a DB uniqueness; a negative result is never an amount to invoice — it is
+  carried to the next statement (O13, O14); a replay returns the stored result before any core
+  call; the attribution version read at approval counts, a later correction becomes corrections
+  (O15).
 
 ### 1. Who owns what
 
