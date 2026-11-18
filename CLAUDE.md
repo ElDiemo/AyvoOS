@@ -169,8 +169,18 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   append-only versions per salesperson (1, 2, … without gaps, DB) of the initial rate %, its length
   N in whole months and the maintenance rate % from month N+1 (exact 0–100, at most 2 decimals,
   N ≥ 1, a reason; DB CHECK); `sales:commission_terms_manage` ADMIN only (`security_admin`, never a
-  custom role); a salesperson reads only their own terms. No attribution, portfolio, calculation,
-  statement, salesperson invoice or payout yet (PR 1b and Finance are not approved).
+  custom role); a salesperson reads only their own terms.
+  Hotel attribution and portfolio (PR 1b #193; owner approved the model 2026-11-18 in the agreed
+  scope — doc 068 §3.2–§3.3): `sales_hotel_attributions` (append-only revisions per hotel; for a
+  month the latest effective month decides, the same month the highest revision; a revision must
+  change the recipient; a change before a planned later one only with an explicit confirmation;
+  the first paid month confirmed by the admin and never moved; source CONTRACT = a signed draft of
+  this hotel, the prefill is the prospect's CURRENT owner to verify; MANUAL for a hotel without an
+  acquisition; NULL = "Firemní hotel – bez provize"), `sales_hotel_commission_terms` (the snapshot
+  of the salesperson's valid terms, written only in the attribution's own transaction, DB). Existing
+  permissions only (`sales:manage` + `hotels:read`; portfolio `sales:work` own). Never an amount,
+  estimate, invoice or payment; no change of a hotel's existing rates (EXPLICIT_CHANGE not
+  approved). Calculation, statements, closing, corrections and payouts are Finance's, not approved.
   Return intake R1 (owner approved the model 2026-11-06 on doc 047 `69d90c8`, PR #126;
   implementation under review): module `returns` — `return_receipts` (site, OPEN → CLOSED),
   `return_receipt_lines` (one physical container: CRATE completes its delivered cycle's allocation,
