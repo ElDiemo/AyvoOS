@@ -14,6 +14,7 @@ export * from './labeling.js';
 export * from './filling.js';
 export * from './finance.js';
 export * from './finance-billing.js';
+export * from './finance-commissions.js';
 export * from './finance-issuer.js';
 export * from './finance-invoices.js';
 export * from './finance-deliveries.js';
