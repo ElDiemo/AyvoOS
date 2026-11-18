@@ -219,6 +219,104 @@ describe.skipIf(!hasDatabase)('Finance: commission statements — database invar
     ).toMatch(/its statement's mode and salesperson/);
   });
 
+  it('a cancellation and an approval of the same invoice are serialised (both orders)', async () => {
+    const fresh = async (name: string) => {
+      const x = await hotel(f, `Hotel DB souběh ${name} ${randomUUID().slice(0, 6)}`);
+      const p = await payer(f, `Plátce souběh ${name}`);
+      const ag = await agreement(f, p.id, x.id);
+      const v = await invoice(f, [ag.code], '2026-10');
+      return { invoiceId: v.id, number: v.number, hotelId: x.id, hotelCode: x.code };
+    };
+    const cancel = (tx: Tx, invoiceId: string) =>
+      tx.$executeRaw`INSERT INTO "finance"."invoice_cancellations"
+        ("invoice_id", "reason", "cancelled_by", "cancelled_by_name", "request_id")
+        VALUES (${invoiceId}::uuid, 'syntetické storno', ${randomUUID()}::uuid, 'Test', ${randomUUID()}::uuid)`;
+    const gate = () => {
+      let open!: () => void;
+      const done = new Promise<void>((r) => (open = r));
+      return { done, open };
+    };
+    /** Until another connection waits for an advisory lock (the second transaction is blocked). */
+    const blocked = async () => {
+      for (let i = 0; i < 200; i++) {
+        const [r] = await withPrivileged(
+          (db) =>
+            db.$queryRaw<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_locks
+            WHERE locktype = 'advisory' AND NOT granted`,
+        );
+        if ((r?.n ?? 0) > 0) return;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error('the second transaction never waited for the lock');
+    };
+    const approve = (src: typeof line, sp: string) => (tx: Tx) =>
+      statement(tx, { month: '2026-10', sp, total: '200.00' }).then((id) =>
+        item(tx, id, sp, src, { amount: '200.00' }),
+      );
+
+    // 1. The cancellation is first: the approval waits for it and is refused (stale), not booked.
+    const a = await fresh('A');
+    await withPrivileged(async (db) => {
+      const held = gate();
+      const inside = gate();
+      const first = db.$transaction(
+        async (tx) => {
+          await cancel(tx, a.invoiceId);
+          inside.open();
+          await held.done;
+        },
+        { timeout: 30_000 },
+      );
+      await inside.done;
+      const second = attempt(approve(a, randomUUID()));
+      await blocked();
+      held.open();
+      await first;
+      expect(await second).toMatch(/valid line at its full amount/);
+    });
+
+    // 2. The approval is first: the cancellation waits and then commits; the booked REGULAR item
+    //    stays and its storno is a CANCELLED correction of a later statement (once).
+    const b = await fresh('B');
+    const sp = randomUUID();
+    const firstId = randomUUID();
+    await withPrivileged(async (db) => {
+      const held = gate();
+      const inside = gate();
+      const first = db.$transaction(
+        async (tx) => {
+          await statement(tx, { id: firstId, month: '2026-10', sp, total: '200.00' });
+          await item(tx, firstId, sp, b, { amount: '200.00' });
+          inside.open();
+          await held.done;
+        },
+        { timeout: 30_000 },
+      );
+      await inside.done;
+      const second = attempt((tx) => cancel(tx, b.invoiceId));
+      await blocked();
+      held.open();
+      await first;
+      expect(await second).toBe('OK');
+    });
+    expect(
+      await attempt(async (tx) => {
+        const id = await statement(tx, {
+          month: '2026-11',
+          sp,
+          previous: firstId,
+          total: '-200.00',
+        });
+        await item(tx, id, sp, b, {
+          kind: 'CORRECTION',
+          cause: 'CANCELLED',
+          base: '-1000.00',
+          amount: '-200.00',
+        });
+      }),
+    ).toBe('OK');
+  }, 60_000);
+
   it('append-only, also for the schema owner; the runtime role may not change a row', async () => {
     for (const sql of [
       `UPDATE "finance"."commission_statements" SET "salesperson_name" = 'X'`,

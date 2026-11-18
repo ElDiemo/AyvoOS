@@ -176,6 +176,12 @@ BEGIN
     RAISE EXCEPTION 'AYVO: a commission item has its statement''s mode and salesperson'
       USING ERRCODE = 'check_violation';
   END IF;
+  -- Serialised with a cancellation of the same invoice: invoice_cancellations_unpaid takes this
+  -- key exclusively until its commit, an item takes it shared (approvals of different
+  -- salespeople never wait for each other). The cancellation is then either committed and seen
+  -- below (the item is refused, the approval is stale), or it waits for this approval and becomes
+  -- a CANCELLED correction of a later statement - never a REGULAR item of a cancelled invoice.
+  PERFORM pg_advisory_xact_lock_shared(hashtext('invoice-payments:' || NEW."invoice_id"::text));
   SELECT i."kind", i."number", i."currency", l."period_month", l."hotel_id", l."amount",
          EXISTS (SELECT 1 FROM "finance"."invoice_cancellations" c WHERE c."invoice_id" = i."id") AS cancelled
     INTO ln
