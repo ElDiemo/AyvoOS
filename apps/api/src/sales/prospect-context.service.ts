@@ -14,6 +14,8 @@ export interface ProspectContext {
   countryCode: string;
   roomsEstimate: number | null;
   archived: boolean;
+  /** The prospect's owner now (the commission prefill, doc 068 §3.2). */
+  ownerId: string;
 }
 
 const view = (row: Awaited<ReturnType<typeof visibleProspect>>): ProspectContext => ({
@@ -27,6 +29,7 @@ const view = (row: Awaited<ReturnType<typeof visibleProspect>>): ProspectContext
   countryCode: row.countryCode,
   roomsEstimate: row.roomsEstimate,
   archived: row.archivedAt !== null,
+  ownerId: row.ownerId,
 });
 
 /**
