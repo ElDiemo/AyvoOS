@@ -87,12 +87,13 @@ describe.skipIf(!hasDatabase)('R3-c: the bottle circulation view', () => {
       expect(v.get(c!)!.location.deliveredAt).not.toBeNull();
     }
 
-    // The mixed return: crate K scanned back; in K's line K's first bottle and L's first bottle.
+    // The mixed return: crate K scanned back (R1.1: freed at once), then K's first bottle and
+    // L's first bottle, each on its own.
     const api = returnsApi(t);
     const receipt = await api.open();
-    const line = (await api.scanCrate(receipt.code, k.crateUrl)).body.lineId as string;
-    await api.scanBottle(receipt.code, line, k.bottleUrls[0]!, 'GOOD').expect(200);
-    await api.scanBottle(receipt.code, line, l.bottleUrls[0]!, 'GOOD').expect(200);
+    await api.scanCrate(receipt.code, k.crateUrl).expect(200);
+    await api.scanBottle(receipt.code, k.bottleUrls[0]!, 'GOOD').expect(200);
+    await api.scanBottle(receipt.code, l.bottleUrls[0]!, 'GOOD').expect(200);
     v = await view(k1!, k2!, l1!, l2!);
     expect(v.get(k1!)!.location.kind).toBe('AT_SITE');
     expect(v.get(l1!)!.location.kind).toBe('AT_SITE');
