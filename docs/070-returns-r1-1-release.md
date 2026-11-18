@@ -84,8 +84,12 @@ on another environment goes to the owner before the deploy.
   delete or rewrite R1.1 rows to make an old image work.
 - The release note records the time of the first R1.1 write.
 
-Not yet verified for this PR: the old release's own API tests on the R1.1 schema (doc 049 §2
-style). To do before the DEV deploy.
+Verified 2026-11-18 on a throwaway worktree of `main` `09e82e7` (the release before R3 and
+R1.1): `test/rollback-compat.e2e.test.ts` with `AYVO_NEWER_API_DIR` = this branch (all R3 and R1.1
+migrations applied) — **17 passed**, 1 not applicable: its precondition "the newer database holds
+permissions this version does not know" is false by design (R1.1 adds no permission), as in doc 050
+§3. Still to do before the DEV deploy: the old release's own production, dispatch and return API
+tests with these migrations applied before each file (doc 049 §2).
 
 ## 6. Deviations from doc 047 §6.3 (for the review)
 
