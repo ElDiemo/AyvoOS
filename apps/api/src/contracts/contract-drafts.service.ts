@@ -34,6 +34,17 @@ type Db = Prisma.TransactionClient;
 type DraftRow = Prisma.ContractDraftGetPayload<object>;
 type RevisionRow = Prisma.ContractDraftRevisionGetPayload<object>;
 
+/** A signed revision of a draft linked to a hotel: an acquisition source (doc 068 §1). */
+export interface SignedSource {
+  draftId: string;
+  draftCode: string;
+  revision: number;
+  signedOn: string;
+  startOn: string;
+  prospectId: string | null;
+  hotelId: string;
+}
+
 /** Linking a hotel and drafts kept only at a hotel: `sales:manage` + `hotels:read` (ADR 0043 §3). */
 export const canUseHotels = (p: Principal) =>
   p.permissions.has('sales:manage') && p.permissions.has('hotels:read');
@@ -716,6 +727,73 @@ export class ContractDraftsService {
   }
 
   // --- the hotel portal (ADR 0045; doc 055): signed originals only -------------------------
+
+  /**
+   * The acquisition sources of a hotel for commissions (doc 068 §1, §3.2; PR 1b): every signed
+   * revision of a draft linked to this hotel, with its prospect (if any) and the contract's start.
+   * A signed draft keeps its hotel for good (DB), so the list only grows. Read-only.
+   */
+  async signedAcquisitionSources(hotelId: string, db: Db = this.prisma): Promise<SignedSource[]> {
+    const rows = await db.contractSignedDocument.findMany({
+      where: { revisionRow: { draft: { hotelId } } },
+      select: {
+        revision: true,
+        signedOn: true,
+        revisionRow: {
+          select: { startOn: true, draft: { select: { id: true, code: true, prospectId: true } } },
+        },
+      },
+      orderBy: [{ signedOn: 'desc' }, { uploadedAt: 'desc' }],
+    });
+    return rows.map((r) => ({
+      draftId: r.revisionRow.draft.id,
+      draftCode: r.revisionRow.draft.code,
+      revision: r.revision,
+      signedOn: r.signedOn.toISOString().slice(0, 10),
+      startOn: r.revisionRow.startOn.toISOString().slice(0, 10),
+      prospectId: r.revisionRow.draft.prospectId,
+      hotelId,
+    }));
+  }
+
+  /** The codes of drafts by id (the commission source shown next to an attribution). */
+  draftCodes(db: Db, ids: readonly string[]): Promise<{ id: string; code: string }[]> {
+    return db.contractDraft.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, code: true },
+    });
+  }
+
+  /**
+   * One signed revision by the draft's code, its draft row locked (FOR SHARE) so its hotel link
+   * cannot change meanwhile; null when the draft does not exist. `signed` is false when that
+   * revision has no signed original.
+   */
+  async signedSource(
+    db: Db,
+    draftCode: string,
+    revision: number,
+  ): Promise<(Omit<SignedSource, 'hotelId'> & { hotelId: string | null; signed: boolean }) | null> {
+    const locked = await db.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "contract_drafts" WHERE "code" = ${draftCode} FOR SHARE`;
+    if (locked.length === 0) return null;
+    const draft = await db.contractDraft.findUniqueOrThrow({ where: { id: locked[0]!.id } });
+    const rev = await db.contractDraftRevision.findUnique({
+      where: { draftId_revision: { draftId: draft.id, revision } },
+      include: { signed: true },
+    });
+    if (!rev) return null;
+    return {
+      draftId: draft.id,
+      draftCode: draft.code,
+      revision,
+      signedOn: rev.signed?.signedOn.toISOString().slice(0, 10) ?? '',
+      startOn: rev.startOn.toISOString().slice(0, 10),
+      prospectId: draft.prospectId,
+      hotelId: draft.hotelId,
+      signed: rev.signed !== null,
+    };
+  }
 
   /**
    * The signed originals of drafts linked to this hotel, newest first, through the caller's client

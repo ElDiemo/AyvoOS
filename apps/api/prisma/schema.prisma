@@ -1026,6 +1026,7 @@ enum OperationKind {
   PORTAL_FENCE_RESOLVE
   PORTAL_FENCE_SETTLE
   SALES_COMMISSION_TERMS_RECORD
+  SALES_HOTEL_ATTRIBUTION_RECORD
 }
 
 /// One row per successful mutating request. Same request id + same payload → stored result;
@@ -1220,6 +1221,9 @@ model User {
   contractRevisions      ContractDraftRevision[]  @relation("ContractDraftRevisionCreatedBy")
   commissionTerms        SalesCommissionTerms[]   @relation("SalesCommissionTermsSalesperson")
   commissionTermsBy      SalesCommissionTerms[]   @relation("SalesCommissionTermsRecordedBy")
+  hotelAttributions      SalesHotelAttribution[]  @relation("SalesHotelAttributionSalesperson")
+  hotelAttributionOffers SalesHotelAttribution[]  @relation("SalesHotelAttributionPrefilled")
+  hotelAttributionsBy    SalesHotelAttribution[]  @relation("SalesHotelAttributionRecordedBy")
   contractDraftEvents    ContractDraftEvent[]     @relation("ContractDraftEventActor")
   contractSignedUploads  ContractSignedDocument[] @relation("ContractSignedDocumentUploadedBy")
 
@@ -2467,6 +2471,7 @@ model Hotel {
   contractDrafts  ContractDraft[]
   portalGrants    PortalGrantHotel[]
   portalFences    PortalOperationalFence[]
+  attributions    SalesHotelAttribution[]
 
   @@index([fulfillmentSiteId])
   @@map("hotels")
@@ -3812,8 +3817,9 @@ model ContractSignedDocument {
   uploadedBy       String   @map("uploaded_by") @db.Uuid
   requestId        String   @unique @map("request_id") @db.Uuid
 
-  revisionRow ContractDraftRevision @relation(fields: [draftId, revision], references: [draftId, revision], onDelete: Restrict)
-  uploader    User                  @relation("ContractSignedDocumentUploadedBy", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  revisionRow  ContractDraftRevision   @relation(fields: [draftId, revision], references: [draftId, revision], onDelete: Restrict)
+  uploader     User                    @relation("ContractSignedDocumentUploadedBy", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  attributions SalesHotelAttribution[]
 
   @@unique([draftId, revision])
   @@map("contract_signed_documents")
@@ -4080,9 +4086,69 @@ model SalesCommissionTerms {
   recordedBy      String   @map("recorded_by") @db.Uuid
   requestId       String   @unique @map("request_id") @db.Uuid
 
-  salesperson User @relation("SalesCommissionTermsSalesperson", fields: [salespersonId], references: [id], onDelete: Restrict)
-  recorder    User @relation("SalesCommissionTermsRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+  salesperson   User                        @relation("SalesCommissionTermsSalesperson", fields: [salespersonId], references: [id], onDelete: Restrict)
+  recorder      User                        @relation("SalesCommissionTermsRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+  hotelBindings SalesHotelCommissionTerms[]
 
   @@unique([salespersonId, version], map: "sales_commission_terms_salesperson_version_key")
   @@map("sales_commission_terms")
+}
+
+/// Who gets the commission for a hotel (doc 068 §3.2, PR 1b): append-only revisions per hotel. For
+/// month M the latest effective_from <= M decides; the same month: the largest revision. salesperson NULL =
+/// explicitly nobody (a house account). The commission start is the first revision's for good (DB).
+model SalesHotelAttribution {
+  id                     String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  hotelId                String    @map("hotel_id") @db.Uuid
+  revision               Int
+  effectiveFrom          DateTime  @map("effective_from") @db.Date
+  salespersonId          String?   @map("salesperson_id") @db.Uuid
+  /// CONTRACT | MANUAL
+  source                 String
+  contractDraftId        String?   @map("contract_draft_id") @db.Uuid
+  contractRevision       Int?      @map("contract_revision")
+  /// The draft's prospect (kept equal to the draft's by the insert trigger; no FK of its own).
+  prospectId             String?   @map("prospect_id") @db.Uuid
+  prefilledSalespersonId String?   @map("prefilled_salesperson_id") @db.Uuid
+  commissionStart        DateTime  @map("commission_start") @db.Date
+  contractStartOn        DateTime? @map("contract_start_on") @db.Date
+  reason                 String
+  recordedAt             DateTime  @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy             String    @map("recorded_by") @db.Uuid
+  requestId              String    @unique @map("request_id") @db.Uuid
+
+  hotel       Hotel                       @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  salesperson User?                       @relation("SalesHotelAttributionSalesperson", fields: [salespersonId], references: [id], onDelete: Restrict)
+  prefilled   User?                       @relation("SalesHotelAttributionPrefilled", fields: [prefilledSalespersonId], references: [id], onDelete: Restrict, map: "sales_hotel_attributions_prefilled_fkey")
+  recorder    User                        @relation("SalesHotelAttributionRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+  signed      ContractSignedDocument?     @relation(fields: [contractDraftId, contractRevision], references: [draftId, revision], onDelete: Restrict, map: "sales_hotel_attributions_contract_fkey")
+  bindings    SalesHotelCommissionTerms[]
+
+  @@unique([hotelId, revision], map: "sales_hotel_attributions_hotel_revision_key")
+  @@index([salespersonId], map: "sales_hotel_attributions_salesperson_idx")
+  @@map("sales_hotel_attributions")
+}
+
+/// The terms applied to an attributed hotel (doc 068 §3.3, PR 1b): the snapshot of the
+/// salesperson's valid version, written with the attribution (ON_ATTRIBUTION only, binding 1).
+model SalesHotelCommissionTerms {
+  id                  String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  hotelId             String   @map("hotel_id") @db.Uuid
+  attributionRevision Int      @map("attribution_revision")
+  bindingNo           Int      @map("binding_no")
+  /// ON_ATTRIBUTION
+  kind                String
+  effectiveFrom       DateTime @map("effective_from") @db.Date
+  termsId             String   @map("terms_id") @db.Uuid
+  initialRate         Decimal  @map("initial_rate") @db.Decimal
+  initialMonths       Int      @map("initial_months")
+  maintenanceRate     Decimal  @map("maintenance_rate") @db.Decimal
+  recordedAt          DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+
+  attribution SalesHotelAttribution @relation(fields: [hotelId, attributionRevision], references: [hotelId, revision], onDelete: Restrict, map: "sales_hotel_commission_terms_attribution_fkey")
+  terms       SalesCommissionTerms  @relation(fields: [termsId], references: [id], onDelete: Restrict)
+
+  @@unique([hotelId, attributionRevision, bindingNo], map: "sales_hotel_commission_terms_binding_key")
+  @@index([termsId])
+  @@map("sales_hotel_commission_terms")
 }

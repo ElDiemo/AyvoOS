@@ -1,8 +1,9 @@
-/** Obchod → Provize (doc 068, PR 1a): commission terms per salesperson. */
+/** Obchod → Provize (doc 068, PR 1a/1b): commission terms, hotel attribution, portfolio. */
 export const commissionsCs = {
   title: 'Provize',
-  subtitle: 'Podmínky provize obchodníků. Částky a výplaty přijdou z Financí v dalších krocích.',
-  tabs: { settings: 'Nastavení', mine: 'Moje podmínky' },
+  subtitle:
+    'Podmínky a portfolio obchodníků. Částky a výplaty přijdou z Financí v dalších krocích.',
+  tabs: { settings: 'Nastavení', mine: 'Moje podmínky', portfolio: 'Portfolio' },
   mine: {
     heading: 'Moje podmínky provize',
     readOnly: 'Jen ke čtení. Podmínky nastavuje administrátor.',
@@ -50,5 +51,106 @@ export const commissionsCs = {
     CONCURRENT_CHANGE: 'Podmínky mezitím změnil někdo jiný. Načtěte stránku znovu.',
     failed: 'Uložení se nepodařilo.',
     uncertain: 'Odpověď nedorazila. Odeslání znovu pokračuje ve stejném požadavku.',
+  },
+  months: (n: number) => (n === 1 ? 'měsíc' : n < 5 ? 'měsíce' : 'měsíců'),
+  /** PR 1b: the hotel card panel "Obchodník (provize)". */
+  attribution: {
+    title: 'Obchodník (provize)',
+    unavailable: 'Přiřazení obchodníka teď nelze načíst. Zbytek karty funguje.',
+    none: 'Hotel zatím nikomu přiřazený není.',
+    current: 'Přiřazeno',
+    timeline: 'Přiřazení v čase',
+    span: (from: string, until: string | null) => (until ? `${from}–${until}` : `od ${from}`),
+    supersededBy: (rev: number) => `nahrazeno opravou (revize ${rev})`,
+    plannedLater: (from: string, name: string, until: string) =>
+      `Od ${from} je naplánováno: ${name}. Tato změna bude platit jen do ${until}; plán zůstane. Chcete-li plán zrušit, zadejte změnu od ${from}.`,
+    acknowledgePlanned: (from: string) => `Rozumím, od ${from} zůstává naplánované přiřazení`,
+    nobody: 'Firemní hotel – bez provize',
+    firstMonth: 'První zpoplatněný měsíc',
+    source: 'Zdroj',
+    sourceManual: 'Ruční přiřazení (hotel bez akvizice)',
+    noSource:
+      'Bez zdrojové akvizice: k hotelu není podepsaná smlouva z návrhu. Obchodníka i první zpoplatněný měsíc zadejte ručně.',
+    candidate: (code: string, rev: number, signed: string, start: string) =>
+      `${code} rev. ${rev} · podepsáno ${signed} · začátek ${start}`,
+    salesperson: 'Obchodník',
+    changedFromOffer: 'Změněno oproti nabídce.',
+    offer: (name: string) =>
+      `Nabídka: současný vlastník akvizice ${name}. Kdo hotel získal v době podpisu, systém neví — ověřte skutečného získavatele.`,
+    noOffer: 'Akvizice nemá aktivního obchodníka; obchodníka vyberte sami.',
+    fromContract: (start: string) =>
+      `Ze smlouvy: začátek ${start}. Podpis neprokazuje první zpoplatněný měsíc.`,
+    differs: 'Měsíc se liší od začátku smlouvy. V důvodu uveďte proč.',
+    confirmMonth: 'Potvrzuji první zpoplatněný měsíc',
+    effectiveFrom: 'Platí od měsíce',
+    effectiveHelp:
+      'Do předchozího měsíce zůstává původní obchodník. První zpoplatněný měsíc se nemění.',
+    termsBound: 'Podmínky, které se k hotelu uloží',
+    termsHidden: 'Podmínky obchodníka vidí jen administrátor.',
+    missingBound:
+      'Chybí podmínky provize: hotel se přiřadí bez podmínek a nic se pro něj nepočítá.',
+    reason: 'Důvod',
+    confirm: 'Potvrzuji přiřazení',
+    saveFirst: 'Přiřadit obchodníka',
+    change: 'Změnit obchodníka',
+    saveChange: 'Zapsat změnu',
+    saved: 'Přiřazení je zapsané.',
+    history: 'Historie přiřazení',
+    columns: {
+      from: 'Platí',
+      who: 'Obchodník',
+      source: 'Zdroj',
+      terms: 'Podmínky',
+      reason: 'Důvod',
+      recorded: 'Zapsáno',
+    },
+    sourceLabel: { CONTRACT: 'Smlouva', MANUAL: 'Ručně' },
+    offered: (name: string) => `nabídnut současný vlastník akvizice: ${name}`,
+    startDiffers: (start: string) => `začátek smlouvy ${start}`,
+    errors: {
+      salesperson: 'Vyberte obchodníka.',
+      month: 'Zadejte měsíc.',
+      confirmMonth: 'Potvrďte první zpoplatněný měsíc.',
+      reason: 'Uveďte důvod.',
+      confirm: 'Potvrďte přiřazení.',
+      planned: 'Potvrďte, že naplánované přiřazení zůstává.',
+      SALESPERSON_UNCHANGED:
+        'Od tohoto měsíce už hotel tomuto příjemci patří. Přiřazení ani sazby se nemění.',
+      PLANNED_LATER_EXISTS: 'Mezitím přibylo naplánované přiřazení. Načtěte stránku znovu.',
+      COMMISSION_START_REQUIRED: 'Zadejte první zpoplatněný měsíc.',
+      COMMISSION_START_NOT_CONFIRMED: 'Potvrďte první zpoplatněný měsíc.',
+      COMMISSION_START_FIXED: 'První zpoplatněný měsíc se nemění.',
+      EFFECTIVE_FROM_INVALID: 'Zadejte platný měsíc.',
+      EFFECTIVE_FROM_BEFORE_START: 'Změna nemůže platit před prvním zpoplatněným měsícem.',
+      CONTRACT_NOT_SIGNED: 'Tato revize smlouvy nemá podepsaný originál.',
+      CONTRACT_OTHER_HOTEL: 'Podepsaná smlouva patří jinému hotelu.',
+      SOURCE_INVALID: 'Zkontrolujte zdroj přiřazení.',
+      SALESPERSON_NOT_ELIGIBLE: 'Tento uživatel není aktivní obchodník.',
+      CONCURRENT_CHANGE: 'Mezitím se přiřazení změnilo. Načtěte stránku znovu.',
+      failed: 'Uložení se nepodařilo.',
+      uncertain: 'Odpověď nedorazila. Odeslání znovu pokračuje ve stejném požadavku.',
+    },
+  },
+  /** PR 1b: Obchod → Provize → Portfolio. No amounts until Finance (PR 2/3). */
+  portfolio: {
+    month: 'Měsíc',
+    salesperson: 'Obchodník',
+    everyone: 'Všichni',
+    show: 'Zobrazit',
+    noAmounts: 'Bez částek: provize vzniká až z vystavené faktury hotelu, kterou přinesou Finance.',
+    count: (n: number) =>
+      `${n} ${n === 1 ? 'hotel' : n >= 2 && n <= 4 ? 'hotely' : 'hotelů'} v tomto měsíci`,
+    empty: 'V tomto měsíci nemáte přiřazený žádný hotel. Hotel se započítá, až ho admin přiřadí.',
+    emptyAll: 'V tomto měsíci není přiřazený žádný hotel.',
+    totals: 'Hotely podle obchodníka',
+    columns: { hotel: 'Hotel', since: 'Přiřazeno od', k: 'Měsíc provize', rate: 'Sazba' },
+    k: (k: number) => `${k}.`,
+    state: {
+      INITIAL: 'počáteční',
+      MAINTENANCE: 'udržovací',
+      MISSING_TERMS: 'Chybí podmínky provize',
+      NO_SALESPERSON: 'Firemní hotel – bez provize',
+      BEFORE_START: 'Před prvním zpoplatněným měsícem',
+    },
   },
 } as const;

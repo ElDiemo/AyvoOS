@@ -6,15 +6,27 @@ import {
 } from '@ayvo/types';
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
+import { CommissionPortfolio } from '@/components/sales/commission-portfolio';
 import { CommissionTermsForm } from '@/components/sales/commission-terms-form';
 import { SalesHeader } from '@/components/sales/sales-header';
 import { Card, EmptyState, Notice } from '@/components/ui';
 import { commissionsCs } from '@/i18n/cs/commissions';
-import { formatDateTimeCs } from '@/i18n/cs/format';
+import { DEFAULT_TIME_ZONE, formatDateTimeCs } from '@/i18n/cs/format';
 import { apiGet } from '@/lib/api';
 import { hasPermission, requirePermission } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
+
+/** The current service month in Europe/Prague ('YYYY-MM'). */
+function currentMonth(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: DEFAULT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date());
+  const get = (k: string) => parts.find((p) => p.type === k)!.value;
+  return `${get('year')}-${get('month')}`;
+}
 const t = commissionsCs;
 const cz = (rate: string) => rate.replace('.', ',');
 const summary = (v: CommissionTermsVersion) =>
@@ -81,19 +93,22 @@ function Valid({ terms }: { terms: CommissionTerms }) {
 }
 
 /**
- * Obchod → Provize (doc 068 §2, PR 1a). A salesperson reads their own terms; the admin
+ * Obchod → Provize (doc 068 §2, PR 1a/1b). Portfolio: the hotels of a month (own for a
+ * salesperson, everyone for `sales:manage`). Terms: a salesperson reads their own; the admin
  * (`sales:commission_terms_manage`, ADMIN only) also picks a salesperson, sees the history and
  * records a new version. The API enforces the same; this page only hides what is refused.
  */
 export default async function SalesCommissionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; salesperson?: string }>;
+  searchParams: Promise<{ tab?: string; salesperson?: string; month?: string }>;
 }) {
   const me = await requirePermission('sales:work');
   const manage = hasPermission(me, 'sales:commission_terms_manage');
   const q = await searchParams;
-  const tab = manage && q.tab !== 'mine' ? 'settings' : 'mine';
+  const portfolioManage = hasPermission(me, 'sales:manage');
+  const tab =
+    q.tab === 'portfolio' ? 'portfolio' : manage && q.tab !== 'mine' ? 'settings' : 'mine';
   const tabClass = (on: boolean) =>
     cn(
       'rounded-md px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none',
@@ -103,7 +118,22 @@ export default async function SalesCommissionsPage({
     );
 
   let body: React.ReactNode;
-  if (tab === 'mine') {
+  if (tab === 'portfolio') {
+    const month = q.month && /^\d{4}-(0[1-9]|1[0-2])$/.test(q.month) ? q.month : currentMonth();
+    const people = manage
+      ? (await apiGet('admin/sales/commission-terms', commissionTermsOverviewSchema)).map(
+          (p) => p.salesperson,
+        )
+      : [];
+    body = (
+      <CommissionPortfolio
+        month={month}
+        salesperson={portfolioManage ? q.salesperson : undefined}
+        manage={portfolioManage}
+        people={people}
+      />
+    );
+  } else if (tab === 'mine') {
     const mine = await apiGet('admin/sales/commission-terms/mine', commissionTermsSchema);
     body = (
       <div className="flex flex-col gap-4">
@@ -176,8 +206,8 @@ export default async function SalesCommissionsPage({
   return (
     <>
       <SalesHeader active="commissions" title={t.title} subtitle={t.subtitle} />
-      {manage && (
-        <nav aria-label={t.title} className="mb-4 flex gap-2">
+      <nav aria-label={t.title} className="mb-4 flex flex-wrap gap-2">
+        {manage && (
           <Link
             href="/sales/commissions"
             aria-current={tab === 'settings' ? 'page' : undefined}
@@ -185,15 +215,22 @@ export default async function SalesCommissionsPage({
           >
             {t.tabs.settings}
           </Link>
-          <Link
-            href="/sales/commissions?tab=mine"
-            aria-current={tab === 'mine' ? 'page' : undefined}
-            className={tabClass(tab === 'mine')}
-          >
-            {t.tabs.mine}
-          </Link>
-        </nav>
-      )}
+        )}
+        <Link
+          href="/sales/commissions?tab=portfolio"
+          aria-current={tab === 'portfolio' ? 'page' : undefined}
+          className={tabClass(tab === 'portfolio')}
+        >
+          {t.tabs.portfolio}
+        </Link>
+        <Link
+          href="/sales/commissions?tab=mine"
+          aria-current={tab === 'mine' ? 'page' : undefined}
+          className={tabClass(tab === 'mine')}
+        >
+          {t.tabs.mine}
+        </Link>
+      </nav>
       {body}
     </>
   );
