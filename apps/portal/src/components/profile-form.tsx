@@ -210,7 +210,13 @@ export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
 
   const invalid = Object.keys(errors).length > 0 || reasonError !== null;
   return (
-    <form noValidate onSubmit={submit} className="flex flex-col gap-4" data-testid="profile-form">
+    <form
+      noValidate
+      onSubmit={submit}
+      // A focused field or an error link's target stays above the sticky actions on a phone.
+      className="flex flex-col gap-4 [&_input]:scroll-mb-32 [&_textarea]:scroll-mb-32"
+      data-testid="profile-form"
+    >
       {(invalid || failure) && (
         <div
           ref={summary}
@@ -289,7 +295,18 @@ export function ProfileForm({ profile }: { profile: PortalHotelProfile }) {
           </p>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-3">
+      {/* What a change does — read before saving, not after it. */}
+      <p
+        className="rounded-lg border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700"
+        data-testid="profile-impact"
+      >
+        {cs.profile.managed}
+      </p>
+      {/* On a phone the actions stay at hand at the bottom; on wider screens they follow the form. */}
+      <div
+        className="sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center gap-3 border-t border-stone-200 bg-stone-50/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none"
+        data-testid="profile-actions"
+      >
         <button
           type="submit"
           disabled={busy}

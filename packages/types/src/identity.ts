@@ -95,6 +95,7 @@ export const PERMISSION_CODES = [
   'printing:manage',
   'sales:work',
   'sales:manage',
+  'sales:commission_terms_manage',
   'finance:documents_read',
   'finance:documents_manage',
   'finance:exports_manage',
@@ -125,6 +126,8 @@ export const SECURITY_ADMIN_PERMISSIONS: readonly PermissionCode[] = [
   'sites:all_access',
   'carriers:connections_manage',
   'printing:manage',
+  // ADMIN only, never a custom role (doc 068 §8.1): a salesperson must never edit their own terms.
+  'sales:commission_terms_manage',
 ];
 
 /** Module of a permission (its code prefix) — the checkbox groups of the role editor. */

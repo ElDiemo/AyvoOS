@@ -13,6 +13,7 @@ import {
   type LinkContractHotelRequest,
   type RemoveContractDraftRequest,
   type ReviseContractDraftRequest,
+  type PortalContract,
   type UploadSignedContractFields,
 } from '@ayvo/types';
 import { CODE_PREFIX, formatCode } from '../common/codes.js';
@@ -33,6 +34,17 @@ type Db = Prisma.TransactionClient;
 type DraftRow = Prisma.ContractDraftGetPayload<object>;
 type RevisionRow = Prisma.ContractDraftRevisionGetPayload<object>;
 
+/** A signed revision of a draft linked to a hotel: an acquisition source (doc 068 §1). */
+export interface SignedSource {
+  draftId: string;
+  draftCode: string;
+  revision: number;
+  signedOn: string;
+  startOn: string;
+  prospectId: string | null;
+  hotelId: string;
+}
+
 /** Linking a hotel and drafts kept only at a hotel: `sales:manage` + `hotels:read` (ADR 0043 §3). */
 export const canUseHotels = (p: Principal) =>
   p.permissions.has('sales:manage') && p.permissions.has('hotels:read');
@@ -48,6 +60,8 @@ const safeFilename = (name: string) => {
     .slice(0, 200);
   return cleaned.length > 0 ? cleaned : 'podepsano.pdf';
 };
+const contractUnavailable = () =>
+  domainError(503, 'CONTRACT_UNAVAILABLE', 'Smlouvu teď nelze stáhnout. Zkuste to za chvíli.');
 const signedLocked = () =>
   domainError(
     409,
@@ -710,6 +724,144 @@ export class ContractDraftsService {
       });
       return { file, name: `${code}-r${revision}-PODEPSANO.pdf` };
     });
+  }
+
+  // --- the hotel portal (ADR 0045; doc 055): signed originals only -------------------------
+
+  /**
+   * The acquisition sources of a hotel for commissions (doc 068 §1, §3.2; PR 1b): every signed
+   * revision of a draft linked to this hotel, with its prospect (if any) and the contract's start.
+   * A signed draft keeps its hotel for good (DB), so the list only grows. Read-only.
+   */
+  async signedAcquisitionSources(hotelId: string, db: Db = this.prisma): Promise<SignedSource[]> {
+    const rows = await db.contractSignedDocument.findMany({
+      where: { revisionRow: { draft: { hotelId } } },
+      select: {
+        revision: true,
+        signedOn: true,
+        revisionRow: {
+          select: { startOn: true, draft: { select: { id: true, code: true, prospectId: true } } },
+        },
+      },
+      orderBy: [{ signedOn: 'desc' }, { uploadedAt: 'desc' }],
+    });
+    return rows.map((r) => ({
+      draftId: r.revisionRow.draft.id,
+      draftCode: r.revisionRow.draft.code,
+      revision: r.revision,
+      signedOn: r.signedOn.toISOString().slice(0, 10),
+      startOn: r.revisionRow.startOn.toISOString().slice(0, 10),
+      prospectId: r.revisionRow.draft.prospectId,
+      hotelId,
+    }));
+  }
+
+  /** The codes of drafts by id (the commission source shown next to an attribution). */
+  draftCodes(db: Db, ids: readonly string[]): Promise<{ id: string; code: string }[]> {
+    return db.contractDraft.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, code: true },
+    });
+  }
+
+  /**
+   * One signed revision by the draft's code, its draft row locked (FOR SHARE) so its hotel link
+   * cannot change meanwhile; null when the draft does not exist. `signed` is false when that
+   * revision has no signed original.
+   */
+  async signedSource(
+    db: Db,
+    draftCode: string,
+    revision: number,
+  ): Promise<(Omit<SignedSource, 'hotelId'> & { hotelId: string | null; signed: boolean }) | null> {
+    const locked = await db.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "contract_drafts" WHERE "code" = ${draftCode} FOR SHARE`;
+    if (locked.length === 0) return null;
+    const draft = await db.contractDraft.findUniqueOrThrow({ where: { id: locked[0]!.id } });
+    const rev = await db.contractDraftRevision.findUnique({
+      where: { draftId_revision: { draftId: draft.id, revision } },
+      include: { signed: true },
+    });
+    if (!rev) return null;
+    return {
+      draftId: draft.id,
+      draftCode: draft.code,
+      revision,
+      signedOn: rev.signed?.signedOn.toISOString().slice(0, 10) ?? '',
+      startOn: rev.startOn.toISOString().slice(0, 10),
+      prospectId: draft.prospectId,
+      hotelId: draft.hotelId,
+      signed: rev.signed !== null,
+    };
+  }
+
+  /**
+   * The signed originals of drafts linked to this hotel, newest first, through the caller's client
+   * (the portal's pool). Only what AYVO uploaded as signed: drafts, their revisions and the
+   * working template are never offered. A signed draft keeps its hotel for good (DB).
+   */
+  async portalSigned(hotelId: string, db: Db = this.prisma): Promise<PortalContract[]> {
+    const rows = await db.contractSignedDocument.findMany({
+      where: { revisionRow: { draft: { hotelId } } },
+      select: {
+        id: true,
+        signedOn: true,
+        byteSize: true,
+        revisionRow: { select: { startOn: true } },
+      },
+      orderBy: [{ signedOn: 'desc' }, { uploadedAt: 'desc' }],
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      signedOn: r.signedOn.toISOString().slice(0, 10),
+      startOn: r.revisionRow.startOn.toISOString().slice(0, 10),
+      byteSize: r.byteSize,
+    }));
+  }
+
+  /**
+   * One signed original for a portal account, if its draft's hotel is one of `hotelIds` (the
+   * session's granted hotels, evaluated by the caller now); any other id is "not found". The file
+   * is returned as kept, its hash checked, and the download recorded on the draft with the portal
+   * account as actor.
+   */
+  async portalSignedFile(
+    documentId: string,
+    hotelIds: ReadonlySet<string>,
+    actorUserId: string,
+    read: { signal: AbortSignal; maxBytes: number },
+    db: Db = this.prisma,
+  ): Promise<{ file: Buffer; signedOn: string }> {
+    const doc = await db.contractSignedDocument.findUnique({
+      where: { id: documentId },
+      include: { revisionRow: { select: { draft: { select: { id: true, hotelId: true } } } } },
+    });
+    const hotelId = doc?.revisionRow.draft.hotelId;
+    if (!doc || !hotelId || !hotelIds.has(hotelId))
+      throw domainError(404, 'CONTRACT_NOT_FOUND', 'No such contract');
+    // Bounded real work (review 5841786998): the request's deadline or the client leaving stops the
+    // read in the storage itself, at most the upload limit is ever read, and the read settles only
+    // once the storage resource is released. Any failure → 503, nothing recorded or sent.
+    let file: Buffer;
+    try {
+      file = await this.storage.getBounded(doc.storageKey, read);
+    } catch (error) {
+      this.logger.warn(`Portal contract PDF not read: ${(error as Error).name}`);
+      throw contractUnavailable();
+    }
+    if (read.signal.aborted) throw contractUnavailable();
+    if (createHash('sha256').update(file).digest('hex') !== doc.sha256)
+      throw domainError(500, 'STORED_FILE_CHANGED', 'Uložený originál neodpovídá svému otisku.');
+    await db.contractDraftEvent.create({
+      data: {
+        draftId: doc.revisionRow.draft.id,
+        kind: 'SIGNED_DOWNLOADED',
+        revision: doc.revision,
+        actorId: actorUserId,
+        details: { via: 'PORTAL' },
+      },
+    });
+    return { file, signedOn: doc.signedOn.toISOString().slice(0, 10) };
   }
 
   // --- helpers -------------------------------------------------------------------------------

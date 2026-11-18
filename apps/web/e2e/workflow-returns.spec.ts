@@ -178,11 +178,11 @@ for (const width of [390, 1440] as const) {
   }) => {
     await page.setViewportSize({ width, height: 900 });
     const [k, l] = crates as [(typeof crates)[number], (typeof crates)[number]];
-    await page.goto('/warehouse/returns');
+    await page.goto('/production/cycle/returns');
     await expect(page.getByRole('heading', { name: 'Příjem vratek' })).toBeVisible();
     await noOverflow(page);
     await page.getByRole('button', { name: 'Otevřít příjem' }).click();
-    await expect(page).toHaveURL(/\/warehouse\/returns\/RR-\d{6}$/);
+    await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
     await expect(page.getByTestId('receipt-state')).toContainText('Otevřený');
 
     if (width === 390) {
@@ -244,7 +244,7 @@ for (const width of [390, 1440] as const) {
       await page.getByRole('button', { name: 'Uzavřít příjem' }).click();
       await expect(page.getByTestId('receipt-state')).toContainText('Uzavřený');
       // The overview: K's and L's good bottles wait for washing.
-      await page.goto('/warehouse/returns');
+      await page.goto('/production/cycle/returns');
       await expect(page.getByTestId('waiting-for-wash').locator('li')).toHaveCount(2);
       // The unreadable piece was resolved (defective); COUNT_MISMATCH is information, not open work.
       await expect(page.getByText('Žádná otevřená neshoda.')).toBeVisible();
@@ -257,9 +257,9 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 900 });
-  await page.goto('/warehouse/returns');
+  await page.goto('/production/cycle/returns');
   await page.getByRole('button', { name: 'Otevřít příjem' }).click();
-  await expect(page).toHaveURL(/\/warehouse\/returns\/RR-\d{6}$/);
+  await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
   const code = page.url().split('/').pop()!;
   const posts: string[] = [];
   page.on('request', (r) => {
@@ -327,9 +327,9 @@ test('a scanner typing the next bottle while the detail refreshes: two exact cod
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 900 });
-  await page.goto('/warehouse/returns');
+  await page.goto('/production/cycle/returns');
   await page.getByRole('button', { name: 'Otevřít příjem' }).click();
-  await expect(page).toHaveURL(/\/warehouse\/returns\/RR-\d{6}$/);
+  await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
   const code = page.url().split('/').pop()!;
   await page.getByRole('button', { name: 'Krabice bez kódu' }).click();
   const card = page.getByTestId('return-line-box-1');
@@ -507,7 +507,7 @@ for (const width of [390, 1440] as const) {
   test(`"Po mytí" at ${width} px: the second scan after washing, the queue`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     const [k, l] = crates as [(typeof crates)[number], (typeof crates)[number]];
-    await page.goto('/warehouse/after-wash');
+    await page.goto('/production/cycle/after-wash');
     await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
     await noOverflow(page);
     const message = page.getByTestId('after-wash-message');
@@ -561,6 +561,10 @@ for (const width of [390, 1440] as const) {
       await page.goto(`/bottles/${code.trim()}`);
       await expect(page.getByText('Připravená k plnění · Po mytí').first()).toBeVisible();
       await expect(page.getByText('Po mytí – připravena k dalšímu plnění')).toBeVisible();
+      // Its return receipt link leads into Výroba → Oběh lahví (owner 2026-11-09).
+      await page.getByRole('link', { name: /^RR-\d{6}$/ }).click();
+      await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
+      await expect(page.getByRole('heading', { level: 1 })).toContainText('Příjem vratek RR-');
     }
   });
 }
@@ -643,7 +647,7 @@ test('"Po mytí": a bottle scanned while an answer is pending is kept; an uncert
     return route.continue();
   });
 
-  await page.goto('/warehouse/after-wash');
+  await page.goto('/production/cycle/after-wash');
   const field = page.getByRole('textbox', { name: /umytou a zkontrolovanou lahev/ });
   // The first scan is sent and held; the second is scanned before its answer.
   await field.fill(m.bottles[0]!);
@@ -713,7 +717,7 @@ test('"Po mytí": a refused bottle stays visible with its reason when the next s
     }
     await route.continue();
   });
-  await page.goto('/warehouse/after-wash');
+  await page.goto('/production/cycle/after-wash');
   const field = page.getByRole('textbox', { name: /umytou a zkontrolovanou lahev/ });
   await field.fill(k.bottles[1]!);
   await field.press('Enter');
@@ -747,7 +751,7 @@ test('"Po mytí": reads of the queue are merged — at most one at a time, one m
   let releaseReads!: () => void;
   let reads = new Promise<void>((r) => (releaseReads = r));
   let holding = false;
-  await page.goto('/warehouse/after-wash');
+  await page.goto('/production/cycle/after-wash');
   await page.route('**/api/admin/returns/after-wash', async (route) => {
     const req = route.request();
     if (req.method() === 'GET') {
@@ -851,7 +855,7 @@ test('"Po mytí": the end of the session stops the series and keeps the unsent s
   });
   // Leaving after the end of the session is confirmed (the scans are kept, see below).
   page.on('dialog', (d) => void d.accept());
-  await page.goto('/warehouse/after-wash');
+  await page.goto('/production/cycle/after-wash');
   const field = page.getByRole('textbox', { name: /umytou a zkontrolovanou lahev/ });
   await field.fill(o.bottles[0]!);
   await field.press('Enter');
@@ -867,13 +871,15 @@ test('"Po mytí": the end of the session stops the series and keeps the unsent s
   ]);
 
   // Another user in this tab: nothing of the administrator's series.
-  await page.goto(`/api/auth/login?next=/warehouse/after-wash&login_hint=${washerEmail}`);
-  await expect(page).toHaveURL(/\/warehouse\/after-wash$/);
+  await page.goto(`/api/auth/login?next=/production/cycle/after-wash&login_hint=${washerEmail}`);
+  await expect(page).toHaveURL(/\/production\/cycle\/after-wash$/);
   await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
   await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
   // The same administrator signs in again and, as an account with several sites, chooses the
   // site in the UI — first the other one: nothing of the series there.
-  await page.goto('/api/auth/login?next=/warehouse/after-wash&login_hint=e2e-admin@ayvo.test');
+  await page.goto(
+    '/api/auth/login?next=/production/cycle/after-wash&login_hint=e2e-admin@ayvo.test',
+  );
   await expect(page).toHaveURL(/\/select-site\?next=/);
   await page
     .getByTestId('site-choices')
@@ -881,7 +887,7 @@ test('"Po mytí": the end of the session stops the series and keeps the unsent s
     .filter({ hasText: 'E2E-DE' })
     .getByRole('button', { name: 'Pracovat zde' })
     .click();
-  await expect(page).toHaveURL(/\/warehouse\/after-wash$/);
+  await expect(page).toHaveURL(/\/production\/cycle\/after-wash$/);
   await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
   await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
   // Back at the site of the series through the site switcher: both scans restored, stopped.

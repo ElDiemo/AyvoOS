@@ -3,10 +3,10 @@ import type {
   PortalGrantRequestLookup,
   PortalAccount,
   PortalAccountRequest,
+  PortalAccountListItem,
   PortalGrantListItem,
   PortalInvitation,
   PortalGrant,
-  PortalGrantFinanceCheck,
   PortalGrantIssueRequest,
   PortalGrantReplaceRequest,
 } from '@ayvo/types';
@@ -19,6 +19,7 @@ import { Prisma, type AccountAudience } from '../generated/prisma/client.js';
 import { InvitationsService } from '../identity/invitations.service.js';
 import { MAIL_DELIVERY_ATTEMPTS } from '../identity/native-tokens.service.js';
 import { SessionsService } from '../identity/sessions.service.js';
+import { isOperational, lockHotels, pragueToday } from './portal-fences.service.js';
 
 type Tx = Prisma.TransactionClient;
 type GrantRow = Prisma.PortalGrantGetPayload<{ include: { hotels: true } }>;
@@ -32,7 +33,7 @@ const toView = (g: GrantRow): PortalGrant => ({
   payerCustomerId: g.payerCustomerId,
   hotelIds: g.hotels.map((h) => h.hotelId).sort(),
   reason: g.reason,
-  financeCheck: g.financeCheck as PortalGrantFinanceCheck,
+  financeCheck: g.financeCheck as PortalGrant['financeCheck'],
   grantedAt: g.grantedAt.toISOString(),
   grantedBy: g.grantedBy,
   replacesGrantId: g.replacesId,
@@ -291,6 +292,78 @@ export class PortalGrantsService {
       .sort((a, b) => Number(a.revokedAt !== null) - Number(b.revokedAt !== null));
   }
 
+  /**
+   * Hotely → Uživatelé: every hotel portal (PORTAL) account — never an internal one — with all its
+   * grants (active first) and their hotels' identity, its invitation and its open sessions. One
+   * account (`only`) or all, by name. With `hotelId` (the hotel's card): only the accounts with an
+   * active grant naming that hotel, each with only those grants — never the other accounts.
+   */
+  async accounts(only?: string, hotelId?: string): Promise<PortalAccountListItem[]> {
+    const now = new Date();
+    // One hotel's card: only accounts with an active grant naming it, and only those grants.
+    const ofHotel = hotelId ? { revokedAt: null, hotels: { some: { hotelId } } } : undefined;
+    const users = await this.prisma.user.findMany({
+      where: {
+        audience: 'PORTAL',
+        ...(only ? { id: only } : {}),
+        ...(ofHotel ? { portalGrants: { some: ofHotel } } : {}),
+      },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        status: true,
+        deactivatedAt: true,
+        deactivationReason: true,
+        lastLoginAt: true,
+        createdAt: true,
+        ...invitationSelect,
+        portalGrants: {
+          ...(ofHotel ? { where: ofHotel } : {}),
+          include: {
+            hotels: { include: { hotel: { select: { id: true, code: true, name: true } } } },
+          },
+          orderBy: { grantedAt: 'desc' },
+        },
+      },
+      orderBy: [{ status: 'asc' }, { displayName: 'asc' }, { email: 'asc' }],
+    });
+    const sessions = await this.prisma.userSession.groupBy({
+      by: ['userId'],
+      where: {
+        userId: { in: users.map((u) => u.id) },
+        revokedAt: null,
+        idleExpiresAt: { gt: now },
+        absoluteExpiresAt: { gt: now },
+      },
+      _count: { _all: true },
+    });
+    const open = new Map(sessions.map((s) => [s.userId, s._count._all]));
+    return users.map((u) => ({
+      id: u.id,
+      email: u.email,
+      displayName: u.displayName,
+      status: u.status,
+      deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
+      deactivationReason: u.deactivationReason,
+      lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+      createdAt: u.createdAt.toISOString(),
+      signsIn: u.nativeCredential !== null,
+      invitation: invitationOf(u, now),
+      activeSessions: open.get(u.id) ?? 0,
+      grants: u.portalGrants
+        .map((g) => ({
+          id: g.id,
+          payerCustomerId: g.payerCustomerId,
+          hotels: g.hotels.map((h) => h.hotel).sort((a, b) => a.code.localeCompare(b.code)),
+          grantedAt: g.grantedAt.toISOString(),
+          revokedAt: g.revokedAt?.toISOString() ?? null,
+          revokeReason: g.revokeReason,
+        }))
+        .sort((a, b) => Number(a.revokedAt !== null) - Number(b.revokedAt !== null)),
+    }));
+  }
+
   /** The account's invitation state now (see portalGrantListItemSchema). */
   async invitationState(userId: string): Promise<InvitationState> {
     const user = await this.prisma.user.findUniqueOrThrow({
@@ -319,7 +392,7 @@ export class PortalGrantsService {
     const meaning = { actorId, userId: input.userId, ...scopeOf(input) };
     return this.idempotent('PORTAL_GRANT_ISSUE', input.requestId, meaning, async (tx) => {
       await this.lockAccount(tx, input.userId);
-      await this.requireHotels(tx, input.hotelIds);
+      await this.lockChecked(tx, input);
       const open = await tx.portalGrant.findFirst({
         where: { userId: input.userId, payerCustomerId: input.payerCustomerId, revokedAt: null },
         select: { id: true },
@@ -358,7 +431,7 @@ export class PortalGrantsService {
       const old = await this.lockGrant(tx, grantId);
       if (old.payerCustomerId !== input.payerCustomerId)
         throw domainError(409, 'GRANT_PAYER_MISMATCH', 'A replacement keeps the payer');
-      await this.requireHotels(tx, input.hotelIds);
+      await this.lockChecked(tx, input);
       const previous = old.hotels.map((h) => h.hotelId).sort();
       await tx.portalGrant.update({
         where: { id: old.id },
@@ -422,21 +495,60 @@ export class PortalGrantsService {
 
   /**
    * The account's active grants now (read on every portal request). `db`: the caller's own client
-   * (the hotel portal reads through its reserved pool).
+   * (the hotel portal reads through its reserved pool). `hotelIds`: every hotel of the grant — the
+   * scope of the payer's invoices (Finance). `operationalHotelIds`: only those operational today
+   * (v6 §3) — the scope of the hotel's detail, profile, contracts and deliveries. Read from the
+   * core's own rows only, never from Finance.
    */
   async activeOf(
     userId: string,
     db: Tx = this.prisma,
-  ): Promise<{ id: string; payerCustomerId: string; hotelIds: string[] }[]> {
+  ): Promise<
+    { id: string; payerCustomerId: string; hotelIds: string[]; operationalHotelIds: string[] }[]
+  > {
     const rows = await db.portalGrant.findMany({
       where: { userId, revokedAt: null },
-      include: { hotels: { select: { hotelId: true } } },
+      include: {
+        hotels: {
+          select: { hotelId: true, access: true, checkedRevision: true, operationsUntil: true },
+        },
+      },
       orderBy: { grantedAt: 'asc' },
     });
+    const pairs = rows.flatMap((g) =>
+      g.hotels
+        .filter((h) => h.access === 'OPERATIONS')
+        .map((h) => ({ payerCustomerId: g.payerCustomerId, hotelId: h.hotelId })),
+    );
+    const fences =
+      pairs.length === 0
+        ? []
+        : await db.portalOperationalFence.findMany({
+            where: { OR: pairs },
+            select: {
+              payerCustomerId: true,
+              hotelId: true,
+              endsOn: true,
+              resolution: { select: { restoreRevision: true } },
+            },
+          });
+    const today = pragueToday();
     return rows.map((g) => ({
       id: g.id,
       payerCustomerId: g.payerCustomerId,
       hotelIds: g.hotels.map((h) => h.hotelId).sort(),
+      operationalHotelIds: g.hotels
+        .filter((h) =>
+          isOperational(
+            h,
+            fences.filter(
+              (f) => f.payerCustomerId === g.payerCustomerId && f.hotelId === h.hotelId,
+            ),
+            today,
+          ),
+        )
+        .map((h) => h.hotelId)
+        .sort(),
     }));
   }
 
@@ -520,9 +632,35 @@ export class PortalGrantsService {
     return grant;
   }
 
-  private async requireHotels(tx: Tx, hotelIds: readonly string[]) {
-    const found = await tx.hotel.count({ where: { id: { in: [...hotelIds] } } });
-    if (found !== hotelIds.length) throw domainError(404, 'HOTEL_NOT_FOUND', 'No such hotel');
+  /**
+   * The grant's hotels, locked (the lock a fence takes too), and Finance's check against the
+   * pair's fences: an OPERATIONS hotel checked in a revision older than a fence of this payer ×
+   * hotel is STALE_TERMS — Finance checks again (v3 §3; the read rule would refuse it anyway).
+   */
+  private async lockChecked(tx: Tx, input: PortalGrantReplaceRequest) {
+    await lockHotels(tx, input.hotelIds);
+    const operational = input.financeCheck.hotels.filter((h) => h.basis === 'AGREEMENT');
+    if (operational.length === 0) return;
+    const fences = await tx.portalOperationalFence.groupBy({
+      by: ['hotelId'],
+      where: {
+        payerCustomerId: input.payerCustomerId,
+        hotelId: { in: operational.map((h) => h.id) },
+      },
+      _max: { termsRevision: true },
+    });
+    const newest = new Map(fences.map((f) => [f.hotelId, f._max.termsRevision ?? 0]));
+    const stale = operational
+      .filter((h) => h.checkedRevision! < (newest.get(h.id) ?? 0))
+      .map((h) => h.id)
+      .sort();
+    if (stale.length > 0)
+      throw domainErrorWithDetails(
+        409,
+        'STALE_TERMS',
+        'The terms changed since Finance checked these hotels; check again',
+        { hotelIds: stale },
+      );
   }
 
   private async create(
@@ -540,7 +678,20 @@ export class PortalGrantsService {
         reason: input.reason,
         financeCheck: input.financeCheck,
         replacesId,
-        hotels: { create: input.hotelIds.map((hotelId) => ({ hotelId })) },
+        hotels: {
+          create: input.financeCheck.hotels.map((h) =>
+            h.basis === 'AGREEMENT'
+              ? {
+                  hotelId: h.id,
+                  access: 'OPERATIONS' as const,
+                  checkedRevision: h.checkedRevision,
+                  operationsUntil: h.operationsUntil
+                    ? new Date(`${h.operationsUntil}T00:00:00.000Z`)
+                    : null,
+                }
+              : { hotelId: h.id, access: 'INVOICES' as const },
+          ),
+        },
       },
       include: { hotels: true },
     });

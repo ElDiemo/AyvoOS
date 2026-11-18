@@ -187,7 +187,7 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
       expect(open.map((r) => r.roleCode)).toEqual(['WAREHOUSE_SUPERVISOR']);
     });
 
-    it('the API refuses an internal role for a portal account (ROLE_AUDIENCE_MISMATCH)', async () => {
+    it('a portal account is unknown on the internal user routes: no internal role for it (404)', async () => {
       const portal = await su.prisma.user.create({
         data: {
           email: `pa-${randomUUID().slice(0, 8)}@ayvo.test`,
@@ -199,8 +199,8 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
         .post(`/api/admin/identity/users/${portal.id}/roles/grant`)
         .send({ role: 'WAREHOUSE_SUPERVISOR', reason: 'audience test' });
       expect([res.status, res.body.code], JSON.stringify(res.body)).toEqual([
-        409,
-        'ROLE_AUDIENCE_MISMATCH',
+        404,
+        'USER_NOT_FOUND',
       ]);
       expect(await su.prisma.userRole.count({ where: { userId: portal.id } })).toBe(0);
     });
@@ -432,10 +432,9 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
       const res = await http
         .post(`/api/admin/identity/users/${user.id}/invitations${action}`)
         .send({ requestId: randomUUID(), reason: 'internal invitation of a portal account' });
-      expect([res.status, res.body.code], `invitations${action}`).toEqual([
-        409,
-        'ACCOUNT_AUDIENCE_MISMATCH',
-      ]);
+      // Unknown on the internal user routes (Hotely → Uživatelé); InvitationsService would also
+      // refuse the audience (ACCOUNT_AUDIENCE_MISMATCH) behind it.
+      expect([res.status, res.body.code], `invitations${action}`).toEqual([404, 'USER_NOT_FOUND']);
     }
     await adm.app.get(NativeTokensService).deliverPending();
     await t.app.get(NativeTokensService).deliverPending();
@@ -450,7 +449,7 @@ describe.skipIf(!hasDatabase)('account audience: STAFF and PORTAL never mix', ()
       .post(`/api/admin/identity/users/${user.id}/invitations`)
       .send({ requestId: portalRequest.requestId, reason: 'replay of a portal request id' });
     expect(portalRequest.kind).toBe('SEND');
-    expect([replay.status, replay.body.code]).toEqual([409, 'ACCOUNT_AUDIENCE_MISMATCH']);
+    expect([replay.status, replay.body.code]).toEqual([404, 'USER_NOT_FOUND']);
     expect(await state()).toEqual(before);
 
     // An ordinary STAFF invitation through the same route goes through, to the staff origin.

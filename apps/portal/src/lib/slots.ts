@@ -21,6 +21,86 @@ export class SlotLimit {
   }
 }
 
+/**
+ * Slots counted globally AND per key (e.g. per portal account): `acquire(key)` takes one of each
+ * or none — refused at once when either is full. The release (idempotent) frees both.
+ */
+export class KeyedSlotLimit {
+  private active = 0;
+  private readonly perKey = new Map<string, number>();
+  constructor(
+    private readonly max: number,
+    private readonly maxPerKey: number,
+  ) {}
+
+  get inFlight(): number {
+    return this.active;
+  }
+  inFlightOf(key: string): number {
+    return this.perKey.get(key) ?? 0;
+  }
+
+  acquire(key: string): (() => void) | null {
+    if (this.active >= this.max || this.inFlightOf(key) >= this.maxPerKey) return null;
+    this.active++;
+    this.perKey.set(key, this.inFlightOf(key) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active--;
+      const left = this.inFlightOf(key) - 1;
+      if (left > 0) this.perKey.set(key, left);
+      else this.perKey.delete(key);
+    };
+  }
+}
+
+/**
+ * Starts of invoice packages in time (review 6800881871; owner 2026-11-11: a package is fetched
+ * about once or twice a month): per key (a portal account) at most one start per `minIntervalMs`
+ * and `perKeyPerDay` in 24 h, and `globalPerDay` in 24 h in total. With the concurrency of
+ * KeyedSlotLimit this bounds how many packages can ever be in transfer or parked in buffers on the
+ * way, whatever the client's speed. A start that passed nothing on (a refusal, no slot) is given
+ * back. Kept in this process: portal-web runs as one process (DEV and PROD); a restart forgets the
+ * starts — at worst one more start per account.
+ */
+export class StartQuota {
+  private readonly starts = new Map<string, number[]>();
+  private all: number[] = [];
+  constructor(
+    private readonly limits: { minIntervalMs: number; perKeyPerDay: number; globalPerDay: number },
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** A start (its `giveBack` frees it again), or why not. */
+  take(key: string): { giveBack: () => void } | 'RATE' | 'DAILY' | 'GLOBAL' {
+    const t = this.now();
+    const since = t - 86_400_000;
+    const mine = (this.starts.get(key) ?? []).filter((x) => x > since);
+    this.all = this.all.filter((x) => x > since);
+    const last = mine.at(-1);
+    if (last !== undefined && t - last < this.limits.minIntervalMs) return 'RATE';
+    if (mine.length >= this.limits.perKeyPerDay) return 'DAILY';
+    if (this.all.length >= this.limits.globalPerDay) return 'GLOBAL';
+    mine.push(t);
+    this.starts.set(key, mine);
+    this.all.push(t);
+    let given = false;
+    return {
+      giveBack: () => {
+        if (given) return;
+        given = true;
+        const list = this.starts.get(key) ?? [];
+        const i = list.lastIndexOf(t);
+        if (i >= 0) list.splice(i, 1);
+        const j = this.all.lastIndexOf(t);
+        if (j >= 0) this.all.splice(j, 1);
+      },
+    };
+  }
+}
+
 /** Why a bounded transfer ended early (the stream is errored with it). */
 export class TransferCut extends Error {
   constructor(readonly reason: 'DEADLINE' | 'TOO_LARGE' | 'UPSTREAM' | 'CLIENT') {

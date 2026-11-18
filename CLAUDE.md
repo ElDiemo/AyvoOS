@@ -164,6 +164,13 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   `FileStorage` (`contract-documents`) with its SHA-256, downloaded only through the API. A signed
   draft is never removed and its hotel link never changed (DB); the signing revision's hotel must
   match the linked one, a first link the signed hotel. Signatures are never verified.
+  Sales commission terms (PR 1a; owner approved the model 2026-11-17 in the agreed scope — doc 068
+  §3.1, ADR 0046 §2a on the docs branch; implementation under review): `sales_commission_terms`,
+  append-only versions per salesperson (1, 2, … without gaps, DB) of the initial rate %, its length
+  N in whole months and the maintenance rate % from month N+1 (exact 0–100, at most 2 decimals,
+  N ≥ 1, a reason; DB CHECK); `sales:commission_terms_manage` ADMIN only (`security_admin`, never a
+  custom role); a salesperson reads only their own terms. No attribution, portfolio, calculation,
+  statement, salesperson invoice or payout yet (PR 1b and Finance are not approved).
   Return intake R1 (owner approved the model 2026-11-06 on doc 047 `69d90c8`, PR #126;
   implementation under review): module `returns` — `return_receipts` (site, OPEN → CLOSED),
   `return_receipt_lines` (one physical container: CRATE completes its delivered cycle's allocation,

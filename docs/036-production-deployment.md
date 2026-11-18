@@ -194,6 +194,28 @@ e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism
 - Any failure stops at that step and reports it, the dump, whether migrations ran and the previous
   release. Nothing is undone silently, and **a database is never restored automatically** — an
   older backup is never written over newer data without the owner deciding (doc 035 §4).
+- **A revision is built once** (PROD 2026-11-16). A second `--release` of the same commit (for
+  example to apply a changed `prod.env`) reuses the images recorded in `state/images/<release>`
+  instead of building again. Every build moves the tag to a new image ID, and the containerd image
+  store then forgets the previous ID even while containers still run it.
+  - **Before anything changes**, `--check` and `--release` decide the same way (`preflight_images`;
+    `--check` prints `images: reuse|build`):
+    - all three tags name their recorded IDs → reuse;
+    - no tag of the release exists → build (the first build, or a release whose images were removed).
+      Absence is decided only by one successful, exact listing; a Docker error is a stop that leaves
+      `state/images` and the images untouched;
+    - otherwise stop: a moved tag, only some tags, or tags without a record.
+  - `--rollback` first requires the release's record and api/web tags naming its IDs; only then is
+    the portal held and a service touched.
+  - api and web are always recreated (`--force-recreate`), because Compose compares only the
+    platform manifest. After the start they must run exactly the tagged and recorded IDs, otherwise
+    the deployment fails.
+- **After an interrupted build** (tags without a record), check that no container uses them: no line
+  of `docker ps -a --format '{{.Names}}' | xargs docker inspect --format '{{.Name}} {{.Image}}'` may
+  name an ID of `docker image inspect --format '{{.Id}}' ayvo-prod/{api,api-migrate,web}:<release>`.
+  Then remove only those tags (`docker image rm ayvo-prod/<image>:<release>`) and run
+  `--check --release` again; it must say `images: build`. If a container uses one of them, stop and
+  ask; never remove it.
 - `--rollback <12-character release>` starts the images of an earlier release again without
   building or migrating. Safe only when that code works with the current schema (migrations are
   additive by policy; check the release notes). Otherwise: fix forward, or a deliberate restore.
