@@ -69,8 +69,15 @@ export const returnsCs = {
     scanBottles: 'Naskenujte vrácené lahve',
     scanBottlesHint:
       'Každou skutečně vrácenou lahev podle jejího QR – i bez bedny, před bednou nebo později v jiném příjmu.',
-    pumps: 'Vadná pumpička −1',
-    pumpsCount: (n: number) => `Vadné pumpičky: ${n}`,
+    pumps: 'Odepsat pumpičky (ks)',
+    pumpsSubmit: 'Zapsat odpis',
+    pumpsHelp:
+      'Použité pumpičky vyřazené při tomto příjmu, jedním číslem. Nevážou se k lahvi ani bedně a nic se neodepisuje ze skladu.',
+    pumpsDone: (n: number) => `Odepsáno pumpiček: ${n}`,
+    pumpsEntry: (n: number) => `Odpis ${n} ks`,
+    pumpsUnconfirmed: (n: number) =>
+      `Výsledek nepotvrzený: odpis ${n} ks. „Zkusit znovu“ pošle tentýž zápis – nezapíše se dvakrát.`,
+    pumpsCount: (n: number) => `Odepsané pumpičky: ${n}`,
     counts: (crates: number, identified: number, defective: number, unreadable: number) =>
       `Bedny ${crates} · přijaté lahve ${identified} (z toho ke skartaci ${defective}) · nečitelné ${unreadable}`,
     close: 'Uzavřít příjem',

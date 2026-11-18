@@ -213,8 +213,9 @@ for (const width of [390, 1440] as const) {
         .getByRole('button', { name: 'Nečitelná lahev +1' })
         .click();
       await expect(page.getByTestId('return-message')).toContainText('Nečitelná lahev');
-      await page.getByRole('button', { name: 'Vadná pumpička −1' }).click();
-      await expect(page.getByTestId('pump-count')).toHaveText('Vadné pumpičky: 1');
+      await page.getByRole('textbox', { name: 'Odepsat pumpičky (ks)' }).fill('1');
+      await page.getByRole('button', { name: 'Zapsat odpis' }).click();
+      await expect(page.getByTestId('pump-count')).toHaveText('Odepsané pumpičky: 1');
       await expect(page.getByTestId('receipt-counts')).toHaveText(
         'Bedny 1 · přijaté lahve 2 (z toho ke skartaci 1) · nečitelné 1',
       );
@@ -299,7 +300,8 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
   await expect(page.getByTestId('refresh-failed')).toBeVisible();
   // While it is not refreshed, no action can be sent again.
   await expect(unreadable).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Vadná pumpička −1' })).toBeDisabled();
+  await page.getByRole('textbox', { name: 'Odepsat pumpičky (ks)' }).fill('1');
+  await expect(page.getByRole('button', { name: 'Zapsat odpis' })).toBeDisabled();
   await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
   await expect(page.getByTestId('refresh-failed')).toHaveCount(0);
   await expect(page.getByTestId('return-line-bottles').getByTestId('line-recorded')).toHaveText(
@@ -307,11 +309,11 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
   );
 
   failGets = 1;
-  await page.getByRole('button', { name: 'Vadná pumpička −1' }).click();
+  await page.getByRole('button', { name: 'Zapsat odpis' }).click();
   await expect(page.getByTestId('refresh-failed')).toBeVisible();
-  await expect(page.getByTestId('pump-count')).toHaveText('Vadné pumpičky: 0');
+  await expect(page.getByTestId('pump-count')).toHaveText('Odepsané pumpičky: 0');
   await page.getByTestId('refresh-failed').getByRole('button', { name: 'Obnovit' }).click();
-  await expect(page.getByTestId('pump-count')).toHaveText('Vadné pumpičky: 1');
+  await expect(page.getByTestId('pump-count')).toHaveText('Odepsané pumpičky: 1');
 
   // Each committed once — the server agrees.
   expect(posts).toEqual(['unreadable', 'pumps']);
