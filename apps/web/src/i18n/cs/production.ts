@@ -120,6 +120,29 @@ export const productionCs = {
     // Series record no author (no column, no audit event); history is never guessed (issue #11).
     noCreator: 'Autor vytvoření série se v AYVO OS neeviduje.',
   },
+  /**
+   * The operating view of a bottle (doc 048 §3.0a, R3-c): readiness, crate and location apart,
+   * each derived; a printed code with no label is never shown as a bottle in stock.
+   */
+  circulation: {
+    readiness: {
+      CREATED: 'Kód čekající na nalepení',
+      TO_FILL: 'K plnění',
+    },
+    source: { NEW: 'Nová', AFTER_WASH: 'Po mytí' } as Record<string, string>,
+    crate: 'Bedna',
+    noCrate: 'bez bedny',
+    location: 'Poloha',
+    locationKind: {
+      NONE: '—',
+      AT_SITE: 'Na provozovně',
+      IN_TRANSIT: 'U dopravce',
+      AT_HOTEL: 'U hotelu',
+    } as Record<string, string>,
+    order: (order: string, hotel: string) => `objednávka ${order} · ${hotel}`,
+    delivered: (at: string) => `doručeno ${at}`,
+    unknown: 'nezjištěno',
+  },
   bottle: {
     subtitle: 'Vratná lahev AYVO',
     back: 'Lahve',

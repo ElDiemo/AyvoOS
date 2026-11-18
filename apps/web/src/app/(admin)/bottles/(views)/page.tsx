@@ -1,4 +1,5 @@
 import {
+  bottleCirculationListSchema,
   bottleListQuerySchema,
   bottleListResponseSchema,
   labelTemplateSummarySchema,
@@ -7,7 +8,11 @@ import {
 import Link from 'next/link';
 import { z } from 'zod';
 import { BottlesHeader } from '@/components/production/bottles-header';
-import { BottleStatusBadge } from '@/components/status';
+import {
+  BottleCrate,
+  BottleLocation,
+  BottleReadiness,
+} from '@/components/production/bottle-circulation';
 import { buttonClass, Card, EmptyState, inputClass } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { productionCs } from '@/i18n/cs/production';
@@ -50,6 +55,16 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
     }),
     apiGet('admin/label-templates', z.array(labelTemplateSummarySchema)),
   ]);
+  // The operating view of the page's bottles (doc 048 §3.0a): crate and location, derived.
+  const circulation = new Map(
+    list.items.length === 0
+      ? []
+      : (
+          await apiGet('admin/bottle-circulation', bottleCirculationListSchema, {
+            codes: list.items.map((i) => i.code).join(','),
+          })
+        ).items.map((x) => [x.code, x]),
+  );
   const pages = Math.max(1, Math.ceil(list.total / list.pageSize));
   const filtered = !!(params.batch || params.search || params.templateId || params.status);
   const link = (p: number) => {
@@ -136,6 +151,8 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
               <tr>
                 <th className="px-6 py-3 font-medium">{b.code}</th>
                 <th className="px-6 py-3 font-medium">{b.status}</th>
+                <th className="px-6 py-3 font-medium">{productionCs.circulation.crate}</th>
+                <th className="px-6 py-3 font-medium">{productionCs.circulation.location}</th>
                 <th className="px-6 py-3 font-medium">{b.series}</th>
                 <th className="px-6 py-3 font-medium">{b.template}</th>
                 <th className="px-6 py-3 font-medium">{b.createdAt}</th>
@@ -150,7 +167,16 @@ export default async function BottlesPage({ searchParams }: { searchParams: Prom
                     </Link>
                   </td>
                   <td className="px-6 py-3">
-                    <BottleStatusBadge status={bottle.status} />
+                    <BottleReadiness
+                      status={bottle.status}
+                      source={circulation.get(bottle.code)?.source}
+                    />
+                  </td>
+                  <td className="px-6 py-3 whitespace-nowrap">
+                    <BottleCrate circulation={circulation.get(bottle.code)} />
+                  </td>
+                  <td className="px-6 py-3 min-w-40">
+                    <BottleLocation circulation={circulation.get(bottle.code)} />
                   </td>
                   <td className="px-6 py-3 font-mono">
                     <Link href={`/batches/${bottle.creationBatchCode}`} className="hover:underline">
