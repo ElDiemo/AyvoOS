@@ -61,7 +61,10 @@ function run(mode: string, opts: { previous: string; finance: string; apiImage?:
     'validate_compose',
     'check_core_holds_finance_contract',
     'backup_status',
+    'preflight_images',
+    'preflight_rollback_images',
     'build_images',
+    'check_running_images',
     'wait_healthy',
     'backup_before_migration',
     'migrate',
@@ -72,13 +75,14 @@ function run(mode: string, opts: { previous: string; finance: string; apiImage?:
     'record_finance',
     'record_release',
     'remove_old_images',
+    'hold_unverified_portal',
   ].map((s) => `${s}() { echo "${s} $*" >>"$STEPS"; }`);
   const body = [
     'set -uo pipefail',
     `STEPS=${steps}; PROD_DIR=${dir}/prod; PROJECT=ayvo-prod; IMAGE_PREFIX=ayvo-prod`,
     `MODE=${mode}; RELEASE=${mode.includes('rollback') ? '' : NEW_FULL}`,
     `ROLLBACK=${OLD}; FINANCE_ROLLBACK=${OLD}; FINANCE_ENABLED=true`,
-    `PREVIOUS=${opts.previous}; FINANCE_RELEASE=${opts.finance}`,
+    `PREVIOUS=${opts.previous}; FINANCE_RELEASE=${opts.finance}; PORTAL_FAILED=""`,
     'die() { echo "DIED: $*"; exit 1; }; ok() { echo "ok: $*"; }; log() { :; }; warn() { echo "WARN: $*"; }',
     'compose() { echo "compose $*" >>"$STEPS"; }',
     'release_dir() { printf "%s/releases/%s" "$PROD_DIR" "${1:0:12}"; }',
@@ -114,7 +118,7 @@ describe('the order of the OS and Finance (doc 040 §12a)', () => {
   it('the OS deployment leaves the running Finance alone and names the open window', () => {
     const r = run('deploy', { previous: OLD, finance: OLD });
     expect(r.status).toBe(0);
-    expect(r.steps.join('\n')).toContain('compose up -d --no-build api web');
+    expect(r.steps.join('\n')).toContain('compose up -d --no-build --force-recreate api web');
     expect(r.steps.join('\n')).not.toMatch(/finance/);
     expect(r.out).toContain(`Finance still runs ${OLD}`);
     expect(r.out).toContain(`--finance --release ${NEW_FULL}`);

@@ -17,3 +17,13 @@
 .on-dark :where(a, button):focus-visible {
   outline-color: #e9dcc6;
 }
+
+/*
+ * The profile edit on a phone keeps Uložit/Zrušit in a sticky bar at the bottom: focusing a field
+ * (also with the on-screen keyboard open) or following an error link scrolls it above that bar.
+ */
+@media (max-width: 639px) {
+  html:has([data-testid='profile-actions']) {
+    scroll-padding-bottom: 7rem;
+  }
+}

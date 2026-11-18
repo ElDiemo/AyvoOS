@@ -8,11 +8,14 @@ import type {
   RecordActivityRequest,
   RescheduleTaskRequest,
   RetireContactRequest,
+  SalesCalendar,
+  SalesCalendarQuery,
   SaveContactRequest,
   TaskListQuery,
   TaskPage,
   UpdateTaskRequest,
 } from '@ayvo/types';
+import { SALES_CALENDAR_MAX } from '@ayvo/types';
 import { domainError } from '../common/domain-error.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
@@ -25,6 +28,7 @@ import {
   dateOnly,
   salesEvent,
   salesInstant,
+  overdueTaskWhere,
   salesToday,
   visibleProspect,
   type Db,
@@ -341,8 +345,8 @@ export class SalesWorkService {
     if (q.assignee !== 'me' && !scope.all) {
       throw new ForbiddenException("Only an administrator sees other people's tasks");
     }
-    const where: Prisma.SalesTaskWhereInput = {
-      status: q.status === 'OPEN' ? 'OPEN' : { in: ['DONE', 'CANCELLED'] },
+    const today = salesToday();
+    const visible: Prisma.SalesTaskWhereInput = {
       ...(q.assignee === 'me'
         ? { assigneeId: scope.userId }
         : q.assignee === 'all'
@@ -350,11 +354,57 @@ export class SalesWorkService {
           : { assigneeId: q.assignee }),
       prospect: scope.all ? {} : { ownerId: scope.userId },
     };
+    const overdue = q.due === 'overdue';
+    const where: Prisma.SalesTaskWhereInput = overdue
+      ? { AND: [visible, overdueTaskWhere(today)] }
+      : { ...visible, status: q.status === 'OPEN' ? 'OPEN' : { in: ['DONE', 'CANCELLED'] } };
+    const closed = !overdue && q.status !== 'OPEN';
     const [items, total] = await Promise.all([
-      this.views.tasks(where, TASK_PAGE_SIZE, (q.page - 1) * TASK_PAGE_SIZE, q.status !== 'OPEN'),
+      this.views.tasks(where, TASK_PAGE_SIZE, (q.page - 1) * TASK_PAGE_SIZE, closed),
       this.prisma.salesTask.count({ where }),
     ]);
-    return { items, total, page: q.page, pageSize: TASK_PAGE_SIZE, today: salesToday() };
+    return { items, total, page: q.page, pageSize: TASK_PAGE_SIZE, today };
+  }
+
+  /**
+   * "Kalendář": the tasks due in one month for the same people and prospects as the task list
+   * (the same scope check), open and closed, by day; and the open ones overdue before it (due
+   * before the month and before today).
+   */
+  async calendar(scope: SalesScope, q: SalesCalendarQuery): Promise<SalesCalendar> {
+    if (q.assignee !== 'me' && !scope.all) {
+      throw new ForbiddenException("Only an administrator sees other people's tasks");
+    }
+    const today = salesToday();
+    const month = q.month ?? today.slice(0, 7);
+    const [y, m] = month.split('-').map(Number) as [number, number];
+    const first = new Date(Date.UTC(y, m - 1, 1));
+    const next = new Date(Date.UTC(y, m, 1));
+    const startOfToday = new Date(`${today}T00:00:00Z`);
+    const overdueBound = first < startOfToday ? first : startOfToday;
+    const who: Prisma.SalesTaskWhereInput = {
+      ...(q.assignee === 'me'
+        ? { assigneeId: scope.userId }
+        : q.assignee === 'all'
+          ? {}
+          : { assigneeId: q.assignee }),
+      prospect: scope.all ? {} : { ownerId: scope.userId },
+    };
+    const [items, overdueBefore] = await Promise.all([
+      this.views.tasks({ ...who, dueOn: { gte: first, lt: next } }, SALES_CALENDAR_MAX + 1),
+      // Overdue = due before the month viewed AND before today: an open task due later this
+      // month is not late when a future month is viewed (review 5829337971).
+      this.prisma.salesTask.count({
+        where: { ...who, status: 'OPEN', dueOn: { lt: overdueBound } },
+      }),
+    ]);
+    return {
+      month,
+      today,
+      items: items.slice(0, SALES_CALENDAR_MAX),
+      overdueBefore,
+      truncated: items.length > SALES_CALENDAR_MAX,
+    };
   }
 
   async createTask(

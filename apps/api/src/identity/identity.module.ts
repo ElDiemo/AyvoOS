@@ -78,6 +78,9 @@ import { EmployeeCardRateLimit } from './employee-card-rate-limit.service.js';
   ],
   exports: [
     AccessService,
+    // Hotel portal accounts are deactivated/reactivated under Hotely → Uživatelé (portal-grants)
+    // with the same rules and audit as internal accounts.
+    UsersService,
     SessionsService,
     // Hotel portal accounts are invited by the grants module once a grant exists (ADR 0045 §4).
     InvitationsService,

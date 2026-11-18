@@ -50,7 +50,10 @@ export default async function BottlePage({ params }: { params: Promise<{ code: s
               </Field>
               {bottle.returnReceipt && (
                 <Field label={t.returnReceipt}>
-                  <Link className="underline" href={`/warehouse/returns/${bottle.returnReceipt}`}>
+                  <Link
+                    className="underline"
+                    href={`/production/cycle/returns/${bottle.returnReceipt}`}
+                  >
                     {bottle.returnReceipt}
                   </Link>
                 </Field>

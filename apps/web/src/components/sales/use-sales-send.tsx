@@ -3,7 +3,7 @@
 import { prospectDetailSchema, type ProspectDetail } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { useAttempt } from '@/components/catalog/form-kit';
+import { uncertain, useAttempt } from '@/components/catalog/form-kit';
 import { salesCs } from '@/i18n/cs/sales';
 import { apiSend } from '@/lib/client-api';
 import { isStale, salesErrorText } from './sales-format';
@@ -44,8 +44,16 @@ export function useSalesSend() {
   const router = useRouter();
   const { busy, run } = useAttempt();
   const [error, setError] = useState<unknown>(null);
-  /** `onDone` gets the prospect as the confirmed write returned it (before any refresh). */
-  async function send(path: string, body: object, onDone: (detail: ProspectDetail) => void) {
+  /**
+   * `onDone` gets the prospect as the confirmed write returned it (before any refresh). The
+   * outcome is returned as well — "uncertain" when no definite answer came (the same body sent
+   * again continues the same request id); callers that do not need it ignore it.
+   */
+  async function send(
+    path: string,
+    body: object,
+    onDone: (detail: ProspectDetail) => void,
+  ): Promise<'saved' | 'refused' | 'uncertain' | 'busy'> {
     setError(null);
     const result = await run(path + JSON.stringify(body), (requestId) =>
       apiSend('POST', path, prospectDetailSchema, { requestId, ...body }),
@@ -53,7 +61,11 @@ export function useSalesSend() {
     if (result.ok) {
       onDone(result.value);
       router.refresh();
-    } else if (result.error) setError(result.error);
+      return 'saved';
+    }
+    if (!result.error) return 'busy';
+    setError(result.error);
+    return uncertain(result.error) ? 'uncertain' : 'refused';
   }
   return { busy, error, setError, send };
 }
