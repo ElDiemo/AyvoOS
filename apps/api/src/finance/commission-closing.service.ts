@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import type {
   ApproveCommissionStatement,
   CommissionMine,
@@ -9,6 +9,7 @@ import type {
   CommissionStatementList,
   CommissionStatementsQuery,
   FinanceCommissionHotel,
+  RecordSalespersonInvoice,
 } from '@ayvo/types';
 import { domainError, idempotencyConflict } from '../common/domain-error.js';
 import { payloadHash } from '../database/operation-requests.service.js';
@@ -20,6 +21,8 @@ import {
   linesToEvaluate,
   money,
   monthNotClosed,
+  nextMonth,
+  payoutPlan,
   cents,
   type BookedItem,
   type ClosingLine,
@@ -48,6 +51,13 @@ interface FinanceSources {
 }
 
 const APPROVE = 'COMMISSION_STATEMENT_APPROVE';
+const INVOICE = 'COMMISSION_SALESPERSON_INVOICE';
+const STATEMENT_INCLUDE = {
+  items: { orderBy: { itemNo: 'asc' } },
+  previous: { select: { periodMonth: true } },
+  salespersonInvoice: true,
+} as const satisfies Prisma.CommissionStatementInclude;
+const invoiceRefused = (code: string, message: string) => domainError(422, code, message);
 
 const stale = () =>
   domainError(
@@ -400,10 +410,7 @@ export class CommissionClosingService {
   private async statement(id: string): Promise<CommissionStatement> {
     const s = await this.prisma.commissionStatement.findUniqueOrThrow({
       where: { id },
-      include: {
-        items: { orderBy: { itemNo: 'asc' } },
-        previous: { select: { periodMonth: true } },
-      },
+      include: STATEMENT_INCLUDE,
     });
     return toStatement(s);
   }
@@ -412,10 +419,7 @@ export class CommissionClosingService {
   async list(q: CommissionStatementsQuery): Promise<CommissionStatementList> {
     const rows = await this.prisma.commissionStatement.findMany({
       where: { periodMonth: monthDate(q.month), mode: q.mode },
-      include: {
-        items: { orderBy: { itemNo: 'asc' } },
-        previous: { select: { periodMonth: true } },
-      },
+      include: STATEMENT_INCLUDE,
       orderBy: [{ salespersonName: 'asc' }, { salespersonId: 'asc' }],
     });
     return { month: q.month, mode: q.mode, statements: rows.map(toStatement) };
@@ -435,7 +439,13 @@ export class CommissionClosingService {
           mode: q.mode,
         },
       },
-      select: { currency: true, amountToInvoice: true, carriedForward: true, approvedAt: true },
+      select: {
+        currency: true,
+        amountToInvoice: true,
+        carriedForward: true,
+        approvedAt: true,
+        salespersonInvoice: { select: { payoutOn: true } },
+      },
     });
     if (!s)
       return {
@@ -446,23 +456,127 @@ export class CommissionClosingService {
         amountToInvoice: null,
         balanceCarriedForward: null,
         approvedAt: null,
+        payoutPlannedOn: null,
       };
     const positive = s.amountToInvoice.gt(0);
     return {
       month: q.month,
       mode: q.mode,
-      state: positive ? 'TO_INVOICE' : 'NOTHING_TO_INVOICE',
+      state: s.salespersonInvoice
+        ? 'INVOICE_RECEIVED'
+        : positive
+          ? 'TO_INVOICE'
+          : 'NOTHING_TO_INVOICE',
       currency: s.currency,
       amountToInvoice: positive ? s.amountToInvoice.toFixed(2) : null,
       balanceCarriedForward: positive ? null : s.carriedForward.toFixed(2),
       approvedAt: s.approvedAt.toISOString(),
+      payoutPlannedOn: s.salespersonInvoice ? toDay(s.salespersonInvoice.payoutOn) : null,
     };
+  }
+
+  /**
+   * The salesperson's one invoice on an approved statement (doc 069 §5, doc 068 I3) and its
+   * planned payout day from the actual receipt (C12, O11). Nothing is paid; the statement itself
+   * never changes. The DB repeats every rule (one per statement, a number once, the amount, the
+   * payout rule).
+   */
+  async recordInvoice(
+    statementId: string,
+    req: RecordSalespersonInvoice,
+    caller: FinanceCaller,
+  ): Promise<CommissionStatement> {
+    const { userId, displayName } = caller.principal;
+    const st = await this.prisma.commissionStatement.findUnique({
+      where: { id: statementId },
+      select: {
+        periodMonth: true,
+        mode: true,
+        salespersonId: true,
+        currency: true,
+        amountToInvoice: true,
+      },
+    });
+    if (!st) throw new NotFoundException('Podklad neexistuje.');
+    const month = toMonth(st.periodMonth);
+    if (!st.amountToInvoice.gt(0))
+      throw invoiceRefused('NOTHING_TO_INVOICE', 'Podklad nemá částku k fakturaci.');
+    if (req.currency !== st.currency)
+      throw invoiceRefused(
+        'SALESPERSON_INVOICE_CURRENCY_MISMATCH',
+        'Faktura je v jiné měně než podklad.',
+      );
+    if (req.base !== st.amountToInvoice.toFixed(2))
+      throw invoiceRefused(
+        'SALESPERSON_INVOICE_BASE_MISMATCH',
+        `Základ faktury bez DPH musí být ${st.amountToInvoice.toFixed(2)} ${st.currency}.`,
+      );
+    if (req.issuedOn > req.receivedOn)
+      throw invoiceRefused(
+        'SALESPERSON_INVOICE_DATES',
+        'Faktura nemohla být přijata před vystavením.',
+      );
+    if (req.receivedOn < `${nextMonth(month)}-01`)
+      throw invoiceRefused(
+        'SALESPERSON_INVOICE_BEFORE_CLOSE',
+        'Faktura za měsíc nemůže být přijata před jeho uzavřením.',
+      );
+    if (req.receivedOn > pragueToday())
+      throw invoiceRefused('SALESPERSON_INVOICE_IN_FUTURE', 'Datum přijetí nemůže být v budoucnu.');
+    const payoutOn = payoutPlan(month, req.receivedOn);
+    const { requestId, ...content } = req;
+    const payload = { statementId, ...content, actorId: userId };
+    await this.operations
+      .run(INVOICE, requestId, payload, async (tx) => {
+        await tx.commissionSalespersonInvoice.create({
+          data: {
+            statementId,
+            mode: st.mode,
+            salespersonId: st.salespersonId,
+            invoiceNumber: req.invoiceNumber,
+            issuedOn: new Date(`${req.issuedOn}T00:00:00.000Z`),
+            receivedOn: new Date(`${req.receivedOn}T00:00:00.000Z`),
+            base: req.base,
+            currency: req.currency,
+            payoutOn: new Date(`${payoutOn}T00:00:00.000Z`),
+            recordedBy: userId,
+            recordedByName: displayName,
+            requestId: req.requestId,
+          },
+        });
+        for (const kind of ['SALESPERSON_INVOICE_RECORDED', 'PAYOUT_PLANNED'])
+          await tx.commissionStatementEvent.create({
+            data: { statementId, kind, recordedBy: userId, recordedByName: displayName },
+          });
+        return { statementId };
+      })
+      .catch((e: unknown) => {
+        const text = e instanceof Error ? e.message : String(e);
+        if (
+          /commission_salesperson_invoices_statement_key|commission_statement_events_one_(invoice|plan)/.test(
+            text,
+          )
+        )
+          throw domainError(
+            409,
+            'SALESPERSON_INVOICE_EXISTS',
+            'Faktura k tomuto podkladu je už zaevidovaná.',
+          );
+        if (/commission_salesperson_invoices_number_key/.test(text))
+          throw domainError(
+            409,
+            'SALESPERSON_INVOICE_NUMBER_REUSED',
+            'Obchodník už fakturu s tímto číslem vystavil.',
+          );
+        throw e;
+      });
+    return this.statement(statementId);
   }
 }
 
-type StatementRow = Prisma.CommissionStatementGetPayload<{
-  include: { items: true; previous: { select: { periodMonth: true } } };
-}>;
+const toDay = (d: Date) => d.toISOString().slice(0, 10);
+
+type StatementRow = Prisma.CommissionStatementGetPayload<{ include: typeof STATEMENT_INCLUDE }>;
 function toStatement(s: StatementRow): CommissionStatement {
   return {
     id: s.id,
@@ -494,5 +608,15 @@ function toStatement(s: StatementRow): CommissionStatement {
     sourcesReadAt: s.sourcesReadAt.toISOString(),
     approvedAt: s.approvedAt.toISOString(),
     approvedByName: s.approvedByName,
+    salespersonInvoice: s.salespersonInvoice && {
+      invoiceNumber: s.salespersonInvoice.invoiceNumber,
+      issuedOn: toDay(s.salespersonInvoice.issuedOn),
+      receivedOn: toDay(s.salespersonInvoice.receivedOn),
+      base: s.salespersonInvoice.base.toFixed(2),
+      currency: s.salespersonInvoice.currency,
+      payoutOn: toDay(s.salespersonInvoice.payoutOn),
+      recordedAt: s.salespersonInvoice.recordedAt.toISOString(),
+      recordedByName: s.salespersonInvoice.recordedByName,
+    },
   };
 }

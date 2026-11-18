@@ -776,10 +776,11 @@ model CommissionStatement {
   approvedByName      String   @map("approved_by_name")
   requestId           String   @unique @map("request_id") @db.Uuid
 
-  previous CommissionStatement?       @relation("CommissionStatementChain", fields: [previousStatementId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "commission_statements_previous_fkey")
-  next     CommissionStatement?       @relation("CommissionStatementChain")
-  items    CommissionStatementItem[]
-  events   CommissionStatementEvent[]
+  previous           CommissionStatement?          @relation("CommissionStatementChain", fields: [previousStatementId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "commission_statements_previous_fkey")
+  next               CommissionStatement?          @relation("CommissionStatementChain")
+  items              CommissionStatementItem[]
+  events             CommissionStatementEvent[]
+  salespersonInvoice CommissionSalespersonInvoice?
 
   @@unique([periodMonth, salespersonId, currency, mode], map: "commission_statements_slot_key")
   @@map("commission_statements")
@@ -834,5 +835,31 @@ model CommissionStatementEvent {
   statement CommissionStatement @relation(fields: [statementId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "commission_statement_events_statement_fkey")
 
   @@map("commission_statement_events")
+  @@schema("finance")
+}
+
+/// The salesperson's one invoice on an approved statement with a positive amount to invoice
+/// (doc 069 §5, doc 068 I3) and its planned payout day (C12, O11 — DB function
+/// commission_payout_on). Append-only; nothing is paid here.
+model CommissionSalespersonInvoice {
+  id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  statementId    String   @unique(map: "commission_salesperson_invoices_statement_key") @map("statement_id") @db.Uuid
+  mode           String
+  salespersonId  String   @map("salesperson_id") @db.Uuid
+  invoiceNumber  String   @map("invoice_number")
+  issuedOn       DateTime @map("issued_on") @db.Date
+  receivedOn     DateTime @map("received_on") @db.Date
+  base           Decimal  @db.Decimal(19, 2)
+  currency       String   @db.Char(3)
+  payoutOn       DateTime @map("payout_on") @db.Date
+  recordedAt     DateTime @default(dbgenerated("clock_timestamp()")) @map("recorded_at") @db.Timestamptz(3)
+  recordedBy     String   @map("recorded_by") @db.Uuid
+  recordedByName String   @map("recorded_by_name")
+  requestId      String   @unique(map: "commission_salesperson_invoices_request_id_key") @map("request_id") @db.Uuid
+
+  statement CommissionStatement @relation(fields: [statementId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "commission_salesperson_invoices_statement_fkey")
+
+  @@unique([mode, salespersonId, invoiceNumber], map: "commission_salesperson_invoices_number_key")
+  @@map("commission_salesperson_invoices")
   @@schema("finance")
 }

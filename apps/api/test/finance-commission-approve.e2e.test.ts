@@ -262,6 +262,7 @@ describe.skipIf(!hasDatabase)('Finance: approving a commission statement (doc 06
       amountToInvoice: '400.00',
       balanceCarriedForward: null,
       approvedAt: st.approvedAt,
+      payoutPlannedOn: null,
     });
     expect(JSON.stringify(own)).not.toMatch(/T\d{4}-\d{5}|HOT|hotel/i);
     // Bohdan sees only his own (not approved yet).

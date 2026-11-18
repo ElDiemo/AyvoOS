@@ -1,9 +1,10 @@
-import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import {
   approveCommissionStatementSchema,
   commissionMineQuerySchema,
   commissionPreviewQuerySchema,
   commissionStatementsQuerySchema,
+  recordSalespersonInvoiceSchema,
   type ApproveCommissionStatement,
   type CommissionMine,
   type CommissionPreview,
@@ -11,6 +12,7 @@ import {
   type CommissionStatement,
   type CommissionStatementList,
   type CommissionStatementsQuery,
+  type RecordSalespersonInvoice,
 } from '@ayvo/types';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -46,6 +48,21 @@ export class CommissionsController {
     @Caller() caller: FinanceCaller,
   ): Promise<CommissionStatement> {
     return this.closing.approve(req, caller);
+  }
+
+  /**
+   * The salesperson's one invoice on an approved statement and the planned payout day (doc 069
+   * §5d "Payout plan"). Nothing is paid here.
+   */
+  @RequirePermission('finance:commissions_manage')
+  @Post('statements/:id/salesperson-invoice')
+  @HttpCode(200)
+  recordInvoice(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(recordSalespersonInvoiceSchema)) req: RecordSalespersonInvoice,
+    @Caller() caller: FinanceCaller,
+  ): Promise<CommissionStatement> {
+    return this.closing.recordInvoice(id, req, caller);
   }
 
   /** The approved statements of a month. */

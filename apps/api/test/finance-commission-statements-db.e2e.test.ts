@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Prisma } from '../src/generated/prisma/client.js';
+import { payoutPlan } from '../src/finance/commission-closing.js';
 import { createFinanceTestApp, type FinanceTestApp } from './support/finance-app.js';
 import { agreement, hotel, invoice, payer } from './support/finance-portal.js';
 import { hasDatabase, withPrivileged } from './support/test-app.js';
@@ -343,5 +344,90 @@ describe.skipIf(!hasDatabase)('Finance: commission statements — database invar
         { table_name, privilege_type: 'SELECT' },
       ]),
     );
+  });
+
+  it('PR 2d: the salesperson invoice — the payout rule in SQL equals the application, one per statement, append-only', async () => {
+    const cases: [string, string][] = [
+      ['2026-10', '2026-11-01'],
+      ['2026-10', '2026-11-10'],
+      ['2026-10', '2026-11-11'],
+      ['2026-10', '2026-11-18'],
+      ['2026-07', '2026-11-18'],
+      ['2026-07', '2026-11-10'],
+      ['2026-12', '2027-01-10'],
+      ['2026-12', '2027-01-11'],
+      ['2026-11', '2026-12-31'],
+      ['2027-01', '2027-02-28'],
+    ];
+    for (const [month, received] of cases) {
+      const [r] = await withPrivileged(
+        (db) =>
+          db.$queryRaw<
+            { d: string }[]
+          >`SELECT "finance"."commission_payout_on"(${`${month}-01`}::date, ${received}::date)::text AS d`,
+      );
+      expect([month, received, r!.d]).toEqual([month, received, payoutPlan(month, received)]);
+    }
+    const sp = randomUUID();
+    const st = randomUUID();
+    const x = await hotel(f, `Hotel DB faktura ${randomUUID().slice(0, 6)}`);
+    const p = await payer(f, 'Plátce DB faktura');
+    const v = await invoice(f, [(await agreement(f, p.id, x.id)).code], '2026-10');
+    const src = { invoiceId: v.id, number: v.number, hotelId: x.id, hotelCode: x.code };
+    expect(
+      await attempt(async (tx) => {
+        await statement(tx, { id: st, month: '2026-10', sp, total: '200.00' });
+        await item(tx, st, sp, src, { amount: '200.00' });
+      }),
+    ).toBe('OK');
+    const spInvoice = (
+      tx: Tx,
+      o: { number?: string; base?: string; received?: string; payout?: string },
+    ) =>
+      tx.$executeRaw`INSERT INTO "finance"."commission_salesperson_invoices"
+        ("statement_id", "mode", "salesperson_id", "invoice_number", "issued_on", "received_on", "base",
+         "currency", "payout_on", "recorded_by", "recorded_by_name", "request_id")
+        VALUES (${st}::uuid, 'TEST', ${sp}::uuid, ${o.number ?? 'F-1'}, '2026-11-01'::date,
+         ${o.received ?? '2026-11-18'}::date, ${o.base ?? '200.00'}::numeric, 'CZK',
+         ${o.payout ?? '2026-12-15'}::date, ${randomUUID()}::uuid, 'Admin', ${randomUUID()}::uuid)`;
+    expect(await attempt((tx) => spInvoice(tx, { payout: '2026-11-15' }))).toMatch(
+      /payout day follows the payout rule/,
+    );
+    expect(await attempt((tx) => spInvoice(tx, { base: '199.99' }))).toMatch(
+      /statement's amount to invoice/,
+    );
+    expect(
+      await attempt((tx) => spInvoice(tx, { received: '2026-10-31', payout: '2026-11-15' })),
+    ).toMatch(/received after its month closed|commission_salesperson_invoices_dates_check/);
+    expect(await attempt((tx) => spInvoice(tx, {}))).toBe('OK');
+    expect(await attempt((tx) => spInvoice(tx, { number: 'F-2' }))).toMatch(
+      /commission_salesperson_invoices_statement_key|Unique constraint/,
+    );
+    // Events of the invoice only with the invoice, once each.
+    const ev =
+      (kind: string, statementId = st) =>
+      (tx: Tx) =>
+        tx.$executeRaw`INSERT INTO "finance"."commission_statement_events" ("statement_id", "kind", "recorded_by", "recorded_by_name")
+        VALUES (${statementId}::uuid, ${kind}, ${randomUUID()}::uuid, 'Admin')`;
+    expect(await attempt(ev('PAYOUT_PLANNED'))).toBe('OK');
+    expect(await attempt(ev('PAYOUT_PLANNED'))).toMatch(
+      /commission_statement_events_one_plan|Unique constraint/,
+    );
+    expect(await attempt(ev('PAID'))).toMatch(/commission_statement_events_kind_check/);
+    for (const sql of [
+      `UPDATE "finance"."commission_salesperson_invoices" SET "payout_on" = '2026-11-15'`,
+      `DELETE FROM "finance"."commission_salesperson_invoices"`,
+    ])
+      expect(await attempt((tx) => tx.$executeRawUnsafe(sql))).toMatch(
+        /not allowed \(immutable record\)/,
+      );
+    const grants = await withPrivileged(
+      (db) =>
+        db.$queryRaw<{ privilege_type: string }[]>`
+        SELECT privilege_type FROM information_schema.role_table_grants
+        WHERE grantee = 'ayvo_finance_rw' AND table_name = 'commission_salesperson_invoices'
+        ORDER BY privilege_type`,
+    );
+    expect(grants.map((g) => g.privilege_type)).toEqual(['INSERT', 'SELECT']);
   });
 });

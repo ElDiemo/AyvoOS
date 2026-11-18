@@ -121,6 +121,19 @@ export const commissionStatementSchema = z.object({
   sourcesReadAt: z.string(),
   approvedAt: z.string(),
   approvedByName: z.string(),
+  /** PR 2d: the salesperson's one invoice and the planned payout day; null until recorded. */
+  salespersonInvoice: z
+    .object({
+      invoiceNumber: z.string(),
+      issuedOn: z.string(),
+      receivedOn: z.string(),
+      base: money,
+      currency: z.string(),
+      payoutOn: z.string(),
+      recordedAt: z.string(),
+      recordedByName: z.string(),
+    })
+    .nullable(),
 });
 export type CommissionStatement = z.infer<typeof commissionStatementSchema>;
 
@@ -143,7 +156,13 @@ export type CommissionStatementList = z.infer<typeof commissionStatementListSche
  * invoice number, payment or another person. Before approval: PROCESSING ("Zpracovává se").
  */
 export const commissionMineQuerySchema = commissionStatementsQuerySchema;
-export const COMMISSION_MINE_STATES = ['PROCESSING', 'TO_INVOICE', 'NOTHING_TO_INVOICE'] as const;
+export const COMMISSION_MINE_STATES = [
+  'PROCESSING',
+  'TO_INVOICE',
+  'NOTHING_TO_INVOICE',
+  /** PR 2d: the invoice is recorded; the payout is planned (never "Vyplaceno" here). */
+  'INVOICE_RECEIVED',
+] as const;
 export const commissionMineSchema = z.object({
   month: z.string(),
   mode: commissionModeSchema,
@@ -154,5 +173,24 @@ export const commissionMineSchema = z.object({
   /** NOTHING_TO_INVOICE: the negative balance carried to the next statement (O13); else null. */
   balanceCarriedForward: money.nullable(),
   approvedAt: z.string().nullable(),
+  /** INVOICE_RECEIVED: the planned payout day (YYYY-MM-DD); otherwise null. */
+  payoutPlannedOn: z.string().nullable(),
 });
 export type CommissionMine = z.infer<typeof commissionMineSchema>;
+
+/**
+ * POST /api/admin/finance/commissions/statements/:id/salesperson-invoice
+ * (finance:commissions_manage; doc 069 §5, doc 068 I3, C12): the salesperson's one invoice on an
+ * approved statement with a positive amount to invoice — its number, dates and the base without
+ * VAT (= the amount to invoice). The payout day is planned from the actual receipt; nothing is
+ * paid. The same requestId replays the stored result.
+ */
+export const recordSalespersonInvoiceSchema = z.strictObject({
+  requestId: z.uuid(),
+  invoiceNumber: z.string().trim().min(1, 'Uveďte číslo faktury.').max(40),
+  issuedOn: z.iso.date(),
+  receivedOn: z.iso.date(),
+  base: money,
+  currency: z.literal('CZK'),
+});
+export type RecordSalespersonInvoice = z.infer<typeof recordSalespersonInvoiceSchema>;

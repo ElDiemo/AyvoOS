@@ -438,5 +438,18 @@ function statementFingerprint(
   ]);
 }
 
+/**
+ * The planned payout day (doc 069 §5d "Payout plan", C12, O11): the 15th of the first month whose
+ * cut-off (the 10th) the actual receipt met, never before the 15th of M+1 — and so never before
+ * the receipt. The DB function commission_payout_on is the same rule (the table refuses another).
+ */
+export function payoutPlan(month: string, receivedOn: string): string {
+  const received = receivedOn.slice(0, 7);
+  const day = Number(receivedOn.slice(8, 10));
+  const fromReceipt = day <= 10 ? received : nextMonth(received);
+  const earliest = nextMonth(month);
+  return `${fromReceipt > earliest ? fromReceipt : earliest}-15`;
+}
+
 export const monthNotClosed = () =>
   domainError(422, 'MONTH_NOT_CLOSED', 'Měsíc lze uzavřít až od 1. dne následujícího měsíce.');

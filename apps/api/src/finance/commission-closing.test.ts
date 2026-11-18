@@ -10,6 +10,7 @@ import {
   type ClosingInput,
   type ClosingLine,
   type LatestStatement,
+  payoutPlan,
 } from './commission-closing.js';
 
 /**
@@ -343,5 +344,23 @@ describe('commission closing — the calculation (doc 069 §5)', () => {
     const fp = (s: typeof one, sp: string) => s.find((x) => x.salespersonId === sp)!.fingerprint;
     expect(fp(one, A.salespersonId)).toBe(fp(two, A.salespersonId));
     expect(fp(one, B.salespersonId)).not.toBe(fp(two, B.salespersonId));
+  });
+});
+
+describe('payoutPlan (doc 069 §5d, C12, O11)', () => {
+  it('the 15th of the first month whose 10th the receipt met, never before the 15th of M+1', () => {
+    // On time: received by the 10th of M+1.
+    expect(payoutPlan('2026-10', '2026-11-01')).toBe('2026-11-15');
+    expect(payoutPlan('2026-10', '2026-11-10')).toBe('2026-11-15');
+    // The 11th → the next run; the owner's example: received 18. 11. → 15. 12.
+    expect(payoutPlan('2026-10', '2026-11-11')).toBe('2026-12-15');
+    expect(payoutPlan('2026-10', '2026-11-18')).toBe('2026-12-15');
+    // Several months late: counted from the actual receipt, never before it.
+    expect(payoutPlan('2026-07', '2026-11-18')).toBe('2026-12-15');
+    expect(payoutPlan('2026-07', '2026-11-10')).toBe('2026-11-15');
+    // Across the year.
+    expect(payoutPlan('2026-12', '2027-01-10')).toBe('2027-01-15');
+    expect(payoutPlan('2026-12', '2027-01-11')).toBe('2027-02-15');
+    expect(payoutPlan('2026-11', '2026-12-11')).toBe('2027-01-15');
   });
 });
