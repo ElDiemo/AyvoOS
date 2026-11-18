@@ -84,12 +84,41 @@ on another environment goes to the owner before the deploy.
   delete or rewrite R1.1 rows to make an old image work.
 - The release note records the time of the first R1.1 write.
 
-Verified 2026-11-18 on a throwaway worktree of `main` `09e82e7` (the release before R3 and
-R1.1): `test/rollback-compat.e2e.test.ts` with `AYVO_NEWER_API_DIR` = this branch (all R3 and R1.1
-migrations applied) — **17 passed**, 1 not applicable: its precondition "the newer database holds
-permissions this version does not know" is false by design (R1.1 adds no permission), as in doc 050
-§3. Still to do before the DEV deploy: the old release's own production, dispatch and return API
-tests with these migrations applied before each file (doc 049 §2).
+Verified on throwaway worktrees of `main` `09e82e7` (the release before R3 and R1.1), with all
+five migrations of R3-a, R3-b and R1.1 applied (evidence harness outside the repository, listed
+in the review package):
+
+- **2026-11-18:** `test/rollback-compat.e2e.test.ts` with `AYVO_NEWER_API_DIR` = this branch —
+  **17 passed**, 1 not applicable: its precondition "the newer database holds permissions this
+  version does not know" is false by design (R1.1 adds no permission), as in doc 050 §3.
+- **2026-11-19, the old release's own walk** (doc 049 §2), the migrations applied before each
+  file: labelling, filling, orders, tracking, shipments, crates, dispatch printing, database
+  invariants, returns, returns access, Po mytí, cycle member status, portal deliveries — **19 files,
+  171 of 172 passed**. The one difference is by design of R3-b: R2's guard test expects
+  `READY_FOR_REUSE → FILLED` by SQL alone to be refused as "not allowed"; R3 allows that step only
+  with its FILLED event, so the same write is refused as "a filled bottle needs its FILLED event".
+  The first run found two real gaps, fixed before this result: the database refused the old image's
+  new `CONTAINER` line and its unanchored `NOT_DELIVERED` (both answered 500) — §6 2 and §6 4.
+- **2026-11-19, real R1 data across the migrations:** the old release wrote, on its own schema,
+  two closed R1 receipts (one with `COUNT_MISMATCH`, its unscanned bottle still an active member of
+  the `CLOSED` cycle), an open receipt (a `RETURNED` crate line not emptied, an unreadable piece, a
+  container with a bottle of a never scanned crate and an unanchored `NOT_DELIVERED` of a crate
+  only picked up) and an open receipt with a container and an unreadable piece at **another site**.
+  Preflight (§3) on it: 2 open receipts, 1 `RETURNED` cycle, 2 active members of returned/closed
+  cycles, 1 open `NOT_DELIVERED`, 4 open issues, 2 sites. Two copies, both migrated:
+  - **the old release continues** (rollback before the first R1.1 write) — 4/4: every receipt
+    read with its own contracts; the open receipt finished (its bottle on its line, the late
+    `NOT_DELIVERED` identified, Vyprázdněno with counts, closed); a new crate line and a new
+    container line; the other site's receipt 404 at MAIN, written off, emptied and closed there.
+  - **R1.1 takes over** — 5/5: every old receipt read with the new contracts, nothing rewritten
+    (no `BOTTLES` line, no crate freed, counts and reuse counters as recorded); the open receipt
+    continues (a new bottle scan on its `BOTTLES` line, the old `NOT_DELIVERED` resolved under R1's
+    rule on its own line after the late delivery, the R1 lines emptied with counts, closed); the
+    bottle still active in an R1 `CLOSED` cycle received on its own; the never scanned crate
+    freed now, its last bottle traceable at the hotel and received weeks later, never twice; the
+    other site's old receipt continued there, a MAIN bottle there only an `OTHER_SITE` piece.
+  - **after the first R1.1 write** the old release fails reading the receipts (500) — as stated
+    above: fix forward only.
 
 ## 6. Deviations from doc 047 §6.3 (for the review)
 
@@ -108,6 +137,10 @@ tests with these migrations applied before each file (doc 049 §2).
 3. **"Bottle at the hotel" is enforced** (§2 read side, `BOTTLE_AT_HOTEL`): not spelled out in
    §6.3, but without it a bottle freed with its crate would look like a loose finished bottle and
    could be repacked without ever being returned.
+4. **A `NOT_DELIVERED` without an anchor is still accepted on an R1 line** (`CRATE` or
+   `CONTAINER`): the previous image writes it so after a rollback before the first R1.1 write; it
+   is resolved under R1's rule on its own line. On the `BOTTLES` line it is always anchored (review
+   fix, 2026-11-19).
 
 ## 7. Tests (API e2e on a real database, guards committed as `ayvo_core`; Playwright isolated)
 
