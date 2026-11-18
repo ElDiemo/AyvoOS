@@ -65,7 +65,7 @@ export const commissionsCs = {
     plannedLater: (from: string, name: string, until: string) =>
       `Od ${from} je naplánováno: ${name}. Tato změna bude platit jen do ${until}; plán zůstane. Chcete-li plán zrušit, zadejte změnu od ${from}.`,
     acknowledgePlanned: (from: string) => `Rozumím, od ${from} zůstává naplánované přiřazení`,
-    nobody: 'Nikdo (bez provize)',
+    nobody: 'Firemní hotel – bez provize',
     firstMonth: 'První zpoplatněný měsíc',
     source: 'Zdroj',
     sourceManual: 'Ruční přiřazení (hotel bez akvizice)',
@@ -147,7 +147,7 @@ export const commissionsCs = {
       INITIAL: 'počáteční',
       MAINTENANCE: 'udržovací',
       MISSING_TERMS: 'Chybí podmínky provize',
-      NO_SALESPERSON: 'Bez obchodníka',
+      NO_SALESPERSON: 'Firemní hotel – bez provize',
       BEFORE_START: 'Před prvním zpoplatněným měsícem',
     },
   },
