@@ -62,6 +62,8 @@ Core runtime DB role for review: [0041 — The running core connects as its own 
 
 PPL production for review: [0042 — PPL production connection, chosen explicitly per site](0042-ppl-production-connection.md).
 
+Sales commissions (proposed; addendum 2026-11-18 for review): [0046 — Sales commissions: attribution and terms in the core, calculation and statements in Finance](0046-sales-commissions.md). Details: doc 068 (core, implemented as #192/#193) and doc 069 (the Finance closing).
+
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
 owner on 2026-10-10 as part of the foundation review. ADRs 0004,
 0005, 0006 and 0008 were updated on 2026-10-10 to reflect the owner's
