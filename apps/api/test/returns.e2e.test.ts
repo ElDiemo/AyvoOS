@@ -633,8 +633,7 @@ describe.skipIf(!hasDatabase)('return intake R1.1 (doc 047 §6.3)', () => {
           db.$executeRaw`UPDATE "crate_assignments" SET "released_at" = NULL WHERE "cycle_id" = ${cycle.id}::uuid`,
           /changes only by its one release/,
         );
-        // A BOTTLES line is never emptied and has no count; a second one is refused; no new
-        // container line exists in R1.1.
+        // A BOTTLES line is never emptied and has no count; a second one is refused.
         await fails(
           db.$executeRaw`UPDATE "return_receipt_lines" SET "emptied_at" = now(), "emptied_by" = "scanned_by",
             "empty_operation_id" = "scan_operation_id" WHERE "id" = ${bLine}::uuid`,
@@ -645,17 +644,55 @@ describe.skipIf(!hasDatabase)('return intake R1.1 (doc 047 §6.3)', () => {
             SELECT "receipt_id", 'BOTTLES', "scanned_by", "scan_operation_id" FROM "return_receipt_lines" WHERE "id" = ${bLine}::uuid`,
           /return_receipt_lines_one_bottles_line/,
         );
-        await fails(
-          db.$executeRaw`INSERT INTO "return_receipt_lines" ("receipt_id", "kind", "scanned_by", "scan_operation_id")
-            SELECT "receipt_id", 'CONTAINER', "scanned_by", "scan_operation_id" FROM "return_receipt_lines" WHERE "id" = ${bLine}::uuid`,
-          /needs no container line/,
-        );
         // The crate line keeps its (absent) count: an emptied line changes no more.
         await fails(
           db.$executeRaw`UPDATE "return_receipt_lines" SET "physical_count" = 2 WHERE "id" = ${kLine}::uuid`,
           /changes only by its one emptying/,
         );
       });
+      await api.close(receipt.code).expect(200);
+    });
+
+    it('a container line and an unanchored NOT_DELIVERED of the previous image (a rollback before the first R1.1 write) stay R1: resolved on that line, emptied with its count, then the close', async () => {
+      const { crates } = await delivered();
+      const [k] = crates as [MadeCrate];
+      // M only picked up (its bottles in circulation before the container line is opened).
+      const m = await factory.make();
+      const transit = await shipCrates(t, hotel, factory.kit.productCode, [m]);
+      await pickUp(t, transit);
+      const receipt = await api.open();
+      // R1.1 itself has no container route.
+      expect((await api.post(`/receipts/${receipt.code}/containers`, {})).status).toBe(404);
+      await api.unreadable(receipt.code).expect(200);
+      const bLine = bottlesLine(await api.detail(receipt.code))!.id;
+      // What the previous image's "Krabice bez kódu" writes, committed as the core role.
+      await t.prisma
+        .$executeRaw`INSERT INTO "return_receipt_lines" ("receipt_id", "kind", "scanned_by", "scan_operation_id")
+        SELECT "receipt_id", 'CONTAINER', "scanned_by", "scan_operation_id" FROM "return_receipt_lines" WHERE "id" = ${bLine}::uuid`;
+      const box = (await api.detail(receipt.code)).lineDetails.find((l) => l.kind === 'CONTAINER')!;
+      expect(box.emptiedAt).toBeNull();
+      // The previous image's NOT_DELIVERED on that line has no anchor (R1): accepted there.
+      const line = await t.prisma.returnReceiptLine.findUniqueOrThrow({ where: { id: box.id } });
+      await t.prisma
+        .$executeRaw`INSERT INTO "return_receipt_issues" ("serial", "code", "receipt_id", "line_id", "kind",
+          "bottle_id", "recorded_by", "record_operation_id")
+        VALUES (999101, 'RI-999101', ${line.receiptId}::uuid, ${line.id}::uuid, 'NOT_DELIVERED',
+          ${m.bottleIds[0]!}::uuid, ${line.scannedBy}::uuid, ${line.scanOperationId}::uuid)`;
+      // A bottle scanned now goes to the BOTTLES line, never to the container.
+      expect(ok(await api.scanBottle(receipt.code, k.bottleUrls[0]!))).toMatchObject({
+        outcome: 'IDENTIFIED',
+      });
+      expect((await sortedOf(k.bottleIds[0]!))[0]!.returnLineId).toBe(bLine);
+      // The container keeps R1's rule: the close waits for its Vyprázdněno with a count.
+      refused(await api.close(receipt.code), 409, 'LINES_NOT_EMPTIED');
+      // R1's rule: resolved on its own line once the crate is delivered.
+      refused(await api.identify('RI-999101', m.bottleUrls[0]!), 409, 'NOT_DELIVERED');
+      await deliver(t, transit);
+      expect(ok(await api.identify('RI-999101', m.bottleUrls[0]!))).toMatchObject({
+        outcome: 'IDENTIFIED',
+      });
+      expect((await sortedOf(m.bottleIds[0]!))[0]!.returnLineId).toBe(box.id);
+      await api.empty(receipt.code, box.id, 1).expect(200);
       await api.close(receipt.code).expect(200);
     });
 
