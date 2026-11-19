@@ -5,6 +5,7 @@ import {
   type UpdateHotelPracticalRequest,
   type CreateHotelRequest,
   type FulfillmentSiteOption,
+  type HotelChange,
   type HotelDetail,
   type HotelSummary,
 } from '@ayvo/types';
@@ -39,6 +40,15 @@ export class HotelsController {
     @Param('code', new ZodValidationPipe(hotelCodeSchema)) code: string,
   ): Promise<HotelDetail> {
     return this.hotels.detail(code);
+  }
+
+  /** "Historie změn údajů": who changed the hotel's details, when, why (staff or the portal). */
+  @RequirePermission('hotels:read')
+  @Get(':code/changes')
+  changes(
+    @Param('code', new ZodValidationPipe(hotelCodeSchema)) code: string,
+  ): Promise<HotelChange[]> {
+    return this.hotels.changes(code);
   }
 
   /** "Upravit praktické údaje" (doc 032): optional details only, with a reason. */

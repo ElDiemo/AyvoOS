@@ -113,6 +113,7 @@ test('the hotel in clear sections; receiving details are optional and saved with
     'Dodávky',
   ]);
   await expect(page.getByTestId('hotel-practical')).toContainText('Nevyplněno');
+  await expect(page.getByTestId('hotel-changes')).toContainText('Údaje se od založení neměnily.');
   await expect(page.getByTestId('hotel-plan')).toContainText('Hotel zatím nemá plán zásobování.');
   await expect(page.getByTestId('hotel-deliveries')).toContainText('Zatím žádné doručené');
   await page.getByTestId('edit-practical').click();
@@ -128,6 +129,12 @@ test('the hotel in clear sections; receiving details are optional and saved with
   await expect(page.getByTestId('hotel-practical')).toContainText(
     'Jana Skladová, +420 600 000 111',
   );
+  // Who changed it and why (Historie změn údajů).
+  const changes = page.getByTestId('hotel-changes');
+  await expect(changes).toContainText('AYVO');
+  await expect(changes).toContainText('Důvod: doplněno z telefonátu');
+  await expect(changes).toContainText('Pokyny k doručení');
+  await expect(changes).toContainText('Příjem zboží – jméno');
   await threeWidths(page, 'plan-01-hotel-empty');
   await page.getByTestId('create-plan').click();
   await page.waitForURL(`**/hotels/${hotel}/plan`);
