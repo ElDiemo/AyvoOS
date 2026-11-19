@@ -25,8 +25,44 @@ export class OrderReturnsService {
         },
       },
     });
-    if (!allocation || !allocation.parcels.some((p) => p.progress?.deliveredAt)) return null;
-    return { id: allocation.id, order: allocation.order };
+    const deliveredAt = allocation?.parcels.find((p) => p.progress?.deliveredAt)?.progress
+      ?.deliveredAt;
+    if (!allocation || !deliveredAt) return null;
+    return { id: allocation.id, order: allocation.order, deliveredAt };
+  }
+
+  /**
+   * R1.1 (doc 047 §6.3 2): the delivery of the allocation (live or completed) that recorded this
+   * assignment at picking — its order and when the carrier delivered it — or null.
+   */
+  async deliveryOf(db: Prisma.TransactionClient, assignmentId: string) {
+    const row = await db.orderAllocationBottle.findFirst({
+      where: { assignmentId, allocation: { releasedAt: null } },
+      select: {
+        allocation: {
+          select: {
+            id: true,
+            order: { select: { code: true } },
+            parcels: {
+              where: { shipment: { status: { not: 'CANCELLED' } } },
+              select: { progress: { select: { deliveredAt: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!row) return null;
+    const deliveredAt =
+      row.allocation.parcels.find((p) => p.progress?.deliveredAt)?.progress?.deliveredAt ?? null;
+    return { allocationId: row.allocation.id, orderCode: row.allocation.order.code, deliveredAt };
+  }
+
+  /** The cycle's live (neither released nor completed) allocation, for a NOT_DELIVERED anchor. */
+  async liveAllocation(db: Prisma.TransactionClient, cycleId: string) {
+    return db.orderCrateAllocation.findFirst({
+      where: { cycleId, releasedAt: null, completedAt: null },
+      select: { id: true },
+    });
   }
 
   /** Completed once by its crate line: it stays the order's history, no longer holding the crate. */

@@ -68,10 +68,10 @@ describe.skipIf(!hasDatabase)('crate membership only for placeable bottles', () 
     await deliver(t, await shipCrates(t, hotel, factory.kit.productCode, [k, l]));
     const api = returnsApi(t);
     const receipt = await api.open();
-    const line = (await api.scanCrate(receipt.code, k.crateUrl)).body.lineId as string;
-    await api.scanBottle(receipt.code, line, k.bottleUrls[0]!, 'GOOD').expect(200);
-    await api.scanBottle(receipt.code, line, k.bottleUrls[1]!, 'DEFECTIVE').expect(200);
-    await api.scanBottle(receipt.code, line, l.bottleUrls[0]!, 'DEFECTIVE').expect(200);
+    await api.scanCrate(receipt.code, k.crateUrl).expect(200);
+    await api.scanBottle(receipt.code, k.bottleUrls[0]!, 'GOOD').expect(200);
+    await api.scanBottle(receipt.code, k.bottleUrls[1]!, 'DEFECTIVE').expect(200);
+    await api.scanBottle(receipt.code, l.bottleUrls[0]!, 'DEFECTIVE').expect(200);
     returned = { id: k.bottleIds[0]!, code: await codeOf(k.bottleIds[0]!) };
     retired = { id: k.bottleIds[1]!, code: await codeOf(k.bottleIds[1]!) };
     // DISPOSED has no API in R1: the database's own RETIRED → DISPOSED path (fixture only).
