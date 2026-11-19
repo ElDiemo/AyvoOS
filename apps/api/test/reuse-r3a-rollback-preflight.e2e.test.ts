@@ -54,11 +54,23 @@ describe.skipIf(!hasDatabase)(
     const name = `ayvo_r3a_pf_${Math.random().toString(16).slice(2, 10)}`;
     class Rollback extends Error {}
 
-    /** Runs the preflight read-only after `setup` and rolls everything back. */
-    const preflight = async (setup: (tx: Tx) => Promise<unknown> = async () => {}) => {
+    /**
+     * Runs the preflight read-only after `setup` and rolls everything back. `base: 'r3a'` starts
+     * from a database that recorded R3-a as its latest migration (the later ones of this branch,
+     * if any, are taken out of `_prisma_migrations` first); `'branch'` from this branch as deployed.
+     */
+    const preflight = async (
+      setup: (tx: Tx) => Promise<unknown> = async () => {},
+      { base = 'r3a' }: { base?: 'r3a' | 'branch' } = {},
+    ) => {
       let result: Preflight | undefined;
       await db
         .$transaction(async (tx) => {
+          if (base === 'r3a')
+            await tx.$executeRawUnsafe(
+              `DELETE FROM _prisma_migrations WHERE migration_name > $1`,
+              R3A,
+            );
           await setup(tx);
           await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
           [result] = await tx.$queryRawUnsafe<Preflight[]>(preflightSql);
@@ -185,6 +197,48 @@ describe.skipIf(!hasDatabase)(
         later_migrations: `${R3B[0]}=DEPENDS_R3B, ${R3B[1]}=DEPENDS_R3B, ${COMMISSIONS}=INDEPENDENT`,
       });
     });
+
+    const laterInRepo = repoMigrations.filter((m) => m > R3A);
+    it('this branch as deployed: each later migration by its classification', async () => {
+      const expected = laterInRepo.map((m) => `${m}=${reviewed.get(m)![1]}`);
+      const dependent = laterInRepo.some((m) => reviewed.get(m)![1].startsWith('DEPENDS_'));
+      const verdict = dependent ? 'STOP_DEPENDENT_DEPLOYED' : 'ROLLBACK_ALLOWED';
+      expect(await preflight(undefined, { base: 'branch' })).toMatchObject({
+        verdict,
+        later_migrations: expected.join(', '),
+      });
+      // With a later independent one deployed as well: unchanged.
+      expect(
+        await preflight((tx) => applied(tx, COMMISSIONS, reviewedChecksum(COMMISSIONS)), {
+          base: 'branch',
+        }),
+      ).toMatchObject({
+        verdict,
+        later_migrations: [...expected, `${COMMISSIONS}=INDEPENDENT`].sort().join(', '),
+      });
+    });
+
+    it.runIf(laterInRepo.includes(R3B[1]!))(
+      'R3-b applied for real: its first write (a REUSE member alone) means fix forward only',
+      async () => {
+        expect(
+          await preflight(
+            async (tx) => {
+              // A REUSE member with nothing filled yet (review 5829606688). The triggers and FKs
+              // are off only to place this one row without a whole crate scenario.
+              await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
+              await tx.$executeRawUnsafe(
+                `INSERT INTO crate_assignments (cycle_id, cycle_capacity, bottle_id, ordinal, source,
+                   assigned_by, operation_request_id, assigned_event_id)
+                 VALUES (gen_random_uuid(), 1, gen_random_uuid(), 1, 'REUSE', gen_random_uuid(),
+                   gen_random_uuid(), gen_random_uuid())`,
+              );
+            },
+            { base: 'branch' },
+          ),
+        ).toMatchObject({ verdict: 'FIX_FORWARD', reuse_members: 1, reuse_anchored: 0 });
+      },
+    );
 
     it('a FILLED without its anchor stops it (filled <> anchored)', async () => {
       expect(
