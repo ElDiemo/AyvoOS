@@ -20,6 +20,7 @@ import type {
   ReturnScanRequest,
   ReturnsOverview,
 } from '@ayvo/types';
+import { RETURN_RECENT_BOTTLES } from '@ayvo/types';
 import { Inject, Injectable } from '@nestjs/common';
 import { BottlesService } from '../assets/bottles.service.js';
 import { CODE_PREFIX, formatCode, parseCodeSerial } from '../common/codes.js';
@@ -117,9 +118,16 @@ export class ReturnReceiptsService {
     return (await this.hotels.list(site.siteId)).map((h) => ({ code: h.code, name: h.name }));
   }
 
-  async detail(site: SiteContext, code: string): Promise<ReturnReceiptDetail> {
+  async detail(
+    site: SiteContext,
+    code: string,
+    bottles: 'all' | 'recent' = 'all',
+  ): Promise<ReturnReceiptDetail> {
     const receipt = await this.receiptInSite(code, site.siteId);
-    return this.detailOf(this.prisma, receipt.id);
+    // One snapshot: the counts, the lines and the bottle lists agree even while others scan.
+    return this.prisma.$transaction((tx) => this.detailOf(tx, receipt.id, bottles), {
+      isolationLevel: 'RepeatableRead',
+    });
   }
 
   async overview(site: SiteContext): Promise<ReturnsOverview> {
@@ -1496,7 +1504,17 @@ export class ReturnReceiptsService {
     };
   }
 
-  private async detailOf(db: Tx, id: string): Promise<ReturnReceiptDetail> {
+  /**
+   * The receipt's detail in a fixed number of queries, whatever its size (a large receipt has
+   * hundreds of crates and bottles; the intake reloads it after every scan). `recent` keeps only
+   * the latest RETURN_RECENT_BOTTLES bottles of each line; every count, line and issue stays
+   * complete and is read from the database, never from the shortened lists.
+   */
+  private async detailOf(
+    db: Tx,
+    id: string,
+    bottles: 'all' | 'recent' = 'all',
+  ): Promise<ReturnReceiptDetail> {
     const summary = await this.summary(db, id);
     const r = await db.returnReceipt.findUniqueOrThrow({
       where: { id },
@@ -1518,7 +1536,8 @@ export class ReturnReceiptsService {
             },
             sortedEvents: {
               where: { type: 'SORTED' },
-              orderBy: { id: 'asc' },
+              orderBy: { id: bottles === 'recent' ? 'desc' : 'asc' },
+              ...(bottles === 'recent' ? { take: RETURN_RECENT_BOTTLES } : {}),
               select: {
                 occurredAt: true,
                 payload: true,
@@ -1532,42 +1551,72 @@ export class ReturnReceiptsService {
         },
       },
     });
-    const lineDetails: ReturnLineDetail[] = [];
-    const shippedOf = new Map<string, Awaited<ReturnType<OrderReturnsService['shippedOfCycle']>>>();
-    const cycleShipped = async (cycleId: string) => {
-      if (!shippedOf.has(cycleId)) {
-        shippedOf.set(cycleId, await this.orderReturns.shippedOfCycle(db, cycleId));
-      }
-      return shippedOf.get(cycleId)!;
-    };
-    for (const l of r.lines) {
-      const bottles = [];
-      for (const e of l.sortedEvents) {
-        const shipped = await cycleShipped(e.crateCycleId!);
-        const payload = e.payload as { outcome: 'RETURNED' | 'RETIRED'; crate: string };
-        bottles.push({
-          bottleCode: e.bottle.code,
-          outcome: payload.outcome,
-          crateCode: payload.crate,
-          orderCode: shipped?.orderCode ?? '',
-          at: e.occurredAt.toISOString(),
-          resolvesIssue: e.resolvesIssue?.code ?? null,
-        });
-      }
-      let history: ReturnLineDetail['history'] = null;
-      const freedWithCrate =
-        l.kind === 'CRATE'
-          ? await db.crateAssignment.count({ where: { releasedByLineId: l.id } })
-          : null;
-      if (l.returnedCycleId) {
-        const shipped = await cycleShipped(l.returnedCycleId);
-        const identified = await db.bottleEvent.count({
-          where: { type: 'SORTED', crateCycleId: l.returnedCycleId },
-        });
-        const n = shipped?.shipped ?? 0;
-        history = { shipped: n, identified, withoutConfirmedReturn: n - identified };
-      }
-      lineDetails.push({
+    const lineIds = r.lines.map((l) => l.id);
+    const returnedCycles = r.lines.flatMap((l) => (l.returnedCycleId ? [l.returnedCycleId] : []));
+    const cycleIds = [
+      ...new Set([
+        ...returnedCycles,
+        ...r.lines.flatMap((l) => l.sortedEvents.map((e) => e.crateCycleId!)),
+      ]),
+    ];
+    const [
+      shipped,
+      freed,
+      identifiedOfCycle,
+      sortedOfLine,
+      ownSortedOfLine,
+      piecesOfLine,
+      defective,
+    ] = await Promise.all([
+      this.orderReturns.shippedOfCycles(db, cycleIds),
+      db.crateAssignment.groupBy({
+        by: ['releasedByLineId'],
+        where: { releasedByLineId: { in: lineIds } },
+        _count: { _all: true },
+      }),
+      db.bottleEvent.groupBy({
+        by: ['crateCycleId'],
+        where: { type: 'SORTED', crateCycleId: { in: returnedCycles } },
+        _count: { _all: true },
+      }),
+      db.bottleEvent.groupBy({
+        by: ['returnLineId'],
+        where: { type: 'SORTED', returnLineId: { in: lineIds } },
+        _count: { _all: true },
+      }),
+      db.bottleEvent.groupBy({
+        by: ['returnLineId'],
+        where: { type: 'SORTED', returnLineId: { in: lineIds }, resolvesIssueId: null },
+        _count: { _all: true },
+      }),
+      db.returnReceiptIssue.groupBy({
+        by: ['lineId'],
+        where: { lineId: { in: lineIds }, kind: { in: PIECE_KINDS } },
+        _count: { _all: true },
+      }),
+      db.bottleEvent.count({
+        where: {
+          type: 'SORTED',
+          returnLine: { receiptId: id },
+          payload: { path: ['outcome'], equals: 'RETIRED' },
+        },
+      }),
+    ]);
+    const by = <K extends string>(
+      rows: ({ _count: { _all: number } } & Record<K, string | null>)[],
+      key: K,
+    ) => new Map(rows.map((row) => [row[key], row._count._all]));
+    const freedOf = by(freed, 'releasedByLineId');
+    const identifiedOf = by(identifiedOfCycle, 'crateCycleId');
+    const bottleCountOf = by(sortedOfLine, 'returnLineId');
+    const ownSortedOf = by(ownSortedOfLine, 'returnLineId');
+    const piecesOf = by(piecesOfLine, 'lineId');
+
+    const lineDetails: ReturnLineDetail[] = r.lines.map((l) => {
+      const events = bottles === 'recent' ? [...l.sortedEvents].reverse() : l.sortedEvents;
+      const n = l.returnedCycleId ? (shipped.get(l.returnedCycleId)?.shipped ?? 0) : 0;
+      const identified = l.returnedCycleId ? (identifiedOf.get(l.returnedCycleId) ?? 0) : 0;
+      return {
         id: l.id,
         kind: l.kind,
         crateCode: l.crate?.code ?? null,
@@ -1576,22 +1625,35 @@ export class ReturnReceiptsService {
         scannedAt: l.scannedAt.toISOString(),
         emptiedAt: l.emptiedAt?.toISOString() ?? null,
         physicalCount: l.physicalCount,
-        recordedCount: await this.recordedCount(db, l.id),
-        bottles,
+        // Each piece once: its piece issue (resolved or not), or its own SORTED (§4.8).
+        recordedCount: (piecesOf.get(l.id) ?? 0) + (ownSortedOf.get(l.id) ?? 0),
+        bottleCount: bottleCountOf.get(l.id) ?? 0,
+        bottles: events.map((e) => {
+          const payload = e.payload as { outcome: 'RETURNED' | 'RETIRED'; crate: string };
+          return {
+            bottleCode: e.bottle.code,
+            outcome: payload.outcome,
+            crateCode: payload.crate,
+            orderCode: shipped.get(e.crateCycleId!)?.orderCode ?? '',
+            at: e.occurredAt.toISOString(),
+            resolvesIssue: e.resolvesIssue?.code ?? null,
+          };
+        }),
         issues: l.issues.map(toIssue),
-        freedWithCrate,
-        history,
-      });
-    }
-    const all = lineDetails.flatMap((l) => l.bottles);
+        freedWithCrate: l.kind === 'CRATE' ? (freedOf.get(l.id) ?? 0) : null,
+        history: l.returnedCycleId
+          ? { shipped: n, identified, withoutConfirmedReturn: n - identified }
+          : null,
+      };
+    });
     return {
       ...summary,
       hotelCode: r.hotel?.code ?? null,
       defectivePumps: r.pumpCounts.reduce((sum, p) => sum + p.defective, 0),
       counts: {
         crates: lineDetails.filter((l) => l.kind === 'CRATE').length,
-        identified: all.length,
-        defective: all.filter((b) => b.outcome === 'RETIRED').length,
+        identified: summary.identified,
+        defective,
         unreadable: lineDetails.flatMap((l) => l.issues).filter((i) => i.kind === 'UNREADABLE')
           .length,
       },
