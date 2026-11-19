@@ -53,40 +53,35 @@ Run the preflight first. It decides whether this runbook applies at all.
 
 ### 1. Preflight, before anything is started (read only, privileged migration role)
 
-```sql
--- a) Migrations after R3-a. Any row: R3-b (or later) was deployed. Stop here.
-SELECT migration_name, finished_at, rolled_back_at
-  FROM _prisma_migrations
- WHERE migration_name > '20261119090000_bottle_fill_circulations'
- ORDER BY migration_name;
+`scripts/sql/reuse-r3a-rollback-preflight.sql`, inside `BEGIN READ ONLY`. It returns one row: a
+`verdict`, every later migration with its classification (`later_migrations`, for the release
+note), and the counts below.
 
--- b) Both R3-b signals. Each must be 0. `::text` keeps the query valid before the R3-b enum
---    value exists.
-SELECT (SELECT count(*) FROM crate_assignments WHERE source::text = 'REUSE') AS reuse_members,
-       (SELECT count(*) FROM bottle_fill_circulations c
-          JOIN bottle_events e ON e.id = c.circulation_event_id
-         WHERE e.type = 'REUSE_READY')                                      AS reuse_anchored;
+It checks three things:
 
--- c) The anchors: filled = anchored.
-SELECT (SELECT count(*) FROM bottle_events WHERE type = 'FILLED') AS filled,
-       (SELECT count(*) FROM bottle_fill_circulations)            AS anchored;
-```
+- **(a) Later migrations, by their real relation to R3-a.** A migration after R3-a stops the
+  rollback unless the file's reviewed list names it **with the same checksum** (what Prisma
+  records: sha256 of its `migration.sql`) as `INDEPENDENT`. `INDEPENDENT` means its SQL names no
+  R3-a object (`bottle_fill_circulations`, its triggers and functions) and needs no migration that
+  does. Example: commissions 2a (#196, `20261119180000_finance_commissions_permission`) has a later
+  prefix but only adds a permission. It does not stop this rollback; its own rollback is decided by
+  its own runbook. R3-b (#154) and R1.1 (#197) are `DEPENDS_*`.
+  **Fail closed:** an unknown name, another checksum, a failed migration, or one named before R3-a
+  but applied after it is `UNVERIFIED` and stops the rollback. Adding a migration to the list needs
+  a review of its SQL; a test fails while a migration of the repo after R3-a is missing from it.
+- **(b) Both R3-b signals** (`reuse_members`, `reuse_anchored`), each must be 0. R3-b's first write
+  can be a `REUSE` member alone, before any reused filling (review 5829606688). The R2 code does
+  not know that value and may fail to read the crate. That is why (b) checks members as well as
+  fillings. Checking only after the rollback would be too late.
+- **(c) The anchors:** `filled = anchored`.
 
-The rollback to R2 may start only when all three hold:
-
-- (a) returns no row;
-- (b) gives `reuse_members = 0` and `reuse_anchored = 0`;
-- (c) gives `filled = anchored`.
-
-R3-b's first write can be a `REUSE` member alone, before any reused filling (review 5829606688). The
-R2 code does not know that value and may fail to read the crate. That is why (b) checks members as
-well as fillings. Checking only after the rollback would be too late.
-
-If (a) returns a row, or (b) is not 0, this runbook does not apply:
-
-- **R3-b is deployed, but nothing has been written through it** (both counts 0): follow doc 059.
-  Go back to the R3-a image only, and run its checks.
-- **Either count is above 0:** fix forward only (doc 048 §3.3c).
+| `verdict`                   | Meaning                                                         | What to do                                                                         |
+| --------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `ROLLBACK_ALLOWED`          | only R3-a and reviewed independent migrations, (b) 0, (c) holds | §2                                                                                 |
+| `STOP_DEPENDENT_DEPLOYED`   | R3-b and/or R1.1 deployed, nothing written through R3-b         | doc 070 (R1.1) / doc 059 (R3-b): back to the R3-a image only, and run their checks |
+| `FIX_FORWARD`               | a `REUSE` member or a reused filling exists                     | fix forward only (doc 048 §3.3c)                                                   |
+| `STOP_UNVERIFIED_MIGRATION` | a later migration nobody has checked against R3-a               | stop; review its SQL and add it to the list in a PR first                          |
+| `STOP_ANCHORS`              | `filled <> anchored`                                            | stop; R3-a is not intact                                                           |
 
 Going from R3-b straight back to R2 is not covered by any runbook.
 
@@ -102,8 +97,8 @@ Neither runs a migration, so nothing in the database changes.
 
 ### 3. After the rollback
 
-Repeat the preflight (a)–(c). Nothing may have changed: still no later migration,
-`reuse_members = 0`, `reuse_anchored = 0` and `filled = anchored`. The trigger stays in force, so
+Repeat the preflight. Nothing may have changed: still `ROLLBACK_ALLOWED` with the same
+`later_migrations`. The trigger stays in force, so
 each `FILLED` the R2 image writes from now on still gets its anchor.
 
 ### Why the schema is kept
@@ -133,5 +128,10 @@ way forward again, with a backfill and the rules restored. This release does not
   - a row naming another bottle's circulation, or a non-`FILLED` event, is refused.
 - **A second `FILLED`** of a filled bottle by direct SQL is refused and nothing is written.
 - **Two concurrent fill scans** of one bottle give one `FILLED` and one anchor.
+- **The rollback preflight** (`reuse-r3a-rollback-preflight.e2e`, a throw-away database): only R3-a
+  → allowed; a later independent migration (commissions 2a) → still allowed; the same name with
+  another checksum, an unknown, a failed and a late-applied earlier migration → stop; R3-b recorded
+  → `STOP_DEPENDENT_DEPLOYED`; a `FILLED` without its anchor → `STOP_ANCHORS`; the reviewed
+  checksums are what Prisma records, and every later migration of the repo is in the list.
 - **Compatibility:** the existing labelling, filling, crates, orders, shipments, returns (R1) and
   "Po mytí" (R2) suites pass on this schema (13 files, 120 tests).
