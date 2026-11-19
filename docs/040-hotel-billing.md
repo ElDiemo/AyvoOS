@@ -279,7 +279,7 @@ the real script text and a stub of Docker. No real deployment has run this.
 
 1. In advance or in arrears, and the issuing window.
 2. Partial months; mid-month room changes.
-3. Number series next to iDoklad (format, start).
+3. Number series next to iDoklad (format, start) — decided by the owner on 2026-11-03 (§16).
 4. VAT, tax point and rounding; foreign customers (reverse charge).
 5. PDF contents; QR payment.
 6. Corrections (credit note).
@@ -337,7 +337,7 @@ UOL's rule (doc 041 §8b, PR #110).
 | ---------------------------------------------- | ------------------------------------------------------------------------ |
 | 1. In advance or in arrears, issuing window    | decided as a setting (above); the setting itself is still to be proposed |
 | 2. Partial months, mid-month room changes      | open                                                                     |
-| 3. Number series                               | UOL                                                                      |
+| 3. Number series                               | decided by the owner 2026-11-03 (§16); tax-document conditions with UOL  |
 | 4. VAT, tax point, rounding, foreign customers | UOL (law above)                                                          |
 | 5. PDF contents, QR payment                    | done for TEST invoices (§9); tax-document contents with UOL              |
 | 6. Corrections (credit note)                   | open                                                                     |
@@ -398,3 +398,54 @@ infrastructure, DNS or the edge):
    Finance never reads core tables; whether the portal is part of the shared web app or its own
    app is an architecture decision.
 5. **Payment-state wording** shown to a customer, and whether overdue is shown.
+
+## 16. Number series of issued hotel invoices (owner 2026-11-03; proposal + isolated base)
+
+The owner approved the number series of issued hotel invoices on 2026-11-03. It is the first own
+series: no iDoklad series is documented and the company does not issue invoices anywhere yet.
+**Nothing here enables live issuing**: the gate of §5 stays closed, `invoices.kind` stays `TEST` only
+(DB CHECK), and no VAT, tax point (DUZP) or other accounting condition is decided here (§13, UOL).
+
+**Approved (owner):**
+
+- Number = **year of issue + series `1` + five digits of order**, e.g. `2026100001` (ten digits).
+- The **same number is the variable symbol** in QR Platba, on the PDF and in the accountant's export.
+- The PDF names the service **"AYVO · Hotelové služby"** in the document's language; the supplier
+  (issuer) is **REvolaris** — the issuer's data from §8, not a text constant.
+- The TEST series stays as it is (§9: `T<year>-<5>`, VS `99<year><4>`, its own counter).
+
+**Rules of allocation** (built as an isolated base, `apps/api/src/finance/invoice-numbering.ts`):
+
+- Allocated **atomically at issue**, inside the issuing transaction after everything that may
+  still refuse it (§5 step 3): the counter row stays locked until commit and rolls back with it. A
+  number therefore exists only together with its issued invoice; a refused or failed attempt hands
+  the same number to the next one, and an issued number is never handed out again (a cancelled
+  invoice keeps its number). `invoices.number` and `invoices.variable_symbol` stay unique (DB).
+- **A retry of the same request** (`requestId`) replays the stored result with the same number — the
+  idempotency of §5 step 1 (`operation_requests`), as for TEST invoices.
+- **A counter of its own per year and series**: a row `hotel_invoice:<year>:<series>` in
+  `finance.code_counters`, created at the first issue of that year (from `00001`). The year is the
+  year of the **issue date** (Europe/Prague), never the billed period: December billed on 5 January
+  is a number of the new year.
+- After **99 999** in a year the issue is refused (`409 NUMBER_SERIES_FULL`, nothing issued, the
+  counter unchanged) — never a sixth digit, never another series by itself.
+- Tests on the real Finance DB as its runtime role (`finance-invoice-numbering.e2e.test.ts`):
+  format, concurrency (20 at once: distinct, consecutive), a failed attempt and its retry, the
+  turn of the year, another billed period, exhaustion, the TEST counter untouched.
+
+**It fits the approved model** without a migration: `code_counters` is the existing gapless counter
+table of Finance (runtime grant SELECT/INSERT/UPDATE). The base is not called by any route.
+
+**Exact decisions still needed before it is used** (with the live tax document, §13 step 6):
+
+1. **The live invoice kind** in `invoices` (CHECK today `TEST` only) and its DB CHECKs: number
+   `^\d{4}1\d{5}$`, VS = number, number year = year of `issued_on`. Part of the live document's
+   model, together with UOL's answers (tax point, VAT, rounding).
+2. **The 99 999 limit in the DB as well**, i.e. a dedicated counter table with `CHECK (last_value
+BETWEEN 0 AND 99999)` instead of a `code_counters` row (today the limit is in the allocating
+   statement only). Proposal: decide with decision 1.
+3. **The wording of "AYVO · Hotelové služby" in English and German** for the PDF (proposal:
+   "AYVO · Hotel services", "AYVO · Hoteldienstleistungen") — the owner's confirmation.
+4. **The series of corrections** (credit notes, §7 item 6): not this series unless decided.
+5. **An issue date in a year already closed** (back-dating): allowed or refused — not decided; the
+   base numbers by the date it is given.
