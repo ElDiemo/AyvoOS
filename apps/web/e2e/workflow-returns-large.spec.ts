@@ -1,8 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { json, measurement, printedBottles } from './dispatch-setup';
-import { e2eSql } from './e2e-db';
-import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from './labeling-setup';
+import { json } from './dispatch-setup';
+import { deliveredReceipt, type SeededCrate } from './returns-receipt-setup';
 
 /**
  * MEASUREMENT (opt-in: E2E_RECEIPT_PERF=1, never in CI): one large receipt walked through in the
@@ -10,8 +9,9 @@ import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from
  * carrier events (the recreated e2e database only), every crate scanned and freed, all but the
  * last bottle of each crate scanned on their own. Midway ANOTHER operator (the API, same receipt)
  * identifies 5 bottles and records an unreadable piece: the next scan in the browser must show
- * them. Per scan: from the click until the message AND the running total are on the screen. The
- * result is written to E2E_PERF_OUT. Synthetic data, FAKE test carrier only.
+ * them. At the end "Zobrazit všechny" and 10 more scans in that view (the full list each time).
+ * Per scan: from the click until the message AND the running total are on the screen. The result
+ * is written to E2E_PERF_OUT. Synthetic data, FAKE test carrier only.
  */
 const N = Number(process.env.E2E_PERF_CRATES ?? 50);
 const C = 10;
@@ -21,144 +21,19 @@ test.describe.configure({ mode: 'serial' });
 test.setTimeout(3_600_000);
 
 let receipt = '';
-const crates: { url: string; code: string; bottles: string[] }[] = [];
+const crates: SeededCrate[] = [];
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(3_600_000);
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
-  const request = context.request;
   const t0 = Date.now();
-  const printed = await printedBottles(request, `perf-mydlo-${Date.now()}`, N * C);
-  const kit = await labelingSetup(request, {
-    versionId: printed.versionId,
+  const seeded = await deliveredReceipt(context.request, {
+    crates: N,
     capacity: C,
-    productName: 'Tekuté mýdlo (velký příjem)',
+    name: 'Velký příjem',
   });
-  await json(
-    await request.post(`/api/admin/catalog/products/${kit.productCode}/weights`, {
-      data: measurement({ recipeVersion: 1, massG: '372.5', bottlesWeighed: 10 }),
-    }),
-  );
-  await json(
-    await request.post(`/api/admin/catalog/crate-types/${kit.crateTypeCode}/tare`, {
-      data: measurement({ massG: '1850', configuration: 'Bedna s přepážkami' }),
-    }),
-  );
-  await json(
-    await request.post(`/api/admin/catalog/crate-types/${kit.crateTypeCode}/dimensions`, {
-      data: measurement({
-        subject: 'SHIPPING_PACKAGE',
-        lengthMm: 600,
-        widthMm: 400,
-        heightMm: 300,
-        extraPackaging: 'NONE',
-        extraDescription: null,
-        extraMassG: null,
-        extraItemCode: null,
-        extraInTare: null,
-      }),
-    }),
-  );
-  const bottleLot = (await receiveStock(request, 'NEW_BOTTLE', String(N * C)))!;
-  await receiveStock(request, kit.pumpCode, String(N * C));
-  await receiveStock(request, kit.labelCode, String(N * C));
-  const liquid = await lotIdOf(
-    request,
-    kit.liquidCode,
-    (await receiveStock(request, kit.liquidCode, String(N * C * 400)))!,
-  );
-  for (let i = 0; i < N; i++) {
-    const urls = printed.urls.slice(i * C, i * C + C);
-    const crate = await labelledCrate(request, kit, {
-      versionId: printed.versionId,
-      bottleLotCode: bottleLot,
-      urls,
-    });
-    await filledCrate(request, crate, {
-      liquidLotId: liquid,
-      bottleUrls: urls,
-      category: 'HAND_SOAP',
-    });
-    crates.push({ ...crate, bottles: urls });
-  }
-  const siteId = (
-    await json<{ sites: { id: string; code: string }[] }>(await request.get('/api/auth/me'))
-  ).sites.find((s) => s.code === 'CZ-PREROV-01')!.id;
-  const hotelCode = (
-    await json<{ code: string }>(
-      await request.post('/api/admin/hotels', {
-        data: {
-          requestId: crypto.randomUUID(),
-          name: 'Hotel Velký příjem (E2E)',
-          addressLine1: 'Wilsonova 7',
-          addressLine2: null,
-          postalCode: '750 02',
-          city: 'Přerov',
-          countryCode: 'CZ',
-          contactName: 'Recepce',
-          contactPhone: '+420 581 000 778',
-          contactEmail: 'recepce@velky.test',
-          fulfillmentSiteId: siteId,
-        },
-      }),
-    )
-  ).code;
-  const calendar = await json<{ today: string }>(await request.get('/api/admin/orders/calendar'));
-  const orderCode = (
-    await json<{ code: string }>(
-      await request.post('/api/admin/orders', {
-        data: {
-          requestId: crypto.randomUUID(),
-          hotelCode,
-          requestedShipDate: calendar.today,
-          lines: [{ productCode: kit.productCode, crates: N }],
-        },
-      }),
-    )
-  ).code;
-  for (const c of crates) {
-    await json(
-      await request.post(`/api/admin/orders/${orderCode}/crates`, {
-        data: { requestId: crypto.randomUUID(), scannedValue: c.url },
-      }),
-    );
-  }
-  await json(
-    await request.post(`/api/admin/orders/${orderCode}/complete-and-label`, {
-      data: { requestId: crypto.randomUUID(), printerId: null },
-    }),
-  );
-  await json(
-    await request.post(`/api/admin/orders/${orderCode}/shipment/ready`, {
-      data: { requestId: crypto.randomUUID(), labelsApplied: true },
-    }),
-  );
-  await e2eSql([
-    `INSERT INTO "shipment_tracking_events"
-       ("shipment_id", "parcel_id", "carrier_code", "carrier_environment", "carrier_parcel_number",
-        "status_id", "code", "phase", "event_group", "name", "meaning", "occurred_at", "fetched_at")
-     SELECT s."id", p."id", s."carrier_code", s."carrier_environment", p."carrier_parcel_number",
-            450, 'Delivered', NULL, NULL, 'Zásilku jsme doručili příjemci.', 'DELIVERED', now(), now()
-       FROM "shipments" s JOIN "orders" o ON o."id" = s."order_id"
-       JOIN "shipment_parcels" p ON p."shipment_id" = s."id"
-      WHERE o."code" = '${orderCode}' AND s."status" = 'LABELED'
-     ON CONFLICT DO NOTHING`,
-  ]);
-  await json(
-    await request.post(`/api/admin/orders/${orderCode}/shipment/tracking/refresh`, {
-      data: { requestId: crypto.randomUUID() },
-    }),
-  );
-  expect(
-    (await json<{ status: string }>(await request.get(`/api/admin/orders/${orderCode}`))).status,
-  ).toBe('DELIVERED');
-  receipt = (
-    await json<{ code: string }>(
-      await request.post('/api/admin/returns/receipts', {
-        data: { requestId: crypto.randomUUID(), hotelCode },
-      }),
-    )
-  ).code;
+  receipt = seeded.receipt;
+  crates.push(...seeded.crates);
   console.log(`seed ${N}×${C} in ${Math.round((Date.now() - t0) / 1000)} s, receipt ${receipt}`);
   await context.close();
 });
@@ -248,12 +123,29 @@ test(`large receipt in the browser: ${N} crates × ${C} bottles`, async ({ page,
   const passMs = Date.now() - passStart;
   // The other operator's unreadable piece is on the screen, and so is every received bottle.
   const bottlesCard = page.getByTestId('return-line-bottles');
+  const listed = bottlesCard.getByTestId('line-bottles').locator('li');
   await expect(bottlesCard.getByText('Nečitelná', { exact: false }).first()).toBeVisible();
-  const all = bottlesCard.getByRole('button', { name: /Zobrazit všechny/ });
-  if (await all.count()) await all.click();
-  await expect(bottlesCard.getByTestId('line-bottles').locator('li')).toHaveCount(identified, {
-    timeout: 60_000,
-  });
+  await expect(listed).toHaveCount(Math.min(identified, 20));
+  // "Zobrazit všechny" and further scans in that view: the full list stays, one more each time.
+  const showAllStart = Date.now();
+  await bottlesCard.getByRole('button', { name: /Zobrazit všechny/ }).click();
+  await expect(listed).toHaveCount(identified, { timeout: 60_000 });
+  const showAllMs = Date.now() - showAllStart;
+  const allModeMs: number[] = [];
+  for (const c of crates.slice(5, 15)) {
+    identified++;
+    allModeMs.push(
+      await timed(
+        page,
+        'Naskenujte lahev',
+        'Zapsat lahev',
+        c.bottles[C - 1]!,
+        counts(N, identified, unreadable),
+      ),
+    );
+    await expect(listed).toHaveCount(identified);
+    await expect(bottlesCard.getByTestId('line-bottles-recent')).toHaveCount(0);
+  }
   await other.close();
   const result = {
     build: process.env.E2E_PERF_LABEL ?? '',
@@ -265,6 +157,8 @@ test(`large receipt in the browser: ${N} crates × ${C} bottles`, async ({ page,
     bottle: { p50: pct(bottleMs, 50), p95: pct(bottleMs, 95), max: Math.max(...bottleMs) },
     lastTenBottles: bottleMs.slice(-10),
     firstTenBottles: bottleMs.slice(0, 10),
+    showAllMs,
+    allMode: { scans: allModeMs.length, p50: pct(allModeMs, 50), max: Math.max(...allModeMs) },
     detailGets: detailGets.length,
     detailMB: Math.round(detailGets.reduce((s, g) => s + g.bytes, 0) / 1e4) / 100,
     lastDetailKB: Math.round((detailGets.at(-1)?.bytes ?? 0) / 100) / 10,

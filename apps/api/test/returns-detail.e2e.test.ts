@@ -100,6 +100,49 @@ describe.skipIf(!hasDatabase)('return receipt detail: complete counts, recent bo
     );
   });
 
+  it('reads overlapping a series of scans: each answer is one consistent state, never older than the last one read', async () => {
+    const f = await crateFactory(t, { capacity: 10 });
+    const hotel = (await createHotel(t, { name: 'Hotel Souběh' })).code;
+    const k = await f.make();
+    const l = await f.make();
+    await deliver(t, await shipCrates(t, hotel, f.kit.productCode, [k, l]));
+    const receipt = await api.open(hotel);
+    const urls = [...k.bottleUrls, ...l.bottleUrls];
+    let scanning = true;
+    const scans = (async () => {
+      try {
+        for (const url of urls) ok(await api.scanBottle(receipt.code, url));
+      } finally {
+        scanning = false;
+      }
+    })();
+    const seen: number[] = [];
+    let previousRound = 0;
+    const reads = (async () => {
+      while (scanning) {
+        const views = await Promise.all([
+          get(receipt.code, '?bottles=recent'),
+          get(receipt.code, '?bottles=all'),
+        ]);
+        for (const d of views) {
+          const line = d.lineDetails.find((x) => x.kind === 'BOTTLES');
+          const n = line?.bottleCount ?? 0;
+          // The counts, the line's total, its list and the receipt summary agree.
+          expect([d.counts.identified, d.identified, line?.recordedCount ?? 0]).toEqual([n, n, n]);
+          expect(line?.bottles.length ?? 0).toBe(d === views[0] ? Math.min(n, 20) : n);
+          seen.push(n);
+        }
+        // A read started after an answer never shows less than it.
+        const round = views.map((d) => d.counts.identified);
+        expect(Math.min(...round)).toBeGreaterThanOrEqual(previousRound);
+        previousRound = Math.max(...round);
+      }
+    })();
+    await Promise.all([scans, reads]);
+    expect(seen.length).toBeGreaterThan(2);
+    expect((await get(receipt.code, '?bottles=recent')).counts.identified).toBe(20);
+  });
+
   it('an unknown view is refused', async () => {
     const receipt = await api.open(null);
     await http().get(`/api/admin/returns/receipts/${receipt.code}?bottles=some`).expect(400);
