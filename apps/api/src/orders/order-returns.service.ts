@@ -120,4 +120,28 @@ export class OrderReturnsService {
         }
       : null;
   }
+
+  /** `shippedOfCycle` of many cycles in one query (a large receipt's detail). */
+  async shippedOfCycles(db: Prisma.TransactionClient, cycleIds: string[]) {
+    const rows = await db.orderCrateAllocation.findMany({
+      where: { cycleId: { in: cycleIds }, releasedAt: null },
+      orderBy: { id: 'asc' },
+      select: {
+        cycleId: true,
+        order: { select: { code: true, hotel: { select: { name: true } } } },
+        _count: { select: { bottles: true } },
+      },
+    });
+    const of = new Map<string, { orderCode: string; hotelName: string; shipped: number }>();
+    for (const a of rows) {
+      if (!of.has(a.cycleId)) {
+        of.set(a.cycleId, {
+          orderCode: a.order.code,
+          hotelName: a.order.hotel.name,
+          shipped: a._count.bottles,
+        });
+      }
+    }
+    return of;
+  }
 }

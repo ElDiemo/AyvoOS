@@ -10,7 +10,7 @@ import {
   type ReturnLineDetail,
   type ReturnReceiptDetail,
 } from '@ayvo/types';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Card, buttonClass, inputClass } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { returnsCs } from '@/i18n/cs/returns';
@@ -49,16 +49,37 @@ export function ReceiptWorkspace({
   const send = useStableRequests();
   const open = receipt.state === 'OPEN';
   const base = `admin/returns/receipts/${receipt.code}`;
+  // A large receipt: after each scan only the latest bottles of each line come back; the counts,
+  // the lines and every issue are always complete and current (also another operator's scans).
+  const [allBottles, setAllBottles] = useState(false);
 
   // A confirmed write and the refresh of the detail are separate: when only the refresh fails,
   // the write stays done and the page offers "Obnovit" (a GET only) — never the action again.
   const [stale, setStale] = useState(false);
-  const refresh = async () => {
+  // Refreshes can overlap (a repeated "Obnovit"). Only the latest one started may change the
+  // screen: an older answer that arrives later (an earlier read, maybe another view) is dropped.
+  const latestRefresh = useRef(0);
+  const refresh = async (all = allBottles) => {
+    const mine = ++latestRefresh.current;
     try {
-      setReceipt(await apiGet(base, returnReceiptDetailSchema));
+      const next = await apiGet(
+        `${base}?bottles=${all ? 'all' : 'recent'}`,
+        returnReceiptDetailSchema,
+      );
+      if (mine !== latestRefresh.current) return;
+      setReceipt(next);
       setStale(false);
     } catch {
-      setStale(true);
+      if (mine === latestRefresh.current) setStale(true);
+    }
+  };
+  const showAll = async () => {
+    setBusy(true);
+    try {
+      setAllBottles(true);
+      await refresh(true);
+    } finally {
+      setBusy(false);
     }
   };
   const run: Run = async (key, action, subject) => {
@@ -131,7 +152,7 @@ export function ReceiptWorkspace({
               type="button"
               className={buttonClass.secondary}
               disabled={busy}
-              onClick={refresh}
+              onClick={() => refresh()}
             >
               {t.refresh}
             </button>
@@ -206,6 +227,7 @@ export function ReceiptWorkspace({
           base={base}
           run={run}
           canCorrect={canCorrect}
+          onShowAll={showAll}
         />
       ))}
 
@@ -362,6 +384,7 @@ function LineCard({
   base,
   run,
   canCorrect,
+  onShowAll,
 }: {
   line: ReturnLineDetail;
   index: number;
@@ -370,6 +393,7 @@ function LineCard({
   base: string;
   run: Run;
   canCorrect: boolean;
+  onShowAll: () => void;
 }) {
   const [count, setCount] = useState('');
   // Only an older crate or box line (from before R1.1) still waits for Vyprázdněno.
@@ -465,6 +489,21 @@ function LineCard({
                   </li>
                 ))}
               </ul>
+            )}
+            {line.bottleCount > line.bottles.length && (
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-stone-500">
+                <span data-testid="line-bottles-recent">
+                  {t.line.recentBottles(line.bottles.length, line.bottleCount)}
+                </span>
+                <button
+                  type="button"
+                  className={buttonClass.secondary}
+                  disabled={busy}
+                  onClick={onShowAll}
+                >
+                  {t.line.allBottles(line.bottleCount)}
+                </button>
+              </div>
             )}
           </div>
         )}

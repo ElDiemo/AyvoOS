@@ -127,6 +127,8 @@ export const returnLineDetailSchema = z.object({
   physicalCount: z.number().int().nullable(),
   /** Pieces recorded on this line: identifications + piece issues, each piece once (§4.8). */
   recordedCount: z.number().int(),
+  /** Every bottle identified on this line; `bottles` may hold only the latest (`?bottles=recent`). */
+  bottleCount: z.number().int(),
   bottles: z.array(returnIdentifiedBottleSchema),
   issues: z.array(returnIssueSummarySchema),
   /** CRATE (R1.1): members whose binding to the crate its scan ended — never a confirmation. */
@@ -167,6 +169,16 @@ export const returnReceiptDetailSchema = returnReceiptSummarySchema.extend({
   lineDetails: z.array(returnLineDetailSchema),
 });
 export type ReturnReceiptDetail = z.infer<typeof returnReceiptDetailSchema>;
+
+/**
+ * The detail's bottle lists: `all` (default) or `recent` — only the latest
+ * RETURN_RECENT_BOTTLES of each line; the counts, `bottleCount`, lines and issues stay complete.
+ */
+export const RETURN_RECENT_BOTTLES = 20;
+export const returnReceiptDetailQuerySchema = z.object({
+  bottles: z.enum(['all', 'recent']).default('all'),
+});
+export type ReturnReceiptDetailQuery = z.infer<typeof returnReceiptDetailQuerySchema>;
 
 export const returnReceiptListSchema = z.object({ items: z.array(returnReceiptSummarySchema) });
 export type ReturnReceiptList = z.infer<typeof returnReceiptListSchema>;
