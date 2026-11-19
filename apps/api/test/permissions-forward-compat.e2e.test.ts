@@ -89,15 +89,16 @@ describe.skipIf(!hasDatabase)('permissions from a newer database (rollback compa
   });
 
   afterAll(async () => {
-    // Leave the shared test database as it was (other files compare the catalogue).
+    // Leave the shared test database as it was (other files compare the catalogue and check
+    // that only ADMIN holds a permission): no role keeps the newer codes or the strong role's
+    // permissions. This must succeed — it runs on its own, apart from the catalogue rows.
     await asMigration(async (db) => {
-      // Other files check that only ADMIN holds a permission: the strong role keeps none.
       await db.$executeRaw`DELETE FROM "role_permissions" WHERE "role_code" = ${strong}`;
-      for (const code of [FUTURE, NOT_HELD]) {
+      for (const code of [FUTURE, NOT_HELD])
         await db.$executeRaw`DELETE FROM "role_permissions" WHERE "permission_code" = ${code}`;
-        await db.$executeRaw`DELETE FROM "permissions" WHERE "code" = ${code}`;
-      }
-    }).catch(() => undefined);
+    });
+    // The catalogue rows themselves stay (the database never deletes a permission), held by
+    // no role — as on main, where the former cleanup failed as a whole on that rule.
     await t?.close();
   });
 
