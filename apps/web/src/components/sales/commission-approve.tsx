@@ -2,12 +2,12 @@
 
 import { commissionStatementSchema, type CommissionMode } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ConfirmDialog, uncertain, useAttempt } from '@/components/catalog/form-kit';
 import { buttonClass, ErrorNote } from '@/components/ui';
 import { commissionsCs } from '@/i18n/cs/commissions';
 import { apiSend, ClientApiError } from '@/lib/client-api';
-import { refusalText } from './commission-closing-format';
+import { approvalOutcome, refusalText } from './commission-closing-format';
 
 const t = commissionsCs.closing;
 
@@ -40,6 +40,9 @@ export function CommissionApprove({
   const { busy, run } = useAttempt();
   const [open, setOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // An attempt ended without an answer: it may have been approved. Until a definite answer
+  // arrives, no message may claim that nothing was approved.
+  const earlierUncertain = useRef(false);
   const testId = `approve-${salesperson.id}`;
 
   async function approve() {
@@ -59,18 +62,24 @@ export function CommissionApprove({
     );
     setOpen(false);
     if (result.ok) {
+      earlierUncertain.current = false;
       router.refresh();
       return;
     }
     if (!result.error) return;
     const err = result.error;
     const code = err instanceof ClientApiError ? err.code : null;
+    const outcome = approvalOutcome(code, uncertain(err), earlierUncertain.current);
+    if (outcome.kind === 'uncertain') earlierUncertain.current = true;
+    if (outcome.kind === 'refused') earlierUncertain.current = false;
     setFailure(
-      code === 'FINANCE_DEPENDENCY_UNAVAILABLE'
+      outcome.kind === 'dependencyNothingWritten'
         ? t.errors.FINANCE_DEPENDENCY_UNAVAILABLE
-        : uncertain(err)
-          ? t.errors.uncertain
-          : refusalText(t.errors, code, t.errors.failed),
+        : outcome.kind === 'dependencyAfterUncertain'
+          ? t.errors.dependencyAfterUncertain
+          : outcome.kind === 'uncertain'
+            ? t.errors.uncertain
+            : refusalText(t.errors, outcome.code, t.errors.failed),
     );
   }
 

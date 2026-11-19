@@ -1,6 +1,7 @@
 import type { CommissionStatementPreview } from '@ayvo/types';
 import { describe, expect, it } from 'vitest';
 import {
+  approvalOutcome,
   causeLabel,
   closableFrom,
   deviations,
@@ -106,5 +107,24 @@ describe('commission closing display (doc 069, PR 2e)', () => {
     expect(refusalText(table, 'STATEMENT_STALE', 'x')).toBe('změna');
     expect(refusalText(table, 'OTHER', 'x')).toBe('x');
     expect(refusalText(table, null, 'x')).toBe('x');
+  });
+
+  it('an approval failure never claims "nothing approved" when the result is unknown', () => {
+    // Core down on a first attempt: the core read precedes any write.
+    expect(approvalOutcome('FINANCE_DEPENDENCY_UNAVAILABLE', true, false)).toEqual({
+      kind: 'dependencyNothingWritten',
+    });
+    // Core down on the retry after a lost answer: the first attempt may have been committed.
+    expect(approvalOutcome('FINANCE_DEPENDENCY_UNAVAILABLE', true, true)).toEqual({
+      kind: 'dependencyAfterUncertain',
+    });
+    // A lost answer, a proxy 502/503/504 without the code, a 500 after commit: unknown.
+    expect(approvalOutcome(null, true, false)).toEqual({ kind: 'uncertain' });
+    expect(approvalOutcome('INTERNAL', true, true)).toEqual({ kind: 'uncertain' });
+    // A definite refusal is the server's answer for this request.
+    expect(approvalOutcome('STATEMENT_STALE', false, true)).toEqual({
+      kind: 'refused',
+      code: 'STATEMENT_STALE',
+    });
   });
 });

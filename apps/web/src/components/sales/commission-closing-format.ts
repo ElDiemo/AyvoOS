@@ -91,3 +91,29 @@ export function refusalText(
 ): string {
   return (code && table[code]) || fallback;
 }
+
+/**
+ * What an approval failure may honestly say (doc 069 §5d). A definite refusal is the server's
+ * answer for this request. FINANCE_DEPENDENCY_UNAVAILABLE (503) comes only from the core read
+ * BEFORE anything is written, so this attempt approved nothing — unless an earlier attempt ended
+ * without an answer: that one may have been committed, and with the core down the result cannot
+ * be checked. Any other 5xx or a lost answer is never "nothing approved".
+ */
+export type ApprovalOutcome =
+  | { kind: 'refused'; code: string | null }
+  | { kind: 'dependencyNothingWritten' }
+  | { kind: 'dependencyAfterUncertain' }
+  | { kind: 'uncertain' };
+
+export function approvalOutcome(
+  code: string | null | undefined,
+  uncertainError: boolean,
+  earlierUncertain: boolean,
+): ApprovalOutcome {
+  if (code === 'FINANCE_DEPENDENCY_UNAVAILABLE')
+    return earlierUncertain
+      ? { kind: 'dependencyAfterUncertain' }
+      : { kind: 'dependencyNothingWritten' };
+  if (uncertainError) return { kind: 'uncertain' };
+  return { kind: 'refused', code: code ?? null };
+}

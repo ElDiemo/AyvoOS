@@ -245,8 +245,11 @@ export const commissionsCs = {
       MONTH_NOT_CLOSED: 'Měsíc ještě není uzavřený.',
       IDEMPOTENCY_CONFLICT: 'Požadavek se neshoduje s předchozím pokusem. Načtěte stránku znovu.',
       FINANCE_DEPENDENCY_UNAVAILABLE:
-        'Jádro teď neodpovídá. Nic se neschválilo; zkuste to znovu stejným tlačítkem.',
-      uncertain: 'Odpověď nedorazila. Opakování pokračuje ve stejném požadavku.',
+        'Jádro teď neodpovídá. Tento pokus nic neschválil; zkuste to znovu stejným tlačítkem.',
+      dependencyAfterUncertain:
+        'Jádro teď neodpovídá, takže výsledek předchozího pokusu nejde ověřit – podklad se mohl schválit. Zkuste to později stejným tlačítkem; podklad se nikdy neschválí dvakrát.',
+      uncertain:
+        'Odpověď nedorazila: není jisté, zda se podklad schválil. Zkuste to znovu stejným tlačítkem (pokračuje stejný požadavek, dvakrát se neschválí), nebo načtěte stránku a podívejte se do schválených podkladů.',
       failed: 'Schválení se nepodařilo.',
     },
     items: (n: number) => `Položky (${n})`,
