@@ -398,3 +398,93 @@ infrastructure, DNS or the edge):
    Finance never reads core tables; whether the portal is part of the shared web app or its own
    app is an architecture decision.
 5. **Payment-state wording** shown to a customer, and whether overdue is shown.
+
+## 15. Recorded monthly runs and their scheduler — proposal for review (not built)
+
+The next step 3 of §13, TEST only. It adds what is missing between the settings (#112), the run of
+§11 and the sending of doc 043. **What already exists stays as it is and is reused:** the preview
+and its states, `bindLines`, `issueOne` (one invoice per agreement, due date = issue date + the
+agreement's payment terms, the customer's newest version), the database's refusal of a second valid
+invoice per agreement and month, the delivery queue with its checks (`prepare`: mode, recipient,
+allow-list, cancelled) and runner, and the versioned settings. Nothing here issues a live tax
+document (§5 gate), calls the bank or sends for real outside the configured mail mode.
+
+### Who authorizes a run (the main question for review)
+
+Finance acts only for a person: every core call needs the forwarded session, and a scheduler has
+none. **No system user, no ADMIN stand-in and no new identity is created.** Instead a person
+authorizes **one issue month** in advance and the scheduler only carries out that authorization:
+
+- On Měsíční běh the person sees the plan and the preview of that issue month and confirms
+  "Schválit běh" (`finance:invoices_test` + `finance:billing_read`; sending additionally
+  `finance:invoices_send`). Their identity comes from the session at that moment, as for every
+  other Finance write.
+- The authorization binds what the person saw: the settings revision, the issue date, the lines
+  (agreement, revision, amount — the existing `bindLines` input), whether sending follows, and the
+  mail mode then in force. It is valid only for that issue month and expires at the end of its issue
+  date (Europe/Prague) — never a standing permission.
+- On the issue date the run is carried out by the scheduler (when switched on) or by the person
+  with "Spustit teď" — the same code. Invoices and deliveries record the authorizing person as
+  issuer / requester **and** the run, so it is visible that the act was carried out by the run.
+- Anything changed since the authorization — a newer settings revision, changed terms, customer or
+  price (`TERMS_CHANGED`, as today), the mail mode (`MODE_CHANGED`), a recipient — **blocks the
+  run visibly**; nothing is issued on terms nobody saw. The person reviews and authorizes again.
+- The person (or anyone with the same permissions) may revoke an authorization before it runs.
+- **Open for the owner:** Finance cannot re-check, without a session, whether the authorizing
+  person still holds the permissions on the issue date. Proposed: accept the short validity above
+  (one month, expiring on its issue date) plus revocation. The alternative — a core contract
+  endpoint checking a user's current permissions by service token alone — is a separate change of
+  the core contract and is not proposed now.
+
+### Model (Finance schema, append-only where it is history)
+
+| Table                | Purpose                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `billing_runs`       | one per issue month and kind `TEST` (partial unique index among runs not revoked): code `BR-…`, issue month, issue date, settings revision (FK), `send_after_issue`, the mail mode seen, authorized by / name / at, request id; current state `AUTHORIZED → RUNNING → ISSUED / BLOCKED / FAILED / REVOKED / EXPIRED`, a lease for the one runner, timestamps |
+| `billing_run_lines`  | the lines bound at authorization (agreement, revision, billed month, amount, currency); immutable                                                                                                                                                                                                                                                            |
+| `billing_run_items`  | the result per line, written once by the run: the issue result (`ISSUED` with the invoice, `ALREADY_INVOICED` with the existing invoice, `BLOCKED` with the code) **separately** from the delivery result (`QUEUED` with the delivery, `NOT_REQUESTED`, `BLOCKED` with the code)                                                                             |
+| `billing_run_events` | append-only history: `AUTHORIZED`, `STARTED`, `ISSUED`, `DELIVERIES_QUEUED`, `BLOCKED` / `FAILED` (with the code), `REVOKED`, `EXPIRED`; who or which runner, when                                                                                                                                                                                           |
+
+`invoices` gains a nullable `billing_run_id` (only through a run); the issuer columns keep the
+authorizing person. One migration in Finance (tables, triggers, grants, new `operation_requests`
+kinds), no core migration and no new permission.
+
+### Carrying out a run
+
+1. Claim the run under its lease (one runner; a lost lease reads and writes nothing more, as the
+   bank sync).
+2. **Issue:** in one transaction, the existing all-or-nothing run of §11 (at most 50 lines, as there) with the bound lines and a
+   request id derived from the run — a repeated attempt replays, never duplicates. The result is
+   final before anything is sent.
+3. **Send (only if authorized):** per invoice its own transaction through the existing delivery
+   path with the recorded mode and recipient. A refused delivery (e.g. `RECIPIENT_NOT_ALLOWED`,
+   `DELIVERY_DISABLED`) is recorded on the item and does not touch the invoice. This replaces the
+   rule of doc 043 §6 ("never automatically after issuing") **only** for a run a person authorized
+   with sending.
+4. "Today" and the expiry are the Europe/Prague date; timestamps stay UTC.
+
+### Scheduler
+
+Off unless `FINANCE_BILLING_RUN_SECONDS` is set (as the bank scheduler of doc 041 §9); refused with
+`APP_ENV=production` while invoices are TEST only. A tick only carries out authorized runs whose
+issue date has come; it never creates, extends or re-authorizes one. On DEV it stays off until the
+owner switches it on.
+
+### Visible on Měsíční běh
+
+The runs of recent months with their state, the bound lines, per agreement the issue and delivery
+result with the code in Czech, and why a run is blocked, failed or expired. Counts on the Finance
+overview only for runs needing a person (blocked, failed, expired without a run).
+
+### Tests (synthetic data)
+
+Authorization binds and expires; a changed revision / terms / mode blocks; revocation; one run per
+month (DB); a repeated or concurrent execution issues nothing twice (DB + lease); issue and sending
+results separate; a refused delivery leaves the invoice; the scheduler is off without the variable
+and refused in production; Europe/Prague day boundary; permissions of every route; append-only
+also for the schema owner.
+
+### Not in this step
+
+Live tax documents, proformas, the accountant's export of issued invoices (§13 step 4), the RB
+scheduler (#94), the portal (§14).
