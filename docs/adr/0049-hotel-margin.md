@@ -84,6 +84,14 @@ today's sources (19. 11. 2026, `main` 09e82e7):
   - materials in the month the crate was dispatched to the hotel;
   - return transport in the receipt month;
   - commissions by the item's billed month, approved statements only.
+- **Recipient:** the hotel of the crate a bottle was **dispatched** in; a repack after filling
+  moves no cost and consumes nothing (doc 071 §3.3).
+- **One unique key per amount** from its source row (invoice line, inventory movement, crate
+  cycle, return receipt line, statement item), checked over the whole input; a duplicate is a
+  data error, never counted twice (doc 071 §3.3).
+- **Without commission ≠ not yet approved:** an explicit 0.00 only from the core attribution
+  (Firemní hotel, `recipient: null`; before the commission start) or an approved statement; a
+  missing or unapproved statement, or no attribution, makes the month incomplete (doc 071 §3.4).
 - **A missing price, rate, revenue or approval makes the hotel × month visibly incomplete.** The
   known costs are shown as "known so far", the margin is not shown, and the reasons are listed.
   Never a zero.

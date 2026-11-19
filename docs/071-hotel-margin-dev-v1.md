@@ -10,15 +10,15 @@ Reproducible calculation on fictional data: `docs/prototypes/071-hotel-margin.mj
 
 For one hotel and one month, what the hotel brought and what it cost:
 
-| Line                       | Source                                                                                             | Note                                                                        |
-| -------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **Výnos** (revenue)        | Finance `invoice_lines` of the hotel, billed month = M, not cancelled                              | [PROPOSAL] without VAT; DEV = TEST invoices, LIVE once doc 040 §5/§13 opens |
-| **Materiál** (materials)   | core: actual consumption of the bottles dispatched to the hotel, priced by Finance standard prices | [OWNER] new bottle = packaging + fill per consumption, refill = fill only   |
-| **Doprava tam** (outbound) | core: crates dispatched to the hotel × Finance rate per crate                                      | [OWNER] at dispatch                                                         |
-| **Doprava zpět** (return)  | core: returned crates received from the hotel × Finance rate per crate                             | [OWNER] only at the receipt of that crate                                   |
-| **Provize** (commission)   | Finance approved commission statement items of the hotel                                           | [PROPOSAL] by the item's billed month; approved only                        |
-| **Marže před provizí**     | revenue − materials − outbound − return                                                            | [OWNER] shown separately                                                    |
-| **Marže po provizi**       | margin before − commission                                                                         | [OWNER] shown separately                                                    |
+| Line                       | Source                                                                                             | Note                                                                                       |
+| -------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **Výnos** (revenue)        | Finance `invoice_lines` of the hotel, billed month = M, not cancelled                              | [PROPOSAL] without VAT; DEV = TEST invoices, LIVE once doc 040 §5/§13 opens                |
+| **Materiál** (materials)   | core: actual consumption of the bottles dispatched to the hotel, priced by Finance standard prices | [OWNER] new bottle = packaging + fill per consumption, refill = fill only                  |
+| **Doprava tam** (outbound) | core: crates dispatched to the hotel × Finance rate per crate                                      | [OWNER] at dispatch                                                                        |
+| **Doprava zpět** (return)  | core: returned crates received from the hotel × Finance rate per crate                             | [OWNER] only at the receipt of that crate                                                  |
+| **Provize** (commission)   | Finance approved commission statement items of the hotel + the core attribution (#196 contract)    | [PROPOSAL] by the item's billed month; approved only; „bez provize“ ≠ „neschváleno“ (§3.4) |
+| **Marže před provizí**     | revenue − materials − outbound − return                                                            | [OWNER] shown separately                                                                   |
+| **Marže po provizi**       | margin before − commission                                                                         | [OWNER] shown separately                                                                   |
 
 [OWNER] A hotel's margin is its **contribution**. It is not the company result: rent, the
 accountant, wages and other overheads are never allocated to a hotel (§6).
@@ -44,13 +44,19 @@ Details: the map of 19. 11. 2026.
 `GET /api/internal/v1/finance/margin/activity?month=YYYY-MM&hotelIds=…` (service token, ≤ 200
 hotels per call, like the commission contract). It returns **events and quantities, never money**:
 
-- `circulations[]`: one per bottle filled and dispatched in a crate of the hotel's order in M.
-  - Fields: `hotelId`, `crateCycleId`, `dispatchedOn` (Prague day), `bottleId`.
+- `dispatches[]`: `crateCycleId`, `hotelId`, `dispatchedOn` (Prague day). The dispatch is the
+  **only source of the recipient** of everything in that crate.
+- `circulations[]`: one per bottle in a crate dispatched in M.
+  - Fields: `crateCycleId` (the crate the bottle was **dispatched** in), `bottleId`,
+    optionally `filledInCrateCycleId` (where it was filled, if different — information only).
+  - No hotel of its own: the hotel comes from the dispatch of `crateCycleId` (§3.3).
   - `kind`: `FIRST_USE` (anchor LABEL_APPLIED) or `REFILL` (anchor REUSE_READY, R3a).
-  - `consumed[]`: `item` (inventory item code), `itemKind` (BOTTLE_BODY | LABEL | PUMP | LIQUID |
-    OTHER), `unit`, `qty` (exact decimal string), `on` (day of the movement).
-- `dispatches[]`: `hotelId`, `crateCycleId`, `dispatchedOn`.
-- `returns[]`: `hotelId`, `crateCycleId`, `receiptId`, `receivedOn`. Only crates actually
+  - `consumed[]`: `movementId` (the core inventory movement), `item` (inventory item code),
+    `itemKind` (BOTTLE_BODY | LABEL | PUMP | LIQUID | OTHER), `unit`, `qty` (exact decimal
+    string), `on` (day of the movement).
+- `returns[]`: `returnLineId` (core `return_receipt_lines.id`), `crateCycleId` (the returned
+  cycle, unique per line in the DB) or null, `hotelId` (of the returned cycle's dispatch; for a
+  line without a cycle the receipt's hotel, or null), `receivedOn`. Only crates actually
   received.
 
 Rules:
@@ -61,6 +67,60 @@ Rules:
   error (`REFILL_CARRIES_PACKAGING`). It is never priced.
 - A new pump really issued on a refill would be actual consumption and priced (question Q3).
 - Core down = Finance 503, never a partial overview.
+
+### 3.3 Recipient after a repack, and one unique key per amount [PROPOSAL]
+
+**Recipient.** A filled bottle can be repacked (doc 025 „Přeložit lahev / hotové lahve“) into
+another crate before dispatch. A repack has **no inventory movement** (doc 025: never a second
+consumption), so it moves no cost and adds none.
+
+- The recipient of a bottle's consumption is the hotel of the crate it was **dispatched** in,
+  never the crate it was filled in.
+- The costing month is that crate's dispatch month (§4); the consumption keeps its own day for
+  the price.
+- A circulation whose crate was never dispatched (a cancelled cycle, a bottle still in stock)
+  has no recipient. The core does not report it. If it ever did, Finance refuses it
+  (`CIRCULATION_NOT_DISPATCHED`) and never guesses a hotel.
+
+**Unique key.** Every amount has exactly one key from its source row:
+
+| Amount     | Key                                                                         |
+| ---------- | --------------------------------------------------------------------------- |
+| Revenue    | `REVENUE:<invoice_lines.id>`                                                |
+| Material   | `MATERIAL:<inventory_movements.id>`                                         |
+| Outbound   | `OUTBOUND:<crate_cycles.id>` (one cycle = one circulation, dispatched once) |
+| Return     | `RETURN:<return_receipt_lines.id>` (and each returned cycle at most once)   |
+| Commission | `COMMISSION:<statement item id>`                                            |
+
+- The keys are checked over the **whole input**, not only the hotel × month, so a movement can
+  never land in two hotels or two months.
+- A duplicate is a data error of the whole computation (`DUPLICATE_COST_KEY`), never priced
+  twice and never silently dropped.
+- The overview's detail lists every line with its key, so the admin can trace each koruna to its
+  source.
+
+### 3.4 Commission: without commission ≠ not yet approved [PROPOSAL]
+
+The state comes from the core attribution for M (the #196 contract) and Finance's own
+statements:
+
+| State                | When                                                                      | Commission                                              | Month       |
+| -------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- | ----------- |
+| `NONE_COMPANY_HOTEL` | attribution in force, `recipient: null` — **Firemní hotel – bez provize** | 0.00 (explicit)                                         | complete    |
+| `NONE_BEFORE_START`  | attribution in force, M before its commission start                       | 0.00 (explicit)                                         | complete    |
+| `APPROVED`           | the recipient's statement for M is approved                               | Σ its items (0.00 if none; corrections may be negative) | complete    |
+| `NOT_YET_APPROVED`   | the recipient's statement for M is missing or not approved                | not counted                                             | **NEÚPLNÉ** |
+| `UNASSIGNED`         | no attribution in force for M                                             | not counted                                             | **NEÚPLNÉ** |
+
+- „Bez provize“ is shown only from an explicit source (Firemní hotel, start not reached, an
+  approved statement without an item for the hotel). It is **never inferred** from a missing
+  statement.
+- An item of the hotel × month still in an unapproved statement (a later correction, O4/O15 of
+  doc 069) makes the month incomplete (`CORRECTION_NOT_YET_APPROVED`), also for a Firemní hotel
+  that gets only a reversal.
+- A preview estimate is never used as a commission cost (Q7).
+- „Bez provize“ is no shortcut for the rest: a missing standard price still makes a Firemní
+  hotel's month incomplete (§5).
 
 ### 3.2 Finance tables (not implemented)
 
@@ -106,7 +166,8 @@ A hotel × month is **NEÚPLNÉ** when any of these is missing:
 - a standard price for a consumed item on its day (or a different unit);
 - a transport rate on the dispatch or receipt day;
 - a valid invoice line for the month;
-- an approved commission statement for the month.
+- the commission is `NOT_YET_APPROVED`, `UNASSIGNED` or has a correction not yet approved
+  (§3.4) — a Firemní hotel or a month before the commission start is complete with 0.00.
 
 Then:
 
@@ -161,6 +222,17 @@ Further cases from the same test:
 - **December is incomplete.** Two replacement bottles use a new label variant without a price,
   and the commission is not approved. The margin is not shown, the reasons are listed, and the
   known costs so far are 313.48.
+- **Firemní hotel (zero commission fixture):** a second fictional hotel with `recipient: null`,
+  revenue 3 000.00, one crate of 40 new bottles in October: materials 2 764.00, outbound 95.00,
+  commission **0.00 explicitly** (`NONE_COMPANY_HOTEL`), complete, margin before = after =
+  **141.00**. The same hotel with a salesperson whose October statement is not approved is
+  NEÚPLNÉ; with an approved statement and no item it is complete with 0.00; with no attribution it
+  is NEÚPLNÉ (`UNASSIGNED`). Without the pump price it is NEÚPLNÉ despite no commission.
+- **Repack:** a bottle filled on 10. 11. in crate CC-7 (cancelled) and repacked into CC-8,
+  dispatched to the Firemní hotel on 12. 11., costs that hotel 72.40 once, under the four
+  movement keys of 10. 11.; Hotel Smyšlený's November is unchanged. Reporting the same movements
+  under another crate too is refused (`DUPLICATE_COST_KEY`); a circulation of the undispatched
+  CC-7 is refused (`CIRCULATION_NOT_DISPATCHED`).
 - **Company contrast:** with fictional rent 15 000.00 and accountant 3 000.00, November gives a
   hotel contribution of 1 709.00 and a company result of −16 291.00. These are two different
   figures.
@@ -183,6 +255,10 @@ Further cases from the same test:
 8. Computed on read (proposal) or a frozen monthly snapshot with a fingerprint like the
    commission statement?
 9. Where the overview lives: Finance → Přehledy (proposal), or Obchod?
+10. A returned crate the core cannot link to a dispatched cycle, or to any hotel: no hotel's cost
+    (proposal, listed apart), or the receipt's hotel?
+11. A bottle repacked into a crate for a **different hotel** than its original order: the
+    dispatched crate's hotel carries it (proposal, §3.3) — confirm.
 
 ## 9. Not in this batch
 
