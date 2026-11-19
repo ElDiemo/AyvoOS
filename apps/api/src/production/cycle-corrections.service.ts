@@ -181,10 +181,22 @@ export class CycleCorrectionsService {
             { crate: elsewhere.cycle.crate.code },
           );
         }
-        const origin = await tx.crateCycle.findUniqueOrThrow({
-          where: { id: binding.crateCycleId },
-        });
+        // R1.1: freed with its returned crate, not scanned back itself — still at the hotel.
+        if (await this.cycles.stillAtHotel(tx, bottle.id)) {
+          throw domainErrorWithDetails(
+            409,
+            'BOTTLE_AT_HOTEL',
+            'This bottle is still at the hotel by the records: receive it in Příjem vratek first',
+            { bottle: bottle.code },
+          );
+        }
         const filled = status === 'FILLED';
+        // The snapshot the bottle carries: a filled bottle that of its latest filling (a washed
+        // bottle refilled with another recipe version, R3-b), an empty one that of its labelling.
+        const originId = filled
+          ? ((await this.bottles.latestFillingCycleId(tx, bottle.id)) ?? binding.crateCycleId)
+          : binding.crateCycleId;
+        const origin = await tx.crateCycle.findUniqueOrThrow({ where: { id: originId } });
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         let cycle: CycleRecord;
         let source: 'REPACKED' | 'REPLACEMENT';

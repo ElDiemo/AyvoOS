@@ -5,7 +5,6 @@ import {
   returnCrateScanResultSchema,
   returnIssueResultSchema,
   returnIssueSummarySchema,
-  returnLineResultSchema,
   returnReceiptDetailSchema,
   type ReturnIssueSummary,
   type ReturnLineDetail,
@@ -31,10 +30,11 @@ type Run = (
 ) => Promise<RunResult>;
 
 /**
- * Příjem vratek (doc 047 §4.9): scan a returned crate or add a box, scan each bottle (good or
- * defective), count unreadable pieces and defective pumps, enter the physical count and empty
- * each container, close the receipt; resolve issues, also after the close. Every action is one
- * request with a stable id (a repeated attempt is the same request).
+ * Příjem vratek (doc 047 §4.9, R1.1 §6.3): scan a returned crate — it is freed at once, no bottle
+ * confirmed; scan each really returned bottle on its own (good or defective), in any order and
+ * independent of any crate; count unreadable pieces and defective pumps; close the receipt — no
+ * physical count. An older line from before R1.1 keeps its Vyprázdněno. Resolve issues, also after
+ * the close. Every action is one request with a stable id (a repeated attempt is the same request).
  */
 export function ReceiptWorkspace({
   initial,
@@ -91,12 +91,16 @@ export function ReceiptWorkspace({
           scannedValue: scanned,
         });
         return r.outcome === 'CRATE_RETURNED'
-          ? t.result.crate(r.crateCode, r.orderCode)
+          ? t.result.crate(r.crateCode, r.orderCode, r.freed)
           : t.result.crateAgain(r.crateCode);
       },
       scanned,
     );
-  const allEmptied = receipt.lineDetails.every((l) => l.emptiedAt);
+  // The BOTTLES line is never emptied (R1.1); only an older crate or box line waits for it.
+  const allEmptied = receipt.lineDetails.every((l) => l.kind === 'BOTTLES' || l.emptiedAt);
+  const lines = [...receipt.lineDetails].sort(
+    (a, b) => Number(b.kind === 'BOTTLES') - Number(a.kind === 'BOTTLES'),
+  );
 
   return (
     <div className="flex flex-col gap-6" data-testid="return-receipt">
@@ -107,6 +111,14 @@ export function ReceiptWorkspace({
           </span>
           <span data-testid="pump-count">{t.receipt.pumpsCount(receipt.defectivePumps)}</span>
         </div>
+        <p className="mt-2 text-sm font-medium" data-testid="receipt-counts">
+          {t.receipt.counts(
+            receipt.counts.crates,
+            receipt.counts.identified,
+            receipt.counts.defective,
+            receipt.counts.unreadable,
+          )}
+        </p>
         {!open && <p className="mt-2 text-sm text-stone-600">{t.receipt.closed}</p>}
         {stale && (
           <div
@@ -138,6 +150,7 @@ export function ReceiptWorkspace({
 
       {open && (
         <Card title={t.receipt.scanCrate}>
+          <p className="mb-3 text-sm text-stone-600">{t.receipt.scanCrateHint}</p>
           <form
             className="flex flex-col gap-3 sm:flex-row"
             onSubmit={async (e) => {
@@ -159,21 +172,6 @@ export function ReceiptWorkspace({
             <button type="submit" className={buttonClass.primary} disabled={locked}>
               {t.receipt.addCrate}
             </button>
-            <button
-              type="button"
-              className={buttonClass.secondary}
-              disabled={locked}
-              onClick={() =>
-                run(`container:${receipt.lineDetails.length}`, async (requestId) => {
-                  await apiSend('POST', `${base}/containers`, returnLineResultSchema, {
-                    requestId,
-                  });
-                  return null;
-                })
-              }
-            >
-              {t.receipt.addContainer}
-            </button>
           </form>
           {crateField.unconfirmed && (
             <div className="mt-3">
@@ -189,7 +187,16 @@ export function ReceiptWorkspace({
         </Card>
       )}
 
-      {receipt.lineDetails.map((line, index) => (
+      {open && (
+        <BottleScanCard
+          base={base}
+          busy={locked}
+          run={run}
+          unreadableKey={`unreadable:${receipt.counts.unreadable}`}
+        />
+      )}
+
+      {lines.map((line, index) => (
         <LineCard
           key={line.id}
           line={line}
@@ -231,6 +238,106 @@ export function ReceiptWorkspace({
   );
 }
 
+/** The bottle scan of the whole receipt (R1.1): no crate scan or choice is needed. */
+function BottleScanCard({
+  base,
+  busy,
+  run,
+  unreadableKey,
+}: {
+  base: string;
+  busy: boolean;
+  run: Run;
+  unreadableKey: string;
+}) {
+  const field = useScanField<{ scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }>();
+  const [outcome, setOutcome] = useState<'GOOD' | 'DEFECTIVE'>('GOOD');
+  const sendBottle = (a: { scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }) =>
+    run(
+      `bottle:${a.scanned}:${a.outcome}`,
+      async (requestId) => {
+        const r = await apiSend('POST', `${base}/bottles`, returnBottleScanResultSchema, {
+          requestId,
+          scannedValue: a.scanned,
+          outcome: a.outcome,
+        });
+        if (r.outcome === 'ISSUE_RECORDED') {
+          return t.result.issue(t.issue.kind[r.issue!.kind] ?? r.issue!.kind, r.issue!.code);
+        }
+        return r.repeated
+          ? t.result.repeated(r.bottleCode!)
+          : t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? r.result!);
+      },
+      a.scanned,
+    );
+  return (
+    <Card title={t.receipt.scanBottles} testId="return-bottle-scan">
+      <p className="mb-3 text-sm text-stone-600">{t.receipt.scanBottlesHint}</p>
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const scanned = field.value.trim();
+          if (!scanned) return;
+          await field.submit({ scanned, outcome }, sendBottle);
+        }}
+      >
+        <input
+          className={inputClass}
+          value={field.value}
+          onChange={(e) => field.setValue(e.target.value)}
+          placeholder={t.line.scanBottlePlaceholder}
+          aria-label={t.line.scanBottle}
+          autoComplete="off"
+          name="bottle"
+        />
+        <fieldset className="flex flex-wrap gap-4">
+          {(['GOOD', 'DEFECTIVE'] as const).map((o) => (
+            <label key={o} className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="outcome"
+                checked={outcome === o}
+                onChange={() => setOutcome(o)}
+              />
+              {o === 'GOOD' ? t.line.good : t.line.defective}
+            </label>
+          ))}
+        </fieldset>
+        <div className="flex flex-wrap gap-2">
+          <button type="submit" className={buttonClass.primary} disabled={busy}>
+            {t.line.submitBottle}
+          </button>
+          <button
+            type="button"
+            className={buttonClass.secondary}
+            disabled={busy}
+            onClick={() =>
+              run(unreadableKey, async (requestId) => {
+                const r = await apiSend('POST', `${base}/unreadable`, returnIssueResultSchema, {
+                  requestId,
+                });
+                return t.result.issue(t.issue.kind.UNREADABLE!, r.issue.code);
+              })
+            }
+          >
+            {t.line.unreadable}
+          </button>
+        </div>
+        {field.unconfirmed && (
+          <UnconfirmedScan
+            label={`${field.unconfirmed.scanned} · ${t.line[field.unconfirmed.outcome === 'GOOD' ? 'good' : 'defective']}`}
+            held={field.held}
+            busy={busy}
+            onRetry={() => field.retry(sendBottle)}
+            onDismiss={field.dismiss}
+          />
+        )}
+      </form>
+    </Card>
+  );
+}
+
 function LineCard({
   line,
   index,
@@ -248,36 +355,30 @@ function LineCard({
   run: Run;
   canCorrect: boolean;
 }) {
-  const field = useScanField<{ scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }>();
-  const [outcome, setOutcome] = useState<'GOOD' | 'DEFECTIVE'>('GOOD');
   const [count, setCount] = useState('');
-  const active = open && !line.emptiedAt;
-  const title = line.crateCode ? t.line.crate(line.crateCode) : `${t.line.container} ${index + 1}`;
+  // Only an older crate or box line (from before R1.1) still waits for Vyprázdněno.
+  const legacy = open && line.kind !== 'BOTTLES' && !line.emptiedAt;
+  const title =
+    line.kind === 'BOTTLES'
+      ? t.line.bottlesTitle
+      : line.crateCode
+        ? t.line.crate(line.crateCode)
+        : `${t.line.container} ${index + 1}`;
   const path = `${base}/lines/${line.id}`;
-  const sendBottle = (a: { scanned: string; outcome: 'GOOD' | 'DEFECTIVE' }) =>
-    run(
-      `bottle:${line.id}:${a.scanned}:${a.outcome}`,
-      async (requestId) => {
-        const r = await apiSend('POST', `${path}/bottles`, returnBottleScanResultSchema, {
-          requestId,
-          scannedValue: a.scanned,
-          outcome: a.outcome,
-        });
-        if (r.outcome === 'ISSUE_RECORDED') {
-          return t.result.issue(t.issue.kind[r.issue!.kind] ?? r.issue!.kind, r.issue!.code);
-        }
-        return r.repeated
-          ? t.result.repeated(r.bottleCode!)
-          : t.result.identified(r.bottleCode!, t.outcome[r.result!] ?? r.result!);
-      },
-      a.scanned,
-    );
 
   return (
-    <Card title={title} testId={`return-line-${line.crateCode ?? `box-${index + 1}`}`}>
+    <Card
+      title={title}
+      testId={`return-line-${line.kind === 'BOTTLES' ? 'bottles' : (line.crateCode ?? `box-${index + 1}`)}`}
+    >
       <div className="flex flex-col gap-4 text-sm">
         {line.orderCode && (
           <p className="text-stone-600">{t.line.order(line.orderCode, line.hotelName)}</p>
+        )}
+        {line.kind === 'CRATE' && line.emptiedAt && line.physicalCount === null && (
+          <p className="font-medium" data-testid="line-freed">
+            {t.line.freed(line.freedWithCrate ?? 0)}
+          </p>
         )}
         {line.history && (
           <p className="text-stone-500" data-testid="line-history">
@@ -288,76 +389,16 @@ function LineCard({
             )}
           </p>
         )}
-        <p className="font-medium" data-testid="line-recorded">
-          {line.emptiedAt ? t.line.emptied(line.physicalCount ?? 0) + ' · ' : ''}
-          {t.line.recorded(line.recordedCount)}
-        </p>
+        {line.kind !== 'CRATE' || line.physicalCount !== null || line.bottles.length > 0 ? (
+          <p className="font-medium" data-testid="line-recorded">
+            {line.emptiedAt && line.physicalCount !== null
+              ? t.line.emptied(line.physicalCount) + ' · '
+              : ''}
+            {t.line.recorded(line.recordedCount)}
+          </p>
+        ) : null}
 
-        {active && (
-          <form
-            className="flex flex-col gap-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const scanned = field.value.trim();
-              if (!scanned) return;
-              await field.submit({ scanned, outcome }, sendBottle);
-            }}
-          >
-            <input
-              className={inputClass}
-              value={field.value}
-              onChange={(e) => field.setValue(e.target.value)}
-              placeholder={t.line.scanBottlePlaceholder}
-              aria-label={`${t.line.scanBottle} – ${title}`}
-              autoComplete="off"
-              name="bottle"
-            />
-            <fieldset className="flex flex-wrap gap-4">
-              {(['GOOD', 'DEFECTIVE'] as const).map((o) => (
-                <label key={o} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`outcome-${line.id}`}
-                    checked={outcome === o}
-                    onChange={() => setOutcome(o)}
-                  />
-                  {o === 'GOOD' ? t.line.good : t.line.defective}
-                </label>
-              ))}
-            </fieldset>
-            <div className="flex flex-wrap gap-2">
-              <button type="submit" className={buttonClass.primary} disabled={busy}>
-                {t.line.submitBottle}
-              </button>
-              <button
-                type="button"
-                className={buttonClass.secondary}
-                disabled={busy}
-                onClick={() =>
-                  run(`unreadable:${line.id}:${line.recordedCount}`, async (requestId) => {
-                    const r = await apiSend('POST', `${path}/unreadable`, returnIssueResultSchema, {
-                      requestId,
-                    });
-                    return t.result.issue(t.issue.kind.UNREADABLE!, r.issue.code);
-                  })
-                }
-              >
-                {t.line.unreadable}
-              </button>
-            </div>
-            {field.unconfirmed && (
-              <UnconfirmedScan
-                label={`${field.unconfirmed.scanned} · ${t.line[field.unconfirmed.outcome === 'GOOD' ? 'good' : 'defective']}`}
-                held={field.held}
-                busy={busy}
-                onRetry={() => field.retry(sendBottle)}
-                onDismiss={field.dismiss}
-              />
-            )}
-          </form>
-        )}
-
-        {active && (
+        {legacy && (
           <form
             className="flex flex-col gap-2 sm:flex-row sm:items-end"
             onSubmit={async (e) => {
@@ -373,6 +414,7 @@ function LineCard({
               });
             }}
           >
+            <p className="text-stone-600 sm:basis-full">{t.line.legacy}</p>
             <label className="flex flex-col gap-1">
               <span className="text-stone-700">{t.line.physical}</span>
               <input
@@ -389,25 +431,27 @@ function LineCard({
           </form>
         )}
 
-        <div>
-          <h3 className="mb-1 font-medium text-stone-700">{t.line.bottles}</h3>
-          {line.bottles.length === 0 ? (
-            <p className="text-stone-500">{t.line.noBottles}</p>
-          ) : (
-            <ul className="flex flex-col gap-1" data-testid="line-bottles">
-              {line.bottles.map((b) => (
-                <li key={b.bottleCode + b.at} className="flex flex-wrap justify-between gap-2">
-                  <span>
-                    <span className="font-medium">{b.bottleCode}</span> · {t.outcome[b.outcome]}
-                  </span>
-                  <span className="text-stone-500">
-                    {t.line.fromCrate(b.crateCode, b.orderCode)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        {(line.kind === 'BOTTLES' || line.bottles.length > 0) && (
+          <div>
+            <h3 className="mb-1 font-medium text-stone-700">{t.line.bottles}</h3>
+            {line.bottles.length === 0 ? (
+              <p className="text-stone-500">{t.line.noBottles}</p>
+            ) : (
+              <ul className="flex flex-col gap-1" data-testid="line-bottles">
+                {line.bottles.map((b) => (
+                  <li key={b.bottleCode + b.at} className="flex flex-wrap justify-between gap-2">
+                    <span>
+                      <span className="font-medium">{b.bottleCode}</span> · {t.outcome[b.outcome]}
+                    </span>
+                    <span className="text-stone-500">
+                      {t.line.fromCrate(b.crateCode, b.orderCode)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {line.issues.length > 0 && (
           <ul className="flex flex-col gap-3" data-testid="line-issues">

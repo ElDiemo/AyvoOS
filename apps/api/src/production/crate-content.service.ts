@@ -101,12 +101,20 @@ export class CrateContentService {
    * exact search by code or scanned QR URL; the active site only, read-only.
    */
   async outside(siteId: string, query: OutsideBottlesQuery): Promise<OutsideBottlesPage> {
+    // R1.1: a filled bottle freed with its returned crate and not scanned back itself is at the
+    // hotel by the records — never "a finished bottle outside a crate" at the site.
+    const atHotel = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT b."id" FROM "bottles" b
+       WHERE b."site_id" = ${siteId}::uuid AND b."status" = 'FILLED'
+         AND (SELECT a."release_reason" FROM "crate_assignments" a WHERE a."bottle_id" = b."id"
+               ORDER BY a."assigned_at" DESC, a."id" DESC LIMIT 1) = 'CRATE_RETURNED'`;
     const groups: Record<OutsideBottleGroup, Prisma.BottleWhereInput> = {
       finished: {
         siteId,
         status: 'FILLED',
         assignments: { none: { releasedAt: null } },
         binding: { isNot: null },
+        ...(atHotel.length ? { id: { notIn: atHotel.map((r) => r.id) } } : {}),
       },
       labelledEmpty: {
         siteId,
