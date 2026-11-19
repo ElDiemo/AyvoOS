@@ -1,14 +1,19 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import {
   createIssuerBankAccountSchema,
+  newDomesticVatRateSchema,
   newIssuerBankAccountVersionSchema,
   newIssuerVersionSchema,
   setDefaultAccountSchema,
+  withdrawDomesticVatRateSchema,
   type CreateIssuerBankAccountRequest,
+  type DomesticVatRatePage,
+  type NewDomesticVatRateRequest,
   type IssuerSettings,
   type NewIssuerBankAccountVersionRequest,
   type NewIssuerVersionRequest,
   type SetDefaultAccountRequest,
+  type WithdrawDomesticVatRateRequest,
 } from '@ayvo/types';
 import { z } from 'zod';
 import { ADMIN_PREFIX } from '../common/routes.js';
@@ -71,5 +76,30 @@ export class IssuerSettingsController {
     @Caller() caller: FinanceCaller,
   ): Promise<IssuerSettings> {
     return this.issuer.setDefault(body, caller);
+  }
+
+  @RequirePermission('finance:issuer_manage')
+  @Get('vat-rates')
+  vatRates(): Promise<DomesticVatRatePage> {
+    return this.issuer.vatRates();
+  }
+
+  @RequirePermission('finance:issuer_manage')
+  @Post('vat-rates')
+  newVatRate(
+    @Body(new ZodValidationPipe(newDomesticVatRateSchema)) body: NewDomesticVatRateRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<DomesticVatRatePage> {
+    return this.issuer.newVatRate(body, caller);
+  }
+
+  @RequirePermission('finance:issuer_manage')
+  @Post('vat-rates/withdrawals')
+  withdrawVatRate(
+    @Body(new ZodValidationPipe(withdrawDomesticVatRateSchema))
+    body: WithdrawDomesticVatRateRequest,
+    @Caller() caller: FinanceCaller,
+  ): Promise<DomesticVatRatePage> {
+    return this.issuer.withdrawVatRate(body, caller);
   }
 }
