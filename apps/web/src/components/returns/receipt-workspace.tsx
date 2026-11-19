@@ -10,7 +10,7 @@ import {
   type ReturnLineDetail,
   type ReturnReceiptDetail,
 } from '@ayvo/types';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Card, buttonClass, inputClass } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { returnsCs } from '@/i18n/cs/returns';
@@ -56,14 +56,21 @@ export function ReceiptWorkspace({
   // A confirmed write and the refresh of the detail are separate: when only the refresh fails,
   // the write stays done and the page offers "Obnovit" (a GET only) — never the action again.
   const [stale, setStale] = useState(false);
+  // Refreshes can overlap (a repeated "Obnovit"). Only the latest one started may change the
+  // screen: an older answer that arrives later (an earlier read, maybe another view) is dropped.
+  const latestRefresh = useRef(0);
   const refresh = async (all = allBottles) => {
+    const mine = ++latestRefresh.current;
     try {
-      setReceipt(
-        await apiGet(`${base}?bottles=${all ? 'all' : 'recent'}`, returnReceiptDetailSchema),
+      const next = await apiGet(
+        `${base}?bottles=${all ? 'all' : 'recent'}`,
+        returnReceiptDetailSchema,
       );
+      if (mine !== latestRefresh.current) return;
+      setReceipt(next);
       setStale(false);
     } catch {
-      setStale(true);
+      if (mine === latestRefresh.current) setStale(true);
     }
   };
   const showAll = async () => {
