@@ -28,6 +28,8 @@ describe.skipIf(!hasDatabase)('permissions from a newer database (rollback compa
   const role = `FUT_${randomUUID().slice(0, 6).toUpperCase()}`;
   const onlyFuture = `FUTO_${randomUUID().slice(0, 6).toUpperCase()}`;
   let roleId = '';
+  /** The strong custom role of the non-admin test; its permissions are removed in afterAll. */
+  const strong = `FUTS_${randomUUID().slice(0, 6).toUpperCase()}`;
 
   /** A catalogue change only works inside the migration flag (as a migration would do it). */
   const asMigration = (
@@ -89,6 +91,8 @@ describe.skipIf(!hasDatabase)('permissions from a newer database (rollback compa
   afterAll(async () => {
     // Leave the shared test database as it was (other files compare the catalogue).
     await asMigration(async (db) => {
+      // Other files check that only ADMIN holds a permission: the strong role keeps none.
+      await db.$executeRaw`DELETE FROM "role_permissions" WHERE "role_code" = ${strong}`;
       for (const code of [FUTURE, NOT_HELD]) {
         await db.$executeRaw`DELETE FROM "role_permissions" WHERE "permission_code" = ${code}`;
         await db.$executeRaw`DELETE FROM "permissions" WHERE "code" = ${code}`;
@@ -253,7 +257,6 @@ describe.skipIf(!hasDatabase)('permissions from a newer database (rollback compa
     const everything = PERMISSION_CODES.filter(
       (p) => !SECURITY_ADMIN_PERMISSIONS.includes(p) && !p.startsWith('portal:'),
     );
-    const strong = `FUTS_${randomUUID().slice(0, 6).toUpperCase()}`;
     const made = await http().post('/api/admin/identity/roles').set('Cookie', admin).send({
       code: strong,
       name: 'Vše kromě správy zabezpečení',
