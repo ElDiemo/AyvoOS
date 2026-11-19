@@ -6,6 +6,10 @@ import {
 } from '@ayvo/types';
 import { cn } from '@ayvo/ui';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { CommissionClosing } from '@/components/sales/commission-closing';
+import { isMonth, pragueMonth, previousMonth } from '@/components/sales/commission-closing-format';
+import { CommissionMine } from '@/components/sales/commission-mine';
 import { CommissionPortfolio } from '@/components/sales/commission-portfolio';
 import { CommissionTermsForm } from '@/components/sales/commission-terms-form';
 import { SalesHeader } from '@/components/sales/sales-header';
@@ -101,14 +105,23 @@ function Valid({ terms }: { terms: CommissionTerms }) {
 export default async function SalesCommissionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; salesperson?: string; month?: string }>;
+  searchParams: Promise<{ tab?: string; salesperson?: string; month?: string; mode?: string }>;
 }) {
   const me = await requirePermission('sales:work');
   const manage = hasPermission(me, 'sales:commission_terms_manage');
   const q = await searchParams;
   const portfolioManage = hasPermission(me, 'sales:manage');
+  // PR 2e: the monthly closing (finance:commissions_manage, ADMIN) and the own statement.
+  const closing = hasPermission(me, 'finance:commissions_manage');
+  if (q.tab === 'closing' && !closing) redirect('/forbidden');
   const tab =
-    q.tab === 'portfolio' ? 'portfolio' : manage && q.tab !== 'mine' ? 'settings' : 'mine';
+    q.tab === 'portfolio' || q.tab === 'closing' || q.tab === 'statement'
+      ? q.tab
+      : manage && q.tab !== 'mine'
+        ? 'settings'
+        : 'mine';
+  // The last closed month by default (a month closes on the 1st of the next one, O12).
+  const closedMonth = isMonth(q.month) ? q.month : previousMonth(pragueMonth());
   const tabClass = (on: boolean) =>
     cn(
       'rounded-md px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none',
@@ -118,7 +131,11 @@ export default async function SalesCommissionsPage({
     );
 
   let body: React.ReactNode;
-  if (tab === 'portfolio') {
+  if (tab === 'closing') {
+    body = <CommissionClosing month={closedMonth} mode={q.mode === 'LIVE' ? 'LIVE' : 'TEST'} />;
+  } else if (tab === 'statement') {
+    body = <CommissionMine month={closedMonth} />;
+  } else if (tab === 'portfolio') {
     const month = q.month && /^\d{4}-(0[1-9]|1[0-2])$/.test(q.month) ? q.month : currentMonth();
     const people = manage
       ? (await apiGet('admin/sales/commission-terms', commissionTermsOverviewSchema)).map(
@@ -222,6 +239,24 @@ export default async function SalesCommissionsPage({
           className={tabClass(tab === 'portfolio')}
         >
           {t.tabs.portfolio}
+        </Link>
+        {closing && (
+          <Link
+            href="/sales/commissions?tab=closing"
+            aria-current={tab === 'closing' ? 'page' : undefined}
+            className={tabClass(tab === 'closing')}
+            data-testid="tab-closing"
+          >
+            {t.tabs.closing}
+          </Link>
+        )}
+        <Link
+          href="/sales/commissions?tab=statement"
+          aria-current={tab === 'statement' ? 'page' : undefined}
+          className={tabClass(tab === 'statement')}
+          data-testid="tab-statement"
+        >
+          {t.tabs.statement}
         </Link>
         <Link
           href="/sales/commissions?tab=mine"

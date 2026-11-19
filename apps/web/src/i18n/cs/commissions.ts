@@ -2,8 +2,14 @@
 export const commissionsCs = {
   title: 'Provize',
   subtitle:
-    'Podmínky a portfolio obchodníků. Částky a výplaty přijdou z Financí v dalších krocích.',
-  tabs: { settings: 'Nastavení', mine: 'Moje podmínky', portfolio: 'Portfolio' },
+    'Podmínky, portfolio a měsíční podklady obchodníků. Částky počítají Finance; výplaty systém zatím neeviduje.',
+  tabs: {
+    settings: 'Nastavení',
+    mine: 'Moje podmínky',
+    portfolio: 'Portfolio',
+    closing: 'Uzávěrka',
+    statement: 'Můj podklad',
+  },
   mine: {
     heading: 'Moje podmínky provize',
     readOnly: 'Jen ke čtení. Podmínky nastavuje administrátor.',
@@ -152,5 +158,164 @@ export const commissionsCs = {
       NO_SALESPERSON: 'Firemní hotel – bez provize',
       BEFORE_START: 'Před prvním zpoplatněným měsícem',
     },
+  },
+  /**
+   * PR 2e: Obchod → Provize → Uzávěrka (admin, finance:commissions_manage; doc 069 §5) — the
+   * monthly preview from Finance, its deviations, the approval bound to the preview and the
+   * salesperson's invoice. Nothing is paid and nothing goes to accounting.
+   */
+  closing: {
+    heading: 'Měsíční uzávěrka provizí',
+    intro:
+      'Náhled počítají Finance z vystavených faktur hotelů a přiřazení obchodníků. Úhrady hotelů se nečtou. Schválený podklad se už nemění; pozdější změny se objeví jako opravy v dalším měsíci.',
+    month: 'Měsíc',
+    mode: 'Režim',
+    modes: { TEST: 'TEST (syntetické faktury)', LIVE: 'LIVE (ostré faktury)' },
+    show: 'Zobrazit',
+    testBadge: 'TEST – syntetická data, nic se nevyplácí',
+    liveEmpty: 'Ostré faktury zatím neexistují, takže v režimu LIVE nic nevzniká.',
+    MONTH_NOT_CLOSED: (month: string, from: string) =>
+      `Měsíc ${month} ještě není uzavřený. Náhled a schválení jsou možné od ${from}.`,
+    unavailable:
+      'Náhled teď nelze spočítat: Finance nebo jádro neodpovídá. Nic se nezapsalo; zkuste to později.',
+    invalid: 'Zadejte platný měsíc.',
+    previewHeading: (month: string) => `Náhled ${month}`,
+    noStatements: 'Za tento měsíc nemá žádný obchodník nic k uzávěrce.',
+    approvedHeading: (month: string) => `Schválené podklady ${month}`,
+    noApproved: 'Za tento měsíc zatím není schválený žádný podklad.',
+    hotels: (n: number) => `${n} ${n === 1 ? 'hotel' : n >= 2 && n <= 4 ? 'hotely' : 'hotelů'}`,
+    previous: (month: string | null) =>
+      month ? `Navazuje na podklad ${month}` : 'První podklad obchodníka',
+    balance: {
+      opening: 'Počáteční saldo',
+      total: 'Provize v měsíci',
+      closing: 'Konečné saldo',
+      toInvoice: 'K fakturaci',
+      carried: 'Převádí se do dalšího měsíce',
+    },
+    columns: {
+      cause: 'Položka',
+      invoice: 'Faktura hotelu',
+      hotel: 'Hotel',
+      serviceMonth: 'Za měsíc',
+      base: 'Základ',
+      k: 'Měsíc provize',
+      rate: 'Sazba',
+      amount: 'Provize',
+    },
+    cause: {
+      REGULAR: 'Provize',
+      CANCELLED: 'Oprava – storno faktury',
+      REATTRIBUTED: (rev: string) => `Oprava – změna obchodníka (revize ${rev})`,
+    },
+    deviations: 'Odchylky a opravy',
+    noDeviations: 'Bez odchylek: jen nové položky, žádné opravy ani příznaky.',
+    correctionNote:
+      'Oprava je rozdíl proti už schválenému podkladu (storno nebo změna obchodníka); schválený podklad se nemění.',
+    openingNote: (amount: string) => `Započítává se převedené záporné saldo ${amount}.`,
+    flag: {
+      TERMS_MISSING: 'Chybí podmínky provize',
+      CURRENCY_UNSUPPORTED: 'Faktura v jiné měně než CZK',
+      BEFORE_COMMISSION_START: 'Před prvním zpoplatněným měsícem',
+      EARLIER_PERIOD_OPEN: (month: string) =>
+        `Patří do dřívějšího měsíce ${month}, který ještě není schválený – schvalte nejdřív ten`,
+    },
+    blocked: 'Schválit nelze, dokud podklad má příznaky. Nejdřív je vyřešte.',
+    unresolvedHeading: 'Řádky bez obchodníka',
+    unresolvedHelp:
+      'Nikomu nepatří a nikoho neblokují. Nepřiřazený hotel přiřaďte na kartě hotelu; před prvním zpoplatněným měsícem provize nevzniká.',
+    unresolved: {
+      UNASSIGNED: 'Nepřiřazený hotel',
+      BEFORE_COMMISSION_START: 'Před prvním zpoplatněným měsícem',
+    },
+    approve: 'Schválit podklad',
+    approveTitle: (name: string, month: string) => `Schválit podklad: ${name}, ${month}`,
+    approveBody: (amount: string) =>
+      `Schvaluje se přesně tento náhled. K fakturaci: ${amount}. Schválený podklad se už nikdy nezmění.`,
+    approveConfirm: 'Schválit',
+    approved: 'Podklad je schválený.',
+    approvedAt: (when: string, who: string) => `Schváleno ${when} · ${who}`,
+    errors: {
+      STATEMENT_STALE:
+        'Podklady se mezitím změnily (např. nová nebo stornovaná faktura). Nic se neschválilo. Načtěte náhled znovu a zkontrolujte ho.',
+      ALREADY_APPROVED: 'Podklad obchodníka za tento měsíc je už schválený.',
+      PERIOD_ORDER: 'Obchodník má schválený pozdější měsíc. Tento měsíc už schválit nelze.',
+      STATEMENT_FLAGGED: 'Podklad má příznaky; schválit ho nelze.',
+      NOTHING_TO_APPROVE: 'Obchodník nemá za tento měsíc podklad.',
+      MONTH_NOT_CLOSED: 'Měsíc ještě není uzavřený.',
+      IDEMPOTENCY_CONFLICT: 'Požadavek se neshoduje s předchozím pokusem. Načtěte stránku znovu.',
+      FINANCE_DEPENDENCY_UNAVAILABLE:
+        'Jádro teď neodpovídá. Nic se neschválilo; zkuste to znovu stejným tlačítkem.',
+      uncertain: 'Odpověď nedorazila. Opakování pokračuje ve stejném požadavku.',
+      failed: 'Schválení se nepodařilo.',
+    },
+    items: (n: number) => `Položky (${n})`,
+    invoice: {
+      heading: 'Faktura obchodníka',
+      nothing: 'Nic k fakturaci: saldo je nulové nebo záporné a převádí se do dalšího měsíce.',
+      recorded: 'Zaevidovaná faktura',
+      number: 'Číslo faktury',
+      issuedOn: 'Datum vystavení',
+      receivedOn: 'Datum přijetí',
+      base: 'Částka bez DPH',
+      baseHelp: (amount: string) => `Musí se rovnat částce k fakturaci: ${amount}.`,
+      payoutOn: 'Plánovaná výplata',
+      payoutNote: 'Jen plán výplaty: nic se neplatí ani neposílá účetní.',
+      recordedAt: (when: string, who: string) => `Zaevidováno ${when} · ${who}`,
+      checks:
+        'Kontroluje se: číslo faktury (u obchodníka jen jednou), datum vystavení ≤ datum přijetí, přijetí nejdřív 1. den po uzavřeném měsíci a ne v budoucnu, částka bez DPH = k fakturaci, měna CZK. Vystavitel, doklad ani DPH se nekontrolují.',
+      submit: 'Zaevidovat fakturu',
+      saved: 'Faktura je zaevidovaná a výplata naplánovaná.',
+      required: {
+        number: 'Uveďte číslo faktury.',
+        date: 'Zadejte datum.',
+        base: 'Zadejte částku s nejvýš 2 desetinnými místy.',
+      },
+      errors: {
+        NOTHING_TO_INVOICE: 'Podklad nemá částku k fakturaci.',
+        SALESPERSON_INVOICE_CURRENCY_MISMATCH: 'Faktura musí být v měně podkladu (CZK).',
+        SALESPERSON_INVOICE_BASE_MISMATCH: 'Částka bez DPH se musí rovnat částce k fakturaci.',
+        SALESPERSON_INVOICE_DATES: 'Datum vystavení nemůže být po datu přijetí.',
+        SALESPERSON_INVOICE_BEFORE_CLOSE: 'Fakturu nelze přijmout před uzavřením měsíce.',
+        SALESPERSON_INVOICE_IN_FUTURE: 'Datum přijetí nemůže být v budoucnu.',
+        SALESPERSON_INVOICE_EXISTS: 'K tomuto podkladu už je faktura zaevidovaná.',
+        SALESPERSON_INVOICE_NUMBER_REUSED: 'Toto číslo faktury už obchodník použil.',
+        IDEMPOTENCY_CONFLICT: 'Požadavek se neshoduje s předchozím pokusem. Načtěte stránku znovu.',
+        uncertain: 'Odpověď nedorazila. Opakování pokračuje ve stejném požadavku.',
+        failed: 'Evidence faktury se nepodařila.',
+      },
+    },
+  },
+  /** PR 2e: Obchod → Provize → Můj podklad (sales:work): own state, one amount, dates. */
+  statement: {
+    heading: (month: string) => `Můj podklad ${month}`,
+    month: 'Měsíc',
+    show: 'Zobrazit',
+    testBadge: 'TEST – syntetická data, nic se nevyplácí',
+    hotels: 'Hotely přiřazené v měsíci',
+    hotelsNote: 'Počet z portfolia (přiřazení), ne z faktur.',
+    hotelsUnavailable: 'Počet hotelů teď nelze načíst.',
+    state: {
+      PROCESSING: 'Zpracovává se',
+      TO_INVOICE: 'K fakturaci',
+      NOTHING_TO_INVOICE: 'Nic k fakturaci',
+      INVOICE_RECEIVED: 'Faktura přijata',
+    },
+    help: {
+      PROCESSING:
+        'Podklad za tento měsíc zatím není schválený. Pokud za měsíc nic nevzniklo, podklad nebude. Částka se ukáže až po schválení.',
+      TO_INVOICE: 'Podklad je schválený. Vystavte fakturu přesně na tuto částku bez DPH.',
+      NOTHING_TO_INVOICE:
+        'Podklad je schválený, ale saldo je záporné nebo nulové. Nic nefakturujte.',
+      INVOICE_RECEIVED:
+        'Faktura je zaevidovaná a výplata naplánovaná. Platbu systém zatím neeviduje.',
+    },
+    amount: 'Částka k fakturaci (bez DPH)',
+    carried: 'Převádí se do dalšího měsíce',
+    approvedAt: 'Schváleno',
+    payoutPlanned: 'Plánovaná výplata',
+    rule: (earliest: string) =>
+      `Faktura přijatá do 10. dne měsíce se vyplácí 15. téhož měsíce, nejdříve ${earliest}.`,
+    unavailable: 'Stav teď nelze načíst: Finance neodpovídá. Zkuste to později.',
   },
 } as const;
