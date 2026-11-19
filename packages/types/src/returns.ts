@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * Return intake R1 (doc 047 §4): receipts of the active site, their lines (one physical container
- * each), the individual identification of returned bottles, issues and defective pump counts.
+ * Return intake (doc 047 §4, R1.1 §6.3): receipts of the active site. A crate scan frees the crate;
+ * each returned bottle is identified on its own (no crate needed), issues and defective pump counts.
  */
 
 export const returnReceiptCodeSchema = z
@@ -114,7 +114,11 @@ export type ReturnIdentifiedBottle = z.infer<typeof returnIdentifiedBottleSchema
 
 export const returnLineDetailSchema = z.object({
   id: z.string(),
-  kind: z.enum(['CRATE', 'CONTAINER']),
+  /**
+   * CRATE: a returned crate, freed by its scan (R1.1; an R1 line may still wait for Vyprázdněno).
+   * BOTTLES: the receipt's individually scanned bottles (R1.1). CONTAINER: R1 history only.
+   */
+  kind: z.enum(['CRATE', 'CONTAINER', 'BOTTLES']),
   crateCode: z.string().nullable(),
   orderCode: z.string().nullable(),
   hotelName: z.string().nullable(),
@@ -125,6 +129,8 @@ export const returnLineDetailSchema = z.object({
   recordedCount: z.number().int(),
   bottles: z.array(returnIdentifiedBottleSchema),
   issues: z.array(returnIssueSummarySchema),
+  /** CRATE (R1.1): members whose binding to the crate its scan ended — never a confirmation. */
+  freedWithCrate: z.number().int().nullable(),
   /** CRATE only — the cycle's history, information only (never compared with physicalCount). */
   history: z
     .object({
@@ -151,6 +157,13 @@ export type ReturnReceiptSummary = z.infer<typeof returnReceiptSummarySchema>;
 export const returnReceiptDetailSchema = returnReceiptSummarySchema.extend({
   hotelCode: z.string().nullable(),
   defectivePumps: z.number().int(),
+  /** Derived from the scans (R1.1, doc 047 §6.3): no physical count is ever required. */
+  counts: z.object({
+    crates: z.number().int(),
+    identified: z.number().int(),
+    defective: z.number().int(),
+    unreadable: z.number().int(),
+  }),
   lineDetails: z.array(returnLineDetailSchema),
 });
 export type ReturnReceiptDetail = z.infer<typeof returnReceiptDetailSchema>;
@@ -179,6 +192,8 @@ export const returnCrateScanResultSchema = z.object({
   lineId: z.string(),
   crateCode: z.string(),
   orderCode: z.string(),
+  /** Members whose binding to the crate ended with its scan (none is confirmed returned). */
+  freed: z.number().int(),
 });
 export type ReturnCrateScanResult = z.infer<typeof returnCrateScanResultSchema>;
 

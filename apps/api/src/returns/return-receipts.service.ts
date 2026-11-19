@@ -12,7 +12,6 @@ import type {
   ReturnIssueResult,
   ReturnIssueSummary,
   ReturnLineDetail,
-  ReturnLineResult,
   ReturnPumpCountRequest,
   ReturnReceiptDetail,
   ReturnReceiptList,
@@ -74,6 +73,9 @@ interface IssueRow {
   kind: ReturnIssueKind;
   bottleId: string | null;
   lineId: string;
+  /** R1.1 NOT_DELIVERED: the circulation known at its first scan (doc 047 §6.3 2). */
+  anchorCycleId?: string | null;
+  anchorAllocationId?: string | null;
 }
 
 /**
@@ -209,8 +211,9 @@ export class ReturnReceiptsService {
       { actorId: principal.userId, siteId: site.siteId, receiptId: receipt.id },
       async (tx) => {
         if ((await this.lockReceipt(tx, receipt.id, 'UPDATE')) !== 'OPEN') throw receiptClosed();
+        // The receipt's BOTTLES line needs no emptying (R1.1); an R1 line keeps Vyprázdněno.
         const open = await tx.returnReceiptLine.count({
-          where: { receiptId: receipt.id, emptiedAt: null },
+          where: { receiptId: receipt.id, emptiedAt: null, kind: { not: 'BOTTLES' } },
         });
         if (open > 0) {
           throw domainErrorWithDetails(
@@ -238,9 +241,11 @@ export class ReturnReceiptsService {
   // --- lines ------------------------------------------------------------------------------------
 
   /**
-   * The scan of a returned crate (doc 047 §4.5): a CRATE line, its delivered allocation
-   * completed, the cycle RETURNED with its crate event. No bottle changes; the contents are never
-   * assumed.
+   * The scan of a returned crate (R1.1, doc 047 §6.3 1): the crate's current cycle, DELIVERED
+   * before the receipt was opened, is returned and freed in one transaction — its CRATE line,
+   * the delivered allocation completed, DELIVERED → RETURNED → CLOSED with both crate events, the
+   * line emptied without a count, and every still active member released CRATE_RETURNED by that
+   * line. No bottle row or event is written: each bottle comes back only by its own scan.
    */
   async scanCrate(
     principal: Principal,
@@ -263,114 +268,136 @@ export class ReturnReceiptsService {
           throw domainError(409, 'CRATE_OF_ANOTHER_SITE', 'This crate belongs to another site');
         }
         await this.cycles.lockCrate(tx, crate.id);
+        // Only the crate's one current cycle is ever considered, never an older one.
         const cycle = await this.cycles.openCycle(tx, crate.id, true);
-        if (cycle?.status === 'RETURNED') {
-          const line = await tx.returnReceiptLine.findUniqueOrThrow({
-            where: { returnedCycleId: cycle.id },
-            select: {
-              id: true,
-              receiptId: true,
-              receipt: { select: { code: true } },
-              allocation: { select: { order: { select: { code: true } } } },
-            },
-          });
-          if (line.receiptId === receipt.id) {
-            return {
-              outcome: 'ALREADY_SCANNED',
-              lineId: line.id,
-              crateCode: crate.code,
-              orderCode: line.allocation!.order.code,
-            };
+        if (cycle?.status === 'DELIVERED') {
+          const allocation = await this.orderReturns.deliveredAllocation(tx, cycle.id);
+          if (!allocation) {
+            throw domainErrorWithDetails(
+              409,
+              'CRATE_NOT_DELIVERED',
+              'This crate has no delivered circulation to return',
+              { crate: crate.code, status: cycle.status },
+            );
           }
+          if (allocation.deliveredAt >= receipt.openedAt) {
+            throw domainErrorWithDetails(
+              409,
+              'CRATE_DELIVERED_AFTER_RECEIPT',
+              'This crate was delivered after this receipt was opened: use a new receipt',
+              { crate: crate.code, receipt: receipt.code },
+            );
+          }
+          return this.returnCrate(
+            tx,
+            principal,
+            input.requestId,
+            receipt,
+            crate,
+            cycle,
+            allocation,
+          );
+        }
+        // Scanned before: the same receipt answers with its first result.
+        const earlier = await tx.returnReceiptLine.findFirst({
+          where: { kind: 'CRATE', crateId: crate.id },
+          orderBy: { scannedAt: 'desc' },
+          select: {
+            id: true,
+            receiptId: true,
+            returnedCycleId: true,
+            receipt: { select: { code: true } },
+            allocation: { select: { order: { select: { code: true } } } },
+          },
+        });
+        const lastWasReturned = earlier && (!cycle || cycle.id === earlier.returnedCycleId);
+        if (earlier && lastWasReturned && earlier.receiptId === receipt.id) {
+          return {
+            outcome: 'ALREADY_SCANNED',
+            lineId: earlier.id,
+            crateCode: crate.code,
+            orderCode: earlier.allocation!.order.code,
+            freed: await tx.crateAssignment.count({ where: { releasedByLineId: earlier.id } }),
+          };
+        }
+        if (earlier && lastWasReturned) {
           throw domainErrorWithDetails(
             409,
             'CRATE_ALREADY_RETURNED',
             'This crate was already scanned in another return receipt',
-            { crate: crate.code, receipt: line.receipt.code },
+            { crate: crate.code, receipt: earlier.receipt.code },
           );
         }
-        const allocation =
-          cycle?.status === 'DELIVERED'
-            ? await this.orderReturns.deliveredAllocation(tx, cycle.id)
-            : null;
-        if (!cycle || !allocation) {
-          throw domainErrorWithDetails(
-            409,
-            'CRATE_NOT_DELIVERED',
-            'This crate has no delivered circulation to return',
-            { crate: crate.code, status: cycle?.status ?? null },
-          );
-        }
-        const now = new Date();
-        const line = await tx.returnReceiptLine.create({
-          data: {
-            receiptId: receipt.id,
-            kind: 'CRATE',
-            crateId: crate.id,
-            returnedCycleId: cycle.id,
-            allocationId: allocation.id,
-            scannedBy: principal.userId,
-            scanOperationId: input.requestId,
-          },
-          select: { id: true },
-        });
-        await this.orderReturns.complete(tx, {
-          allocationId: allocation.id,
-          lineId: line.id,
-          actorId: principal.userId,
-          occurredAt: now,
-        });
-        await this.cycles.returnFromHotel(tx, cycle, {
-          actorId: principal.userId,
-          operationId: input.requestId,
-          occurredAt: now,
-          receipt: receipt.code,
-          order: allocation.order.code,
-        });
-        return {
-          outcome: 'CRATE_RETURNED',
-          lineId: line.id,
-          crateCode: crate.code,
-          orderCode: allocation.order.code,
-        };
+        throw domainErrorWithDetails(
+          409,
+          'CRATE_NOT_DELIVERED',
+          'This crate has no delivered circulation to return',
+          { crate: crate.code, status: cycle?.status ?? null },
+        );
       },
     );
     return result as ReturnCrateScanResult;
   }
 
-  /** "Krabice bez kódu": a CONTAINER line. */
-  async addContainer(
+  /** The writes of a crate scan (R1.1), under the receipt → crate → cycle locks. */
+  private async returnCrate(
+    tx: Tx,
     principal: Principal,
-    site: SiteContext,
-    code: string,
-    input: ReturnRequest,
-  ): Promise<ReturnLineResult> {
-    const receipt = await this.receiptInSite(code, site.siteId);
-    const { result } = await this.operations.run(
-      'RETURN_CONTAINER_ADD',
-      input.requestId,
-      { actorId: principal.userId, siteId: site.siteId, receiptId: receipt.id },
-      async (tx) => {
-        if ((await this.lockReceipt(tx, receipt.id, 'UPDATE')) !== 'OPEN') throw receiptClosed();
-        const line = await tx.returnReceiptLine.create({
-          data: {
-            receiptId: receipt.id,
-            kind: 'CONTAINER',
-            scannedBy: principal.userId,
-            scanOperationId: input.requestId,
-          },
-          select: { id: true },
-        });
-        return { lineId: line.id };
+    operationId: string,
+    receipt: { id: string; code: string },
+    crate: { id: string; code: string },
+    cycle: { id: string; crateId: string; siteId: string },
+    allocation: { id: string; order: { code: string } },
+  ): Promise<ReturnCrateScanResult> {
+    const now = new Date();
+    const line = await tx.returnReceiptLine.create({
+      data: {
+        receiptId: receipt.id,
+        kind: 'CRATE',
+        crateId: crate.id,
+        returnedCycleId: cycle.id,
+        allocationId: allocation.id,
+        scannedBy: principal.userId,
+        scanOperationId: operationId,
       },
-    );
-    return result as ReturnLineResult;
+      select: { id: true },
+    });
+    const step = { actorId: principal.userId, operationId, occurredAt: now };
+    await this.orderReturns.complete(tx, {
+      allocationId: allocation.id,
+      lineId: line.id,
+      actorId: principal.userId,
+      occurredAt: now,
+    });
+    await this.cycles.returnFromHotel(tx, cycle, {
+      ...step,
+      receipt: receipt.code,
+      order: allocation.order.code,
+    });
+    const freed = await this.cycles.releaseWithCrate(tx, {
+      cycleId: cycle.id,
+      lineId: line.id,
+      ...step,
+    });
+    await this.cycles.closeEmptied(tx, cycle, { ...step, receipt: receipt.code });
+    await tx.returnReceiptLine.update({
+      where: { id: line.id },
+      data: { emptiedAt: now, emptiedBy: principal.userId, emptyOperationId: operationId },
+    });
+    return {
+      outcome: 'CRATE_RETURNED',
+      lineId: line.id,
+      crateCode: crate.code,
+      orderCode: allocation.order.code,
+      freed,
+    };
   }
 
   /**
-   * Vyprázdněno / line done (doc 047 §4.5, §4.8): the physical count of THIS container compared
-   * with what the line recorded (each piece once); a COUNT_MISMATCH issue if they differ; a CRATE
-   * line's cycle → CLOSED.
+   * Vyprázdněno of an R1 line only (doc 047 §6.3 6): an open receipt from before R1.1 keeps its
+   * not yet emptied CRATE or CONTAINER line with the physical count of THIS container compared
+   * with what the line recorded; a COUNT_MISMATCH issue if they differ; a CRATE line's cycle →
+   * CLOSED. R1.1 lines need no emptying.
    */
   async emptyLine(
     principal: Principal,
@@ -394,6 +421,9 @@ export class ReturnReceiptsService {
       async (tx) => {
         if ((await this.lockReceipt(tx, receipt.id, 'UPDATE')) !== 'OPEN') throw receiptClosed();
         const current = await tx.returnReceiptLine.findUniqueOrThrow({ where: { id: line.id } });
+        if (current.kind === 'BOTTLES') {
+          throw domainError(409, 'LINE_NOT_EMPTIABLE', 'Scanned bottles need no emptying or count');
+        }
         if (current.emptiedAt) throw lineEmptied();
         if (current.kind === 'CRATE') {
           await this.cycles.lockCrate(tx, current.crateId!);
@@ -441,23 +471,21 @@ export class ReturnReceiptsService {
 
   // --- pieces -----------------------------------------------------------------------------------
 
-  /** "Nečitelná lahev +1": an UNREADABLE piece issue of the line. */
+  /** "Nečitelná lahev +1": an UNREADABLE piece issue of the receipt's BOTTLES line (R1.1). */
   async unreadable(
     principal: Principal,
     site: SiteContext,
     code: string,
-    lineId: string,
     input: ReturnRequest,
   ): Promise<ReturnIssueResult> {
     const receipt = await this.receiptInSite(code, site.siteId);
-    const line = await this.lineOf(receipt.id, lineId);
     const { result } = await this.operations.run(
       'RETURN_UNREADABLE',
       input.requestId,
-      { actorId: principal.userId, siteId: site.siteId, receiptId: receipt.id, lineId: line.id },
+      { actorId: principal.userId, siteId: site.siteId, receiptId: receipt.id },
       async (tx) => {
         if ((await this.lockReceipt(tx, receipt.id, 'SHARE')) !== 'OPEN') throw receiptClosed();
-        await this.assertNotEmptied(tx, line.id);
+        const line = await this.bottlesLine(tx, receipt.id, principal.userId, input.requestId);
         const issue = await this.newIssue(tx, {
           receiptId: receipt.id,
           lineId: line.id,
@@ -508,50 +536,45 @@ export class ReturnReceiptsService {
     return result as unknown as ReturnReceiptDetail;
   }
 
-  /** The intake scan of one returned bottle on line L (doc 047 §4.5, §4.6). */
+  /**
+   * The intake scan of one returned bottle (R1.1, doc 047 §6.3 2): no crate scan or choice. It goes
+   * to the receipt's one BOTTLES line and identifies the bottle's real latest circulation,
+   * delivered before the receipt was opened — also after its crate was freed and reused.
+   */
   async scanBottle(
     principal: Principal,
     site: SiteContext,
     code: string,
-    lineId: string,
     input: ReturnBottleScanRequest,
   ): Promise<ReturnBottleScanResult> {
     const token = this.token(input.scannedValue);
     const receipt = await this.receiptInSite(code, site.siteId);
-    const line = await this.lineOf(receipt.id, lineId);
     const outcome: Outcome = input.outcome === 'GOOD' ? 'RETURNED' : 'RETIRED';
     const { result } = await this.operations.run(
       'RETURN_BOTTLE_SCAN',
       input.requestId,
-      {
-        actorId: principal.userId,
-        siteId: site.siteId,
-        receiptId: receipt.id,
-        lineId: line.id,
-        token,
-        outcome,
-      },
+      { actorId: principal.userId, siteId: site.siteId, receiptId: receipt.id, token, outcome },
       async (tx) => {
         const state = await this.lockReceipt(tx, receipt.id, 'SHARE');
         const bottle = await this.bottleOf(tx, token);
-        const current = await tx.returnReceiptLine.findUniqueOrThrow({
-          where: { id: line.id },
-          select: { emptiedAt: true },
-        });
         // The site boundary comes first (§4.6): nothing of another site is changed or named.
         if (bottle.siteId !== site.siteId) {
-          if (state !== 'OPEN' || current.emptiedAt) {
+          if (state !== 'OPEN') {
             throw domainError(409, 'BOTTLE_OF_ANOTHER_SITE', 'This bottle belongs to another site');
           }
+          const line = await this.bottlesLine(tx, receipt.id, principal.userId, input.requestId);
           return this.json(
             this.otherSitePiece(tx, receipt.id, line.id, token, principal, input.requestId),
           );
         }
         if (state !== 'OPEN') throw receiptClosed();
-        if (current.emptiedAt) throw lineEmptied();
+        const line = await this.bottlesLine(tx, receipt.id, principal.userId, input.requestId);
         return this.json(
-          this.identifyOnLine(tx, {
-            line: { id: line.id, scannedAt: line.scannedAt, receiptCode: receipt.code },
+          this.identifyCurrent(tx, {
+            receiptId: receipt.id,
+            receiptCode: receipt.code,
+            openedAt: receipt.openedAt,
+            lineId: line.id,
             bottle,
             outcome,
             actorId: principal.userId,
@@ -603,6 +626,23 @@ export class ReturnReceiptsService {
         if (issue.bottleId && issue.bottleId !== bottle.id) {
           throw domainError(409, 'WRONG_BOTTLE', 'This issue names another bottle');
         }
+        // R1.1: an issue of a BOTTLES line — the receipt anchor, or its NOT_DELIVERED anchor.
+        if (issue.line.kind === 'BOTTLES') {
+          return this.json(
+            this.identifyCurrent(tx, {
+              receiptId: issue.receiptId,
+              receiptCode: issue.receiptCode,
+              openedAt: issue.receipt.openedAt,
+              lineId: issue.lineId,
+              bottle,
+              outcome,
+              actorId: principal.userId,
+              operationId: input.requestId,
+              resolving: issue,
+            }),
+          );
+        }
+        // An R1 issue on an R1 line keeps R1's line anchor (doc 047 §6.3 6).
         return this.json(
           this.identifyOnLine(tx, {
             line: {
@@ -953,6 +993,326 @@ export class ReturnReceiptsService {
     };
   }
 
+  // --- the identification of the current circulation (R1.1) ------------------------------------
+
+  /**
+   * Doc 047 §6.3 2 in order, after the locks crate → cycle (of the bottle's latest assignment) →
+   * bottle → issue. The bottle's real latest circulation is its latest assignment of any cycle,
+   * active or freed with its crate — never an older delivered one when a newer one exists.
+   * `resolving` is the issue named by "Dořešit" (null for an intake scan, whose own open issue of
+   * this bottle on the line is then resolved by the same path). An anchored NOT_DELIVERED is
+   * resolved against its anchor; everything else keeps the receipt anchor (delivered before the
+   * receipt was opened).
+   */
+  private async identifyCurrent(
+    tx: Tx,
+    ctx: {
+      receiptId: string;
+      receiptCode: string;
+      openedAt: Date;
+      lineId: string;
+      bottle: { id: string; code: string };
+      outcome: Outcome;
+      actorId: string;
+      operationId: string;
+      resolving: IssueRow | null;
+    },
+  ): Promise<ReturnBottleScanResult> {
+    const { bottle, outcome } = ctx;
+    const seen = await this.latestAssignment(tx, bottle.id);
+    if (seen) {
+      await this.cycles.lockCrate(tx, seen.cycle.crateId);
+      await this.cycles.lockCycle(tx, seen.cycleId);
+    }
+    const status = await this.bottles.lockForLabelApplication(tx, bottle.id);
+    const latest = await this.latestAssignment(tx, bottle.id);
+    // A NEW assignment meanwhile would need its crate locked after the bottle: refused (rescan).
+    // A release of the same one (its crate scan, a concurrent identification) is the new state.
+    if (latest?.id !== seen?.id) throw concurrentChange();
+
+    // The issue last: the named one, or this bottle's open piece issue on the line.
+    let resolving: IssueRow | null = null;
+    if (ctx.resolving) {
+      const current = await this.lockIssue(tx, ctx.resolving.id);
+      if (current.resolvedAt) {
+        const first = current.resolvingEvent;
+        if (
+          first &&
+          first.bottleId === bottle.id &&
+          (first.payload as { outcome?: string }).outcome === outcome
+        ) {
+          return identified(bottle.code, outcome, true, current);
+        }
+        throw issueResolved();
+      }
+      resolving = ctx.resolving;
+    } else {
+      const own = await tx.returnReceiptIssue.findFirst({
+        where: { bottleId: bottle.id, lineId: ctx.lineId, resolvedAt: null },
+        select: { id: true },
+      });
+      if (own) {
+        const current = await this.lockIssue(tx, own.id);
+        if (!current.resolvedAt) resolving = current;
+      }
+    }
+
+    // An anchored NOT_DELIVERED (§6.3 2): its own circulation, delivered meanwhile.
+    if (resolving?.anchorCycleId && resolving.anchorAllocationId) {
+      if (!latest || latest.cycleId !== resolving.anchorCycleId) {
+        throw domainError(
+          409,
+          'CIRCULATION_CHANGED',
+          'This bottle is in a later circulation than the one this issue recorded',
+        );
+      }
+      const delivery = await this.orderReturns.deliveryOf(tx, latest.id);
+      if (delivery?.allocationId !== resolving.anchorAllocationId || !delivery.deliveredAt) {
+        throw domainError(
+          409,
+          'NOT_DELIVERED',
+          'This bottle is not delivered yet: the issue stays open',
+        );
+      }
+      const sorted = await this.sortedOfCycle(tx, bottle.id, latest.cycleId);
+      if (sorted) {
+        throw domainErrorWithDetails(
+          409,
+          'ALREADY_RECEIVED_ELSEWHERE',
+          'This bottle was already received on another line',
+          { receipt: sorted.returnLine?.receipt.code ?? null },
+        );
+      }
+      return this.writeIdentification(tx, { ...ctx, latest, resolving });
+    }
+
+    // Already identified in its latest circulation.
+    if (latest) {
+      const sorted = await this.sortedOfCycle(tx, bottle.id, latest.cycleId);
+      if (sorted) {
+        if (sorted.returnLineId === ctx.lineId) {
+          const notMovedOn = status === 'RETURNED' || status === 'RETIRED';
+          if (notMovedOn && (sorted.payload as { outcome?: string }).outcome === outcome) {
+            return identified(bottle.code, outcome, true, sorted.resolvesIssue);
+          }
+          throw domainErrorWithDetails(
+            409,
+            'ALREADY_RECEIVED',
+            'This bottle was already received in this receipt; a change is a correction',
+            { receipt: ctx.receiptCode },
+          );
+        }
+        throw domainErrorWithDetails(
+          409,
+          'ALREADY_RECEIVED_ELSEWHERE',
+          'This bottle was already received in another receipt',
+          { receipt: sorted.returnLine?.receipt.code ?? null },
+        );
+      }
+    }
+    // An open piece issue of this bottle on another line.
+    const elsewhere = await tx.returnReceiptIssue.findFirst({
+      where: {
+        bottleId: bottle.id,
+        resolvedAt: null,
+        lineId: { not: ctx.lineId },
+        ...(resolving ? { id: { not: resolving.id } } : {}),
+      },
+      select: { code: true },
+    });
+    if (elsewhere) {
+      throw domainErrorWithDetails(
+        409,
+        'OPEN_ISSUE',
+        'This bottle has an open issue: resolve that issue',
+        { issue: elsewhere.code },
+      );
+    }
+    if (!latest) return this.pieceIssueCurrent(tx, ctx, resolving, 'NOT_IN_CIRCULATION', null);
+    // Its latest circulation delivered: the identification, if delivered before the receipt.
+    const stillOfThatCrate =
+      latest.releasedAt === null || latest.releaseReason === 'CRATE_RETURNED';
+    if (SHIPPED.includes(latest.cycle.status) && stillOfThatCrate && status === 'FILLED') {
+      const delivery = await this.orderReturns.deliveryOf(tx, latest.id);
+      if (delivery?.deliveredAt) {
+        if (delivery.deliveredAt >= ctx.openedAt) {
+          throw domainErrorWithDetails(
+            409,
+            'DELIVERED_AFTER_RECEIPT',
+            'This bottle was delivered after this receipt was opened: use a new receipt',
+            { receipt: ctx.receiptCode },
+          );
+        }
+        return this.writeIdentification(tx, { ...ctx, latest, resolving });
+      }
+    }
+    // Its latest circulation not delivered yet: anchored to it.
+    if (
+      latest.releasedAt === null &&
+      (latest.cycle.status === 'ALLOCATED' || latest.cycle.status === 'DISPATCHED')
+    ) {
+      const allocation = await this.orderReturns.liveAllocation(tx, latest.cycleId);
+      if (allocation) {
+        return this.pieceIssueCurrent(tx, ctx, resolving, 'NOT_DELIVERED', {
+          cycleId: latest.cycleId,
+          allocationId: allocation.id,
+        });
+      }
+    }
+    return this.pieceIssueCurrent(tx, ctx, resolving, 'NOT_IN_CIRCULATION', null);
+  }
+
+  /** The SORTED, its release (if still active) and the issue's resolution, in one transaction. */
+  private async writeIdentification(
+    tx: Tx,
+    ctx: {
+      receiptCode: string;
+      lineId: string;
+      bottle: { id: string; code: string };
+      outcome: Outcome;
+      actorId: string;
+      operationId: string;
+      latest: NonNullable<Awaited<ReturnType<ReturnReceiptsService['latestAssignment']>>>;
+      resolving: IssueRow | null;
+    },
+  ): Promise<ReturnBottleScanResult> {
+    const now = new Date();
+    const sortedId = await this.bottles.identifyAtReturn(tx, {
+      bottleId: ctx.bottle.id,
+      crateCycleId: ctx.latest.cycleId,
+      returnLineId: ctx.lineId,
+      resolvesIssueId: ctx.resolving?.id ?? null,
+      outcome: ctx.outcome,
+      actorId: ctx.actorId,
+      operationRequestId: ctx.operationId,
+      occurredAt: now,
+      receipt: ctx.receiptCode,
+      crateCode: ctx.latest.cycle.crate.code,
+    });
+    // Bottle before its crate: still an active member, released by its SORTED. Freed with its
+    // crate already (CRATE_RETURNED): the SORTED names that cycle and needs no release.
+    if (ctx.latest.releasedAt === null) {
+      await this.cycles.releaseByReturn(tx, {
+        assignmentId: ctx.latest.id,
+        sortedEventId: sortedId,
+        actorId: ctx.actorId,
+        operationId: ctx.operationId,
+        occurredAt: now,
+      });
+    }
+    if (ctx.resolving) {
+      await tx.returnReceiptIssue.update({
+        where: { id: ctx.resolving.id },
+        data: {
+          resolvedAt: now,
+          resolvedBy: ctx.actorId,
+          resolution: 'IDENTIFIED',
+          resolveOperationId: ctx.operationId,
+          resolvingEventId: sortedId,
+        },
+      });
+    }
+    return identified(ctx.bottle.code, ctx.outcome, false, ctx.resolving);
+  }
+
+  /**
+   * A refusal that records an issue, committed with its result (R1.1: on the BOTTLES line, a
+   * NOT_DELIVERED with its anchor). A resolution records nothing and keeps the issue open; a
+   * rescan with its open issue on the line returns that issue — never a second piece.
+   */
+  private async pieceIssueCurrent(
+    tx: Tx,
+    ctx: {
+      receiptId: string;
+      lineId: string;
+      bottle: { id: string; code: string };
+      actorId: string;
+      operationId: string;
+      resolving: IssueRow | null;
+    },
+    own: IssueRow | null,
+    kind: 'NOT_DELIVERED' | 'NOT_IN_CIRCULATION',
+    anchor: { cycleId: string; allocationId: string } | null,
+  ): Promise<ReturnBottleScanResult> {
+    if (ctx.resolving) {
+      throw domainError(
+        409,
+        kind,
+        kind === 'NOT_DELIVERED'
+          ? 'This bottle is not delivered yet: the issue stays open'
+          : 'This bottle is not in circulation: the issue stays open',
+      );
+    }
+    const issue =
+      own ??
+      (await this.newIssue(tx, {
+        receiptId: ctx.receiptId,
+        lineId: ctx.lineId,
+        kind,
+        bottleId: ctx.bottle.id,
+        details: {},
+        actorId: ctx.actorId,
+        operationId: ctx.operationId,
+        anchor,
+      }));
+    return {
+      outcome: 'ISSUE_RECORDED',
+      repeated: false,
+      code: kind,
+      bottleCode: ctx.bottle.code,
+      result: null,
+      issue: { code: issue.code, kind: issue.kind },
+    };
+  }
+
+  /** The bottle's latest assignment of any cycle, active or released (R1.1 §6.3 2). */
+  private latestAssignment(tx: Tx, bottleId: string) {
+    return tx.crateAssignment.findFirst({
+      where: { bottleId },
+      orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true,
+        cycleId: true,
+        releasedAt: true,
+        releaseReason: true,
+        cycle: { select: { status: true, crateId: true, crate: { select: { code: true } } } },
+      },
+    });
+  }
+
+  private sortedOfCycle(tx: Tx, bottleId: string, cycleId: string) {
+    return tx.bottleEvent.findFirst({
+      where: { bottleId, type: 'SORTED', crateCycleId: cycleId },
+      select: {
+        id: true,
+        returnLineId: true,
+        payload: true,
+        resolvesIssue: { select: { code: true, kind: true } },
+        returnLine: { select: { receipt: { select: { code: true } } } },
+      },
+    });
+  }
+
+  /**
+   * The receipt's one BOTTLES line (R1.1), made with its first bottle scan. Concurrent first scans
+   * hold only the shared receipt lock: the partial unique index lets exactly one insert win.
+   */
+  private async bottlesLine(tx: Tx, receiptId: string, actorId: string, operationId: string) {
+    const existing = await tx.returnReceiptLine.findFirst({
+      where: { receiptId, kind: 'BOTTLES' },
+      select: { id: true },
+    });
+    if (existing) return existing;
+    await tx.returnReceiptLine.createMany({
+      data: [{ receiptId, kind: 'BOTTLES', scannedBy: actorId, scanOperationId: operationId }],
+      skipDuplicates: true,
+    });
+    return tx.returnReceiptLine.findFirstOrThrow({
+      where: { receiptId, kind: 'BOTTLES' },
+      select: { id: true },
+    });
+  }
+
   // --- helpers ----------------------------------------------------------------------------------
 
   /** A result stored by OperationRequestsService (plain JSON). */
@@ -993,7 +1353,7 @@ export class ReturnReceiptsService {
         ? null
         : await this.prisma.returnReceipt.findUnique({
             where: { serial },
-            select: { id: true, code: true, siteId: true },
+            select: { id: true, code: true, siteId: true, openedAt: true },
           });
     if (!receipt || receipt.siteId !== siteId) throw notFound();
     return receipt;
@@ -1026,8 +1386,10 @@ export class ReturnReceiptsService {
               bottleId: true,
               lineId: true,
               receiptId: true,
-              receipt: { select: { code: true, siteId: true } },
-              line: { select: { scannedAt: true } },
+              anchorCycleId: true,
+              anchorAllocationId: true,
+              receipt: { select: { code: true, siteId: true, openedAt: true } },
+              line: { select: { scannedAt: true, kind: true } },
             },
           });
     if (!issue || issue.receipt.siteId !== siteId) throw issueNotFound();
@@ -1061,14 +1423,6 @@ export class ReturnReceiptsService {
     });
   }
 
-  private async assertNotEmptied(tx: Tx, lineId: string) {
-    const line = await tx.returnReceiptLine.findUniqueOrThrow({
-      where: { id: lineId },
-      select: { emptiedAt: true },
-    });
-    if (line.emptiedAt) throw lineEmptied();
-  }
-
   private async newIssue(
     tx: Tx,
     input: {
@@ -1079,6 +1433,7 @@ export class ReturnReceiptsService {
       details: Record<string, unknown>;
       actorId: string;
       operationId: string;
+      anchor?: { cycleId: string; allocationId: string } | null;
     },
   ) {
     const { first: serial } = await allocateSerials(tx, 'return_issue', 1);
@@ -1093,6 +1448,8 @@ export class ReturnReceiptsService {
         details: input.details as Prisma.InputJsonValue,
         recordedBy: input.actorId,
         recordOperationId: input.operationId,
+        anchorCycleId: input.anchor?.cycleId ?? null,
+        anchorAllocationId: input.anchor?.allocationId ?? null,
       },
       select: { id: true, code: true, kind: true, bottleId: true, lineId: true },
     });
@@ -1198,6 +1555,10 @@ export class ReturnReceiptsService {
         });
       }
       let history: ReturnLineDetail['history'] = null;
+      const freedWithCrate =
+        l.kind === 'CRATE'
+          ? await db.crateAssignment.count({ where: { releasedByLineId: l.id } })
+          : null;
       if (l.returnedCycleId) {
         const shipped = await cycleShipped(l.returnedCycleId);
         const identified = await db.bottleEvent.count({
@@ -1218,13 +1579,22 @@ export class ReturnReceiptsService {
         recordedCount: await this.recordedCount(db, l.id),
         bottles,
         issues: l.issues.map(toIssue),
+        freedWithCrate,
         history,
       });
     }
+    const all = lineDetails.flatMap((l) => l.bottles);
     return {
       ...summary,
       hotelCode: r.hotel?.code ?? null,
       defectivePumps: r.pumpCounts.reduce((sum, p) => sum + p.defective, 0),
+      counts: {
+        crates: lineDetails.filter((l) => l.kind === 'CRATE').length,
+        identified: all.length,
+        defective: all.filter((b) => b.outcome === 'RETIRED').length,
+        unreadable: lineDetails.flatMap((l) => l.issues).filter((i) => i.kind === 'UNREADABLE')
+          .length,
+      },
       lineDetails,
     };
   }
