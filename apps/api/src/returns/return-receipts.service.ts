@@ -76,6 +76,8 @@ interface IssueRow {
   /** R1.1 NOT_DELIVERED: the circulation known at its first scan (doc 047 §6.3 2). */
   anchorCycleId?: string | null;
   anchorAllocationId?: string | null;
+  /** When it was recorded: an R1 NOT_DELIVERED names the membership active at that moment. */
+  recordedAt?: Date;
 }
 
 /**
@@ -736,9 +738,12 @@ export class ReturnReceiptsService {
       where: { bottleId: bottle.id, releasedAt: null },
       select: { id: true, cycleId: true, cycle: { select: { crateId: true } } },
     });
-    if (seen) {
-      await this.cycles.lockCrate(tx, seen.cycle.crateId);
-      await this.cycles.lockCycle(tx, seen.cycleId);
+    // An R1 NOT_DELIVERED whose crate a later receipt freed (R1.1): its membership, locked the same.
+    const freedSeen = seen ? null : await this.freedOfR1Issue(tx, bottle.id, line, ctx.resolving);
+    const locked = seen ?? freedSeen;
+    if (locked) {
+      await this.cycles.lockCrate(tx, locked.cycle.crateId);
+      await this.cycles.lockCycle(tx, locked.cycleId);
     }
     const status = await this.bottles.lockForLabelApplication(tx, bottle.id);
     const assignment = await tx.crateAssignment.findFirst({
@@ -754,6 +759,11 @@ export class ReturnReceiptsService {
     // lock, so the checks run on the new state and give the first result. A NEW assignment
     // elsewhere would need its crate locked after the bottle — refused instead (rescan).
     if (assignment && assignment.id !== seen?.id) throw concurrentChange();
+    // Freed with its crate meanwhile (a crate scan that held the crate first) or before: the
+    // membership the R1 issue was recorded in, under the crate lock taken above.
+    const freed = assignment ? null : await this.freedOfR1Issue(tx, bottle.id, line, ctx.resolving);
+    if (freed && freed.cycle.crateId !== locked?.cycle.crateId) throw concurrentChange();
+    const circulation = assignment ?? freed;
 
     // The issue last: the named one, or this bottle's open piece issue on L (§4.6 lock order).
     let resolving: IssueRow | null = null;
@@ -817,9 +827,9 @@ export class ReturnReceiptsService {
     // 3. Identified elsewhere, and not in circulation again before L.
     if (lastSorted) {
       const inCirculationAgain =
-        !!assignment &&
-        assignment.assignedAt > lastSorted.recordedAt &&
-        assignment.assignedAt < line.scannedAt;
+        !!circulation &&
+        circulation.assignedAt > lastSorted.recordedAt &&
+        circulation.assignedAt < line.scannedAt;
       if (!inCirculationAgain) {
         throw domainErrorWithDetails(
           409,
@@ -847,14 +857,20 @@ export class ReturnReceiptsService {
         { issue: elsewhere.code },
       );
     }
-    const before = !!assignment && assignment.assignedAt < line.scannedAt;
-    // 5. The delivered cycle → the identification.
-    if (assignment && before && SHIPPED.includes(assignment.cycle.status) && status === 'FILLED') {
-      if (await this.orderReturns.shippedIn(tx, assignment.id)) {
+    const before = !!circulation && circulation.assignedAt < line.scannedAt;
+    // 5. The delivered cycle → the identification. A member freed with its crate in a later
+    // receipt (R1.1) is identified in that same delivered cycle and needs no release.
+    if (
+      circulation &&
+      before &&
+      SHIPPED.includes(circulation.cycle.status) &&
+      status === 'FILLED'
+    ) {
+      if (await this.orderReturns.shippedIn(tx, circulation.id)) {
         const now = new Date();
         const sortedId = await this.bottles.identifyAtReturn(tx, {
           bottleId: bottle.id,
-          crateCycleId: assignment.cycleId,
+          crateCycleId: circulation.cycleId,
           returnLineId: line.id,
           resolvesIssueId: resolving?.id ?? null,
           outcome,
@@ -862,15 +878,17 @@ export class ReturnReceiptsService {
           operationRequestId: ctx.operationId,
           occurredAt: now,
           receipt: line.receiptCode,
-          crateCode: assignment.cycle.crate.code,
+          crateCode: circulation.cycle.crate.code,
         });
-        await this.cycles.releaseByReturn(tx, {
-          assignmentId: assignment.id,
-          sortedEventId: sortedId,
-          actorId: ctx.actorId,
-          operationId: ctx.operationId,
-          occurredAt: now,
-        });
+        if (assignment) {
+          await this.cycles.releaseByReturn(tx, {
+            assignmentId: assignment.id,
+            sortedEventId: sortedId,
+            actorId: ctx.actorId,
+            operationId: ctx.operationId,
+            occurredAt: now,
+          });
+        }
         if (resolving) {
           await tx.returnReceiptIssue.update({
             where: { id: resolving.id },
@@ -900,6 +918,36 @@ export class ReturnReceiptsService {
     }
     // 8. Not in circulation.
     return this.pieceIssue(tx, ctx, resolving, 'NOT_IN_CIRCULATION');
+  }
+
+  /**
+   * The membership an R1 NOT_DELIVERED (no anchor, on an R1 line) was recorded in, when a later
+   * R1.1 receipt freed it with its crate (CRATE_RETURNED): the bottle's latest assignment, made
+   * before the line was opened, active when the issue was recorded and released only after it.
+   * Anything else (another circulation, another release, another issue) keeps R1's answer.
+   */
+  private async freedOfR1Issue(tx: Tx, bottleId: string, line: LineAnchor, issue: IssueRow | null) {
+    if (issue?.kind !== 'NOT_DELIVERED' || issue.anchorCycleId || !issue.recordedAt) return null;
+    const latest = await tx.crateAssignment.findFirst({
+      where: { bottleId },
+      orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true,
+        cycleId: true,
+        assignedAt: true,
+        releasedAt: true,
+        releaseReason: true,
+        cycle: { select: { status: true, crateId: true, crate: { select: { code: true } } } },
+      },
+    });
+    const recordedIn =
+      !!latest &&
+      latest.releaseReason === 'CRATE_RETURNED' &&
+      latest.assignedAt < line.scannedAt &&
+      latest.assignedAt <= issue.recordedAt &&
+      !!latest.releasedAt &&
+      latest.releasedAt > issue.recordedAt;
+    return recordedIn ? latest : null;
   }
 
   /**
@@ -1388,6 +1436,7 @@ export class ReturnReceiptsService {
               receiptId: true,
               anchorCycleId: true,
               anchorAllocationId: true,
+              recordedAt: true,
               receipt: { select: { code: true, siteId: true, openedAt: true } },
               line: { select: { scannedAt: true, kind: true } },
             },
