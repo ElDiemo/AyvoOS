@@ -302,7 +302,7 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     await factory.refill();
   });
 
-  it('in R2 a bottle "Po mytí" enters no crate — station, "Doplnit lahev", direct SQL; meanwhile new bottles are labelled, filled, finished, picked and delivered as today', async () => {
+  it('a bottle "Po mytí" enters a crate only by the station as REUSE (R3-b) — never by "Doplnit lahev" or another source; meanwhile new bottles go on as today', async () => {
     const [k] = await returned([['GOOD', 'GOOD']]);
     const [b] = await pieces(k!);
     ok(await wash(b!.url));
@@ -322,9 +322,6 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     });
 
     const before = await snapshot([b!.id]);
-    const scan = await labelScan(t, station.sessionId, b!.url);
-    refused(scan, 409, 'NOT_PLACEABLE_YET');
-    expect(scan.body.details).toEqual({ bottle: b!.code });
 
     // "Doplnit lahev" into an assembling crate with a free place.
     const add = await correctCrate(t, target.crateCode, 'add-bottle', { bottle: b!.code });
@@ -368,6 +365,14 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     expect(await t.prisma.crateAssignment.count({ where: { cycle: { crateId: crate.id } } })).toBe(
       0,
     );
+    // R3-b: the station places it as REUSE (its label is on it; nothing consumed).
+    const scan = await labelScan(t, station.sessionId, b!.url);
+    expect(scan.status, JSON.stringify(scan.body)).toBe(200);
+    expect(scan.body.outcome).toBe('PLACED');
+    const placed = await t.prisma.crateAssignment.findFirstOrThrow({
+      where: { bottleId: b!.id, releasedAt: null },
+    });
+    expect(placed.source).toBe('REUSE');
 
     // Today's walk of new bottles, unchanged, while READY_FOR_REUSE bottles exist.
     const fresh = await factory.make();
@@ -534,13 +539,14 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
         t.prisma.$executeRawUnsafe(reuseEvent(b.id, op, actor)),
         /only a RETURNED bottle/,
       );
-      // …and nothing leaves READY_FOR_REUSE in R2.
+      // …and nothing leaves READY_FOR_REUSE but its refilling (R3-b): FILLED only with a FILLED of
+      // this circulation (its previous filling never counts).
       for (const next of ['RETURNED', 'RETIRED', 'LABELED_EMPTY', 'FILLED', 'DISPOSED']) {
         await fails(
           t.prisma.$executeRawUnsafe(
             `UPDATE "bottles" SET "status" = '${next}' WHERE "id" = '${b.id}'`,
           ),
-          /is not allowed/,
+          next === 'FILLED' ? /needs its FILLED event/ : /is not allowed/,
         );
       }
     });

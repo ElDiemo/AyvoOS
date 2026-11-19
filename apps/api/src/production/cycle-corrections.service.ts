@@ -181,10 +181,13 @@ export class CycleCorrectionsService {
             { crate: elsewhere.cycle.crate.code },
           );
         }
-        const origin = await tx.crateCycle.findUniqueOrThrow({
-          where: { id: binding.crateCycleId },
-        });
         const filled = status === 'FILLED';
+        // The snapshot the bottle carries: a filled bottle that of its latest filling (a washed
+        // bottle refilled with another recipe version, R3-b), an empty one that of its labelling.
+        const originId = filled
+          ? ((await this.bottles.latestFillingCycleId(tx, bottle.id)) ?? binding.crateCycleId)
+          : binding.crateCycleId;
+        const origin = await tx.crateCycle.findUniqueOrThrow({ where: { id: originId } });
         const step = { actorId, operationId: input.requestId, occurredAt: new Date() };
         let cycle: CycleRecord;
         let source: 'REPACKED' | 'REPLACEMENT';
