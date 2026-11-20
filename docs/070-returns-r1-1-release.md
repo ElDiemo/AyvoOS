@@ -208,3 +208,66 @@ in the review package):
   `workstation-reuse.spec.ts` on an isolated database.
 
 The FAKE test carrier only; synthetic data only; no live carrier call.
+
+## 8. Isolated trial before DEV (reproducible seed, synthetic data only)
+
+This trial comes before any step on DEV. It replaces a copy of the shared DEV database with a seed
+that can be recreated at any time. It runs the built release (#152 → #154 → #197 + #208) on its own
+recreated e2e database. The configuration matches the e2e stack and the T1 path of the trial
+runbook: `APP_ENV=test`, the FAKE test carrier, and simulated carrier events (PPL 150/450) in that
+database only. It runs on local ports, never on DEV, and never calls PPL.
+
+`apps/web/e2e-compat/bottle-cycle-trial.spec.ts`, run with `playwright.compat.config.ts`, not in
+CI:
+
+```bash
+cd apps/web   # after pnpm build here and in the earlier release's worktree
+flock /tmp/ayvo-pw-3100-4100.lock env E2E_DB_NAME=ayvo_e2e_trial \
+  AYVO_COMPAT_OLD_ROOT=<worktree of main 09e82e7, built> AYVO_TRIAL_OUT=<dir> \
+  pnpm exec playwright test -c playwright.compat.config.ts e2e-compat/bottle-cycle-trial.spec.ts
+```
+
+1. **Seed (this build):** crates A, C, K, E, F and G with 10 filled bottles each. A, C and K are
+   delivered to the hotel; E and F (one order) are only picked up; G is allocated to an order
+   that is cancelled later.
+2. **The R1 rows of the previous release.** A real process of `09e82e7`, on the same database,
+   writes a closed R1 receipt (crate A, Vyprázdněno 10). It also writes an open one: crate C not
+   emptied with C1, plus a container with E1, F1 and G1, each an unanchored `NOT_DELIVERED`.
+
+   These rows are the same as on a migrated DEV. The chain's migrations add tables, enum values
+   and columns, and their one backfill (the R3-a anchor) is also done by its trigger.
+
+   The first-write detector (`scripts/sql/bottle-cycle-first-write-detector.sql`) stays 0, so the
+   rollback is still allowed.
+
+3. **P1 in the browser (recommended for user acceptance):** a receipt is opened only when the
+   return is unloaded.
+   - Crate K is freed with its scan. This is the first write: the detector turns non-zero and
+     records its time.
+   - 8 of K's 10 bottles are scanned on their own; 2 stay at the hotel.
+   - E/F are delivered only now. In the earlier receipt the scan of E is refused with "Nic se
+     nezapsalo", and the detector does not change. That receipt is closed.
+4. **The old R1 receipt first:**
+   - it cannot be closed before Vyprázdněno;
+   - E1's old issue is resolved by identifying E1.
+5. **A new receipt for the E/F unload:**
+   - E is freed (9 memberships ended) and E2–E10 are scanned;
+   - E1 is refused there with "already received elsewhere", so nothing is counted twice;
+   - F is freed (10 memberships ended) and F2–F10 are scanned.
+6. **F1 after its crate was freed (#208, §4.1):** F was freed while F1 still had its old,
+   unanchored `NOT_DELIVERED`. The new receipt refuses F1 with `OPEN_ISSUE`. "Dořešit" on the old
+   receipt counts F1 once, in F's delivered cycle, on the old line. A rescan in the new receipt
+   answers "already received elsewhere": nothing written, the detector unchanged, still one
+   `SORTED`. (The first run, before #208, found F1 stuck here — `NOT_IN_CIRCULATION`.)
+7. **G1, another circulation:** G's first order is cancelled; G goes out with a later order, is
+   delivered and freed in a new receipt (P1). "Dořešit" of G1's old issue answers
+   `CIRCULATION_CHANGED`: nothing written. The new receipt names the open issue; after a
+   supervisor's close-out (`WRITTEN_OFF` with a reason) it counts G1 once.
+8. **The old R1 lines** are emptied with a count (the migration plan: C 1, the container 3), and
+   the receipt is closed. Every bottle is counted once: 49 returned, 2 of K at the hotel.
+
+The old operating rule ("resolve a crate's old open issues before its crate is scanned in a new
+receipt") is no longer needed with #208.
+
+Each step writes its detector row and a screenshot to `AYVO_TRIAL_OUT` (`trial.json`). The model of
+#197 is unchanged: P1 is a rule for the operators, not a rule in the code.
