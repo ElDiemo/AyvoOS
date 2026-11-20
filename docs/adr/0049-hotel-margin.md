@@ -95,14 +95,37 @@ today's sources (19. 11. 2026, `main` 09e82e7):
 - **Return day = the scan of that crate** on the return receipt; a return without a proven cycle
   or hotel is an **unassigned cost** for the admin, never assigned automatically, and counts only
   in the company view (recommended DEV default for the owner to confirm; doc 071 §3.5, §10.1).
-- **Large volume is read in batches** with one core snapshot and time limits; a hotel whose
-  source arrived only in part (PARTIAL) or does not add up (UNRECONCILED) shows no costs and no
-  margin (doc 071 §3.6).
+- **Large volume is read over several calls** (§4); a hotel whose source was not read whole
+  (PARTIAL) or does not add up (UNRECONCILED) shows no costs and no margin (doc 071 §3.6).
 - **A missing price, rate, revenue or approval makes the hotel × month visibly incomplete.** The
   known costs are shown as "known so far", the margin is not shown, and the reasons are listed.
   Never a zero.
 - **Rounding:** each cost line half-up to 0.01; totals are sums of the rounded lines. To be
   confirmed by the accountant, like O9 in ADR 0046.
+
+### 4. Reading over several calls (proposal; doc 071 §3.6, re-review 2026-11-20)
+
+- **A time watermark is not a stable listing.** `now()` is the writer's transaction start, so a
+  transaction begun before the first page and committed between pages appears half. A sequence
+  is taken before the commit, so a seq cursor can lose a row. No variant holds a DB transaction
+  across the network (no `pg_export_snapshot`).
+- **Variant S (stable over several calls):**
+  - the first call returns `pg_current_snapshot()`;
+  - every later call keeps only rows with `pg_visible_in_snapshot(created_xid, snapshot)`;
+  - needs an `xid8` column `created_xid` (default `pg_current_xact_id()`) on each append-only
+    source table, a core migration.
+- **Variant H (recommended for v1, no core schema change):**
+  - each call returns whole hotels from one short REPEATABLE READ transaction, so each hotel is
+    consistent as of its own `readAt`;
+  - different hotels may be of different moments, and the overview says so;
+  - a **sum over hotels** is shown only when one verification call returns, from one
+    transaction, the same fingerprint for every hotel;
+  - a changed hotel is re-read once; otherwise no sum (`CHANGED_DURING_READ`);
+  - an inconsistent aggregation is never merged.
+- **Hard total deadline** (60 s, proposal): checked before every try, retries included. Each try
+  gets `min(10 s, the remaining budget)`. After the budget, nothing is tried, and the overview
+  never reads in the background.
+- The owner chooses H or S for v1 (doc 071 Q13).
 
 ## Consequences
 
