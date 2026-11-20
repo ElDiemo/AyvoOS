@@ -2,7 +2,13 @@
 // Fictional data only: one fictional hotel, made-up prices and rates.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MarginError, companyView, hotelMonth, priceAt } from './071-hotel-margin.mjs';
+import {
+  MarginError,
+  companyView,
+  hotelMonth,
+  priceAt,
+  unassignedCosts,
+} from './071-hotel-margin.mjs';
 
 const H = 'hotel-smysleny';
 const net = { currency: 'CZK', vat: 'EXCLUDED' };
@@ -121,7 +127,15 @@ const input = {
     { hotelId: H, crateCycleId: 'CC-2', dispatchedOn: '2026-11-05' },
   ],
   // The October crate comes back on 3 Nov: the return rate counts only then (November).
-  returns: [{ returnLineId: 'RL-1', hotelId: H, crateCycleId: 'CC-1', receivedOn: '2026-11-03' }],
+  returns: [
+    {
+      returnLineId: 'RL-1',
+      kind: 'CRATE',
+      hotelId: H,
+      crateCycleId: 'CC-1',
+      scannedOn: '2026-11-03',
+    },
+  ],
   attributions: [attribution(H, '2026-10', S1), attribution(H, '2026-11', S1)],
   statements: [
     { statementId: 'ST-10', salespersonId: 'S1', month: '2026-10', approved: true },
@@ -215,7 +229,13 @@ test('a missing price makes the month visibly incomplete — never a zero cost, 
     ],
     returns: [
       ...input.returns,
-      { returnLineId: 'RL-2', hotelId: H, crateCycleId: 'CC-2', receivedOn: '2026-12-02' },
+      {
+        returnLineId: 'RL-2',
+        kind: 'CRATE',
+        hotelId: H,
+        crateCycleId: 'CC-2',
+        scannedOn: '2026-12-02',
+      },
     ],
     // S1's December statement exists but is not approved yet: not the same as "no commission".
     attributions: [...input.attributions, attribution(H, '2026-12', S1)],
@@ -278,6 +298,7 @@ test('the hotel contribution is not the company result (overheads are never allo
   assert.deepEqual(company, {
     complete: true,
     contributions: '1709.00',
+    unassigned: '0.00',
     overheads: '18000.00',
     result: '-16291.00',
   });
@@ -500,4 +521,56 @@ test('every amount has one unique key: a crate dispatched or returned twice is r
     dup({ commissionItems: [...input.commissionItems, input.commissionItems[1]] }),
     isDup,
   );
+});
+
+// --- Returns without a proven cycle or hotel: unassigned, never auto-assigned -------------------
+
+test('a return without a proven cycle or hotel is an unassigned cost for the admin, never a hotel’s', () => {
+  const loose = {
+    ...input,
+    returns: [
+      ...input.returns,
+      // A box without a crate QR, put on a receipt where the operator picked hotel H.
+      {
+        returnLineId: 'RL-B1',
+        kind: 'CONTAINER',
+        crateCycleId: null,
+        hotelId: null,
+        receiptHotelId: H,
+        scannedOn: '2026-11-07',
+      },
+      // A scanned crate whose dispatch hotel the core cannot prove.
+      {
+        returnLineId: 'RL-B2',
+        kind: 'CRATE',
+        crateCycleId: 'CC-X',
+        hotelId: null,
+        scannedOn: '2026-11-08',
+      },
+    ],
+  };
+  // Hotel H's November keeps only its own scanned crate (80.00), nothing from the receipt hint.
+  const h = hotelMonth(loose, H, '2026-11', '2026-11-15');
+  assert.equal(h.costs.returnTransport, '80.00');
+  assert.equal(h.marginAfterCommission, '1709.00');
+  const u = unassignedCosts(loose, '2026-11', '2026-11-15');
+  assert.deepEqual(u, {
+    complete: true,
+    missing: [],
+    rows: [
+      { key: 'RETURN:RL-B1', reason: 'NO_CYCLE', receiptHotelHint: H, cost: '80.00' },
+      { key: 'RETURN:RL-B2', reason: 'NO_HOTEL', receiptHotelHint: null, cost: '80.00' },
+    ],
+    total: '160.00',
+  });
+  // In the company result, not in any contribution: 1709.00 − 160.00 − 18000.00.
+  assert.deepEqual(companyView([h], [{ name: 'nájem (smyšlený)', amount: '18000.00' }], u), {
+    complete: true,
+    contributions: '1709.00',
+    unassigned: '160.00',
+    overheads: '18000.00',
+    result: '-16451.00',
+  });
+  // The return rate counts on the scan day: the same box scanned in December is not November's.
+  assert.equal(unassignedCosts(loose, '2026-12', '2026-12-31').rows.length, 0);
 });

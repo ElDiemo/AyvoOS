@@ -4,7 +4,8 @@ Status: **proposal for the owner's approval** (owner brief 2026-11-19). Nothing 
 migrated or switched on. Finance code waits for the approval of the boundary (ADR 0049 §2). Every
 point is marked **[OWNER]** (an explicit owner decision of 2026-11-19) or **[PROPOSAL]**.
 Reproducible calculation on fictional data: `docs/prototypes/071-hotel-margin.mjs`, check with
-`node --test docs/prototypes/071-hotel-margin.test.mjs`.
+`node --test docs/prototypes/071-hotel-margin.test.mjs`; reading in batches (separate example):
+`docs/prototypes/071-margin-batches.mjs`, `node --test docs/prototypes/071-margin-batches.test.mjs`.
 
 ## 1. What the overview answers
 
@@ -54,10 +55,13 @@ hotels per call, like the commission contract). It returns **events and quantiti
   - `consumed[]`: `movementId` (the core inventory movement), `item` (inventory item code),
     `itemKind` (BOTTLE_BODY | LABEL | PUMP | LIQUID | OTHER), `unit`, `qty` (exact decimal
     string), `on` (day of the movement).
-- `returns[]`: `returnLineId` (core `return_receipt_lines.id`), `crateCycleId` (the returned
-  cycle, unique per line in the DB) or null, `hotelId` (of the returned cycle's dispatch; for a
-  line without a cycle the receipt's hotel, or null), `receivedOn`. Only crates actually
-  received.
+- `returns[]`: one per return receipt line actually scanned.
+  - `returnLineId` (core `return_receipt_lines.id`), `kind` (`CRATE` = the crate's QR scanned |
+    `CONTAINER` = a box without a crate QR).
+  - `crateCycleId`: the returned cycle (unique per line in the DB), null for a CONTAINER.
+  - `hotelId`: the hotel of **that cycle's dispatch** (cycle → allocation → order), or null. Never
+    the hotel picked on the receipt; that one comes only as `receiptHotelId`, a hint.
+  - `scannedOn`: the Prague day of the line's scan (`scanned_at`).
 
 Rules:
 
@@ -66,7 +70,23 @@ Rules:
 - If the core ever reported a bottle body or a label on a refill, Finance refuses it as a data
   error (`REFILL_CARRIES_PACKAGING`). It is never priced.
 - A new pump really issued on a refill would be actual consumption and priced (question Q3).
-- Core down = Finance 503, never a partial overview.
+- Core down for a single hotel's detail = Finance 503. A many-hotel overview is read in batches
+  (§3.6), and a hotel whose rows did not all arrive is shown as PARTIAL, never computed from part
+  of its rows.
+
+### 3.2 Finance tables (not implemented)
+
+- `margin_standard_prices`:
+  - columns: `item`, `unit`, `price` NUMERIC(19,4), `currency` = CZK, `vat` = EXCLUDED,
+    `effective_from` (day), `recorded_at`, `recorded_by`, `reason`;
+  - append-only, a correction is a new version;
+  - unique (`item`, `effective_from`, `recorded_at`); CHECK price ≥ 0.
+- `margin_transport_rates`:
+  - `kind` OUTBOUND_CRATE | RETURN_CRATE, other columns as above, the unit is a crate.
+- No table of results: the overview is **computed on read** in v1, like the commission preview.
+  A frozen monthly snapshot is a later decision (Q8).
+- Permissions: `finance:margin_read` and `finance:margin_prices_manage`, both ADMIN only, granted
+  in the migration. They are new ADMIN codes, so they need #204 deployed first.
 
 ### 3.3 Recipient after a repack, and one unique key per amount [PROPOSAL]
 
@@ -122,19 +142,52 @@ statements:
 - „Bez provize“ is no shortcut for the rest: a missing standard price still makes a Firemní
   hotel's month incomplete (§5).
 
-### 3.2 Finance tables (not implemented)
+### 3.5 Unassigned costs [PROPOSAL — recommended DEV default, for the owner to confirm]
 
-- `margin_standard_prices`:
-  - columns: `item`, `unit`, `price` NUMERIC(19,4), `currency` = CZK, `vat` = EXCLUDED,
-    `effective_from` (day), `recorded_at`, `recorded_by`, `reason`;
-  - append-only, a correction is a new version;
-  - unique (`item`, `effective_from`, `recorded_at`); CHECK price ≥ 0.
-- `margin_transport_rates`:
-  - `kind` OUTBOUND_CRATE | RETURN_CRATE, other columns as above, the unit is a crate.
-- No table of results: the overview is **computed on read** in v1, like the commission preview.
-  A frozen monthly snapshot is a later decision (Q8).
-- Permissions: `finance:margin_read` and `finance:margin_prices_manage`, both ADMIN only, granted
-  in the migration. They are new ADMIN codes, so they need #204 deployed first.
+- A return line is a hotel's cost only when the crate was **scanned** (`CRATE`), its cycle is
+  known and that cycle's dispatch names the hotel.
+- Otherwise it is a **nezařazený náklad** of the month (the return rate on the scan day):
+  - `NO_CYCLE`: a box without a crate QR (CONTAINER);
+  - `NO_HOTEL`: a scanned crate whose dispatch hotel the core cannot prove.
+- The admin sees each one with its key, reason, day, rate and the receipt's hotel as a **hint**
+  only. Nothing assigns it to a hotel automatically; an assignment by hand would be a later,
+  separate decision (not in v1).
+- Unassigned costs are real costs of the company: they appear in the company view (§6), never in
+  a hotel's contribution.
+- The same default holds for a repacked bottle (§3.3): costed **once**, at the hotel of the
+  actual dispatch.
+
+### 3.6 Large volume: batches, time limits, partial and unreconciled source [PROPOSAL]
+
+Reproducible model: `docs/prototypes/071-margin-batches.mjs` (separate example, §7b).
+
+- **Paging.**
+  - The contract takes ≤ 200 hotels per call (like the commission contract) and a cursor.
+  - It returns ≤ 1 000 circulations per page, ordered by hotel.
+  - The first page of a call carries per hotel its header: totals (dispatches, circulations,
+    returns), the dispatches with their bottle count, and the returns.
+  - Every page lists the hotels whose rows are now all delivered.
+- **One moment.** The first page fixes a `snapshot` (the core's read watermark).
+  - Later pages and calls send it back.
+  - The core reads only rows recorded ≤ snapshot; consumption, crate events and return lines are
+    append-only.
+  - A page with another snapshot ends the read: nothing is combined across two moments.
+- **Time limits (proposal values):**
+  - 10 s per page, one retry of the page (a read is idempotent);
+  - 60 s for the whole overview build;
+  - the read is never left running in the background.
+- **States of a hotel's source:**
+
+  | State          | When                                                                                                                                           | Shown                                                                       |
+  | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+  | `COMPLETE`     | every row delivered and reconciled                                                                                                             | the hotel × month (§1, §5)                                                  |
+  | `PARTIAL`      | not every row arrived: `NOT_READ`, `DEADLINE`, `SOURCE_UNAVAILABLE`                                                                            | **„Zdroj nenačten celý“**, no costs and no margin, retry                    |
+  | `UNRECONCILED` | rows arrived but do not add up: `COUNT_MISMATCH`, `CRATE_COUNT_MISMATCH` (bottles in a crate ≠ its count), `FOREIGN_CRATE`, `SNAPSHOT_CHANGED` | **„Zdroj nesjednocený“**, no costs and no margin, the reasons for the admin |
+
+- Unlike a missing price (§5), a PARTIAL or UNRECONCILED hotel shows **no known costs so far**:
+  part of the rows could look like a final, lower cost.
+- The overview header says how much is in: snapshot, the number of hotels COMPLETE / PARTIAL /
+  UNRECONCILED. The company view (§6) is incomplete while any hotel is not COMPLETE.
 
 ## 4. Validity of prices and rates [PROPOSAL]
 
@@ -144,8 +197,8 @@ statements:
     computation.
 - Day of each cost event:
   - material: the day of the consumption movement;
-  - outbound: the dispatch day;
-  - return: the receipt day.
+  - outbound: the dispatch day (the hand-over to the carrier, cycle `DISPATCHED`);
+  - return: the day **that crate was scanned** on the return receipt (§3.5, §10.1).
 - Days are Europe/Prague. A version is never edited. A correction for the same effective day is a
   new version with a reason. An overview computed before the correction is reproducible with
   `asOf`.
@@ -153,7 +206,7 @@ statements:
   unit, and nothing is converted.
 - Month of each cost:
   - materials in the **dispatch month** of the crate to the hotel;
-  - return transport in the **receipt month**;
+  - return transport in the **month of the crate's scan**;
   - commission in the item's **billed month**;
   - revenue in the **billed month**.
 - Rounding: each cost line = qty × price, half-up to 0.01 CZK. Totals are sums of rounded lines.
@@ -177,12 +230,16 @@ Then:
 - a missing value is **never 0**;
 - the company view (§6) is also incomplete.
 
+A hotel whose **source** is PARTIAL or UNRECONCILED (§3.6) is a different case: no costs at all
+are shown, only the state and its reasons.
+
 ## 6. Hotel contribution vs company result [OWNER]
 
 - **Hotel contribution** = margin after commission of that hotel × month, made only of costs
   directly caused by the hotel (§1).
 - **Company result** is a different figure:
-  - Σ hotel contributions − overheads that belong to no hotel: rent, the accountant, wages,
+  - Σ hotel contributions − unassigned costs (§3.5) − overheads that belong to no hotel: rent,
+    the accountant, wages,
     washing and labour, depreciation, software, …;
   - it comes from accounting, not from this overview;
   - v1 shows it at most as a side note for contrast, and never as "zisk hotelu".
@@ -237,6 +294,23 @@ Further cases from the same test:
   hotel contribution of 1 709.00 and a company result of −16 291.00. These are two different
   figures.
 
+- **Unassigned return:** in November a box without a QR (receipt hotel hint: Hotel Smyšlený) and
+  a scanned crate without a provable hotel are two unassigned costs of 80.00 each (160.00).
+  Hotel Smyšlený keeps its 80.00 and its contribution 1 709.00. The company result with a
+  fictional 18 000.00 overhead is 1 709.00 − 160.00 − 18 000.00 = −16 451.00.
+
+### 7b. Separate example: reading in batches (fictional; `071-margin-batches.test.mjs`)
+
+450 fictional hotels, one crate of 40 bottles each, a fake core of 1 s per page:
+
+| Case                                    | Calls                                            | Result                                                                  |
+| --------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------- |
+| normal                                  | 3 calls (200 + 200 + 50 hotels), 8 + 8 + 2 pages | 450 COMPLETE, one snapshot                                              |
+| deadline 12 s                           | 12 pages                                         | 300 COMPLETE, 150 PARTIAL (`DEADLINE`)                                  |
+| a page times out twice (hotels 201–400) | the other calls still run                        | 250 COMPLETE, 200 PARTIAL (`SOURCE_UNAVAILABLE`)                        |
+| hotel 007 sends 39 of 40 bottles        | normal                                           | 449 COMPLETE, 1 UNRECONCILED (`COUNT_MISMATCH`, `CRATE_COUNT_MISMATCH`) |
+| the snapshot changes on page 5          | the read stops                                   | 450 UNRECONCILED (`SNAPSHOT_CHANGED`), nothing combined                 |
+
 ## 8. Questions for the owner (not decided)
 
 1. Margin per hotel or per payer? The invoice is per payer, the overview per hotel (revenue
@@ -255,10 +329,13 @@ Further cases from the same test:
 8. Computed on read (proposal) or a frozen monthly snapshot with a fingerprint like the
    commission statement?
 9. Where the overview lives: Finance → Přehledy (proposal), or Obchod?
-10. A returned crate the core cannot link to a dispatched cycle, or to any hotel: no hotel's cost
-    (proposal, listed apart), or the receipt's hotel?
-11. A bottle repacked into a crate for a **different hotel** than its original order: the
-    dispatched crate's hotel carries it (proposal, §3.3) — confirm.
+10. **Recommended DEV default, to confirm:** a return without a proven cycle or hotel is an
+    unassigned cost shown to the admin, never assigned automatically (§3.5) — not to the
+    receipt's hotel.
+11. **Recommended DEV default, to confirm:** a repacked bottle is costed once, at the hotel of the
+    actual dispatch (§3.3), also when that hotel differs from its original order.
+12. The limits of §3.6 (200 hotels, 1 000 rows, 10 s, 60 s, one retry): proposal values, to be
+    measured on DEV volume before LIVE.
 
 ## 9. Not in this batch
 
@@ -267,3 +344,37 @@ Further cases from the same test:
 - Depreciation, overhead allocation, the company result.
 - LIVE revenue.
 - VAT logic, accounting integration, payments.
+
+## 10. Acceptance of the first DEV version [PROPOSAL]
+
+### 10.1 Transport only at the crate's scan — the rule against today's `main`
+
+| Rule (owner 2026-11-19)                            | Today on `main` (09e82e7)                                                                                                                                                                                                | Fit                | What v1 needs                                                                  |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | ------------------------------------------------------------------------------ |
+| Outbound per crate **at dispatch**                 | the hand-over confirms the whole shipment; every crate cycle `DISPATCHED` (doc 029); 1 crate = 1 parcel                                                                                                                  | yes                | the contract reports the cycle and the hand-over day                           |
+| Return rate only at the **scan of that crate**     | `return_receipt_lines` kind `CRATE` with `scanned_at`; the DB allows it only for a delivered cycle held by its live allocation; `returned_cycle_id` unique; a line is never deleted, it changes only by its one emptying | yes                | day = `scanned_at` (not the receipt's opening or closing)                      |
+| …of **that** returned crate                        | the hotel follows from the cycle → allocation → order; the receipt's own `hotel_id` is optional and picked by hand                                                                                                       | yes, via the cycle | `hotelId` from the dispatch, the receipt's hotel only as a hint (§3.5)         |
+| A box without a crate QR                           | kind `CONTAINER`, no cycle (DB CHECK)                                                                                                                                                                                    | no hotel           | unassigned cost `NO_CYCLE` (§3.5)                                              |
+| A crate whose delivery the carrier never confirmed | it cannot be scanned as `CRATE` (the DB requires a delivered parcel)                                                                                                                                                     | gap                | stays a CONTAINER or waits; shown as unassigned, never guessed — note for R1.1 |
+| An unreturned crate                                | no line                                                                                                                                                                                                                  | yes                | no return cost (Q5)                                                            |
+
+### 10.2 Acceptance criteria
+
+Each criterion is met by a test on real rows (core contract, Finance) and by the overview UI;
+today the prototype shows the expected result.
+
+| #   | Criterion                                                                                                     | Prototype case today                           |
+| --- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| A1  | New bottle = body + label + pump + liquid as consumed; refill = fill only; packaging on a refill refused      | circulation 1 / 2; `REFILL_CARRIES_PACKAGING`  |
+| A2  | Standard price in force on the day; a correction is a new version; `asOf` reproduces an earlier result        | validity                                       |
+| A3  | Only CZK without VAT; another currency refused                                                                | only CZK without VAT                           |
+| A4  | Outbound at the hand-over; return at the crate's scan, in the scan month                                      | circulation 2 (RL-1 on 3. 11.)                 |
+| A5  | A missing price or rate: NEÚPLNÉ, reasons, „známé náklady zatím“, no margin, never 0                          | December; Firemní hotel without the pump price |
+| A6  | Bez provize (Firemní hotel, before start, approved without item) ≠ not yet approved / no attribution          | Firemní hotel; three states                    |
+| A7  | A repacked bottle costed once, at the actual dispatch's hotel                                                 | repack                                         |
+| A8  | One unique key per amount over the whole input; duplicates refused                                            | unique key                                     |
+| A9  | A return without a proven cycle or hotel: unassigned cost for the admin, never auto-assigned                  | unassigned return                              |
+| A10 | Batches ≤ 200 hotels / ≤ 1 000 rows, one snapshot; PARTIAL and UNRECONCILED shown, never computed             | `071-margin-batches.test.mjs`                  |
+| A11 | Hotel contribution ≠ company result; unassigned costs only in the company view                                | company contrast; unassigned return            |
+| A12 | ADMIN only (`finance:margin_read`, `finance:margin_prices_manage`); SALES and a hotel get 403; no session 401 | — (needs the code; after #204 on DEV)          |
+| A13 | Phone 390 px and desktop without sideways scrolling; TEST data only on DEV                                    | — (UI)                                         |

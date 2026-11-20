@@ -158,8 +158,11 @@ function commissionOf(input, hotelId, month) {
  *                  consumed: [{movementId, item, itemKind, unit, qty, on}]} — actual consumption
  *                  only, no prices, and no hotel of its own: a bottle repacked after filling
  *                  belongs to the hotel of the crate it was dispatched in
- *   returns        core: returned crates received {returnLineId, crateCycleId|null,
- *                  hotelId|null, receivedOn}
+ *   returns        core: return receipt lines {returnLineId, kind: CRATE|CONTAINER,
+ *                  crateCycleId|null, hotelId|null, scannedOn} — CRATE = the crate's QR scanned
+ *                  at the receipt (the DB allows it only for a delivered cycle held by its live
+ *                  allocation); hotelId = the hotel of that cycle's dispatch, never the hotel
+ *                  picked on the receipt; scannedOn = the Prague day of that scan
  *   attributions, statements, commissionItems   see commissionOf
  *   prices         Finance standard prices [{item, unit, price, currency, vat, effectiveFrom,
  *                  recordedAt}]
@@ -221,13 +224,13 @@ export function hotelMonth(input, hotelId, month, asOf) {
     }
   }
 
-  // Return transport: only when that returned crate is received. A received crate with no hotel
-  // (hotelId null) is nobody's cost here (doc 071 Q10).
+  // Return transport: only at the scan of that returned crate. A line without a proven cycle or
+  // hotel is never a hotel's cost: it goes to unassignedCosts for the admin (doc 071 §3.5).
   let returnTransport = 0n;
   for (const r of input.returns) {
-    if (r.hotelId !== hotelId || monthOf(r.receivedOn) !== month) continue;
-    const rate = priceAt(input.rates, 'RETURN_CRATE', r.receivedOn, asOf);
-    if (!rate) missing.push({ kind: 'RATE', item: 'RETURN_CRATE', on: r.receivedOn });
+    if (!returnAssigned(r) || r.hotelId !== hotelId || monthOf(r.scannedOn) !== month) continue;
+    const rate = priceAt(input.rates, 'RETURN_CRATE', r.scannedOn, asOf);
+    if (!rate) missing.push({ kind: 'RATE', item: 'RETURN_CRATE', on: r.scannedOn });
     else {
       const cost = lineCost('1', rate.price);
       returnTransport += cost;
@@ -264,19 +267,64 @@ export function hotelMonth(input, hotelId, month, asOf) {
   };
 }
 
+/** A return line is a hotel's cost only with a scanned crate, its cycle and that cycle's hotel. */
+const returnAssigned = (r) => r.kind === 'CRATE' && r.crateCycleId !== null && r.hotelId !== null;
+
+/**
+ * Unassigned costs of a month (PROPOSAL, DEV default for the owner to confirm, doc 071 §3.5):
+ * return lines without a proven cycle (a box without a QR, CONTAINER) or without its hotel. They
+ * are shown to the admin as „nezařazený náklad“ with the reason, and never assigned to a hotel
+ * automatically — not even to the hotel picked on the receipt (shown only as a hint).
+ */
+export function unassignedCosts(input, month, asOf) {
+  assertUniqueKeys(input);
+  const rows = [];
+  const missing = [];
+  for (const r of input.returns) {
+    if (returnAssigned(r) || monthOf(r.scannedOn) !== month) continue;
+    const reason = r.kind !== 'CRATE' || r.crateCycleId === null ? 'NO_CYCLE' : 'NO_HOTEL';
+    const rate = priceAt(input.rates, 'RETURN_CRATE', r.scannedOn, asOf);
+    if (!rate) {
+      missing.push({ kind: 'RATE', item: 'RETURN_CRATE', on: r.scannedOn });
+      continue;
+    }
+    rows.push({
+      key: `RETURN:${r.returnLineId}`,
+      reason,
+      receiptHotelHint: r.receiptHotelId ?? null,
+      cost: text(lineCost('1', rate.price)),
+    });
+  }
+  return {
+    complete: missing.length === 0,
+    missing,
+    rows,
+    total: text(rows.reduce((s, r) => s + cents(r.cost), 0n)),
+  };
+}
+
 /**
  * The company result is NOT the sum of hotel contributions: rent, the accountant, wages and other
  * overheads are never allocated to a hotel in v1 (doc 071 §6). Shown apart, for contrast only.
  */
-export function companyView(hotelRows, overheads) {
-  if (hotelRows.some((r) => !r.complete))
-    return { complete: false, contributions: null, overheads: null, result: null };
+export function companyView(hotelRows, overheads, unassigned = null) {
+  if (hotelRows.some((r) => !r.complete) || (unassigned && !unassigned.complete))
+    return {
+      complete: false,
+      contributions: null,
+      unassigned: null,
+      overheads: null,
+      result: null,
+    };
   const contributions = hotelRows.reduce((s, r) => s + cents(r.marginAfterCommission), 0n);
+  const loose = unassigned ? cents(unassigned.total) : 0n;
   const over = overheads.reduce((s, o) => s + cents(o.amount), 0n);
   return {
     complete: true,
     contributions: text(contributions),
+    // Real costs of no hotel (doc 071 §3.5): in the company result, never in a contribution.
+    unassigned: text(loose),
     overheads: text(over),
-    result: text(contributions - over),
+    result: text(contributions - loose - over),
   };
 }

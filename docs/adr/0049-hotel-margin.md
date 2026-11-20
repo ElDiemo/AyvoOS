@@ -92,6 +92,12 @@ today's sources (19. 11. 2026, `main` 09e82e7):
 - **Without commission ≠ not yet approved:** an explicit 0.00 only from the core attribution
   (Firemní hotel, `recipient: null`; before the commission start) or an approved statement; a
   missing or unapproved statement, or no attribution, makes the month incomplete (doc 071 §3.4).
+- **Return day = the scan of that crate** on the return receipt; a return without a proven cycle
+  or hotel is an **unassigned cost** for the admin, never assigned automatically, and counts only
+  in the company view (recommended DEV default for the owner to confirm; doc 071 §3.5, §10.1).
+- **Large volume is read in batches** with one core snapshot and time limits; a hotel whose
+  source arrived only in part (PARTIAL) or does not add up (UNRECONCILED) shows no costs and no
+  margin (doc 071 §3.6).
 - **A missing price, rate, revenue or approval makes the hotel × month visibly incomplete.** The
   known costs are shown as "known so far", the margin is not shown, and the reasons are listed.
   Never a zero.
