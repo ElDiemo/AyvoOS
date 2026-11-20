@@ -60,6 +60,8 @@ Native authentication for review: [0037 — Native password + TOTP authenticatio
 
 Core runtime DB role for review: [0041 — The running core connects as its own non-superuser DB role](0041-core-db-runtime-role.md).
 
+Hotel margin (proposed 2026-11-19, nothing implemented): [0049 — Hotel margin: actual consumption and events from the core, standard prices and the overview in Finance](0049-hotel-margin.md). Details: doc 071 and `docs/prototypes/071-hotel-margin.mjs`.
+
 PPL production for review: [0042 — PPL production connection, chosen explicitly per site](0042-ppl-production-connection.md).
 
 ADRs 0003 (Next.js + NestJS stack) and 0009 (Prisma) were confirmed by the
