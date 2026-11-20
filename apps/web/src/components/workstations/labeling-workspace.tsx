@@ -89,7 +89,8 @@ export function LabelingWorkspace({
     };
   }, [base]);
 
-  const contextReady = !!state?.product && !!state.design && !!state.sourceLot && !editing;
+  // The lot of new bottles is optional: a crate of washed bottles needs none (doc 048 §3.0).
+  const contextReady = !!state?.product && !!state.design && !editing;
   const crateAssembling =
     !!state?.crate && (!state.crate.cycle || state.crate.cycle.status === 'OPEN_ASSEMBLY');
   const phase: 'context' | 'crate' | 'bottle' = !contextReady
@@ -107,8 +108,8 @@ export function LabelingWorkspace({
     setLog((l) => [{ id: Date.now() + Math.random(), tone, text }, ...l].slice(0, 15));
 
   async function applyContext() {
-    if (!product || !design || !lot || busy) return;
-    const body = { productCode: product, labelTemplateVersionId: design, sourceLotId: lot };
+    if (!product || !design || busy) return;
+    const body = { productCode: product, labelTemplateVersionId: design, sourceLotId: lot || null };
     const key = `context:${JSON.stringify(body)}`;
     setBusy(true);
     try {
@@ -156,9 +157,10 @@ export function LabelingWorkspace({
           s
             ? {
                 ...s,
-                sourceLot: s.sourceLot
-                  ? { ...s.sourceLot, onHand: r.sourceLot.onHand }
-                  : s.sourceLot,
+                sourceLot:
+                  s.sourceLot && r.sourceLot
+                    ? { ...s.sourceLot, onHand: r.sourceLot.onHand }
+                    : s.sourceLot,
                 crate: s.crate ? { ...s.crate, cycle: r.cycle } : s.crate,
               }
             : s,
@@ -166,14 +168,18 @@ export function LabelingWorkspace({
         const text =
           r.outcome === 'APPLIED'
             ? t.scan.applied(r.bottle.code, r.cycle.memberCount, r.cycle.capacity)
-            : t.scan.already(r.bottle.code);
+            : r.outcome === 'PLACED'
+              ? t.scan.placed(r.bottle.code, r.cycle.memberCount, r.cycle.capacity)
+              : t.scan.already(r.bottle.code);
+        const ok = r.outcome !== 'ALREADY_APPLIED';
         const full = r.cycle.status === 'READY_TO_FILL';
         setNotice({
-          tone: r.outcome === 'APPLIED' ? 'ok' : 'warn',
+          tone: ok ? 'ok' : 'warn',
           text: full ? `${text} ${t.crate.full(r.crate.code)}` : text,
         });
-        push(r.outcome === 'APPLIED' ? 'ok' : 'warn', text);
-        scanFeedback(r.outcome === 'APPLIED' ? 'ok' : 'error');
+        push(ok ? 'ok' : 'warn', text);
+        // A washed bottle placed is a success like a new one labelled; only a duplicate is not.
+        scanFeedback(ok ? 'ok' : 'error');
       }
       return true;
     } catch (error) {
@@ -213,10 +219,16 @@ export function LabelingWorkspace({
         {contextReady ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm font-medium" data-testid="labeling-context">
-              {t.context.current(state.product!.name, state.design!.label, state.sourceLot!.code)}
+              {t.context.current(
+                state.product!.name,
+                state.design!.label,
+                state.sourceLot?.code ?? null,
+              )}
               <span className="block text-xs text-stone-500">
                 {t.context.recipe(cycle?.recipeVersion ?? state.recipeVersion!)} ·{' '}
-                {t.scan.lotLeft(state.sourceLot!.code, state.sourceLot!.onHand)}
+                {state.sourceLot
+                  ? t.scan.lotLeft(state.sourceLot.code, state.sourceLot.onHand)
+                  : t.context.noLotChosen}
               </span>
             </p>
             <button
@@ -228,7 +240,7 @@ export function LabelingWorkspace({
                   options.products.find((p) => p.code === state.product!.code)?.code ?? '',
                 );
                 setDesign(state.design!.versionId);
-                setLot(state.sourceLot!.id);
+                setLot(state.sourceLot?.id ?? '');
                 setEditing(true);
               }}
             >
@@ -283,11 +295,11 @@ export function LabelingWorkspace({
                 <select
                   id={`${id}-l`}
                   value={lot}
-                  disabled={!chosen || lots.length === 0}
+                  disabled={!chosen}
                   onChange={(e) => setLot(e.target.value)}
                   className={inputClass}
                 >
-                  <option value="">{t.context.choose}</option>
+                  <option value="">{t.context.lotNone}</option>
                   {lots.map((l) => (
                     <option key={l.id} value={l.id}>
                       {t.context.lotOption(l.code, l.onHand)}
@@ -309,7 +321,7 @@ export function LabelingWorkspace({
               <button
                 type="button"
                 className={buttonClass.primary}
-                disabled={busy || !product || !design || !lot}
+                disabled={busy || !product || !design}
                 onClick={() => void applyContext()}
               >
                 {t.context.apply}

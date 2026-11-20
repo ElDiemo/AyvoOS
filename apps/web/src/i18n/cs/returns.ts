@@ -13,7 +13,7 @@ export const returnsCs = {
     site: (name: string) => `Provozovna: ${name}`,
     step: (n: number) => `Krok ${n}`,
     returns: {
-      text: 'Tady pípáte vrácenou bednu nebo krabici od hotelu a v ní každou lahev zvlášť.',
+      text: 'Tady pípnete vrácenou bednu (tím se uvolní) a každou vrácenou lahev zvlášť – v libovolném pořadí.',
       open: 'Přijmout vratku',
     },
     afterWash: {
@@ -32,7 +32,7 @@ export const returnsCs = {
   },
   title: 'Příjem vratek',
   subtitle:
-    'Vrácené bedny a krabice od hotelů: každá lahev se skenuje jednotlivě. Obsah bedny se nikdy nepředpokládá.',
+    'Sken vrácené bedny ji hned uvolní pro další použití. Každá lahev se přijímá jen vlastním skenem – nezávisle na bedně. Nic se nepočítá ručně.',
   open: {
     title: 'Nový příjem',
     hotel: 'Hotel (nepovinné)',
@@ -46,7 +46,7 @@ export const returnsCs = {
     state: 'Stav',
     hotel: 'Hotel',
     opened: 'Otevřen',
-    lines: 'Kontejnery',
+    lines: 'Řádky',
     identified: 'Identifikováno',
     openIssues: 'Otevřené neshody',
   },
@@ -62,18 +62,30 @@ export const returnsCs = {
   receipt: {
     back: 'Příjem vratek',
     scanCrate: 'Naskenujte vrácenou bednu',
+    scanCrateHint:
+      'Sken bednu hned uvolní pro další použití a ukončí vazbu lahví k ní. Žádnou lahev nepotvrzuje – každou lahev naskenujte zvlášť.',
     scanCratePlaceholder: 'QR bedny',
-    addCrate: 'Přidat bednu',
-    addContainer: 'Krabice bez kódu',
+    addCrate: 'Uvolnit bednu',
+    scanBottles: 'Naskenujte vrácené lahve',
+    scanBottlesHint:
+      'Každou skutečně vrácenou lahev podle jejího QR – i bez bedny, před bednou nebo později v jiném příjmu.',
     pumps: 'Vadná pumpička −1',
     pumpsCount: (n: number) => `Vadné pumpičky: ${n}`,
+    counts: (crates: number, identified: number, defective: number, unreadable: number) =>
+      `Bedny ${crates} · přijaté lahve ${identified} (z toho ke skartaci ${defective}) · nečitelné ${unreadable}`,
     close: 'Uzavřít příjem',
-    closeHint: 'Příjem lze uzavřít až po vyprázdnění všech kontejnerů.',
+    closeHint: 'Nejdřív vyprázdněte starší kontejnery tohoto příjmu (Vyprázdněno).',
     closed: 'Příjem je uzavřený. Neshody lze dořešit i teď.',
   },
   line: {
     crate: (code: string) => `Bedna ${code}`,
     container: 'Krabice bez kódu',
+    bottlesTitle: 'Přijaté lahve',
+    freed: (n: number) =>
+      n === 1
+        ? 'Uvolněna · ukončena vazba 1 lahve (nepotvrzuje její návrat)'
+        : `Uvolněna · ukončena vazba ${n} lahví (nepotvrzuje jejich návrat)`,
+    legacy: 'Starší kontejner z doby před uvolňováním beden: vyprázdněte ho s počtem kusů.',
     order: (code: string, hotel: string | null) =>
       `objednávka ${code}${hotel ? ` · ${hotel}` : ''}`,
     scanBottle: 'Naskenujte lahev',
@@ -117,9 +129,10 @@ export const returnsCs = {
   },
   result: {
     identified: (code: string, outcome: string) => `${code}: ${outcome}`,
-    repeated: (code: string) => `${code}: už zapsáno na tomto kontejneru (první výsledek)`,
+    repeated: (code: string) => `${code}: už zapsáno v tomto příjmu (první výsledek)`,
     issue: (kind: string, code: string) => `Zapsána neshoda ${code}: ${kind}`,
-    crate: (code: string, order: string) => `Bedna ${code} přijata (objednávka ${order})`,
+    crate: (code: string, order: string, freed: number) =>
+      `Bedna ${code} přijata a uvolněna (objednávka ${order}) · ukončena vazba ${freed} lahví`,
     crateAgain: (code: string) => `Bedna ${code} už je v tomto příjmu`,
   },
   afterWash: {
@@ -140,7 +153,8 @@ export const returnsCs = {
       'Design etikety už není pro produkt schválený. Lahev zůstává vrácená a čeká na výslovné rozhodnutí; nic se nevyřazuje automaticky.',
     withdrawnEmpty: 'Žádná vyčleněná lahev.',
     readyList: 'Připravené k plnění · Po mytí',
-    readyHint: 'Do bedny a k plnění přijdou až s dalším krokem (plnění vrácených lahví).',
+    readyHint:
+      'Na pracovišti je vložíte do bedny jako novou lahev (stejný QR, bez nové etikety) a naplníte běžnou cestou.',
     readyEmpty: 'Zatím žádná lahev po mytí.',
     count: (shown: number, total: number) => (shown < total ? `${shown} z ${total}` : `${total}`),
     since: 'od',
@@ -180,8 +194,17 @@ export const returnsCs = {
     BOTTLE_OF_ANOTHER_SITE: 'Lahev patří jiné provozovně.',
     CRATE_NOT_DELIVERED: 'Bedna nemá doručený oběh, který by se vracel.',
     CRATE_ALREADY_RETURNED: 'Bedna už je přijatá v jiném příjmu.',
-    ALREADY_RECEIVED: 'Lahev už je na tomto kontejneru zapsaná; změna je oprava.',
-    ALREADY_RECEIVED_ELSEWHERE: 'Lahev už byla přijata jinde – na tento kontejner se nepočítá.',
+    CRATE_DELIVERED_AFTER_RECEIPT:
+      'Bedna byla doručena až po otevření tohoto příjmu – přijměte ji v novém příjmu. Nic se nezapsalo.',
+    DELIVERED_AFTER_RECEIPT:
+      'Lahev byla doručena až po otevření tohoto příjmu – přijměte ji v novém příjmu. Nic se nezapsalo.',
+    CIRCULATION_CHANGED:
+      'Lahev je už v dalším oběhu, než který neshoda zaznamenala – neshoda zůstává otevřená.',
+    LINE_NOT_EMPTIABLE: 'Přijaté lahve se nevyprazdňují ani nepočítají.',
+    BOTTLE_AT_HOTEL:
+      'Lahev je podle evidence u hotelu (její bedna se vrátila bez ní) – nejdřív ji přijměte v Příjmu vratek.',
+    ALREADY_RECEIVED: 'Lahev už je v tomto příjmu zapsaná; změna je oprava.',
+    ALREADY_RECEIVED_ELSEWHERE: 'Lahev už byla přijata v jiném příjmu – znovu se nepočítá.',
     OPEN_ISSUE: 'Lahev má otevřenou neshodu – dořešte ji u té neshody.',
     NOT_IN_THIS_LINE: 'Tato lahev v tomto kontejneru být nemůže.',
     NOT_DELIVERED: 'Lahev zatím není doručená – neshoda zůstává otevřená.',
