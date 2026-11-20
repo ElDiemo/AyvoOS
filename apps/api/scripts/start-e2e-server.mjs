@@ -104,7 +104,10 @@ const coreUrl = Object.assign(new URL(e2eUrl), {
 // fake credentials; the test-only base URL is refused by the API unless APP_ENV=test.
 const { FakePpl } = await import(resolve(apiRoot, 'test/support/fake-ppl.ts'));
 const fakePpl = new FakePpl('e2e-fake-ppl-client', 'e2e-fake-ppl-secret-never-shown');
-await fakePpl.start();
+// E2E_CARRIER=ppl (the isolated Svoz walkthrough only, workflow-pickups-ppl.spec.ts): the real PPL
+// adapter talks to this simulation, on a known port so the spec can steer it (test control route).
+const pplWalkthrough = process.env.E2E_CARRIER === 'ppl';
+await fakePpl.start(pplWalkthrough ? Number(process.env.E2E_FAKE_PPL_PORT ?? 4195) : 0);
 
 // A SIMULATED Raiffeisenbank Premium API (test/support/fake-rb.ts) for the browser tests of
 // Finance → Bankovní pohyby: its own CA and certificates per run, synthetic entries that live only
@@ -162,8 +165,10 @@ const testEnv = {
   ...process.env,
   APP_ENV: 'test',
   AUTH_PROVIDER: 'test',
-  // The fake carrier (doc 029): allowed only with APP_ENV=test; never on DEV or production.
-  CARRIER_PROVIDER: 'test',
+  // The fake carrier (doc 029): allowed only with APP_ENV=test; never on DEV or production. The
+  // isolated Svoz walkthrough uses the real PPL adapter against the simulation instead.
+  CARRIER_PROVIDER: pplWalkthrough ? 'none' : 'test',
+  ...(pplWalkthrough ? { CARRIER_SETTLE_SECONDS: '0', CARRIER_CALL_TIMEOUT_SECONDS: '3' } : {}),
   // Supply plans (doc 032): the real background round, often enough for the browser tests.
   SUPPLY_PLAN_SECONDS: '2',
   PPL_TEST_CLIENT_ID: fakePpl.clientId,
