@@ -304,6 +304,8 @@ export function unassignedCosts(input, month, asOf) {
 }
 
 /**
+ * DEFINITION ONLY — not part of the v1 overview, which shows no sum over hotels (ADR 0049 §4: no
+ * common Finance + core moment is claimed).
  * The company result is NOT the sum of hotel contributions: rent, the accountant, wages and other
  * overheads are never allocated to a hotel in v1 (doc 071 §6). Shown apart, for contrast only.
  */

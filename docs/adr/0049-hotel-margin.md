@@ -118,9 +118,14 @@ today's sources (19. 11. 2026, `main` 09e82e7):
   - each call returns whole hotels from one short REPEATABLE READ transaction, so each hotel is
     consistent as of its own `readAt`;
   - different hotels may be of different moments, and the overview says so;
-  - a **sum over hotels** is shown only when one verification call returns, from one
-    transaction, the same fingerprint for every hotel;
-  - a changed hotel is re-read once; otherwise no sum (`CHANGED_DURING_READ`);
+  - the fingerprint covers every money-relevant value (hotel, crate cycle, days, quantities,
+    units, item, kind and state), not only keys and counts, so a changed value with the same keys
+    and counts is a mismatch, never computed;
+  - a hotel row has two read moments, the core's `readAt` and Finance's own `financeReadAt`
+    (revenue, commissions, prices, rates), and never claims a common one;
+  - **no sum over hotels in v1** (no company view, no totals). A core check cannot cover
+    Finance's inputs, and a late transaction can be in one hotel's read and not another's. A sum
+    needs a later proposal that proves the consistency of all its inputs;
   - an inconsistent aggregation is never merged.
 - **Hard total deadline** (60 s, proposal): checked before every try, retries included. Each try
   gets `min(10 s, the remaining budget)`. After the budget, nothing is tried, and the overview

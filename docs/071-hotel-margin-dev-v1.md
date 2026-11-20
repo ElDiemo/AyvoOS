@@ -194,21 +194,37 @@ exporting transaction open for the whole read, so it is rejected.
   internally consistent as of that call's `readAt`.
 - **What it does not promise:** two hotels may describe two different moments. Each hotel row
   shows its own `readAt`.
-- **A sum over hotels** (the company view, totals) is shown only after **one verification call**
-  that returns every hotel's fingerprint (canonical hash of its row keys and counts) from one
-  transaction:
-  - all fingerprints equal → the sum is the real state at `verifiedAt`;
-  - a hotel changed (a late commit) → it is re-read once and verified again;
-  - still different → **no sum** (`CHANGED_DURING_READ`, the hotels listed). The hotel rows stay
-    valid on their own.
-- More hotels than one verification call takes (≤ 1 000) → no sum in v1 (`SCOPE_TOO_LARGE`).
+- **The fingerprint covers every value that changes money**, not only keys and counts:
+  - hotel, crate cycle, dispatch day, bottle count and crate state;
+  - the circulation kind;
+  - each consumption's movement, item, item kind, unit, quantity and day;
+  - each return line's kind, cycle, hotel and scan day.
+
+  The core computes it (SHA-256 over a canonical text, fixed field order, rows sorted by key) in
+  the same transaction as the rows. Finance recomputes it from what arrived, and any difference is
+  `FINGERPRINT_MISMATCH`. For example, the same keys and counts with a quantity of 0.300 instead
+  of 0.330 is a mismatch.
+
+- **Two moments in one hotel row, never claimed as one:**
+  - the core part is as of `readAt`;
+  - Finance reads its own inputs (revenue, commissions, standard prices, rates) in its own short
+    transaction, at `financeReadAt`;
+  - the row shows both;
+  - a core verification cannot cover Finance's inputs, so no common Finance + core moment is
+    claimed.
+- **No sum over hotels in v1:**
+  - neither the company view nor totals across hotels;
+  - a late transaction can be in one hotel's read and not in another's (§7b);
+  - a sum returns only with a proposal that proves the consistency of **all** its inputs, core and
+    Finance (for example Variant S plus Finance read in one transaction at the same moment). That
+    is not part of v1.
 - An inconsistent aggregation is **never merged**.
 
 **Time limits (proposal values):**
 
 - one hard total budget of 60 s for the whole build, checked **before every try**, retries
   included;
-- each try (page or verification) gets `min(10 s, remaining budget)`;
+- each try gets `min(10 s, remaining budget)`;
 - one retry of a failed page, only if budget remains;
 - with no budget left, nothing more is tried, and the overview never keeps reading in the
   background.
@@ -281,7 +297,8 @@ are shown, only the state and its reasons.
     the accountant, wages,
     washing and labour, depreciation, software, …;
   - it comes from accounting, not from this overview;
-  - v1 shows it at most as a side note for contrast, and never as "zisk hotelu".
+  - v1 does **not** show it (no sum over hotels, §3.6); the prototype's `companyView` only
+    defines the difference, and it is never called "zisk hotelu".
 - The overview is labelled **"Příspěvek hotelu"**, never "zisk".
 
 ## 7. Example with two circulations (fictional; the prototype test)
@@ -343,16 +360,16 @@ Further cases from the same test:
 450 fictional hotels, one crate of 40 bottles each. The fake core takes 1 s per call and pages 25
 whole hotels.
 
-| Case                                                                 | Calls                                                               | Result                                                                                                                   |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| normal                                                               | 18 pages (≤ 200 hotels a call) + 1 verification                     | 450 COMPLETE, consistent sum as of the verification                                                                      |
-| deadline 12 s                                                        | 12 pages, no 13th try                                               | 300 COMPLETE, 150 PARTIAL (`DEADLINE`), no sum                                                                           |
-| **hard deadline 20 s, page 9 slow**                                  | try 9 gets min(10 s, 12 s left) = 10 s, the retry only the last 2 s | elapsed exactly 20 s; hotels 201–450 PARTIAL (`DEADLINE`)                                                                |
-| a page times out twice within 60 s                                   | the other calls still run                                           | 200 PARTIAL (`SOURCE_UNAVAILABLE`), no sum                                                                               |
-| hotel 007 sends 39 of 40 bottles                                     | normal                                                              | 007 UNRECONCILED (counts, crate count, fingerprint), no sum                                                              |
-| **late commit:** hotel 007 gets a crate right after its page         | verification → 007 changed → re-read 007 → verification             | 007 with 80 bottles, `readAt` of the re-read; consistent sum as of the 2nd verification                                  |
-| a source that keeps changing (hotel 450)                             | two verifications differ                                            | all hotels COMPLETE with their `readAt`; **no sum** (`CHANGED_DURING_READ`)                                              |
-| **why not a watermark / seq cursor** (fake DB, one late transaction) | page 1, the late commit, page 2                                     | watermark: r4 without r2 (half a transaction); seq: r2, r4 lost; snapshot visibility (Variant S): exactly page 1's state |
+| Case                                                                                                                                                    | Calls                                                               | Result                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| normal                                                                                                                                                  | 18 pages (≤ 200 hotels a call)                                      | 450 COMPLETE, each with its `readAt` (1 s … 18 s); **no sum** (`NOT_IN_V1`)                                                 |
+| deadline 12 s                                                                                                                                           | 12 pages, no 13th try                                               | 300 COMPLETE, 150 PARTIAL (`DEADLINE`)                                                                                      |
+| **hard deadline 20 s, page 9 slow**                                                                                                                     | try 9 gets min(10 s, 12 s left) = 10 s, the retry only the last 2 s | elapsed exactly 20 s; hotels 201–450 PARTIAL (`DEADLINE`)                                                                   |
+| a page times out twice within 60 s                                                                                                                      | the other calls still run                                           | 200 PARTIAL (`SOURCE_UNAVAILABLE`)                                                                                          |
+| hotel 007 sends 39 of 40 bottles                                                                                                                        | normal                                                              | 007 UNRECONCILED (counts, crate count, fingerprint)                                                                         |
+| **a value changes, keys and counts stay** (8 cases: quantity, unit, item, consumption day, circulation kind, dispatch day, dispatch hotel, crate state) | normal                                                              | 007 UNRECONCILED (`FINGERPRINT_MISMATCH`), 449 COMPLETE; a keys-and-counts fingerprint would not have seen it               |
+| **late commit** of one transaction for hotels 007 (call 1) and 030 (call 2), after call 1                                                               | normal                                                              | 007 whole before it (40 bottles, `readAt` 1 s), 030 whole after it (80, `readAt` 2 s); a sum would mix two moments, so none |
+| **why not a watermark / seq cursor** (fake DB, one late transaction)                                                                                    | page 1, the late commit, page 2                                     | watermark: r4 without r2 (half a transaction); seq: r2, r4 lost; snapshot visibility (Variant S): exactly page 1's state    |
 
 ## 8. Questions for the owner (not decided)
 
@@ -378,9 +395,9 @@ whole hotels.
 11. **Recommended DEV default, to confirm:** a repacked bottle is costed once, at the hotel of the
     actual dispatch (§3.3), also when that hotel differs from its original order.
 12. The limits of §3.6 (200 hotels, 1 000 rows, 10 s per try within a hard 60 s budget, one
-    retry, 1 000 hotels per verification): proposal values, to be measured on DEV volume before
+    retry): proposal values, to be measured on DEV volume before
     LIVE.
-13. v1 with Variant H (per-hotel moments, a verified sum or none) — or Variant S at once (a core
+13. v1 with Variant H (per-hotel moments, no sum over hotels; recommended, Codex 2026-11-20 concurs) — or Variant S at once (a core
     migration adding `created_xid` to the source tables)?
 
 ## 9. Not in this batch
@@ -409,18 +426,18 @@ whole hotels.
 Each criterion is met by a test on real rows (core contract, Finance) and by the overview UI;
 today the prototype shows the expected result.
 
-| #   | Criterion                                                                                                                                               | Prototype case today                           |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| A1  | New bottle = body + label + pump + liquid as consumed; refill = fill only; packaging on a refill refused                                                | circulation 1 / 2; `REFILL_CARRIES_PACKAGING`  |
-| A2  | Standard price in force on the day; a correction is a new version; `asOf` reproduces an earlier result                                                  | validity                                       |
-| A3  | Only CZK without VAT; another currency refused                                                                                                          | only CZK without VAT                           |
-| A4  | Outbound at the hand-over; return at the crate's scan, in the scan month                                                                                | circulation 2 (RL-1 on 3. 11.)                 |
-| A5  | A missing price or rate: NEÚPLNÉ, reasons, „známé náklady zatím“, no margin, never 0                                                                    | December; Firemní hotel without the pump price |
-| A6  | Bez provize (Firemní hotel, before start, approved without item) ≠ not yet approved / no attribution                                                    | Firemní hotel; three states                    |
-| A7  | A repacked bottle costed once, at the actual dispatch's hotel                                                                                           | repack                                         |
-| A8  | One unique key per amount over the whole input; duplicates refused                                                                                      | unique key                                     |
-| A9  | A return without a proven cycle or hotel: unassigned cost for the admin, never auto-assigned                                                            | unassigned return                              |
-| A10 | Whole hotels per call; hard budget before every try; PARTIAL / UNRECONCILED never computed; a sum over hotels only verified at one moment (late commit) | `071-margin-batches.test.mjs`                  |
-| A11 | Hotel contribution ≠ company result; unassigned costs only in the company view                                                                          | company contrast; unassigned return            |
-| A12 | ADMIN only (`finance:margin_read`, `finance:margin_prices_manage`); SALES and a hotel get 403; no session 401                                           | — (needs the code; after #204 on DEV)          |
-| A13 | Phone 390 px and desktop without sideways scrolling; TEST data only on DEV                                                                              | — (UI)                                         |
+| #   | Criterion                                                                                                                               | Prototype case today                           |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| A1  | New bottle = body + label + pump + liquid as consumed; refill = fill only; packaging on a refill refused                                | circulation 1 / 2; `REFILL_CARRIES_PACKAGING`  |
+| A2  | Standard price in force on the day; a correction is a new version; `asOf` reproduces an earlier result                                  | validity                                       |
+| A3  | Only CZK without VAT; another currency refused                                                                                          | only CZK without VAT                           |
+| A4  | Outbound at the hand-over; return at the crate's scan, in the scan month                                                                | circulation 2 (RL-1 on 3. 11.)                 |
+| A5  | A missing price or rate: NEÚPLNÉ, reasons, „známé náklady zatím“, no margin, never 0                                                    | December; Firemní hotel without the pump price |
+| A6  | Bez provize (Firemní hotel, before start, approved without item) ≠ not yet approved / no attribution                                    | Firemní hotel; three states                    |
+| A7  | A repacked bottle costed once, at the actual dispatch's hotel                                                                           | repack                                         |
+| A8  | One unique key per amount over the whole input; duplicates refused                                                                      | unique key                                     |
+| A9  | A return without a proven cycle or hotel: unassigned cost for the admin, never auto-assigned                                            | unassigned return                              |
+| A10 | Whole hotels per call; value fingerprint; hard budget before every try; PARTIAL / UNRECONCILED never computed; no sum over hotels in v1 | `071-margin-batches.test.mjs`                  |
+| A11 | Hotel contribution ≠ company result; unassigned costs only in the company view                                                          | company contrast; unassigned return            |
+| A12 | ADMIN only (`finance:margin_read`, `finance:margin_prices_manage`); SALES and a hotel get 403; no session 401                           | — (needs the code; after #204 on DEV)          |
+| A13 | Phone 390 px and desktop without sideways scrolling; TEST data only on DEV                                                              | — (UI)                                         |
