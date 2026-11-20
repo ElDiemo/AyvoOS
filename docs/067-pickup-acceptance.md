@@ -64,7 +64,7 @@ převzato 1 · ke svozu 1").
 "now"); a per-order note why an order is not selectable while another pickup waits (today the card
 above says it).
 
-## 3. DEV — read-only state (2026-11-14 21:30 UTC)
+## 3. DEV — read-only state (2026-11-14 21:30 UTC; current state in §6)
 
 - `api` / `web` `1ec991c895ee-20261111T162604Z`, `finance` `finance-1ec991c…`, `portal-web`
   `14ced8b89a56-…` — all healthy; DEV does **not** contain #188.
@@ -75,7 +75,7 @@ above says it).
   cannot use the simulation: on DEV, "Objednat svoz PPL" and "Zrušit svoz" call the PPL TEST
   environment (own database, no real transport — §4).
 
-## 4. After approval: DEV acceptance on the existing PPL TEST connection
+## 4. After approval: DEV acceptance on the existing PPL TEST connection (one run: §7)
 
 Owner 2026-11-15: DEV has its own PPL **TEST** credentials, and PPL documents that the TEST
 environment has its own database and carries out no real transport (ppl-cpl-api.apidog.io,
@@ -123,3 +123,176 @@ Out of scope here: the physical pickup, PROD, returns.
    `04` (confirmed: free) → `05` (partial pickup: only the rest) → `06` (delivered without a scan)
    → `07` (lost answer, Czech text, closing) → `08` (after the outage).
 2. To see it live once more: the command in §2 (about 5 minutes with `pnpm build`, 40 s without).
+
+## 6. Coming back as a revert of #191 (2026-11-20)
+
+#188 was merged (`795f1d8`), then taken out again by #191 (`d561680`) so the release of 2026-11-17
+could go without pickups. It comes back as one PR, a `git revert -m 1 d561680` on the current
+`main`.
+
+- **The code is #188's.** For 32 of the 33 files, the diff against `main` is line for line the
+  diff of #188 (`795f1d8^1..795f1d8`). The one exception is `schema.prisma`: there the union with
+  commissions (`SALES_COMMISSION_TERMS_RECORD`, `SALES_HOTEL_ATTRIBUTION_RECORD` and the user
+  relations of #196–#202) and `prisma format`'s alignment.
+- **Nothing else changes.** Labels, tracking, Zásoby, Obchod, commissions and Finance are kept.
+- **The same two migrations, byte for byte:**
+
+  | Migration                                    | sha256 (= Prisma checksum)                                         |
+  | -------------------------------------------- | ------------------------------------------------------------------ |
+  | `20261116090000_carrier_pickups_enum_values` | `4d1e4daa09dbae6c13ee8fe9ccad2fa8f794b1642674298c499d9c6f648e3c37` |
+  | `20261116090100_carrier_pickups`             | `b26748a8bab967f09bddf373642bcb8474e1ba812a890d838c9ff1534f4b050a` |
+
+### 6.1 Per database
+
+Check first, read only (`BEGIN READ ONLY`, privileged migration role):
+
+```sql
+SELECT migration_name, checksum, finished_at IS NOT NULL AS finished, rolled_back_at
+  FROM _prisma_migrations WHERE migration_name LIKE '20261116%' ORDER BY 1;
+SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL;
+```
+
+- **Both rows finished with these checksums. This is DEV, read on 2026-11-20:**
+  - DEV applied them on 2026-11-16 and kept them through #191;
+  - the tables are there, with 0 pickups, 0 parcels and 0 cancellations.
+
+  `migrate deploy` has nothing to do ("No pending migrations"). Nothing on the database changes.
+
+- **No row (a database that never ran #188, e.g. PROD if it skipped it):** `migrate deploy`
+  applies both after the newer migrations already there. This was checked on a thrown-away database:
+  - it ran `main` first, then this branch: both applied, and a repeat says "No pending";
+  - its schema is identical to a database migrated in name order, except the order of the
+    `OperationKind` enum values (cosmetic; no code sorts by them).
+- **The R3-a rollback preflight (doc 058) and the order:** if R3-a (`20261119090000`) is already
+  on that database, the two pickup migrations are "named before R3-a but applied after it". The
+  preflight then answers `STOP_UNVERIFIED_MIGRATION` and stops a later R3-a rollback.
+  - So where both are still missing, deploy this PR **before** R3-a.
+  - On DEV the question does not arise: pickups are there since 2026-11-16, before R3-a.
+
+### 6.2 A schema applied only in part earlier (safe handling, never automatic)
+
+A partial application shows up as a row with `finished_at IS NULL AND rolled_back_at IS NULL`.
+
+- Prisma then refuses every further `migrate deploy` (P3009).
+- The running image is unaffected: an image without pickups never touches these tables.
+- `deploy-dev.sh` stops before starting anything new.
+
+What to do, each step with the owner's approval:
+
+1. **Stop.** No automatic retry, no `migrate reset`, no restore from a backup. Keep the deploy log.
+2. **Inventory, read only:** which objects of the failed file exist — tables, functions, triggers,
+   indexes, the `code_counters` row `carrier_pickup`, and the enum values. Check that every pickup
+   table is **empty**. The new tables are written only by the pickup module, so after a failed
+   deploy they must hold 0 rows.
+3. **`20261116090000` (enum values) partly applied:** added enum values cannot be removed.
+   - Add the missing ones by hand with `ALTER TYPE "OperationKind" ADD VALUE IF NOT EXISTS …`
+     (privileged role).
+   - The end state then equals the file, so record it with
+     `prisma migrate resolve --applied 20261116090000_carrier_pickups_enum_values`.
+4. **`20261116090100` (tables) partly applied:**
+   - In one transaction, drop only the objects of this file found in step 2, and only while their
+     tables are empty. That includes the `carrier_pickup` counter row while it is still 0.
+   - Then `prisma migrate resolve --rolled-back 20261116090100_carrier_pickups`, and `migrate
+deploy` applies the whole file again.
+   - Never finish the file by hand and mark it `--applied`: a hand-made schema would carry the
+     file's checksum without being proven equal to it.
+5. **After:** step 6.1's query shows both rows finished with the checksums above, and the
+   pickup tables are empty.
+6. **Not this procedure** (stop, ask the owner): anything that holds rows, a different checksum,
+   or an object of another migration.
+
+## 7. One TEST run on DEV: label → pickup → cancellation → confirmed by PPL → new date
+
+### Preconditions, each its own GO
+
+- **PPL TEST answers** (2026-11-20 20:51 CET, read by Codex): a signed-in `GET /codelist/product`
+  gives 200 with 16 items, so the 404 of 15.–18. 11. is over.
+- **This PR is reviewed, merged** (CI on `main` green) **and on DEV** via `scripts/deploy-dev.sh`.
+  The migrations are a no-op on DEV (§6.1). This happens only after the ongoing release (#202) has
+  finished.
+- **The disk:** DEV has 7.0 GB free. The deploy builds images, so check the free space and the
+  build cache first. If it is low, stop: no prune without the owner's approval.
+- **The isolated walkthrough (§2) passed on exactly the commit to deploy.**
+  - 2026-11-20, on the revert `47fbe27` (main `32e3d47` + #188): `--repeat-each=3`, both tests
+    3/3. The run used DB `ayvo_e2e_svozr191` and ports 3200/4200/4210, with the simulation on 4195. Screenshots are in `/home/ayvo/svoz-walkthrough-20261120/`.
+  - It covers label without pickup → part ordered → cancelled → held → confirmed → planned again
+    → partial pickup, and a lost answer during an outage.
+
+### The run (one synthetic order of a synthetic hotel, never ORD-000002)
+
+What is sent to PPL TEST at run time:
+
+- one `POST /shipment/batch` (step 1);
+- one pickup order (step 2);
+- one pickup cancellation (step 3).
+
+No other POST, and nothing is ever re-sent. Record everything in a note **outside git**, without
+credentials, tokens or raw logs.
+
+| #   | Step                                                                       | Expected                                                                                                                                        | Record                                |
+| --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| 0   | Správa systému → Dopravci; Expedice → Svoz                                 | `PPL_TEST` (TEST badge), credentials "uloženo"; "Testovací prostředí dopravce – žádný skutečný svoz", sender address; "Ověřit připojení" passes | time                                  |
+| 1   | **Label:** a finished crate, a new synthetic order → "Vytvořit štítky"     | label (PDF), "Připraveno k vyzvednutí", **no pickup** for it                                                                                    | our `SHP-…`, PPL parcel number(s)     |
+| 2   | **Pickup:** select only this order, tomorrow → "Objednat svoz PPL"         | "Potvrzeno dopravcem", or "Dopravce zpracovává" → "Zjistit stav u dopravce"                                                                     | `SV-…`, PPL number, duration          |
+| 3   | **Cancellation:** "Zrušit svoz" (reason)                                   | "Storno čeká na potvrzení dopravce; balíky zůstávají blokované"; the order not selectable, another date refused                                 | time                                  |
+| 4   | **Confirmed by PPL:** "Zjistit stav u dopravce" until PPL shows `Canceled` | "Svoz zrušen dopravcem". Only PPL's `Canceled` confirms it, never the time passed or an empty read                                              | every check, time to `Canceled`       |
+| 5   | **New date:** after `Canceled`                                             | the order selectable again; a pickup for the day after tomorrow lists **the same parcel number(s)**                                             | `SV-…`; keep or cancel (decided then) |
+| 6   | Notes                                                                      | real limits of PPL TEST (refusals, `Canceled` never shown, cut-off, missing number), differences to doc 029 §11                                 | the report, not a public PR           |
+
+**Stop rules:**
+
+- An answer lost in step 1, 2 or 3 makes the request "Nejisté". Never re-send it and never start a
+  second one: only "Zjistit stav"/"Ověřit", and close it by hand only as in §8 3.
+- If `Canceled` is not shown by the end of the day, the pickup stays held. Nothing is closed by
+  hand without evidence.
+
+## 8. SHP-000002-1 (ORD-000002): the open uncertain label request
+
+**State (DEV, read 2026-11-20):**
+
+- shipment `SHP-000002` `REQUESTING`;
+- request `SHP-000002-1` `SENT` / `NO_ANSWER`, sent 2026-11-15 18:14:41 UTC, no batch id, never
+  resolved;
+- parcels `SHP-000002-1-1..3`.
+
+The POST was sent three minutes before PPL TEST started answering 404 to every signed-in call
+(15.–18. 11.).
+
+**Codex's read (2026-11-20 20:51 CET):** one `GET /shipment` for the three parcel references
+`SHP-000002-1-1..3` gave HTTP 200 with 0 records. Nothing was written and nothing was sent.
+
+**Why that is not yet a definitive "not created":**
+
+- PPL documents neither which reference `GET /shipment?CustomerReferences` matches nor how far
+  back it searches. The code says so in `ppl-gateway.ts` `poll`.
+- In a set the batch carries the shipment-level `referenceId` `SHP-000002-1`, while each item
+  carries its own CUST reference, and only the item references were read.
+- PPL TEST was in a 404 state for four days and may have reset its data. An empty answer could
+  mean "never created" as well as "no longer visible".
+
+**Supported ways, in this order:**
+
+1. **"Ověřit stav u dopravce"** in the shipment's detail (`POST
+/api/admin/orders/:code/shipment/resolve`, `shipments:prepare`).
+   - Without a batch id the PPL adapter makes **no call** and answers `UNKNOWN`. The request
+     stays `SENT` / `NO_ANSWER`.
+   - It writes only its operation record and the request's message, on DEV.
+   - It cannot decide anything, so it is not needed for this decision.
+2. **Evidence from PPL itself:** a written answer from PPL support to the prepared question
+   (`~/PPL-SVOZ-20261117.md` §4). It must say that **no batch / shipment** exists in TEST for
+   `referenceId` `SHP-000002-1` and the CUST references `SHP-000002-1-1..3`. Equally good is the
+   same check in PPL's own TEST portal by the owner. Keep it with Codex's read in the note outside
+   git.
+3. **Only with that evidence and the owner's decision: "Uzavřít nejistý požadavek ručně"**
+   (`POST /api/admin/orders/:code/shipment/abandon`, `shipments:resolve_uncertain`, ADMIN, a reason
+   that names the evidence and its date, the check "Ověřil(a) jsem u dopravce, že zásilka
+   nevznikla").
+   - The request becomes `NOT_CREATED` / `CLOSED_BY_PERSON` and the shipment `DRAFT`.
+   - It is audited as `LABELS_NOT_CREATED` with `manual: true`.
+4. **What does not happen:**
+   - no reset, and no SQL change on the request;
+   - no new label for ORD-000002, also not after step 3, unless the owner decides it separately;
+   - no `POST` "to see whether it comes back".
+
+ORD-000002 does not block §7: the pickup board offers only orders "Připraveno k vyzvednutí", and
+the uncertain request belongs to its own shipment only.
