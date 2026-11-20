@@ -867,6 +867,7 @@ export class ReturnReceiptsService {
       status === 'FILLED'
     ) {
       if (await this.orderReturns.shippedIn(tx, circulation.id)) {
+        await this.sameOrderAsR1Issue(tx, circulation.id, ctx.resolving);
         const now = new Date();
         const sortedId = await this.bottles.identifyAtReturn(tx, {
           bottleId: bottle.id,
@@ -948,6 +949,30 @@ export class ReturnReceiptsService {
       !!latest.releasedAt &&
       latest.releasedAt > issue.recordedAt;
     return recordedIn ? latest : null;
+  }
+
+  /**
+   * An R1 NOT_DELIVERED names no order, so only its timeline documents one: the delivery must come
+   * from the allocation that already held the crate when the issue was recorded. A later order of
+   * the same cycle (the first one cancelled) is another circulation: CIRCULATION_CHANGED, as an
+   * anchored R1.1 issue (doc 070 §4.1 5).
+   */
+  private async sameOrderAsR1Issue(tx: Tx, assignmentId: string, issue: IssueRow | null) {
+    if (issue?.kind !== 'NOT_DELIVERED' || issue.anchorCycleId || !issue.recordedAt) return;
+    const delivery = await this.orderReturns.deliveryOf(tx, assignmentId);
+    const allocation = delivery
+      ? await tx.orderCrateAllocation.findUnique({
+          where: { id: delivery.allocationId },
+          select: { allocatedAt: true },
+        })
+      : null;
+    if (!allocation || allocation.allocatedAt > issue.recordedAt) {
+      throw domainError(
+        409,
+        'CIRCULATION_CHANGED',
+        'This bottle is in a later circulation than the one this issue recorded',
+      );
+    }
   }
 
   /**

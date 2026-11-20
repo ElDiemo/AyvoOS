@@ -35,7 +35,7 @@ WITH r3a AS (
    '98f3cc82e92d54ea57b25d263c1515a258b20b31d12e87f6ed008d38db0acd60', 'DEPENDS_R1_1'),
   -- R1.1 follow-up: an R1 NOT_DELIVERED resolvable after its crate was freed (R1.1's SORTED rule).
   ('20261119090500_returns_r1_issue_freed_crate',
-   '7ec15ca044f79256594afe7dd249a470c86d4e8ce0fe0200e1a400fe42dd1e1c', 'DEPENDS_R1_1'),
+   'a339454da15af8399a5aaa686c69a775603c67a343095f2079b7ea903430c9ee', 'DEPENDS_R1_1'),
   -- Commissions 2a (#196): a permission in the catalogue only, no bottle table.
   ('20261119180000_finance_commissions_permission',
    '356eea2b8c6d3c16cb73e44bcf1bd4391bd5fd92e34a24f9448437d323dc1997', 'INDEPENDENT')

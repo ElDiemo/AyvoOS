@@ -100,7 +100,16 @@ Expected behaviour (migration `20261119090500_returns_r1_issue_freed_crate`, a r
 4. **Once per circulation:** "Dořešit" racing the new receipt's bottle scan, a second "Dořešit"
    or the crate scan itself (both orders) gives one `SORTED` — the same locks crate → cycle →
    bottle → issue, and the unique index `bottle_events_one_sorted_per_cycle` in the database.
-5. **Everything else keeps R1's answer** (`NOT_IN_CIRCULATION`, nothing written): an issue
+5. **Another circulation is never taken over.** The R1 issue names no order, so only its timeline
+   documents one: the delivery must come from the allocation that already held the crate when
+   the issue was recorded. The same cycle delivered by a later order (the first one cancelled) is
+   `CIRCULATION_CHANGED` — before and after its crate is freed; a bottle moved by a correction into
+   another crate answers `NOT_IN_THIS_LINE`, after that crate is freed `NOT_IN_CIRCULATION`.
+   Nothing is written; the new circulation is counted once in the new receipt after a supervisor
+   closes out the old issue (`OPEN_ISSUE` names it until then). The database refuses the same
+   `SORTED` by direct SQL (for a freed member; an active member keeps R1's database rule, so the
+   previous image after a rollback is never refused by it — the API refuses it).
+6. **Everything else keeps R1's answer** (`NOT_IN_CIRCULATION`, nothing written): an issue
    recorded only after the crate was freed, any other kind (`NOT_IN_CIRCULATION`, `UNREADABLE`),
    another release than `CRATE_RETURNED`, or a later membership of the bottle. The database
    refuses the same by direct SQL.

@@ -2,7 +2,8 @@
 -- on an R1 line of a receipt opened before R1.1) stays resolvable when a later R1.1 receipt freed
 -- its crate first. Its circulation is the membership it was recorded in: the bottle's latest
 -- assignment, made before the line, active when the issue was recorded and freed with its crate
--- (CRATE_RETURNED) only after it — delivered in that cycle's allocation. The SORTED names that
+-- (CRATE_RETURNED) only after it — delivered by the allocation that already held the crate when the
+-- issue was recorded (a later order of the same cycle is another circulation). The SORTED names that
 -- cycle on the issue's own line and resolves the issue; the membership needs no release (the
 -- commit check already accepts a member freed with its crate). Once per circulation stays the
 -- unique index bottle_events_one_sorted_per_cycle; one open issue per bottle stays as it is.
@@ -117,6 +118,7 @@ BEGIN
               AND (a."released_at" IS NULL
                    OR (r1_not_delivered_at IS NOT NULL
                        AND a."release_reason" = 'CRATE_RETURNED'
+                       AND oa."allocated_at" <= r1_not_delivered_at
                        AND a."assigned_at" <= r1_not_delivered_at AND a."released_at" > r1_not_delivered_at
                        AND NOT EXISTS (
                          SELECT 1 FROM "crate_assignments" later

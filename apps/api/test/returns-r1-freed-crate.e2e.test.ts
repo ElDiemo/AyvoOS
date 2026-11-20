@@ -3,7 +3,20 @@ import type { BottleDetail, ReturnBottleScanResult } from '@ayvo/types';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testCarrierControl } from '../src/carriers/test-carrier.js';
-import { crateFactory, createHotel, type MadeCrate } from './support/order-fixtures.js';
+import {
+  correctCrate,
+  fillingSession,
+  fillLoadCrate,
+  finishCrate,
+} from './support/labeling-fixtures.js';
+import {
+  scanCrate as allocateCrate,
+  cancelOrder,
+  crateFactory,
+  createHotel,
+  createOrder,
+  type MadeCrate,
+} from './support/order-fixtures.js';
 import {
   deliver,
   pickUp,
@@ -60,6 +73,12 @@ describe.skipIf(!hasDatabase)('an R1 NOT_DELIVERED whose crate a later receipt f
     const f = await factory.make();
     const transit = await shipCrates(t, hotel, factory.kit.productCode, [f]);
     await pickUp(t, transit);
+    const { old, box } = await oldContainer();
+    const code = await r1Issue(box.id, f.bottleIds[0]!, 'NOT_DELIVERED');
+    return { f, transit, old, box, code };
+  };
+  /** An open receipt of the previous image with its container line. */
+  const oldContainer = async () => {
     const old = await api.open();
     await api.unreadable(old.code).expect(200);
     const seed = (await api.detail(old.code)).lineDetails.find((l) => l.kind === 'BOTTLES')!;
@@ -67,8 +86,7 @@ describe.skipIf(!hasDatabase)('an R1 NOT_DELIVERED whose crate a later receipt f
       .$executeRaw`INSERT INTO "return_receipt_lines" ("receipt_id", "kind", "scanned_by", "scan_operation_id")
       SELECT "receipt_id", 'CONTAINER', "scanned_by", "scan_operation_id" FROM "return_receipt_lines" WHERE "id" = ${seed.id}::uuid`;
     const box = (await api.detail(old.code)).lineDetails.find((l) => l.kind === 'CONTAINER')!;
-    const code = await r1Issue(box.id, f.bottleIds[0]!, 'NOT_DELIVERED');
-    return { f, transit, old, box, code };
+    return { old, box };
   };
   const r1Issue = async (lineId: string, bottleId: string, kind: string) => {
     const s = ++serial;
@@ -88,6 +106,26 @@ describe.skipIf(!hasDatabase)('an R1 NOT_DELIVERED whose crate a later receipt f
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body).toMatchObject({ outcome: 'CRATE_RETURNED', freed: 2 });
     return fresh;
+  };
+  /** The complete identification on the old line: SORTED, status, the issue resolved. */
+  const identifyBySql = async (
+    tx: Db,
+    input: { bottleId: string; cycleId: string; lineId: string; issueId: string | null },
+  ) => {
+    const line = await t.prisma.returnReceiptLine.findUniqueOrThrow({
+      where: { id: input.lineId },
+    });
+    const id = randomUUID();
+    await tx.$executeRaw`INSERT INTO "bottle_events" ("id", "bottle_id", "type", "occurred_at", "actor_id", "crate_cycle_id",
+        "return_line_id", "resolves_issue_id", "operation_request_id", "payload")
+      VALUES (${id}::uuid, ${input.bottleId}::uuid, 'SORTED', now(), ${line.scannedBy}::uuid, ${input.cycleId}::uuid,
+        ${input.lineId}::uuid, ${input.issueId}::uuid, ${line.scanOperationId}::uuid, '{"outcome":"RETURNED","crate":"x"}'::jsonb)`;
+    await tx.$executeRaw`UPDATE "bottles" SET "status" = 'RETURNED' WHERE "id" = ${input.bottleId}::uuid`;
+    if (input.issueId) {
+      await tx.$executeRaw`UPDATE "return_receipt_issues" SET "resolved_at" = now(), "resolved_by" = ${line.scannedBy}::uuid,
+          "resolution" = 'IDENTIFIED', "resolve_operation_id" = ${line.scanOperationId}::uuid, "resolving_event_id" = ${id}::uuid
+        WHERE "id" = ${input.issueId}::uuid`;
+    }
   };
 
   beforeAll(async () => {
@@ -193,6 +231,112 @@ describe.skipIf(!hasDatabase)('an R1 NOT_DELIVERED whose crate a later receipt f
     expect([await sortedOf(f.bottleIds[0]!), await sortedOf(f.bottleIds[1]!)]).toEqual([[], []]);
   });
 
+  describe('the bottle provably started another circulation: the old issue never takes it over', () => {
+    /** M allocated to order 1 (not picked up), the R1 NOT_DELIVERED of M1, then order 1 cancelled. */
+    const recordedThenCancelled = async () => {
+      const m = await factory.make();
+      const first = await createOrder(t, hotel, [
+        { productCode: factory.kit.productCode, crates: 1 },
+      ]);
+      expect((await allocateCrate(t, first.code, m.crateUrl)).status).toBe(200);
+      const { old, box } = await oldContainer();
+      const code = await r1Issue(box.id, m.bottleIds[0]!, 'NOT_DELIVERED');
+      expect((await cancelOrder(t, first.code)).status).toBe(200);
+      return { m, old, box, code };
+    };
+    /** The old issue closed out by a supervisor, then the new receipt counts the new circulation. */
+    const closedOutThenCounted = async (receipt: string, url: string, code: string) => {
+      const scan = await api.scanBottle(receipt, url);
+      refused(scan, 409, 'OPEN_ISSUE');
+      expect(scan.body.details).toEqual({ issue: code });
+      await api.closeOut(code, 'WRITTEN_OFF', 'jiný oběh, stará neshoda nedoložena').expect(200);
+      expect(ok(await api.scanBottle(receipt, url))).toMatchObject({ outcome: 'IDENTIFIED' });
+      refused(await api.scanBottle(receipt, url, 'DEFECTIVE'), 409, 'ALREADY_RECEIVED');
+    };
+
+    it('the same cycle delivered by a later order: CIRCULATION_CHANGED before and after its crate is freed, nothing written (also by SQL)', async () => {
+      const { m, box, code } = await recordedThenCancelled();
+      // The same crate and cycle go out with order 2, allocated after the issue was recorded.
+      const second = await shipCrates(t, hotel, factory.kit.productCode, [m]);
+      await deliver(t, second);
+      refused(await api.identify(code, m.bottleUrls[0]!), 409, 'CIRCULATION_CHANGED');
+      const fresh = await api.open();
+      expect(ok(await api.scanCrate(fresh.code, m.crateUrl))).toMatchObject({
+        outcome: 'CRATE_RETURNED',
+      });
+      refused(await api.identify(code, m.bottleUrls[0]!), 409, 'CIRCULATION_CHANGED');
+      expect(await sortedOf(m.bottleIds[0]!)).toEqual([]);
+      expect((await issue(code)).resolvedAt).toBeNull();
+      const cycle = await cycleOf(m.crateCode);
+      const issueId = (await issue(code)).id;
+      await withPrivileged(async (db) => {
+        await expect(
+          db.$transaction((tx) =>
+            identifyBySql(tx, {
+              bottleId: m.bottleIds[0]!,
+              cycleId: cycle.id,
+              lineId: box.id,
+              issueId,
+            }),
+          ),
+        ).rejects.toThrow(/delivered member of the cycle, assigned before its line/);
+      });
+      await closedOutThenCounted(fresh.code, m.bottleUrls[0]!, code);
+      const sorted = await sortedOf(m.bottleIds[0]!);
+      expect(sorted.map((e) => e.crateCycleId)).toEqual([cycle.id]);
+      expect(sorted[0]!.returnLineId).not.toBe(box.id);
+    });
+
+    it('moved into another crate and delivered there: the old issue identifies nothing (NOT_IN_THIS_LINE, then NOT_IN_CIRCULATION); the new circulation is counted once', async () => {
+      const { m, box, code } = await recordedThenCancelled();
+      // A supervised correction moves M1 into crate T, whose circulation then goes out.
+      expect((await correctCrate(t, m.crateCode, 'reopen')).status).toBe(200);
+      const m1 = (await t.prisma.bottle.findUniqueOrThrow({ where: { id: m.bottleIds[0]! } })).code;
+      expect((await correctCrate(t, m.crateCode, 'remove-bottle', { bottle: m1 })).status).toBe(
+        200,
+      );
+      const target = await factory.make('FILLING');
+      const spare = (
+        await t.prisma.bottle.findUniqueOrThrow({ where: { id: target.bottleIds[1]! } })
+      ).code;
+      expect(
+        (await correctCrate(t, target.crateCode, 'remove-bottle', { bottle: spare })).status,
+      ).toBe(200);
+      const moved = await correctCrate(t, target.crateCode, 'add-bottle', { bottle: m1 });
+      expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+      // Proven another circulation: T's, assigned after the old line was opened.
+      refused(await api.identify(code, m.bottleUrls[0]!), 409, 'NOT_IN_THIS_LINE');
+      const fs = await fillingSession(t, 'HAND_SOAP');
+      expect((await fillLoadCrate(t, fs, target.crateUrl)).status).toBe(200);
+      const done = await finishCrate(t, fs);
+      expect(done.status, JSON.stringify(done.body)).toBe(200);
+      const tCycle = await cycleOf(target.crateCode);
+      expect(tCycle.status).toBe('FILLED');
+      const shipped = await shipCrates(t, hotel, factory.kit.productCode, [target]);
+      await deliver(t, shipped);
+      const fresh = await api.open();
+      expect(ok(await api.scanCrate(fresh.code, target.crateUrl))).toMatchObject({
+        outcome: 'CRATE_RETURNED',
+      });
+      refused(await api.identify(code, m.bottleUrls[0]!), 409, 'NOT_IN_CIRCULATION');
+      expect(await sortedOf(m.bottleIds[0]!)).toEqual([]);
+      await withPrivileged(async (db) => {
+        await expect(
+          db.$transaction(async (tx) =>
+            identifyBySql(tx, {
+              bottleId: m.bottleIds[0]!,
+              cycleId: tCycle.id,
+              lineId: box.id,
+              issueId: (await issue(code)).id,
+            }),
+          ),
+        ).rejects.toThrow(/delivered member of the cycle, assigned before its line/);
+      });
+      await closedOutThenCounted(fresh.code, m.bottleUrls[0]!, code);
+      expect((await sortedOf(m.bottleIds[0]!)).map((e) => e.crateCycleId)).toEqual([tCycle.id]);
+    });
+  });
+
   describe('concurrency (the crate row held so both requests are inside their transactions)', () => {
     const together = async (crateCode: string, calls: (() => Promise<request.Response>)[]) => {
       const [pending] = await withPrivileged(async (db) => {
@@ -267,27 +411,6 @@ describe.skipIf(!hasDatabase)('an R1 NOT_DELIVERED whose crate a later receipt f
 
   describe('database guards (direct SQL that commits)', () => {
     const fails = (p: Promise<unknown>, message: RegExp) => expect(p).rejects.toThrow(message);
-    /** The complete identification on the old line: SORTED, status, the issue resolved. */
-    const identifyBySql = async (
-      tx: Db,
-      input: { bottleId: string; cycleId: string; lineId: string; issueId: string | null },
-    ) => {
-      const line = await t.prisma.returnReceiptLine.findUniqueOrThrow({
-        where: { id: input.lineId },
-      });
-      const id = randomUUID();
-      await tx.$executeRaw`INSERT INTO "bottle_events" ("id", "bottle_id", "type", "occurred_at", "actor_id", "crate_cycle_id",
-          "return_line_id", "resolves_issue_id", "operation_request_id", "payload")
-        VALUES (${id}::uuid, ${input.bottleId}::uuid, 'SORTED', now(), ${line.scannedBy}::uuid, ${input.cycleId}::uuid,
-          ${input.lineId}::uuid, ${input.issueId}::uuid, ${line.scanOperationId}::uuid, '{"outcome":"RETURNED","crate":"x"}'::jsonb)`;
-      await tx.$executeRaw`UPDATE "bottles" SET "status" = 'RETURNED' WHERE "id" = ${input.bottleId}::uuid`;
-      if (input.issueId) {
-        await tx.$executeRaw`UPDATE "return_receipt_issues" SET "resolved_at" = now(), "resolved_by" = ${line.scannedBy}::uuid,
-            "resolution" = 'IDENTIFIED', "resolve_operation_id" = ${line.scanOperationId}::uuid, "resolving_event_id" = ${id}::uuid
-          WHERE "id" = ${input.issueId}::uuid`;
-      }
-    };
-
     it('a freed member on an R1 line only by resolving its unanchored NOT_DELIVERED recorded while it was a member; once', async () => {
       const { f, transit, box, code } = await oldReceiptWithIssue();
       await freedInNewReceipt(f, transit);
