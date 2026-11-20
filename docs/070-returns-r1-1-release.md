@@ -48,6 +48,9 @@ cycle_id)`, new unique key). No existing row is rewritten.
 New refusals (nothing written): `CRATE_DELIVERED_AFTER_RECEIPT`, `DELIVERED_AFTER_RECEIPT`,
 `CIRCULATION_CHANGED`, `LINE_NOT_EMPTIABLE`, `BOTTLE_AT_HOTEL`.
 
+Follow-up migration `20261119090500_returns_r1_issue_freed_crate` (§4.1): `bottle_events_return_rules`
+replaced once more, only its R1-line branch widened. No table, row, index or trigger changes.
+
 ## 3. Preflight before the deploy (read only, as doc 049 §4)
 
 ```sql
@@ -66,12 +69,55 @@ on another environment goes to the owner before the deploy.
 
 ## 4. Old data (doc 047 §6.3 6)
 
-| Situation at the deploy                                                   | Under R1.1                                                                                     |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Closed R1 receipts, emptied lines, `COUNT_MISMATCH`, R1 `SORTED`          | Unchanged and readable; every new rule accepts them                                            |
-| R1 `CLOSED` cycle with still active members                               | Kept active; a later bottle scan identifies them (latest assignment, delivered before receipt) |
-| Open R1 receipt with a not emptied `CRATE` (RETURNED) or `CONTAINER` line | That line keeps Vyprázdněno with its count; new scans go to the receipt's `BOTTLES` line       |
-| Open R1 `NOT_DELIVERED` issue (no anchor) on an R1 line                   | Resolved under R1's rule (the line's `scanned_at`), never anchored afterwards                  |
+| Situation at the deploy                                                   | Under R1.1                                                                                                                        |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Closed R1 receipts, emptied lines, `COUNT_MISMATCH`, R1 `SORTED`          | Unchanged and readable; every new rule accepts them                                                                               |
+| R1 `CLOSED` cycle with still active members                               | Kept active; a later bottle scan identifies them (latest assignment, delivered before receipt)                                    |
+| Open R1 receipt with a not emptied `CRATE` (RETURNED) or `CONTAINER` line | That line keeps Vyprázdněno with its count; new scans go to the receipt's `BOTTLES` line                                          |
+| Open R1 `NOT_DELIVERED` issue (no anchor) on an R1 line                   | Resolved under R1's rule (the line's `scanned_at`), never anchored afterwards — also after a later receipt freed its crate (§4.1) |
+
+### 4.1 An R1 `NOT_DELIVERED` after a later receipt freed its crate
+
+Found in the isolated trial (2026-11-19): an old receipt holds an unanchored `NOT_DELIVERED` of F1
+on its container line (F was only picked up then); F is delivered, and a new receipt scans crate F
+— F's cycle is `CLOSED`, F1's membership released `CRATE_RETURNED`. Before this follow-up F1 was
+stuck: the new receipt refused it (`OPEN_ISSUE`), "Dořešit" on the old line answered
+`NOT_IN_CIRCULATION` (R1's rule wanted a still active member), and only a close-out was left.
+
+Expected behaviour (migration `20261119090500_returns_r1_issue_freed_crate`, a replaced
+`bottle_events_return_rules` only):
+
+1. **The new receipt** still refuses F1 with `OPEN_ISSUE` and names the old issue
+   (`details.issue`); it writes nothing. The issue stays with the receipt where it was recorded.
+2. **"Dořešit" of that issue** identifies F1 in exactly the circulation the issue was recorded
+   in: the bottle's latest membership, made before the old line was opened, active when the issue
+   was recorded and freed with its crate only after it — delivered in that cycle's allocation. The
+   `SORTED` is on the old line, names F's cycle, resolves the issue; the membership keeps its
+   `CRATE_RETURNED` release (no second release). The old container counts the piece once; it is
+   emptied with its count and closed as before.
+3. **Afterwards** the new receipt answers `ALREADY_RECEIVED_ELSEWHERE` with the old receipt; a
+   replay or a rescan of "Dořešit" repeats the first result; another outcome is `ISSUE_RESOLVED`.
+4. **Once per circulation:** "Dořešit" racing the new receipt's bottle scan, a second "Dořešit"
+   or the crate scan itself (both orders) gives one `SORTED` — the same locks crate → cycle →
+   bottle → issue, and the unique index `bottle_events_one_sorted_per_cycle` in the database.
+5. **Another circulation is never taken over.** The R1 issue names no order, so only its timeline
+   documents one: the delivery must come from the allocation that already held the crate when
+   the issue was recorded. The same cycle delivered by a later order (the first one cancelled) is
+   `CIRCULATION_CHANGED` — before and after its crate is freed; a bottle moved by a correction into
+   another crate answers `NOT_IN_THIS_LINE`, after that crate is freed `NOT_IN_CIRCULATION`.
+   Nothing is written; the new circulation is counted once in the new receipt after a supervisor
+   closes out the old issue (`OPEN_ISSUE` names it until then). The database refuses the same
+   `SORTED` by direct SQL (for a freed member; an active member keeps R1's database rule, so the
+   previous image after a rollback is never refused by it — the API refuses it).
+6. **Everything else keeps R1's answer** (`NOT_IN_CIRCULATION`, nothing written): an issue
+   recorded only after the crate was freed, any other kind (`NOT_IN_CIRCULATION`, `UNREADABLE`),
+   another release than `CRATE_RETURNED`, or a later membership of the bottle. The database
+   refuses the same by direct SQL.
+
+The operating rule of the trial ("resolve a crate's old open issues before scanning that crate in
+a new receipt") is no longer needed; the order no longer matters. Rollback (§5) is unchanged: the
+migration only widens what an R1 line accepts, and the previous images never write such a
+`SORTED`.
 
 ## 5. Rollback
 
