@@ -393,10 +393,19 @@ verify_published_ports() {
 # Local checks of the public side (from this server, so NOT a proof from the internet — the
 # owner's test from outside the tailnet is): public IPv4/IPv6 :443 is closed, public :80 aborts
 # everything except the challenge directory, and the private DNS answers only DEV_DOMAIN.
+# The first global address of family $1 (4 or 6) outside tailscale0 and the Docker interfaces;
+# empty when there is none. awk reads ALL of its input and never exits early: under pipefail an
+# early `exit` let `ip` die of SIGPIPE (141) on a long interface list and stopped the deployment
+# after a successful start (DEV 2026-11-20, c34408c). A failing `ip` still fails the pipeline.
+first_public_address() {
+  ip "-$1" -o addr show scope global |
+    awk '!found && $2 != "tailscale0" && $2 !~ /^(docker|br-|veth)/ { sub(/\/.*/, "", $4); print $4; found = 1 }'
+}
+
 verify_tailnet_only() {
   local domain=${CFG[DEV_DOMAIN]} pub4 pub6 code
-  pub4="$(ip -4 -o addr show scope global | awk '$2 != "tailscale0" && $2 !~ /^(docker|br-|veth)/ { sub(/\/.*/, "", $4); print $4; exit }')"
-  pub6="$(ip -6 -o addr show scope global | awk '$2 != "tailscale0" && $2 !~ /^(docker|br-|veth)/ { sub(/\/.*/, "", $4); print $4; exit }')"
+  pub4="$(first_public_address 4)"
+  pub6="$(first_public_address 6)"
   [[ -n $pub4 ]] || die "cannot determine the public IPv4 address"
 
   STEP="verify: public IPv4 $pub4 refuses HTTPS"
