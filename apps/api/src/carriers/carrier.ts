@@ -165,6 +165,65 @@ export class CarrierRejectedError extends Error {
  */
 export class CarrierProtocolError extends Error {}
 
+/**
+ * One pickup order ("svoz", doc 029 §11): the carrier collects physical parcels at the site's
+ * registered sender address on a day. It names no parcel numbers or labels — only how many
+ * parcels; ordering it never confirms a hand-over (only the tracking or a person does).
+ */
+export interface CarrierPickupRequest {
+  /** Unique per pickup at the carrier (looked up by it after a lost answer). */
+  clientReference: string;
+  /** Our pickup code (SV-…), sent as the customer reference. */
+  pickupCode: string;
+  /** The local day of the pickup (YYYY-MM-DD). */
+  date: string;
+  /** The wished time window (HH:MM), recorded by AYVO; null when none was chosen. */
+  window: { from: string; to: string } | null;
+  parcelCount: number;
+  settings: CarrierSettingsSnapshot;
+}
+
+export type CarrierPickupOutcome =
+  /** Accepted for asynchronous processing: looked up later, never re-sent. */
+  | { kind: 'ACCEPTED'; carrierRef: string }
+  /** Still processing. */
+  | { kind: 'PENDING' }
+  /** The carrier confirms the pickup order (its own number once it gives one). */
+  | { kind: 'CONFIRMED'; orderNumber: string | null; state: string | null }
+  | { kind: 'REJECTED'; code: string; message: string }
+  /** The carrier cannot tell (yet): stays unresolved, nothing is sent again. */
+  | { kind: 'UNKNOWN'; detail: string };
+
+/** Ordering a pickup at the carrier — only carriers that document it have one. */
+export interface CarrierPickups {
+  /** The most parcels one pickup order may announce (documented by the carrier). */
+  readonly maxParcels: number;
+  /**
+   * Sends the pickup order ONCE (same rules as {@link CarrierGateway.create}): a definitive refusal
+   * throws {@link CarrierRejectedError}; any other error means the outcome is unknown.
+   */
+  order(request: CarrierPickupRequest, signal: AbortSignal): Promise<CarrierPickupOutcome>;
+  /** Looks the pickup order up by its references. Read-only at the carrier. */
+  status(
+    query: { clientReference: string; carrierRef: string | null },
+    signal: AbortSignal,
+  ): Promise<CarrierPickupOutcome>;
+  /**
+   * Asks the carrier to cancel a pickup order ONCE, by its own reference. ACCEPTED = the carrier
+   * took the request — the cancellation is confirmed only when {@link find} shows the order
+   * cancelled. A definitive refusal throws {@link CarrierRejectedError}; any other error is unknown.
+   */
+  cancel(query: { clientReference: string }, signal: AbortSignal): Promise<'ACCEPTED'>;
+  /**
+   * The pickup order with exactly this reference as the carrier shows it now (null = not shown);
+   * `cancelled` only from the carrier's documented state. Throws when the carrier cannot answer.
+   */
+  find(
+    query: { clientReference: string },
+    signal: AbortSignal,
+  ): Promise<{ orderNumber: string | null; state: string | null; cancelled: boolean } | null>;
+}
+
 export interface CarrierGateway {
   readonly code: string;
   readonly name: string;
@@ -232,6 +291,8 @@ export interface CarrierGateway {
    * cannot answer completely (an outage) — the caller keeps the last known state.
    */
   track(query: { parcels: string[] }, signal: AbortSignal): Promise<CarrierTracking>;
+  /** Pickup ordering (doc 029 §11), where the carrier documents it; absent otherwise. */
+  readonly pickups?: CarrierPickups;
 }
 
 export const CARRIERS = Symbol('CARRIERS');
