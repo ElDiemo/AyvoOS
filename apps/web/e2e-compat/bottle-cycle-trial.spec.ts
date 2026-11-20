@@ -28,8 +28,13 @@ import {
  *    P1 — a receipt is opened only when the return is unloaded: crate K freed with its scan,
  *    8 of 10 bottles on their own (2 stay at the hotel); crate E, delivered by the carrier after
  *    that receipt was opened, is refused there with nothing written → closed, a new receipt for
- *    the E unload; E1's old open issue resolved on the old receipt; the old R1 lines emptied with
- *    a count (migration plan) and closed.
+ *    the E/F unload. The old open issues are resolved on the old receipt — E1 before its crate is
+ *    freed, F1 after it (#208): each counted once in the circulation its issue recorded, a rescan
+ *    in the new receipt never counts it again.
+ * 3. G1's old issue was recorded while G was allocated to an order that was then cancelled; G went
+ *    out with a later order (another circulation). The old issue never takes it over
+ *    (CIRCULATION_CHANGED, nothing written); after a supervisor's close-out the new receipt counts
+ *    G1 once. The old R1 lines emptied with a count (migration plan) and closed.
  * Every step: the detector, a screenshot and the result in AYVO_TRIAL_OUT (default
  * test-results/bottle-cycle-trial). Run: doc 070 §8 (playwright.compat.config.ts).
  */
@@ -108,7 +113,7 @@ async function carrier(request: APIRequestContext, order: string, delivered: boo
 
 /** Filled crates (new build), an order per group, shipped; `delivered` groups delivered. */
 async function seed(request: APIRequestContext) {
-  const names = ['A', 'C', 'K', 'E', 'F'];
+  const names = ['A', 'C', 'K', 'E', 'F', 'G'];
   const printed = await printedBottles(request, `zkouska-obeh-${Date.now()}`, names.length * C);
   const kit = await labelingSetup(request, {
     versionId: printed.versionId,
@@ -188,7 +193,7 @@ async function seed(request: APIRequestContext) {
   ).code;
   const today = (await json<{ today: string }>(await request.get('/api/admin/orders/calendar')))
     .today;
-  const ship = async (group: Crate[]) => {
+  const allocate = async (group: Crate[]) => {
     const order = (
       await json<{ code: string }>(
         await request.post('/api/admin/orders', {
@@ -207,6 +212,10 @@ async function seed(request: APIRequestContext) {
           data: { requestId: crypto.randomUUID(), scannedValue: c.url },
         }),
       );
+    return order;
+  };
+  const ship = async (group: Crate[]) => {
+    const order = await allocate(group);
     await json(
       await request.post(`/api/admin/orders/${order}/complete-and-label`, {
         data: { requestId: crypto.randomUUID(), printerId: null },
@@ -223,7 +232,9 @@ async function seed(request: APIRequestContext) {
   await carrier(request, delivered, true);
   const late = await ship([crates.E!, crates.F!]);
   await carrier(request, late, false);
-  return { crates, hotel, late };
+  // G: allocated to an order (not picked up yet) — that order is cancelled later.
+  const cancelled = await allocate([crates.G!]);
+  return { crates, hotel, late, cancelled, ship };
 }
 
 const serverPid = () =>
@@ -264,8 +275,8 @@ test('DEV trial on an isolated reproducible seed: R1 rows of the previous releas
   mkdirSync(OUT, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   const context = await browser.newContext({ storageState: 'e2e/.auth/admin.json' });
-  const { crates, hotel, late } = await seed(context.request);
-  const { A, C: c, K, E, F } = crates as Record<'A' | 'C' | 'K' | 'E' | 'F', Crate>;
+  const { crates, hotel, late, cancelled, ship } = await seed(context.request);
+  const { A, C: c, K, E, F, G } = crates as Record<'A' | 'C' | 'K' | 'E' | 'F' | 'G', Crate>;
   expect(await step(null, 'seed')).toEqual(ZERO);
 
   // --- 1. The previous release writes the R1 returns (its own process, same database) --------
@@ -331,6 +342,15 @@ test('DEV trial on an isolated reproducible seed: R1 rows of the previous releas
         }),
       ),
     ).toMatchObject({ outcome: 'ISSUE_RECORDED', code: 'NOT_DELIVERED' });
+    // G1 too (G allocated to an order that is cancelled later).
+    const g1 = await json<{ outcome: string; code: string; issue: { code: string } }>(
+      await post(`/receipts/${open.code}/lines/${box}/bottles`, {
+        scannedValue: G.bottles[0],
+        outcome: 'GOOD',
+      }),
+    );
+    expect(g1).toMatchObject({ outcome: 'ISSUE_RECORDED', code: 'NOT_DELIVERED' });
+    legacy.g1Issue = g1.issue.code;
     legacy.closed = closed.code;
     legacy.open = open.code;
     for (const code of [closed.code, open.code])
@@ -429,9 +449,8 @@ test('DEV trial on an isolated reproducible seed: R1 rows of the previous releas
   }
   await scanBottle(page, E.bottles[0]!);
   await expect(message(page)).toContainText('Lahev už byla přijata v jiném příjmu');
-  // FINDING (migration window, R1 data): F is freed while F1 still has its OLD unanchored
-  // NOT_DELIVERED. F1 is then refused here (open issue) and the old issue can no longer identify
-  // it (its crate membership has ended): only a supervisor's close-out remains.
+  // F is freed while F1 still has its OLD unanchored NOT_DELIVERED (the finding of the first run,
+  // fixed by #208): F1 is refused here and the old issue names it.
   await scanCrate(page, F.url);
   await expect(page.getByTestId(`return-line-${F.code}`).getByTestId('line-freed')).toContainText(
     'ukončena vazba 10 lahví',
@@ -449,17 +468,101 @@ test('DEV trial on an isolated reproducible seed: R1 rows of the previous releas
   );
   await step(page, 'p1-new-receipt-e-f');
 
+  // "Dořešit" on the old receipt: F1 counted once, in F's delivered cycle, on the old line.
   await page.goto(`/production/cycle/returns/${legacy.open}`);
-  const before = await detector();
   await identify(F.bottles[0]!);
-  await expect(message(page)).toContainText('Lahev není v oběhu – neshoda zůstává otevřená.');
-  expect(await detector()).toEqual(before);
-  await step(page, 'finding-f1-stuck');
+  await expect(message(page)).toContainText('Vrácená, čeká na mytí');
+  const f1 = `(SELECT "id" FROM "bottles" WHERE "public_token" = '${F.bottles[0]!.split('/').pop()}')`;
+  const sortedF1 = async () =>
+    e2eRows<{ crate: string; receipt: string }>(
+      `SELECT cr."code" AS crate, r."code" AS receipt FROM "bottle_events" e
+         JOIN "crate_cycles" c ON c."id" = e."crate_cycle_id"
+         JOIN "crates" cr ON cr."id" = c."crate_id"
+         JOIN "return_receipt_lines" l ON l."id" = e."return_line_id"
+         JOIN "return_receipts" r ON r."id" = l."receipt_id"
+        WHERE e."bottle_id" = ${f1} AND e."type" = 'SORTED'`,
+    );
+  const once = await sortedF1();
+  expect(once).toHaveLength(1);
+  expect(once[0]).toEqual({ crate: F.code, receipt: legacy.open });
+  await step(page, 'old-r1-f1-identified-after-crate-freed', once);
+  // A rescan in the new receipt never counts it again; nothing is written.
+  await page.goto(`/production/cycle/returns/${eReceipt}`);
+  const beforeRescan = await detector();
+  await scanBottle(page, F.bottles[0]!);
+  await expect(message(page)).toContainText('Lahev už byla přijata v jiném příjmu');
+  await expect(page.getByTestId('receipt-counts')).toHaveText(
+    'Bedny 2 · přijaté lahve 18 (z toho ke skartaci 0) · nečitelné 0',
+  );
+  expect(await detector()).toEqual(beforeRescan);
+  expect(await sortedF1()).toEqual(once);
+  await step(page, 'f1-rescan-not-counted');
 
-  // The old R1 lines emptied with a count (the migration plan), then closed; F1's issue stays open.
+  // --- 3. G1: the bottle provably started another circulation -------------------------------
+  // G's first order is cancelled; G goes out with a later order and is delivered (P1: unloaded,
+  // then a new receipt).
+  await json(
+    await context.request.post(`/api/admin/orders/${cancelled}/cancel`, {
+      data: { requestId: crypto.randomUUID(), reason: 'Zkouška: storno před vyzvednutím' },
+    }),
+  );
+  const again = await ship([G]);
+  await carrier(context.request, again, true);
+  await page.goto('/production/cycle/returns');
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  await expect(page).not.toHaveURL(new RegExp(`(${kReceipt}|${eReceipt})$`));
+  await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
+  const gReceipt = page.url().split('/').pop()!;
+  await scanCrate(page, G.url);
+  await expect(message(page)).toContainText(`Bedna ${G.code} přijata a uvolněna`);
+  for (const u of G.bottles.slice(1)) {
+    await scanBottle(page, u);
+    await expect(message(page)).toContainText('Vrácená, čeká na mytí');
+  }
+  // The old issue does not take over G's later circulation: nothing written.
+  await page.goto(`/production/cycle/returns/${legacy.open}`);
+  const beforeG = await detector();
+  await identify(G.bottles[0]!);
+  await expect(message(page)).toContainText(
+    'Lahev je už v dalším oběhu, než který neshoda zaznamenala – neshoda zůstává otevřená.',
+  );
+  expect(await detector()).toEqual(beforeG);
+  const g1 = `(SELECT "id" FROM "bottles" WHERE "public_token" = '${G.bottles[0]!.split('/').pop()}')`;
+  const sortedG1 = () =>
+    e2eRows<{ n: bigint }>(
+      `SELECT count(*) AS n FROM "bottle_events" WHERE "bottle_id" = ${g1} AND "type" = 'SORTED'`,
+    );
+  expect(Number((await sortedG1())[0]!.n)).toBe(0);
+  await step(page, 'g1-old-issue-refused-circulation-changed');
+  // The new receipt names the open issue; a supervisor closes it out; then G1 is counted once.
+  await page.goto(`/production/cycle/returns/${gReceipt}`);
+  await scanBottle(page, G.bottles[0]!);
+  await expect(message(page)).toContainText(
+    'Lahev má otevřenou neshodu – dořešte ji u té neshody.',
+  );
+  await json(
+    await context.request.post(`/api/admin/returns/issues/${legacy.g1Issue}/close-out`, {
+      data: {
+        requestId: crypto.randomUUID(),
+        resolution: 'WRITTEN_OFF',
+        reason: 'Zkouška: lahev v pozdějším oběhu, stará neshoda nedoložena',
+      },
+    }),
+  );
+  await scanBottle(page, G.bottles[0]!);
+  await expect(message(page)).toContainText('Vrácená, čeká na mytí');
+  await scanBottle(page, G.bottles[0]!);
+  await expect(page.getByTestId('receipt-counts')).toHaveText(
+    'Bedny 1 · přijaté lahve 10 (z toho ke skartaci 0) · nečitelné 0',
+  );
+  expect(Number((await sortedG1())[0]!.n)).toBe(1);
+  await step(page, 'g1-counted-once-in-new-circulation');
+
+  await page.goto(`/production/cycle/returns/${legacy.open}`);
+  // The old R1 lines emptied with a count (the migration plan), then closed.
   for (const [testId, count] of [
     [`return-line-${c.code}`, '1'],
-    ['return-line-box-2', '2'],
+    ['return-line-box-2', '3'],
   ] as const) {
     const line = page.getByTestId(testId);
     await line
@@ -474,15 +577,15 @@ test('DEV trial on an isolated reproducible seed: R1 rows of the previous releas
   await expect(page.getByTestId('receipt-state')).toContainText('Uzavřený');
   await step(page, 'old-r1-emptied-and-closed');
 
-  // Every bottle once: A 10 and C1 (R1), K 8, E 10, F 9 — 2 of K at the hotel, F1 open.
+  // Every bottle once: A 10 and C1 (R1), K 8, E 10, F 10, G 10 — 2 of K at the hotel.
   const counted = await e2eRows<{ n: bigint }>(
     `SELECT count(DISTINCT b."id") AS n FROM "bottles" b WHERE b."status" = 'RETURNED'`,
   );
   await page.goto('/production/cycle/returns');
   await step(page, 'overview', {
-    receipts: { ...legacy, k: kReceipt, ef: eReceipt },
+    receipts: { ...legacy, k: kReceipt, ef: eReceipt, g: gReceipt },
     returnedBottles: Number(counted[0]!.n),
   });
-  expect(Number(counted[0]!.n)).toBe(10 + 1 + 8 + 10 + 9);
+  expect(Number(counted[0]!.n)).toBe(10 + 1 + 8 + 10 + 10 + 10);
   await context.close();
 });
