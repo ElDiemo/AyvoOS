@@ -39,6 +39,8 @@ other DEV units.
 ```bash
 export DEV_TAILNET_IPV4="$(tailscale ip -4)"
 export PORTAL_IMAGE_TAG="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+# The image's source revision (PROD's --portal requires it; the checkout must be clean).
+test -z "$(git status --porcelain)" && export PORTAL_IMAGE_REVISION="$(git rev-parse HEAD)"
 # A shell export must not override the approved server-only values.
 unset DEV_PORTAL_DOMAIN PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN
 portal_compose=(docker compose -f deploy/dev/compose.yml
