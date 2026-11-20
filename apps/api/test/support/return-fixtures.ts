@@ -95,7 +95,7 @@ export async function deliver(t: TestApp, shipped: ShippedOrder) {
   expect(order.status).toBe('DELIVERED');
 }
 
-/** The return intake through its API (superuser app, active site MAIN). */
+/** The return intake through its API (superuser app, active site MAIN; R1.1, doc 047 §6.3). */
 export function returnsApi(t: TestApp) {
   const post = (path: string, body: object) =>
     http(t)
@@ -111,19 +111,16 @@ export function returnsApi(t: TestApp) {
     detail: async (code: string) =>
       (await http(t).get(`/api/admin/returns/receipts/${code}`).expect(200))
         .body as ReturnReceiptDetail,
-    scanCrate: (code: string, crateUrl: string, requestId = randomUUID()) =>
+    scanCrate: (code: string, crateUrl: string, requestId: string = randomUUID()) =>
       post(`/receipts/${code}/crates`, { requestId, scannedValue: crateUrl }),
-    container: (code: string) => post(`/receipts/${code}/containers`, {}),
+    /** R1.1: a bottle scan needs no line — it goes to the receipt's BOTTLES line. */
     scanBottle: (
       code: string,
-      lineId: string,
       url: string,
       outcome: 'GOOD' | 'DEFECTIVE' = 'GOOD',
       requestId = randomUUID(),
-    ) =>
-      post(`/receipts/${code}/lines/${lineId}/bottles`, { requestId, scannedValue: url, outcome }),
-    unreadable: (code: string, lineId: string) =>
-      post(`/receipts/${code}/lines/${lineId}/unreadable`, {}),
+    ) => post(`/receipts/${code}/bottles`, { requestId, scannedValue: url, outcome }),
+    unreadable: (code: string) => post(`/receipts/${code}/unreadable`, {}),
     pumps: (code: string, defective: number, reason: string | null = null) =>
       post(`/receipts/${code}/pumps`, { defective, reason }),
     empty: (code: string, lineId: string, physicalCount: number, requestId = randomUUID()) =>

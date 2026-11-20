@@ -42,7 +42,7 @@ for (const width of [390, 1440] as const) {
     await expect(page.getByTestId('cycle-site')).toContainText('CZ-PREROV-01');
     const steps = page.getByTestId('cycle-steps');
     await expect(steps).toContainText('Krok 1 · Příjem vratek');
-    await expect(steps).toContainText('pípáte vrácenou bednu');
+    await expect(steps).toContainText('pípnete vrácenou bednu (tím se uvolní)');
     await expect(steps).toContainText('Krok 2 · Po mytí');
     await expect(steps).toContainText('potvrzujete umytou a zkontrolovanou lahev');
     await expect(page.getByTestId('cycle-station')).toHaveAttribute('href', '/production/station');

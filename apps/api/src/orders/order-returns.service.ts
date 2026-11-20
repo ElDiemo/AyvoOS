@@ -25,8 +25,44 @@ export class OrderReturnsService {
         },
       },
     });
-    if (!allocation || !allocation.parcels.some((p) => p.progress?.deliveredAt)) return null;
-    return { id: allocation.id, order: allocation.order };
+    const deliveredAt = allocation?.parcels.find((p) => p.progress?.deliveredAt)?.progress
+      ?.deliveredAt;
+    if (!allocation || !deliveredAt) return null;
+    return { id: allocation.id, order: allocation.order, deliveredAt };
+  }
+
+  /**
+   * R1.1 (doc 047 §6.3 2): the delivery of the allocation (live or completed) that recorded this
+   * assignment at picking — its order and when the carrier delivered it — or null.
+   */
+  async deliveryOf(db: Prisma.TransactionClient, assignmentId: string) {
+    const row = await db.orderAllocationBottle.findFirst({
+      where: { assignmentId, allocation: { releasedAt: null } },
+      select: {
+        allocation: {
+          select: {
+            id: true,
+            order: { select: { code: true } },
+            parcels: {
+              where: { shipment: { status: { not: 'CANCELLED' } } },
+              select: { progress: { select: { deliveredAt: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!row) return null;
+    const deliveredAt =
+      row.allocation.parcels.find((p) => p.progress?.deliveredAt)?.progress?.deliveredAt ?? null;
+    return { allocationId: row.allocation.id, orderCode: row.allocation.order.code, deliveredAt };
+  }
+
+  /** The cycle's live (neither released nor completed) allocation, for a NOT_DELIVERED anchor. */
+  async liveAllocation(db: Prisma.TransactionClient, cycleId: string) {
+    return db.orderCrateAllocation.findFirst({
+      where: { cycleId, releasedAt: null, completedAt: null },
+      select: { id: true },
+    });
   }
 
   /** Completed once by its crate line: it stays the order's history, no longer holding the crate. */
@@ -83,5 +119,55 @@ export class OrderReturnsService {
           shipped: allocation._count.bottles,
         }
       : null;
+  }
+  /**
+   * For the bottle view (doc 048 §3.0a, read only): each bottle's latest live (never released)
+   * allocation recorded at picking — its order, the hotel of the order, the crate cycle and the
+   * carrier's progress of its parcel (a cancelled shipment is ignored). Bottles never shipped are
+   * absent.
+   */
+  async lastShipments(db: Prisma.TransactionClient, bottleIds: readonly string[]) {
+    const rows = await db.orderAllocationBottle.findMany({
+      where: { bottleId: { in: [...bottleIds] }, allocation: { releasedAt: null } },
+      select: {
+        bottleId: true,
+        allocation: {
+          select: {
+            allocatedAt: true,
+            cycleId: true,
+            cycle: { select: { status: true } },
+            order: { select: { code: true, hotelName: true } },
+            parcels: {
+              where: { shipment: { status: { not: 'CANCELLED' } } },
+              select: { progress: { select: { pickedUpAt: true, deliveredAt: true } } },
+            },
+          },
+        },
+      },
+    });
+    const latest = new Map<string, (typeof rows)[number]['allocation']>();
+    for (const r of rows) {
+      const seen = latest.get(r.bottleId);
+      if (!seen || r.allocation.allocatedAt > seen.allocatedAt)
+        latest.set(r.bottleId, r.allocation);
+    }
+    return new Map(
+      [...latest].map(([bottleId, a]) => {
+        const delivered = a.parcels
+          .map((p) => p.progress?.deliveredAt ?? null)
+          .find((d): d is Date => d !== null);
+        return [
+          bottleId,
+          {
+            cycleId: a.cycleId,
+            cycleStatus: a.cycle.status,
+            orderCode: a.order.code,
+            hotelName: a.order.hotelName,
+            pickedUp: a.parcels.some((p) => p.progress?.pickedUpAt),
+            deliveredAt: delivered ?? null,
+          },
+        ] as const;
+      }),
+    );
   }
 }
