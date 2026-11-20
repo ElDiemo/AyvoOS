@@ -208,10 +208,14 @@ deploy` applies the whole file again.
 - **PPL TEST answers** (2026-11-20 20:51 CET, read by Codex): a signed-in `GET /codelist/product`
   gives 200 with 16 items, so the 404 of 15.–18. 11. is over.
 - **This PR is reviewed, merged** (CI on `main` green) **and on DEV** via `scripts/deploy-dev.sh`.
-  The migrations are a no-op on DEV (§6.1). This happens only after the ongoing release (#202) has
-  finished.
-- **The disk:** DEV has 7.0 GB free. The deploy builds images, so check the free space and the
-  build cache first. If it is low, stop: no prune without the owner's approval.
+  The migrations are a no-op on DEV (§6.1). The release of #202 is already on DEV (api/web/finance
+  `32e3d47`, 2026-11-20 about 19:56–19:59 UTC), so this deploy comes after it.
+- **The disk:** after the #202 release, DEV has **4.8 GiB** free (read 2026-11-20 about 21:00 UTC;
+  the 7.0 GB read before it is outdated).
+  - The deploy builds images, so **stop before the build** until the owner has decided how much
+    reserve is needed and how to get it.
+  - Nothing is removed without the owner's approval: no prune, and no deletion of worktrees or
+    databases.
 - **The isolated walkthrough (§2) passed on exactly the commit to deploy.**
   - 2026-11-20, on the revert `47fbe27` (main `32e3d47` + #188): `--repeat-each=3`, both tests
     3/3. The run used DB `ayvo_e2e_svozr191` and ports 3200/4200/4210, with the simulation on 4195. Screenshots are in `/home/ayvo/svoz-walkthrough-20261120/`.
@@ -220,31 +224,48 @@ deploy` applies the whole file again.
 
 ### The run (one synthetic order of a synthetic hotel, never ORD-000002)
 
-What is sent to PPL TEST at run time:
+**Business operations at PPL TEST, at most four,** each a new operation with its own reference:
 
-- one `POST /shipment/batch` (step 1);
-- one pickup order (step 2);
-- one pickup cancellation (step 3).
+| #   | Operation                                                                 | Step                  | Reference                                   |
+| --- | ------------------------------------------------------------------------- | --------------------- | ------------------------------------------- |
+| 1   | label: `POST /shipment/batch`                                             | 1                     | the request `SHP-…-1` (parcels `SHP-…-1-n`) |
+| 2   | pickup order                                                              | 2                     | the pickup's own `SV-…`                     |
+| 3   | cancellation of that pickup                                               | 3                     | the same `SV-…`                             |
+| 4   | **new pickup** for the same parcels, only **after** PPL showed `Canceled` | 5 (full variant only) | a **new** `SV-…`                            |
 
-No other POST, and nothing is ever re-sent. Record everything in a note **outside git**, without
+- **Not counted:** obtaining the authentication token and the reads, i.e. "Zjistit stav" /
+  "Ověřit" and any automatic polling.
+- **Forbidden in every variant:** sending the same operation again after an uncertain answer, and
+  replacing an uncertain operation by a new one. An uncertain operation is only looked up (stop
+  rules below).
+- **No fifth operation:** the new pickup of step 5 is not cancelled in this run. The TEST
+  environment carries nothing, and a cancellation would be a separate decision by the owner.
+- **Short variant (three operations):** in step 5, only check that the order is selectable again
+  for a new date and that the form lists the same parcel numbers. Do **not** send the new pickup.
+  Choose the variant before the run.
+
+Nothing is ever re-sent. Record everything in a note **outside git**, without
 credentials, tokens or raw logs.
 
-| #   | Step                                                                       | Expected                                                                                                                                        | Record                                |
-| --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| 0   | Správa systému → Dopravci; Expedice → Svoz                                 | `PPL_TEST` (TEST badge), credentials "uloženo"; "Testovací prostředí dopravce – žádný skutečný svoz", sender address; "Ověřit připojení" passes | time                                  |
-| 1   | **Label:** a finished crate, a new synthetic order → "Vytvořit štítky"     | label (PDF), "Připraveno k vyzvednutí", **no pickup** for it                                                                                    | our `SHP-…`, PPL parcel number(s)     |
-| 2   | **Pickup:** select only this order, tomorrow → "Objednat svoz PPL"         | "Potvrzeno dopravcem", or "Dopravce zpracovává" → "Zjistit stav u dopravce"                                                                     | `SV-…`, PPL number, duration          |
-| 3   | **Cancellation:** "Zrušit svoz" (reason)                                   | "Storno čeká na potvrzení dopravce; balíky zůstávají blokované"; the order not selectable, another date refused                                 | time                                  |
-| 4   | **Confirmed by PPL:** "Zjistit stav u dopravce" until PPL shows `Canceled` | "Svoz zrušen dopravcem". Only PPL's `Canceled` confirms it, never the time passed or an empty read                                              | every check, time to `Canceled`       |
-| 5   | **New date:** after `Canceled`                                             | the order selectable again; a pickup for the day after tomorrow lists **the same parcel number(s)**                                             | `SV-…`; keep or cancel (decided then) |
-| 6   | Notes                                                                      | real limits of PPL TEST (refusals, `Canceled` never shown, cut-off, missing number), differences to doc 029 §11                                 | the report, not a public PR           |
+| #   | Step                                                                       | Expected                                                                                                                                                                                                 | Record                                          |
+| --- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| 0   | Správa systému → Dopravci; Expedice → Svoz                                 | `PPL_TEST` (TEST badge), credentials "uloženo"; "Testovací prostředí dopravce – žádný skutečný svoz", sender address; "Ověřit připojení" passes                                                          | time                                            |
+| 1   | **Label:** a finished crate, a new synthetic order → "Vytvořit štítky"     | label (PDF), "Připraveno k vyzvednutí", **no pickup** for it                                                                                                                                             | our `SHP-…`, PPL parcel number(s)               |
+| 2   | **Pickup:** select only this order, tomorrow → "Objednat svoz PPL"         | "Potvrzeno dopravcem", or "Dopravce zpracovává" → "Zjistit stav u dopravce"                                                                                                                              | `SV-…`, PPL number, duration                    |
+| 3   | **Cancellation:** "Zrušit svoz" (reason)                                   | "Storno čeká na potvrzení dopravce; balíky zůstávají blokované"; the order not selectable, another date refused                                                                                          | time                                            |
+| 4   | **Confirmed by PPL:** "Zjistit stav u dopravce" until PPL shows `Canceled` | "Svoz zrušen dopravcem". Only PPL's `Canceled` confirms it, never the time passed or an empty read                                                                                                       | every check, time to `Canceled`                 |
+| 5   | **New date:** after `Canceled`                                             | the order selectable again; the form for the day after tomorrow lists **the same parcel number(s)**. Full variant: "Objednat svoz PPL" once (operation 4, new `SV-…`), kept. Short variant: nothing sent | the variant; full: the new `SV-…` and its state |
+| 6   | Notes                                                                      | real limits of PPL TEST (refusals, `Canceled` never shown, cut-off, missing number), differences to doc 029 §11                                                                                          | the report, not a public PR                     |
 
 **Stop rules:**
 
 - An answer lost in step 1, 2 or 3 makes the request "Nejisté". Never re-send it and never start a
   second one: only "Zjistit stav"/"Ověřit", and close it by hand only as in §8 3.
 - If `Canceled` is not shown by the end of the day, the pickup stays held. Nothing is closed by
-  hand without evidence.
+  hand without evidence, and step 5 does not happen.
+- **This run says nothing about SHP-000002-1.** Its date and its results (a label created, a
+  pickup confirmed or cancelled) neither confirm nor resolve the old uncertain request. That one
+  is decided only as in §8.
 
 ## 8. SHP-000002-1 (ORD-000002): the open uncertain label request
 
