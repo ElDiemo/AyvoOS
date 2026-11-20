@@ -205,23 +205,7 @@ export function ReceiptWorkspace({
       {open && (
         <Card>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <button
-              type="button"
-              className={buttonClass.secondary}
-              disabled={locked}
-              onClick={() =>
-                run(`pump:${receipt.defectivePumps}`, async (requestId) => {
-                  await apiSend('POST', `${base}/pumps`, returnReceiptDetailSchema, {
-                    requestId,
-                    defective: 1,
-                    reason: null,
-                  });
-                  return null;
-                })
-              }
-            >
-              {t.receipt.pumps}
-            </button>
+            <PumpWriteOff base={base} busy={locked} run={run} />
             <div className="flex flex-col items-start gap-1 sm:items-end">
               <button
                 type="button"
@@ -573,5 +557,101 @@ function IssueRow({
         </form>
       )}
     </li>
+  );
+}
+
+/**
+ * "Odepsat pumpičky" (doc 047 §6.2, step P): one count X of used pumps written off in this open
+ * receipt — linked to no bottle or crate, never a stock movement (the existing RETURN_PUMP_COUNT).
+ * One request id per intended entry, made when the operator confirms X and kept until a definite
+ * answer: it never depends on the shown total, so "Zkusit znovu" after an uncertain answer is the
+ * same request even when the total changed meanwhile. An unconfirmed entry is shown apart and
+ * blocks a second one until it is retried or dropped.
+ */
+function PumpWriteOff({ base, busy, run }: { base: string; busy: boolean; run: Run }) {
+  const [value, setValue] = useState('');
+  const [entry, setEntry] = useState<{ id: string; count: number; uncertain: boolean } | null>(
+    null,
+  );
+  const count = Number(value);
+  const valid = /^\d{1,4}$/.test(value) && count >= 1 && count <= 1000;
+  const submit = async (e: { id: string; count: number }) => {
+    setEntry({ ...e, uncertain: false });
+    const result = await run(
+      `pumps:${e.id}`,
+      async (requestId) => {
+        await apiSend('POST', `${base}/pumps`, returnReceiptDetailSchema, {
+          requestId,
+          defective: e.count,
+          reason: null,
+        });
+        return t.receipt.pumpsDone(e.count);
+      },
+      t.receipt.pumpsEntry(e.count),
+    );
+    if (result === 'uncertain') setEntry({ ...e, uncertain: true });
+    else {
+      setEntry(null);
+      if (result === 'done') setValue('');
+    }
+  };
+  return (
+    <div className="flex flex-col gap-2" data-testid="pump-write-off">
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(ev) => {
+          ev.preventDefault();
+          if (!valid || entry) return;
+          void submit({ id: crypto.randomUUID(), count });
+        }}
+      >
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium text-stone-700">{t.receipt.pumps}</span>
+          <input
+            className={`${inputClass} w-28`}
+            inputMode="numeric"
+            name="pumps"
+            value={value}
+            disabled={!!entry}
+            onChange={(e) => setValue(e.target.value.trim())}
+          />
+        </label>
+        <button
+          type="submit"
+          className={buttonClass.secondary}
+          disabled={busy || !valid || !!entry}
+        >
+          {t.receipt.pumpsSubmit}
+        </button>
+      </form>
+      <p className="text-xs text-stone-500">{t.receipt.pumpsHelp}</p>
+      {entry?.uncertain && (
+        <div
+          role="alert"
+          className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+          data-testid="pump-unconfirmed"
+        >
+          <span>{t.receipt.pumpsUnconfirmed(entry.count)}</span>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={buttonClass.secondary}
+              disabled={busy}
+              onClick={() => void submit(entry)}
+            >
+              {t.retry}
+            </button>
+            <button
+              type="button"
+              className={buttonClass.secondary}
+              disabled={busy}
+              onClick={() => setEntry(null)}
+            >
+              {t.unconfirmed.dismiss}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

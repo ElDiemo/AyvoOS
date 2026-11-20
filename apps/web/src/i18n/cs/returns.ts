@@ -65,8 +65,15 @@ export const returnsCs = {
     scanCratePlaceholder: 'QR bedny',
     addCrate: 'Přidat bednu',
     addContainer: 'Krabice bez kódu',
-    pumps: 'Vadná pumpička −1',
-    pumpsCount: (n: number) => `Vadné pumpičky: ${n}`,
+    pumps: 'Odepsat pumpičky (ks)',
+    pumpsSubmit: 'Zapsat odpis',
+    pumpsHelp:
+      'Použité pumpičky vyřazené při tomto příjmu, jedním číslem. Nevážou se k lahvi ani bedně a nic se neodepisuje ze skladu.',
+    pumpsDone: (n: number) => `Odepsáno pumpiček: ${n}`,
+    pumpsEntry: (n: number) => `Odpis ${n} ks`,
+    pumpsUnconfirmed: (n: number) =>
+      `Výsledek nepotvrzený: odpis ${n} ks. „Zkusit znovu“ pošle tentýž zápis – nezapíše se dvakrát.`,
+    pumpsCount: (n: number) => `Odepsané pumpičky: ${n}`,
     close: 'Uzavřít příjem',
     closeHint: 'Příjem lze uzavřít až po vyprázdnění všech kontejnerů.',
     closed: 'Příjem je uzavřený. Neshody lze dořešit i teď.',
