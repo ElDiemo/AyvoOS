@@ -61,6 +61,107 @@ later build cannot pass. On success the deployment log records `portal_image=` a
 `portal_image_id=`. Ordinary staff redeploys with an already active portal and no
 `PORTAL_IMAGE_TAG` do not check the portal.
 
+## Keep the running Caddy's source
+
+The next deployment first backs up the running edge (`scripts/dev-edge-backup.sh`) and finds its
+Compose file only through Caddy's own labels (`com.docker.compose.project.working_dir` and
+`…config_files`). Caddy runs from one of two sources, and each must stay intact while it runs:
+
+- **a deploy checkout**: the label is `<checkout>/deploy/dev`, written when `deploy-dev.sh`
+  recreated Caddy from that checkout;
+- **a verified edge backup**: the label is a backup directory
+  `/opt/ayvo/backups/dev-preview/edge-before-*`, written by `dev-edge-backup.sh restore`.
+
+Neither the last `SUCCESS` line nor Caddy's image tag says which commit Caddy runs from:
+`deploy-dev.sh` switches Caddy before its verification and writes `SUCCESS` only afterwards, so a
+run whose verification failed (`FAILED step=verify…`) can leave Caddy on its new checkout while the
+last `SUCCESS` names an older one. The image is plain `caddy:<version>`, and the label
+`com.ayvo.edge-commit` is the last change of `deploy/dev`, not the release's HEAD.
+
+**0. Read-only check before every deployment.** It changes nothing on DEV and stops on any doubt;
+a failing `docker` or `git` is a stop, never a clean result. It reads Caddy exactly as
+`dev-edge-backup.sh` does: only the one **running** `caddy` service of the project (never a
+container by name — `docker inspect ayvo-dev-preview-caddy-1` also answers for a stopped one), and
+the file in its `config_files` label, which is the file the backup saves. Both sources create Caddy
+from `<working_dir>/compose.yml` (`deploy-dev.sh` and `dev-edge-backup.sh restore`), so any other
+value is a stop:
+
+```bash
+bash <<'CHECK'
+set -uo pipefail
+stop() { echo "STOP: $*" >&2; exit 1; }
+project=ayvo-dev-preview
+ids="$(docker ps -q --filter "label=com.docker.compose.project=$project" \
+  --filter "label=com.docker.compose.service=caddy")" || stop "docker ps failed"
+[[ -n $ids && $(wc -l <<<"$ids") == 1 ]] || stop "expected exactly one running caddy in $project"
+label() { docker inspect --format "{{ index .Config.Labels \"$1\" }}" "$ids"; }
+dir="$(label com.docker.compose.project.working_dir)" || stop "cannot read Caddy's labels"
+file="$(label com.docker.compose.project.config_files)" || stop "cannot read Caddy's labels"
+[[ -n $dir && $file == "$dir/compose.yml" ]] ||
+  stop "Caddy's Compose file '$file' is not $dir/compose.yml"
+[[ -f $file ]] || stop "$file is missing"
+case "$dir" in
+  /opt/ayvo/backups/dev-preview/edge-before-*)
+    [[ -f $dir/COMPLETE ]] || stop "$dir is not a complete edge backup"
+    (cd "$dir" && sha256sum --quiet -c SHA256SUMS) || stop "checksums in $dir do not match"
+    grep -q '  ./compose.yml$' "$dir/SHA256SUMS" || stop "SHA256SUMS in $dir does not cover compose.yml"
+    echo "OK backup $dir caddy=$ids" ;;
+  */deploy/dev)
+    checkout="${dir%/deploy/dev}"
+    head="$(git -C "$checkout" rev-parse --short=12 HEAD)" || stop "git cannot read $checkout"
+    git -C "$checkout" ls-files --error-unmatch deploy/dev/compose.yml >/dev/null ||
+      stop "$file is not tracked in $checkout"
+    changes="$(git -C "$checkout" status --porcelain)" || stop "git status failed in $checkout"
+    [[ -z $changes ]] || stop "$checkout has local changes"
+    echo "OK checkout $checkout $head caddy=$ids" ;;
+  *) stop "unknown Caddy source: $dir" ;;
+esac
+CHECK
+```
+
+1. Deploy from a detached checkout of the reviewed commit named after it, for example
+   `git worktree add --detach /opt/ayvo/repos/AyvoOS-deploy-<sha7> <commit>`, and never edit it.
+2. Keep the checkout or backup that the check names until the next deployment's check names
+   another one. Remove an old checkout only when the check names a different source.
+3. **A normal deployment** (`SUCCESS`): the check then names the new checkout; the previous
+   checkout may be removed.
+4. **Verification failed after the switch** (`FAILED step=verify…`, Caddy recreated): run the check.
+   It names the source Caddy really runs from, usually the new checkout; keep both checkouts.
+   Either deploy again from a checkout, or restore the edge with the backup the failure printed
+   (`scripts/dev-edge-backup.sh restore <edge-before-…> <env file>`); then the check names that
+   backup.
+5. **Running from a restored backup**: keep that `edge-before-*` directory; the check verifies
+   `COMPLETE` and the checksums. The next deployment backs it up from there. Never remove or edit
+   it while Caddy runs from it.
+6. **The checkout is gone** (the check stops): restore it only if its commit is proven, otherwise
+   stop and ask before any deployment. Proof: the checkout's name holds its commit
+   (`AyvoOS-deploy-<sha7>`) and the first line after Caddy's creation time
+   (`docker inspect --format '{{.Created}}' <id>`, where `<id>` is the running Caddy the check selects:
+   `docker ps -q --filter label=com.docker.compose.project=ayvo-dev-preview --filter label=com.docker.compose.service=caddy`) in
+   `/opt/ayvo/logs/deployments-dev-preview.log` — the run that recreated it, `SUCCESS` or
+   `FAILED` — has a `git=` starting with the same `<sha7>`. Then
+   `git worktree add --detach <that path> <that commit>`, run the check again. Never bypass or skip
+   the edge backup.
+
+## Acceptance: invoice ZIP and PDF (synthetic account with an invoice)
+
+Only in an already approved signed-in test session of a synthetic portal account whose payer has
+at least one TEST invoice; never a real customer's account, another person's password, a new
+account or an invitation for the smoke test. Without such a session, record the authenticated
+smoke as not run and rely on the isolated real-units walk (`PORTAL_WEB_WALK=1`, doc 057).
+
+1. Without a session: `/invoices` redirects to `/login`; `/invoices/package?from=…&to=…` and
+   `/invoices/<id>/pdf` answer 401.
+2. Signed in: "Faktury" lists the account's invoices first; open one and "Stáhnout PDF" saves
+   `<number>.pdf`, which opens as a PDF.
+3. Open "Stáhnout faktury za období (ZIP)", choose the invoice's month as from and to and download:
+   `AYVO-faktury-<from>-<to>.zip` contains `manifest.csv`, `README.txt` and
+   `faktury/<number>.pdf`; the PDF's SHA-256 equals the manifest's.
+4. A month without invoices comes back to "Faktury" with "V tomto období nejsou žádné faktury…";
+   more than 12 months with the period message. Nothing is downloaded then.
+5. Record the commit, the time and the results in the deployment notes; no screenshots with real
+   data.
+
 ## Verify and disable
 
 1. Verify the TLS certificate and DNS answer over the tailnet. Verify from outside the tailnet
