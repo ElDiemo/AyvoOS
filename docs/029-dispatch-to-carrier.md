@@ -503,8 +503,24 @@ the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/
   read it — also one of an attempt a person closed meanwhile (that attempt's audit stays) — never
   cleared or overwritten by a later "Created"; it confirms the live attempt with it (an unsent one is
   never sent), releases the parcels and refuses any further cancellation (also in the database: a
-  cancellation is `CONFIRMED` exactly when its pickup is shown cancelled). A lost answer or a time-out is
-  uncertain (`SENT`): only looked up, never re-sent; the parcels stay held. An error, a time-out, an
+  cancellation is `CONFIRMED` exactly when its pickup is shown cancelled). An answer that is not usable
+  (an undocumented HTTP status, a network error, a time-out) is uncertain (`SENT`): never re-sent;
+  the parcels stay held. Only its HTTP status or the kind of error is kept, with PPL's own `traceId`
+  when the problem body carries one — never the body. The poller then looks it up by the pickup's
+  reference — `GET /order` only — first after the in-flight window. Like an accepted one,
+  `next_poll_at` is the lease of one lookup (another API process skips it; an expired lease after a
+  crash is taken over) and then the next due time, by the back-off from the lookup that ran; each
+  lookup is counted when it is claimed (also when PPL is down), at most 30. An older attempt without
+  a due time (sent by an earlier release) is due once, without catching up (migration
+  `20261121090000_pickup_cancel_uncertain_lookups` lets `SENT` carry `next_poll_at`). A person's
+  "Zjistit stav" takes the same lease: due → it is that lookup; the next one far away or none left →
+  one extra read, not counted; a lookup running or due within the lease → nothing is asked. After
+  the 30th lookup a person's read is always an extra one: never counted, no new due time (also
+  when the last lookup's lease expired after a crash). The board waits while the last lookup's
+  lease still holds (its answer may still be `Canceled`); when the lookups ran out without
+  `Canceled` — or that lease expired — it says so and hands it over to a person. An open
+  board reads itself again from the server (never the carrier) while the server still settles
+  something, every 15 s on a visible tab, at most 3 h (2026-11-21). An error, a time-out, an
   outage or PPL showing only `Created` releases nothing by itself. **Closing an uncertain attempt**
   (`SENT` after the in-flight window, or `ACCEPTED` whose bounded lookups ran out) is a person's
   audited decision with `shipments:resolve_uncertain` after verifying with PPL that the attempt was

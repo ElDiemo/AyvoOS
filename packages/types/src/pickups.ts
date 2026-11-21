@@ -103,6 +103,8 @@ export const pickupViewSchema = z.object({
     code: z.string(),
     environment: z.enum(['TEST', 'PRODUCTION']),
   }),
+  /** Our reference of the pickup at the carrier (what it is looked up by; for support). */
+  reference: z.string(),
   /** The carrier's own number of the pickup order, once it gives one. */
   carrierOrderNumber: z.string().nullable(),
   carrierState: z.string().nullable(),
@@ -136,8 +138,18 @@ export const pickupViewSchema = z.object({
       errorCode: z.string().nullable(),
       errorMessage: z.string().nullable(),
       lookupFrom: z.iso.datetime().nullable(),
-      /** Still looked up automatically (false once the bounded lookups ran out). */
+      /**
+       * Still looked up automatically — an accepted attempt, and an uncertain one (sent, its answer
+       * not usable) by a read only — false once the bounded lookups ran out and the last one
+       * answered (or its lease expired after a crash).
+       */
       lookingUp: z.boolean(),
+      /** Automatic lookups so far. */
+      lookups: z.number().int(),
+      /** The bounded lookups ran out without the carrier showing it cancelled: for a person now. */
+      lookupsExhausted: z.boolean(),
+      /** When the next automatic lookup is due (null when none is planned). */
+      nextLookupAt: z.iso.datetime().nullable(),
       /** The reason a person gave when closing an uncertain attempt. */
       resolutionReason: z.string().nullable(),
     })

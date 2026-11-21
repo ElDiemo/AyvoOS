@@ -166,6 +166,18 @@ export class CarrierRejectedError extends Error {
 export class CarrierProtocolError extends Error {}
 
 /**
+ * The carrier's answer was not usable — an undocumented HTTP status, a network error or no answer
+ * in time: the outcome is unknown and the request is never sent again. `detail` is safe to store:
+ * the HTTP status or the kind of error, and the carrier's own request id when it returned one —
+ * never a body, a token or personal data.
+ */
+export class CarrierUnusableAnswerError extends Error {
+  constructor(readonly detail: string) {
+    super(detail);
+  }
+}
+
+/**
  * One pickup order ("svoz", doc 029 §11): the carrier collects physical parcels at the site's
  * registered sender address on a day. It names no parcel numbers or labels — only how many
  * parcels; ordering it never confirms a hand-over (only the tracking or a person does).

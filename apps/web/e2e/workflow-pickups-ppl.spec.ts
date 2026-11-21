@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page, type Request } from '@playwright/test';
 import { json, measurement, noOverflow, printedBottles } from './dispatch-setup';
 import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from './labeling-setup';
 
@@ -74,8 +74,10 @@ async function orderPickup(page: Page, date: string, expectParcels: number) {
   await dialog.getByRole('button', { name: 'Objednat svoz' }).click();
   await expect(items).toHaveCount(before + 1);
   const item = items.first();
-  await expect(item).not.toContainText('Připraveno k odeslání');
-  return { item, code: (await item.getAttribute('data-testid'))!.replace('pickup-', '') };
+  const code = (await item.getAttribute('data-testid'))!.replace('pickup-', '');
+  // Sent (never left as written): its technical state is in Podrobnosti.
+  await expect(item.getByTestId(`pickup-system-state-${code}`)).not.toHaveText('PREPARED');
+  return { item, code };
 }
 async function refreshTracking(page: Page, order: string) {
   await page.goto(`/dispatch/orders/${order}`);
@@ -242,7 +244,7 @@ test('svoz PPL: labels without a pickup → part ordered → cancelled → held 
   await select(page, [a.code, b.code]);
   await expect(page.getByTestId('pickup-total')).toHaveText('Vybráno 2 obj., 3 balíků');
   const first = await orderPickup(page, days(1), 3);
-  await expect(first.item).toContainText('Potvrzeno dopravcem');
+  await expect(page.getByTestId(`pickup-status-${first.code}`)).toHaveText('Svoz potvrzen');
   for (const n of [...a.numbers, ...b.numbers]) await expect(first.item).toContainText(n);
   await expect(first.item).not.toContainText(c.numbers[0]!);
   await expect(first.item).toContainText('Stav balíku dnes');
@@ -255,8 +257,8 @@ test('svoz PPL: labels without a pickup → part ordered → cancelled → held 
   await dialog.getByRole('textbox').fill('Zákazník posunul termín');
   await page.getByTestId(`pickup-cancel-check-${first.code}`).check();
   await dialog.getByRole('button', { name: 'Požádat o zrušení' }).click();
-  await expect(page.getByTestId(`pickup-cancel-${first.code}`)).toContainText(
-    'čeká na potvrzení dopravce',
+  await expect(page.getByTestId(`pickup-status-${first.code}`)).toHaveText(
+    'Čekáme na potvrzení storna. Balíky zatím nelze přeplánovat.',
   );
   // Held while not confirmed: not selectable, and the API refuses another day too.
   await expect(page.getByTestId(`pickup-select-${a.code}`)).toBeDisabled();
@@ -272,13 +274,34 @@ test('svoz PPL: labels without a pickup → part ordered → cancelled → held 
   expect((await refused.json()).code).toBe('ORDER_IN_PICKUP');
   await shot(page, 'svoz-03-cancel-pending');
 
-  // PPL confirms (the simulation now shows Canceled) → "Zjistit stav u dopravce".
+  // PPL confirms (the simulation now shows Canceled). Nobody clicks "Zjistit stav" and the page is
+  // not reloaded: the server's own lookup confirms it, and the open board, read again from our
+  // server while the server still looks something up, shows it and frees the order.
+  test.setTimeout(240_000);
+  const manualLookups: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && /\/dispatch\/pickups\/[^/]+\/lookup$/.test(r.url())) {
+      manualLookups.push(r.url());
+    }
+  });
+  let loads = 0;
+  page.on('load', () => (loads += 1));
   await control(request, { showCancelled: true });
-  await page.getByTestId(`pickup-lookup-${first.code}`).click();
-  await expect(page.getByTestId(`pickup-cancel-${first.code}`)).toContainText(
-    'Svoz zrušen dopravcem',
-  );
+  await expect(page.getByTestId(`pickup-status-${first.code}`)).toHaveText('Svoz zrušen', {
+    timeout: 90_000,
+  });
   await expect(page.getByTestId(`pickup-select-${a.code}`)).toBeEnabled();
+  expect(manualLookups).toEqual([]);
+  expect(loads).toBe(0);
+  // Nothing is settled by the server any more: the board stops reading itself again.
+  const boardReads: string[] = [];
+  const onRequest = (r: Request) => {
+    if (r.url().includes('/dispatch/pickups') && r.headers()['rsc']) boardReads.push(r.url());
+  };
+  page.on('request', onRequest);
+  await page.waitForTimeout(35_000); // more than two refresh periods
+  page.off('request', onRequest);
+  expect(boardReads).toEqual([]);
   await shot(page, 'svoz-04-cancel-confirmed');
 
   // The same labels planned again (A and B, the day after tomorrow).
@@ -314,9 +337,7 @@ test('svoz PPL: labels without a pickup → part ordered → cancelled → held 
   await d2.getByRole('textbox').fill('Řidič vzal jen část zásilek');
   await page.getByTestId(`pickup-cancel-check-${second.code}`).check();
   await d2.getByRole('button', { name: 'Požádat o zrušení' }).click();
-  await expect(page.getByTestId(`pickup-cancel-${second.code}`)).toContainText(
-    'Svoz zrušen dopravcem',
-  );
+  await expect(page.getByTestId(`pickup-status-${second.code}`)).toHaveText('Svoz zrušen');
   await expect(page.getByTestId('pickup-candidates')).toContainText('převzato 1');
   await select(page, [a.code]);
   await expect(page.getByTestId('pickup-total')).toHaveText('Vybráno 1 obj., 1 balíků');
@@ -361,14 +382,17 @@ test('svoz PPL: a delivery without a pickup scan; an outage with the lost answer
   // PPL down while ordering: the answer is lost — uncertain, never sent again.
   await control(request, { mode: { down: true } });
   const lost = await orderPickup(page, days(1), 1);
-  await expect(lost.item).toContainText('Nejisté');
+  await expect(page.getByTestId(`pickup-status-${lost.code}`)).toHaveText('Čekáme na PPL');
+  await expect(page.getByTestId(`pickup-hint-${lost.code}`)).toContainText('zatím nepotvrdilo');
+  await expect(lost.item).not.toContainText('ztratil');
   await expect(page.getByTestId('pickup-order')).toBeDisabled(); // the site waits for it
   await shot(page, 'svoz-07-lost-answer');
   // After the outage: looked up by its own reference — PPL does not have it.
   await control(request, { mode: { down: false } });
   await page.getByTestId(`pickup-lookup-${lost.code}`).click();
-  await expect(lost.item).toContainText('Nejisté');
-  // Closed by a person after checking with PPL; then a new pickup of the same parcel.
+  await expect(page.getByTestId(`pickup-status-${lost.code}`)).toHaveText('Čekáme na PPL');
+  // Closed by a person after checking with PPL (in Podrobnosti); then a new pickup of the parcel.
+  await page.getByTestId(`pickup-details-${lost.code}`).locator('summary').click();
   await page.getByTestId(`pickup-resolve-${lost.code}`).click();
   const dialog = page.getByTestId(`pickup-resolve-dialog-${lost.code}`);
   await dialog.getByRole('textbox').fill('PPL potvrdila, že svoz nemá');
@@ -377,7 +401,7 @@ test('svoz PPL: a delivery without a pickup scan; an outage with the lost answer
   await expect(page.getByTestId(`pickup-status-${lost.code}`)).toContainText('nebyl objednán');
   await select(page, [c.code]);
   const again = await orderPickup(page, days(1), 1);
-  await expect(again.item).toContainText('Potvrzeno dopravcem');
+  await expect(page.getByTestId(`pickup-status-${again.code}`)).toHaveText('Svoz potvrzen');
   await expect(again.item).toContainText(c.numbers[1]!);
   await shot(page, 'svoz-08-after-outage');
 });

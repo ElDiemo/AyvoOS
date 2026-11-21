@@ -44,9 +44,10 @@ simulation verified by "Ověřit připojení", three orders: A = 2 parcels, B = 
    1 · ke svozu 1" → a new pickup announces **only the remaining parcel**.
 7. Separately: PPL reports C's first parcel **delivered without a pickup scan** → "převzato 1" →
    only the second parcel is planned.
-8. Separately: **PPL down** while ordering → "Nejisté – odpověď dopravce se ztratila" in Czech
-   ("Odpověď dopravce se nepodařilo získat…"), the site waits; after the outage "Zjistit stav"
-   does not find it → "Uzavřít jako neobjednaný" (reason, check box) → a new pickup is confirmed.
+8. Separately: **PPL down** while ordering → "Čekáme na PPL" with "PPL objednávku svozu zatím
+   nepotvrdilo…" (the HTTP status is in Podrobnosti), the site waits; after the outage "Zjistit stav
+   u PPL" does not find it → in Podrobnosti "Uzavřít jako neobjednaný" (reason, check box) → a new
+   pickup is confirmed. (Texts as of 2026-11-21, docs/002 principle 14.)
 
 Run 3× in a row on 2026-11-14: 3/3 each time. Screenshots (desktop 1280 and phone 390, synthetic
 data only): `/home/ayvo/svoz-walkthrough-20261114/` (16 files, `svoz-01` … `svoz-08`).

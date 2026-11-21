@@ -155,10 +155,22 @@ test('svoz: the ready order selected, one confirmed pickup order; the order is n
 
   const history = page.getByTestId('pickup-history');
   const item = history.locator('[data-testid^="pickup-SV-"]').first();
-  await expect(item).toContainText('Potvrzeno dopravcem');
+  const code = (await item.getAttribute('data-testid'))!.replace('pickup-', '');
+  // First layer: what happened, the day, the parcels with their numbers, the one action.
+  await expect(page.getByTestId(`pickup-status-${code}`)).toHaveText('Svoz potvrzen');
   await expect(item).toContainText('13:00–16:00');
   await expect(item).toContainText(`${orderCode}`);
-  await expect(item).toContainText('čeká na předání');
+  await expect(page.getByTestId(`pickup-cancel-button-${code}`)).toBeVisible();
+  // The technical detail is behind "Podrobnosti" (closed), opened by the keyboard.
+  const details = page.getByTestId(`pickup-details-${code}`);
+  await expect(details.getByText('Reference u PPL')).toBeHidden();
+  await details.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(details.getByText('Reference u PPL')).toBeVisible();
+  await expect(details).toContainText('čeká na předání');
+  await expect(page.getByTestId(`pickup-system-state-${code}`)).toHaveText('CONFIRMED');
+  await page.keyboard.press('Enter');
+  await expect(details.getByText('Reference u PPL')).toBeHidden();
   // Planned now: not offered again for a coming pickup.
   await expect(mine).toBeDisabled();
   await expect(page.getByText(/Ve svozu SV-/).first()).toBeVisible();
@@ -169,16 +181,22 @@ test('svoz: the ready order selected, one confirmed pickup order; the order is n
   // "Zrušit svoz": one request, confirmed by the (test) carrier — the parcels are free again, the
   // pickup and its plan stay in the history.
   await page.setViewportSize({ width: 390, height: 844 });
-  const code = (await item.getAttribute('data-testid'))!.replace('pickup-', '');
   await page.getByTestId(`pickup-cancel-button-${code}`).click();
   const cancelDialog = page.getByTestId(`pickup-cancel-dialog-${code}`);
   await cancelDialog.getByRole('textbox').fill('Svoz už nepotřebujeme');
   await expect(cancelDialog.getByRole('button', { name: 'Požádat o zrušení' })).toBeDisabled();
   await page.getByTestId(`pickup-cancel-check-${code}`).check();
   await cancelDialog.getByRole('button', { name: 'Požádat o zrušení' }).click();
-  await expect(page.getByTestId(`pickup-cancel-${code}`)).toContainText('Svoz zrušen dopravcem');
+  await expect(page.getByTestId(`pickup-status-${code}`)).toHaveText('Svoz zrušen');
+  await expect(page.getByTestId(`pickup-hint-${code}`)).toHaveText(
+    'Balíky lze zařadit do jiného svozu.',
+  );
   await expect(mine).toBeEnabled();
   await expect(page.getByTestId(`pickup-${code}`)).toContainText(orderCode);
+  await noOverflow(page);
+  // Desktop: the same first layer.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByTestId(`pickup-status-${code}`)).toHaveText('Svoz zrušen');
   await noOverflow(page);
 
   // The pickup is a plan, not a hand-over.
