@@ -106,14 +106,6 @@ a {
   opacity: 0.85;
 }
 
-.ayvo-tagline {
-  font-size: 14px;
-  font-weight: 500;
-  margin-left: 6px;
-  letter-spacing: 0.01em;
-  color: var(--muted);
-}
-
 /* =========================
    Layout
 ========================= */
@@ -123,14 +115,15 @@ a {
   padding: 0 24px;
 }
 
-/* As the original: 20px above, a 1140px box with its 1px line below (full width on phones).
-   Sticky, so the language switch is at hand while reading (it keeps the section). */
+/* A compact header: the 1140px box with its 1px line below (full width on phones), its height
+   scaling smoothly from 52px (phones) to 60px (desktop), one line down to 320px. Sticky, so the
+   language switch is at hand while reading (it keeps the section). */
 .ayvo-header {
   position: sticky;
   top: 0;
   z-index: 5;
   max-width: 1140px;
-  margin: 20px auto 0;
+  margin: 0 auto;
   background: #fff;
   border-bottom: 1px solid var(--line);
 }
@@ -154,24 +147,23 @@ main section[id] {
 }
 
 .ayvo-header-row {
-  padding-top: 5px;
-  padding-bottom: 5px;
-  min-height: 62.5px;
+  height: clamp(52px, 1vw + 46px, 60px);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
 }
 
+/* The logo is the link home; the hero has its own larger wordmark and the slogan. */
 .ayvo-brand {
   display: flex;
-  gap: 5px;
-  align-items: baseline;
-  /* The original logo's 52.5px line box: the letters' baseline 36px from its top. */
-  min-height: 52.5px;
-  padding-top: 14.5px;
+  align-items: center;
+  min-height: 44px;
   text-decoration: none;
-  min-width: 0;
+  flex-shrink: 0;
+}
+.ayvo-header .ayvo-wordmark {
+  height: clamp(17px, 0.35vw + 15.5px, 21px);
 }
 
 /* =========================
@@ -549,13 +541,39 @@ main section[id] {
   font-weight: 700;
 }
 
-/* In the header the original shows every language in ink (the footer keeps them muted). */
+/* In the header every language is in ink (the footer keeps them muted), each with a 40px click
+   and focus area; the current one bold and underlined. */
+.ayvo-header .ayvo-langs {
+  display: flex;
+  align-items: center;
+}
 .ayvo-header .ayvo-lang {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 6px;
+  border-radius: 8px;
   color: var(--ink);
   font-weight: 400;
 }
+.ayvo-header .ayvo-lang:hover {
+  background: var(--soft);
+}
+.ayvo-header .ayvo-lang:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
 .ayvo-header .ayvo-lang[aria-current='page'] {
   font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 5px;
+  text-decoration-color: var(--gold);
+}
+.ayvo-header .ayvo-lang-sep {
+  margin: 0 1px;
 }
 
 .ayvo-lang-sep {

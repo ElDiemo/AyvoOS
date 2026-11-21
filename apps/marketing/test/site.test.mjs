@@ -69,7 +69,10 @@ describe('pages', () => {
     });
 
     it(`${page.path}: slogan, hero CTAs to the pilot and the steps, no unbacked claims`, () => {
-      assert.ok(html.includes('<span class="ayvo-tagline">Refill. Redefined.</span>'));
+      // The compact header: the logo links home, no slogan there (the hero has it).
+      const header = html.match(/<header class="ayvo-header">[\s\S]*?<\/header>/)[0];
+      assert.ok(header.includes(`<a class="ayvo-brand" href="${page.path}">`));
+      assert.doesNotMatch(header, /Refill|ayvo-tagline/);
       const hero = html.match(/<section id="top"[\s\S]*?<\/section>/)[0];
       const targets = [...hero.matchAll(/class="ayvo-btn[^"]*"|href="(#[a-z]+)"/g)]
         .map((m) => m[1])
@@ -243,5 +246,6 @@ describe('robots, sitemap, Caddy', () => {
     const html = read('404.html');
     for (const p of PAGES) assert.ok(html.includes(`href="${p.path}"`));
     assert.match(html, /<meta name="robots" content="noindex" \/>/);
+    assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /Refill|ayvo-tagline/);
   });
 });

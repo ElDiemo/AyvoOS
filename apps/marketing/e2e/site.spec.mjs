@@ -167,6 +167,37 @@ test('narrow desktops (861 / 900 / 1024 px): the copy never reaches the bottle l
   }
 });
 
+test('the header: compact (52-64 px), one line from 320 px, the logo links home, 40 px language targets', async ({
+  page,
+}) => {
+  for (const width of [320, 390, 861, 1440]) {
+    for (const p of [...PAGES, { path: '/no-such-page', lang: 'en' }]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(p.path);
+      const header = await page.locator('header.ayvo-header').boundingBox();
+      expect(header.height, `${p.path} at ${width}px`).toBeGreaterThanOrEqual(52);
+      expect(header.height, `${p.path} at ${width}px`).toBeLessThanOrEqual(64);
+      const brand = page.locator('header a.ayvo-brand');
+      await expect(brand).toHaveAttribute('href', p.path === '/no-such-page' ? '/' : p.path);
+      const logo = await brand.boundingBox();
+      // One line: everything inside the header's height, side by side.
+      expect(logo.y).toBeGreaterThanOrEqual(header.y);
+      expect(logo.y + logo.height).toBeLessThanOrEqual(header.y + header.height);
+      for (const lang of await page.locator('header a.ayvo-lang').all()) {
+        const box = await lang.boundingBox();
+        expect(box.width).toBeGreaterThanOrEqual(40);
+        expect(box.height).toBeGreaterThanOrEqual(40);
+        expect(box.y + box.height).toBeLessThanOrEqual(header.y + header.height);
+        expect(box.x).toBeGreaterThan(logo.x + logo.width);
+      }
+    }
+  }
+  await page.goto('/cz/');
+  const current = page.locator('header a.ayvo-lang[aria-current="page"]');
+  await expect(current).toHaveText('CZ');
+  expect(await current.evaluate((a) => getComputedStyle(a).fontWeight)).toBe('700');
+});
+
 test('switching the language keeps the section being read', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, '/');
