@@ -21,6 +21,8 @@ test.skip(process.env.E2E_CARRIER !== 'ppl', 'the isolated PPL walkthrough only 
 
 const CONTROL = `http://127.0.0.1:${process.env.E2E_FAKE_PPL_PORT ?? 4195}/__fake-ppl/control`;
 const SHOTS = process.env.AYVO_SCREENSHOT_DIR;
+/** D: picked, not yet labelled — the dispatch outcomes (refused, tracking outage) on the order. */
+let orderD = '';
 const orders: Record<'a' | 'b' | 'c', { code: string; numbers: string[] }> = {
   a: { code: '', numbers: [] },
   b: { code: '', numbers: [] },
@@ -126,7 +128,7 @@ test.beforeAll(async ({ browser }) => {
   expect(verified.ok, JSON.stringify(verified)).toBe(true);
   await json(await save('SIM-A'));
 
-  const printed = await printedBottles(request, `svoz-ppl-${Date.now()}`, 10);
+  const printed = await printedBottles(request, `svoz-ppl-${Date.now()}`, 12);
   const kit = await labelingSetup(request, {
     versionId: printed.versionId,
     capacity: 2,
@@ -145,7 +147,7 @@ test.beforeAll(async ({ browser }) => {
     (await receiveStock(request, kit.liquidCode, '5000'))!,
   );
   const crates: { url: string; code: string }[] = [];
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 6; i++) {
     const urls = printed.urls.slice(i * 2, i * 2 + 2);
     const crate = await labelledCrate(request, kit, {
       versionId: printed.versionId,
@@ -216,6 +218,23 @@ test.beforeAll(async ({ browser }) => {
     );
     orders[key] = { code, numbers: s.shipment.parcels.map((p) => p.carrierParcelNumber) };
   }
+  orderD = (
+    await json<{ code: string }>(
+      await request.post('/api/admin/orders', {
+        data: {
+          requestId: crypto.randomUUID(),
+          hotelCode,
+          requestedShipDate: days(0),
+          lines: [{ productCode: kit.productCode, crates: 1 }],
+        },
+      }),
+    )
+  ).code;
+  await json(
+    await request.post(`/api/admin/orders/${orderD}/crates`, {
+      data: { requestId: crypto.randomUUID(), scannedValue: crates[next++]!.url },
+    }),
+  );
   await context.close();
 });
 
@@ -404,4 +423,57 @@ test('svoz PPL: a delivery without a pickup scan; an outage with the lost answer
   await expect(page.getByTestId(`pickup-status-${again.code}`)).toHaveText('Svoz potvrzen');
   await expect(again.item).toContainText(c.numbers[1]!);
   await shot(page, 'svoz-08-after-outage');
+});
+
+test('Expedice PPL: refused labels said in Czech, the reason under Podrobnosti; a tracking outage the same', async ({
+  page,
+  request,
+}) => {
+  // PPL refuses the shipment (400 validation): nothing was created.
+  await control(request, { mode: { reject: true } });
+  await json(
+    await request.post(`/api/admin/orders/${orderD}/complete`, {
+      data: { requestId: crypto.randomUUID() },
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/dispatch/orders/${orderD}`);
+  await page.getByTestId('create-labels').click();
+  await expect(page.getByTestId('shipment-phase')).toHaveAttribute('data-phase', 'CREATE');
+  await expect(page.getByTestId('shipment-refused')).toContainText('odmítl – nic nevzniklo');
+  // The carrier's own words only under Podrobnosti, opened with the keyboard.
+  const error = page.getByTestId('shipment-request-error');
+  await expect(error).toBeHidden();
+  await page.getByTestId('shipment-details').locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(error).toBeVisible();
+  await expect(error).not.toBeEmpty();
+  // The history names the refusal; the carrier's text there is under Podrobnosti too.
+  const history = page.getByTestId('order-history');
+  await expect(history).toContainText('Dopravce požadavek odmítl');
+  await expect(history.getByText(/validation errors/)).toBeHidden();
+  await shot(page, 'expedice-01-refused');
+
+  // Fixed at the carrier: one new request makes the labels.
+  await control(request, { mode: { reject: false } });
+  await page.getByTestId('create-labels').click();
+  await expect(page.getByTestId('shipment-phase')).toHaveAttribute('data-phase', 'LABELED');
+  await expect(page.getByTestId('shipment-refused')).toHaveCount(0);
+
+  // PPL down while tracking: the last known state stays, the reason under Podrobnosti.
+  await control(request, { mode: { down: true } });
+  const answered = page.waitForResponse((r) =>
+    r.url().endsWith(`/orders/${orderD}/shipment/tracking/refresh`),
+  );
+  await page.getByTestId('tracking-card').getByTestId('tracking-refresh').click();
+  await answered;
+  await page.reload();
+  await expect(page.getByTestId('tracking-failed')).toContainText('se nepovedlo');
+  await expect(page.getByTestId('tracking-failed')).not.toContainText('503');
+  const outage = page.getByTestId('tracking-failed-details');
+  await outage.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(outage.locator('dd')).not.toBeEmpty();
+  await shot(page, 'expedice-02-tracking-outage');
+  await control(request, { mode: { down: false } });
 });

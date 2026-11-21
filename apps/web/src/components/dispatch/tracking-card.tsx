@@ -3,7 +3,7 @@
 import type { OrderShipment, ShipmentParcel, TrackingEvent } from '@ayvo/types';
 import { useState } from 'react';
 import { uncertain, useAttempt } from '@/components/catalog/form-kit';
-import { buttonClass, Card, Notice } from '@/components/ui';
+import { buttonClass, Card, DetailFact, Details, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { shipmentsCs } from '@/i18n/cs/shipments';
 import { orderErrorText } from './order-errors';
@@ -82,11 +82,16 @@ export function TrackingCard({
           {tr.stopped === 'DELIVERED' && <> {t.done}</>}
         </p>
         {tr.lastError && tr.lastAttemptAt && (
-          <Notice tone="warning">
-            <span data-testid="tracking-failed">
-              {t.failed(at(tr.lastAttemptAt), tr.lastError)}
-            </span>
-          </Notice>
+          <>
+            <Notice tone="warning">
+              <span data-testid="tracking-failed">{t.failed(at(tr.lastAttemptAt))}</span>
+            </Notice>
+            <Details testId="tracking-failed-details">
+              <dl>
+                <DetailFact label={t.failedDetail} value={tr.lastError} />
+              </dl>
+            </Details>
+          </>
         )}
         {tr.stopped === 'GAVE_UP' && (
           <Notice tone="warning">

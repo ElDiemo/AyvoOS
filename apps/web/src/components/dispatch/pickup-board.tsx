@@ -4,7 +4,7 @@ import { pickupViewSchema, type PickupBoard as Board, type PickupView } from '@a
 import { useRouter } from 'next/navigation';
 import { useEffect, useId, useState } from 'react';
 import { ConfirmDialog, reasonError, ReasonField, useAttempt } from '@/components/catalog/form-kit';
-import { buttonClass, Card, EmptyState } from '@/components/ui';
+import { buttonClass, Card, DetailFact, Details, EmptyState } from '@/components/ui';
 import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
 import { pickupsCs as t } from '@/i18n/cs/pickups';
 import { apiSend, ClientApiError } from '@/lib/client-api';
@@ -314,26 +314,6 @@ const toneClass: Record<Tone, string> = {
 };
 
 /** One line of the technical detail (only rendered when it has a value). */
-function Fact({
-  label,
-  value,
-  testId,
-}: {
-  label: string;
-  value: string | null | undefined;
-  testId?: string;
-}) {
-  if (!value) return null;
-  return (
-    <div className="flex flex-wrap gap-x-2">
-      <dt className="text-stone-500">{label}:</dt>
-      <dd className="break-all text-stone-800" data-testid={testId}>
-        {value}
-      </dd>
-    </div>
-  );
-}
-
 function PickupItem({
   pickup: p,
   canOrder,
@@ -489,96 +469,91 @@ function PickupItem({
           {error}
         </p>
       )}
-      <details
-        className="mt-2 rounded border border-stone-200"
-        data-testid={`pickup-details-${p.code}`}
-      >
-        <summary className="cursor-pointer px-2 py-2 text-sm font-medium text-stone-700">
-          {t.details.summary}
-        </summary>
-        <div className="space-y-2 px-2 pb-2 text-xs">
-          <dl className="space-y-0.5">
-            <Fact label={t.details.carrierNumber} value={p.carrierOrderNumber} />
-            <Fact label={t.details.carrierState} value={p.carrierState} />
-            <Fact label={t.details.reference} value={p.reference} />
-            <Fact
-              label={t.details.systemState}
-              value={p.status}
-              testId={`pickup-system-state-${p.code}`}
+      <Details summary={t.details.summary} className="mt-2" testId={`pickup-details-${p.code}`}>
+        <dl className="space-y-0.5">
+          <DetailFact label={t.details.carrierNumber} value={p.carrierOrderNumber} />
+          <DetailFact label={t.details.carrierState} value={p.carrierState} />
+          <DetailFact label={t.details.reference} value={p.reference} />
+          <DetailFact
+            label={t.details.systemState}
+            value={p.status}
+            testId={`pickup-system-state-${p.code}`}
+          />
+          <DetailFact label={t.details.error} value={problem(p.errorCode, p.errorMessage)} />
+          <DetailFact label={t.details.resolution} value={p.resolutionReason} />
+          <DetailFact label={t.details.createdAt} value={at(p.createdAt)} />
+          <DetailFact label={t.details.sentAt} value={at(p.sentAt)} />
+          <DetailFact label={t.details.resolvedAt} value={at(p.resolvedAt)} />
+          <DetailFact label={t.details.lookupFrom} value={at(p.lookupFrom)} />
+        </dl>
+        {c && (
+          <dl
+            className="space-y-0.5 border-t border-stone-200 pt-2"
+            data-testid={`pickup-cancel-${p.code}`}
+          >
+            <DetailFact label={t.details.cancel} value={c.status} />
+            <DetailFact label={t.details.cancelReason} value={c.reason} />
+            <DetailFact label={t.details.carrierState} value={c.carrierState} />
+            <DetailFact label={t.details.error} value={problem(c.errorCode, c.errorMessage)} />
+            <DetailFact label={t.details.resolution} value={c.resolutionReason} />
+            <DetailFact label={t.details.sentAt} value={at(c.sentAt)} />
+            <DetailFact label={t.details.resolvedAt} value={at(c.resolvedAt)} />
+            <DetailFact
+              label={t.details.lookups}
+              value={c.lookups > 0 ? String(c.lookups) : null}
             />
-            <Fact label={t.details.error} value={problem(p.errorCode, p.errorMessage)} />
-            <Fact label={t.details.resolution} value={p.resolutionReason} />
-            <Fact label={t.details.createdAt} value={at(p.createdAt)} />
-            <Fact label={t.details.sentAt} value={at(p.sentAt)} />
-            <Fact label={t.details.resolvedAt} value={at(p.resolvedAt)} />
-            <Fact label={t.details.lookupFrom} value={at(p.lookupFrom)} />
+            <DetailFact label={t.details.nextLookup} value={at(c.nextLookupAt)} />
+            <DetailFact label={t.details.lookupFrom} value={at(c.lookupFrom)} />
+            <DetailFact label={t.details.cancelId} value={c.id} />
           </dl>
-          {c && (
-            <dl
-              className="space-y-0.5 border-t border-stone-200 pt-2"
-              data-testid={`pickup-cancel-${p.code}`}
-            >
-              <Fact label={t.details.cancel} value={c.status} />
-              <Fact label={t.details.cancelReason} value={c.reason} />
-              <Fact label={t.details.carrierState} value={c.carrierState} />
-              <Fact label={t.details.error} value={problem(c.errorCode, c.errorMessage)} />
-              <Fact label={t.details.resolution} value={c.resolutionReason} />
-              <Fact label={t.details.sentAt} value={at(c.sentAt)} />
-              <Fact label={t.details.resolvedAt} value={at(c.resolvedAt)} />
-              <Fact label={t.details.lookups} value={c.lookups > 0 ? String(c.lookups) : null} />
-              <Fact label={t.details.nextLookup} value={at(c.nextLookupAt)} />
-              <Fact label={t.details.lookupFrom} value={at(c.lookupFrom)} />
-              <Fact label={t.details.cancelId} value={c.id} />
-            </dl>
-          )}
-          <div className="border-t border-stone-200 pt-2">
-            <p className="text-stone-500">{t.plan}:</p>
-            <p className="text-stone-400">{t.planNote}</p>
-            <ul className="text-stone-700">
-              {p.parcels.map((x) => (
-                <li key={x.carrierParcelNumber} data-testid="pickup-parcel-now">
-                  {x.carrierParcelNumber} – {t.parcelNow}:{' '}
-                  {x.withCarrierNow
-                    ? t.parcelWithCarrierNow
-                    : (t.orderStatus[x.orderStatus] ?? x.orderStatus)}
-                </li>
-              ))}
-            </ul>
-          </div>
-          {canResolve && (cancelUncertain || p.status === 'SENT') && (
-            <div className="space-y-2 border-t border-stone-200 pt-2">
-              <p className="font-medium text-stone-700">{t.details.support}</p>
-              <p className="text-stone-600">{t.details.supportNote}</p>
-              <div className="flex flex-wrap gap-2">
-                {cancelUncertain && (
-                  <button
-                    type="button"
-                    className={buttonClass.secondary}
-                    onClick={() => {
-                      setError(null);
-                      setClosingCancel(c.id);
-                    }}
-                    data-testid={`pickup-cancel-resolve-${p.code}`}
-                  >
-                    {t.cancelResolve}
-                  </button>
-                )}
-                {/* Too early is refused by the API (PICKUP_IN_FLIGHT) and said so. */}
-                {p.status === 'SENT' && (
-                  <button
-                    type="button"
-                    className={buttonClass.secondary}
-                    onClick={() => setClosing(true)}
-                    data-testid={`pickup-resolve-${p.code}`}
-                  >
-                    {t.resolve}
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
+        )}
+        <div className="border-t border-stone-200 pt-2">
+          <p className="text-stone-500">{t.plan}:</p>
+          <p className="text-stone-400">{t.planNote}</p>
+          <ul className="text-stone-700">
+            {p.parcels.map((x) => (
+              <li key={x.carrierParcelNumber} data-testid="pickup-parcel-now">
+                {x.carrierParcelNumber} – {t.parcelNow}:{' '}
+                {x.withCarrierNow
+                  ? t.parcelWithCarrierNow
+                  : (t.orderStatus[x.orderStatus] ?? x.orderStatus)}
+              </li>
+            ))}
+          </ul>
         </div>
-      </details>
+        {canResolve && (cancelUncertain || p.status === 'SENT') && (
+          <div className="space-y-2 border-t border-stone-200 pt-2">
+            <p className="font-medium text-stone-700">{t.details.support}</p>
+            <p className="text-stone-600">{t.details.supportNote}</p>
+            <div className="flex flex-wrap gap-2">
+              {cancelUncertain && (
+                <button
+                  type="button"
+                  className={buttonClass.secondary}
+                  onClick={() => {
+                    setError(null);
+                    setClosingCancel(c.id);
+                  }}
+                  data-testid={`pickup-cancel-resolve-${p.code}`}
+                >
+                  {t.cancelResolve}
+                </button>
+              )}
+              {/* Too early is refused by the API (PICKUP_IN_FLIGHT) and said so. */}
+              {p.status === 'SENT' && (
+                <button
+                  type="button"
+                  className={buttonClass.secondary}
+                  onClick={() => setClosing(true)}
+                  data-testid={`pickup-resolve-${p.code}`}
+                >
+                  {t.resolve}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </Details>
       <ConfirmDialog
         open={closing}
         title={t.resolveTitle}

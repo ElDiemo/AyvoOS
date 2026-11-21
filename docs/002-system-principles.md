@@ -24,7 +24,8 @@ Status: Draft — foundation phase (2026-10-10)
 ## Screens (principle 14)
 
 Every screen of the internal AYVO OS and of the hotel portal (CZ/EN/DE). The first example is
-Expedice → Svoz (`components/dispatch/pickup-board.tsx`, `pickup-summary.ts`).
+Expedice → Svoz (`components/dispatch/pickup-board.tsx`, `pickup-summary.ts`); the shared
+disclosure is `Details` / `DetailFact` in `apps/web/src/components/ui.tsx`.
 
 - **First layer.** The person sees at a glance:
   - the **state**: what happened, in one short, true sentence (e.g. "Čekáme na PPL", "Svoz potvrzen",
