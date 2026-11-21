@@ -27,6 +27,22 @@
     <link rel="icon" href="/assets/icons/ayvo-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/icons/ayvo-180.png" />
     <link rel="stylesheet" href="/assets/site.css" />
+    <link
+      rel="preload"
+      as="image"
+      href="/assets/img/ayvo-hero-scene.webp"
+      type="image/webp"
+      media="(min-width: 861px)"
+      fetchpriority="high"
+    />
+    <link
+      rel="preload"
+      as="image"
+      href="/assets/img/ayvo-hero-scene-mobile.webp"
+      type="image/webp"
+      media="(max-width: 860px)"
+      fetchpriority="high"
+    />
     <script src="/assets/site.js" defer></script>
   </head>
   <body>
@@ -41,7 +57,6 @@
             width="3386"
             height="985"
           />
-          <span class="ayvo-tagline">Refill. Redefined.</span>
         </a>
         <nav class="ayvo-langs" aria-label="Language">
           <a href="/" hreflang="en" lang="en" class="ayvo-lang" data-lang aria-current="page">EN</a
@@ -54,26 +69,21 @@
     </header>
     <main id="content">
       <section id="top" class="ayvo-section ayvo-hero ayvo-hero-dark">
-        <div class="ayvo-hero-media">
-          <img
-            class="ayvo-hero-visual"
-            src="/assets/img/ayvo-hero.webp"
-            width="648"
-            height="792"
-            fetchpriority="high"
-            decoding="async"
-            alt="Illustrative image: two white AYVO bottles, Liquid Hand Soap and Hair &amp; Body Wash, on a hotel bathroom vanity"
-          />
-        </div>
-        <div class="ayvo-wrap ayvo-hero-content">
-          <div class="ayvo-hero-copy">
+        <div class="ayvo-hero-stage">
+          <div class="ayvo-hero-products">
             <img
-              class="ayvo-hero-wordmark"
-              src="/assets/img/ayvo-wordmark-gold.svg"
-              alt="AYVO"
-              width="3386"
-              height="985"
+              class="ayvo-hero-visual"
+              src="/assets/img/ayvo-hero-products.webp"
+              width="474"
+              height="612"
+              fetchpriority="high"
+              decoding="async"
+              alt="Illustrative image of AYVO products: two white bottles, Liquid Hand Soap and Hair &amp; Body Wash"
             />
+          </div>
+        </div>
+        <div class="ayvo-hero-content">
+          <div class="ayvo-hero-copy">
             <p class="ayvo-hero-slogan">Refill. Redefined.</p>
 
             <h1 class="ayvo-h1">
@@ -81,11 +91,10 @@
               <span class="ayvo-h1-part ayvo-h1-gold">Fully managed.</span>
             </h1>
 
-            <ul class="ayvo-hero-points">
-              <li>Premium reusable glass bottles.</li>
-              <li>Predictable monthly costs.</li>
-              <li>Less administration.</li>
-            </ul>
+            <p class="ayvo-hero-lead">
+              We supply hotel amenities in reusable bottles and take care of replenishment,
+              collection and washing.
+            </p>
 
             <div class="ayvo-cta">
               <a href="#pilot" class="ayvo-btn primary"
