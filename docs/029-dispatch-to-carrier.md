@@ -507,10 +507,17 @@ the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/
   (an undocumented HTTP status, a network error, a time-out) is uncertain (`SENT`): never re-sent;
   the parcels stay held. Only its HTTP status or the kind of error is kept, with PPL's own `traceId`
   when the problem body carries one — never the body. The poller then looks it up by the pickup's
-  reference — `GET /order` only — after the in-flight window, with the same bounded back-off as an
-  accepted one (counted from its sending; each lookup is counted when it is claimed, also when PPL is
-  down). When the lookups run out without `Canceled`, the board says so and hands it over to a
-  person (2026-11-21). An error, a time-out, an
+  reference — `GET /order` only — first after the in-flight window. Like an accepted one,
+  `next_poll_at` is the lease of one lookup (another API process skips it; an expired lease after a
+  crash is taken over) and then the next due time, by the back-off from the lookup that ran; each
+  lookup is counted when it is claimed (also when PPL is down), at most 30. An older attempt without
+  a due time (sent by an earlier release) is due once, without catching up (migration
+  `20261121090000_pickup_cancel_uncertain_lookups` lets `SENT` carry `next_poll_at`). A person's
+  "Zjistit stav" takes the same lease: due → it is that lookup; the next one far away or none left →
+  one extra read, not counted; a lookup running or due within the lease → nothing is asked. When
+  the lookups run out without `Canceled`, the board says so and hands it over to a person. An open
+  board reads itself again from the server (never the carrier) while the server still settles
+  something, every 15 s on a visible tab, at most 3 h (2026-11-21). An error, a time-out, an
   outage or PPL showing only `Created` releases nothing by itself. **Closing an uncertain attempt**
   (`SENT` after the in-flight window, or `ACCEPTED` whose bounded lookups ran out) is a person's
   audited decision with `shipments:resolve_uncertain` after verifying with PPL that the attempt was

@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page, type Request } from '@playwright/test';
 import { json, measurement, noOverflow, printedBottles } from './dispatch-setup';
 import { filledCrate, labelingSetup, labelledCrate, lotIdOf, receiveStock } from './labeling-setup';
 
@@ -274,11 +274,34 @@ test('svoz PPL: labels without a pickup → part ordered → cancelled → held 
   expect((await refused.json()).code).toBe('ORDER_IN_PICKUP');
   await shot(page, 'svoz-03-cancel-pending');
 
-  // PPL confirms (the simulation now shows Canceled) → "Zjistit stav u dopravce".
+  // PPL confirms (the simulation now shows Canceled). Nobody clicks "Zjistit stav" and the page is
+  // not reloaded: the server's own lookup confirms it, and the open board, read again from our
+  // server while the server still looks something up, shows it and frees the order.
+  test.setTimeout(240_000);
+  const manualLookups: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && /\/dispatch\/pickups\/[^/]+\/lookup$/.test(r.url())) {
+      manualLookups.push(r.url());
+    }
+  });
+  let loads = 0;
+  page.on('load', () => (loads += 1));
   await control(request, { showCancelled: true });
-  await page.getByTestId(`pickup-lookup-${first.code}`).click();
-  await expect(page.getByTestId(`pickup-status-${first.code}`)).toHaveText('Svoz zrušen');
+  await expect(page.getByTestId(`pickup-status-${first.code}`)).toHaveText('Svoz zrušen', {
+    timeout: 90_000,
+  });
   await expect(page.getByTestId(`pickup-select-${a.code}`)).toBeEnabled();
+  expect(manualLookups).toEqual([]);
+  expect(loads).toBe(0);
+  // Nothing is settled by the server any more: the board stops reading itself again.
+  const boardReads: string[] = [];
+  const onRequest = (r: Request) => {
+    if (r.url().includes('/dispatch/pickups') && r.headers()['rsc']) boardReads.push(r.url());
+  };
+  page.on('request', onRequest);
+  await page.waitForTimeout(35_000); // more than two refresh periods
+  page.off('request', onRequest);
+  expect(boardReads).toEqual([]);
   await shot(page, 'svoz-04-cancel-confirmed');
 
   // The same labels planned again (A and B, the day after tomorrow).

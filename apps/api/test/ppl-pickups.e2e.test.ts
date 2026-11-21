@@ -602,6 +602,8 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     await service().pollDue(5);
     expect((await lookup(p.code).expect(200)).body.cancellation.status).toBe('SENT');
     ppl.mode.down = false;
+    // The next lookup by its back-off (a person's lookup meanwhile leaves it to that one).
+    await dueNow(p.code);
     expect((await lookup(p.code).expect(200)).body.cancellation).toMatchObject({
       status: 'SENT',
       carrierState: 'Created',
@@ -707,22 +709,58 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     ).toBe('NOT_CREATED');
   });
 
+  /** PPL's answers to GET /order for the next lookups, in order — each held until released. */
+  type Shown = Awaited<ReturnType<PplPickups['find']>>;
+  function heldAnswer(shown: Shown) {
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (entered = r));
+    const answer = new Promise<Shown>((r) => (release = () => r(shown)));
+    return {
+      run: () => {
+        entered();
+        return answer;
+      },
+      reached,
+      release,
+    };
+  }
+  const CREATED: Shown = { orderNumber: '1', state: 'Created', cancelled: false };
+  const CANCELED: Shown = { orderNumber: '1', state: 'Canceled', cancelled: true };
+  /** An uncertain attempt (a 500 before PPL carried it out — PPL shows "Created"). */
+  async function uncertainCancel(code: string) {
+    ppl.mode.cancelOrderError = true;
+    const v = (await cancel(code).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderError = false;
+    expect(v.cancellation!.status).toBe('SENT');
+    return v.cancellation!.id;
+  }
+  const attemptRow = (id: string) =>
+    t.prisma.carrierPickupCancellation.findUniqueOrThrow({ where: { id } });
+
   /** GET /order lookups of exactly this pickup's reference (reads only). */
   const orderReads = (ref: string) =>
     ppl.seen.filter(
       (s) => s.method === 'GET' && s.path === '/order' && s.query.get('OrderReferences') === ref,
     ).length;
-  /** Every automatic lookup of an uncertain cancellation is due now (its back-off counts from sending). */
-  const sentLongAgo = (pickupCode: string) =>
-    t.prisma
-      .$executeRaw`UPDATE "carrier_pickup_cancellations" c SET "sent_at" = c."sent_at" - interval '2 days'
-      FROM "carrier_pickups" p WHERE p."id" = c."pickup_id" AND p."code" = ${pickupCode} AND c."status" = 'SENT'`;
+  /** The uncertain attempt's next automatic lookup is due now (as when its back-off has passed). */
+  const dueNow = (pickupCode: string) =>
+    t.prisma.$executeRaw`UPDATE "carrier_pickup_cancellations" c SET "next_poll_at" = now()
+      FROM "carrier_pickups" p WHERE p."id" = c."pickup_id" AND p."code" = ${pickupCode}
+        AND c."status" = 'SENT' AND c."next_poll_at" IS NOT NULL`;
+  const attemptOfCode = (pickupCode: string) =>
+    t.prisma.carrierPickupCancellation.findFirstOrThrow({
+      where: { pickup: { code: pickupCode } },
+      orderBy: { createdAt: 'desc' },
+    });
+  const referenceOf = async (pickupCode: string) =>
+    (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: pickupCode } }))
+      .clientReference;
 
   it('uncertain cancellation: one POST, the HTTP status kept, read-only lookups until Canceled releases the parcels', async () => {
     const o = await readyForPickup(1);
     const p = (await order([o.code]).expect(200)).body as PickupView;
-    const ref = (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: p.code } }))
-      .clientReference;
+    const ref = await referenceOf(p.code);
     const traceId = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
     ppl.mode.cancelOrderAnswer = { status: 502, traceId };
     const sent = cancelPosts();
@@ -752,19 +790,25 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       lookingUp: true,
       lookupsExhausted: false,
     });
-    expect(created.cancellation!.nextLookupAt).not.toBeNull();
+    // The next lookup by the back-off from the lookup that ran (10 s), not before.
+    const next = Date.parse(created.cancellation!.nextLookupAt!);
+    expect(next).toBeGreaterThan(Date.now() + 5_000);
+    expect(next).toBeLessThan(Date.now() + 15_000);
     expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
-    // Not due yet (back-off from its sending): no further read.
     await service().pollDue(50);
     expect(orderReads(ref)).toBe(reads + 1);
     // PPL shows it Canceled: the next automatic read confirms and releases the same parcel.
     const shown = ppl.orders.get(ref)!;
     shown.cancelled = true;
     shown.hiddenLooks = 0;
-    await sentLongAgo(p.code);
+    await dueNow(p.code);
     await service().pollDue(50);
     const done = await view(p.code);
-    expect(done.cancellation).toMatchObject({ status: 'CONFIRMED', carrierState: 'Canceled' });
+    expect(done.cancellation).toMatchObject({
+      status: 'CONFIRMED',
+      carrierState: 'Canceled',
+      nextLookupAt: null,
+    });
     expect(done.cancelledByCarrierAt).not.toBeNull();
     expect(cancelPosts()).toBe(sent + 1);
     const again = (await order([o.code], { date: pragueToday(2) }).expect(200)).body as PickupView;
@@ -774,8 +818,7 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
   it('uncertain cancellation: outages are counted, the lookups stop at the limit — for a person, never a second POST', async () => {
     const o = await readyForPickup(1);
     const p = (await order([o.code]).expect(200)).body as PickupView;
-    const ref = (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: p.code } }))
-      .clientReference;
+    const ref = await referenceOf(p.code);
     // Carried out at PPL, but no answer in time; PPL never shows it cancelled here.
     ppl.mode.cancelOrderHang = true;
     ppl.mode.cancelOrderShownAfter = 1_000_000;
@@ -792,7 +835,7 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     expect((await view(p.code)).cancellation).toMatchObject({ status: 'SENT', lookups: 1 });
     // Every further lookup due: they run up to the limit and stop there.
     for (let i = 0; i < PICKUP_MAX_POLLS + 5; i++) {
-      await sentLongAgo(p.code);
+      await dueNow(p.code);
       await service().pollDue(50);
     }
     const reads = orderReads(ref);
@@ -805,9 +848,15 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       lookupsExhausted: true,
       nextLookupAt: null,
     });
-    await sentLongAgo(p.code);
     await service().pollDue(50);
     expect(orderReads(ref)).toBe(reads);
+    // A person's lookup after the last one: one extra read, not counted, nothing rescheduled.
+    await lookup(p.code).expect(200);
+    expect(orderReads(ref)).toBe(reads + 1);
+    expect(await attemptOfCode(p.code)).toMatchObject({
+      pollCount: PICKUP_MAX_POLLS,
+      nextPollAt: null,
+    });
     expect(cancelPosts()).toBe(sent + 1);
     // Still held; a person closes it after checking with PPL (shipments:resolve_uncertain).
     expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
@@ -819,34 +868,90 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     expect(cancelPosts()).toBe(sent + 1);
   });
 
-  /** PPL's answers to GET /order for the next lookups, in order — each held until released. */
-  type Shown = Awaited<ReturnType<PplPickups['find']>>;
-  function heldAnswer(shown: Shown) {
-    let entered!: () => void;
-    let release!: () => void;
-    const reached = new Promise<void>((r) => (entered = r));
-    const answer = new Promise<Shown>((r) => (release = () => r(shown)));
-    return {
-      run: () => {
-        entered();
-        return answer;
-      },
-      reached,
-      release,
-    };
-  }
-  const CREATED: Shown = { orderNumber: '1', state: 'Created', cancelled: false };
-  const CANCELED: Shown = { orderNumber: '1', state: 'Canceled', cancelled: true };
-  /** An uncertain attempt (a 500 before PPL carried it out — PPL shows "Created"). */
-  async function uncertainCancel(code: string) {
-    ppl.mode.cancelOrderError = true;
-    const v = (await cancel(code).expect(200)).body as PickupView;
-    ppl.mode.cancelOrderError = false;
-    expect(v.cancellation!.status).toBe('SENT');
-    return v.cancellation!.id;
-  }
-  const attemptRow = (id: string) =>
-    t.prisma.carrierPickupCancellation.findUniqueOrThrow({ where: { id } });
+  it('an older uncertain attempt and two pollers: one lookup at a time, the next by its back-off; a crash is taken over; never a POST', async () => {
+    const o = await readyForPickup(1);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    const ref = await referenceOf(p.code);
+    ppl.mode.cancelOrderShownAfter = 1_000_000;
+    const id = await uncertainCancel(p.code);
+    // As SV-000001 on DEV: sent long ago by the earlier release — no due time, nothing counted.
+    await t.prisma.$executeRaw`UPDATE "carrier_pickup_cancellations"
+      SET "next_poll_at" = NULL, "sent_at" = "sent_at" - interval '6 days' WHERE "id" = ${id}::uuid`;
+    const posts = cancelPosts();
+    const real = PplPickups.prototype.find;
+    let mine = 0;
+    let held: ReturnType<typeof heldAnswer> | null = null;
+    const find = vi.spyOn(PplPickups.prototype, 'find').mockImplementation(async function (
+      this: PplPickups,
+      ...args
+    ) {
+      if (args[0].clientReference !== ref) return real.apply(this, args);
+      mine++;
+      if (held) {
+        const h = held;
+        held = null;
+        return h.run();
+      }
+      return real.apply(this, args);
+    });
+    try {
+      const gate = heldAnswer(CREATED);
+      held = gate;
+      // Two pollers (as two API processes): the first holds the lookup; the second skips it.
+      const first = service().pollDue(50);
+      await gate.reached;
+      await service().pollDue(50);
+      expect(mine).toBe(1);
+      // A person's lookup meanwhile asks nothing either (the running lookup answers).
+      await lookup(p.code).expect(200);
+      expect(mine).toBe(1);
+      gate.release();
+      await first;
+      // Due once — no catching up for the six days; "Created" releases nothing.
+      const one = await attemptRow(id);
+      expect(one).toMatchObject({ status: 'SENT', pollCount: 1, carrierState: 'Created' });
+      const gap = one.nextPollAt!.getTime() - Date.now();
+      expect(gap).toBeGreaterThan(5_000);
+      expect(gap).toBeLessThan(15_000);
+      await service().pollDue(50);
+      await lookup(p.code).expect(200); // due within the lease: nothing asked
+      expect(mine).toBe(1);
+      expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+
+      // A crash during the next lookup: its lease expires and another poller takes it over.
+      await dueNow(p.code);
+      const crashed = await t.prisma.$queryRaw<{ id: string }[]>`
+        UPDATE "carrier_pickup_cancellations" SET "next_poll_at" = now() - interval '1 second',
+               "poll_count" = "poll_count" + 1
+         WHERE "id" = ${id}::uuid RETURNING "id"`; // claimed, then the process died
+      expect(crashed).toHaveLength(1);
+      await service().pollDue(50);
+      expect(mine).toBe(2);
+      expect(await attemptRow(id)).toMatchObject({ status: 'SENT', pollCount: 3 });
+
+      // A person's lookup when the next one is far: one extra read, not counted, time kept.
+      const far = new Date(Date.now() + 10 * 60_000);
+      await t.prisma.$executeRaw`UPDATE "carrier_pickup_cancellations" SET "next_poll_at" = ${far}
+        WHERE "id" = ${id}::uuid`;
+      await lookup(p.code).expect(200);
+      expect(mine).toBe(3);
+      expect(await attemptRow(id)).toMatchObject({ pollCount: 3, nextPollAt: far });
+
+      // PPL shows Canceled: the next due lookup confirms and releases.
+      ppl.orders.get(ref)!.cancelled = true;
+      ppl.orders.get(ref)!.hiddenLooks = 0;
+      await dueNow(p.code);
+      await service().pollDue(50);
+      expect(await attemptRow(id)).toMatchObject({ status: 'CONFIRMED', nextPollAt: null });
+      expect(
+        (await order([o.code], { date: pragueToday(2) }).expect(200)).body.parcels[0]
+          .carrierParcelNumber,
+      ).toBe(o.numbers[0]);
+      expect(cancelPosts()).toBe(posts);
+    } finally {
+      find.mockRestore();
+    }
+  });
 
   it('a late closing names its attempt: closing A after B exists leaves B and its hold untouched', async () => {
     const o = await readyForPickup(1);

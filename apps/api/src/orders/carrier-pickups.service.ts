@@ -51,13 +51,6 @@ const unusable = (error: unknown) =>
     error instanceof CarrierUnusableAnswerError ? error.detail : 'unexpected error'
   }`.slice(0, 1000);
 
-/**
- * The seconds after the in-flight window at which the n-th automatic lookup of an uncertain
- * cancellation is due — the same back-off as an accepted one (10 s, 20 s, … at most 5 min apart),
- * counted from its sending because the database keeps no next lookup for it.
- */
-const uncertainLookupAfter = (n: number) => (n <= 5 ? 10 * (2 ** n - 1) : 310 + 300 * (n - 5));
-
 const pickupInclude = {
   parcels: {
     include: {
@@ -394,6 +387,8 @@ export class CarrierPickupsService {
    * "Zjistit stav u dopravce": a read-only lookup of an accepted pickup, of an uncertain one (its
    * answer lost — only after the in-flight window, by its own reference), of a confirmed one still
    * without the carrier's number, and of its unresolved cancellation. Never sends anything again.
+   * An unresolved cancellation is read under the same lease as the automatic lookups and without
+   * using up one of them (see {@link lookupCancelOnce}).
    */
   async lookup(site: SiteContext, code: string, input: LookupPickupRequest): Promise<PickupView> {
     void input;
@@ -405,10 +400,84 @@ export class CarrierPickupsService {
       (c?.status === 'SENT' && !(await this.settled('carrier_pickup_cancellations', c.id)));
     if (inFlight) throw domainError(409, 'PICKUP_IN_FLIGHT', 'The carrier may still be answering');
     await this.drive(row.id, true);
-    if (c && (UNRESOLVED as readonly string[]).includes(c.status)) {
-      await this.driveCancel(c.id, true);
-    }
+    if (c && (c.status === 'SENT' || c.status === 'ACCEPTED')) await this.lookupCancelOnce(c.id);
     return this.view(site, code);
+  }
+
+  /** The lease of one lookup of a cancellation: longer than one carrier call. */
+  private lookupLease(): number {
+    return Math.max(LEASE_SECONDS, 2 * this.env.CARRIER_CALL_TIMEOUT_SECONDS);
+  }
+
+  /**
+   * A person's "Zjistit stav": one read of an unresolved cancellation at the carrier, always under
+   * the same lease (`next_poll_at`) as the automatic lookups, so never next to a running one.
+   * - Due now: it is the regular lookup, counted and scheduled as the poller would.
+   * - Its next lookup is further away than the lease, or none is left: one extra read, not
+   *   counted; the next due time is put back afterwards.
+   * - Held by a running lookup, or due within the lease: nothing is asked; that one answers.
+   */
+  private async lookupCancelOnce(id: string): Promise<void> {
+    const lease = this.lookupLease();
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<
+        {
+          status: 'SENT' | 'ACCEPTED';
+          next: Date | null;
+          count: number;
+          due: boolean;
+          far: boolean;
+        }[]
+      >`
+        SELECT "status"::text AS "status", "next_poll_at" AS "next", "poll_count" AS "count",
+               coalesce("next_poll_at" <= now(), false) AS "due",
+               coalesce("next_poll_at" > now() + make_interval(secs => ${lease}), false) AS "far"
+          FROM "carrier_pickup_cancellations"
+         WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED') FOR UPDATE`;
+      if (!row) return null;
+      // An older uncertain attempt without a due time and lookups left is due (once).
+      const regular =
+        row.due || (row.next === null && row.status === 'SENT' && row.count < PICKUP_MAX_POLLS);
+      if (!regular && !(row.next === null || row.far)) return null;
+      const counted = regular && row.status === 'SENT' ? 1 : 0;
+      const [taken] = await tx.$queryRaw<{ lease: Date }[]>`
+        UPDATE "carrier_pickup_cancellations"
+           SET "next_poll_at" = now() + make_interval(secs => ${lease}),
+               "poll_count" = "poll_count" + ${counted}
+         WHERE "id" = ${id}::uuid
+        RETURNING "next_poll_at" AS "lease"`;
+      return { regular, status: row.status, previous: row.next, lease: taken!.lease };
+    });
+    if (!claimed) return;
+    try {
+      await this.readCancel(id);
+    } finally {
+      if (!claimed.regular) {
+        await this.prisma.$executeRaw`
+          UPDATE "carrier_pickup_cancellations" SET "next_poll_at" = ${claimed.previous}
+           WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED')
+             AND "next_poll_at" = ${claimed.lease}`;
+      } else if (claimed.status === 'SENT') {
+        await this.scheduleUncertain(id, claimed.lease);
+      } else {
+        const untouched = await this.prisma.carrierPickupCancellation.count({
+          where: { id, nextPollAt: claimed.lease, status: 'ACCEPTED' },
+        });
+        if (untouched) await this.scheduleCancel(id);
+      }
+    }
+  }
+
+  /**
+   * After a lookup of an uncertain attempt (already counted at its claim): still uncertain and
+   * still under that lookup's lease → the next lookup by the back-off, or none after the last.
+   */
+  private async scheduleUncertain(id: string, lease: Date): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE "carrier_pickup_cancellations"
+         SET "next_poll_at" = CASE WHEN "poll_count" >= ${PICKUP_MAX_POLLS} THEN NULL
+                                   ELSE now() + make_interval(secs => LEAST(5 * power(2, "poll_count"), 300)) END
+       WHERE "id" = ${id}::uuid AND "status" = 'SENT' AND "next_poll_at" = ${lease}`;
   }
 
   /**
@@ -590,12 +659,13 @@ export class CarrierPickupsService {
              WHERE "id" = ${id}::uuid AND "status" = 'SENT'`;
         } else {
           // Uncertain: looked up automatically by its own reference (GET only, bounded — see
-          // pollDue), never sent again.
+          // pollDue), first after the in-flight window; never sent again.
           const detail = unusable(error);
           this.log.warn(`Pickup cancellation ${id}: ${detail}`);
           await this.prisma.$executeRaw`
             UPDATE "carrier_pickup_cancellations"
-               SET "error_code" = ${PICKUP_NO_ANSWER}, "error_message" = ${detail}
+               SET "error_code" = ${PICKUP_NO_ANSWER}, "error_message" = ${detail},
+                   "next_poll_at" = now() + make_interval(secs => ${this.env.CARRIER_SETTLE_SECONDS})
              WHERE "id" = ${id}::uuid AND "status" = 'SENT'`;
         }
         return;
@@ -610,23 +680,39 @@ export class CarrierPickupsService {
       return;
     }
     if (!(c.status === 'ACCEPTED' || (lookup && c.status === 'SENT'))) return;
+    // Not (yet) shown cancelled: an accepted request is looked up again (an uncertain one is
+    // scheduled by its own poller round).
+    if ((await this.readCancel(id)) !== 'CANCELLED') await this.scheduleCancel(id);
+  }
+
+  /**
+   * One read of the carrier's state of the attempt's pickup (GET only): Canceled confirms it (and
+   * releases the parcels); anything else only keeps the state read. Never sends anything.
+   */
+  private async readCancel(id: string): Promise<'CANCELLED' | 'NOT_CANCELLED' | 'FAILED'> {
+    const c = await this.prisma.carrierPickupCancellation.findUniqueOrThrow({
+      where: { id },
+      include: { pickup: true },
+    });
+    const pickups = await this.pickupsOf(c.pickup);
+    if (!pickups) return 'FAILED';
     let found: Awaited<ReturnType<CarrierPickups['find']>>;
     try {
-      found = await this.call((signal) => pickups.find(ref, signal));
+      found = await this.call((signal) =>
+        pickups.find({ clientReference: c.pickup.clientReference }, signal),
+      );
     } catch {
       this.log.warn(`Pickup cancellation ${id}: lookup failed`);
-      await this.scheduleCancel(id);
-      return;
+      return 'FAILED';
     }
     if (found?.cancelled) {
       await this.markCancelled(c.pickupId, found.state);
-      return;
+      return 'CANCELLED';
     }
-    // Not (yet) shown cancelled: an accepted request is looked up again; an uncertain one stays.
     await this.prisma.$executeRaw`
       UPDATE "carrier_pickup_cancellations" SET "carrier_state" = ${found?.state?.slice(0, 100) ?? null}
        WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED')`;
-    await this.scheduleCancel(id);
+    return 'NOT_CANCELLED';
   }
 
   /**
@@ -1021,24 +1107,30 @@ export class CarrierPickupsService {
       if (untouched) await this.scheduleCancel(r.id);
     }
     // Uncertain cancellations (sent, the answer not usable): looked up by the pickup's own
-    // reference — a read only, never sent again — after the in-flight window, with the same bounded
-    // back-off. Each lookup is counted when it is claimed, so a failing carrier ends the lookups
-    // too; only the carrier's Canceled confirms (and releases the parcels).
-    const uncertain = await this.prisma.$queryRaw<{ id: string }[]>`
-      UPDATE "carrier_pickup_cancellations" c SET "poll_count" = c."poll_count" + 1
+    // reference — a read only, never sent again — after the in-flight window. Claimed like an
+    // accepted one: `next_poll_at` becomes the lease of this one lookup (another process skips it;
+    // after a crash the expired lease is claimed again) and the lookup is counted at the claim, so
+    // a failing carrier ends the lookups too. The next one is due by the back-off from the lookup
+    // that ran. An older attempt without a due time is due once after the in-flight window — no
+    // catching up. Only the carrier's Canceled confirms (and releases the parcels).
+    const lease = this.lookupLease();
+    const uncertain = await this.prisma.$queryRaw<{ id: string; lease: Date }[]>`
+      UPDATE "carrier_pickup_cancellations" c
+         SET "next_poll_at" = now() + make_interval(secs => ${lease}), "poll_count" = c."poll_count" + 1
        WHERE c."id" IN (SELECT q."id" FROM "carrier_pickup_cancellations" q
                          WHERE q."status" = 'SENT' AND q."poll_count" < ${PICKUP_MAX_POLLS}
-                           AND q."sent_at" + make_interval(secs => ${grace} + (CASE WHEN q."poll_count" <= 5
-                                 THEN 10 * (power(2, q."poll_count") - 1)
-                                 ELSE 310 + 300 * (q."poll_count" - 5) END)) <= now()
-                         ORDER BY q."sent_at" LIMIT ${limit} FOR UPDATE SKIP LOCKED)
-      RETURNING c."id"`;
+                           AND q."sent_at" <= now() - make_interval(secs => ${grace})
+                           AND (q."next_poll_at" IS NULL OR q."next_poll_at" <= now())
+                         ORDER BY coalesce(q."next_poll_at", q."sent_at") LIMIT ${limit}
+                         FOR UPDATE SKIP LOCKED)
+      RETURNING c."id", c."next_poll_at" AS "lease"`;
     for (const r of uncertain) {
       try {
-        await this.driveCancel(r.id, true);
+        await this.readCancel(r.id);
       } catch (error) {
         this.log.warn(`Uncertain pickup cancellation lookup ${r.id} failed: ${String(error)}`);
       }
+      await this.scheduleUncertain(r.id, r.lease);
     }
     return written.length + cancels.length + due.length + dueCancels.length + uncertain.length;
   }
@@ -1202,16 +1294,15 @@ export class CarrierPickupsService {
             lookupsExhausted:
               (c.status === 'ACCEPTED' && c.nextPollAt === null) ||
               (c.status === 'SENT' && c.pollCount >= PICKUP_MAX_POLLS),
+            // An older uncertain attempt without a due time is due once after the in-flight window.
             nextLookupAt:
-              c.status === 'ACCEPTED'
-                ? (c.nextPollAt?.toISOString() ?? null)
-                : c.status === 'SENT' && c.sentAt && c.pollCount < PICKUP_MAX_POLLS
-                  ? new Date(
-                      c.sentAt.getTime() +
-                        (this.env.CARRIER_SETTLE_SECONDS + uncertainLookupAfter(c.pollCount)) *
-                          1000,
-                    ).toISOString()
-                  : null,
+              c.status !== 'SENT' && c.status !== 'ACCEPTED'
+                ? null
+                : c.nextPollAt
+                  ? c.nextPollAt.toISOString()
+                  : c.status === 'SENT' && c.pollCount < PICKUP_MAX_POLLS
+                    ? this.lookupFrom(c.sentAt)
+                    : null,
             resolutionReason: c.resolutionReason,
           }
         : null,

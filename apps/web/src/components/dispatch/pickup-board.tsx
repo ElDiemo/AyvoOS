@@ -2,13 +2,43 @@
 
 import { pickupViewSchema, type PickupBoard as Board, type PickupView } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { ConfirmDialog, reasonError, ReasonField, useAttempt } from '@/components/catalog/form-kit';
 import { buttonClass, Card, EmptyState } from '@/components/ui';
 import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
 import { pickupsCs as t } from '@/i18n/cs/pickups';
-import { pickupSummary, type Tone } from './pickup-summary';
 import { apiSend, ClientApiError } from '@/lib/client-api';
+import { boardAutoChecking, pickupSummary, type Tone } from './pickup-summary';
+
+/** How often the board is read again from our server while the server settles something itself. */
+const AUTO_REFRESH_MS = 15_000;
+/** At most this many refreshes per opened board (about 3 hours; the lookups end within ~2.2 h). */
+const AUTO_REFRESH_MAX = 720;
+
+/**
+ * Keeps an open board current while the server itself still sends or looks something up: the page
+ * is read again from our own server (read only — never the carrier, never "Zjistit stav"), only on
+ * a visible tab (and once when the tab becomes visible again), bounded. Fields being edited keep
+ * their values: only the server's part of the page is replaced.
+ */
+function useAutoRefresh(active: boolean) {
+  const router = useRouter();
+  useEffect(() => {
+    if (!active) return;
+    let count = 0;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible' || count >= AUTO_REFRESH_MAX) return;
+      count += 1;
+      router.refresh();
+    };
+    const timer = setInterval(refresh, AUTO_REFRESH_MS);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [active, router]);
+}
 
 const errorText = (error: unknown) =>
   error instanceof ClientApiError
@@ -41,6 +71,7 @@ export function PickupBoard({
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { busy, run } = useAttempt();
+  useAutoRefresh(boardAutoChecking(board));
 
   const chosen = eligible.filter((c) => selected.has(c.orderCode));
   // The pickup announces the parcels not yet with the carrier and not held by another pickup.

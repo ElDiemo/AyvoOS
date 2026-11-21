@@ -1,6 +1,6 @@
-import type { PickupView } from '@ayvo/types';
+import type { PickupBoard, PickupView } from '@ayvo/types';
 import { describe, expect, it } from 'vitest';
-import { pickupSummary } from './pickup-summary';
+import { boardAutoChecking, pickupSummary } from './pickup-summary';
 
 type Cancellation = NonNullable<PickupView['cancellation']>;
 
@@ -127,5 +127,42 @@ describe('pickupSummary — the first layer of a pickup (AYVO UX rule)', () => {
     expect(pickupSummary(pickup({ status: 'NOT_SENT', errorCode: 'PICKUP_DAY_PASSED' })).hint).toBe(
       'Den svozu minul dřív, než se požadavek odeslal. Objednejte nový svoz.',
     );
+  });
+});
+
+describe('boardAutoChecking — the board refreshes itself only while the server settles something', () => {
+  const board = (pickups: PickupView[]) =>
+    ({
+      today: '2026-11-21',
+      carrier: {},
+      candidates: [],
+      open: null,
+      pickups,
+    }) as unknown as PickupBoard;
+
+  it('while a cancellation is looked up automatically, or a pickup is written or accepted', () => {
+    expect(boardAutoChecking(board([pickup({ cancellation: cancellation() })]))).toBe(true);
+    expect(boardAutoChecking(board([pickup({ status: 'ACCEPTED' })]))).toBe(true);
+    expect(boardAutoChecking(board([pickup({ status: 'PREPARED' })]))).toBe(true);
+    expect(
+      boardAutoChecking(
+        board([pickup({ cancellation: cancellation({ status: 'PREPARED', lookingUp: false }) })]),
+      ),
+    ).toBe(true);
+  });
+
+  it('stops when the lookups ran out, when PPL confirmed, and for a person-only uncertain pickup', () => {
+    const exhausted = cancellation({ lookingUp: false, lookupsExhausted: true, lookups: 30 });
+    expect(boardAutoChecking(board([pickup({ cancellation: exhausted })]))).toBe(false);
+    const confirmed = cancellation({ status: 'CONFIRMED', lookingUp: false });
+    expect(
+      boardAutoChecking(
+        board([
+          pickup({ cancelledByCarrierAt: '2026-11-21T14:00:00.000Z', cancellation: confirmed }),
+        ]),
+      ),
+    ).toBe(false);
+    expect(boardAutoChecking(board([pickup(), pickup({ status: 'SENT' })]))).toBe(false);
+    expect(boardAutoChecking(board([]))).toBe(false);
   });
 });

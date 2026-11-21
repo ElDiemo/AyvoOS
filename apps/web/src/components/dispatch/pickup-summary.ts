@@ -1,4 +1,4 @@
-import type { PickupView } from '@ayvo/types';
+import type { PickupBoard, PickupView } from '@ayvo/types';
 import { formatDateCs } from '@/i18n/cs/format';
 import { pickupsCs as t } from '@/i18n/cs/pickups';
 
@@ -76,4 +76,19 @@ export function pickupSummary(p: PickupView): {
     // A confirmed pickup without the carrier's number yet is looked up first.
     action: !p.carrierOrderNumber ? 'lookup' : cancellable ? 'cancel' : null,
   };
+}
+
+/**
+ * Whether the server is still settling something on this board by itself — a written pickup to
+ * send, an accepted one to look up, or a cancellation still looked up automatically. Only then is
+ * the board refreshed (from our server, never the carrier); after the last lookup it stops.
+ */
+export function boardAutoChecking(board: PickupBoard): boolean {
+  return board.pickups.some(
+    (p) =>
+      p.status === 'PREPARED' ||
+      p.status === 'ACCEPTED' ||
+      p.cancellation?.status === 'PREPARED' ||
+      (p.cancellation?.lookingUp ?? false),
+  );
 }
