@@ -93,14 +93,14 @@ for (const width of WIDTHS) {
   }
 }
 
-test('the CTAs: "See what you get" and "Request a pilot" lead to their sections; pilot is a mailto', async ({
+test('the CTAs: "How AYVO works" and "Request a pilot" lead to their sections; pilot is a mailto', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page, '/');
-  await page.locator('#top a[href="#value"]').click();
-  await expect(page).toHaveURL(/#value$/);
-  await expect(page.locator('#value h2')).toBeInViewport();
+  await page.locator('#top a[href="#how"]').click();
+  await expect(page).toHaveURL(/#how$/);
+  await expect(page.locator('#how h2')).toBeInViewport();
   await page.locator('#top a[href="#pilot"]').click();
   await expect(page.locator('#pilot h2')).toBeInViewport();
   const mail = page.locator('#pilot a[href^="mailto:"]');
