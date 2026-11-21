@@ -378,9 +378,79 @@ main section[id] {
   background: #fff;
 }
 
-.ayvo-hero-img {
-  max-width: 380px;
+/* Black-and-gold hero: the copy (HTML) on the left, the product image on the right; on phones
+   the image is its own block under the copy, always whole (never cropped). */
+.ayvo-hero.ayvo-hero-dark {
+  background: var(--ink-strong);
+}
+.ayvo-hero-wordmark {
+  display: block;
+  width: 150px;
+  height: auto;
+}
+.ayvo-hero-slogan {
+  margin: 10px 0 30px 0;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--gold);
+}
+.ayvo-hero-dark .ayvo-h1 {
+  color: #fff;
+}
+/* The h1 in two parts (the second in gold), each on its own line; a phone wraps inside a part. */
+.ayvo-hero-dark .ayvo-h1-part {
+  display: block;
+}
+.ayvo-hero-dark .ayvo-h1-gold {
+  color: var(--gold);
+}
+.ayvo-hero-points {
+  list-style: none;
+  margin: 22px 0 0 0;
+  padding: 0;
+}
+.ayvo-hero-points li {
+  position: relative;
+  margin: 0 0 10px 0;
+  padding-left: 26px;
+  font-size: 18px;
+  line-height: 1.45;
+  color: #e9e4da;
+}
+.ayvo-hero-points li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.72em;
+  width: 14px;
+  height: 1px;
+  background: var(--gold);
+}
+.ayvo-hero-dark .ayvo-cta {
+  margin-top: 30px;
+}
+.ayvo-hero-dark .ayvo-btn.primary {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--ink-strong);
+}
+.ayvo-hero-dark .ayvo-btn.primary:hover {
+  background: #c29d63;
+}
+/* The pilot CTA of the hero: rounded, with a decorative arrow (hidden from screen readers). */
+.ayvo-hero-dark .ayvo-btn.ayvo-btn-arrow {
+  gap: 12px;
+  padding: 15px 26px;
+  border-radius: 999px;
+}
+.ayvo-arrow {
+  font-size: 18px;
+  line-height: 1;
+}
+.ayvo-hero-visual {
+  display: block;
   width: 100%;
+  height: auto;
 }
 
 .ayvo-band {
@@ -487,6 +557,9 @@ main section[id] {
   }
   .ayvo-hero {
     padding: 64px 0 56px 0;
+  }
+  .ayvo-hero-dark .ayvo-hero-media {
+    margin-top: 8px;
   }
   .ayvo-cta {
     flex-direction: column;

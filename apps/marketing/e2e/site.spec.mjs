@@ -93,15 +93,29 @@ for (const width of WIDTHS) {
   }
 }
 
-test('the CTAs: "How AYVO works" and "Request a pilot" lead to their sections; pilot is a mailto', async ({
+test('the hero: one CTA to the pilot, the product photo whole and loaded; pilot is a mailto', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page, '/');
-  await page.locator('#top a[href="#how"]').click();
-  await expect(page).toHaveURL(/#how$/);
-  await expect(page.locator('#how h2')).toBeInViewport();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open(page, '/');
+    const visual = page.locator('#top img.ayvo-hero-visual');
+    await expect(visual).toBeVisible();
+    // Never cropped: the rendered box keeps the photo's aspect ratio.
+    const ratio = await visual.evaluate((i) => i.clientWidth / i.clientHeight);
+    expect(Math.abs(ratio - 857 / 916)).toBeLessThan(0.01);
+    if (width === 1440) {
+      // Desktop: the copy on the left, the photo on the right.
+      const h1 = await page.locator('#top h1').boundingBox();
+      const img = await visual.boundingBox();
+      expect(img.x).toBeGreaterThan(h1.x + h1.width - 1);
+    }
+  }
+  const photo = await page.request.get('/assets/img/ayvo-hero-set.webp');
+  expect(photo.status()).toBe(200);
+  expect(photo.headers()['content-type']).toBe('image/webp');
   await page.locator('#top a[href="#pilot"]').click();
+  await expect(page).toHaveURL(/#pilot$/);
   await expect(page.locator('#pilot h2')).toBeInViewport();
   const mail = page.locator('#pilot a[href^="mailto:"]');
   await expect(mail).toHaveAttribute('href', /^mailto:hello@ayvo\.co\?subject=/);
