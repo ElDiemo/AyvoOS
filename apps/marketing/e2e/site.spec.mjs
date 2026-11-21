@@ -93,25 +93,31 @@ for (const width of WIDTHS) {
   }
 }
 
-test('the hero: one CTA to the pilot, the product photo whole and loaded; pilot is a mailto', async ({
+test('the hero: the product image beside (desktop) or above (phone) the copy, one CTA to the pilot', async ({
   page,
 }) => {
   for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
+    await page.setViewportSize({ width, height: 844 });
     await open(page, '/');
     const visual = page.locator('#top img.ayvo-hero-visual');
     await expect(visual).toBeVisible();
-    // Never cropped: the rendered box keeps the photo's aspect ratio.
-    const ratio = await visual.evaluate((i) => i.clientWidth / i.clientHeight);
-    expect(Math.abs(ratio - 857 / 916)).toBeLessThan(0.01);
+    // The exact product area of the approved visual, never rescaled in the file.
+    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([648, 792]);
+    const hero = await page.locator('#top').boundingBox();
+    const img = await visual.boundingBox();
+    const h1 = await page.locator('#top h1').boundingBox();
+    const cta = await page.locator('#top a[href="#pilot"]').boundingBox();
     if (width === 1440) {
-      // Desktop: the copy on the left, the photo on the right.
-      const h1 = await page.locator('#top h1').boundingBox();
-      const img = await visual.boundingBox();
-      expect(img.x).toBeGreaterThan(h1.x + h1.width - 1);
+      // Desktop: the image on the right edge of the hero, the copy starting left of it.
+      expect(Math.abs(img.x + img.width - (hero.x + hero.width))).toBeLessThan(1);
+      expect(h1.x).toBeLessThan(img.x);
+    } else {
+      // Phone: the image above the copy, the CTA still in the first screen.
+      expect(img.y + img.height).toBeLessThanOrEqual(h1.y);
+      expect(cta.y + cta.height).toBeLessThanOrEqual(844);
     }
   }
-  const photo = await page.request.get('/assets/img/ayvo-hero-set.webp');
+  const photo = await page.request.get('/assets/img/ayvo-hero.webp');
   expect(photo.status()).toBe(200);
   expect(photo.headers()['content-type']).toBe('image/webp');
   await page.locator('#top a[href="#pilot"]').click();

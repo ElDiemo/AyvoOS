@@ -86,7 +86,7 @@ describe('pages', () => {
       assert.match(hero, /<span class="ayvo-arrow" aria-hidden="true">→<\/span><\/a\s*>/);
       const visual = hero.match(/<img\s[^>]*class="ayvo-hero-visual"[^>]*>/)?.[0];
       assert.ok(visual, 'hero product image');
-      assert.match(visual, /src="\/assets\/img\/ayvo-hero-set\.webp"/);
+      assert.match(visual, /src="\/assets\/img\/ayvo-hero\.webp"/);
       assert.match(visual, /fetchpriority="high"/);
       assert.doesNotMatch(visual, /loading="lazy"/);
       // No CO2 figures, savings percentages or regulatory compliance promises on the site.

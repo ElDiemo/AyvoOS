@@ -15,6 +15,10 @@
   --soft: #f6f6f6;
   --sans:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* System serif faces only (no font file is loaded): the hero h1. */
+  --serif:
+    'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman',
+    serif;
 }
 
 *,
@@ -378,79 +382,103 @@ main section[id] {
   background: #fff;
 }
 
-/* Black-and-gold hero: the copy (HTML) on the left, the product image on the right; on phones
-   the image is its own block under the copy, always whole (never cropped). */
+/* Black-and-gold hero (the approved bathroom visual): the copy in HTML on the dark left part,
+   the exact product area of the visual on the right, fading into the dark on its left edge.
+   On phones the image is its own square block above the copy. */
 .ayvo-hero.ayvo-hero-dark {
-  background: var(--ink-strong);
+  --hero-cream: #f3ebdc;
+  --hero-gold: #cfad72;
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: clamp(560px, 52vw, 720px);
+  padding: 0;
+  overflow: hidden;
+  background: linear-gradient(90deg, #0f0f0f 0%, #16120f 55%, #1c1713 100%);
+}
+.ayvo-hero-dark .ayvo-hero-media {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 58%;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 24%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 24%);
+}
+.ayvo-hero-dark .ayvo-hero-visual {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 40%;
+}
+.ayvo-hero-dark .ayvo-hero-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  padding-top: 64px;
+  padding-bottom: 64px;
+}
+.ayvo-hero-copy {
+  max-width: 500px;
 }
 .ayvo-hero-wordmark {
   display: block;
-  width: 150px;
+  width: 230px;
   height: auto;
 }
 .ayvo-hero-slogan {
-  margin: 10px 0 30px 0;
-  font-size: 15px;
-  letter-spacing: 0.04em;
-  color: var(--gold);
+  margin: 12px 0 34px 0;
+  font-size: 23px;
+  color: var(--hero-gold);
 }
+/* The h1 in two parts (cream, then gold), each on its own line; a phone wraps inside a part. */
 .ayvo-hero-dark .ayvo-h1 {
-  color: #fff;
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 62px;
+  line-height: 1.06;
+  letter-spacing: 0;
+  color: var(--hero-cream);
 }
-/* The h1 in two parts (the second in gold), each on its own line; a phone wraps inside a part. */
 .ayvo-hero-dark .ayvo-h1-part {
   display: block;
 }
 .ayvo-hero-dark .ayvo-h1-gold {
-  color: var(--gold);
+  color: var(--hero-gold);
 }
 .ayvo-hero-points {
   list-style: none;
-  margin: 22px 0 0 0;
+  margin: 26px 0 0 0;
   padding: 0;
 }
 .ayvo-hero-points li {
-  position: relative;
-  margin: 0 0 10px 0;
-  padding-left: 26px;
-  font-size: 18px;
-  line-height: 1.45;
-  color: #e9e4da;
-}
-.ayvo-hero-points li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0.72em;
-  width: 14px;
-  height: 1px;
-  background: var(--gold);
+  margin: 0 0 4px 0;
+  font-size: 23px;
+  line-height: 1.35;
+  color: var(--hero-cream);
 }
 .ayvo-hero-dark .ayvo-cta {
-  margin-top: 30px;
+  margin-top: 34px;
 }
+/* The pilot CTA: a rounded gold button with a decorative arrow (hidden from screen readers). */
 .ayvo-hero-dark .ayvo-btn.primary {
-  background: var(--gold);
-  border-color: var(--gold);
-  color: var(--ink-strong);
+  gap: 14px;
+  padding: 18px 30px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #ead3a0 0%, #d2b277 55%, #b99559 100%);
+  color: #17120c;
+  font-size: 19px;
+  font-weight: 600;
 }
 .ayvo-hero-dark .ayvo-btn.primary:hover {
-  background: #c29d63;
-}
-/* The pilot CTA of the hero: rounded, with a decorative arrow (hidden from screen readers). */
-.ayvo-hero-dark .ayvo-btn.ayvo-btn-arrow {
-  gap: 12px;
-  padding: 15px 26px;
-  border-radius: 999px;
+  background: linear-gradient(135deg, #f0dcad 0%, #d9ba80 55%, #c19d61 100%);
 }
 .ayvo-arrow {
-  font-size: 18px;
+  font-size: 22px;
   line-height: 1;
-}
-.ayvo-hero-visual {
-  display: block;
-  width: 100%;
-  height: auto;
 }
 
 .ayvo-band {
@@ -558,8 +586,44 @@ main section[id] {
   .ayvo-hero {
     padding: 64px 0 56px 0;
   }
+  /* Phones: the image is its own square block above the copy, both bottles whole. */
+  .ayvo-hero.ayvo-hero-dark {
+    display: block;
+    min-height: 0;
+  }
   .ayvo-hero-dark .ayvo-hero-media {
-    margin-top: 8px;
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent 100%);
+    mask-image: linear-gradient(180deg, #000 80%, transparent 100%);
+  }
+  .ayvo-hero-dark .ayvo-hero-content {
+    padding-top: 10px;
+    padding-bottom: 40px;
+  }
+  .ayvo-hero-wordmark {
+    width: 130px;
+  }
+  .ayvo-hero-slogan {
+    margin: 6px 0 16px 0;
+    font-size: 16px;
+  }
+  .ayvo-hero-dark .ayvo-h1 {
+    font-size: 38px;
+  }
+  .ayvo-hero-points {
+    margin-top: 14px;
+  }
+  .ayvo-hero-points li {
+    font-size: 17px;
+  }
+  .ayvo-hero-dark .ayvo-cta {
+    margin-top: 20px;
+  }
+  .ayvo-hero-dark .ayvo-btn.primary {
+    padding: 15px 24px;
+    font-size: 16px;
   }
   .ayvo-cta {
     flex-direction: column;
