@@ -140,7 +140,8 @@ export const pickupViewSchema = z.object({
       lookupFrom: z.iso.datetime().nullable(),
       /**
        * Still looked up automatically — an accepted attempt, and an uncertain one (sent, its answer
-       * not usable) by a read only — false once the bounded lookups ran out.
+       * not usable) by a read only — false once the bounded lookups ran out and the last one
+       * answered (or its lease expired after a crash).
        */
       lookingUp: z.boolean(),
       /** Automatic lookups so far. */

@@ -412,9 +412,11 @@ export class CarrierPickupsService {
   /**
    * A person's "Zjistit stav": one read of an unresolved cancellation at the carrier, always under
    * the same lease (`next_poll_at`) as the automatic lookups, so never next to a running one.
-   * - Due now: it is the regular lookup, counted and scheduled as the poller would.
-   * - Its next lookup is further away than the lease, or none is left: one extra read, not
-   *   counted; the next due time is put back afterwards.
+   * - Due now with lookups left: it is the regular lookup, counted and scheduled as the poller
+   *   would.
+   * - Its next lookup is further away than the lease, or none is left (also the last lookup's
+   *   lease expired after a crash): one extra read, not counted; the next due time is put back
+   *   afterwards, and after the last lookup none is set.
    * - Held by a running lookup, or due within the lease: nothing is asked; that one answers.
    */
   private async lookupCancelOnce(id: string): Promise<void> {
@@ -435,10 +437,11 @@ export class CarrierPickupsService {
           FROM "carrier_pickup_cancellations"
          WHERE "id" = ${id}::uuid AND "status" IN ('SENT', 'ACCEPTED') FOR UPDATE`;
       if (!row) return null;
-      // An older uncertain attempt without a due time and lookups left is due (once).
-      const regular =
-        row.due || (row.next === null && row.status === 'SENT' && row.count < PICKUP_MAX_POLLS);
-      if (!regular && !(row.next === null || row.far)) return null;
+      // An uncertain attempt is regular only with lookups left (an older one without a due time
+      // is due once); after the last one every read is extra.
+      const left = row.status === 'ACCEPTED' || row.count < PICKUP_MAX_POLLS;
+      const regular = left && (row.due || (row.next === null && row.status === 'SENT'));
+      if (!regular && !(row.next === null || row.far || (row.due && !left))) return null;
       const counted = regular && row.status === 'SENT' ? 1 : 0;
       const [taken] = await tx.$queryRaw<{ lease: Date }[]>`
         UPDATE "carrier_pickup_cancellations"
@@ -446,7 +449,9 @@ export class CarrierPickupsService {
                "poll_count" = "poll_count" + ${counted}
          WHERE "id" = ${id}::uuid
         RETURNING "next_poll_at" AS "lease"`;
-      return { regular, status: row.status, previous: row.next, lease: taken!.lease };
+      // After the last lookup no automatic one is due again (a crashed last lease included).
+      const previous = left ? row.next : null;
+      return { regular, status: row.status, previous, lease: taken!.lease };
     });
     if (!claimed) return;
     try {
@@ -1253,6 +1258,14 @@ export class CarrierPickupsService {
   private toView(r: PickupRow, today: string): PickupView {
     const c = r.cancellations[0] ?? null;
     const date = r.pickupDate.toISOString().slice(0, 10);
+    // An uncertain cancellation is still looked up while lookups are left or the last one still
+    // holds its lease (its GET may still answer Canceled); a crashed last lease expires, and
+    // then it is a person's.
+    const lastLeaseHeld = !!c?.nextPollAt && c.nextPollAt.getTime() > Date.now();
+    const lookingUp =
+      !!c &&
+      ((c.status === 'ACCEPTED' && c.nextPollAt !== null) ||
+        (c.status === 'SENT' && (c.pollCount < PICKUP_MAX_POLLS || lastLeaseHeld)));
     return {
       code: r.code,
       status: r.status,
@@ -1287,22 +1300,20 @@ export class CarrierPickupsService {
             errorCode: c.errorCode,
             errorMessage: c.errorMessage,
             lookupFrom: c.status === 'SENT' ? this.lookupFrom(c.sentAt) : null,
-            lookingUp:
-              (c.status === 'ACCEPTED' && c.nextPollAt !== null) ||
-              (c.status === 'SENT' && c.pollCount < PICKUP_MAX_POLLS),
+            lookingUp,
             lookups: c.pollCount,
-            lookupsExhausted:
-              (c.status === 'ACCEPTED' && c.nextPollAt === null) ||
-              (c.status === 'SENT' && c.pollCount >= PICKUP_MAX_POLLS),
+            lookupsExhausted: (c.status === 'ACCEPTED' || c.status === 'SENT') && !lookingUp,
             // An older uncertain attempt without a due time is due once after the in-flight window.
             nextLookupAt:
               c.status !== 'SENT' && c.status !== 'ACCEPTED'
                 ? null
-                : c.nextPollAt
-                  ? c.nextPollAt.toISOString()
-                  : c.status === 'SENT' && c.pollCount < PICKUP_MAX_POLLS
-                    ? this.lookupFrom(c.sentAt)
-                    : null,
+                : c.status === 'SENT' && c.pollCount >= PICKUP_MAX_POLLS
+                  ? null
+                  : c.nextPollAt
+                    ? c.nextPollAt.toISOString()
+                    : c.status === 'SENT'
+                      ? this.lookupFrom(c.sentAt)
+                      : null,
             resolutionReason: c.resolutionReason,
           }
         : null,

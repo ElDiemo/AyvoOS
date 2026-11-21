@@ -514,8 +514,11 @@ the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/
   a due time (sent by an earlier release) is due once, without catching up (migration
   `20261121090000_pickup_cancel_uncertain_lookups` lets `SENT` carry `next_poll_at`). A person's
   "Zjistit stav" takes the same lease: due → it is that lookup; the next one far away or none left →
-  one extra read, not counted; a lookup running or due within the lease → nothing is asked. When
-  the lookups run out without `Canceled`, the board says so and hands it over to a person. An open
+  one extra read, not counted; a lookup running or due within the lease → nothing is asked. After
+  the 30th lookup a person's read is always an extra one: never counted, no new due time (also
+  when the last lookup's lease expired after a crash). The board waits while the last lookup's
+  lease still holds (its answer may still be `Canceled`); when the lookups ran out without
+  `Canceled` — or that lease expired — it says so and hands it over to a person. An open
   board reads itself again from the server (never the carrier) while the server still settles
   something, every 15 s on a visible tab, at most 3 h (2026-11-21). An error, a time-out, an
   outage or PPL showing only `Created` releases nothing by itself. **Closing an uncertain attempt**

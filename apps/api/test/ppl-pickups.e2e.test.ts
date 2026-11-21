@@ -953,6 +953,101 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     }
   });
 
+  it('the last lookup: the board waits for its answer and Canceled releases; a crashed last lease is a person’s — an extra read, never counted or rescheduled', async () => {
+    ppl.mode.cancelOrderShownAfter = 1_000_000;
+    const o = await readyForPickup(1);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    const ref = await referenceOf(p.code);
+    const id = await uncertainCancel(p.code);
+    const q = await readyForPickup(1);
+    const r = (await order([q.code]).expect(200)).body as PickupView;
+    const ref2 = await referenceOf(r.code);
+    const id2 = await uncertainCancel(r.code);
+    const posts = cancelPosts();
+    const real = PplPickups.prototype.find;
+    let mine = 0;
+    let held: ReturnType<typeof heldAnswer> | null = null;
+    const find = vi.spyOn(PplPickups.prototype, 'find').mockImplementation(async function (
+      this: PplPickups,
+      ...args
+    ) {
+      const own = args[0].clientReference;
+      if (own !== ref && own !== ref2) return real.apply(this, args);
+      mine++;
+      if (held) {
+        const h = held;
+        held = null;
+        return h.run();
+      }
+      return real.apply(this, args);
+    });
+    const onBoard = async (code: string) =>
+      (await board()).pickups.find((x) => x.code === code)!.cancellation;
+    try {
+      // One lookup left, due now; its GET is held while PPL already shows it Canceled.
+      await t.prisma.$executeRaw`UPDATE "carrier_pickup_cancellations"
+        SET "poll_count" = ${PICKUP_MAX_POLLS - 1}, "next_poll_at" = now() - interval '1 second'
+        WHERE "id" = ${id}::uuid`;
+      await t.prisma.$executeRaw`UPDATE "carrier_pickup_cancellations"
+        SET "next_poll_at" = now() + interval '1 hour' WHERE "id" = ${id2}::uuid`;
+      const last = heldAnswer(CANCELED);
+      held = last;
+      const polling = service().pollDue(50);
+      await last.reached;
+      // Counted at the claim, but its GET still runs: the board still waits (and keeps refreshing).
+      expect(await onBoard(p.code)).toMatchObject({
+        status: 'SENT',
+        lookups: PICKUP_MAX_POLLS,
+        lookingUp: true,
+        lookupsExhausted: false,
+        nextLookupAt: null,
+      });
+      await lookup(p.code).expect(200); // the running lookup answers
+      expect(mine).toBe(1);
+      expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+      last.release();
+      await polling;
+      // Its Canceled shows on the board by itself and releases the parcel.
+      expect(await onBoard(p.code)).toMatchObject({
+        status: 'CONFIRMED',
+        lookingUp: false,
+        lookupsExhausted: false,
+      });
+      expect(
+        (await order([o.code], { date: pragueToday(2) }).expect(200)).body.parcels[0]
+          .carrierParcelNumber,
+      ).toBe(o.numbers[0]);
+
+      // The process died during the last lookup: once its lease expires it is a person's (the
+      // board stops), nothing is due again and a person's lookup is one extra read.
+      await t.prisma.$executeRaw`UPDATE "carrier_pickup_cancellations"
+        SET "poll_count" = ${PICKUP_MAX_POLLS}, "next_poll_at" = now() - interval '1 second'
+        WHERE "id" = ${id2}::uuid`;
+      expect(await onBoard(r.code)).toMatchObject({
+        status: 'SENT',
+        lookups: PICKUP_MAX_POLLS,
+        lookingUp: false,
+        lookupsExhausted: true,
+        nextLookupAt: null,
+      });
+      await service().pollDue(50);
+      expect(mine).toBe(1);
+      await lookup(r.code).expect(200);
+      expect(mine).toBe(2);
+      expect(await attemptRow(id2)).toMatchObject({
+        status: 'SENT',
+        pollCount: PICKUP_MAX_POLLS,
+        nextPollAt: null,
+      });
+      await service().pollDue(50);
+      expect(mine).toBe(2);
+      expect((await order([q.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+      expect(cancelPosts()).toBe(posts);
+    } finally {
+      find.mockRestore();
+    }
+  });
+
   it('a late closing names its attempt: closing A after B exists leaves B and its hold untouched', async () => {
     const o = await readyForPickup(1);
     const p = (await order([o.code]).expect(200)).body as PickupView;
