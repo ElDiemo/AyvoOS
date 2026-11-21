@@ -599,6 +599,21 @@ main section[id] {
 /* =========================
    Responsive
 ========================= */
+/* Narrow desktops (861-1100 px): a smaller h1 and bottle layer, so the longest h1 (CZ) keeps clear
+   of the bottles. */
+@media (min-width: 861px) and (max-width: 1100px) {
+  .ayvo-hero-dark .ayvo-h1 {
+    font-size: 46px;
+  }
+  .ayvo-hero-copy {
+    max-width: 400px;
+  }
+  .ayvo-hero-products {
+    right: 5%;
+    height: 60%;
+  }
+}
+
 @media (max-width: 860px) {
   .ayvo-grid3 {
     grid-template-columns: 1fr;

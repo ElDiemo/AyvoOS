@@ -137,6 +137,36 @@ test('the hero: one scene from edge to edge, the bottles on the counter, the off
   await expect(mail).toHaveAttribute('href', /^mailto:hello@ayvo\.co\?subject=/);
 });
 
+test('narrow desktops (861 / 900 / 1024 px): the copy never reaches the bottle layer', async ({
+  page,
+}) => {
+  for (const width of [861, 900, 1024]) {
+    for (const p of PAGES) {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page, p.path);
+      const { text, product } = await page.evaluate(() => {
+        // The real extents of the text (its line boxes), not the blocks around it.
+        const right = (el) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return Math.max(...[...range.getClientRects()].map((r) => r.right));
+        };
+        const copy = [
+          ...document.querySelectorAll(
+            '#top h1 .ayvo-h1-part, #top .ayvo-hero-points li, #top .ayvo-hero-slogan',
+          ),
+        ];
+        const cta = document.querySelector('#top a[href="#pilot"]').getBoundingClientRect().right;
+        return {
+          text: Math.max(cta, ...copy.map(right)),
+          product: document.querySelector('#top img.ayvo-hero-visual').getBoundingClientRect().left,
+        };
+      });
+      expect(text, `${p.path} at ${width}px`).toBeLessThan(product);
+    }
+  }
+});
+
 test('switching the language keeps the section being read', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, '/');
