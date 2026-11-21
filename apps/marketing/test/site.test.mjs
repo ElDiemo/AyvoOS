@@ -56,7 +56,9 @@ describe('pages', () => {
     });
 
     it(`${page.path}: slogan, hero CTAs to the pilot and the steps, no unbacked claims`, () => {
-      assert.ok(html.includes('<span class="ayvo-tagline">Refill. Redefined.</span>'));
+      assert.ok(html.includes('<span class="ayvo-tagline">Refill. Redefine.</span>'));
+      assert.ok(html.includes('<h2 class="ayvo-h1">Refill. Redefine.</h2>'));
+      assert.doesNotMatch(html, /Redefined/);
       const hero = html.match(/<section id="top"[\s\S]*?<\/section>/)[0];
       const targets = [...hero.matchAll(/class="ayvo-btn[^"]*"|href="(#[a-z]+)"/g)]
         .map((m) => m[1])
