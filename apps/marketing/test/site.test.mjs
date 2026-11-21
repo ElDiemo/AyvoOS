@@ -55,6 +55,18 @@ describe('pages', () => {
       for (const p of PAGES) assert.ok(html.includes(`<a href="${p.path}" hreflang="${p.lang}"`));
     });
 
+    it(`${page.path}: slogan, hero CTAs to the pilot and the steps, no unbacked claims`, () => {
+      assert.ok(html.includes('<span class="ayvo-tagline">Refill. Redefined.</span>'));
+      const hero = html.match(/<section id="top"[\s\S]*?<\/section>/)[0];
+      const targets = [...hero.matchAll(/class="ayvo-btn[^"]*"|href="(#[a-z]+)"/g)]
+        .map((m) => m[1])
+        .filter(Boolean);
+      assert.deepEqual(targets, ['#pilot', '#how']);
+      // No CO2 figures, savings percentages or regulatory compliance promises on the site.
+      const text = html.replace(/\shref="[^"]*"/g, '');
+      assert.doesNotMatch(text, /CO2|CO₂|\d+\s?%|regulat|regulac|Regulier/i);
+    });
+
     it(`${page.path}: contact by mailto, no portal sign-in yet`, () => {
       assert.match(html, /href="mailto:hello@ayvo\.co\?subject=[^"]+"/);
       assert.doesNotMatch(html, /portal\.ayvo\.co/);
