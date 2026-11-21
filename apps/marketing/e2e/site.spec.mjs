@@ -93,15 +93,35 @@ for (const width of WIDTHS) {
   }
 }
 
-test('the CTAs: "How AYVO works" and "Request a pilot" lead to their sections; pilot is a mailto', async ({
+test('the hero: the product image beside (desktop) or above (phone) the copy, one CTA to the pilot', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page, '/');
-  await page.locator('#top a[href="#how"]').click();
-  await expect(page).toHaveURL(/#how$/);
-  await expect(page.locator('#how h2')).toBeInViewport();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await open(page, '/');
+    const visual = page.locator('#top img.ayvo-hero-visual');
+    await expect(visual).toBeVisible();
+    // The exact product area of the approved visual, never rescaled in the file.
+    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([648, 792]);
+    const hero = await page.locator('#top').boundingBox();
+    const img = await visual.boundingBox();
+    const h1 = await page.locator('#top h1').boundingBox();
+    const cta = await page.locator('#top a[href="#pilot"]').boundingBox();
+    if (width === 1440) {
+      // Desktop: the image on the right edge of the hero, the copy starting left of it.
+      expect(Math.abs(img.x + img.width - (hero.x + hero.width))).toBeLessThan(1);
+      expect(h1.x).toBeLessThan(img.x);
+    } else {
+      // Phone: the image above the copy, the CTA still in the first screen.
+      expect(img.y + img.height).toBeLessThanOrEqual(h1.y);
+      expect(cta.y + cta.height).toBeLessThanOrEqual(844);
+    }
+  }
+  const photo = await page.request.get('/assets/img/ayvo-hero.webp');
+  expect(photo.status()).toBe(200);
+  expect(photo.headers()['content-type']).toBe('image/webp');
   await page.locator('#top a[href="#pilot"]').click();
+  await expect(page).toHaveURL(/#pilot$/);
   await expect(page.locator('#pilot h2')).toBeInViewport();
   const mail = page.locator('#pilot a[href^="mailto:"]');
   await expect(mail).toHaveAttribute('href', /^mailto:hello@ayvo\.co\?subject=/);

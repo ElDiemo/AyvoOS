@@ -27,6 +27,19 @@ function files(dir) {
 const attrs = (html, name) =>
   [...html.matchAll(new RegExp(`\\s${name}="([^"]*)"`, 'g'))].map((m) => m[1]);
 const ids = (html) => attrs(html, 'id');
+/** Width and height of a WebP file (VP8X, VP8 or VP8L). */
+function webpSize(buf) {
+  assert.equal(buf.toString('ascii', 0, 4), 'RIFF');
+  assert.equal(buf.toString('ascii', 8, 12), 'WEBP');
+  const chunk = buf.toString('ascii', 12, 16);
+  if (chunk === 'VP8X') return [buf.readUIntLE(24, 3) + 1, buf.readUIntLE(27, 3) + 1];
+  if (chunk === 'VP8 ') return [buf.readUInt16LE(26) & 0x3fff, buf.readUInt16LE(28) & 0x3fff];
+  if (chunk === 'VP8L') {
+    const bits = buf.readUInt32LE(21);
+    return [(bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1];
+  }
+  throw new Error(`unknown WebP chunk ${chunk}`);
+}
 /** A site path ("/", "/cz/", "/assets/x.css") → the file it serves. */
 const fileOf = (path) => join(site, path.endsWith('/') ? `${path}index.html` : path);
 
@@ -61,7 +74,21 @@ describe('pages', () => {
       const targets = [...hero.matchAll(/class="ayvo-btn[^"]*"|href="(#[a-z]+)"/g)]
         .map((m) => m[1])
         .filter(Boolean);
-      assert.deepEqual(targets, ['#pilot', '#how']);
+      assert.deepEqual(targets, ['#pilot']);
+      // The black-and-gold hero: the official wordmark (gold variant of the same outline), the
+      // slogan, one h1, three points and the product photo loaded first (LCP), never lazily.
+      assert.ok(hero.includes('src="/assets/img/ayvo-wordmark-gold.svg"'));
+      assert.ok(hero.includes('<p class="ayvo-hero-slogan">Refill. Redefined.</p>'));
+      assert.equal(hero.match(/<li>/g)?.length, 3);
+      // The h1 in two parts, the second in gold; the CTA arrow is decorative only.
+      assert.equal(hero.match(/<span class="ayvo-h1-part[^"]*">/g)?.length, 2);
+      assert.match(hero, /<span class="ayvo-h1-part ayvo-h1-gold">[^<]+<\/span>\s*<\/h1>/);
+      assert.match(hero, /<span class="ayvo-arrow" aria-hidden="true">→<\/span><\/a\s*>/);
+      const visual = hero.match(/<img\s[^>]*class="ayvo-hero-visual"[^>]*>/)?.[0];
+      assert.ok(visual, 'hero product image');
+      assert.match(visual, /src="\/assets\/img\/ayvo-hero\.webp"/);
+      assert.match(visual, /fetchpriority="high"/);
+      assert.doesNotMatch(visual, /loading="lazy"/);
       // No CO2 figures, savings percentages or regulatory compliance promises on the site.
       const text = html.replace(/\shref="[^"]*"/g, '');
       assert.doesNotMatch(text, /CO2|CO₂|\d+\s?%|regulat|regulac|Regulier/i);
@@ -118,6 +145,13 @@ describe('links and assets', () => {
     }
   });
 
+  it('SVG files are well-formed: an XML comment never contains "--" (the image would not load)', () => {
+    for (const f of files(site).filter((x) => x.endsWith('.svg'))) {
+      for (const m of readFileSync(f, 'utf8').matchAll(/<!--([\s\S]*?)-->/g))
+        assert.ok(!m[1].includes('--'), f);
+    }
+  });
+
   it('images have alt text and their real dimensions', () => {
     for (const f of htmlFiles) {
       for (const m of readFileSync(f, 'utf8').matchAll(/<img\s[^>]*>/g)) {
@@ -130,6 +164,8 @@ describe('links and assets', () => {
           const svg = file.toString('utf8');
           assert.equal(svg.match(/<svg[^>]*\swidth="(\d+)"/)?.[1], w, src);
           assert.equal(svg.match(/<svg[^>]*\sheight="(\d+)"/)?.[1], h, src);
+        } else if (src.endsWith('.webp')) {
+          assert.deepEqual(webpSize(file), [Number(w), Number(h)], src);
         } else {
           assert.equal(file.readUInt32BE(16), Number(w), src);
           assert.equal(file.readUInt32BE(20), Number(h), src);
