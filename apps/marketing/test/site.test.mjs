@@ -17,6 +17,12 @@ const PAGES = [
   { file: 'de/index.html', path: '/de/', lang: 'de' },
 ];
 const ORIGIN = 'https://ayvo.co';
+/** The hero's one sentence, exactly as the owner approved it. */
+const HERO_LEAD = {
+  en: 'We supply hotel amenities in reusable bottles and take care of replenishment, collection and washing.',
+  cs: 'Dodáváme hotelovou kosmetiku ve vratných lahvích a zajišťujeme zásobování, svoz i mytí.',
+  de: 'Wir liefern Hotelkosmetik in Mehrwegflaschen und kümmern uns um Nachschub, Abholung und Reinigung.',
+};
 
 function files(dir) {
   return readdirSync(dir).flatMap((name) => {
@@ -78,11 +84,17 @@ describe('pages', () => {
         .map((m) => m[1])
         .filter(Boolean);
       assert.deepEqual(targets, ['#pilot']);
-      // The black-and-gold hero: the official wordmark (gold variant of the same outline), the
-      // slogan, one h1, three points and the product photo loaded first (LCP), never lazily.
-      assert.ok(hero.includes('src="/assets/img/ayvo-wordmark-gold.svg"'));
+      // The black-and-gold hero: only the slogan, the h1, one sentence and the CTA (the single
+      // wordmark is the header's); the product layer loaded first (LCP), never lazily.
       assert.ok(hero.includes('<p class="ayvo-hero-slogan">Refill. Redefined.</p>'));
-      assert.equal(hero.match(/<li>/g)?.length, 3);
+      assert.ok(
+        hero
+          .replace(/\s+/g, ' ')
+          .replace(/> /g, '>')
+          .replace(/ </g, '<')
+          .includes(`<p class="ayvo-hero-lead">${HERO_LEAD[page.lang]}</p>`),
+      );
+      assert.doesNotMatch(hero, /ayvo-wordmark|<ul|<li/);
       // The h1 in two parts, the second in gold; the CTA arrow is decorative only.
       assert.equal(hero.match(/<span class="ayvo-h1-part[^"]*">/g)?.length, 2);
       assert.match(hero, /<span class="ayvo-h1-part ayvo-h1-gold">[^<]+<\/span>\s*<\/h1>/);
@@ -90,11 +102,19 @@ describe('pages', () => {
       const visual = hero.match(/<img\s[^>]*class="ayvo-hero-visual"[^>]*>/)?.[0];
       assert.ok(visual, 'hero product image');
       assert.match(visual, /src="\/assets\/img\/ayvo-hero-products\.webp"/);
-      // The bathroom background is a separate layer (CSS), preloaded with high priority.
-      assert.match(
-        html,
-        /<link\s+rel="preload"\s+as="image"\s+href="\/assets\/img\/ayvo-hero-background\.webp"\s+type="image\/webp"\s+fetchpriority="high"\s*\/>/,
-      );
+      // The scene is a separate CSS layer, preloaded with high priority for its width.
+      for (const [file, media] of [
+        ['ayvo-hero-scene.webp', '(min-width: 861px)'],
+        ['ayvo-hero-scene-mobile.webp', '(max-width: 860px)'],
+      ])
+        assert.ok(
+          html
+            .replace(/\s+/g, ' ')
+            .includes(
+              `<link rel="preload" as="image" href="/assets/img/${file}" type="image/webp" media="${media}" fetchpriority="high" />`,
+            ),
+          file,
+        );
       assert.ok(hero.includes('<div class="ayvo-hero-stage">'));
       assert.match(visual, /fetchpriority="high"/);
       assert.doesNotMatch(visual, /loading="lazy"/);

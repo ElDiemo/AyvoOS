@@ -30,8 +30,17 @@
     <link
       rel="preload"
       as="image"
-      href="/assets/img/ayvo-hero-background.webp"
+      href="/assets/img/ayvo-hero-scene.webp"
       type="image/webp"
+      media="(min-width: 861px)"
+      fetchpriority="high"
+    />
+    <link
+      rel="preload"
+      as="image"
+      href="/assets/img/ayvo-hero-scene-mobile.webp"
+      type="image/webp"
+      media="(max-width: 860px)"
       fetchpriority="high"
     />
     <script src="/assets/site.js" defer></script>
@@ -74,15 +83,8 @@
             />
           </div>
         </div>
-        <div class="ayvo-wrap ayvo-hero-content">
+        <div class="ayvo-hero-content">
           <div class="ayvo-hero-copy">
-            <img
-              class="ayvo-hero-wordmark"
-              src="/assets/img/ayvo-wordmark-gold.svg"
-              alt="AYVO"
-              width="3386"
-              height="985"
-            />
             <p class="ayvo-hero-slogan">Refill. Redefined.</p>
 
             <h1 class="ayvo-h1">
@@ -90,11 +92,10 @@
               <span class="ayvo-h1-part ayvo-h1-gold">bez starostí.</span>
             </h1>
 
-            <ul class="ayvo-hero-points">
-              <li>Prémiové vratné skleněné lahve.</li>
-              <li>Předvídatelné měsíční náklady.</li>
-              <li>Méně administrativy.</li>
-            </ul>
+            <p class="ayvo-hero-lead">
+              Dodáváme hotelovou kosmetiku ve vratných lahvích a zajišťujeme zásobování, svoz i
+              mytí.
+            </p>
 
             <div class="ayvo-cta">
               <a href="#pilot" class="ayvo-btn primary"
