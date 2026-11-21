@@ -27,6 +27,13 @@
     <link rel="icon" href="/assets/icons/ayvo-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/icons/ayvo-180.png" />
     <link rel="stylesheet" href="/assets/site.css" />
+    <link
+      rel="preload"
+      as="image"
+      href="/assets/img/ayvo-hero-background.webp"
+      type="image/webp"
+      fetchpriority="high"
+    />
     <script src="/assets/site.js" defer></script>
   </head>
   <body>
@@ -56,16 +63,18 @@
     </header>
     <main id="content">
       <section id="top" class="ayvo-section ayvo-hero ayvo-hero-dark">
-        <div class="ayvo-hero-media">
-          <img
-            class="ayvo-hero-visual"
-            src="/assets/img/ayvo-hero.webp"
-            width="648"
-            height="792"
-            fetchpriority="high"
-            decoding="async"
-            alt="Illustrative Abbildung: zwei weiße AYVO Flaschen, Liquid Hand Soap und Hair &amp; Body Wash, im Hotelbad"
-          />
+        <div class="ayvo-hero-stage">
+          <div class="ayvo-hero-products">
+            <img
+              class="ayvo-hero-visual"
+              src="/assets/img/ayvo-hero-products.webp"
+              width="474"
+              height="612"
+              fetchpriority="high"
+              decoding="async"
+              alt="Illustrative Abbildung der AYVO Produkte: zwei weiße Flaschen, Liquid Hand Soap und Hair &amp; Body Wash"
+            />
+          </div>
         </div>
         <div class="ayvo-wrap ayvo-hero-content">
           <div class="ayvo-hero-copy">

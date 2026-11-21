@@ -382,54 +382,83 @@ main section[id] {
   background: #fff;
 }
 
-/* Black-and-gold hero (the approved bathroom visual): the copy in HTML on the dark left part,
-   the exact product area of the visual on the right, fading into the dark on its left edge.
-   On phones the image is its own square block above the copy. */
+/* Black-and-gold hero, built from separate parts: one bathroom background from edge to edge (an
+   atmosphere, CSS), the two real bottles as one transparent layer standing on the counter, and the
+   copy in HTML. On desktop the hero keeps the background's 3:2 proportion (or is taller), so the
+   counter is always at 78 % of its height and the bottles stand on it. */
 .ayvo-hero.ayvo-hero-dark {
-  --hero-cream: #f3ebdc;
-  --hero-gold: #cfad72;
+  --hero-cream: #f2eadb;
+  --hero-gold: #d8b97c;
   position: relative;
   display: flex;
   align-items: center;
-  min-height: clamp(560px, 52vw, 720px);
+  aspect-ratio: 3 / 2;
+  min-height: 600px;
   padding: 0;
   overflow: hidden;
-  background: linear-gradient(90deg, #0f0f0f 0%, #16120f 55%, #1c1713 100%);
+  background: #15110d;
 }
-.ayvo-hero-dark .ayvo-hero-media {
+.ayvo-hero-stage {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 58%;
-  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 24%);
-  mask-image: linear-gradient(90deg, transparent 0%, #000 24%);
+  inset: 0;
 }
-.ayvo-hero-dark .ayvo-hero-visual {
+.ayvo-hero-stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url('/assets/img/ayvo-hero-background.webp') 50% 100% / cover no-repeat;
+}
+/* The bottles: their bases on the counter (just in front of its back edge at 78 %). */
+.ayvo-hero-products {
+  position: absolute;
+  right: 8%;
+  bottom: 17.5%;
+  height: 66%;
+  aspect-ratio: 474 / 612;
+}
+.ayvo-hero-products .ayvo-hero-visual {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: 50% 40%;
+}
+/* Soft contact shadows under the two bases (computed, not part of the product image). */
+.ayvo-hero-products::before,
+.ayvo-hero-products::after {
+  content: '';
+  position: absolute;
+  bottom: -1.6%;
+  width: 47%;
+  height: 4.5%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+}
+.ayvo-hero-products::before {
+  left: 4.5%;
+}
+.ayvo-hero-products::after {
+  left: 54.5%;
 }
 .ayvo-hero-dark .ayvo-hero-content {
   position: relative;
   z-index: 1;
   width: 100%;
-  padding-top: 64px;
-  padding-bottom: 64px;
+  padding-top: 56px;
+  padding-bottom: 56px;
 }
 .ayvo-hero-copy {
-  max-width: 500px;
+  max-width: 470px;
 }
 .ayvo-hero-wordmark {
   display: block;
-  width: 230px;
+  width: 196px;
   height: auto;
 }
 .ayvo-hero-slogan {
-  margin: 12px 0 34px 0;
-  font-size: 23px;
+  margin: 14px 0 40px 0;
+  font-size: 19px;
+  letter-spacing: 0.02em;
   color: var(--hero-gold);
 }
 /* The h1 in two parts (cream, then gold), each on its own line; a phone wraps inside a part. */
@@ -437,8 +466,8 @@ main section[id] {
   margin: 0;
   font-family: var(--serif);
   font-weight: 400;
-  font-size: 62px;
-  line-height: 1.06;
+  font-size: 56px;
+  line-height: 1.08;
   letter-spacing: 0;
   color: var(--hero-cream);
 }
@@ -450,34 +479,34 @@ main section[id] {
 }
 .ayvo-hero-points {
   list-style: none;
-  margin: 26px 0 0 0;
+  margin: 28px 0 0 0;
   padding: 0;
 }
 .ayvo-hero-points li {
-  margin: 0 0 4px 0;
-  font-size: 23px;
-  line-height: 1.35;
-  color: var(--hero-cream);
+  margin: 0 0 6px 0;
+  font-size: 19px;
+  line-height: 1.4;
+  color: rgba(242, 234, 219, 0.88);
 }
 .ayvo-hero-dark .ayvo-cta {
-  margin-top: 34px;
+  margin-top: 36px;
 }
-/* The pilot CTA: a rounded gold button with a decorative arrow (hidden from screen readers). */
+/* The pilot CTA: a calm rounded gold button with a decorative arrow (hidden from screen readers). */
 .ayvo-hero-dark .ayvo-btn.primary {
-  gap: 14px;
-  padding: 18px 30px;
+  gap: 12px;
+  padding: 16px 28px;
   border: 0;
   border-radius: 999px;
-  background: linear-gradient(135deg, #ead3a0 0%, #d2b277 55%, #b99559 100%);
+  background: var(--hero-gold);
   color: #17120c;
-  font-size: 19px;
+  font-size: 17px;
   font-weight: 600;
 }
 .ayvo-hero-dark .ayvo-btn.primary:hover {
-  background: linear-gradient(135deg, #f0dcad 0%, #d9ba80 55%, #c19d61 100%);
+  background: #e2c68e;
 }
 .ayvo-arrow {
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
 }
 
@@ -586,43 +615,56 @@ main section[id] {
   .ayvo-hero {
     padding: 64px 0 56px 0;
   }
-  /* Phones: the image is its own square block above the copy, both bottles whole. */
+  /* Phones: the offer and the CTA first, then a low 4:3 scene with the bottles on the counter
+     (the background is scaled by height there, so the counter is again at 78 %). */
   .ayvo-hero.ayvo-hero-dark {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    aspect-ratio: auto;
     min-height: 0;
   }
-  .ayvo-hero-dark .ayvo-hero-media {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent 100%);
-    mask-image: linear-gradient(180deg, #000 80%, transparent 100%);
-  }
   .ayvo-hero-dark .ayvo-hero-content {
-    padding-top: 10px;
-    padding-bottom: 40px;
+    order: 1;
+    padding-top: 36px;
+    padding-bottom: 8px;
+  }
+  .ayvo-hero-stage {
+    position: relative;
+    order: 2;
+    aspect-ratio: 4 / 3;
+  }
+  .ayvo-hero-stage::before {
+    background-position: 72% 100%;
+    -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 22%);
+    mask-image: linear-gradient(180deg, transparent 0%, #000 22%);
+  }
+  .ayvo-hero-products {
+    right: 50%;
+    height: 64%;
+    transform: translateX(50%);
   }
   .ayvo-hero-wordmark {
-    width: 130px;
+    width: 132px;
   }
   .ayvo-hero-slogan {
-    margin: 6px 0 16px 0;
-    font-size: 16px;
+    margin: 8px 0 22px 0;
+    font-size: 15px;
   }
   .ayvo-hero-dark .ayvo-h1 {
     font-size: 38px;
   }
   .ayvo-hero-points {
-    margin-top: 14px;
+    margin-top: 16px;
   }
   .ayvo-hero-points li {
-    font-size: 17px;
+    font-size: 16px;
   }
   .ayvo-hero-dark .ayvo-cta {
-    margin-top: 20px;
+    margin-top: 22px;
   }
   .ayvo-hero-dark .ayvo-btn.primary {
-    padding: 15px 24px;
+    padding: 14px 24px;
     font-size: 16px;
   }
   .ayvo-cta {

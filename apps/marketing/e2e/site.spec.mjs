@@ -93,33 +93,43 @@ for (const width of WIDTHS) {
   }
 }
 
-test('the hero: the product image beside (desktop) or above (phone) the copy, one CTA to the pilot', async ({
+test('the hero: one scene from edge to edge, the bottles on the counter, the offer and CTA first on phones', async ({
   page,
 }) => {
-  for (const width of [1440, 390]) {
+  for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await open(page, '/');
     const visual = page.locator('#top img.ayvo-hero-visual');
     await expect(visual).toBeVisible();
-    // The exact product area of the approved visual, never rescaled in the file.
-    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([648, 792]);
+    // The two real bottles as one transparent layer, never rescaled in the file.
+    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([474, 612]);
     const hero = await page.locator('#top').boundingBox();
+    const stage = await page.locator('#top .ayvo-hero-stage').boundingBox();
     const img = await visual.boundingBox();
     const h1 = await page.locator('#top h1').boundingBox();
     const cta = await page.locator('#top a[href="#pilot"]').boundingBox();
+    // The background layer reaches both edges of the hero.
+    expect(Math.abs(stage.x - hero.x)).toBeLessThan(1);
+    expect(Math.abs(stage.width - hero.width)).toBeLessThan(1);
+    // The bottles stand on the counter (its back edge at 78 % of the scene, the bases just in front).
+    const base = (img.y + img.height - stage.y) / stage.height;
+    expect(base).toBeGreaterThan(0.78);
+    expect(base).toBeLessThan(0.86);
     if (width === 1440) {
-      // Desktop: the image on the right edge of the hero, the copy starting left of it.
-      expect(Math.abs(img.x + img.width - (hero.x + hero.width))).toBeLessThan(1);
-      expect(h1.x).toBeLessThan(img.x);
+      expect(Math.abs(stage.height - hero.height)).toBeLessThan(1);
+      expect(img.x).toBeGreaterThan(h1.x + h1.width);
     } else {
-      // Phone: the image above the copy, the CTA still in the first screen.
-      expect(img.y + img.height).toBeLessThanOrEqual(h1.y);
+      // Phones: the offer and the CTA first (in the first screen), then the scene with the bottles.
       expect(cta.y + cta.height).toBeLessThanOrEqual(844);
+      expect(stage.y).toBeGreaterThanOrEqual(cta.y + cta.height);
+      expect(img.y).toBeLessThan(844);
     }
   }
-  const photo = await page.request.get('/assets/img/ayvo-hero.webp');
-  expect(photo.status()).toBe(200);
-  expect(photo.headers()['content-type']).toBe('image/webp');
+  for (const file of ['ayvo-hero-products.webp', 'ayvo-hero-background.webp']) {
+    const res = await page.request.get(`/assets/img/${file}`);
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toBe('image/webp');
+  }
   await page.locator('#top a[href="#pilot"]').click();
   await expect(page).toHaveURL(/#pilot$/);
   await expect(page.locator('#pilot h2')).toBeInViewport();

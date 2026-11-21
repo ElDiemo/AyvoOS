@@ -86,7 +86,13 @@ describe('pages', () => {
       assert.match(hero, /<span class="ayvo-arrow" aria-hidden="true">→<\/span><\/a\s*>/);
       const visual = hero.match(/<img\s[^>]*class="ayvo-hero-visual"[^>]*>/)?.[0];
       assert.ok(visual, 'hero product image');
-      assert.match(visual, /src="\/assets\/img\/ayvo-hero\.webp"/);
+      assert.match(visual, /src="\/assets\/img\/ayvo-hero-products\.webp"/);
+      // The bathroom background is a separate layer (CSS), preloaded with high priority.
+      assert.match(
+        html,
+        /<link\s+rel="preload"\s+as="image"\s+href="\/assets\/img\/ayvo-hero-background\.webp"\s+type="image\/webp"\s+fetchpriority="high"\s*\/>/,
+      );
+      assert.ok(hero.includes('<div class="ayvo-hero-stage">'));
       assert.match(visual, /fetchpriority="high"/);
       assert.doesNotMatch(visual, /loading="lazy"/);
       // No CO2 figures, savings percentages or regulatory compliance promises on the site.
