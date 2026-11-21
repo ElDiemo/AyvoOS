@@ -87,6 +87,11 @@ type Mode = {
   cancelOrderHang: boolean;
   /** GET /order shows a cancelled order as Canceled only after this many further lookups. */
   cancelOrderShownAfter: number;
+  /**
+   * POST /order/cancel answers this undocumented status (with PPL's problem body and its
+   * `traceId`) without applying the cancellation.
+   */
+  cancelOrderAnswer: { status: number; traceId: string } | null;
 };
 
 /** A pickup order (CollectionOrder) PPL received. */
@@ -203,6 +208,7 @@ export class FakePpl {
       cancelOrderLost: false,
       cancelOrderHang: false,
       cancelOrderShownAfter: 0,
+      cancelOrderAnswer: null,
     };
   }
 
@@ -662,6 +668,10 @@ export class FakePpl {
         return this.json(res, 400, { title: 'Order cannot be cancelled', status: 400 });
       }
       if (this.mode.cancelOrderError) return this.json(res, 500, { title: 'Internal error' });
+      if (this.mode.cancelOrderAnswer) {
+        const { status, traceId } = this.mode.cancelOrderAnswer;
+        return this.json(res, status, { title: 'Bad gateway', detail: 'upstream', traceId });
+      }
       o.cancelled = true;
       o.hiddenLooks = this.mode.cancelOrderShownAfter;
       if (this.mode.cancelOrderHang) return;

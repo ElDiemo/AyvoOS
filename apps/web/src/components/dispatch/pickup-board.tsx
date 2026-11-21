@@ -7,11 +7,8 @@ import { ConfirmDialog, reasonError, ReasonField, useAttempt } from '@/component
 import { buttonClass, Card, EmptyState } from '@/components/ui';
 import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
 import { pickupsCs as t } from '@/i18n/cs/pickups';
+import { pickupSummary, type Tone } from './pickup-summary';
 import { apiSend, ClientApiError } from '@/lib/client-api';
-
-/** The carrier's problem in Czech where its code is known; the carrier's own text otherwise. */
-const problemText = (code: string | null, message: string | null) =>
-  (code && t.problems[code]) ?? message ?? code ?? '';
 
 const errorText = (error: unknown) =>
   error instanceof ClientApiError
@@ -278,6 +275,34 @@ function CarrierCard({ board }: { board: Board }) {
   );
 }
 
+const toneClass: Record<Tone, string> = {
+  ok: 'text-emerald-800',
+  wait: 'text-amber-800',
+  warn: 'text-red-800',
+  done: 'text-stone-700',
+};
+
+/** One line of the technical detail (only rendered when it has a value). */
+function Fact({
+  label,
+  value,
+  testId,
+}: {
+  label: string;
+  value: string | null | undefined;
+  testId?: string;
+}) {
+  if (!value) return null;
+  return (
+    <div className="flex flex-wrap gap-x-2">
+      <dt className="text-stone-500">{label}:</dt>
+      <dd className="break-all text-stone-800" data-testid={testId}>
+        {value}
+      </dd>
+    </div>
+  );
+}
+
 function PickupItem({
   pickup: p,
   canOrder,
@@ -298,21 +323,9 @@ function PickupItem({
   const [cancelChecked, setCancelChecked] = useState(false);
   const { busy, run } = useAttempt();
   const c = p.cancellation;
-  const cancelOpen =
-    !!c && (c.status === 'PREPARED' || c.status === 'SENT' || c.status === 'ACCEPTED');
-  const lookable =
-    p.status === 'ACCEPTED' ||
-    p.status === 'SENT' ||
-    (p.status === 'CONFIRMED' && !p.carrierOrderNumber) ||
-    cancelOpen;
-  // One cancellation at a time; a refused one may be followed by a new request. Never once the
-  // carrier shows the pickup cancelled, and never after its day (its parcels may be planned again).
-  const cancellable =
-    p.status === 'CONFIRMED' &&
-    !p.cancelledByCarrierAt &&
-    !p.dayPassed &&
-    (!c || c.status === 'REJECTED' || c.status === 'NOT_CREATED');
-  // An uncertain attempt (answer lost, or lookups ran out): closed only by a person after checking.
+  const summary = pickupSummary(p);
+  // An uncertain attempt (its answer not usable, or the lookups ran out): closed only by a person
+  // after checking with PPL — in Podrobnosti, for `shipments:resolve_uncertain` (the API decides).
   const cancelUncertain = !!c && (c.status === 'SENT' || (c.status === 'ACCEPTED' && !c.lookingUp));
   // The attempt the closing dialog was opened for — fixed then, never "the latest" at submit.
   const [closingCancel, setClosingCancel] = useState<string | null>(null);
@@ -383,60 +396,36 @@ function PickupItem({
     } else if (result.error) setError(errorText(result.error));
   }
 
+  const at = (iso: string | null | undefined) => (iso ? formatDateTimeCs(iso) : null);
+  const problem = (code: string | null, message: string | null) =>
+    [code, message].filter(Boolean).join(' – ') || null;
+
   return (
     <div className="text-sm" data-testid={`pickup-${p.code}`}>
-      <p className="font-medium">
+      {/* What happened (state + its meaning), then the pickup itself. */}
+      <p
+        className={`font-semibold ${toneClass[summary.tone]}`}
+        data-testid={`pickup-status-${p.code}`}
+      >
+        {summary.title}
+      </p>
+      <p className="text-stone-700" data-testid={`pickup-hint-${p.code}`}>
+        {summary.hint}
+      </p>
+      <p className="mt-1 text-stone-600">
         {p.code} · {formatDateCs(p.date)}
-        {p.window && ` · ${p.window.from}–${p.window.to}`} · {p.parcelCount} bal. ·{' '}
-        <span data-testid={`pickup-status-${p.code}`}>{t.status[p.status] ?? p.status}</span>
+        {p.window && ` · ${p.window.from}–${p.window.to}`} · {p.parcelCount} bal.
         {p.carrier.environment === 'TEST' && ' · TEST'}
       </p>
-      {p.carrierOrderNumber && (
-        <p className="text-xs text-stone-600">
-          {t.carrierNumber}: {p.carrierOrderNumber}
-          {p.carrierState && ` (${p.carrierState})`}
-        </p>
-      )}
-      {(p.errorCode || p.errorMessage) && (
-        <p className="text-xs text-red-700">{problemText(p.errorCode, p.errorMessage)}</p>
-      )}
-      {p.resolutionReason && <p className="text-xs text-stone-600">{p.resolutionReason}</p>}
-      {p.cancelledByCarrierAt && (
-        <p className="text-xs text-stone-700" data-testid={`pickup-cancelled-${p.code}`}>
-          {t.cancelledByCarrier(formatDateTimeCs(p.cancelledByCarrierAt))}
-        </p>
-      )}
-      {c && (
-        <p className="text-xs" data-testid={`pickup-cancel-${p.code}`}>
-          <span className={c.status === 'CONFIRMED' ? 'text-stone-700' : 'text-amber-800'}>
-            {t.cancelStatus[c.status] ?? c.status}
-          </span>
-          {' · '}
-          {c.reason}
-          {(c.errorCode || c.errorMessage) && (
-            <span className="block text-red-700">{problemText(c.errorCode, c.errorMessage)}</span>
-          )}
-          {c.resolutionReason && <span className="block text-stone-600">{c.resolutionReason}</span>}
-        </p>
-      )}
-      <p className="mt-1 text-xs text-stone-500">{t.plan}:</p>
-      <p className="text-xs text-stone-400">{t.planNote}</p>
-      <ul className="text-xs text-stone-700">
+      {/* The parcels it affects, with the number needed to trace each one. */}
+      <ul className="mt-1 text-xs text-stone-700" aria-label={t.parcels}>
         {p.parcels.map((x) => (
           <li key={x.carrierParcelNumber}>
             {x.orderCode} · {x.hotelName} · {t.parcel} {x.parcelNo} ({x.carrierParcelNumber})
-            {/* Today's state of the parcel, never what this pickup collected. */}
-            <span className="block pl-3 text-stone-500" data-testid="pickup-parcel-now">
-              {t.parcelNow}:{' '}
-              {x.withCarrierNow
-                ? t.parcelWithCarrierNow
-                : (t.orderStatus[x.orderStatus] ?? x.orderStatus)}
-            </span>
           </li>
         ))}
       </ul>
-      <p className="text-xs text-stone-400">{formatDateTimeCs(p.createdAt)}</p>
-      {canOrder && cancellable && (
+      {canOrder && summary.action === 'cancel' && (
         <div className="mt-2">
           <button
             type="button"
@@ -451,8 +440,8 @@ function PickupItem({
           </button>
         </div>
       )}
-      {canOrder && lookable && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+      {canOrder && summary.action === 'lookup' && (
+        <div className="mt-2">
           <button
             type="button"
             className={buttonClass.secondary}
@@ -462,35 +451,6 @@ function PickupItem({
           >
             {t.lookup}
           </button>
-          {(p.lookupFrom ?? c?.lookupFrom) && (
-            <span className="text-xs text-stone-500">
-              {t.lookupFrom(formatDateTimeCs(p.lookupFrom ?? c?.lookupFrom))}
-            </span>
-          )}
-          {canResolve && cancelUncertain && (
-            <button
-              type="button"
-              className={buttonClass.secondary}
-              onClick={() => {
-                setError(null);
-                setClosingCancel(c.id);
-              }}
-              data-testid={`pickup-cancel-resolve-${p.code}`}
-            >
-              {t.cancelResolve}
-            </button>
-          )}
-          {/* Too early is refused by the API (PICKUP_IN_FLIGHT) and said so. */}
-          {canResolve && p.status === 'SENT' && (
-            <button
-              type="button"
-              className={buttonClass.secondary}
-              onClick={() => setClosing(true)}
-              data-testid={`pickup-resolve-${p.code}`}
-            >
-              {t.resolve}
-            </button>
-          )}
         </div>
       )}
       {error && !closing && !cancelling && closingCancel === null && (
@@ -498,6 +458,96 @@ function PickupItem({
           {error}
         </p>
       )}
+      <details
+        className="mt-2 rounded border border-stone-200"
+        data-testid={`pickup-details-${p.code}`}
+      >
+        <summary className="cursor-pointer px-2 py-2 text-sm font-medium text-stone-700">
+          {t.details.summary}
+        </summary>
+        <div className="space-y-2 px-2 pb-2 text-xs">
+          <dl className="space-y-0.5">
+            <Fact label={t.details.carrierNumber} value={p.carrierOrderNumber} />
+            <Fact label={t.details.carrierState} value={p.carrierState} />
+            <Fact label={t.details.reference} value={p.reference} />
+            <Fact
+              label={t.details.systemState}
+              value={p.status}
+              testId={`pickup-system-state-${p.code}`}
+            />
+            <Fact label={t.details.error} value={problem(p.errorCode, p.errorMessage)} />
+            <Fact label={t.details.resolution} value={p.resolutionReason} />
+            <Fact label={t.details.createdAt} value={at(p.createdAt)} />
+            <Fact label={t.details.sentAt} value={at(p.sentAt)} />
+            <Fact label={t.details.resolvedAt} value={at(p.resolvedAt)} />
+            <Fact label={t.details.lookupFrom} value={at(p.lookupFrom)} />
+          </dl>
+          {c && (
+            <dl
+              className="space-y-0.5 border-t border-stone-200 pt-2"
+              data-testid={`pickup-cancel-${p.code}`}
+            >
+              <Fact label={t.details.cancel} value={c.status} />
+              <Fact label={t.details.cancelReason} value={c.reason} />
+              <Fact label={t.details.carrierState} value={c.carrierState} />
+              <Fact label={t.details.error} value={problem(c.errorCode, c.errorMessage)} />
+              <Fact label={t.details.resolution} value={c.resolutionReason} />
+              <Fact label={t.details.sentAt} value={at(c.sentAt)} />
+              <Fact label={t.details.resolvedAt} value={at(c.resolvedAt)} />
+              <Fact label={t.details.lookups} value={c.lookups > 0 ? String(c.lookups) : null} />
+              <Fact label={t.details.nextLookup} value={at(c.nextLookupAt)} />
+              <Fact label={t.details.lookupFrom} value={at(c.lookupFrom)} />
+              <Fact label={t.details.cancelId} value={c.id} />
+            </dl>
+          )}
+          <div className="border-t border-stone-200 pt-2">
+            <p className="text-stone-500">{t.plan}:</p>
+            <p className="text-stone-400">{t.planNote}</p>
+            <ul className="text-stone-700">
+              {p.parcels.map((x) => (
+                <li key={x.carrierParcelNumber} data-testid="pickup-parcel-now">
+                  {x.carrierParcelNumber} – {t.parcelNow}:{' '}
+                  {x.withCarrierNow
+                    ? t.parcelWithCarrierNow
+                    : (t.orderStatus[x.orderStatus] ?? x.orderStatus)}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {canResolve && (cancelUncertain || p.status === 'SENT') && (
+            <div className="space-y-2 border-t border-stone-200 pt-2">
+              <p className="font-medium text-stone-700">{t.details.support}</p>
+              <p className="text-stone-600">{t.details.supportNote}</p>
+              <div className="flex flex-wrap gap-2">
+                {cancelUncertain && (
+                  <button
+                    type="button"
+                    className={buttonClass.secondary}
+                    onClick={() => {
+                      setError(null);
+                      setClosingCancel(c.id);
+                    }}
+                    data-testid={`pickup-cancel-resolve-${p.code}`}
+                  >
+                    {t.cancelResolve}
+                  </button>
+                )}
+                {/* Too early is refused by the API (PICKUP_IN_FLIGHT) and said so. */}
+                {p.status === 'SENT' && (
+                  <button
+                    type="button"
+                    className={buttonClass.secondary}
+                    onClick={() => setClosing(true)}
+                    data-testid={`pickup-resolve-${p.code}`}
+                  >
+                    {t.resolve}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </details>
       <ConfirmDialog
         open={closing}
         title={t.resolveTitle}

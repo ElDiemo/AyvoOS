@@ -503,8 +503,14 @@ the label through the pickup to the delivery. **Expedice → Svoz** (`/dispatch/
   read it — also one of an attempt a person closed meanwhile (that attempt's audit stays) — never
   cleared or overwritten by a later "Created"; it confirms the live attempt with it (an unsent one is
   never sent), releases the parcels and refuses any further cancellation (also in the database: a
-  cancellation is `CONFIRMED` exactly when its pickup is shown cancelled). A lost answer or a time-out is
-  uncertain (`SENT`): only looked up, never re-sent; the parcels stay held. An error, a time-out, an
+  cancellation is `CONFIRMED` exactly when its pickup is shown cancelled). An answer that is not usable
+  (an undocumented HTTP status, a network error, a time-out) is uncertain (`SENT`): never re-sent;
+  the parcels stay held. Only its HTTP status or the kind of error is kept, with PPL's own `traceId`
+  when the problem body carries one — never the body. The poller then looks it up by the pickup's
+  reference — `GET /order` only — after the in-flight window, with the same bounded back-off as an
+  accepted one (counted from its sending; each lookup is counted when it is claimed, also when PPL is
+  down). When the lookups run out without `Canceled`, the board says so and hands it over to a
+  person (2026-11-21). An error, a time-out, an
   outage or PPL showing only `Created` releases nothing by itself. **Closing an uncertain attempt**
   (`SENT` after the in-flight window, or `ACCEPTED` whose bounded lookups ran out) is a person's
   audited decision with `shipments:resolve_uncertain` after verifying with PPL that the attempt was

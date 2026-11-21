@@ -40,29 +40,72 @@ export const pickupsCs = {
     `Dopravce bude požádán, aby ${date} vyzvedl ${parcels} balíků na adrese odesílatele. Požadavek se odešle jednou.`,
   confirmCheck: 'Rozumím, že dopravce opravdu dostane objednávku svozu.',
   confirmButton: 'Objednat svoz',
-  open: 'Svoz čeká na dopravce',
+  open: 'Rozpracovaný svoz',
   openBlocks: 'Dokud není vyřízený, další svoz této provozovny objednat nelze.',
   history: 'Svozy provozovny',
   historyEmpty: 'Zatím žádný svoz.',
-  status: {
-    PREPARED: 'Připraveno k odeslání',
-    SENT: 'Nejisté – odpověď dopravce se ztratila',
-    ACCEPTED: 'Dopravce zpracovává',
-    CONFIRMED: 'Potvrzeno dopravcem',
-    REJECTED: 'Odmítnuto dopravcem',
-    NOT_CREATED: 'Uzavřeno – svoz nebyl objednán',
-    NOT_SENT: 'Neodesláno – termín nebo plán už neplatil',
+  /** The first layer: what happened, in one sentence (the technical state is in Podrobnosti). */
+  state: {
+    waiting: 'Čekáme na PPL',
+    confirmed: 'Svoz potvrzen',
+    cancelWaiting: 'Čekáme na potvrzení storna. Balíky zatím nelze přeplánovat.',
+    cancelled: 'Svoz zrušen',
+    rejected: 'PPL svoz odmítlo',
+    notCreated: 'Svoz nebyl objednán',
+    notSent: 'Svoz se neodeslal',
+  },
+  /** What it means and what to do next, short. */
+  hint: {
+    processing: 'PPL objednávku svozu zpracovává. Stav se ověřuje automaticky.',
+    uncertain:
+      'PPL objednávku svozu zatím nepotvrdilo. Nic se znovu neodešle – zjistěte stav u PPL.',
+    confirmed: (date: string) => `Svoz je objednaný na ${date}.`,
+    cancelLookingUp: 'Stav storna u PPL ověřujeme automaticky.',
+    cancelExhausted:
+      'PPL storno zatím nepotvrdilo a automatické ověřování skončilo. Předejte to správci – ověří stav u PPL.',
+    cancelled: 'Balíky lze zařadit do jiného svozu.',
+    cancelRefused: 'PPL storno odmítlo – svoz dál platí.',
+    cancelClosed: 'Pokus o storno byl po ověření u PPL uzavřen jako neprovedený – svoz dál platí.',
+    released: 'Balíky lze zařadit do nového svozu.',
+  },
+  /** A refusal with a clear next step; any other reason is in Podrobnosti. */
+  instructions: {
+    PPL_AUTH: 'PPL odmítlo přihlášení serveru, nic se neodeslalo. Předejte to správci dopravců.',
+    PPL_401: 'PPL nepřijalo přístup serveru, nic se neodeslalo. Předejte to správci dopravců.',
+    PPL_403: 'PPL nepřijalo přístup serveru, nic se neodeslalo. Předejte to správci dopravců.',
+    PPL_UNAVAILABLE: 'PPL nebylo dostupné, nic se neodeslalo. Zkuste to znovu později.',
+    PPL_400: 'PPL požadavek odmítlo. Důvod je v podrobnostech.',
+    PPL_FIELD_TOO_LONG:
+      'Adresa odesílatele obsahuje údaj, který PPL nepřijme. Předejte to správci provozovny.',
+    PPL_NOT_LATIN:
+      'Adresa odesílatele obsahuje znaky, které PPL nepřijme. Předejte to správci provozovny.',
+    PICKUP_DAY_PASSED: 'Den svozu minul dřív, než se požadavek odeslal. Objednejte nový svoz.',
+    PICKUP_PLAN_CHANGED:
+      'Plán už neplatil (balík převzal dopravce nebo se změnila objednávka). Objednejte nový svoz.',
   } as Record<string, string>,
-  cancelStatus: {
-    PREPARED: 'Storno se odesílá',
-    SENT: 'Storno nejisté – odpověď dopravce se ztratila; balíky zůstávají blokované',
-    ACCEPTED: 'Storno čeká na potvrzení dopravce; balíky zůstávají blokované',
-    CONFIRMED: 'Svoz zrušen dopravcem – balíky lze zařadit do jiného svozu',
-    REJECTED: 'Storno dopravce odmítl – svoz platí',
-    NOT_CREATED: 'Pokus o storno uzavřen jako neprovedený (ověřeno u dopravce) – svoz platí',
-  } as Record<string, string>,
-  cancelledByCarrier: (at: string) =>
-    `Dopravce svoz zrušil (zjištěno ${at}) – balíky lze zařadit do jiného svozu.`,
+  instructionFallback: 'Důvod je v podrobnostech.',
+  details: {
+    summary: 'Podrobnosti',
+    carrierNumber: 'Číslo svozu u PPL',
+    carrierState: 'Stav u PPL',
+    reference: 'Reference u PPL',
+    systemState: 'Stav v systému',
+    sentAt: 'Odesláno',
+    resolvedAt: 'Vyřízeno',
+    createdAt: 'Vytvořeno',
+    window: 'Přání časového okna',
+    resolution: 'Důvod uzavření',
+    error: 'Odpověď / chyba',
+    cancel: 'Storno',
+    cancelReason: 'Důvod storna',
+    cancelId: 'Pokus o storno',
+    lookups: 'Automatická ověření',
+    nextLookup: 'Další automatické ověření',
+    lookupFrom: 'Ručně ověřit lze od',
+    support: 'Pro podporu',
+    supportNote:
+      'Uzavřít ručně lze jen po ověření u PPL. Uzavření se zaznamená s důvodem a nic se znovu neodešle.',
+  },
   cancelResolve: 'Uzavřít pokus o storno jako neprovedený',
   cancelResolveTitle: 'Uzavřít nejistý pokus o storno',
   cancelResolveText:
@@ -82,25 +125,16 @@ export const pickupsCs = {
     'Dnešní stav balíku není potvrzením, že ho převzal právě tento svoz – balík mohl odejít s jiným svozem.',
   pickedUp: (n: number) => `převzato ${n}`,
   toCollect: (n: number) => `ke svozu ${n}`,
-  problems: {
-    NO_ANSWER:
-      'Odpověď dopravce se nepodařilo získat. Požadavek se znovu neodešle – zjistěte stav u dopravce.',
-    PICKUP_DAY_PASSED: 'Neodesláno: den svozu minul dřív, než se požadavek odeslal.',
-    PICKUP_PLAN_CHANGED:
-      'Neodesláno: plán už neplatil (balík převzal dopravce nebo se změnila objednávka či zásilka).',
-    PPL_UNAVAILABLE: 'PPL nebylo dostupné – nic se neodeslalo.',
-    PPL_AUTH: 'PPL odmítlo přihlášení serveru – nic se neodeslalo.',
-  } as Record<string, string>,
   carrierNumber: 'Číslo svozu u dopravce',
   plan: 'Plán (co se mělo předat)',
+  parcels: 'Balíky',
   orderStatus: {
     READY_FOR_PICKUP: 'čeká na předání',
     HANDED_TO_CARRIER: 'předáno dopravci',
     DELIVERED: 'doručeno',
     READY_TO_DISPATCH: 'vráceno k přípravě',
   } as Record<string, string>,
-  lookup: 'Zjistit stav u dopravce',
-  lookupFrom: (at: string) => `Ověřit lze od ${at}.`,
+  lookup: 'Zjistit stav u PPL',
   resolve: 'Uzavřít jako neobjednaný',
   resolveTitle: 'Uzavřít nejistý svoz',
   resolveText:

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { CarrierSettingsSnapshot } from '../src/carriers/carrier.js';
 import { CarrierRegistryService } from '../src/carriers/carrier-registry.service.js';
 import { PplPickups } from '../src/carriers/ppl/ppl-pickups.js';
-import { CarrierPickupsService } from '../src/orders/carrier-pickups.service.js';
+import { CarrierPickupsService, PICKUP_MAX_POLLS } from '../src/orders/carrier-pickups.service.js';
 import { ShipmentCarrierFlow } from '../src/orders/shipment-carrier-flow.service.js';
 import { ShipmentPoller } from '../src/orders/shipment-poller.service.js';
 import { ShipmentTrackingService } from '../src/orders/shipment-tracking.service.js';
@@ -707,6 +707,118 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
     ).toBe('NOT_CREATED');
   });
 
+  /** GET /order lookups of exactly this pickup's reference (reads only). */
+  const orderReads = (ref: string) =>
+    ppl.seen.filter(
+      (s) => s.method === 'GET' && s.path === '/order' && s.query.get('OrderReferences') === ref,
+    ).length;
+  /** Every automatic lookup of an uncertain cancellation is due now (its back-off counts from sending). */
+  const sentLongAgo = (pickupCode: string) =>
+    t.prisma
+      .$executeRaw`UPDATE "carrier_pickup_cancellations" c SET "sent_at" = c."sent_at" - interval '2 days'
+      FROM "carrier_pickups" p WHERE p."id" = c."pickup_id" AND p."code" = ${pickupCode} AND c."status" = 'SENT'`;
+
+  it('uncertain cancellation: one POST, the HTTP status kept, read-only lookups until Canceled releases the parcels', async () => {
+    const o = await readyForPickup(1);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    const ref = (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: p.code } }))
+      .clientReference;
+    const traceId = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
+    ppl.mode.cancelOrderAnswer = { status: 502, traceId };
+    const sent = cancelPosts();
+    const v = (await cancel(p.code).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderAnswer = null;
+    expect(cancelPosts()).toBe(sent + 1);
+    // Not usable, which is not "lost": the status and PPL's own request id, never the body.
+    expect(v.cancellation).toMatchObject({
+      status: 'SENT',
+      errorCode: 'NO_ANSWER',
+      lookingUp: true,
+    });
+    expect(v.cancellation!.errorMessage).toBe(
+      `No usable answer from the carrier: HTTP 502 (PPL traceId ${traceId})`,
+    );
+    expect(v.cancellation!.errorMessage).not.toMatch(/Bad gateway|upstream/);
+    expect(v.reference).toBe(ref);
+    // The poller reads PPL's state (GET only): "Created" releases nothing.
+    const reads = orderReads(ref);
+    await service().pollDue(50);
+    expect(orderReads(ref)).toBe(reads + 1);
+    const created = await view(p.code);
+    expect(created.cancellation).toMatchObject({
+      status: 'SENT',
+      carrierState: 'Created',
+      lookups: 1,
+      lookingUp: true,
+      lookupsExhausted: false,
+    });
+    expect(created.cancellation!.nextLookupAt).not.toBeNull();
+    expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+    // Not due yet (back-off from its sending): no further read.
+    await service().pollDue(50);
+    expect(orderReads(ref)).toBe(reads + 1);
+    // PPL shows it Canceled: the next automatic read confirms and releases the same parcel.
+    const shown = ppl.orders.get(ref)!;
+    shown.cancelled = true;
+    shown.hiddenLooks = 0;
+    await sentLongAgo(p.code);
+    await service().pollDue(50);
+    const done = await view(p.code);
+    expect(done.cancellation).toMatchObject({ status: 'CONFIRMED', carrierState: 'Canceled' });
+    expect(done.cancelledByCarrierAt).not.toBeNull();
+    expect(cancelPosts()).toBe(sent + 1);
+    const again = (await order([o.code], { date: pragueToday(2) }).expect(200)).body as PickupView;
+    expect(again.parcels.map((x) => x.carrierParcelNumber)).toEqual(o.numbers);
+  });
+
+  it('uncertain cancellation: outages are counted, the lookups stop at the limit — for a person, never a second POST', async () => {
+    const o = await readyForPickup(1);
+    const p = (await order([o.code]).expect(200)).body as PickupView;
+    const ref = (await t.prisma.carrierPickup.findFirstOrThrow({ where: { code: p.code } }))
+      .clientReference;
+    // Carried out at PPL, but no answer in time; PPL never shows it cancelled here.
+    ppl.mode.cancelOrderHang = true;
+    ppl.mode.cancelOrderShownAfter = 1_000_000;
+    const sent = cancelPosts();
+    const v = (await cancel(p.code).expect(200)).body as PickupView;
+    ppl.mode.cancelOrderHang = false;
+    expect(v.cancellation!.errorMessage).toBe(
+      'No usable answer from the carrier: no answer within the time limit',
+    );
+    // PPL down: the lookup fails, is counted, and nothing changes.
+    ppl.mode.down = true;
+    await service().pollDue(50);
+    ppl.mode.down = false;
+    expect((await view(p.code)).cancellation).toMatchObject({ status: 'SENT', lookups: 1 });
+    // Every further lookup due: they run up to the limit and stop there.
+    for (let i = 0; i < PICKUP_MAX_POLLS + 5; i++) {
+      await sentLongAgo(p.code);
+      await service().pollDue(50);
+    }
+    const reads = orderReads(ref);
+    const out = await view(p.code);
+    expect(out.cancellation).toMatchObject({
+      status: 'SENT',
+      carrierState: 'Created',
+      lookups: PICKUP_MAX_POLLS,
+      lookingUp: false,
+      lookupsExhausted: true,
+      nextLookupAt: null,
+    });
+    await sentLongAgo(p.code);
+    await service().pollDue(50);
+    expect(orderReads(ref)).toBe(reads);
+    expect(cancelPosts()).toBe(sent + 1);
+    // Still held; a person closes it after checking with PPL (shipments:resolve_uncertain).
+    expect((await order([o.code], { date: pragueToday(2) })).body.code).toBe('ORDER_IN_PICKUP');
+    expect((await cancel(p.code)).body.code).toBe('PICKUP_CANCEL_EXISTS');
+    expect(
+      ((await closeCancel(p.code, out.cancellation!.id).expect(200)).body as PickupView)
+        .cancellation!.status,
+    ).toBe('NOT_CREATED');
+    expect(cancelPosts()).toBe(sent + 1);
+  });
+
   /** PPL's answers to GET /order for the next lookups, in order — each held until released. */
   type Shown = Awaited<ReturnType<PplPickups['find']>>;
   function heldAnswer(shown: Shown) {
@@ -913,8 +1025,9 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       eventDate: new Date(Date.now() - 60_000).toISOString(),
       name: 'Zásilku jsme převzali od odesílatele.',
     };
-    // Every pickup lookup waits at a gate (as PPL hanging up to the call's time limit), then asks
-    // the simulation for real; how many run at once is counted.
+    // Every lookup of THIS pickup waits at a gate (as PPL hanging up to the call's time limit),
+    // then asks the simulation for real; how many run at once is counted. Lookups of other
+    // pickups (uncertain attempts left by earlier tests in the shared database) pass straight on.
     const real = PplPickups.prototype.find;
     let calls = 0;
     let inFlight = 0;
@@ -927,6 +1040,7 @@ describe.skipIf(!hasDatabase)('PPL pickup orders (simulated PPL)', () => {
       this: PplPickups,
       ...args
     ) {
+      if (args[0].clientReference !== ref) return real.apply(this, args);
       calls++;
       maxInFlight = Math.max(maxInFlight, ++inFlight);
       entered();

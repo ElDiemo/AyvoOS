@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { PplClient } from './ppl-client.js';
-import { CarrierRejectedError, type CarrierPickupRequest } from '../carrier.js';
+import {
+  CarrierRejectedError,
+  CarrierUnusableAnswerError,
+  type CarrierPickupRequest,
+} from '../carrier.js';
 import { orderBatchId, PPL_PICKUP_MAX_PARCELS, PplPickups } from './ppl-pickups.js';
 
 const request = (over: Partial<CarrierPickupRequest> = {}): CarrierPickupRequest => ({
@@ -131,5 +135,55 @@ describe('PPL pickup cancellation (POST /order/cancel) and lookup', () => {
       { status: 200, body: [{ referenceId: 'R-1', orderState: 'Created' }] },
     ]);
     expect((await created.pickups.find({ clientReference: 'R-1' }, signal))!.cancelled).toBe(false);
+  });
+
+  const detail = async (p: Promise<unknown>) => {
+    const error = await p.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CarrierUnusableAnswerError);
+    return (error as CarrierUnusableAnswerError).detail;
+  };
+
+  it('an unusable answer keeps only its HTTP status and PPL’s own traceId — never the body', async () => {
+    const trace = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
+    const c = client([
+      { status: 502, body: { title: 'Bad gateway', detail: 'x', traceId: trace } },
+    ]);
+    expect(await detail(c.pickups.cancel({ clientReference: 'R-1' }, signal))).toBe(
+      `HTTP 502 (PPL traceId ${trace})`,
+    );
+    // A traceId that is not a plain id (spaces, an e-mail, too long) is not kept.
+    for (const traceId of ['a b c d e f g h', 'someone@example.test', 'x'.repeat(65)]) {
+      const odd = client([{ status: 500, body: { traceId } }]);
+      expect(await detail(odd.pickups.cancel({ clientReference: 'R-1' }, signal))).toBe('HTTP 500');
+    }
+    const order = client([{ status: 204 }]);
+    expect(await detail(order.pickups.order(request(), signal))).toBe('HTTP 204');
+  });
+
+  it('a failed call: the kind of network error, or no answer in time — sent once, never repeated', async () => {
+    let calls = 0;
+    const failing = (error: unknown) =>
+      new PplPickups({
+        accessToken: async () => 'token',
+        request: async () => {
+          calls++;
+          throw error;
+        },
+      } as unknown as PplClient);
+    const reset = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+    expect(await detail(failing(reset).cancel({ clientReference: 'R-1' }, signal))).toBe(
+      'network error ECONNRESET',
+    );
+    expect(
+      await detail(failing(new Error('boom')).cancel({ clientReference: 'R-1' }, signal)),
+    ).toBe('network error');
+    const timedOut = new AbortController();
+    timedOut.abort();
+    expect(
+      await detail(
+        failing(new Error('aborted')).cancel({ clientReference: 'R-1' }, timedOut.signal),
+      ),
+    ).toBe('no answer within the time limit');
+    expect(calls).toBe(3);
   });
 });

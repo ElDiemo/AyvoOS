@@ -1,5 +1,6 @@
 import {
   CarrierRejectedError,
+  CarrierUnusableAnswerError,
   type CarrierPickupOutcome,
   type CarrierPickupRequest,
   type CarrierPickups,
@@ -54,10 +55,51 @@ export function orderBatchId(location: string | null): string | null {
   return m ? m[1]!.toLowerCase() : null;
 }
 
+/**
+ * What is safe to keep about an unusable answer to a creating request: its HTTP status and PPL's
+ * own `traceId` when the problem body carries one — never the body itself.
+ */
+export function unusableAnswer(res: { status: number; body: unknown }): CarrierUnusableAnswerError {
+  const trace = (res.body as { traceId?: unknown } | null)?.traceId;
+  const id = typeof trace === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(trace) ? trace : null;
+  return new CarrierUnusableAnswerError(`HTTP ${res.status}${id ? ` (PPL traceId ${id})` : ''}`);
+}
+
+/** A creating request whose call itself failed: no answer in time, or the kind of network error. */
+function noAnswer(error: unknown, signal: AbortSignal): CarrierUnusableAnswerError {
+  if (signal.aborted) return new CarrierUnusableAnswerError('no answer within the time limit');
+  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return new CarrierUnusableAnswerError(
+    typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(code)
+      ? `network error ${code}`
+      : 'network error',
+  );
+}
+
 export class PplPickups implements CarrierPickups {
   readonly maxParcels = PPL_PICKUP_MAX_PARCELS;
 
   constructor(private readonly client: PplClient) {}
+
+  /** A creating request, sent once; a failed call is an unusable answer (never repeated). */
+  private async once(
+    method: 'POST',
+    path: string,
+    opts: { json: unknown; query?: Record<string, string>; signal: AbortSignal },
+  ) {
+    try {
+      return await this.client.request(method, path, { ...opts, once: true });
+    } catch (error) {
+      // The token is asked for before the request goes out: refused = nothing was sent.
+      if (error instanceof PplAuthError) {
+        throw new CarrierRejectedError(
+          'PPL_AUTH',
+          'PPL refused the server credentials; nothing was sent',
+        );
+      }
+      throw noAnswer(error, opts.signal);
+    }
+  }
 
   /**
    * Exactly what PPL receives, built from the pickup's stored request — the same for every look
@@ -131,22 +173,18 @@ export class PplPickups implements CarrierPickups {
       );
     }
     // Sent once; never repeated by the client (also not after a 401).
-    const res = await this.client.request('POST', '/order/batch', {
-      json: body,
-      signal,
-      once: true,
-    });
+    const res = await this.once('POST', '/order/batch', { json: body, signal });
     if (res.status === 201) {
       const id = orderBatchId(res.headers.get('location'));
       // Accepted without a usable batch id: unknown — looked up by reference, never re-sent.
-      if (!id) throw new Error('PPL accepted the pickup order without a usable Location');
+      if (!id) throw new CarrierUnusableAnswerError('HTTP 201 without a usable Location');
       return { kind: 'ACCEPTED', carrierRef: id };
     }
     if (res.status === 400) throw new CarrierRejectedError('PPL_400', pplProblem(res.body));
     if (res.status === 401 || res.status === 403) {
       throw new CarrierRejectedError(`PPL_${res.status}`, 'PPL did not accept the access token');
     }
-    throw new Error(`PPL answered HTTP ${res.status}`);
+    throw unusableAnswer(res);
   }
 
   async status(
@@ -215,18 +253,17 @@ export class PplPickups implements CarrierPickups {
           : 'PPL could not be reached; nothing was sent',
       );
     }
-    const res = await this.client.request('POST', '/order/cancel', {
+    const res = await this.once('POST', '/order/cancel', {
       query: { orderReference: query.clientReference },
       json: { note: null },
       signal,
-      once: true,
     });
     if (res.status === 200) return 'ACCEPTED';
     if (res.status === 400) throw new CarrierRejectedError('PPL_400', pplProblem(res.body));
     if (res.status === 401 || res.status === 403) {
       throw new CarrierRejectedError(`PPL_${res.status}`, 'PPL did not accept the access token');
     }
-    throw new Error(`PPL answered HTTP ${res.status}`);
+    throw unusableAnswer(res);
   }
 
   async find(query: { clientReference: string }, signal: AbortSignal) {

@@ -13,6 +13,7 @@ import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   CARRIERS,
   CarrierRejectedError,
+  CarrierUnusableAnswerError,
   type CarrierGateway,
   type CarrierPickupOutcome,
   type CarrierPickupRequest,
@@ -40,6 +41,22 @@ const RECENT = 20;
 const UNRESOLVED = ['PREPARED', 'SENT', 'ACCEPTED'] as const;
 
 const notFound = () => new NotFoundException('Pickup not found');
+
+/**
+ * What is stored about a call whose answer was not usable: the HTTP status or the kind of error
+ * (and the carrier's request id), never a body — "not usable", which is not the same as "lost".
+ */
+const unusable = (error: unknown) =>
+  `No usable answer from the carrier: ${
+    error instanceof CarrierUnusableAnswerError ? error.detail : 'unexpected error'
+  }`.slice(0, 1000);
+
+/**
+ * The seconds after the in-flight window at which the n-th automatic lookup of an uncertain
+ * cancellation is due — the same back-off as an accepted one (10 s, 20 s, … at most 5 min apart),
+ * counted from its sending because the database keeps no next lookup for it.
+ */
+const uncertainLookupAfter = (n: number) => (n <= 5 ? 10 * (2 ** n - 1) : 310 + 300 * (n - 5));
 
 const pickupInclude = {
   parcels: {
@@ -572,10 +589,13 @@ export class CarrierPickupsService {
                    "error_code" = ${error.code.slice(0, 100)}, "error_message" = ${error.message.slice(0, 1000)}
              WHERE "id" = ${id}::uuid AND "status" = 'SENT'`;
         } else {
-          this.log.warn(`Pickup cancellation ${id}: no usable answer from the carrier`);
+          // Uncertain: looked up automatically by its own reference (GET only, bounded — see
+          // pollDue), never sent again.
+          const detail = unusable(error);
+          this.log.warn(`Pickup cancellation ${id}: ${detail}`);
           await this.prisma.$executeRaw`
             UPDATE "carrier_pickup_cancellations"
-               SET "error_code" = ${PICKUP_NO_ANSWER}, "error_message" = 'The carrier did not answer usably'
+               SET "error_code" = ${PICKUP_NO_ANSWER}, "error_message" = ${detail}
              WHERE "id" = ${id}::uuid AND "status" = 'SENT'`;
         }
         return;
@@ -840,8 +860,9 @@ export class CarrierPickupsService {
         if (error instanceof CarrierRejectedError) {
           outcome = { kind: 'REJECTED', code: error.code, message: error.message };
         } else {
-          this.log.warn(`Pickup ${p.code}: no usable answer from the carrier`);
-          outcome = { kind: 'UNKNOWN', detail: 'The carrier did not answer usably' };
+          const detail = unusable(error);
+          this.log.warn(`Pickup ${p.code}: ${detail}`);
+          outcome = { kind: 'UNKNOWN', detail };
         }
       }
       await this.settle(id, outcome);
@@ -999,7 +1020,27 @@ export class CarrierPickupsService {
       });
       if (untouched) await this.scheduleCancel(r.id);
     }
-    return written.length + cancels.length + due.length + dueCancels.length;
+    // Uncertain cancellations (sent, the answer not usable): looked up by the pickup's own
+    // reference — a read only, never sent again — after the in-flight window, with the same bounded
+    // back-off. Each lookup is counted when it is claimed, so a failing carrier ends the lookups
+    // too; only the carrier's Canceled confirms (and releases the parcels).
+    const uncertain = await this.prisma.$queryRaw<{ id: string }[]>`
+      UPDATE "carrier_pickup_cancellations" c SET "poll_count" = c."poll_count" + 1
+       WHERE c."id" IN (SELECT q."id" FROM "carrier_pickup_cancellations" q
+                         WHERE q."status" = 'SENT' AND q."poll_count" < ${PICKUP_MAX_POLLS}
+                           AND q."sent_at" + make_interval(secs => ${grace} + (CASE WHEN q."poll_count" <= 5
+                                 THEN 10 * (power(2, q."poll_count") - 1)
+                                 ELSE 310 + 300 * (q."poll_count" - 5) END)) <= now()
+                         ORDER BY q."sent_at" LIMIT ${limit} FOR UPDATE SKIP LOCKED)
+      RETURNING c."id"`;
+    for (const r of uncertain) {
+      try {
+        await this.driveCancel(r.id, true);
+      } catch (error) {
+        this.log.warn(`Uncertain pickup cancellation lookup ${r.id} failed: ${String(error)}`);
+      }
+    }
+    return written.length + cancels.length + due.length + dueCancels.length + uncertain.length;
   }
 
   // --- helpers -------------------------------------------------------------------------------
@@ -1130,6 +1171,7 @@ export class CarrierPickupsService {
         code: r.carrierCode,
         environment: r.carrierEnvironment === 'PRODUCTION' ? 'PRODUCTION' : 'TEST',
       },
+      reference: r.clientReference,
       carrierOrderNumber: r.carrierOrderNumber,
       carrierState: r.carrierState,
       cancelledByCarrierAt: r.carrierCancelledAt?.toISOString() ?? null,
@@ -1153,7 +1195,23 @@ export class CarrierPickupsService {
             errorCode: c.errorCode,
             errorMessage: c.errorMessage,
             lookupFrom: c.status === 'SENT' ? this.lookupFrom(c.sentAt) : null,
-            lookingUp: c.status === 'ACCEPTED' && c.nextPollAt !== null,
+            lookingUp:
+              (c.status === 'ACCEPTED' && c.nextPollAt !== null) ||
+              (c.status === 'SENT' && c.pollCount < PICKUP_MAX_POLLS),
+            lookups: c.pollCount,
+            lookupsExhausted:
+              (c.status === 'ACCEPTED' && c.nextPollAt === null) ||
+              (c.status === 'SENT' && c.pollCount >= PICKUP_MAX_POLLS),
+            nextLookupAt:
+              c.status === 'ACCEPTED'
+                ? (c.nextPollAt?.toISOString() ?? null)
+                : c.status === 'SENT' && c.sentAt && c.pollCount < PICKUP_MAX_POLLS
+                  ? new Date(
+                      c.sentAt.getTime() +
+                        (this.env.CARRIER_SETTLE_SECONDS + uncertainLookupAfter(c.pollCount)) *
+                          1000,
+                    ).toISOString()
+                  : null,
             resolutionReason: c.resolutionReason,
           }
         : null,
