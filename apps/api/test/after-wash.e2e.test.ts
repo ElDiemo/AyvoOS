@@ -302,7 +302,7 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     await factory.refill();
   });
 
-  it('in R2 a bottle "Po mytí" enters no crate — station, "Doplnit lahev", direct SQL; meanwhile new bottles are labelled, filled, finished, picked and delivered as today', async () => {
+  it('a bottle "Po mytí" enters a crate only by the station as REUSE (R3-b) — never by "Doplnit lahev" or another source; meanwhile new bottles go on as today', async () => {
     const [k] = await returned([['GOOD', 'GOOD']]);
     const [b] = await pieces(k!);
     ok(await wash(b!.url));
@@ -322,9 +322,6 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     });
 
     const before = await snapshot([b!.id]);
-    const scan = await labelScan(t, station.sessionId, b!.url);
-    refused(scan, 409, 'NOT_PLACEABLE_YET');
-    expect(scan.body.details).toEqual({ bottle: b!.code });
 
     // "Doplnit lahev" into an assembling crate with a free place.
     const add = await correctCrate(t, target.crateCode, 'add-bottle', { bottle: b!.code });
@@ -368,6 +365,14 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     expect(await t.prisma.crateAssignment.count({ where: { cycle: { crateId: crate.id } } })).toBe(
       0,
     );
+    // R3-b: the station places it as REUSE (its label is on it; nothing consumed).
+    const scan = await labelScan(t, station.sessionId, b!.url);
+    expect(scan.status, JSON.stringify(scan.body)).toBe(200);
+    expect(scan.body.outcome).toBe('PLACED');
+    const placed = await t.prisma.crateAssignment.findFirstOrThrow({
+      where: { bottleId: b!.id, releasedAt: null },
+    });
+    expect(placed.source).toBe('REUSE');
 
     // Today's walk of new bottles, unchanged, while READY_FOR_REUSE bottles exist.
     const fresh = await factory.make();
@@ -384,6 +389,43 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     expect((await t.prisma.bottle.findUniqueOrThrow({ where: { id: b!.id } })).status).toBe(
       'READY_FOR_REUSE',
     );
+  });
+
+  it('a bottle "Po mytí" placed in one crate: a rescan there is the same placement; another crate refuses IN_ANOTHER_CRATE (its crate named), writes nothing, opens no empty cycle', async () => {
+    const [k] = await returned([['GOOD']]);
+    const [b] = await pieces(k!);
+    ok(await wash(b!.url));
+    const crateOf = async (url: string) =>
+      t.prisma.crate.findUniqueOrThrow({ where: { qrToken: url.split('/').pop()! } });
+
+    // Crate A at the station: placed once (REUSE), audited with the bottle's code.
+    const first = await factory.openStation();
+    const a = await crateOf(first.crateUrl);
+    const placed = await labelScan(t, first.sessionId, b!.url);
+    expect(placed.status, JSON.stringify(placed.body)).toBe(200);
+    expect(placed.body.outcome).toBe('PLACED');
+    const added = await t.prisma.crateEvent.findFirstOrThrow({
+      where: { crateId: a.id, type: 'MEMBER_ADDED' },
+    });
+    expect(added.payload).toMatchObject({ bottle: b!.code, source: 'REUSE' });
+    // The same crate again: the same placement, nothing written.
+    const again = await labelScan(t, first.sessionId, b!.url);
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.outcome).toBe('ALREADY_APPLIED');
+
+    // Crate B (another station session, nothing in it yet): the known refusal, never P2002.
+    const second = await factory.openStation();
+    const crateB = await crateOf(second.crateUrl);
+    const before = await snapshot([b!.id]);
+    const elsewhere = await labelScan(t, second.sessionId, b!.url);
+    refused(elsewhere, 409, 'IN_ANOTHER_CRATE');
+    expect(elsewhere.body.details).toEqual({ crate: a.code });
+    expect(await snapshot([b!.id])).toEqual(before);
+    expect(
+      await t.prisma.crateAssignment.count({ where: { bottleId: b!.id, releasedAt: null } }),
+    ).toBe(1);
+    // The refusal rolled back the whole scan: crate B has no (empty) cycle.
+    expect(await t.prisma.crateCycle.count({ where: { crateId: crateB.id } })).toBe(0);
   });
 
   it('the queue is limited per group in the database, with exact counts — also when the first group fills the limit before the second appears', async () => {
@@ -534,13 +576,14 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
         t.prisma.$executeRawUnsafe(reuseEvent(b.id, op, actor)),
         /only a RETURNED bottle/,
       );
-      // …and nothing leaves READY_FOR_REUSE in R2.
+      // …and nothing leaves READY_FOR_REUSE but its refilling (R3-b): FILLED only with a FILLED of
+      // this circulation (its previous filling never counts).
       for (const next of ['RETURNED', 'RETIRED', 'LABELED_EMPTY', 'FILLED', 'DISPOSED']) {
         await fails(
           t.prisma.$executeRawUnsafe(
             `UPDATE "bottles" SET "status" = '${next}' WHERE "id" = '${b.id}'`,
           ),
-          /is not allowed/,
+          next === 'FILLED' ? /needs its FILLED event/ : /is not allowed/,
         );
       }
     });
