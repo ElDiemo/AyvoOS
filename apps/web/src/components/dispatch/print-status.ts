@@ -40,7 +40,7 @@ export function combinedOutcome(data: OrderShipment, printer: string | null): Ou
   if (r?.status === 'REJECTED' || r?.status === 'NOT_CREATED' || s.status === 'DRAFT') {
     return {
       tone: 'error',
-      text: `Kompletace je dokončená, dopravce ale štítky nevytvořil${r?.errorMessage ? `: ${r.errorMessage}` : ''}. Další krok najdete na objednávce.`,
+      text: 'Kompletace je dokončená, dopravce ale štítky nevytvořil. Další krok i důvod (v Podrobnostech) najdete na objednávce.',
     };
   }
   if (s.status === 'REQUESTING') {
@@ -64,7 +64,7 @@ export function combinedOutcome(data: OrderShipment, printer: string | null): Ou
   if (s.zpl?.status === 'FAILED') {
     return {
       tone: 'error',
-      text: `Štítky jsou vytvořené, ale soubory pro tiskárnu (ZPL) se nepodařilo získat – nic se netiskne. ${s.zpl.errorMessage ?? ''} Pokračujte na objednávce.`.trim(),
+      text: 'Štítky jsou vytvořené, ale soubory pro tiskárnu se nepodařilo získat – nic se netiskne. Pokračujte na objednávce.',
     };
   }
   // UI38-R2: what each label's latest job really reached — not only whether one is still active.
@@ -80,7 +80,7 @@ export function combinedOutcome(data: OrderShipment, printer: string | null): Ou
     if (s.printWaiting.length > 0 || s.zpl?.status === 'PENDING') {
       return {
         tone: 'info',
-        text: `Štítky jsou vytvořené; tisk na ${printer} čeká na soubory pro tiskárnu (ZPL). Stav sledujte na objednávce.`,
+        text: `Štítky jsou vytvořené; tisk na ${printer} čeká na soubory pro tiskárnu. Stav sledujte na objednávce.`,
       };
     }
     return {

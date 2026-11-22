@@ -18,5 +18,7 @@ import { HotelAttributionService } from './hotel-attribution.service.js';
   imports: [SalesModule, CustomersModule, ContractsModule],
   controllers: [CommissionsController, HotelAttributionController],
   providers: [CommissionTermsService, HotelAttributionService],
+  // The core contract for Finance (doc 069 §4) reads attributions through this service.
+  exports: [HotelAttributionService],
 })
 export class CommissionsModule {}

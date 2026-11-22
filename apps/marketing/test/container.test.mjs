@@ -222,7 +222,7 @@ describe(
         const h = ask(names.site, path).headers;
         assert.equal(
           h['content-security-policy'],
-          "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "default-src 'none'; img-src 'self' https://www.googletagmanager.com https://*.google-analytics.com; style-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src https://www.googletagmanager.com https://*.google-analytics.com https://*.google.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
           path,
         );
         assert.equal(h['x-content-type-options'], 'nosniff');
