@@ -147,11 +147,25 @@ test.beforeAll(async ({ browser }) => {
       WHERE o."code" = '${order}' AND s."status" = 'LABELED'
      ON CONFLICT DO NOTHING`,
   ]);
-  await json(
-    await request.post(`/api/admin/orders/${order}/shipment/tracking/refresh`, {
-      data: { requestId: crypto.randomUUID() },
-    }),
-  );
+  // The automatic tracking (every few seconds) may be asking at this very moment: the API then
+  // answers 409 TRACKING_BUSY and nothing happened — ask again until one look is ours.
+  await expect
+    .poll(
+      async () => {
+        const res = await request.post(`/api/admin/orders/${order}/shipment/tracking/refresh`, {
+          data: { requestId: crypto.randomUUID() },
+        });
+        if (
+          res.status() === 409 &&
+          ((await res.json()) as { code?: string }).code === 'TRACKING_BUSY'
+        )
+          return 'busy';
+        await json(res);
+        return 'ok';
+      },
+      { timeout: 30_000 },
+    )
+    .toBe('ok');
   // Returned (R1), every bottle good, then washed (R2 "Po mytí").
   const post = (path: string, data: object) =>
     request.post(`/api/admin/returns${path}`, {
