@@ -112,6 +112,41 @@ export async function apiGet<T extends z.ZodType>(
 }
 
 /**
+ * Like apiGet, but a domain refusal (4xx with a code) or an outage (5xx, no answer) is returned for
+ * the page to explain truthfully instead of throwing — e.g. the commission preview of a month that
+ * is not closed (422 MONTH_NOT_CLOSED) or the core behind Finance down (503). 401/403 still lead to
+ * the sign-in or forbidden page; a contract mismatch still goes to the version-mismatch page.
+ */
+export async function apiGetResult<T extends z.ZodType>(
+  path: string,
+  schema: T,
+  query?: Record<string, string | number | undefined>,
+): Promise<{ ok: true; data: z.infer<T> } | { ok: false; status: number; code: string | null }> {
+  let res: Response;
+  try {
+    res = await call(path, query);
+  } catch {
+    return { ok: false, status: 503, code: null };
+  }
+  if (res.status === 401 || res.status === 403) {
+    const body = (await res.json().catch(() => ({}))) as { code?: string };
+    return redirectForAuth(res.status, body.code);
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { code?: unknown };
+    return {
+      ok: false,
+      status: res.status,
+      code: typeof body.code === 'string' ? body.code : null,
+    };
+  }
+  const parsed = schema.safeParse(await res.json());
+  if (parsed.success) return { ok: true, data: parsed.data };
+  if (path.startsWith('admin/finance/')) redirect('/finance/version-mismatch');
+  throw parsed.error;
+}
+
+/**
  * A part of a page that must not bring the page down (doc 044 U2): never redirects or throws, and
  * ends within its limit. `forbidden` and `unavailable` are different answers; neither is an empty result.
  */

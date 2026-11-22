@@ -283,3 +283,62 @@ export const plannedLaterSchema = z.object({
   salesperson: personRefSchema.nullable(),
   effectiveUntil: z.string(),
 });
+
+// --- the core contract for the Finance commission closing (doc 069 §4, PR 2a) -----------------
+
+/** At most this many hotels per request; Finance splits a month into batches (doc 069 §4). */
+export const COMMISSION_CONTRACT_BATCH = 200;
+
+/** POST /api/internal/v1/finance/commissions/attributions (`finance:commissions_manage`). */
+export const financeCommissionAttributionsRequestSchema = z.strictObject({
+  month: commissionMonthSchema,
+  hotelIds: z
+    .array(z.uuid())
+    .min(1)
+    .max(COMMISSION_CONTRACT_BATCH)
+    .refine((ids) => new Set(ids).size === ids.length, 'hotelIds must be unique'),
+});
+export type FinanceCommissionAttributionsRequest = z.infer<
+  typeof financeCommissionAttributionsRequestSchema
+>;
+
+const rateTextSchema = z.string().regex(/^\d{1,3}\.\d{2}$/);
+
+/** The bound rates of the attribution in force (the snapshot of #193, never re-read terms). */
+export const financeCommissionBindingSchema = z.object({
+  bindingId: z.uuid(),
+  termsVersion: z.number().int().positive(),
+  initialRate: rateTextSchema,
+  initialMonths: z.number().int().positive(),
+  maintenanceRate: rateTextSchema,
+});
+
+export const financeCommissionAttributionSchema = z.object({
+  revision: z.number().int().positive(),
+  effectiveFrom: z.string(),
+  commissionStart: z.string(),
+  /** null = Firemní hotel – bez provize. */
+  recipient: z.object({ salespersonId: z.uuid(), displayName: z.string() }).nullable(),
+  /** null = Chybí podmínky provize. */
+  binding: financeCommissionBindingSchema.nullable(),
+});
+
+export const financeCommissionHotelSchema = z.object({
+  hotelId: z.uuid(),
+  /**
+   * The hotel's approved first paid month (revision 1), or null without any attribution. With
+   * `attribution: null` and a start after the month, the month is before the commission start.
+   */
+  commissionStart: z.string().nullable(),
+  /** The revision in force for the month (latest effective_from ≤ M, then the highest revision). */
+  attribution: financeCommissionAttributionSchema.nullable(),
+});
+
+export const financeCommissionAttributionsSchema = z.object({
+  month: z.string(),
+  /** SHA-256 of the canonical answer (hotels sorted by id). */
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  hotels: z.array(financeCommissionHotelSchema),
+});
+export type FinanceCommissionAttributions = z.infer<typeof financeCommissionAttributionsSchema>;
+export type FinanceCommissionHotel = z.infer<typeof financeCommissionHotelSchema>;

@@ -235,9 +235,16 @@ test('tracking: every parcel with the carrier, two delivered, an unknown code ke
   const warning = card.getByTestId('tracking-warning-3');
   await expect(warning).toContainText('Balík 3');
   await expect(warning).toContainText('vrací se odesílateli – není doručení hotelu');
-  await expect(warning).toContainText('PPL: „Zásilka bude vrácena zpět odesílateli.“');
+  // PPL's own wording is under Podrobnosti; the translation and the parcel stay on top.
+  await expect(warning).not.toContainText('PPL:');
+  const carrierText = card.getByTestId('tracking-warning-3-carrier');
+  await expect(carrierText).toBeHidden();
+  await card.getByTestId('tracking-warnings-details').locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(carrierText).toHaveText('PPL: „Zásilka bude vrácena zpět odesílateli.“');
   await expect(card.getByTestId('tracking-warnings')).not.toContainText('Balík 1');
   await expect(card).toContainText('Nic se automaticky nestornuje');
+  await expect(card).toContainText('Tracking pokračuje.');
   // The history is collapsed; it shows PPL's own code and the time it was fetched.
   const history = card.getByTestId('tracking-history-3');
   await expect(history.getByText('kód 7777')).toBeHidden();

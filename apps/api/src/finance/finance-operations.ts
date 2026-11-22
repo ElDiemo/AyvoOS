@@ -27,7 +27,9 @@ export type FinanceOperationKind =
   | 'PAYMENTS_SIMULATE'
   | 'PAYMENTS_IMPORT_BANK'
   | 'PAYMENT_ALLOCATE'
-  | 'BILLING_RUN_SETTINGS_VERSION';
+  | 'BILLING_RUN_SETTINGS_VERSION'
+  | 'COMMISSION_STATEMENT_APPROVE'
+  | 'COMMISSION_SALESPERSON_INVOICE';
 
 /**
  * The core's idempotency pattern (doc 018 §8) in Finance's own schema: one transaction inserts

@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  COMMISSION_CONTRACT_BATCH,
+  financeCommissionAttributionsSchema,
   financeContractHotelSchema,
   financeContractSupplierDocumentSchema,
   financeContractSupplierSchema,
@@ -14,6 +16,7 @@ import {
   portalInvitationSchema,
   portalIntrospectionSchema,
   PORTAL_SESSION_HEADER,
+  type FinanceCommissionHotel,
   type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
@@ -49,8 +52,8 @@ export const dependencyUnavailable = () =>
 
 /**
  * Client of the core's internal Finance contract (ADR 0039 §4). Every call carries the service
- * token and the user's session token; the core evaluates the user now. GETs are retried once on
- * a network error, nothing else is ever retried. 401/403/404 of the core are the user's answer;
+ * token and the user's session token; the core evaluates the user now. GETs (and POSTs that only
+ * read) are retried once on a network error, nothing else is ever retried. 401/403/404 of the core are the user's answer;
  * anything else (timeout, 5xx, malformed body) is "temporarily unavailable" — never a guess.
  */
 @Injectable()
@@ -104,6 +107,39 @@ export class CoreClient {
       { ids: unique },
     );
     return new Map(rows.map((r) => [r.id, r]));
+  }
+
+  /**
+   * Who gets the commission for these hotels in a billed month (doc 069 §4), in sorted batches of
+   * at most 200. Every batch must answer (a read: retried once on a network error); any failure is
+   * 503 for the whole call — the closing never works from a partial answer.
+   */
+  async commissionAttributions(
+    sessionToken: string,
+    month: string,
+    hotelIds: readonly string[],
+  ): Promise<Map<string, FinanceCommissionHotel>> {
+    const ids = [...new Set(hotelIds)].sort();
+    const out = new Map<string, FinanceCommissionHotel>();
+    for (let i = 0; i < ids.length; i += COMMISSION_CONTRACT_BATCH) {
+      const batch = ids.slice(i, i + COMMISSION_CONTRACT_BATCH);
+      const answer = await this.json(
+        'POST',
+        'commissions/attributions',
+        sessionToken,
+        financeCommissionAttributionsSchema,
+        { month, hotelIds: batch },
+        false,
+        true,
+      );
+      if (answer.month !== month) throw dependencyUnavailable();
+      for (const h of answer.hotels) out.set(h.hotelId, h);
+    }
+    if (ids.some((id) => !out.has(id))) {
+      this.logger.error('Core contract commissions/attributions: a hotel is missing');
+      throw dependencyUnavailable();
+    }
+    return out;
   }
 
   supplierDocuments(
@@ -302,6 +338,7 @@ export class CoreClient {
     schema: z.ZodType<T>,
     body?: unknown,
     domainAnswers = false,
+    read = false,
   ): Promise<T> {
     const res = await this.call(
       method,
@@ -310,6 +347,7 @@ export class CoreClient {
       body,
       this.env.CORE_TIMEOUT_MS,
       domainAnswers,
+      read,
     );
     const parsed = schema.safeParse(await res.json().catch(() => undefined));
     if (!parsed.success) {
@@ -326,9 +364,11 @@ export class CoreClient {
     body: unknown,
     timeoutMs: number,
     domainAnswers = false,
+    /** A POST that only reads (a body too long for a query): retried like a GET. */
+    read = false,
   ): Promise<Response> {
     const url = `${this.env.CORE_INTERNAL_URL}/api/internal/v1/finance/${path}`;
-    const attempts = method === 'GET' ? 2 : 1;
+    const attempts = method === 'GET' || read ? 2 : 1;
     for (let attempt = 1; ; attempt++) {
       let res: Response;
       try {

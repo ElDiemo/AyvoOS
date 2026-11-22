@@ -328,6 +328,15 @@ test('the simulated agent prints; an uncertain label is re-printed alone, the du
     'Nejisté – mohlo se vytisknout',
   );
   await expect(card.getByTestId('print-parcel-3-status')).toHaveText('Čeká ve frontě');
+  // The agent's own words are diagnostics: under the parcel's Podrobnosti, not on the first layer.
+  await expect(card.getByText('Simulace: odpověď z USB se ztratila')).toBeHidden();
+  const parcel2 = card.getByTestId('parcel-2-details');
+  await parcel2.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(parcel2.locator('[data-testid^="print-job-"][data-testid$="-detail"]')).toHaveText(
+    'Simulace: odpověď z USB se ztratila',
+  );
+  await page.keyboard.press('Enter');
   await shot(page, 'printing-03-order-three-parcels-queue-desktop');
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow(page);
