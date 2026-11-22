@@ -10,7 +10,7 @@ import {
   uncertain,
   useAttempt,
 } from '@/components/catalog/form-kit';
-import { buttonClass, Card, Notice } from '@/components/ui';
+import { buttonClass, Card, DetailFact, Details, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { shipmentsCs } from '@/i18n/cs/shipments';
 import { orderErrorText } from './order-errors';
@@ -122,7 +122,24 @@ export function PrintCard({
           <Notice tone="warning">{t.noPrinter}</Notice>
         )}
         {printer && !printer.agent.online && (
-          <Notice tone="warning">{t.agentOffline(printer.agent.code)}</Notice>
+          <>
+            <Notice tone="warning">
+              <span data-testid="agent-offline">{t.agentOffline}</span>
+            </Notice>
+            <Details testId="agent-offline-details">
+              <dl>
+                <DetailFact label={t.agent} value={printer.agent.code} />
+                <DetailFact
+                  label={t.agentLastSeen}
+                  value={
+                    printer.agent.lastSeenAt
+                      ? formatDateTimeCs(printer.agent.lastSeenAt, timeZone)
+                      : null
+                  }
+                />
+              </dl>
+            </Details>
+          </>
         )}
         {zpl?.status === 'PENDING' && (
           <p className="text-stone-600" data-testid="zpl-pending">
@@ -130,12 +147,22 @@ export function PrintCard({
           </p>
         )}
         {zpl?.status === 'FAILED' && (
-          <Notice tone="warning">
-            <span className="font-semibold" data-testid="zpl-failed">
-              {t.zplFailed}
-            </span>{' '}
-            {zpl.errorMessage}
-          </Notice>
+          <>
+            <Notice tone="warning">
+              <span className="font-semibold" data-testid="zpl-failed">
+                {t.zplFailed}
+              </span>
+            </Notice>
+            <Details testId="zpl-failed-details">
+              <dl>
+                <DetailFact
+                  label={t.zplError}
+                  value={[zpl.errorCode, zpl.errorMessage].filter(Boolean).join(' – ')}
+                />
+                <DetailFact label={t.zplAttempts} value={String(zpl.attempts)} />
+              </dl>
+            </Details>
+          </>
         )}
         {zpl && zpl.status !== 'DONE' && canPrepare && (
           <div>
@@ -253,8 +280,10 @@ function ParcelPrint({
         {job && <JobChip status={job.status} testId={`print-parcel-${parcel.parcelNo}-status`} />}
       </div>
       {job?.status === 'UNCERTAIN' && <p className="text-xs text-amber-900">{t.uncertainHelp}</p>}
-      {job?.detail && job.status !== 'SENT' && (
-        <p className="text-xs text-stone-600">{job.detail}</p>
+      {job?.status === 'FAILED' && (
+        <p className="text-xs text-red-800" data-testid={`print-parcel-${parcel.parcelNo}-failed`}>
+          {t.failedHelp}
+        </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
         {pdf && (
@@ -324,6 +353,11 @@ function ParcelPrint({
                     {j.printer} · {j.requestedBy} · {formatDateTimeCs(j.createdAt, timeZone)}
                   </span>
                   {j.reason && <span>· {j.reason}</span>}
+                  {j.detail && j.status !== 'SENT' && (
+                    <span className="w-full break-all" data-testid={`print-job-${j.code}-detail`}>
+                      {j.detail}
+                    </span>
+                  )}
                 </li>
               ))}
             </ol>

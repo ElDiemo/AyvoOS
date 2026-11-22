@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AYVO – Refill provoz. Automatizovaný.</title>
+    <title>AYVO – Hotelová kosmetika bez starostí</title>
     <meta
       name="description"
-      content="AYVO je B2B služba pro organizace s pravidelnou spotřebou. Dodáváme produkty ve vratných lahvích a řídíme celý jejich životní cyklus — doplňování, oběh i dohledatelnost — jako klidnou a předvídatelnou službu."
+      content="Kompletně spravovaná hotelová kosmetika v prémiových vratných skleněných lahvích. Jedna předvídatelná měsíční částka za pokoj, bez opakovaného objednávání a doplňování na pokojích. AYVO zajistí zásobování, svoz, čištění i opětovné použití."
     />
     <link rel="canonical" href="https://ayvo.co/cz/" />
     <link rel="alternate" hreflang="en" href="https://ayvo.co/" />
@@ -16,10 +16,10 @@
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="AYVO" />
     <meta property="og:locale" content="cs_CZ" />
-    <meta property="og:title" content="AYVO – Refill provoz. Automatizovaný." />
+    <meta property="og:title" content="AYVO – Hotelová kosmetika bez starostí" />
     <meta
       property="og:description"
-      content="AYVO je B2B služba pro organizace s pravidelnou spotřebou. Dodáváme produkty ve vratných lahvích a řídíme celý jejich životní cyklus — doplňování, oběh i dohledatelnost — jako klidnou a předvídatelnou službu."
+      content="Kompletně spravovaná hotelová kosmetika v prémiových vratných skleněných lahvích. Jedna předvídatelná měsíční částka za pokoj, bez opakovaného objednávání a doplňování na pokojích. AYVO zajistí zásobování, svoz, čištění i opětovné použití."
     />
     <meta property="og:url" content="https://ayvo.co/cz/" />
     <meta property="og:image" content="https://ayvo.co/assets/img/ayvo-bottles.png" />
@@ -27,10 +27,55 @@
     <link rel="icon" href="/assets/icons/ayvo-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/icons/ayvo-180.png" />
     <link rel="stylesheet" href="/assets/site.css" />
+    <link
+      rel="preload"
+      as="image"
+      href="/assets/img/ayvo-hero-scene.webp"
+      type="image/webp"
+      media="(min-width: 861px)"
+      fetchpriority="high"
+    />
+    <link
+      rel="preload"
+      as="image"
+      href="/assets/img/ayvo-hero-scene-mobile.webp"
+      type="image/webp"
+      media="(max-width: 860px)"
+      fetchpriority="high"
+    />
     <script src="/assets/site.js" defer></script>
+    <script src="/assets/consent.js" defer></script>
   </head>
   <body>
     <a class="ayvo-skip" href="#content">Přeskočit na obsah</a>
+    <section class="ayvo-consent" aria-labelledby="ayvo-consent-title" data-consent-banner hidden>
+      <h2 id="ayvo-consent-title" class="ayvo-consent-title">Analytika návštěvnosti</h2>
+      <p class="ayvo-consent-text">
+        Se souhlasem měříme návštěvnost nástrojem Google Analytics 4 (poskytovatel Google), abychom
+        věděli, jak se web používá – bez reklamy. Bez souhlasu Googlu nic neposíláme.
+      </p>
+      <details class="ayvo-consent-details">
+        <summary>Podrobnosti</summary>
+        <p class="ayvo-consent-text">
+          Google pak dostane adresu a název stránky, předchozí stránku, prohlížeč, zařízení a jazyk,
+          vaši IP adresu a náhodný identifikátor uložený v cookies _ga. Volbu si v tomto prohlížeči
+          pamatujeme 6 měsíců; změníte ji v patičce.
+        </p>
+      </details>
+      <p
+        class="ayvo-consent-status"
+        data-consent-status
+        data-text-granted="Aktuální volba: analytika povolena."
+        data-text-denied="Aktuální volba: analytika odmítnuta."
+        hidden
+      ></p>
+      <div class="ayvo-consent-actions">
+        <button type="button" class="ayvo-consent-btn" data-consent="granted">
+          Povolit analytiku
+        </button>
+        <button type="button" class="ayvo-consent-btn" data-consent="denied">Odmítnout</button>
+      </div>
+    </section>
     <header class="ayvo-header">
       <div class="ayvo-wrap ayvo-header-row">
         <a class="ayvo-brand" href="/cz/">
@@ -41,7 +86,6 @@
             width="3386"
             height="985"
           />
-          <span class="ayvo-tagline">Refill. Redefine.</span>
         </a>
         <nav class="ayvo-langs" aria-label="Jazyk">
           <a href="/" hreflang="en" lang="en" class="ayvo-lang" data-lang>EN</a
@@ -54,94 +98,69 @@
       </div>
     </header>
     <main id="content">
-      <section id="top" class="ayvo-section ayvo-hero">
-        <div class="ayvo-items-center ayvo-wrap ayvo-grid2">
-          <div>
-            <div class="ayvo-kicker ayvo-kicker-line">B2B refill systém</div>
+      <section id="top" class="ayvo-section ayvo-hero ayvo-hero-dark">
+        <div class="ayvo-hero-stage">
+          <div class="ayvo-hero-products">
+            <img
+              class="ayvo-hero-visual"
+              src="/assets/img/ayvo-hero-products.webp"
+              width="478"
+              height="612"
+              fetchpriority="high"
+              decoding="async"
+              alt="Ilustrační snímek produktů AYVO: dvě bílé lahve, Liquid Hand Soap a Hair &amp; Body Wash"
+            />
+          </div>
+        </div>
+        <div class="ayvo-hero-content">
+          <div class="ayvo-hero-copy">
+            <p class="ayvo-hero-slogan">Refill. Redefined.</p>
 
             <h1 class="ayvo-h1">
-              Refill provoz. Automatizovaný.<br />
-              Vratné obaly sledované od začátku do konce.
+              <span class="ayvo-h1-part">Hotelová kosmetika</span>
+              <span class="ayvo-h1-part ayvo-h1-gold">bez starostí.</span>
             </h1>
 
-            <p class="ayvo-max560 ayvo-p ayvo-muted">
-              AYVO je B2B služba pro organizace s pravidelnou spotřebou. Dodáváme produkty ve
-              vratných lahvích a řídíme celý jejich životní cyklus — doplňování, oběh i
-              dohledatelnost — jako klidnou a předvídatelnou službu.
-            </p>
-
-            <p class="ayvo-note-lg ayvo-muted">
-              Navrženo pro hotely, které chtějí méně proměnných, ne více voleb.
+            <p class="ayvo-hero-lead">
+              Dodáváme hotelovou kosmetiku ve vratných lahvích a zajišťujeme zásobování, svoz i
+              mytí.
             </p>
 
             <div class="ayvo-cta">
-              <a href="#pilot" class="ayvo-btn primary">Požádat o pilot</a>
-              <a href="#value" class="ayvo-btn secondary">Zjistit, co získáte</a>
+              <a href="#pilot" class="ayvo-btn primary"
+                >Poptat pilotní spolupráci<span class="ayvo-arrow" aria-hidden="true">→</span></a
+              >
             </div>
-
-            <p class="ayvo-note ayvo-muted">
-              Navrženo pro gastronomii, školství, kanceláře a další prostředí s vysokou spotřebou.
-            </p>
-          </div>
-
-          <div class="ayvo-center">
-            <img
-              class="ayvo-hero-img"
-              decoding="async"
-              loading="lazy"
-              src="/assets/img/ayvo-bottles.png"
-              width="1563"
-              height="1563"
-              alt="AYVO refill lahve"
-            />
           </div>
         </div>
       </section>
       <section class="ayvo-bg-soft ayvo-section" id="value">
         <div class="ayvo-wrap">
-          <div class="ayvo-kicker ayvo-kicker-line">Co AYVO dodává</div>
-          <h2 class="ayvo-h1">Refill systém navržený pro reálný provoz</h2>
+          <div class="ayvo-kicker ayvo-kicker-line">Služba</div>
+          <h2 class="ayvo-h1">Vše, co pokoje potřebují, spravuje AYVO</h2>
 
           <div class="ayvo-grid3">
             <div class="ayvo-card">
-              <div class="ayvo-kicker">Vratné obaly</div>
+              <div class="ayvo-kicker">Připravená kosmetika</div>
               <p class="ayvo-p ayvo-muted">
-                Odolné lahve určené pro dlouhodobý oběh, nikoli pro jednorázové použití.
+                Hotelová kosmetika, například mýdlo na ruce a sprchový gel, dodaná plná v prémiových
+                vratných skleněných lahvích.
               </p>
             </div>
 
             <div class="ayvo-card">
-              <div class="ayvo-kicker">Automatické doplňování</div>
+              <div class="ayvo-kicker">Plánované zásobování</div>
               <p class="ayvo-p ayvo-muted">
-                Dodávky běží automaticky podle dohodnutých objemů a harmonogramu.
+                Dodávky probíhají podle dohodnutého plánu služby, takže nemusíte nic znovu
+                objednávat.
               </p>
             </div>
 
             <div class="ayvo-card">
-              <div class="ayvo-kicker">Sledovatelnost (QR)</div>
+              <div class="ayvo-kicker">Digitální přehled</div>
               <p class="ayvo-p ayvo-muted">
-                Každá lahev má QR identitu s historií oběhu a daty o využití.
-              </p>
-            </div>
-
-            <div class="ayvo-card">
-              <div class="ayvo-kicker">Přehlednost provozu</div>
-              <p class="ayvo-p ayvo-muted">
-                Méně chyb, méně dotazů, předvídatelný každodenní provoz.
-              </p>
-            </div>
-
-            <div class="ayvo-card">
-              <div class="ayvo-kicker">Vratky a opakované použití</div>
-              <p class="ayvo-p ayvo-muted">
-                Svoz, čištění a opětovné použití jsou součástí služby.
-              </p>
-            </div>
-
-            <div class="ayvo-card">
-              <div class="ayvo-kicker">Nízká zátěž</div>
-              <p class="ayvo-p ayvo-muted">
-                Minimální dopad na rutinu personálu. Žádná nová složitost.
+                Každá lahev má vlastní QR identitu, díky které je vidět její životní cyklus a počet
+                oběhů.
               </p>
             </div>
           </div>
@@ -149,22 +168,23 @@
       </section>
       <section id="includes" class="ayvo-section">
         <div class="ayvo-wrap">
-          <div class="ayvo-kicker ayvo-kicker-line">Co získáte</div>
-          <h2 class="ayvo-h1">Kompletní pokojový systém — spravovaný jako služba</h2>
+          <div class="ayvo-kicker ayvo-kicker-line">Paušál za pokoj</div>
+          <h2 class="ayvo-h1">Jedna předvídatelná měsíční částka za pokoj</h2>
 
           <p class="ayvo-max760 ayvo-p ayvo-muted">
-            Jedno stabilní řešení navržené pro předvídatelný provoz. Žádné sezónní změny, žádné
-            střídání produktů, žádné doplňování na pokoji.
+            Spravovanou službu pokrývá jedna dohodnutá měsíční částka za pokoj — neplatíte zvlášť za
+            každé běžné doplnění. Konkrétní rozsah a výši paušálu dohodneme s každým hotelem.
           </p>
 
           <div class="ayvo-card">
             <p class="ayvo-p ayvo-muted">
-              • Vratné skleněné lahve (umyvadlo & sprcha)<br />
-              • Standardizovaný pumpový systém<br />
-              • Jedna neutrální formulace v hotelové kvalitě<br />
-              • Plánované refill dodávky<br />
-              • Profesionální mytí a řízený životní cyklus<br /><br />
-              <strong>Nejedná se o řešení doplňování přímo na pokoji.</strong>
+              • připravená kosmetika ve vratných skleněných lahvích<br />
+              • dodávky podle dohodnutého plánu služby<br />
+              • svoz, profesionální čištění a opětovné použití lahví<br />
+              • přehled životního cyklu a podklady pro environmentální reporting<br /><br />
+              <strong
+                >Žádné přelévání ani doplňování na pokojích — personál jen vymění lahve.</strong
+              >
             </p>
           </div>
         </div>
@@ -172,34 +192,32 @@
       <section class="ayvo-bg-soft ayvo-section" id="how">
         <div class="ayvo-wrap">
           <div class="ayvo-kicker ayvo-kicker-line">Jak to funguje</div>
-          <h2 class="ayvo-h1">Služba životního cyklu, ne ruční objednávání</h2>
+          <h2 class="ayvo-h1">Tři jednoduché kroky</h2>
 
-          <div class="ayvo-grid2">
+          <div class="ayvo-grid3">
             <div class="ayvo-card">
-              <div class="ayvo-kicker">Nastavení</div>
+              <div class="ayvo-kicker">Krok 1</div>
+              <h3 class="ayvo-h2">Dodáme</h3>
               <p class="ayvo-p ayvo-muted">
-                Produkty, objemy a rytmus dodávek jsou definovány předem.
+                AYVO dodává připravenou kosmetiku ve vratných skleněných lahvích podle dohodnutého
+                plánu služby.
               </p>
             </div>
 
             <div class="ayvo-card">
-              <div class="ayvo-kicker">Dodání a používání</div>
+              <div class="ayvo-kicker">Krok 2</div>
+              <h3 class="ayvo-h2">Vyměníte</h3>
               <p class="ayvo-p ayvo-muted">
-                Produkty obíhají ve vratných lahvích s QR sledovatelností.
+                Housekeeping jen nahradí prázdné lahve plnými. Žádné přelévání, doplňování ani
+                opakované objednávání.
               </p>
             </div>
 
             <div class="ayvo-card">
-              <div class="ayvo-kicker">Vratky a opakované použití</div>
+              <div class="ayvo-kicker">Krok 3</div>
+              <h3 class="ayvo-h2">O zbytek se postaráme</h3>
               <p class="ayvo-p ayvo-muted">
-                Lahve se vrací, čistí a znovu používají v řízeném cyklu.
-              </p>
-            </div>
-
-            <div class="ayvo-card">
-              <div class="ayvo-kicker">Přehled a optimalizace</div>
-              <p class="ayvo-p ayvo-muted">
-                Plná transparentnost dnes. Optimalizace podle spotřeby později.
+                AYVO zajistí svoz, profesionální čištění, opětovné použití a průběžné zásobování.
               </p>
             </div>
           </div>
@@ -209,57 +227,43 @@
         <div class="ayvo-wrap">
           <div class="ayvo-kicker ayvo-kicker-line">Proč AYVO</div>
 
-          <h2 class="ayvo-h1-sm ayvo-mb32 ayvo-h1">Navrženo pro reálný hotelový provoz</h2>
+          <h2 class="ayvo-h1-sm ayvo-mb32 ayvo-h1">Méně starostí. Lepší dojem u každého hosta.</h2>
 
-          <div class="ayvo-grid3">
+          <div class="ayvo-grid2">
             <div class="ayvo-card">
-              <h3 class="ayvo-h2">Žádné narušení provozu</h3>
+              <h3 class="ayvo-h2">Méně administrativy</h3>
               <p class="ayvo-p ayvo-muted">
-                AYVO zapadá do stávajících housekeeping procesů. Žádné doplňování na pokoji, žádné
-                nové postupy, žádné dodatečné školení.
-              </p>
-
-              <p class="ayvo-note-sm ayvo-muted">Bez změn v rutinních postupech housekeeping.</p>
-            </div>
-
-            <div class="ayvo-card">
-              <h3 class="ayvo-h2">Jednotný pokojový standard</h3>
-              <p class="ayvo-p ayvo-muted">
-                Jeden systém lahví, jeden vizuální styl a jedna formulace napříč pokoji i hotely.
+                Žádné opakované objednávání ani ruční plánování doplňování. Váš tým se věnuje
+                hostům, ne logistice kosmetiky.
               </p>
             </div>
 
             <div class="ayvo-card">
-              <h3 class="ayvo-h2">Nižší obrat materiálu</h3>
+              <h3 class="ayvo-h2">Předvídatelné měsíční náklady</h3>
               <p class="ayvo-p ayvo-muted">
-                Vratné lahve nahrazují jednorázové obaly, snižují spotřebu plastů i skladovou
-                rotaci.
+                Jedna dohodnutá měsíční částka za pokoj, která pokrývá spravovanou službu.
               </p>
             </div>
 
             <div class="ayvo-card">
-              <h3 class="ayvo-h2">Přehledné měsíční náklady</h3>
+              <h3 class="ayvo-h2">Prémiový zážitek pro hosty</h3>
               <p class="ayvo-p ayvo-muted">
-                Jedna předvídatelná měsíční částka na pokoj, která zahrnuje produkty, refill i
-                servis.
+                Konzistentní, elegantní vratné lahve, které podporují jednotný standard hotelu.
               </p>
             </div>
 
             <div class="ayvo-card">
-              <h3 class="ayvo-h2">Škálovatelnost na úrovni hotelů</h3>
+              <h3 class="ayvo-h2">Měřitelná cirkularita</h3>
               <p class="ayvo-p ayvo-muted">
-                Stejné řešení funguje pro jeden hotel i pro celé hotelové skupiny.
-              </p>
-            </div>
-
-            <div class="ayvo-card">
-              <h3 class="ayvo-h2">Připraveno na regulace</h3>
-              <p class="ayvo-p ayvo-muted">
-                Systém je navržen tak, aby se přizpůsobil budoucím regulacím v oblasti udržitelnosti
-                a obalů bez změny řešení.
+                Přehled o životním cyklu lahví a doložitelná data pro sledování udržitelnosti a ESG
+                dokumentaci.
               </p>
             </div>
           </div>
+
+          <p class="ayvo-note ayvo-muted">
+            Environmentální údaje vycházejí jen z doložených dat a metodiky.
+          </p>
         </div>
       </section>
       <section class="ayvo-band">
@@ -281,49 +285,45 @@
         <div class="ayvo-wrap">
           <div class="ayvo-kicker ayvo-kicker-line">Pilot</div>
 
-          <h2 class="ayvo-h1-sm ayvo-mb12 ayvo-h1">
-            Začněte v malém. Ověřte si to ve svém provozu.
-          </h2>
+          <h2 class="ayvo-h1-sm ayvo-mb12 ayvo-h1">Chcete mít hotelovou kosmetiku jednodušší?</h2>
 
           <p class="ayvo-lead ayvo-p ayvo-muted">
-            Pilot obvykle pokrývá jednu lokalitu a omezený rozsah produktů. Uvidíte, jak služba
-            funguje v reálných podmínkách — a zda dává smysl ji škálovat.
+            AYVO je připravené na pilotní spolupráci s vybranými hotely. Pojďme společně zjistit,
+            jak by kompletně spravovaná hotelová kosmetika fungovala ve vašem provozu.
           </p>
 
           <div class="ayvo-items-start ayvo-grid2">
             <div>
               <div class="ayvo-mb16 ayvo-card">
-                <div class="ayvo-kicker">Pilot zahrnuje</div>
+                <div class="ayvo-kicker">Jak pilot probíhá</div>
                 <p class="ayvo-mt10 ayvo-p ayvo-muted">
-                  • dohodnutý rytmus dodávek a objemy<br />
-                  • vratné lahve v oběhu<br />
-                  • QR sledovatelnost a reporting životního cyklu<br />
-                  • vratky a opakované použití jako součást služby
+                  • společně vymezíme rozsah<br />
+                  • AYVO službu provozuje ve vašem hotelu<br />
+                  • přínosy společně vyhodnotíme
                 </p>
               </div>
 
               <div class="ayvo-cta">
                 <a
                   class="ayvo-btn primary"
-                  href="mailto:hello@ayvo.co?subject=%C5%BD%C3%A1dost%20o%20pilot%20AYVO"
+                  href="mailto:hello@ayvo.co?subject=Pilotn%C3%AD%20spolupr%C3%A1ce%20AYVO"
+                  >Probrat pilotní spolupráci</a
                 >
-                  Požádat o pilot
-                </a>
               </div>
 
               <p class="ayvo-note ayvo-muted">
-                Pro zahájení není nutný dlouhodobý závazek. Společně vymezíme rozsah, pilot spustíme
-                a vyhodnotíme.
+                Pilot je možnost vyzkoušet službu v konkrétním hotelovém provozu. Rozsah, délku a
+                podmínky dohodneme individuálně.
               </p>
             </div>
 
             <div class="ayvo-card">
               <div class="ayvo-kicker">Dává smysl, pokud chcete</div>
               <p class="ayvo-mt10 ayvo-p ayvo-muted">
-                • předvídatelné doplňování bez ručního objednávání<br />
-                • méně odpadu a vyšší kontrolu nad provozem<br />
-                • sledovatelnost a odpovědnost (QR životní cyklus)<br />
-                • řešení navržené pro škálování napříč lokalitami
+                • méně administrativy kolem kosmetiky<br />
+                • předvídatelné náklady za pokoj<br />
+                • jednotný prémiový standard na všech pokojích<br />
+                • doložitelná data o oběhu lahví
               </p>
             </div>
           </div>
@@ -331,11 +331,10 @@
       </section>
       <section id="standard" class="ayvo-section">
         <div class="ayvo-center ayvo-max760 ayvo-wrap">
-          <h2 class="ayvo-h1">AYVO není produkt.</h2>
+          <h2 class="ayvo-h1">Refill. Redefined.</h2>
           <p class="ayvo-p ayvo-muted">
-            Je to dlouhodobý provozní standard.<br />
-            Navržený pro organizace, které si cení konzistence, klidného provozu a rozhodnutí
-            připravených na budoucnost.
+            AYVO vám sejme každodenní starost o hotelovou kosmetiku — od dodání až po opětovné
+            použití. Vy máte jednotný standard, o zbytek se postaráme my.
           </p>
         </div>
       </section>
@@ -366,6 +365,9 @@
           Provozováno společností <strong>REvolaris, s.r.o.</strong>, IČO: 23261781 · Praha, Česká
           republika
         </div>
+        <button type="button" class="ayvo-consent-open" data-consent-open hidden>
+          Nastavení analytiky
+        </button>
       </div>
     </footer>
   </body>

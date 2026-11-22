@@ -297,7 +297,18 @@ test('one click creates three labels; re-opening the PDF creates nothing new', a
   await expect(page.getByTestId('shipment-phase')).toHaveAttribute('data-phase', 'LABELED');
   for (const n of [1, 2, 3])
     await expect(page.getByTestId(`parcel-${n}-number`)).toHaveText(/TEST/);
+  // The carrier's own shipment number and the last request are diagnostics: under Podrobnosti,
+  // opened with the keyboard (docs/002 principle 14).
+  await expect(page.getByTestId('carrier-ref')).toBeHidden();
+  const details = page.getByTestId('shipment-details');
+  await details.locator('summary').focus();
+  await page.keyboard.press('Enter');
   await expect(page.getByTestId('carrier-ref')).toBeVisible();
+  await expect(details.getByTestId('shipment-request-details')).toContainText(
+    'pokus 1 · SUCCEEDED',
+  );
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('carrier-ref')).toBeHidden();
   // Labels exist ≠ printed ≠ ready: the order is still "Kompletace dokončena".
   await expect(page.getByTestId('order-status')).toHaveText('Kompletace dokončena');
   // Each parcel has its own label (1 crate = 1 parcel = 1 label) and there is a complete one.

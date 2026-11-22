@@ -44,7 +44,7 @@ data/{guid}` per parcel. No second shipment, same numbers; our own conversion of
   two fetches never interleave. Preview, download and printing only read stored files and never
   touch PPL.
 - **An outage between PDF and ZPL** leaves the order usable (PDF preview and download); the ZPL
-  fetch is retried in the background (bounded, back-off) and on "Získat ZPL znovu"; until it
+  fetch is retried in the background (bounded, back-off) and on "Získat štítky pro tiskárnu znovu"; until it
   arrives, printing waits and the order says so.
 - **Checks:** each ZPL file starts with `^XA`, is at most 5 MB and comes from the parcel's own
   `labelUrl` of the batch status (mapped by shipment number, proven at creation).
@@ -170,4 +170,4 @@ Simulated PPL (`test/support/fake-ppl.ts`) implements the documented PUT and GUI
   `/opt/ayvo/ppl-support/2026-10-20-format-change/README-1z1.txt`. **The adapter refuses such a
   ZPL** (`LABEL_VARIANT_MISMATCH`: number, own reference and, in a set, the position n/N must all
   match — a real single parcel's 1/1 is correct), so it is never printed automatically and never
-  corrected by us; the PDF stays available and „Získat ZPL znovu“ tries again.
+  corrected by us; the PDF stays available and „Získat štítky pro tiskárnu znovu“ tries again.

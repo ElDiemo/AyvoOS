@@ -23,7 +23,7 @@ export const shipmentsCs = {
       `Dopravci se odešle celá objednávka najednou: ${n}, každý se svým štítkem.`,
     pending: 'Výsledek u dopravce není jistý',
     pendingText:
-      'Odpověď dopravce nedorazila. Požadavek se nikdy neodešle naslepo znovu – nejdřív se ověří u dopravce podle jeho reference.',
+      'Dopravce zatím nepotvrdil, zda štítky vytvořil. Požadavek se nikdy neodešle naslepo znovu – nejdřív se ověří u dopravce podle jeho reference.',
     inFlight: 'Požadavek se právě odesílá',
     inFlightText: 'Počkejte na odpověď dopravce a pak stav ověřte.',
     resolvableAt: (at: string) => `Ověřit lze od ${at} – do té doby může požadavek ještě běžet.`,
@@ -53,6 +53,9 @@ export const shipmentsCs = {
     delivered: 'Doručená',
     deliveredText:
       'Dopravce potvrdil doručení všech balíků. Vratky beden a lahví se zatím neevidují.',
+    refused:
+      'Dopravce minulé štítky odmítl – nic nevzniklo. Zkontrolujte údaje objednávky a vytvořte štítky znovu; důvod je v Podrobnostech u balíků.',
+    notCreated: 'Minulý požadavek u dopravce nic nevytvořil (ověřeno). Štítky lze vytvořit znovu.',
     noShipment: 'Přeprava vznikne s vytvořením štítků z dokončené kompletace.',
   },
   readyDialog: {
@@ -73,11 +76,17 @@ export const shipmentsCs = {
       `Převzato ${picked}/${total} · Doručeno ${delivered}/${total}`,
     checked: (at: string) => `Naposledy ověřeno u dopravce: ${at}`,
     neverChecked: 'U dopravce zatím neověřeno – ověří se automaticky.',
+    neverCheckedStopped: 'U dopravce zatím neověřeno.',
     next: (at: string) => `Další automatické ověření: ${at}`,
-    failed: (at: string, why: string) =>
-      `Poslední pokus (${at}) se nepovedl: ${why}. Zobrazený stav je poslední známý.`,
-    paused: (n: number) =>
-      `Automatické ověřování je po ${n} neúspěšných pokusech pozastavené. „Obnovit tracking“ ho znovu spustí.`,
+    failed: (at: string) =>
+      `Poslední ověření u dopravce (${at}) se nepovedlo. Zobrazený stav je poslední známý; ověří se znovu samo.`,
+    failedFinal: (at: string) =>
+      `Poslední ověření u dopravce (${at}) se nepovedlo. Zobrazený stav je poslední známý.`,
+    failedDetail: 'Odpověď / chyba',
+    paused: (n: number, at: string | null) =>
+      `Automatické ověřování u dopravce je po ${n} neúspěšných pokusech zastavené${at ? ` (poslední pokus ${at})` : ''}. Zobrazený stav je poslední známý.`,
+    pausedResume: '„Obnovit tracking“ ho znovu spustí.',
+    pausedAsk: 'Znovu ho může spustit uživatel s oprávněním potvrzovat předání dopravci.',
     refresh: 'Obnovit tracking',
     refreshing: 'Ověřuji…',
     done: 'Všechny balíky doručené – ověřování skončilo.',
@@ -91,8 +100,11 @@ export const shipmentsCs = {
     warning: (n: number, number: string | null, problem: string) =>
       `Balík ${n}${number ? ` (${number})` : ''}: ${problem}.`,
     carrierSays: (text: string) => `PPL: „${text}“`,
+    warningParcel: (n: number, number: string | null) =>
+      `Balík ${n}${number ? ` (${number})` : ''}`,
     warningNote:
-      'Není to doručení hotelu. Nic se automaticky nestornuje, bedny zůstávají u objednávky a zásoby se nevracejí; tracking pokračuje.',
+      'Není to doručení hotelu. Nic se automaticky nestornuje, bedny zůstávají u objednávky a zásoby se nevracejí.',
+    warningContinues: 'Tracking pokračuje.',
     history: 'Historie trackingu',
     code: (id: number | null, code: string | null) => `kód ${id ?? '–'}${code ? ` (${code})` : ''}`,
     fetched: (at: string) => `načteno ${at}`,
@@ -115,7 +127,6 @@ export const shipmentsCs = {
   labelsNote: 'Opakovaný tisk používá uložené štítky – u dopravce nic nového nevzniká.',
   carrier: (name: string) => `Dopravce: ${name}`,
   shipment: (code: string) => `Přeprava ${code}`,
-  carrierRef: (ref: string) => `Číslo zásilky u dopravce: ${ref}`,
   parcels: 'Balíky (1 bedna = 1 balík = 1 štítek)',
   parcel: (n: number) => `Balík ${n}`,
   bottles: (n: number) => `${n} lahví`,
@@ -148,6 +159,17 @@ export const shipmentsCs = {
     OPTIONAL: 'nepovinné',
     NOT_USED: 'nepoužívá',
   } as Record<string, string>,
+  detail: {
+    carrierRef: 'Číslo zásilky u dopravce',
+    rules: 'Co dopravce vyžaduje',
+    systemState: 'Stav přepravy v systému',
+    request: 'Poslední požadavek',
+    attempt: (n: number, status: string) => `pokus ${n} · ${status}`,
+    reference: 'Reference u dopravce',
+    sentAt: 'Odesláno',
+    error: 'Odpověď / chyba',
+    resolvableAt: 'Ověřit lze od',
+  },
   ruleLine: (weight: string, dims: string) => `Hmotnost balíku: ${weight} · rozměry: ${dims}`,
   more: 'Další možnosti',
   cancel: 'Zrušit přípravu přepravy',
@@ -211,8 +233,12 @@ export const shipmentsCs = {
     activeTarget: (printers: string) => `Rozpracovaný tisk jde na: ${printers}`,
     noPrinter:
       'Provozovna nemá výchozí expediční tiskárnu. Stáhněte PDF a vytiskněte štítky ručně.',
-    agentOffline: (agent: string) =>
-      `Tiskový agent ${agent} se neozval – úlohy počkají ve frontě, nic se netiskne naslepo.`,
+    agentOffline:
+      'Tiskárna se teď neozývá (tiskový agent je offline) – úlohy počkají ve frontě, nic se netiskne naslepo.',
+    agent: 'Tiskový agent',
+    agentLastSeen: 'Naposledy se ozval',
+    zplError: 'Odpověď / chyba',
+    zplAttempts: 'Pokusů',
     printerState: {
       READY: 'Tiskárna připravena',
       NOT_FOUND: 'Tiskárna nenalezena (odpojená USB?)',
@@ -223,10 +249,10 @@ export const shipmentsCs = {
     summary: (sent: number, total: number) => `Odesláno do tiskárny: ${sent} z ${total}`,
     sentNote:
       'Odeslání do tiskárny nepotvrzuje vytištění ani nalepení – zkontrolujte štítky na bednách.',
-    waiting: (printer: string) => `Tisk na ${printer} čeká na štítky pro tiskárnu (ZPL).`,
-    zplPending: 'Štítky pro tiskárnu (ZPL) se získávají od dopravce. PDF je k dispozici.',
-    zplFailed: 'Štítky pro tiskárnu (ZPL) se nepodařilo získat – nic se netiskne.',
-    zplRetry: 'Získat ZPL znovu',
+    waiting: (printer: string) => `Tisk na ${printer} čeká na štítky pro tiskárnu.`,
+    zplPending: 'Štítky pro tiskárnu se získávají od dopravce. PDF je k dispozici.',
+    zplFailed: 'Štítky pro tiskárnu se nepodařilo získat – nic se netiskne. PDF je k dispozici.',
+    zplRetry: 'Získat štítky pro tiskárnu znovu',
     status: {
       QUEUED: 'Čeká ve frontě',
       CLAIMED: 'Převzato agentem',
@@ -236,6 +262,8 @@ export const shipmentsCs = {
       UNCERTAIN: 'Nejisté – mohlo se vytisknout',
       CANCELLED: 'Zrušeno',
     } as Record<string, string>,
+    failedHelp:
+      'Štítek se nevytiskl. Zkontrolujte tiskárnu a vytiskněte ho znovu; důvod je v Podrobnostech.',
     uncertainHelp:
       'Výsledek není jistý. Zkontrolujte tiskárnu; teprve pak případně vytiskněte znovu (hrozí duplikát).',
     reprint: 'Vytisknout znovu',
