@@ -65,7 +65,10 @@ It checks three things:
   R3-a object (`bottle_fill_circulations`, its triggers and functions) and needs no migration that
   does. Example: commissions 2a (#196, `20261119180000_finance_commissions_permission`) has a later
   prefix but only adds a permission. It does not stop this rollback; its own rollback is decided by
-  its own runbook. R3-b (#154) and R1.1 (#197) are `DEPENDS_*`.
+  its own runbook. The same holds for the PPL pickup lookups (#212,
+  `20261121090000_pickup_cancel_uncertain_lookups`, a check on `carrier_pickup_cancellations`
+  only); on DEV both were applied before R3-a although named after it, and that order is allowed
+  too. R3-b (#154) and R1.1 (#197) are `DEPENDS_*`.
   **Fail closed:** an unknown name, another checksum, a failed migration, or one named before R3-a
   but applied after it is `UNVERIFIED` and stops the rollback. Adding a migration to the list needs
   a review of its SQL; a test fails while a migration of the repo after R3-a is missing from it.
@@ -129,7 +132,8 @@ way forward again, with a backfill and the rules restored. This release does not
 - **A second `FILLED`** of a filled bottle by direct SQL is refused and nothing is written.
 - **Two concurrent fill scans** of one bottle give one `FILLED` and one anchor.
 - **The rollback preflight** (`reuse-r3a-rollback-preflight.e2e`, a throw-away database): only R3-a
-  → allowed; a later independent migration (commissions 2a) → still allowed; the same name with
+  → allowed; a later independent migration (commissions 2a) → still allowed; the independent ones
+  named after R3-a but applied before it (DEV's real order) → still allowed; the same name with
   another checksum, an unknown, a failed and a late-applied earlier migration → stop; R3-b recorded
   → `STOP_DEPENDENT_DEPLOYED`; a `FILLED` without its anchor → `STOP_ANCHORS`; the reviewed
   checksums are what Prisma records, and every later migration of the repo is in the list.

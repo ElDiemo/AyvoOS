@@ -96,6 +96,7 @@ describe.skipIf(!hasDatabase)(
       );
     const reviewedChecksum = (migration: string) => reviewed.get(migration)![0];
     const COMMISSIONS = '20261119180000_finance_commissions_permission';
+    const PICKUP_LOOKUPS = '20261121090000_pickup_cancel_uncertain_lookups';
     const R3B = [
       '20261119090100_reuse_placement_enum_values',
       '20261119090200_reuse_placement_filling',
@@ -156,6 +157,20 @@ describe.skipIf(!hasDatabase)(
       ).toMatchObject({
         verdict: 'ROLLBACK_ALLOWED',
         later_migrations: `${COMMISSIONS}=INDEPENDENT`,
+      });
+    });
+
+    it("DEV's order: independent migrations named after R3-a but applied before it do not stop it", async () => {
+      // On DEV, commissions 2a and the PPL pickup lookups ran before R3-a is deployed.
+      const before = "now() - interval '1 day'";
+      expect(
+        await preflight(async (tx) => {
+          for (const m of [COMMISSIONS, PICKUP_LOOKUPS])
+            await applied(tx, m, reviewedChecksum(m), { startedAt: before });
+        }),
+      ).toMatchObject({
+        verdict: 'ROLLBACK_ALLOWED',
+        later_migrations: `${COMMISSIONS}=INDEPENDENT, ${PICKUP_LOOKUPS}=INDEPENDENT`,
       });
     });
 

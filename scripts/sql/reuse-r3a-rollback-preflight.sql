@@ -35,7 +35,11 @@ WITH r3a AS (
    '98f3cc82e92d54ea57b25d263c1515a258b20b31d12e87f6ed008d38db0acd60', 'DEPENDS_R1_1'),
   -- Commissions 2a (#196): a permission in the catalogue only, no bottle table.
   ('20261119180000_finance_commissions_permission',
-   '356eea2b8c6d3c16cb73e44bcf1bd4391bd5fd92e34a24f9448437d323dc1997', 'INDEPENDENT')
+   '356eea2b8c6d3c16cb73e44bcf1bd4391bd5fd92e34a24f9448437d323dc1997', 'INDEPENDENT'),
+  -- PPL pickup cancellations (#212, doc 029 §11): the poll check of carrier_pickup_cancellations
+  -- only, no bottle table.
+  ('20261121090000_pickup_cancel_uncertain_lookups',
+   '80ccec4daa4f390cc823d898b4ade69af11fcb3eb2fe8cd0515f95f5bf685793', 'INDEPENDENT')
 ), later AS (
   SELECT m.migration_name,
          CASE
