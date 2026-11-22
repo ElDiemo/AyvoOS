@@ -235,6 +235,13 @@ describe('no third parties except the opt-in analytics script, strict CSP', () =
       assert.doesNotMatch(js, new RegExp(`${ad}: 'granted'`));
     }
     assert.match(js, /allow_google_signals: false/);
+    assert.match(
+      js,
+      /page_location: `\$\{window\.location\.origin\}\$\{window\.location\.pathname\}`/,
+    );
+    assert.match(js, /cookie_expires: COOKIE_EXPIRES_S/);
+    assert.match(js, /COOKIE_EXPIRES_S = 180 \* 24 \* 60 \* 60;/);
+    assert.match(js, /cookie_update: false/);
     assert.match(js, /allow_ad_personalization_signals: false/);
     assert.doesNotMatch(js, /user_id|(?<!ad_)user_data|email|gtag\('event'/i);
     assert.doesNotMatch(js, /\beval\(|new Function|innerHTML|document\.write/);

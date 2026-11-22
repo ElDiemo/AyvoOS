@@ -243,7 +243,11 @@ test.describe('the public hostname in an isolated browser (Google transport mock
     await page.getByRole('button', { name: 'Decline', exact: true }).click();
     await page.reload({ waitUntil: 'networkidle' });
     await expect(page.locator('[data-consent-banner]')).toBeHidden();
-    await page.goto('/cz/', { waitUntil: 'networkidle' });
+    // A query and a fragment on the page and its referrer are never sent (see the config below).
+    await page.goto('/cz/?email=a%40b.cz&utm_source=x#pilot', {
+      waitUntil: 'networkidle',
+      referer: `${PUBLIC_URL}/?token=secret#top`,
+    });
     expect(net.google).toEqual([]);
     expect(await gaCookies(context)).toEqual([]);
 
@@ -268,10 +272,21 @@ test.describe('the public hostname in an isolated browser (Google transport mock
       ['consent', 'update', { analytics_storage: 'granted' }],
     ]);
     expect(layer.filter((a) => a[0] === 'config')).toEqual([
-      ['config', ID, { allow_google_signals: false, allow_ad_personalization_signals: false }],
+      [
+        'config',
+        ID,
+        {
+          allow_google_signals: false,
+          allow_ad_personalization_signals: false,
+          page_location: `${PUBLIC_URL}/cz/`,
+          page_referrer: `${PUBLIC_URL}/`,
+          cookie_expires: 180 * 24 * 60 * 60,
+          cookie_update: false,
+        },
+      ],
     ]);
     expect(layer.filter((a) => a[0] === 'event')).toEqual([]);
-    expect(JSON.stringify(layer)).not.toMatch(/user_id|email/);
+    expect(JSON.stringify(layer)).not.toMatch(/user_id|email|secret|utm_|#/);
     expect((await gaCookies(context)).sort()).toEqual(['_ga', `_ga_${ID.slice(2)}`]);
 
     // The choice holds for the other languages: the tag again once per page, no banner.

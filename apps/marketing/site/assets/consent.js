@@ -4,13 +4,15 @@
 // (never on the DEV preview or a test host). The choice is versioned, kept in this browser for
 // 180 days, shared by all language versions and all open tabs, and changed in the footer. A
 // withdrawal stops measuring at once (ga-disable), removes the _ga cookies the page can reach,
-// and reloads every open page so no Google tag stays loaded. Advertising stays denied; no user ID.
+// and reloads every open page so no Google tag stays loaded. Advertising stays denied; no user ID;
+// the page address is sent without its query or fragment; _ga lives at most 180 days.
 (() => {
   const MEASUREMENT_ID = 'G-W8X01GWW5Z';
   const PUBLIC_HOSTS = ['ayvo.co', 'www.ayvo.co'];
   const KEY = 'ayvo.consent';
   const VERSION = 1;
   const MAX_AGE_MS = 180 * 24 * 60 * 60 * 1000;
+  const COOKIE_EXPIRES_S = 180 * 24 * 60 * 60; // gtag cookie_expires, in seconds
   const DISABLE = `ga-disable-${MEASUREMENT_ID}`;
 
   const banner = document.querySelector('[data-consent-banner]');
@@ -76,6 +78,16 @@
     }
   };
 
+  /** The referring page without its query or fragment ('' if none or unreadable). */
+  const safeReferrer = () => {
+    try {
+      const r = new URL(document.referrer);
+      return `${r.origin}${r.pathname}`;
+    } catch {
+      return '';
+    }
+  };
+
   let tagLoaded = false;
 
   /** Loads the Google tag once, after consent, only on a public hostname. */
@@ -101,6 +113,12 @@
     gtag('config', MEASUREMENT_ID, {
       allow_google_signals: false,
       allow_ad_personalization_signals: false,
+      // Only the address of the page, never its query or fragment (e.g. parameters of a link).
+      page_location: `${window.location.origin}${window.location.pathname}`,
+      page_referrer: safeReferrer(),
+      // The _ga cookies never outlive the choice: 180 days from when they are first set.
+      cookie_expires: COOKIE_EXPIRES_S,
+      cookie_update: false,
     });
     const script = document.createElement('script');
     script.async = true;

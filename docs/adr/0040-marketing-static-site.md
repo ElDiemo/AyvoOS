@@ -115,7 +115,13 @@
   asked again after that or after a version change. A withdrawal sets `ga-disable-<ID>` at once,
   removes the `_ga` cookies the page can reach and reloads every open tab of the site (the
   `storage` event), so no Google tag stays loaded.
-- **What is sent:** the standard GA4 page view only. Advertising consent types
+- **What is sent:** the page code sends no events of its own — only the `config` of the tag. What
+  the tag then collects is GA4's: its automatic events (the page view, session and engagement
+  events such as `session_start`, `first_visit`, `user_engagement`) and whatever enhanced
+  measurement the web data stream enables (Google Analytics settings, not this code; to be checked
+  in the property before PROD). `page_location` and `page_referrer` carry only origin + path (no
+  query, no fragment); the `_ga` cookies last 180 days from when they are set (`cookie_expires`,
+  `cookie_update: false`), never longer than a choice. Advertising consent types
   (`ad_storage`, `ad_user_data`, `ad_personalization`) are always `denied`; Google signals and ad
   personalisation off; no user ID, no e-mails, no custom or advertising events.
 - **Code and CSP:** one local external script (`site/assets/consent.js`), no inline script,
