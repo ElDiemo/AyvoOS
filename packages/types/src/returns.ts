@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { crateCycleStatusSchema } from './labeling.js';
 
 /**
  * Return intake R1 (doc 047 §4): receipts of the active site, their lines (one physical container
@@ -240,3 +241,55 @@ export const afterWashQueueSchema = z.object({
   }),
 });
 export type AfterWashQueue = z.infer<typeof afterWashQueueSchema>;
+
+// --- R3-c: the operating view of a bottle (doc 048 §3.0a), read only ---------------------------
+
+/** GET /api/admin/bottle-circulation?codes=AYV-B-…,… — bottles of the active site (others omitted). */
+export const bottleCirculationQuerySchema = z.object({
+  codes: z
+    .string()
+    .trim()
+    .transform((s) => [
+      ...new Set(
+        s
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean),
+      ),
+    ])
+    .pipe(
+      z
+        .array(z.string().regex(/^AYV-B-\d{6,}$/))
+        .min(1)
+        .max(100),
+    ),
+});
+export type BottleCirculationQuery = z.infer<typeof bottleCirculationQuerySchema>;
+
+/**
+ * Three things apart, each derived from existing records (doc 048 §3.0a): nothing is stored and
+ * there is no combined status. The readiness is the bottle's own status; `source` says how its
+ * current circulation began — a new bottle (LABEL_APPLIED) or "Po mytí" (REUSE_READY) — and is null
+ * for a printed code with no label yet.
+ */
+export const bottleCirculationSchema = z.object({
+  code: z.string(),
+  source: z.enum(['NEW', 'AFTER_WASH']).nullable(),
+  /** The active crate assignment (crate and its cycle), or null: "bez bedny". */
+  crate: z.object({ code: z.string(), cycleStatus: crateCycleStatusSchema }).nullable(),
+  /**
+   * Derived from dispatch and the bottle's own return scan, never from a crate scan:
+   * NONE "—" (a printed code, or disposed), AT_SITE, IN_TRANSIT (its shipped crate is with the
+   * carrier), AT_HOTEL (its last delivered allocation has no SORTED of the bottle yet).
+   */
+  location: z.object({
+    kind: z.enum(['NONE', 'AT_SITE', 'IN_TRANSIT', 'AT_HOTEL']),
+    /** IN_TRANSIT / AT_HOTEL: the order, its hotel and (AT_HOTEL) the parcel's delivery. */
+    orderCode: z.string().nullable(),
+    hotelName: z.string().nullable(),
+    deliveredAt: z.iso.datetime().nullable(),
+  }),
+});
+export type BottleCirculation = z.infer<typeof bottleCirculationSchema>;
+export const bottleCirculationListSchema = z.object({ items: z.array(bottleCirculationSchema) });
+export type BottleCirculationList = z.infer<typeof bottleCirculationListSchema>;
