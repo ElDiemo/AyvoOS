@@ -60,6 +60,8 @@ export const labelingCs = {
     },
     waiting: (n: number) => (n === 0 ? 'Žádné další scany nečekají.' : `Čeká na odeslání: ${n}`),
   },
+  inAnotherCrate: (crate: string) =>
+    `Lahev už je v bedně ${crate} – nic se nezapsalo ani nepřesunulo. Vraťte ji do bedny ${crate}.`,
   errors: {
     NOT_AYVO_QR: 'Toto není QR kód AYVO tohoto prostředí.',
     WRONG_ENVIRONMENT: 'QR kód patří jinému prostředí AYVO.',
