@@ -39,6 +39,8 @@ type Mode = {
   down: boolean;
   /** Only the token endpoint answers 503. */
   tokenDown: boolean;
+  /** Only tracking (GET /shipment asked in Czech, as `track` asks) answers 503. */
+  trackingDown: boolean;
   /** One more created number than parcels, claiming parcel 1's CUST reference. */
   extraNumber: boolean;
   /** Label URLs relative to the API host. */
@@ -184,6 +186,7 @@ export class FakePpl {
       labelHuge: false,
       down: false,
       tokenDown: false,
+      trackingDown: false,
       extraNumber: false,
       labelRelative: false,
       cancelFailures: 0,
@@ -447,6 +450,8 @@ export class FakePpl {
       });
     }
     if (req.method === 'GET' && path === '/shipment') {
+      if (this.mode.trackingDown && req.headers['accept-language'] === 'cs-CZ')
+        return this.json(res, 503, { title: 'Service unavailable' });
       const wanted = url.searchParams.getAll('ShipmentNumbers');
       // As documented: ShipmentNumbers maxItems 50; Limit (1–1000) and Offset (≥ 0) required.
       const limit = Number(url.searchParams.get('Limit'));

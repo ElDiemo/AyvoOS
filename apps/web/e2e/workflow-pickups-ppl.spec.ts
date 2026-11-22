@@ -454,14 +454,14 @@ test('Expedice PPL: refused labels said in Czech, the reason under Podrobnosti; 
   await expect(history.getByText(/validation errors/)).toBeHidden();
   await shot(page, 'expedice-01-refused');
 
-  // Fixed at the carrier: one new request makes the labels.
-  await control(request, { mode: { reject: false } });
+  // Fixed at the carrier: one new request makes the labels. PPL's tracking is down from the
+  // start, so this shipment is never checked successfully (no lastSuccessAt).
+  await control(request, { mode: { reject: false, trackingDown: true } });
   await page.getByTestId('create-labels').click();
   await expect(page.getByTestId('shipment-phase')).toHaveAttribute('data-phase', 'LABELED');
   await expect(page.getByTestId('shipment-refused')).toHaveCount(0);
 
-  // PPL down while tracking: the last known state stays, the reason under Podrobnosti.
-  await control(request, { mode: { down: true } });
+  // PPL's tracking down: the last known state stays, the reason under Podrobnosti.
   const answered = page.waitForResponse((r) =>
     r.url().endsWith(`/orders/${orderD}/shipment/tracking/refresh`),
   );
@@ -474,6 +474,36 @@ test('Expedice PPL: refused labels said in Czech, the reason under Podrobnosti; 
   await outage.locator('summary').focus();
   await page.keyboard.press('Enter');
   await expect(outage.locator('dd')).not.toBeEmpty();
+  await expect(page.getByTestId('tracking-paused')).toHaveCount(0);
   await shot(page, 'expedice-02-tracking-outage');
-  await control(request, { mode: { down: false } });
+
+  // Still down: every look fails until checking stops (GAVE_UP). Then one true first layer — no
+  // "ověří se znovu samo" beside "zastavené" — the action this role can take, the reason below.
+  type Tracked = { shipment: { tracking: { stopped: string | null } } };
+  for (let i = 0; i < 12; i++) {
+    const view = await json<Tracked>(
+      await request.post(`/api/admin/orders/${orderD}/shipment/tracking/refresh`, {
+        data: { requestId: crypto.randomUUID() },
+      }),
+    );
+    if (view.shipment.tracking.stopped === 'GAVE_UP') break;
+  }
+  await page.reload();
+  const card = page.getByTestId('tracking-card');
+  await expect(card.getByTestId('tracking-paused')).toContainText('zastavené');
+  await expect(card.getByTestId('tracking-paused')).toContainText('„Obnovit tracking“ ho znovu');
+  await expect(card.getByTestId('tracking-failed')).toHaveCount(0);
+  await expect(card).not.toContainText('ověří se znovu samo');
+  await expect(card.getByTestId('tracking-failed-details').locator('dd')).toBeHidden();
+  // Never checked successfully: no promise that it will be checked by itself.
+  await expect(card.getByTestId('tracking-checked')).toHaveText('U dopravce zatím neověřeno.');
+  await expect(card).not.toContainText('ověří se automaticky');
+  await shot(page, 'expedice-03-tracking-stopped');
+
+  // PPL back: "Obnovit tracking" resumes; the stop and the outage are gone.
+  await control(request, { mode: { trackingDown: false } });
+  await card.getByTestId('tracking-refresh').click();
+  await expect(card.getByTestId('tracking-paused')).toHaveCount(0);
+  await expect(card.getByTestId('tracking-failed')).toHaveCount(0);
+  await expect(card.getByTestId('tracking-checked')).toContainText('Naposledy ověřeno u dopravce');
 });

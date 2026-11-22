@@ -76,12 +76,17 @@ export const shipmentsCs = {
       `Převzato ${picked}/${total} · Doručeno ${delivered}/${total}`,
     checked: (at: string) => `Naposledy ověřeno u dopravce: ${at}`,
     neverChecked: 'U dopravce zatím neověřeno – ověří se automaticky.',
+    neverCheckedStopped: 'U dopravce zatím neověřeno.',
     next: (at: string) => `Další automatické ověření: ${at}`,
     failed: (at: string) =>
       `Poslední ověření u dopravce (${at}) se nepovedlo. Zobrazený stav je poslední známý; ověří se znovu samo.`,
+    failedFinal: (at: string) =>
+      `Poslední ověření u dopravce (${at}) se nepovedlo. Zobrazený stav je poslední známý.`,
     failedDetail: 'Odpověď / chyba',
-    paused: (n: number) =>
-      `Automatické ověřování je po ${n} neúspěšných pokusech pozastavené. „Obnovit tracking“ ho znovu spustí.`,
+    paused: (n: number, at: string | null) =>
+      `Automatické ověřování u dopravce je po ${n} neúspěšných pokusech zastavené${at ? ` (poslední pokus ${at})` : ''}. Zobrazený stav je poslední známý.`,
+    pausedResume: '„Obnovit tracking“ ho znovu spustí.',
+    pausedAsk: 'Znovu ho může spustit uživatel s oprávněním potvrzovat předání dopravci.',
     refresh: 'Obnovit tracking',
     refreshing: 'Ověřuji…',
     done: 'Všechny balíky doručené – ověřování skončilo.',
@@ -95,8 +100,11 @@ export const shipmentsCs = {
     warning: (n: number, number: string | null, problem: string) =>
       `Balík ${n}${number ? ` (${number})` : ''}: ${problem}.`,
     carrierSays: (text: string) => `PPL: „${text}“`,
+    warningParcel: (n: number, number: string | null) =>
+      `Balík ${n}${number ? ` (${number})` : ''}`,
     warningNote:
-      'Není to doručení hotelu. Nic se automaticky nestornuje, bedny zůstávají u objednávky a zásoby se nevracejí; tracking pokračuje.',
+      'Není to doručení hotelu. Nic se automaticky nestornuje, bedny zůstávají u objednávky a zásoby se nevracejí.',
+    warningContinues: 'Tracking pokračuje.',
     history: 'Historie trackingu',
     code: (id: number | null, code: string | null) => `kód ${id ?? '–'}${code ? ` (${code})` : ''}`,
     fetched: (at: string) => `načteno ${at}`,
