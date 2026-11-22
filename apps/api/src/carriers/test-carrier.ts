@@ -6,6 +6,9 @@ import {
   type CarrierCreateOutcome,
   type CarrierGateway,
   type CarrierParcelNumber,
+  type CarrierPickupOutcome,
+  type CarrierPickupRequest,
+  type CarrierPickups,
   type CarrierPollOutcome,
   type CarrierRules,
   type CarrierSettingsSnapshot,
@@ -91,6 +94,27 @@ export const testCarrierControl = {
   /** The next tracking calls fail (an outage). */
   trackFail: 0,
   trackCalls: 0,
+  /**
+   * Pickup orders (doc 029 §11): how the next ones answer — SUCCEED (accepted, confirmed on the
+   * next look), REJECT, LOSE_BEFORE (nothing ordered, answer lost), LOSE_AFTER (ordered, answer
+   * lost), HANG (never answers), FAIL_LATER (accepted, then the carrier's import fails).
+   */
+  pickupNext: [] as ('SUCCEED' | 'REJECT' | 'LOSE_BEFORE' | 'LOSE_AFTER' | 'HANG' | 'FAIL_LATER')[],
+  /** Looks still answering "pending" before an accepted pickup is confirmed. */
+  pickupPendingLooks: 0,
+  /** Every pickup order sent, in order — tests assert that nothing is sent twice. */
+  pickupCalls: [] as CarrierPickupRequest[],
+  pickupLooks: 0,
+  pickups: new Map<
+    string,
+    { request: CarrierPickupRequest; fail: boolean; number: string; cancelled: boolean }
+  >(),
+  /**
+   * How the next pickup cancellations answer: ACCEPT (shown cancelled at once), REFUSE, LOSE
+   * (carried out, answer lost), FAIL (not carried out, answer lost).
+   */
+  pickupCancel: [] as ('ACCEPT' | 'REFUSE' | 'LOSE' | 'FAIL')[],
+  pickupCancelCalls: 0,
   /** Adds tracking events to a parcel number. */
   track(number: string, ...events: { statusId: number | null; at: string; name?: string }[]): void {
     this.tracking.set(number, [...(this.tracking.get(number) ?? []), ...events]);
@@ -116,8 +140,92 @@ export const testCarrierControl = {
     this.trackMissing.clear();
     this.trackFail = 0;
     this.trackCalls = 0;
+    this.pickupNext = [];
+    this.pickupPendingLooks = 0;
+    this.pickupCalls = [];
+    this.pickupLooks = 0;
+    this.pickups.clear();
+    this.pickupCancel = [];
+    this.pickupCancelCalls = 0;
   },
 };
+
+let pickupSerial = 0;
+
+/** The test carrier's pickup orders (in memory, never a real carrier). */
+class TestPickups implements CarrierPickups {
+  readonly maxParcels = 50;
+
+  order(request: CarrierPickupRequest, signal: AbortSignal): Promise<CarrierPickupOutcome> {
+    testCarrierControl.pickupCalls.push(request);
+    const behaviour = testCarrierControl.pickupNext.shift() ?? 'SUCCEED';
+    if (behaviour === 'HANG') return abortable(signal, () => new Promise<never>(() => undefined));
+    return abortable(signal, async () => {
+      if (behaviour === 'REJECT') {
+        throw new CarrierRejectedError('TEST_REJECTED', 'Pickup refused by the test carrier');
+      }
+      if (behaviour === 'LOSE_BEFORE') throw new Error('test carrier: connection lost');
+      testCarrierControl.pickups.set(request.clientReference, {
+        request,
+        fail: behaviour === 'FAIL_LATER',
+        number: `TEST-SV-${++pickupSerial}`,
+        cancelled: false,
+      });
+      if (behaviour === 'LOSE_AFTER') throw new Error('test carrier: the answer was lost');
+      return { kind: 'ACCEPTED', carrierRef: `PICKUP-${request.clientReference}` };
+    });
+  }
+
+  status(
+    query: { clientReference: string; carrierRef: string | null },
+    signal: AbortSignal,
+  ): Promise<CarrierPickupOutcome> {
+    return abortable(signal, async () => {
+      testCarrierControl.pickupLooks += 1;
+      const found = testCarrierControl.pickups.get(query.clientReference);
+      if (!found) return { kind: 'UNKNOWN', detail: 'test carrier: no such pickup order' };
+      if (testCarrierControl.pickupPendingLooks > 0) {
+        testCarrierControl.pickupPendingLooks -= 1;
+        return { kind: 'PENDING' };
+      }
+      if (found.fail) {
+        return { kind: 'REJECTED', code: 'TEST_IMPORT_ERROR', message: 'Refused on import' };
+      }
+      return {
+        kind: 'CONFIRMED',
+        orderNumber: found.number,
+        state: found.cancelled ? 'Canceled' : 'Created',
+      };
+    });
+  }
+
+  cancel(query: { clientReference: string }, signal: AbortSignal): Promise<'ACCEPTED'> {
+    return abortable(signal, async () => {
+      testCarrierControl.pickupCancelCalls += 1;
+      const behaviour = testCarrierControl.pickupCancel.shift() ?? 'ACCEPT';
+      const found = testCarrierControl.pickups.get(query.clientReference);
+      if (behaviour === 'FAIL') throw new Error('test carrier: connection lost');
+      if (behaviour === 'REFUSE' || !found) {
+        throw new CarrierRejectedError('TEST_REJECTED', 'Cancellation refused by the test carrier');
+      }
+      found.cancelled = true;
+      if (behaviour === 'LOSE') throw new Error('test carrier: the answer was lost');
+      return 'ACCEPTED' as const;
+    });
+  }
+
+  find(query: { clientReference: string }, signal: AbortSignal) {
+    return abortable(signal, async () => {
+      const found = testCarrierControl.pickups.get(query.clientReference);
+      if (!found || found.fail) return null;
+      return {
+        orderNumber: found.number,
+        state: found.cancelled ? 'Canceled' : 'Created',
+        cancelled: found.cancelled,
+      };
+    });
+  }
+}
 
 /** The settings every site uses with the test carrier (it has no site configuration). */
 export const TEST_CARRIER_SETTINGS: CarrierSettingsSnapshot = {
@@ -213,6 +321,7 @@ export class TestCarrier implements CarrierGateway {
   readonly connection = 'TEST';
   readonly environment = 'TEST' as const;
   readonly account = 'test-carrier';
+  readonly pickups: CarrierPickups = new TestPickups();
   get rules(): CarrierRules {
     return testCarrierControl.rules;
   }

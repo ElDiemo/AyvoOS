@@ -10,7 +10,9 @@
 # The same headers on pages and on error responses (an error response starts without them).
 (security_headers) {
 	header {
-		Content-Security-Policy "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		# Google Analytics 4 only after the visitor's opt-in (ADR 0040 amendment): exactly the hosts
+		# Google documents for GA4 without Ads features (tag-platform/security/guides/csp).
+		Content-Security-Policy "default-src 'none'; img-src 'self' https://www.googletagmanager.com https://*.google-analytics.com; style-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src https://www.googletagmanager.com https://*.google-analytics.com https://*.google.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy strict-origin-when-cross-origin

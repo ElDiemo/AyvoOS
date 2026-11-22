@@ -6,6 +6,8 @@ import { LabelsModule } from '../labels/labels.module.js';
 import { SitesModule } from '../sites/sites.module.js';
 import { CarriersModule } from '../carriers/carriers.module.js';
 import { PrintingModule } from '../printing/printing.module.js';
+import { CarrierPickupsController } from './carrier-pickups.controller.js';
+import { CarrierPickupsService } from './carrier-pickups.service.js';
 import { OrdersController } from './orders.controller.js';
 import { OrderReturnsService } from './order-returns.service.js';
 import { OrdersService } from './orders.service.js';
@@ -36,13 +38,19 @@ import { SupplyPlansService } from './supply-plans.service.js';
     CarriersModule,
     PrintingModule,
   ],
-  controllers: [OrdersController, ShipmentsController, SupplyPlansController],
+  controllers: [
+    OrdersController,
+    ShipmentsController,
+    CarrierPickupsController,
+    SupplyPlansController,
+  ],
   providers: [
     OrdersService,
     ShipmentsService,
     ShipmentDeriver,
     ShipmentCarrierFlow,
     ShipmentPoller,
+    CarrierPickupsService,
     ShipmentTrackingService,
     SupplyPlansService,
     SupplyPlanRunner,

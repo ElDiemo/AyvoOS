@@ -188,3 +188,51 @@ export function ErrorNote({ children }: { children: React.ReactNode }) {
 export function EmptyState({ children }: { children: React.ReactNode }) {
   return <p className="py-10 text-center text-sm text-stone-500">{children}</p>;
 }
+
+/**
+ * "Podrobnosti" (docs/002 principle 14): diagnostics behind a labelled disclosure that works with
+ * the keyboard — internal codes, a carrier's raw states, request ids and times, error details. The
+ * first layer stays short, truthful Czech. Hiding is never an access rule: render the details only
+ * for a role that may read them.
+ */
+export function Details({
+  summary = 'Podrobnosti',
+  testId,
+  className,
+  children,
+}: {
+  summary?: string;
+  testId?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className={cn('rounded border border-stone-200', className)} data-testid={testId}>
+      <summary className="cursor-pointer px-2 py-2 text-sm font-medium text-stone-700">
+        {summary}
+      </summary>
+      <div className="space-y-2 px-2 pb-2 text-xs">{children}</div>
+    </details>
+  );
+}
+
+/** One fact inside `Details` (a `<dl>`): nothing at all when the value is unknown. */
+export function DetailFact({
+  label,
+  value,
+  testId,
+}: {
+  label: string;
+  value: string | null | undefined;
+  testId?: string;
+}) {
+  if (!value) return null;
+  return (
+    <div className="flex flex-wrap gap-x-2">
+      <dt className="text-stone-500">{label}:</dt>
+      <dd className="break-all text-stone-800" data-testid={testId}>
+        {value}
+      </dd>
+    </div>
+  );
+}

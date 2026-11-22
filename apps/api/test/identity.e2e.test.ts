@@ -258,6 +258,7 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/internal/v1/finance/supplier-documents/:id',
       'GET /api/internal/v1/finance/supplier-documents/:id/content',
       'GET /api/internal/v1/finance/suppliers',
+      'POST /api/internal/v1/finance/commissions/attributions',
       'POST /api/internal/v1/finance/hotels/lookup',
       // Hotel portal grants (ADR 0045 §4): issued and replaced only through Finance, which also
       // creates the account and invites it after the grant.

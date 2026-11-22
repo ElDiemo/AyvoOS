@@ -19,6 +19,36 @@ Status: Draft — foundation phase (2026-10-10)
 11. **No unverified sustainability claims.** CO2e only with a documented methodology.
 12. **Redis is never a source of truth.** ([ADR 0010](adr/0010-redis-non-authoritative.md)) _(confirmed by owner 2026-10-10)_
 13. **Separate identities.** A bottle's internal ID and its public QR identity are separate; the public QR identity is opaque, practically unguessable and its public URL stays stable for the bottle's physical lifetime. ([ADR 0005](adr/0005-permanent-bottle-identity.md)) _(confirmed by owner 2026-10-10)_
+14. **Screens say what happened and what to do next** (§ Screens below). _(confirmed by owner 2026-11-21, for the internal AYVO OS and the hotel portal)_
+
+## Screens (principle 14)
+
+Every screen of the internal AYVO OS and of the hotel portal (CZ/EN/DE). The first example is
+Expedice → Svoz (`components/dispatch/pickup-board.tsx`, `pickup-summary.ts`); the shared
+disclosure is `Details` / `DetailFact` in `apps/web/src/components/ui.tsx`.
+
+- **First layer.** The person sees at a glance:
+  - the **state**: what happened, in one short, true sentence (e.g. "Čekáme na PPL", "Svoz potvrzen",
+    "Čekáme na potvrzení storna. Balíky zatím nelze přeplánovat.", "Svoz zrušen");
+  - its **impact**: what it means for the goods, money or people concerned;
+  - the **one next action** that can actually be taken now.
+- **What stays visible:** what the work needs — counts, dates, prices, the parcel or invoice (with
+  the number needed to trace it), the site, and every safety or financial confirmation. Neither
+  work the person really has to do nor a state (done or waiting) is ever hidden.
+- **What goes under "Podrobnosti":** diagnostics, in a text-labelled, keyboard- and
+  phone-accessible disclosure (`<details>`) — internal codes, raw states of external services,
+  references, times and request ids, error details, the protocol, and the steps for support. Manual
+  exceptional actions (closing an uncertain attempt) live there too, for the roles already
+  allowed.
+- **Hiding is not access control.** The API decides permissions; the UI only arranges what the
+  role may already see.
+- **Honest wording.** Say only what is known: "PPL zatím nepotvrdilo", not "odpověď se ztratila"
+  when the answer was only not usable. A refusal with a clear next step says that step in Czech;
+  anything else points to Podrobnosti.
+- **One vocabulary.** Repeated messages are reused across modules, without a new design system or
+  per-module components.
+- **Checks for each screen:** 390 px and desktop, the keyboard, and the three outcomes of a step —
+  it works, it is uncertain, it cannot be done.
 
 ## Proposed design (requires confirmation)
 
