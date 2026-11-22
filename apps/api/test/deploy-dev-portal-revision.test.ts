@@ -13,7 +13,11 @@ import { describe, expect, it } from 'vitest';
  * PROD refuses.
  */
 const root = resolve(import.meta.dirname, '../../..');
-const run = (args: string[]) => spawnSync('docker', args, { cwd: root, encoding: 'utf8' });
+/** The child's env without an inherited PORTAL_IMAGE_REVISION: only the env file decides. */
+const childEnv = { ...process.env };
+delete childEnv.PORTAL_IMAGE_REVISION;
+const run = (args: string[]) =>
+  spawnSync('docker', args, { cwd: root, encoding: 'utf8', env: childEnv });
 const hasDocker = run(['compose', 'version']).status === 0;
 const REVISION = '0123456789abcdef0123456789abcdef01234567';
 

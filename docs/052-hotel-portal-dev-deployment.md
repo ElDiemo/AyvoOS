@@ -39,15 +39,17 @@ other DEV units.
 ```bash
 export DEV_TAILNET_IPV4="$(tailscale ip -4)"
 export PORTAL_IMAGE_TAG="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
-# The image's source revision (PROD's --portal requires it; the checkout must be clean).
-test -z "$(git status --porcelain)" && export PORTAL_IMAGE_REVISION="$(git rev-parse HEAD)"
-# A shell export must not override the approved server-only values.
-unset DEV_PORTAL_DOMAIN PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN
+# A shell export must not override the approved server-only values or the image's revision.
+unset DEV_PORTAL_DOMAIN PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN PORTAL_IMAGE_REVISION
 portal_compose=(docker compose -f deploy/dev/compose.yml
   --env-file /opt/ayvo/secrets/dev-preview.env --profile portal)
-flock -n /opt/ayvo/logs/.deploy-dev-preview.lock "${portal_compose[@]}" build --pull portal-web
-flock -n /opt/ayvo/logs/.deploy-dev-preview.lock "${portal_compose[@]}" up \
-  --detach --wait --wait-timeout 120 --no-deps --no-build portal-web
+# One sequence: only a clean checkout is built, labelled with its full HEAD (PROD's --portal
+# requires it), and only that build is started; any failure stops it with nothing built.
+[[ -z "$(git status --porcelain)" ]] && revision="$(git rev-parse --verify HEAD)" &&
+  PORTAL_IMAGE_REVISION="$revision" flock -n /opt/ayvo/logs/.deploy-dev-preview.lock \
+    "${portal_compose[@]}" build --pull portal-web &&
+  flock -n /opt/ayvo/logs/.deploy-dev-preview.lock "${portal_compose[@]}" up \
+    --detach --wait --wait-timeout 120 --no-deps --no-build portal-web
 scripts/deploy-dev.sh
 scripts/deploy-finance-dev.sh
 ```
