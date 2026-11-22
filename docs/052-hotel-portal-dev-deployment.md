@@ -43,9 +43,10 @@ export PORTAL_IMAGE_TAG="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M
 unset DEV_PORTAL_DOMAIN PORTAL_CORE_TOKEN PORTAL_FINANCE_TOKEN PORTAL_IMAGE_REVISION
 portal_compose=(docker compose -f deploy/dev/compose.yml
   --env-file /opt/ayvo/secrets/dev-preview.env --profile portal)
-# One sequence: only a clean checkout is built, labelled with its full HEAD (PROD's --portal
-# requires it), and only that build is started; any failure stops it with nothing built.
-[[ -z "$(git status --porcelain)" ]] && revision="$(git rev-parse --verify HEAD)" &&
+# One sequence: only a clean, readable checkout is built, labelled with its full HEAD (PROD's
+# --portal requires it), and only that build is started; any failure stops it with nothing built.
+status="$(git status --porcelain)" && [[ -z "$status" ]] &&
+  revision="$(git rev-parse --verify HEAD)" &&
   PORTAL_IMAGE_REVISION="$revision" flock -n /opt/ayvo/logs/.deploy-dev-preview.lock \
     "${portal_compose[@]}" build --pull portal-web &&
   flock -n /opt/ayvo/logs/.deploy-dev-preview.lock "${portal_compose[@]}" up \
