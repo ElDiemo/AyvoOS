@@ -1,7 +1,8 @@
 // The static site as files (ADR 0040): languages and their metadata, every local link and asset
 // resolves, anchors exist, the same section ids in every language (the language switch keeps the
-// section), nothing loads from elsewhere (no tracking, no external fonts, no WordPress leftovers),
-// nothing the strict CSP would block, and the Caddy redirect targets exist.
+// section), nothing loads from elsewhere (no external fonts, no WordPress leftovers; Google
+// Analytics 4 only from the one opt-in script, ADR 0040 amendment), nothing the strict CSP would
+// block, and the Caddy redirect targets exist.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -204,8 +205,9 @@ describe('links and assets', () => {
   });
 });
 
-describe('no tracking, no third parties, strict CSP', () => {
-  const all = files(site).filter((f) => /\.(html|css|js|txt|xml)$/.test(f));
+describe('no third parties except the opt-in analytics script, strict CSP', () => {
+  const CONSENT = join(site, 'assets', 'consent.js');
+  const all = files(site).filter((f) => /\.(html|css|js|txt|xml)$/.test(f) && f !== CONSENT);
   const FORBIDDEN = [
     /googletagmanager|google-analytics|gtag\(|dataLayer/i,
     /cookieyes|cookie-law-info|cky-/i,
@@ -218,6 +220,43 @@ describe('no tracking, no third parties, strict CSP', () => {
     for (const f of all) {
       const text = readFileSync(f, 'utf8');
       for (const re of FORBIDDEN) assert.doesNotMatch(text, re, f);
+    }
+  });
+
+  it('Google Analytics 4 only in consent.js: one ID, advertising denied, no user data', () => {
+    const js = readFileSync(CONSENT, 'utf8');
+    assert.deepEqual([...new Set(js.match(/G-[A-Z0-9]{6,}/g))], ['G-W8X01GWW5Z']);
+    assert.deepEqual(js.match(/https:\/\/[^\s'`"]+/g), [
+      'https://www.googletagmanager.com/gtag/js?id=${MEASUREMENT_ID}',
+    ]);
+    assert.match(js, /PUBLIC_HOSTS = \['ayvo\.co', 'www\.ayvo\.co'\]/);
+    for (const ad of ['ad_storage', 'ad_user_data', 'ad_personalization']) {
+      assert.match(js, new RegExp(`${ad}: 'denied'`));
+      assert.doesNotMatch(js, new RegExp(`${ad}: 'granted'`));
+    }
+    assert.match(js, /allow_google_signals: false/);
+    assert.match(js, /allow_ad_personalization_signals: false/);
+    assert.doesNotMatch(js, /user_id|(?<!ad_)user_data|email|gtag\('event'/i);
+    assert.doesNotMatch(js, /\beval\(|new Function|innerHTML|document\.write/);
+    // Every page with the banner loads the script and offers the choice again in the footer.
+    for (const page of PAGES) {
+      const html = read(page.file);
+      assert.match(html, /<script src="\/assets\/consent\.js" defer><\/script>/, page.file);
+      const banner = html.match(/<section\s+class="ayvo-consent"[\s\S]*?<\/section>/)[0];
+      assert.match(banner, /\shidden\s*>/, `${page.file}: hidden until the script decides`);
+      const choices = [
+        ...banner.matchAll(
+          /<button type="button" class="ayvo-consent-btn" data-consent="(granted|denied)">/g,
+        ),
+      ].map((m) => m[1]);
+      assert.deepEqual(choices, ['granted', 'denied'], page.file);
+      assert.doesNotMatch(banner, /autofocus|aria-pressed|checked|selected/, page.file);
+      assert.match(banner, /Google Analytics 4/, page.file);
+      assert.match(banner, /_ga/, page.file);
+      assert.match(
+        html,
+        /<button type="button" class="ayvo-consent-open" data-consent-open hidden>/,
+      );
     }
   });
 

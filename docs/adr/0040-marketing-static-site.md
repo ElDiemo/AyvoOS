@@ -32,7 +32,8 @@
    `Cache-Control: no-cache` and revalidated (ETag → 304): after a release or a rollback a
    browser never combines new HTML with old CSS/JS. (Fingerprinted asset names would allow long
    caching; not needed for a site of this size.)
-5. **No third parties.** No Google tag, CookieYes, Google Fonts or the "Fiona" font file
+5. **No third parties** (one exception since 2026-11-22: the opt-in Google Analytics 4, see the
+   amendment below). No Google tag, CookieYes, Google Fonts or the "Fiona" font file
    (licence unverified): system fonts for text; the logo is the owner's AYVO wordmark SVG that
    the OS already uses (`apps/web/public/brand/ayvo-wordmark.svg`), not a font imitation. With no cookies and no tracking there is no consent
    banner. Tests fail on any external request.
@@ -97,3 +98,35 @@
    hand; otherwise the layout and texts are the WordPress page's own.
 4. Logo: the owner's wordmark SVG (also used by the OS) replaces the WordPress text set in the
    "Fiona" font; the band image (`logoy.png`) is the WordPress one.
+
+## Amendment 2026-11-22: opt-in Google Analytics 4 (approved exception)
+
+- **Owner:** "no proste to pridej" (2026-11-22), after it was verified that the static site never
+  carried the WordPress site's GA4 since the migration. Destination ID `G-W8X01GWW5Z`.
+- **Scope:** only in the visitor's browser on the public marketing site (`ayvo.co`,
+  `www.ayvo.co`), only after an explicit opt-in. The runtime stays as isolated as in point 1-3: the
+  container makes no outbound call, holds no secrets and sees no analytics data; the OS, the
+  hotel portal and the DEV preview carry no Google tag (the script never loads Google on any
+  other hostname). No external consent platform (CMP).
+- **Basic consent mode:** until the visitor allows analytics nothing is requested from Google and
+  no analytics cookie is written; after "Decline" never. Two equal, unselected choices (CZ/EN/DE),
+  short information on the purpose, the provider and the data sent; the choice is changed in the
+  footer. The choice (`localStorage` `ayvo.consent`: version, value, time) is kept 180 days and
+  asked again after that or after a version change. A withdrawal sets `ga-disable-<ID>` at once,
+  removes the `_ga` cookies the page can reach and reloads every open tab of the site (the
+  `storage` event), so no Google tag stays loaded.
+- **What is sent:** the standard GA4 page view only. Advertising consent types
+  (`ad_storage`, `ad_user_data`, `ad_personalization`) are always `denied`; Google signals and ad
+  personalisation off; no user ID, no e-mails, no custom or advertising events.
+- **Code and CSP:** one local external script (`site/assets/consent.js`), no inline script,
+  no `unsafe-inline`/`unsafe-eval`. The CSP adds only the hosts Google documents for GA4 without
+  Ads features: `script-src https://www.googletagmanager.com`, `img-src
+https://www.googletagmanager.com https://*.google-analytics.com`, `connect-src
+https://www.googletagmanager.com https://*.google-analytics.com https://*.google.com`.
+- **Tests:** zero external requests on a first visit, before the choice, after "Decline", after a
+  withdrawal and reload; exactly one tag with this ID after "Allow"; the choice shared by the
+  languages and the open tabs; keyboard and phone. The Google tag and its transport are mocked in
+  the tests (the public hostname is mapped to the test container in an isolated browser); nothing
+  is sent to Google from DEV or CI.
+- **Before PROD:** DEV acceptance, and the owner checks the Google tag / GA4 property settings
+  (data retention, Google signals off, no linked advertising products).

@@ -23,7 +23,7 @@ Dockerfile             the image (read-only, unprivileged)
 2. Use classes from `site.css`, never `style="…"` or inline `<script>`.
 3. A new image: put it in `site/assets/img/`, reference it as `/assets/img/…` with its real
    `width`, `height` and an `alt` text.
-4. `pnpm --filter @ayvo/marketing test` (files, links, languages, no tracking), then a PR →
+4. `pnpm --filter @ayvo/marketing test` (files, links, languages, no tracking except the opt-in GA4 of `assets/consent.js`), then a PR →
    CI (also the container and browser tests) → DEV preview → acceptance → the same commit on PROD.
 
 ## Tests
