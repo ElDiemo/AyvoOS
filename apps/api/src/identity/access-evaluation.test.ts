@@ -60,4 +60,24 @@ describe('no privilege escalation', () => {
       assertCanGrant(actor(['inventory:read']), ['inventory:read', 'procurement:cost_read']),
     ).toThrow(/procurement:cost_read/);
   });
+
+  // A code this version does not know (a newer database after a rollback) is never skipped.
+  it("a code unknown to this version is held only by the actor's own grants in the database", () => {
+    const admin = actor(['inventory:read', 'identity:users_manage']);
+    const role = ['inventory:read', 'future:feature_x'];
+    // Held in the database (the actor's ADMIN holds it): the grant is allowed.
+    expect(() =>
+      assertCanGrant(admin, role, new Set(['inventory:read', 'future:feature_x'])),
+    ).not.toThrow();
+    // Not held in the database: refused, whatever the actor holds otherwise.
+    expect(() => assertCanGrant(admin, role, new Set(['inventory:read']))).toThrow(
+      /PRIVILEGE|future:feature_x/,
+    );
+    // No database list: fail closed.
+    expect(() => assertCanGrant(admin, role)).toThrow(/future:feature_x/);
+    // The database list never stands in for a known code the evaluated permissions lack.
+    expect(() =>
+      assertCanGrant(actor([]), ['inventory:read'], new Set(['inventory:read'])),
+    ).toThrow(/inventory:read/);
+  });
 });

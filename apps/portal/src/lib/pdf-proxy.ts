@@ -76,12 +76,20 @@ export async function passFile(
     busy: string;
     unavailable: string;
     refused?: (status: number, code: string | null) => Response;
+    /**
+     * The transfer's slot (null: full → BUSY); its release gets the bytes the receiver announced
+     * (0 when nothing was passed on), once the body has been pulled or the transfer cut. Default:
+     * the PDFs' own slots.
+     */
+    acquire?: () => ((bytes: number) => void) | null;
   },
 ): Promise<Response> {
   const session = await readCookie(SESSION_COOKIE);
   if (!session) return plain(401, 'Přihlaste se prosím znovu.');
   slots ??= new SlotLimit(portalEnv().PORTAL_PDF_MAX_IN_FLIGHT);
-  const releasePdf = slots.acquire();
+  const releasePdf: ((bytes: number) => void) | null = options.acquire
+    ? options.acquire()
+    : slots.acquire();
   if (!releasePdf) return options.refused?.(503, 'BUSY') ?? plain(503, options.busy);
   const stop = deadline(options.deadlineMs, request.signal);
   let call: Awaited<ReturnType<typeof contractOpen>>;
@@ -92,16 +100,17 @@ export async function passFile(
     });
   } catch (error) {
     stop.done();
-    releasePdf();
+    releasePdf(0);
     if (error instanceof PortalUnavailable)
       return options.refused?.(503, null) ?? plain(503, options.unavailable);
     throw error;
   }
   const { res } = call;
-  const release = () => {
+  /** `bytes`: what was passed on to the browser as announced (0 for a refusal). */
+  const release = (bytes = 0) => {
     stop.done();
     call.finish();
-    releasePdf();
+    releasePdf(bytes);
   };
   const disposition = res.headers.get('content-disposition');
   const length = res.headers.get('content-length');
@@ -142,7 +151,7 @@ export async function passFile(
     stop: stop.signal,
     // Never more than the receiver announced, and never more than the limit.
     maxBytes: length ? Number(length) : options.maxBytes,
-    release,
+    release: () => release(length ? Number(length) : options.maxBytes),
     // The fetch shares the deadline's signal; cancelling its body ends the receiver's response.
     abortUpstream: () => undefined,
   });

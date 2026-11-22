@@ -61,6 +61,12 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   order `READY_FOR_PICKUP` / `HANDED_TO_CARRIER`, cycle `DISPATCHED` (not delivered);
   `shipments:read|prepare|handover` for ADMIN only. Carrier behind `carriers/carrier.ts`;
   `CARRIER_PROVIDER=test` only with `APP_ENV=test`. No delivery, returns or pickup ordering.
+  Pickup orders at the carrier ("svoz", doc 029 §11, requested by the owner 2026-11-14; table design
+  subject to review): `carrier_pickups` (one site, one day, sent once — PPL `CollectionOrder`;
+  uncertain = looked up by its own reference, never re-sent; one waiting pickup per site, also DB),
+  its fixed plan of concrete parcels not yet with the carrier (`carrier_pickup_parcels`) and its
+  cancellation (`carrier_pickup_cancellations`, confirmed only by PPL's `Canceled`; parcels held
+  until then); never changes an order or shipment, never a hand-over.
   Site carrier settings (doc 029 §9, owner 2026-10-19): `site_carrier_settings` (PPL only,
   `sites:carrier_manage`, ADMIN), a server-side connection by code (`PPL_TEST`; `PPL_PRODUCTION` only
   with `APP_ENV=production` and an explicit per-site choice — doc 029 §9b, ADR 0042; URLs fixed in
@@ -164,6 +170,13 @@ changing behaviour — especially 002 (principles), 003 (domain model) and the A
   `FileStorage` (`contract-documents`) with its SHA-256, downloaded only through the API. A signed
   draft is never removed and its hotel link never changed (DB); the signing revision's hotel must
   match the linked one, a first link the signed hotel. Signatures are never verified.
+  Sales commission terms (PR 1a; owner approved the model 2026-11-17 in the agreed scope — doc 068
+  §3.1, ADR 0046 §2a on the docs branch; implementation under review): `sales_commission_terms`,
+  append-only versions per salesperson (1, 2, … without gaps, DB) of the initial rate %, its length
+  N in whole months and the maintenance rate % from month N+1 (exact 0–100, at most 2 decimals,
+  N ≥ 1, a reason; DB CHECK); `sales:commission_terms_manage` ADMIN only (`security_admin`, never a
+  custom role); a salesperson reads only their own terms. No attribution, portfolio, calculation,
+  statement, salesperson invoice or payout yet (PR 1b and Finance are not approved).
   Return intake R1 (owner approved the model 2026-11-06 on doc 047 `69d90c8`, PR #126;
   implementation under review): module `returns` — `return_receipts` (site, OPEN → CLOSED),
   `return_receipt_lines` (one physical container: CRATE completes its delivered cycle's allocation,
@@ -343,8 +356,9 @@ Tailwind 4 · Vitest · Playwright.
   standard library). Installed and its timers enabled only on AyvoOS-PROD by the owner.
 - `apps/marketing` — the public marketing site ayvo.co (ADR 0040, proposed): static EN/CZ/DE HTML
   in Git, its own Caddy image (no DB/Redis/API/secrets, read-only, unprivileged). No CMS: content
-  changes are HTML edits through a PR; no inline styles/scripts (strict CSP), no tracking or
-  external fonts — `pnpm --filter @ayvo/marketing test` enforces it. Edge: PROD qr-edge and the
+  changes are HTML edits through a PR; no inline styles/scripts (strict CSP), no external fonts,
+  no tracking except the opt-in GA4 on the public hostnames only (ADR 0040 amendment 2026-11-22:
+  basic consent mode, nothing to Google before "Allow") — `pnpm --filter @ayvo/marketing test` enforces it. Edge: PROD qr-edge and the
   internal Caddy only get mounted site files (`deploy/prod/sites/`, `acme.d/`) via
   `compose.marketing.yml` (MARKETING_DOMAIN); DEV preview `https://<DEV_DOMAIN>:8443` (tailnet).
   Deployed on its own: DEV builds and tests the image (pinned base) and saves it as an archive;

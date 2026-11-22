@@ -10,7 +10,10 @@ import { Module } from '@nestjs/common';
 import { MulterModule } from '@nestjs/platform-express';
 import { AccountingExportsService } from './accounting-exports.service.js';
 import { BillingSettingsController } from './billing-settings.controller.js';
+import { CommissionClosingService } from './commission-closing.service.js';
+import { CommissionsController } from './commissions.controller.js';
 import { BillingSettingsService } from './billing-settings.service.js';
+import { BillingTermsService } from './billing-terms.service.js';
 import { InvoiceDeliveriesController } from './invoice-deliveries.controller.js';
 import { InvoiceDeliveriesService } from './invoice-deliveries.service.js';
 import { InvoiceDeliveryRunner } from './invoice-delivery-runner.service.js';
@@ -50,6 +53,7 @@ import { FinancePrismaService } from './finance-prisma.service.js';
   controllers: [
     FinanceController,
     BillingSettingsController,
+    CommissionsController,
     IssuerSettingsController,
     InvoicesController,
     InvoiceDeliveriesController,
@@ -67,6 +71,8 @@ import { FinancePrismaService } from './finance-prisma.service.js';
     FinanceDocumentsService,
     AccountingExportsService,
     BillingSettingsService,
+    CommissionClosingService,
+    BillingTermsService,
     IssuerSettingsService,
     InvoicesService,
     InvoiceDeliveriesService,

@@ -23,6 +23,7 @@ import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 import { ContractDraftsCard } from '@/components/contracts/contract-drafts-card';
 import { HotelBillingPanel } from '@/components/hotels/hotel-billing-panel';
 import { HotelPortalAccess } from '@/components/hotels/hotel-portal-access';
+import { HotelAttributionCard } from '@/components/sales/hotel-attribution-card';
 
 export const dynamic = 'force-dynamic';
 const t = hotelsCs.detail;
@@ -170,6 +171,12 @@ export default async function HotelPage({
       {hasPermission(me, 'sales:manage') && (
         <div className="mb-6 scroll-mt-4" id="navrhy-smluv">
           <ContractDraftsCard hotel={hotel.code} canPrepare />
+        </div>
+      )}
+      {/* Commission attribution (doc 068 PR 1b): sales:manage + hotels:read, as the API. */}
+      {hasPermission(me, 'sales:manage') && hasPermission(me, 'hotels:read') && (
+        <div className="mb-6 scroll-mt-4" id="provize">
+          <HotelAttributionCard hotel={hotel.code} />
         </div>
       )}
       {canSeeOrders && (

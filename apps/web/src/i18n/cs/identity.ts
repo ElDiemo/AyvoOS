@@ -94,6 +94,8 @@ export const identityCs = {
     'sales:work':
       'Pracovat s vlastními zájemci o spolupráci — zakládat, upravovat, kontakty, aktivity a úkoly',
     'sales:manage': 'Vidět všechny zájemce a úkoly obchodu a přidělovat je obchodníkům',
+    'sales:commission_terms_manage':
+      'Nastavovat podmínky provize obchodníků (počáteční sazba, její délka, udržovací sazba) — jen ADMIN',
     'finance:documents_read': 'Vidět přijaté doklady, jejich historii a stahovat originály',
     'finance:exports_manage': 'Vytvářet exporty dokladů pro účetní (ZIP s přehledem a originály)',
     'finance:documents_manage':
@@ -113,6 +115,8 @@ export const identityCs = {
     'finance:bank_read':
       'Vidět pohyby na firemním bankovním účtu načtené z banky a stav propojení s bankou',
     'finance:bank_sync': 'Spustit načtení nových pohybů z banky (pouze čtení, žádné platby)',
+    'finance:commissions_manage':
+      'Kontrolovat a schvalovat měsíční podklady provizí obchodníků — jen ADMIN',
   } satisfies Record<PermissionCode, string> as Record<string, string>,
   modules: {
     inventory: 'Sklad',

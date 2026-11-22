@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { unstable_rethrow } from 'next/navigation';
 import { z } from 'zod';
 import { buttonClass, Notice, PageHeader, Stat } from '@/components/ui';
+import { stockState } from '@/components/warehouse/stock-state';
 import { formatQuantityCs, unitCs } from '@/i18n/cs/format';
 import { catalogCs } from '@/i18n/cs/catalog';
 import { identityCs } from '@/i18n/cs/identity';
@@ -58,7 +59,12 @@ async function warehouseFigures() {
 
 async function availabilityFigures() {
   const summary = await apiGet('admin/inventory/stock-summary', stockSummarySchema);
-  return { lowStock: summary.items.filter((s) => s.lowStock).map((s) => s.item.name) };
+  // The same reading as Zásoby: nothing available first, then below the set minimum.
+  const named = (state: 'none' | 'low') =>
+    summary.items
+      .filter((s) => stockState(s.available, s.lowStock) === state)
+      .map((s) => s.item.name);
+  return { none: named('none'), lowStock: named('low') };
 }
 
 async function productionFigures() {
@@ -187,7 +193,7 @@ export default async function HomePage() {
                       value={formatQuantityCs(warehouse.newBottlesOnHand)}
                       unit={warehouse.unit}
                       tone={warehouse.newBottlesOnHand === '0' ? 'warning' : 'neutral'}
-                      href="/warehouse/stock"
+                      href="/warehouse"
                       testId="home-new-bottles"
                     />
                     <Stat
@@ -221,7 +227,7 @@ export default async function HomePage() {
 
           {canAvailability && (
             <ModulePanel
-              href="/warehouse/availability"
+              href="/warehouse"
               title={warehouseModule.label}
               description={h.availabilityDescription}
               testId="module-availability"
@@ -229,8 +235,15 @@ export default async function HomePage() {
               actions={null}
             >
               {availability ? (
-                availability.lowStock.length > 0 ? (
-                  <Warnings items={[h.lowStockWarning(availability.lowStock.join(', '))]} />
+                availability.none.length + availability.lowStock.length > 0 ? (
+                  <Warnings
+                    items={[
+                      availability.none.length > 0 &&
+                        h.noneAvailableWarning(availability.none.join(', ')),
+                      availability.lowStock.length > 0 &&
+                        h.lowStockWarning(availability.lowStock.join(', ')),
+                    ]}
+                  />
                 ) : (
                   <p className="text-sm text-stone-600">{h.allAvailable}</p>
                 )

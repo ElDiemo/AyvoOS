@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  isPermissionCode,
   isPlannedRole,
   type AdminUserDetail,
   type AdminUserSummary,
@@ -527,9 +528,14 @@ export class UsersService {
         'This role belongs to another kind of account (internal vs hotel portal)',
       );
     }
+    // The role's codes as the database holds them — also those this version does not know
+    // (a newer migration, then a rollback): such a code is checked against what the actor
+    // holds in the database, never skipped.
+    const codes = role.permissions.map((p) => p.permissionCode);
     assertCanGrant(
       actor,
-      role.permissions.map((p) => p.permissionCode as PermissionCode),
+      codes,
+      codes.some((c) => !isPermissionCode(c)) ? await heldInDatabase(tx, actor.userId) : undefined,
     );
     const open = await tx.userRole.findFirst({
       where: { userId, roleCode: code, revokedAt: null },
@@ -802,9 +808,21 @@ interface AccessState {
 /**
  * No privilege escalation: an actor can hand out (assign, or put into a role) only permissions
  * the actor holds right now.
+ *
+ * A code this version knows is held when the actor's evaluated permissions contain it. A code it
+ * does not know (a newer database after a rollback, ADR 0041 / doc 021) grants nothing here, but
+ * it is still a permission: it is held only when the actor's own current grants in the database
+ * contain it (`heldInDatabase`, read in the same transaction). Without that list an unknown code
+ * is missing — fail closed.
  */
-export function assertCanGrant(actor: Actor, permissions: readonly PermissionCode[]): void {
-  const missing = permissions.filter((p) => !actor.permissions.has(p));
+export function assertCanGrant(
+  actor: Actor,
+  permissions: readonly string[],
+  heldInDb?: ReadonlySet<string>,
+): void {
+  const missing = permissions.filter((p) =>
+    isPermissionCode(p) ? !actor.permissions.has(p) : !heldInDb?.has(p),
+  );
   if (missing.length > 0) {
     throw domainError(
       403,
@@ -812,4 +830,21 @@ export function assertCanGrant(actor: Actor, permissions: readonly PermissionCod
       `You cannot grant permissions you do not hold: ${missing.join(', ')}`,
     );
   }
+}
+
+/**
+ * Every permission code the user's current grants hold in the database (not revoked, active
+ * role) — the same rows `AccessService.snapshot` evaluates, before it drops unknown codes.
+ */
+export async function heldInDatabase(
+  tx: Prisma.TransactionClient,
+  userId: string,
+): Promise<ReadonlySet<string>> {
+  const rows = await tx.$queryRaw<{ code: string }[]>`
+    SELECT DISTINCT rp."permission_code" AS code
+    FROM "user_roles" ur
+    JOIN "roles" r ON r."code" = ur."role_code" AND r."active"
+    JOIN "role_permissions" rp ON rp."role_code" = ur."role_code"
+    WHERE ur."user_id" = ${userId}::uuid AND ur."revoked_at" IS NULL`;
+  return new Set(rows.map((r) => r.code));
 }

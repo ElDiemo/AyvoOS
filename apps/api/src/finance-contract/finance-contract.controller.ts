@@ -12,14 +12,20 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import {
+  financeCommissionAttributionsRequestSchema,
   financeHotelLookupSchema,
   financePrincipalRequestSchema,
   financeSupplierLookupSchema,
   portalAccountRequestSchema,
+  portalFenceRequestSchema,
+  portalFenceSettleRequestSchema,
+  portalFenceResolutionRequestSchema,
   portalGrantRequestLookupSchema,
   portalGrantIssueRequestSchema,
   portalGrantReplaceRequestSchema,
   portalInvitationRequestSchema,
+  type FinanceCommissionAttributions,
+  type FinanceCommissionAttributionsRequest,
   type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
@@ -27,6 +33,12 @@ import {
   type FinancePrincipalRequest,
   type PermissionCode,
   type PortalAccount,
+  type PortalFence,
+  type PortalFenceRequest,
+  type PortalFenceSettleRequest,
+  type PortalFenceSettleResult,
+  type PortalFenceResolutionRequest,
+  type PortalFenceResolutionResult,
   type PortalGrantRequestLookup,
   type PortalGrantPerformed,
   type PortalAccountRequest,
@@ -44,7 +56,9 @@ import { ENV, type Env } from '../config/env.js';
 import { ServiceAccess } from '../identity/access.decorators.js';
 import { CurrentPrincipal, forbidden, sameOriginRequest } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
+import { HotelAttributionService } from '../commissions/hotel-attribution.service.js';
 import { HotelsService } from '../customers/hotels.service.js';
+import { PortalFencesService } from '../portal-grants/portal-fences.service.js';
 import { PortalGrantsService } from '../portal-grants/portal-grants.service.js';
 import { ProcurementService } from '../procurement/procurement.service.js';
 
@@ -68,6 +82,8 @@ export class FinanceContractController {
     private readonly procurement: ProcurementService,
     private readonly hotels: HotelsService,
     private readonly portalGrants: PortalGrantsService,
+    private readonly portalFences: PortalFencesService,
+    private readonly attributions: HotelAttributionService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -177,6 +193,26 @@ export class FinanceContractController {
     return this.hotels.financeContractHotels(body.ids);
   }
 
+  // --- sales commissions (doc 069 §4, PR 2a) --------------------------------------------------
+
+  /**
+   * Who gets the commission for each hotel in a service month, with the rates bound to it — the
+   * only input Finance takes from the core for the closing. At most 200 hotels per request
+   * (Finance splits a month into batches); read-only; the forwarded user must be allowed to
+   * approve statements (O8). No amount, invoice or payment: those are Finance's.
+   */
+  @ServiceAccess('finance')
+  @Post('commissions/attributions')
+  @HttpCode(200)
+  commissionAttributions(
+    @Body(new ZodValidationPipe(financeCommissionAttributionsRequestSchema))
+    body: FinanceCommissionAttributionsRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<FinanceCommissionAttributions> {
+    require(p, 'finance:commissions_manage');
+    return this.attributions.financeAttributions(body);
+  }
+
   // --- hotel portal grants (ADR 0045 §4) ---------------------------------------------------
   // Finance has checked, in its own transaction, that the hotels belong to the payer; the core
   // re-checks the admin's permissions on the forwarded session, the account (PORTAL, active) and
@@ -215,6 +251,45 @@ export class FinanceContractController {
   ): Promise<PortalGrantPerformed> {
     require(p, 'finance:billing_read', 'identity:portal_grants_manage');
     return this.portalGrants.performed(p.userId, body);
+  }
+
+  // --- the operational boundary (v6, #148): written by whoever changes the billing terms ----
+
+  /** A fence, before Finance commits terms that move the hotel away from the payer. */
+  @ServiceAccess('finance')
+  @Post('portal-fences')
+  @HttpCode(200)
+  portalFence(
+    @Body(new ZodValidationPipe(portalFenceRequestSchema)) body: PortalFenceRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalFence> {
+    require(p, 'finance:billing_manage');
+    return this.portalFences.fence(body);
+  }
+
+  /** Finance abandons a transfer: the fence of its request, or that request settled for good. */
+  @ServiceAccess('finance')
+  @Post('portal-fences/settle')
+  @HttpCode(200)
+  portalFenceSettle(
+    @Body(new ZodValidationPipe(portalFenceSettleRequestSchema)) body: PortalFenceSettleRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalFenceSettleResult> {
+    require(p, 'finance:billing_manage');
+    return this.portalFences.settle(body.requestId);
+  }
+
+  /** The resolution of named fences by one committed explicit restore (typed evidence only). */
+  @ServiceAccess('finance')
+  @Post('portal-fence-resolutions')
+  @HttpCode(200)
+  portalFenceResolution(
+    @Body(new ZodValidationPipe(portalFenceResolutionRequestSchema))
+    body: PortalFenceResolutionRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<PortalFenceResolutionResult> {
+    require(p, 'finance:billing_manage');
+    return this.portalFences.resolve(body);
   }
 
   /** The PORTAL account of an e-mail (created when new) — Finance's first step of a new grant. */

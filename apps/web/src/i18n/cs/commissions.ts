@@ -1,0 +1,324 @@
+/** Obchod → Provize (doc 068, PR 1a/1b): commission terms, hotel attribution, portfolio. */
+export const commissionsCs = {
+  title: 'Provize',
+  subtitle:
+    'Podmínky, portfolio a měsíční podklady obchodníků. Částky počítají Finance; výplaty systém zatím neeviduje.',
+  tabs: {
+    settings: 'Nastavení',
+    mine: 'Moje podmínky',
+    portfolio: 'Portfolio',
+    closing: 'Uzávěrka',
+    statement: 'Můj podklad',
+  },
+  mine: {
+    heading: 'Moje podmínky provize',
+    readOnly: 'Jen ke čtení. Podmínky nastavuje administrátor.',
+  },
+  settings: {
+    heading: 'Nastavení podmínek',
+    pick: 'Obchodník',
+    none: 'Žádný obchodník (aktivní uživatel s oprávněním Obchod) zatím není.',
+    appliesNew: 'Platí pro nově přiřazené hotely. Hotely, které už podmínky mají, se nemění.',
+    newVersion: 'Nová verze podmínek',
+  },
+  missing: 'Chybí podmínky provize',
+  missingHelp: 'Bez podmínek se pro hotely tohoto obchodníka nic nepočítá ani nefakturuje.',
+  terms: (initial: string, months: number, maintenance: string) =>
+    `${initial} % po ${months} ${months === 1 ? 'měsíc' : months < 5 ? 'měsíce' : 'měsíců'}, potom ${maintenance} %`,
+  fields: {
+    initialRate: 'Počáteční sazba (%)',
+    initialMonths: 'Délka počáteční sazby (celé měsíce)',
+    maintenanceRate: 'Udržovací sazba (%) od měsíce N+1',
+    reason: 'Důvod změny',
+    confirm: 'Potvrzuji novou verzi podmínek',
+    rateHelp: '0–100, nejvýš 2 desetinná místa; nezaokrouhluje se.',
+  },
+  history: {
+    heading: 'Historie verzí',
+    empty: 'Zatím žádná verze.',
+    columns: {
+      version: 'Verze',
+      terms: 'Podmínky',
+      reason: 'Důvod',
+      recorded: 'Zapsáno',
+    },
+    valid: 'platná',
+  },
+  save: 'Zapsat novou verzi',
+  saved: 'Nová verze je zapsaná.',
+  errors: {
+    rate: 'Zadejte 0–100 s nejvýš 2 desetinnými místy.',
+    months: 'Zadejte celé číslo, alespoň 1.',
+    reason: 'Uveďte důvod.',
+    confirm: 'Potvrďte novou verzi.',
+    TERMS_RATE_INVALID: 'Sazba musí být 0–100 % s nejvýš 2 desetinnými místy.',
+    TERMS_MONTHS_INVALID: 'Délka musí být celé číslo, alespoň 1 měsíc.',
+    SALESPERSON_NOT_ELIGIBLE: 'Tento uživatel není aktivní obchodník.',
+    CONCURRENT_CHANGE: 'Podmínky mezitím změnil někdo jiný. Načtěte stránku znovu.',
+    failed: 'Uložení se nepodařilo.',
+    uncertain: 'Odpověď nedorazila. Odeslání znovu pokračuje ve stejném požadavku.',
+  },
+  months: (n: number) => (n === 1 ? 'měsíc' : n < 5 ? 'měsíce' : 'měsíců'),
+  /** PR 1b: the hotel card panel "Obchodník (provize)". */
+  attribution: {
+    title: 'Obchodník (provize)',
+    unavailable: 'Přiřazení obchodníka teď nelze načíst. Zbytek karty funguje.',
+    none: 'Hotel zatím nikomu přiřazený není.',
+    current: 'Přiřazeno',
+    timeline: 'Přiřazení v čase',
+    span: (from: string, until: string | null) => (until ? `${from}–${until}` : `od ${from}`),
+    supersededBy: (rev: number) => `nahrazeno opravou (revize ${rev})`,
+    plannedLater: (from: string, name: string, until: string) =>
+      `Od ${from} je naplánováno: ${name}. Tato změna bude platit jen do ${until}; plán zůstane. Chcete-li plán zrušit, zadejte změnu od ${from}.`,
+    acknowledgePlanned: (from: string) => `Rozumím, od ${from} zůstává naplánované přiřazení`,
+    nobody: 'Firemní hotel – bez provize',
+    firstMonth: 'První zpoplatněný měsíc',
+    source: 'Zdroj',
+    sourceManual: 'Ruční přiřazení (hotel bez akvizice)',
+    noSource:
+      'Bez zdrojové akvizice: k hotelu není podepsaná smlouva z návrhu. Obchodníka i první zpoplatněný měsíc zadejte ručně.',
+    candidate: (code: string, rev: number, signed: string, start: string) =>
+      `${code} rev. ${rev} · podepsáno ${signed} · začátek ${start}`,
+    salesperson: 'Obchodník',
+    changedFromOffer: 'Změněno oproti nabídce.',
+    offer: (name: string) =>
+      `Nabídka: současný vlastník akvizice ${name}. Kdo hotel získal v době podpisu, systém neví — ověřte skutečného získavatele.`,
+    noOffer: 'Akvizice nemá aktivního obchodníka; obchodníka vyberte sami.',
+    fromContract: (start: string) =>
+      `Ze smlouvy: začátek ${start}. Podpis neprokazuje první zpoplatněný měsíc.`,
+    differs: 'Měsíc se liší od začátku smlouvy. V důvodu uveďte proč.',
+    confirmMonth: 'Potvrzuji první zpoplatněný měsíc',
+    effectiveFrom: 'Platí od měsíce',
+    effectiveHelp:
+      'Do předchozího měsíce zůstává původní obchodník. První zpoplatněný měsíc se nemění.',
+    termsBound: 'Podmínky, které se k hotelu uloží',
+    termsHidden: 'Podmínky obchodníka vidí jen administrátor.',
+    missingBound:
+      'Chybí podmínky provize: hotel se přiřadí bez podmínek a nic se pro něj nepočítá.',
+    reason: 'Důvod',
+    confirm: 'Potvrzuji přiřazení',
+    saveFirst: 'Přiřadit obchodníka',
+    change: 'Změnit obchodníka',
+    saveChange: 'Zapsat změnu',
+    saved: 'Přiřazení je zapsané.',
+    history: 'Historie přiřazení',
+    columns: {
+      from: 'Platí',
+      who: 'Obchodník',
+      source: 'Zdroj',
+      terms: 'Podmínky',
+      reason: 'Důvod',
+      recorded: 'Zapsáno',
+    },
+    sourceLabel: { CONTRACT: 'Smlouva', MANUAL: 'Ručně' },
+    offered: (name: string) => `nabídnut současný vlastník akvizice: ${name}`,
+    startDiffers: (start: string) => `začátek smlouvy ${start}`,
+    errors: {
+      salesperson: 'Vyberte obchodníka.',
+      month: 'Zadejte měsíc.',
+      confirmMonth: 'Potvrďte první zpoplatněný měsíc.',
+      reason: 'Uveďte důvod.',
+      confirm: 'Potvrďte přiřazení.',
+      planned: 'Potvrďte, že naplánované přiřazení zůstává.',
+      SALESPERSON_UNCHANGED:
+        'Od tohoto měsíce už hotel tomuto příjemci patří. Přiřazení ani sazby se nemění.',
+      PLANNED_LATER_EXISTS: 'Mezitím přibylo naplánované přiřazení. Načtěte stránku znovu.',
+      COMMISSION_START_REQUIRED: 'Zadejte první zpoplatněný měsíc.',
+      COMMISSION_START_NOT_CONFIRMED: 'Potvrďte první zpoplatněný měsíc.',
+      COMMISSION_START_FIXED: 'První zpoplatněný měsíc se nemění.',
+      EFFECTIVE_FROM_INVALID: 'Zadejte platný měsíc.',
+      EFFECTIVE_FROM_BEFORE_START: 'Změna nemůže platit před prvním zpoplatněným měsícem.',
+      CONTRACT_NOT_SIGNED: 'Tato revize smlouvy nemá podepsaný originál.',
+      CONTRACT_OTHER_HOTEL: 'Podepsaná smlouva patří jinému hotelu.',
+      SOURCE_INVALID: 'Zkontrolujte zdroj přiřazení.',
+      SALESPERSON_NOT_ELIGIBLE: 'Tento uživatel není aktivní obchodník.',
+      CONCURRENT_CHANGE: 'Mezitím se přiřazení změnilo. Načtěte stránku znovu.',
+      failed: 'Uložení se nepodařilo.',
+      uncertain: 'Odpověď nedorazila. Odeslání znovu pokračuje ve stejném požadavku.',
+    },
+  },
+  /** PR 1b: Obchod → Provize → Portfolio. No amounts until Finance (PR 2/3). */
+  portfolio: {
+    month: 'Měsíc',
+    salesperson: 'Obchodník',
+    everyone: 'Všichni',
+    show: 'Zobrazit',
+    noAmounts: 'Bez částek: provize vzniká až z vystavené faktury hotelu, kterou přinesou Finance.',
+    count: (n: number) =>
+      `${n} ${n === 1 ? 'hotel' : n >= 2 && n <= 4 ? 'hotely' : 'hotelů'} v tomto měsíci`,
+    empty: 'V tomto měsíci nemáte přiřazený žádný hotel. Hotel se započítá, až ho admin přiřadí.',
+    emptyAll: 'V tomto měsíci není přiřazený žádný hotel.',
+    totals: 'Hotely podle obchodníka',
+    columns: { hotel: 'Hotel', since: 'Přiřazeno od', k: 'Měsíc provize', rate: 'Sazba' },
+    k: (k: number) => `${k}.`,
+    state: {
+      INITIAL: 'počáteční',
+      MAINTENANCE: 'udržovací',
+      MISSING_TERMS: 'Chybí podmínky provize',
+      NO_SALESPERSON: 'Firemní hotel – bez provize',
+      BEFORE_START: 'Před prvním zpoplatněným měsícem',
+    },
+  },
+  /**
+   * PR 2e: Obchod → Provize → Uzávěrka (admin, finance:commissions_manage; doc 069 §5) — the
+   * monthly preview from Finance, its deviations, the approval bound to the preview and the
+   * salesperson's invoice. Nothing is paid and nothing goes to accounting.
+   */
+  closing: {
+    heading: 'Měsíční uzávěrka provizí',
+    intro:
+      'Náhled počítají Finance z vystavených faktur hotelů a přiřazení obchodníků. Úhrady hotelů se nečtou. Schválený podklad se už nemění; pozdější změny se objeví jako opravy v dalším měsíci.',
+    month: 'Měsíc',
+    mode: 'Režim',
+    modes: { TEST: 'TEST (syntetické faktury)', LIVE: 'LIVE (ostré faktury)' },
+    show: 'Zobrazit',
+    testBadge: 'TEST – syntetická data, nic se nevyplácí',
+    liveEmpty: 'Ostré faktury zatím neexistují, takže v režimu LIVE nic nevzniká.',
+    MONTH_NOT_CLOSED: (month: string, from: string) =>
+      `Měsíc ${month} ještě není uzavřený. Náhled a schválení jsou možné od ${from}.`,
+    unavailable:
+      'Náhled teď nelze spočítat: Finance nebo jádro neodpovídá. Nic se nezapsalo; zkuste to později.',
+    invalid: 'Zadejte platný měsíc.',
+    previewHeading: (month: string) => `Náhled ${month}`,
+    noStatements: 'Za tento měsíc nemá žádný obchodník nic k uzávěrce.',
+    approvedHeading: (month: string) => `Schválené podklady ${month}`,
+    noApproved: 'Za tento měsíc zatím není schválený žádný podklad.',
+    hotels: (n: number) => `${n} ${n === 1 ? 'hotel' : n >= 2 && n <= 4 ? 'hotely' : 'hotelů'}`,
+    previous: (month: string | null) =>
+      month ? `Navazuje na podklad ${month}` : 'První podklad obchodníka',
+    balance: {
+      opening: 'Počáteční saldo',
+      total: 'Provize v měsíci',
+      closing: 'Konečné saldo',
+      toInvoice: 'K fakturaci',
+      carried: 'Převádí se do dalšího měsíce',
+    },
+    columns: {
+      cause: 'Položka',
+      invoice: 'Faktura hotelu',
+      hotel: 'Hotel',
+      serviceMonth: 'Za měsíc',
+      base: 'Základ',
+      k: 'Měsíc provize',
+      rate: 'Sazba',
+      amount: 'Provize',
+    },
+    cause: {
+      REGULAR: 'Provize',
+      CANCELLED: 'Oprava – storno faktury',
+      REATTRIBUTED: (rev: string) => `Oprava – změna obchodníka (revize ${rev})`,
+    },
+    deviations: 'Odchylky a opravy',
+    noDeviations: 'Bez odchylek: jen nové položky, žádné opravy ani příznaky.',
+    correctionNote:
+      'Oprava je rozdíl proti už schválenému podkladu (storno nebo změna obchodníka); schválený podklad se nemění.',
+    openingNote: (amount: string) => `Započítává se převedené záporné saldo ${amount}.`,
+    flag: {
+      TERMS_MISSING: 'Chybí podmínky provize',
+      CURRENCY_UNSUPPORTED: 'Faktura v jiné měně než CZK',
+      BEFORE_COMMISSION_START: 'Před prvním zpoplatněným měsícem',
+      EARLIER_PERIOD_OPEN: (month: string) =>
+        `Patří do dřívějšího měsíce ${month}, který ještě není schválený – schvalte nejdřív ten`,
+    },
+    blocked: 'Schválit nelze, dokud podklad má příznaky. Nejdřív je vyřešte.',
+    unresolvedHeading: 'Řádky bez obchodníka',
+    unresolvedHelp:
+      'Nikomu nepatří a nikoho neblokují. Nepřiřazený hotel přiřaďte na kartě hotelu; před prvním zpoplatněným měsícem provize nevzniká.',
+    unresolved: {
+      UNASSIGNED: 'Nepřiřazený hotel',
+      BEFORE_COMMISSION_START: 'Před prvním zpoplatněným měsícem',
+    },
+    approve: 'Schválit podklad',
+    approveTitle: (name: string, month: string) => `Schválit podklad: ${name}, ${month}`,
+    approveBody: (amount: string) =>
+      `Schvaluje se přesně tento náhled. K fakturaci: ${amount}. Schválený podklad se už nikdy nezmění.`,
+    approveConfirm: 'Schválit',
+    approved: 'Podklad je schválený.',
+    approvedAt: (when: string, who: string) => `Schváleno ${when} · ${who}`,
+    errors: {
+      STATEMENT_STALE:
+        'Podklady se mezitím změnily (např. nová nebo stornovaná faktura). Nic se neschválilo. Načtěte náhled znovu a zkontrolujte ho.',
+      ALREADY_APPROVED: 'Podklad obchodníka za tento měsíc je už schválený.',
+      PERIOD_ORDER: 'Obchodník má schválený pozdější měsíc. Tento měsíc už schválit nelze.',
+      STATEMENT_FLAGGED: 'Podklad má příznaky; schválit ho nelze.',
+      NOTHING_TO_APPROVE: 'Obchodník nemá za tento měsíc podklad.',
+      MONTH_NOT_CLOSED: 'Měsíc ještě není uzavřený.',
+      IDEMPOTENCY_CONFLICT: 'Požadavek se neshoduje s předchozím pokusem. Načtěte stránku znovu.',
+      FINANCE_DEPENDENCY_UNAVAILABLE:
+        'Jádro teď neodpovídá. Tento pokus nic neschválil; zkuste to znovu stejným tlačítkem.',
+      dependencyAfterUncertain:
+        'Jádro teď neodpovídá, takže výsledek předchozího pokusu nejde ověřit – podklad se mohl schválit. Zkuste to později stejným tlačítkem; podklad se nikdy neschválí dvakrát.',
+      uncertain:
+        'Odpověď nedorazila: není jisté, zda se podklad schválil. Zkuste to znovu stejným tlačítkem (pokračuje stejný požadavek, dvakrát se neschválí), nebo načtěte stránku a podívejte se do schválených podkladů.',
+      failed: 'Schválení se nepodařilo.',
+    },
+    items: (n: number) => `Položky (${n})`,
+    invoice: {
+      heading: 'Faktura obchodníka',
+      nothing: 'Nic k fakturaci: saldo je nulové nebo záporné a převádí se do dalšího měsíce.',
+      recorded: 'Zaevidovaná faktura',
+      number: 'Číslo faktury',
+      issuedOn: 'Datum vystavení',
+      receivedOn: 'Datum přijetí',
+      base: 'Částka bez DPH',
+      baseHelp: (amount: string) => `Musí se rovnat částce k fakturaci: ${amount}.`,
+      payoutOn: 'Plánovaná výplata',
+      payoutNote: 'Jen plán výplaty: nic se neplatí ani neposílá účetní.',
+      recordedAt: (when: string, who: string) => `Zaevidováno ${when} · ${who}`,
+      checks:
+        'Kontroluje se: číslo faktury (u obchodníka jen jednou), datum vystavení ≤ datum přijetí, přijetí nejdřív 1. den po uzavřeném měsíci a ne v budoucnu, částka bez DPH = k fakturaci, měna CZK. Vystavitel, doklad ani DPH se nekontrolují.',
+      submit: 'Zaevidovat fakturu',
+      saved: 'Faktura je zaevidovaná a výplata naplánovaná.',
+      required: {
+        number: 'Uveďte číslo faktury.',
+        date: 'Zadejte datum.',
+        base: 'Zadejte částku s nejvýš 2 desetinnými místy.',
+      },
+      errors: {
+        NOTHING_TO_INVOICE: 'Podklad nemá částku k fakturaci.',
+        SALESPERSON_INVOICE_CURRENCY_MISMATCH: 'Faktura musí být v měně podkladu (CZK).',
+        SALESPERSON_INVOICE_BASE_MISMATCH: 'Částka bez DPH se musí rovnat částce k fakturaci.',
+        SALESPERSON_INVOICE_DATES: 'Datum vystavení nemůže být po datu přijetí.',
+        SALESPERSON_INVOICE_BEFORE_CLOSE: 'Fakturu nelze přijmout před uzavřením měsíce.',
+        SALESPERSON_INVOICE_IN_FUTURE: 'Datum přijetí nemůže být v budoucnu.',
+        SALESPERSON_INVOICE_EXISTS: 'K tomuto podkladu už je faktura zaevidovaná.',
+        SALESPERSON_INVOICE_NUMBER_REUSED: 'Toto číslo faktury už obchodník použil.',
+        IDEMPOTENCY_CONFLICT: 'Požadavek se neshoduje s předchozím pokusem. Načtěte stránku znovu.',
+        uncertain: 'Odpověď nedorazila. Opakování pokračuje ve stejném požadavku.',
+        failed: 'Evidence faktury se nepodařila.',
+      },
+    },
+  },
+  /** PR 2e: Obchod → Provize → Můj podklad (sales:work): own state, one amount, dates. */
+  statement: {
+    heading: (month: string) => `Můj podklad ${month}`,
+    month: 'Měsíc',
+    show: 'Zobrazit',
+    testBadge: 'TEST – syntetická data, nic se nevyplácí',
+    hotels: 'Hotely přiřazené v měsíci',
+    hotelsNote: 'Počet z portfolia (přiřazení), ne z faktur.',
+    hotelsUnavailable: 'Počet hotelů teď nelze načíst.',
+    state: {
+      PROCESSING: 'Zpracovává se',
+      TO_INVOICE: 'K fakturaci',
+      NOTHING_TO_INVOICE: 'Nic k fakturaci',
+      INVOICE_RECEIVED: 'Faktura přijata',
+    },
+    help: {
+      PROCESSING:
+        'Podklad za tento měsíc zatím není schválený. Pokud za měsíc nic nevzniklo, podklad nebude. Částka se ukáže až po schválení.',
+      TO_INVOICE: 'Podklad je schválený. Vystavte fakturu přesně na tuto částku bez DPH.',
+      NOTHING_TO_INVOICE:
+        'Podklad je schválený, ale saldo je záporné nebo nulové. Nic nefakturujte.',
+      INVOICE_RECEIVED:
+        'Faktura je zaevidovaná a výplata naplánovaná. Platbu systém zatím neeviduje.',
+    },
+    amount: 'Částka k fakturaci (bez DPH)',
+    carried: 'Převádí se do dalšího měsíce',
+    approvedAt: 'Schváleno',
+    payoutPlanned: 'Plánovaná výplata',
+    rule: (earliest: string) =>
+      `Faktura přijatá do 10. dne měsíce se vyplácí 15. téhož měsíce, nejdříve ${earliest}.`,
+    unavailable: 'Stav teď nelze načíst: Finance neodpovídá. Zkuste to později.',
+  },
+} as const;

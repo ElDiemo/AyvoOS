@@ -386,7 +386,12 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
       .expect(409);
     expect(second.body.code).toBe('ALREADY_TAKEN_OVER');
     expect((await receive(base(), file).expect(409)).body.code).toBe('DUPLICATE_DOCUMENT');
-    const listed = await f.get('/api/admin/finance/supplier-documents').expect(200);
+    // Of this supplier: the shared test database may already hold more than one page (200) of
+    // newer documents of other suppliers, so the unfiltered list is never assumed to contain it.
+    const listed = await f
+      .get('/api/admin/finance/supplier-documents')
+      .query({ supplierId })
+      .expect(200);
     expect(listed.body.find((c: { id: string }) => c.id === sd.body.id).takenOverBy).toBe(doc.code);
     // An unknown supplier document is simply not found.
     await f
@@ -540,6 +545,7 @@ describe.skipIf(!hasDatabase)('finance received documents (Finance unit)', () =>
         { roleCode: 'ADMIN', permissionCode: 'finance:bank_sync' },
         { roleCode: 'ADMIN', permissionCode: 'finance:billing_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:billing_read' },
+        { roleCode: 'ADMIN', permissionCode: 'finance:commissions_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_manage' },
         { roleCode: 'ADMIN', permissionCode: 'finance:documents_read' },
         { roleCode: 'ADMIN', permissionCode: 'finance:exports_manage' },

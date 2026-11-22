@@ -14,11 +14,11 @@ export function Shell({
   children,
 }: {
   user: { displayName: string; email: string };
-  active: 'hotels' | 'invoices';
+  active: 'hotels' | 'deliveries' | 'contracts' | 'invoices';
   testInvoices?: boolean;
   children: React.ReactNode;
 }) {
-  const link = (href: string, key: 'hotels' | 'invoices') => (
+  const link = (href: string, key: 'hotels' | 'deliveries' | 'contracts' | 'invoices') => (
     <Link
       href={href}
       aria-current={active === key ? 'page' : undefined}
@@ -52,6 +52,8 @@ export function Shell({
         </div>
         <nav aria-label={cs.nav.label} className="mx-auto mt-2 flex max-w-5xl gap-6 px-4">
           {link('/', 'hotels')}
+          {link('/deliveries', 'deliveries')}
+          {link('/contracts', 'contracts')}
           {link('/invoices', 'invoices')}
         </nav>
       </header>

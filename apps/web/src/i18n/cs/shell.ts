@@ -55,17 +55,17 @@ export const shellCs = {
         prospects: 'Akvizice',
         tasks: 'Úkoly',
         calendar: 'Kalendář',
+        results: 'Výsledky',
+        commissions: 'Provize',
       },
     },
     warehouse: {
       label: 'Sklad',
       description: 'Fyzické zásoby: příjem zboží, šarže, stav skladu, pohyby a dodavatelé.',
       pages: {
-        overview: 'Přehled skladu',
+        overview: 'Zásoby',
         newReceipt: 'Příjem zboží',
         receipts: 'Příjmy',
-        stock: 'Stav skladu',
-        availability: 'Dostupnost',
         movements: 'Pohyby',
         suppliers: 'Dodavatelé',
       },
@@ -110,7 +110,7 @@ export const shellCs = {
     dispatch: {
       label: 'Expedice',
       description: 'Ruční objednávky hotelů a kompletace hotových beden k expedici.',
-      pages: { orders: 'Objednávky', new: 'Nová objednávka' },
+      pages: { orders: 'Objednávky', new: 'Nová objednávka', pickups: 'Svoz' },
     },
   },
   home: {
@@ -121,7 +121,7 @@ export const shellCs = {
     salesOverdue: 'Úkoly po termínu',
     salesToday: 'Úkoly na dnes',
     salesInProgress: 'Rozpracovaní zájemci',
-    openAvailability: 'Otevřít dostupnost',
+    openAvailability: 'Otevřít zásoby',
     availabilityDescription: 'Dostupnost zásob pro plánování (pouze pro čtení).',
     allAvailable: 'Všechny položky jsou nad minimální zásobou.',
     openProduction: 'Otevřít výrobu',
@@ -138,6 +138,7 @@ export const shellCs = {
     noSuppliers: 'Zatím není založen žádný dodavatel.',
     noBottles: 'Zatím nejsou vytvořeny žádné identity lahví.',
     lowStockWarning: (items: string) => `Pod minimální zásobou: ${items}.`,
+    noneAvailableWarning: (items: string) => `Nic k dispozici: ${items}.`,
     pendingInvoiceWarning: (n: number) =>
       n === 1 ? '1 příjem čeká na fakturu.' : `${n} příjmů čeká na fakturu.`,
     system: 'Stav systému',

@@ -14,6 +14,7 @@ export type FinanceOperationKind =
   | 'BILLING_PRICE_VERSION'
   | 'BILLING_AGREEMENT_CREATE'
   | 'BILLING_AGREEMENT_VERSION'
+  | 'BILLING_TERMS_RESTORE'
   | 'ISSUER_VERSION'
   | 'ISSUER_ACCOUNT_CREATE'
   | 'ISSUER_ACCOUNT_VERSION'
@@ -26,7 +27,9 @@ export type FinanceOperationKind =
   | 'PAYMENTS_SIMULATE'
   | 'PAYMENTS_IMPORT_BANK'
   | 'PAYMENT_ALLOCATE'
-  | 'BILLING_RUN_SETTINGS_VERSION';
+  | 'BILLING_RUN_SETTINGS_VERSION'
+  | 'COMMISSION_STATEMENT_APPROVE'
+  | 'COMMISSION_SALESPERSON_INVOICE';
 
 /**
  * The core's idempotency pattern (doc 018 §8) in Finance's own schema: one transaction inserts

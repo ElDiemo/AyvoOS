@@ -258,11 +258,17 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
       'GET /api/internal/v1/finance/supplier-documents/:id',
       'GET /api/internal/v1/finance/supplier-documents/:id/content',
       'GET /api/internal/v1/finance/suppliers',
+      'POST /api/internal/v1/finance/commissions/attributions',
       'POST /api/internal/v1/finance/hotels/lookup',
       // Hotel portal grants (ADR 0045 §4): issued and replaced only through Finance, which also
       // creates the account and invites it after the grant.
       'POST /api/internal/v1/finance/portal-accounts',
       'POST /api/internal/v1/finance/portal-accounts/:id/invitation',
+      // The operational boundary (v6, #148): Finance's fence before a change of payer and the
+      // resolution by its committed explicit restore.
+      'POST /api/internal/v1/finance/portal-fence-resolutions',
+      'POST /api/internal/v1/finance/portal-fences',
+      'POST /api/internal/v1/finance/portal-fences/settle',
       'POST /api/internal/v1/finance/portal-grants',
       'POST /api/internal/v1/finance/portal-grants/:id/replace',
       'POST /api/internal/v1/finance/portal-grants/requests/lookup',
@@ -280,8 +286,11 @@ describe.skipIf(!hasDatabase)('identity and access', () => {
         .map((r) => `${r.method} ${r.route}`)
         .sort(),
     ).toEqual([
+      'GET /api/internal/v1/portal/contracts/:id/pdf',
       'GET /api/internal/v1/portal/hotels',
       'GET /api/internal/v1/portal/hotels/:id',
+      'GET /api/internal/v1/portal/hotels/:id/contracts',
+      'GET /api/internal/v1/portal/hotels/:id/deliveries',
       'GET /api/internal/v1/portal/hotels/:id/profile',
       'GET /api/internal/v1/portal/session',
       'POST /api/internal/v1/portal/auth/activate',

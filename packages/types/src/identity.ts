@@ -95,6 +95,7 @@ export const PERMISSION_CODES = [
   'printing:manage',
   'sales:work',
   'sales:manage',
+  'sales:commission_terms_manage',
   'finance:documents_read',
   'finance:documents_manage',
   'finance:exports_manage',
@@ -107,6 +108,7 @@ export const PERMISSION_CODES = [
   'finance:payments_manage',
   'finance:bank_read',
   'finance:bank_sync',
+  'finance:commissions_manage',
 ] as const;
 export const permissionCodeSchema = z.enum(PERMISSION_CODES);
 export type PermissionCode = z.infer<typeof permissionCodeSchema>;
@@ -125,6 +127,10 @@ export const SECURITY_ADMIN_PERMISSIONS: readonly PermissionCode[] = [
   'sites:all_access',
   'carriers:connections_manage',
   'printing:manage',
+  // ADMIN only, never a custom role (doc 068 §8.1): a salesperson must never edit their own terms.
+  'sales:commission_terms_manage',
+  // ADMIN only (doc 069 O8): approving commission statements is never delegated to a custom role.
+  'finance:commissions_manage',
 ];
 
 /** Module of a permission (its code prefix) — the checkbox groups of the role editor. */
