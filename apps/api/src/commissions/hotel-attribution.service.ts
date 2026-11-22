@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   attributionTimeline,
@@ -5,6 +6,9 @@ import {
   commissionPhase,
   previousMonth,
   type AttributionCandidate,
+  type FinanceCommissionAttributions,
+  type FinanceCommissionAttributionsRequest,
+  type FinanceCommissionHotel,
   type HotelAttribution,
   type HotelAttributionRevision,
   type HotelTermsBinding,
@@ -18,7 +22,7 @@ import { ContractDraftsService } from '../contracts/contract-drafts.service.js';
 import { HotelsService } from '../customers/hotels.service.js';
 import { OperationRequestsService } from '../database/operation-requests.service.js';
 import { PrismaService } from '../database/prisma.service.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { Prisma } from '../generated/prisma/client.js';
 import type { Principal } from '../identity/principal.js';
 import { ProspectContextService } from '../sales/prospect-context.service.js';
 import { SalespeopleService } from '../sales/salespeople.service.js';
@@ -383,6 +387,88 @@ export class HotelAttributionService {
       }
       return { month: q.month, rows: out, totals };
     });
+  }
+
+  // --- the core contract for Finance (doc 069 §4, PR 2a) -------------------------------------
+
+  /**
+   * Who gets the commission for each hotel in a service month, with the rates bound to that
+   * attribution (the #193 snapshot, never the salesperson's current terms). Read-only, one
+   * consistent snapshot; the same rule of "in force" as the portfolio (latest effective_from ≤ M,
+   * then the highest revision — attributionTimeline). The caller's permission is checked by the
+   * controller; the answer has no amount, invoice or payment. Unknown ids get nulls.
+   */
+  financeAttributions(
+    req: FinanceCommissionAttributionsRequest,
+  ): Promise<FinanceCommissionAttributions> {
+    const ids = [...req.hotelIds].sort();
+    return this.prisma.$transaction(
+      async (tx) => {
+        const month = monthDate(req.month);
+        const inForce = await tx.$queryRaw<{ id: string }[]>`
+          SELECT DISTINCT ON ("hotel_id") "id" FROM "sales_hotel_attributions"
+          WHERE "hotel_id" = ANY(${ids}::uuid[]) AND "effective_from" <= ${month}::date
+          ORDER BY "hotel_id", "effective_from" DESC, "revision" DESC`;
+        const rows = await tx.salesHotelAttribution.findMany({
+          where: { id: { in: inForce.map((r) => r.id) } },
+          include: { bindings: { include: { terms: true }, orderBy: { bindingNo: 'desc' } } },
+        });
+        const byHotel = new Map(rows.map((r) => [r.hotelId, r]));
+        const starts = new Map(
+          (
+            await tx.salesHotelAttribution.findMany({
+              where: { hotelId: { in: ids }, revision: 1 },
+              select: { hotelId: true, commissionStart: true },
+            })
+          ).map((r) => [r.hotelId, toMonth(r.commissionStart)]),
+        );
+        const people = new Map(
+          (
+            await tx.user.findMany({
+              where: {
+                id: { in: rows.flatMap((r) => (r.salespersonId ? [r.salespersonId] : [])) },
+              },
+              select: { id: true, displayName: true },
+            })
+          ).map((u) => [u.id, u.displayName]),
+        );
+        const hotels: FinanceCommissionHotel[] = ids.map((hotelId) => {
+          const r = byHotel.get(hotelId);
+          const b = r?.bindings[0];
+          return {
+            hotelId,
+            commissionStart: starts.get(hotelId) ?? null,
+            attribution: r
+              ? {
+                  revision: r.revision,
+                  effectiveFrom: toMonth(r.effectiveFrom),
+                  commissionStart: toMonth(r.commissionStart),
+                  recipient: r.salespersonId
+                    ? {
+                        salespersonId: r.salespersonId,
+                        displayName: people.get(r.salespersonId) ?? '',
+                      }
+                    : null,
+                  binding: b
+                    ? {
+                        bindingId: b.id,
+                        termsVersion: b.terms.version,
+                        initialRate: b.initialRate.toFixed(2),
+                        initialMonths: b.initialMonths,
+                        maintenanceRate: b.maintenanceRate.toFixed(2),
+                      }
+                    : null,
+                }
+              : null,
+          };
+        });
+        const fingerprint = createHash('sha256')
+          .update(JSON.stringify({ month: req.month, hotels }))
+          .digest('hex');
+        return { month: req.month, fingerprint, hotels };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   // --- helpers --------------------------------------------------------------------------------

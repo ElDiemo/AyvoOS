@@ -19,7 +19,7 @@ import {
   uncertain,
   useAttempt,
 } from '@/components/catalog/form-kit';
-import { buttonClass, Card, Notice } from '@/components/ui';
+import { buttonClass, Card, DetailFact, Details, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
 import { shipmentsCs } from '@/i18n/cs/shipments';
@@ -189,19 +189,6 @@ export function ShipmentPanel({
             </span>
           }
         >
-          {s.carrierShipmentRef && (
-            <p className="mb-3 text-sm" data-testid="carrier-ref">
-              {t.carrierRef(s.carrierShipmentRef)}
-            </p>
-          )}
-          {s.carrier.configured && (
-            <p className="mb-3 text-xs text-stone-500">
-              {t.ruleLine(
-                t.rules[s.carrier.parcelWeight ?? ''] ?? '',
-                t.rules[s.carrier.parcelDimensions ?? ''] ?? '',
-              )}
-            </p>
-          )}
           <ul className="flex flex-col divide-y divide-stone-200">
             {s.parcels.map((parcel) => (
               <ParcelRow
@@ -214,6 +201,28 @@ export function ShipmentPanel({
               />
             ))}
           </ul>
+          <Details className="mt-4" testId="shipment-details">
+            <dl>
+              <DetailFact
+                label={t.detail.carrierRef}
+                value={s.carrierShipmentRef}
+                testId="carrier-ref"
+              />
+              <DetailFact
+                label={t.detail.rules}
+                value={
+                  s.carrier.configured
+                    ? t.ruleLine(
+                        t.rules[s.carrier.parcelWeight ?? ''] ?? '',
+                        t.rules[s.carrier.parcelDimensions ?? ''] ?? '',
+                      )
+                    : null
+                }
+              />
+              <DetailFact label={t.detail.systemState} value={s.status} />
+            </dl>
+            <RequestFacts request={s.request} timeZone={timeZone} />
+          </Details>
           {canResolveUncertain &&
             // As the server: a claimed request after its window; an accepted one only after its
             // automatic checks ended.
@@ -350,6 +359,14 @@ function NextStep({
     case 'CREATE':
       return (
         <>
+          {(data.shipment?.request?.status === 'REJECTED' ||
+            data.shipment?.request?.status === 'NOT_CREATED') && (
+            <Notice tone="warning">
+              <span data-testid="shipment-refused">
+                {data.shipment.request.status === 'REJECTED' ? p.refused : p.notCreated}
+              </span>
+            </Notice>
+          )}
           {heading(p.createLabels, p.createLabelsText(parcelWord))}
           {canPrepare && primary(p.createLabels, () => action('labels', 'labels'), 'create-labels')}
         </>
@@ -491,6 +508,31 @@ function NextStep({
         </Notice>
       );
   }
+}
+
+/** The latest carrier request, for "Podrobnosti" (docs/002 principle 14). */
+function RequestFacts({
+  request: r,
+  timeZone,
+}: {
+  request: NonNullable<OrderShipment['shipment']>['request'];
+  timeZone: string;
+}) {
+  if (!r) return null;
+  const at = (iso: string | null) => (iso ? formatDateTimeCs(iso, timeZone) : null);
+  return (
+    <dl className="border-t border-stone-200 pt-2" data-testid="shipment-request-details">
+      <DetailFact label={t.detail.request} value={t.detail.attempt(r.attemptNo, r.status)} />
+      <DetailFact label={t.detail.reference} value={r.clientReference} />
+      <DetailFact label={t.detail.sentAt} value={at(r.sentAt)} />
+      <DetailFact
+        label={t.detail.error}
+        value={[r.errorCode, r.errorMessage].filter(Boolean).join(' – ')}
+        testId="shipment-request-error"
+      />
+      <DetailFact label={t.detail.resolvableAt} value={at(r.resolvableAt)} />
+    </dl>
+  );
 }
 
 const labelWord = (n: number) => `${n} ${n === 1 ? 'štítek' : n < 5 ? 'štítky' : 'štítků'}`;

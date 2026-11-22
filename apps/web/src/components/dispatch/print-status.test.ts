@@ -63,7 +63,7 @@ describe('printTargets (UI38-R1)', () => {
 });
 
 describe('combinedOutcome: an HTTP 200 is not success by itself', () => {
-  it('a carrier refusal is shown as such, with its reason', () => {
+  it('a carrier refusal is shown as such; its reason stays on the order under Podrobnosti', () => {
     const o = combinedOutcome(
       data({
         status: 'DRAFT',
@@ -72,7 +72,9 @@ describe('combinedOutcome: an HTTP 200 is not success by itself', () => {
       'Zebra B',
     );
     expect(o.tone).toBe('error');
-    expect(o.text).toContain('nevytvořil: Neplatné PSČ');
+    expect(o.text).toContain('dopravce ale štítky nevytvořil');
+    expect(o.text).toContain('důvod (v Podrobnostech) najdete na objednávce');
+    expect(o.text).not.toContain('Neplatné PSČ');
   });
 
   it('labels still being created: informs, never claims printing', () => {
@@ -98,6 +100,7 @@ describe('combinedOutcome: an HTTP 200 is not success by itself', () => {
       'Zebra B',
     );
     expect([o.tone, o.text.includes('nic se netiskne')]).toEqual(['error', true]);
+    expect(o.text).not.toContain('pozice 3/3');
   });
 
   it('labels made and queued: says how many go to which printer', () => {

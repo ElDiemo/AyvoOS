@@ -12,6 +12,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import {
+  financeCommissionAttributionsRequestSchema,
   financeHotelLookupSchema,
   financePrincipalRequestSchema,
   financeSupplierLookupSchema,
@@ -23,6 +24,8 @@ import {
   portalGrantIssueRequestSchema,
   portalGrantReplaceRequestSchema,
   portalInvitationRequestSchema,
+  type FinanceCommissionAttributions,
+  type FinanceCommissionAttributionsRequest,
   type FinanceContractHotel,
   type FinanceContractSupplier,
   type FinanceContractSupplierDocument,
@@ -53,6 +56,7 @@ import { ENV, type Env } from '../config/env.js';
 import { ServiceAccess } from '../identity/access.decorators.js';
 import { CurrentPrincipal, forbidden, sameOriginRequest } from '../identity/access.guard.js';
 import type { Principal } from '../identity/principal.js';
+import { HotelAttributionService } from '../commissions/hotel-attribution.service.js';
 import { HotelsService } from '../customers/hotels.service.js';
 import { PortalFencesService } from '../portal-grants/portal-fences.service.js';
 import { PortalGrantsService } from '../portal-grants/portal-grants.service.js';
@@ -79,6 +83,7 @@ export class FinanceContractController {
     private readonly hotels: HotelsService,
     private readonly portalGrants: PortalGrantsService,
     private readonly portalFences: PortalFencesService,
+    private readonly attributions: HotelAttributionService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -186,6 +191,26 @@ export class FinanceContractController {
   ): Promise<FinanceContractHotel[]> {
     require(p, 'finance:billing_read');
     return this.hotels.financeContractHotels(body.ids);
+  }
+
+  // --- sales commissions (doc 069 §4, PR 2a) --------------------------------------------------
+
+  /**
+   * Who gets the commission for each hotel in a service month, with the rates bound to it — the
+   * only input Finance takes from the core for the closing. At most 200 hotels per request
+   * (Finance splits a month into batches); read-only; the forwarded user must be allowed to
+   * approve statements (O8). No amount, invoice or payment: those are Finance's.
+   */
+  @ServiceAccess('finance')
+  @Post('commissions/attributions')
+  @HttpCode(200)
+  commissionAttributions(
+    @Body(new ZodValidationPipe(financeCommissionAttributionsRequestSchema))
+    body: FinanceCommissionAttributionsRequest,
+    @CurrentPrincipal() p: Principal,
+  ): Promise<FinanceCommissionAttributions> {
+    require(p, 'finance:commissions_manage');
+    return this.attributions.financeAttributions(body);
   }
 
   // --- hotel portal grants (ADR 0045 §4) ---------------------------------------------------

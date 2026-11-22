@@ -3,7 +3,7 @@
 import type { OrderShipment, ShipmentParcel, TrackingEvent } from '@ayvo/types';
 import { useState } from 'react';
 import { uncertain, useAttempt } from '@/components/catalog/form-kit';
-import { buttonClass, Card, Notice } from '@/components/ui';
+import { buttonClass, Card, DetailFact, Details, Notice } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
 import { shipmentsCs } from '@/i18n/cs/shipments';
 import { orderErrorText } from './order-errors';
@@ -78,33 +78,69 @@ export function TrackingCard({
           {t.summary(tr.pickedUp, tr.delivered, tr.parcels)}
         </p>
         <p className="text-stone-600" data-testid="tracking-checked">
-          {tr.lastSuccessAt ? t.checked(at(tr.lastSuccessAt)) : t.neverChecked}
+          {tr.lastSuccessAt
+            ? t.checked(at(tr.lastSuccessAt))
+            : tr.stopped
+              ? t.neverCheckedStopped
+              : t.neverChecked}
           {tr.stopped === 'DELIVERED' && <> {t.done}</>}
         </p>
-        {tr.lastError && tr.lastAttemptAt && (
+        {/* One true first layer: an outage still retried by itself (only while not stopped), or
+            checking paused (GAVE_UP) — then only what this role can do about it. The raw error
+            stays under Podrobnosti. */}
+        {tr.stopped === 'GAVE_UP' ? (
           <Notice tone="warning">
-            <span data-testid="tracking-failed">
-              {t.failed(at(tr.lastAttemptAt), tr.lastError)}
+            <span data-testid="tracking-paused">
+              {t.paused(tr.failures, tr.lastAttemptAt ? at(tr.lastAttemptAt) : null)}{' '}
+              {canRefresh ? t.pausedResume : t.pausedAsk}
             </span>
           </Notice>
+        ) : (
+          tr.lastError &&
+          tr.lastAttemptAt && (
+            <Notice tone="warning">
+              <span data-testid="tracking-failed">
+                {(tr.stopped ? t.failedFinal : t.failed)(at(tr.lastAttemptAt))}
+              </span>
+            </Notice>
+          )
         )}
-        {tr.stopped === 'GAVE_UP' && (
-          <Notice tone="warning">
-            <span data-testid="tracking-paused">{t.paused(tr.failures)}</span>
-          </Notice>
+        {tr.lastError && (
+          <Details testId="tracking-failed-details">
+            <dl>
+              <DetailFact label={t.failedDetail} value={tr.lastError} />
+            </dl>
+          </Details>
         )}
         {warnings.length > 0 && (
-          <Notice tone="warning">
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <ul className="flex flex-col gap-1" data-testid="tracking-warnings">
               {warnings.map((w) => (
                 <li key={w.parcelNo} data-testid={`tracking-warning-${w.parcelNo}`}>
                   <span className="font-medium">{t.warning(w.parcelNo, w.number, w.problem)}</span>
-                  {w.carrierText && <> {t.carrierSays(w.carrierText)}</>}
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-xs">{t.warningNote}</p>
-          </Notice>
+            <p className="mt-2 text-xs">
+              {t.warningNote}
+              {!tr.stopped && <> {t.warningContinues}</>}
+            </p>
+          </div>
+        )}
+        {/* The carrier's own wording of each problem: under Podrobnosti, the translation above. */}
+        {warnings.some((w) => w.carrierText) && (
+          <Details testId="tracking-warnings-details">
+            <dl>
+              {warnings.map((w) => (
+                <DetailFact
+                  key={w.parcelNo}
+                  label={t.warningParcel(w.parcelNo, w.number)}
+                  value={w.carrierText && t.carrierSays(w.carrierText)}
+                  testId={`tracking-warning-${w.parcelNo}-carrier`}
+                />
+              ))}
+            </dl>
+          </Details>
         )}
         {error && (
           <p role="alert" className="font-medium text-red-700" data-testid="tracking-error">

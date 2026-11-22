@@ -13,7 +13,16 @@ import { OriginBadge } from '@/components/dispatch/order-origin';
 import { RescheduleOrder } from '@/components/dispatch/reschedule-order';
 import { OrderStatusBadge } from '@/components/dispatch/order-status';
 import { ShipmentPanel } from '@/components/dispatch/shipment-panel';
-import { buttonClass, Card, EmptyState, Field, FieldList, Notice } from '@/components/ui';
+import {
+  buttonClass,
+  Card,
+  DetailFact,
+  Details,
+  EmptyState,
+  Field,
+  FieldList,
+  Notice,
+} from '@/components/ui';
 import { formatDateCs, formatDateTimeCs } from '@/i18n/cs/format';
 import { ordersCs } from '@/i18n/cs/orders';
 import { apiGet } from '@/lib/api';
@@ -21,6 +30,12 @@ import { currentUser, hasPermission, siteTimeZone } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 const t = ordersCs.detail;
+/** History entries whose reason is the carrier's own error text: under Podrobnosti (docs/002). */
+const CARRIER_ERROR = new Set([
+  'LABELS_REJECTED',
+  'LABEL_VARIANT_FAILED',
+  'SHIPMENT_CANCEL_REFUSED',
+]);
 
 /**
  * Order detail (doc 028, doc 029): snapshot, requested vs. loaded per product, crates, the one
@@ -190,7 +205,7 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
                 <span className="font-medium">
                   {(e.source === 'CARRIER' ? t.carrierEvents[e.type] : undefined) ??
                     t.events[e.type] ??
-                    e.type}
+                    t.otherEvent}
                 </span>
                 {e.type === 'CREATED' && order.origin === 'SUPPLY_PLAN' && (
                   <span> · {ordersCs.origin.SUPPLY_PLAN}</span>
@@ -204,7 +219,14 @@ export default async function OrderPage({ params }: { params: Promise<{ code: st
                 {e.shipment && <span className="font-mono"> · {e.shipment}</span>}
                 {e.parcels !== null && <span> · {t.parcels(e.parcels)}</span>}
                 {e.crate && <span className="font-mono"> · {e.crate}</span>}
-                {e.reason && <span> · {e.reason}</span>}
+                {e.reason && !CARRIER_ERROR.has(e.type) && <span> · {e.reason}</span>}
+                {e.reason && CARRIER_ERROR.has(e.type) && (
+                  <Details className="mt-1" testId={`history-${i}-details`}>
+                    <dl>
+                      <DetailFact label={t.carrierAnswer} value={e.reason} />
+                    </dl>
+                  </Details>
+                )}
                 {e.pickupTimeUnknown && (
                   <span className="block text-xs text-amber-800" data-testid="history-time-unknown">
                     {e.type === 'HANDED_TO_CARRIER' ? t.handedTimeUnknown : t.pickupTimeUnknown}
