@@ -381,11 +381,13 @@ main section[id] {
   background: #fff;
 }
 
-/* Black-and-gold hero as the owner's approved reference (1446 x 815): one scene across the whole
-   width (the clean stone wall with the diagonal light on the left, the original right part with
-   the two bottles, their labels and QR codes, shadows and counter) as a CSS layer, and the copy in
-   HTML (slogan, h1, one sentence, CTA). The hero keeps the scene's proportion, so every part stays
-   where the reference has it. The transparent bottle layer sits exactly over the bottles of the
+/* Black-and-gold hero after the owner's approved reference, in a compact band (1446 x 600, about
+   600 px high at 1440 px): one scene across the whole width (the clean stone wall with the diagonal
+   light on the left, the original right part with the two bottles, their labels and QR codes,
+   shadows and counter) as a CSS layer, and the copy in HTML (slogan, h1, one sentence, CTA). The
+   stage keeps the scene's proportion (never distorted, never cutting a pump or a base): where the
+   hero is taller than the proportion (its minimum height), the stage grows from the centre and only
+   the wall on both sides is cut. The transparent bottle layer sits exactly over the bottles of the
    scene (invisible on desktop, it carries the alt text) and is the product on phones. */
 .ayvo-hero.ayvo-hero-dark {
   --hero-cream: #f2eadb;
@@ -393,15 +395,53 @@ main section[id] {
   position: relative;
   display: flex;
   align-items: center;
-  aspect-ratio: 1446 / 815;
-  min-height: 460px;
+  aspect-ratio: 1446 / 600;
+  min-height: 420px;
+  max-height: 650px;
   padding: 0;
+  isolation: isolate;
   overflow: hidden;
   background: #15110d;
 }
+/* Wide screens (above 1566 px the hero stops growing at 650 px): beyond the sharp scene, whose
+   edges fade out (no frame), the wall and the counter continue as the scene's own edge strips,
+   blurred and widened (the left from x 0-300, the right from x 1290-1446, both without a bottle).
+   Narrower, the sharp scene covers them completely. */
+.ayvo-hero.ayvo-hero-dark::before,
+.ayvo-hero.ayvo-hero-dark::after {
+  content: '';
+  position: absolute;
+  top: -24px;
+  bottom: -24px;
+  width: calc(50% + 24px);
+  background-image: url('/assets/img/ayvo-hero-scene.webp');
+  background-repeat: no-repeat;
+  filter: blur(16px);
+  z-index: -1;
+}
+.ayvo-hero.ayvo-hero-dark::before {
+  left: -24px;
+  background-position: 0 0;
+  background-size: 482% 100%;
+}
+.ayvo-hero.ayvo-hero-dark::after {
+  right: -24px;
+  background-position: 100% 0;
+  background-size: 927% 100%;
+}
+@media (min-width: 1567px) {
+  .ayvo-hero-stage {
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 92%, transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 92%, transparent 100%);
+  }
+}
 .ayvo-hero-stage {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 50%;
+  height: 100%;
+  aspect-ratio: 1446 / 600;
+  transform: translateX(-50%);
 }
 .ayvo-hero-stage::before {
   content: '';
@@ -409,13 +449,13 @@ main section[id] {
   inset: 0;
   background: url('/assets/img/ayvo-hero-scene.webp') 50% 100% / cover no-repeat;
 }
-/* Over the scene's bottles: x 858-1244, y 167-664 of 1446 x 815. */
+/* Over the scene's bottles: x 858-1244, y 47-544 of 1446 x 600. */
 .ayvo-hero-products {
   position: absolute;
   right: 13.66%;
-  bottom: 18%;
-  height: 62.1%;
-  aspect-ratio: 474 / 612;
+  bottom: 8.62%;
+  height: 84.35%;
+  aspect-ratio: 478 / 612;
   opacity: 0;
 }
 .ayvo-hero-products .ayvo-hero-visual {
@@ -446,14 +486,16 @@ main section[id] {
   position: relative;
   z-index: 1;
   width: 100%;
-  padding: 0 clamp(20px, 6.6vw, 110px) 2.7vw;
+  padding: 0 clamp(20px, 6.6vw, 110px) 1.2vw;
+  /* Wide screens: the copy keeps its place in the centred scene (6.6 % of 1566 px from its edge). */
+  padding-left: max(clamp(20px, 6.6vw, 110px), calc(50% - 680px));
 }
 .ayvo-hero-copy {
-  max-width: min(780px, 54vw);
+  max-width: min(640px, 50vw);
 }
 .ayvo-hero-slogan {
-  margin: 0 0 clamp(12px, 1.8vw, 30px) 0;
-  font-size: clamp(16px, 2.1vw, 32px);
+  margin: 0 0 clamp(10px, 1.25vw, 22px) 0;
+  font-size: clamp(15px, 1.5vw, 24px);
   letter-spacing: 0.02em;
   color: var(--hero-gold);
 }
@@ -462,8 +504,8 @@ main section[id] {
   margin: 0;
   font-family: var(--serif);
   font-weight: 400;
-  font-size: clamp(40px, 5.55vw, 88px);
-  line-height: 0.98;
+  font-size: clamp(34px, 4.2vw, 68px);
+  line-height: 1;
   letter-spacing: 0;
   color: var(--hero-cream);
 }
@@ -474,24 +516,24 @@ main section[id] {
   color: var(--hero-gold);
 }
 .ayvo-hero-lead {
-  max-width: 21.5em;
-  margin: clamp(14px, 1.85vw, 30px) 0 0 0;
-  font-size: clamp(16px, 1.75vw, 27px);
+  max-width: 23em;
+  margin: clamp(12px, 1.4vw, 22px) 0 0 0;
+  font-size: clamp(15px, 1.3vw, 21px);
   line-height: 1.46;
   color: rgba(242, 234, 219, 0.92);
 }
 .ayvo-hero-dark .ayvo-cta {
-  margin-top: clamp(20px, 2.7vw, 42px);
+  margin-top: clamp(18px, 2vw, 32px);
 }
 /* The pilot CTA: a calm rounded gold button with a decorative arrow (hidden from screen readers). */
 .ayvo-hero-dark .ayvo-btn.primary {
   gap: 12px;
-  padding: clamp(14px, 1.3vw, 20px) clamp(24px, 3.15vw, 50px);
+  padding: clamp(12px, 1vw, 16px) clamp(22px, 2.4vw, 38px);
   border: 0;
   border-radius: 999px;
   background: var(--hero-gold);
   color: #17120c;
-  font-size: clamp(16px, 1.6vw, 24px);
+  font-size: clamp(15px, 1.2vw, 19px);
   font-weight: 600;
 }
 .ayvo-hero-dark .ayvo-btn.primary:hover {
@@ -643,6 +685,11 @@ main section[id] {
     align-items: stretch;
     aspect-ratio: auto;
     min-height: 0;
+    max-height: none;
+  }
+  .ayvo-hero.ayvo-hero-dark::before,
+  .ayvo-hero.ayvo-hero-dark::after {
+    display: none;
   }
   .ayvo-hero-dark .ayvo-hero-content {
     order: 1;
@@ -653,8 +700,11 @@ main section[id] {
   }
   .ayvo-hero-stage {
     position: relative;
+    left: auto;
     order: 2;
+    height: auto;
     aspect-ratio: 4 / 3;
+    transform: none;
   }
   .ayvo-hero-stage::before {
     background-image: url('/assets/img/ayvo-hero-scene-mobile.webp');

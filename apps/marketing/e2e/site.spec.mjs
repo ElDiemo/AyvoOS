@@ -102,7 +102,7 @@ test('the hero: one scene from edge to edge, the bottles on the counter, the off
     const visual = page.locator('#top img.ayvo-hero-visual');
     await expect(visual).toBeVisible();
     // The two real bottles as one transparent layer, never rescaled in the file.
-    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([474, 612]);
+    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([478, 612]);
     const hero = await page.locator('#top').boundingBox();
     const stage = await page.locator('#top .ayvo-hero-stage').boundingBox();
     const img = await visual.boundingBox();
@@ -117,10 +117,10 @@ test('the hero: one scene from edge to edge, the bottles on the counter, the off
     expect(Math.abs(hero.width - viewport)).toBeLessThan(1);
     const header = await page.locator('header.ayvo-header').boundingBox();
     expect(Math.abs(hero.y - (header.y + header.height))).toBeLessThan(1);
-    // The bottles stand on the counter, just in front of its back edge (76 % of the desktop scene,
+    // The bottles stand on the counter, just in front of its back edge (84 % of the desktop scene,
     // 69.5 % of the phone scene).
     const base = (img.y + img.height - stage.y) / stage.height;
-    const [low, high] = width > 860 ? [0.8, 0.84] : [0.73, 0.79];
+    const [low, high] = width > 860 ? [0.89, 0.93] : [0.73, 0.79];
     expect(base).toBeGreaterThan(low);
     expect(base).toBeLessThan(high);
     if (width === 1440) {
@@ -157,6 +157,36 @@ test('the hero: one scene from edge to edge, the bottles on the counter, the off
   await expect(page.locator('#pilot h2')).toBeInViewport();
   const mail = page.locator('#pilot a[href^="mailto:"]');
   await expect(mail).toHaveAttribute('href', /^mailto:hello@ayvo\.co\?subject=/);
+});
+
+test('a compact desktop hero (about 600 px at 1440 px, at most 650 px wide): both bottles whole, never distorted', async ({
+  page,
+}) => {
+  for (const width of [861, 1024, 1440, 1920, 2560]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open(page, '/cz/');
+    const hero = await page.locator('#top').boundingBox();
+    const stage = await page.locator('#top .ayvo-hero-stage').boundingBox();
+    const img = await page.locator('#top img.ayvo-hero-visual').boundingBox();
+    if (width === 1440) {
+      expect(hero.height).toBeGreaterThanOrEqual(560);
+      expect(hero.height).toBeLessThanOrEqual(620);
+    }
+    // Wide screens: the hero stops growing; the sharp scene is centred and the rest continues it.
+    expect(hero.height).toBeLessThanOrEqual(650.5);
+    if (width >= 1920) {
+      expect(hero.height).toBeGreaterThanOrEqual(649.5);
+      expect(Math.abs(stage.x + stage.width / 2 - width / 2)).toBeLessThan(1);
+    }
+    // The scene keeps its proportion, and the pumps and the bases stay inside the hero.
+    expect(Math.abs(stage.width / stage.height - 1446 / 600)).toBeLessThan(0.01);
+    expect(Math.abs(img.width / img.height - 478 / 612)).toBeLessThan(0.01);
+    expect(Math.abs(stage.height - hero.height)).toBeLessThan(1);
+    expect(img.y).toBeGreaterThanOrEqual(hero.y);
+    expect(img.y + img.height).toBeLessThanOrEqual(hero.y + hero.height);
+    expect(img.x).toBeGreaterThanOrEqual(hero.x);
+    expect(img.x + img.width).toBeLessThanOrEqual(hero.x + hero.width);
+  }
 });
 
 test('narrow desktops (861 / 900 / 1024 / 1280 px): the copy never reaches the bottle layer', async ({
