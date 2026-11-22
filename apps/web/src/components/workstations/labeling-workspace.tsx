@@ -22,6 +22,9 @@ const uncertain = (error: unknown) => !(error instanceof ClientApiError) || erro
 
 function errorText(error: unknown): string {
   if (error instanceof ClientApiError) {
+    const crate = (error.details as { crate?: unknown } | null)?.crate;
+    if (error.code === 'IN_ANOTHER_CRATE' && typeof crate === 'string')
+      return t.inAnotherCrate(crate);
     if (error.code && t.errors[error.code]) return t.errors[error.code]!;
     if (error.status === 403) return t.errors.FORBIDDEN!;
     if (error.status < 500) return t.failed;
