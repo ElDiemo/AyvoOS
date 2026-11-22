@@ -10,7 +10,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { BottlesService } from '../assets/bottles.service.js';
 import { ProductLabelApprovalsService } from '../catalog/product-label-approvals.service.js';
 import { RecipesService } from '../catalog/recipes.service.js';
-import { domainError } from '../common/domain-error.js';
+import { domainError, domainErrorWithDetails } from '../common/domain-error.js';
 import { formatQuantity, quantity } from '../common/quantity.js';
 import { classifyScannedQr } from '../common/qr-policy.js';
 import { ENV, type Env } from '../config/env.js';
@@ -305,7 +305,10 @@ export class LabelingService {
         // Washed after a return ("Po mytí", doc 048 §2–§3.0): the same scan as a new bottle, only
         // placed (its label is on it, nothing consumed, never labelled again).
         if (status === 'READY_FOR_REUSE') {
-          if (cycle && (await this.cycles.isActiveMember(tx, cycle.id, bottle.id))) {
+          // Under the bottle lock: in THIS crate a repeated scan (nothing written); in another
+          // assembling crate the known refusal — never a second active membership (P2002).
+          const member = await this.cycles.activeMembership(tx, bottle.id);
+          if (member && cycle && member.cycleId === cycle.id) {
             return this.result(
               'ALREADY_APPLIED',
               bottle.code,
@@ -316,6 +319,7 @@ export class LabelingService {
               tx,
             );
           }
+          if (member) throw inAnotherCrate(member.cycle.crate.code);
           const binding = await this.bottles.productBinding(tx, bottle.id);
           if (
             !binding ||
@@ -371,6 +375,7 @@ export class LabelingService {
             operationId: input.requestId,
             occurredAt,
             source: 'REUSE',
+            bottleCode: bottle.code,
           });
           return this.result('PLACED', bottle.code, crate.code, cycle, sourceLotId, station, tx);
         }
@@ -396,13 +401,7 @@ export class LabelingService {
             );
           }
           const elsewhere = await this.cycles.activeMembership(tx, bottle.id);
-          if (elsewhere) {
-            throw domainError(
-              409,
-              'IN_ANOTHER_CRATE',
-              `This bottle is already in crate ${elsewhere.cycle.crate.code}`,
-            );
-          }
+          if (elsewhere) throw inAnotherCrate(elsewhere.cycle.crate.code);
           // Labelled before this change (no crate, no binding — owner B3) or otherwise used.
           throw domainError(409, 'ALREADY_LABELED', 'This bottle is already labelled');
         }
@@ -715,3 +714,9 @@ export class LabelingService {
     };
   }
 }
+
+/** The bottle is an active member of another crate's cycle: nothing moves (as cycle corrections). */
+const inAnotherCrate = (crate: string) =>
+  domainErrorWithDetails(409, 'IN_ANOTHER_CRATE', `This bottle is already in crate ${crate}`, {
+    crate,
+  });

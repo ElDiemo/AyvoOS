@@ -391,6 +391,43 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     );
   });
 
+  it('a bottle "Po mytí" placed in one crate: a rescan there is the same placement; another crate refuses IN_ANOTHER_CRATE (its crate named), writes nothing, opens no empty cycle', async () => {
+    const [k] = await returned([['GOOD']]);
+    const [b] = await pieces(k!);
+    ok(await wash(b!.url));
+    const crateOf = async (url: string) =>
+      t.prisma.crate.findUniqueOrThrow({ where: { qrToken: url.split('/').pop()! } });
+
+    // Crate A at the station: placed once (REUSE), audited with the bottle's code.
+    const first = await factory.openStation();
+    const a = await crateOf(first.crateUrl);
+    const placed = await labelScan(t, first.sessionId, b!.url);
+    expect(placed.status, JSON.stringify(placed.body)).toBe(200);
+    expect(placed.body.outcome).toBe('PLACED');
+    const added = await t.prisma.crateEvent.findFirstOrThrow({
+      where: { crateId: a.id, type: 'MEMBER_ADDED' },
+    });
+    expect(added.payload).toMatchObject({ bottle: b!.code, source: 'REUSE' });
+    // The same crate again: the same placement, nothing written.
+    const again = await labelScan(t, first.sessionId, b!.url);
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.outcome).toBe('ALREADY_APPLIED');
+
+    // Crate B (another station session, nothing in it yet): the known refusal, never P2002.
+    const second = await factory.openStation();
+    const crateB = await crateOf(second.crateUrl);
+    const before = await snapshot([b!.id]);
+    const elsewhere = await labelScan(t, second.sessionId, b!.url);
+    refused(elsewhere, 409, 'IN_ANOTHER_CRATE');
+    expect(elsewhere.body.details).toEqual({ crate: a.code });
+    expect(await snapshot([b!.id])).toEqual(before);
+    expect(
+      await t.prisma.crateAssignment.count({ where: { bottleId: b!.id, releasedAt: null } }),
+    ).toBe(1);
+    // The refusal rolled back the whole scan: crate B has no (empty) cycle.
+    expect(await t.prisma.crateCycle.count({ where: { crateId: crateB.id } })).toBe(0);
+  });
+
   it('the queue is limited per group in the database, with exact counts — also when the first group fills the limit before the second appears', async () => {
     // A second revoked design: two more bottles set aside (serials after the approved ones).
     await returned([['GOOD', 'GOOD']]);
