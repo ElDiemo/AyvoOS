@@ -90,6 +90,8 @@ export function ReceiptWorkspace({
           requestId,
           scannedValue: scanned,
         });
+        // A result stored by R1 (no `freed`): the crate was recorded, not freed by this scan.
+        if (r.freed === undefined) return t.result.crateRecorded(r.crateCode, r.orderCode);
         return r.outcome === 'CRATE_RETURNED'
           ? t.result.crate(r.crateCode, r.orderCode, r.freed)
           : t.result.crateAgain(r.crateCode);

@@ -20,14 +20,14 @@ import { OperationRequestsService } from '../database/operation-requests.service
 import type { Prisma } from '../generated/prisma/client.js';
 
 /**
- * A bottle "Po mytí" (READY_FOR_REUSE, doc 048 §2) goes into a crate only with its refilling (R3):
- * in R2 the station, the corrections and the database refuse it.
+ * A bottle "Po mytí" (READY_FOR_REUSE, doc 048 §2) goes into a crate only by the labelling
+ * station's scan as REUSE (R3-b): the corrections and any other source are refused.
  */
 export const notPlaceableYet = (bottle: string) =>
   domainErrorWithDetails(
     409,
     'NOT_PLACEABLE_YET',
-    'A bottle ready for reuse goes into a crate only with its refilling (not yet available)',
+    'A bottle ready for reuse goes into a crate only by the labelling station (as REUSE)',
     { bottle },
   );
 
