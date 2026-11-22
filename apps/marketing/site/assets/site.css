@@ -397,9 +397,43 @@ main section[id] {
   align-items: center;
   aspect-ratio: 1446 / 600;
   min-height: 420px;
+  max-height: 650px;
   padding: 0;
+  isolation: isolate;
   overflow: hidden;
   background: #15110d;
+}
+/* Wide screens (above 1566 px the hero stops growing at 650 px): beyond the sharp scene, whose
+   edges fade out (no frame), the wall and the counter continue as the scene's own edge strips,
+   blurred and widened (the left from x 0-300, the right from x 1290-1446, both without a bottle).
+   Narrower, the sharp scene covers them completely. */
+.ayvo-hero.ayvo-hero-dark::before,
+.ayvo-hero.ayvo-hero-dark::after {
+  content: '';
+  position: absolute;
+  top: -24px;
+  bottom: -24px;
+  width: calc(50% + 24px);
+  background-image: url('/assets/img/ayvo-hero-scene.webp');
+  background-repeat: no-repeat;
+  filter: blur(16px);
+  z-index: -1;
+}
+.ayvo-hero.ayvo-hero-dark::before {
+  left: -24px;
+  background-position: 0 0;
+  background-size: 482% 100%;
+}
+.ayvo-hero.ayvo-hero-dark::after {
+  right: -24px;
+  background-position: 100% 0;
+  background-size: 927% 100%;
+}
+@media (min-width: 1567px) {
+  .ayvo-hero-stage {
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 92%, transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 92%, transparent 100%);
+  }
 }
 .ayvo-hero-stage {
   position: absolute;
@@ -453,6 +487,8 @@ main section[id] {
   z-index: 1;
   width: 100%;
   padding: 0 clamp(20px, 6.6vw, 110px) 1.2vw;
+  /* Wide screens: the copy keeps its place in the centred scene (6.6 % of 1566 px from its edge). */
+  padding-left: max(clamp(20px, 6.6vw, 110px), calc(50% - 680px));
 }
 .ayvo-hero-copy {
   max-width: min(640px, 50vw);
@@ -649,6 +685,11 @@ main section[id] {
     align-items: stretch;
     aspect-ratio: auto;
     min-height: 0;
+    max-height: none;
+  }
+  .ayvo-hero.ayvo-hero-dark::before,
+  .ayvo-hero.ayvo-hero-dark::after {
+    display: none;
   }
   .ayvo-hero-dark .ayvo-hero-content {
     order: 1;

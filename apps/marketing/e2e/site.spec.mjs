@@ -159,10 +159,10 @@ test('the hero: one scene from edge to edge, the bottles on the counter, the off
   await expect(mail).toHaveAttribute('href', /^mailto:hello@ayvo\.co\?subject=/);
 });
 
-test('a compact desktop hero (about 600 px at 1440 px): both bottles whole, never distorted', async ({
+test('a compact desktop hero (about 600 px at 1440 px, at most 650 px wide): both bottles whole, never distorted', async ({
   page,
 }) => {
-  for (const width of [861, 1024, 1440, 1920]) {
+  for (const width of [861, 1024, 1440, 1920, 2560]) {
     await page.setViewportSize({ width, height: 900 });
     await open(page, '/cz/');
     const hero = await page.locator('#top').boundingBox();
@@ -171,6 +171,12 @@ test('a compact desktop hero (about 600 px at 1440 px): both bottles whole, neve
     if (width === 1440) {
       expect(hero.height).toBeGreaterThanOrEqual(560);
       expect(hero.height).toBeLessThanOrEqual(620);
+    }
+    // Wide screens: the hero stops growing; the sharp scene is centred and the rest continues it.
+    expect(hero.height).toBeLessThanOrEqual(650.5);
+    if (width >= 1920) {
+      expect(hero.height).toBeGreaterThanOrEqual(649.5);
+      expect(Math.abs(stage.x + stage.width / 2 - width / 2)).toBeLessThan(1);
     }
     // The scene keeps its proportion, and the pumps and the bases stay inside the hero.
     expect(Math.abs(stage.width / stage.height - 1446 / 600)).toBeLessThan(0.01);
