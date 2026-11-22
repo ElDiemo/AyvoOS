@@ -11,7 +11,7 @@ import { cn } from '@ayvo/ui';
 import Link from 'next/link';
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { expectedBottleCodes } from '@/lib/bottle-codes';
-import { apiSend } from '@/lib/client-api';
+import { apiSend, ClientApiError } from '@/lib/client-api';
 import { codeRange } from '@/lib/format';
 import {
   clearPendingRegistration,
@@ -24,6 +24,7 @@ import {
 import { NewPrintJobButton, PrintJobActions } from './print-job-actions';
 import { buttonClass, Card, ErrorNote, FieldList, Field, inputClass } from '@/components/ui';
 import { productionCs } from '@/i18n/cs/production';
+import { productionError, ProductionErrorNote, type ProductionError } from './production-errors';
 
 const t = productionCs.create;
 
@@ -63,7 +64,7 @@ export function CreateBottlesForm({
   const [quantityText, setQuantityText] = useState('50');
   const [stage, setStage] = useState<'form' | 'review' | 'creating'>('form');
   const [acknowledged, setAcknowledged] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ProductionError | null>(null);
   const [result, setResult] = useState<BottleRegistrationResponse | null>(null);
   const [registration, setRegistration] = useState<PendingRegistration | null>(null);
   const inFlight = useRef(false);
@@ -101,8 +102,12 @@ export function CreateBottlesForm({
       clearPendingRegistration();
       setResult(response);
     } catch (e) {
-      const reason = e instanceof Error ? e.message : t.requestFailed;
-      setError(t.uncertain(reason));
+      // No answer: maybe created (the same request is safe to repeat); a refusal: nothing created.
+      setError(
+        e instanceof ClientApiError && e.status < 500
+          ? productionError(e)
+          : { text: t.uncertain, detail: null },
+      );
       setStage(unfinished ? 'form' : 'review');
     } finally {
       inFlight.current = false;
@@ -176,7 +181,7 @@ export function CreateBottlesForm({
       <Card>
         <div className="flex max-w-xl flex-col gap-4" data-testid="unfinished-creation">
           <p className="text-sm text-stone-800">{t.unfinished(unfinished.quantity)}</p>
-          {error && <ErrorNote>{error}</ErrorNote>}
+          {error && <ProductionErrorNote error={error} />}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -342,7 +347,7 @@ export function CreateBottlesForm({
               />
               {t.acknowledge}
             </label>
-            {error && <ErrorNote>{error}</ErrorNote>}
+            {error && <ProductionErrorNote error={error} />}
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"

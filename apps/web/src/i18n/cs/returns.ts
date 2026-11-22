@@ -236,4 +236,12 @@ export const returnsCs = {
   refreshFailed:
     'Zápis je uložený, ale přehled se nepodařilo načíst. Obnovte ho – nic se znovu neodešle.',
   refresh: 'Obnovit',
+  /** A definite refusal without its own text: never the server's raw (English / Zod) message. */
+  refused: {
+    forbidden: 'Na tuto akci nemáte oprávnění – nic se nezapsalo.',
+    invalid:
+      'Údaje nejsou platné – nic se nezapsalo. Zkontrolujte naskenovaný kód nebo vyplněná pole.',
+    notFound: 'Záznam nebyl nalezen – mohl být mezitím změněn. Načtěte stránku znovu.',
+    other: 'Akce se nezdařila – nic se nezapsalo.',
+  },
 };

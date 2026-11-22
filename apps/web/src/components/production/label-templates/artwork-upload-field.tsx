@@ -4,6 +4,7 @@ import { labelArtworkSchema, type LabelArtwork } from '@ayvo/types';
 import { useState } from 'react';
 import { apiSend } from '@/lib/client-api';
 import { productionCs } from '@/i18n/cs/production';
+import { productionError, type ProductionError } from '../production-errors';
 import { formatBytes } from '@/lib/format';
 
 const t = productionCs.editor;
@@ -25,14 +26,14 @@ export function ArtworkUploadField({
   maxBytes: number;
   disabled: boolean;
   onUploaded: (artwork: LabelArtwork) => void;
-  onError: (message: string | null) => void;
+  onError: (error: ProductionError | null) => void;
 }) {
   const [uploading, setUploading] = useState(false);
 
   async function upload(file: File) {
     onError(null);
     if (file.size > maxBytes) {
-      onError(t.artworkTooLarge(formatBytes(maxBytes)));
+      onError({ text: t.artworkTooLarge(formatBytes(maxBytes)), detail: null });
       return;
     }
     setUploading(true);
@@ -41,11 +42,7 @@ export function ArtworkUploadField({
       form.append('file', file);
       onUploaded(await apiSend('POST', 'admin/label-artworks', labelArtworkSchema, form));
     } catch (e) {
-      onError(
-        productionCs.common.failed(
-          e instanceof Error ? e.message : productionCs.common.unexpectedError,
-        ),
-      );
+      onError(productionError(e));
     } finally {
       setUploading(false);
     }

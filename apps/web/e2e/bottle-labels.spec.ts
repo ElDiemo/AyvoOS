@@ -331,6 +331,28 @@ test('archived templates are no longer offered for new bottles', async ({ page }
   await expect(page.getByLabel('Šablona etiket')).toHaveCount(0);
 });
 
+test('a refused save is said in Czech; the server’s own answer only under Podrobnosti', async ({
+  page,
+}) => {
+  // "mydlo1" exists (archived templates keep their name): the API refuses with its English text.
+  await page.goto('/label-templates/new');
+  await page.getByLabel('Název šablony').fill('mydlo1');
+  await page
+    .getByLabel('Grafika na pozadí (SVG, PNG nebo JPEG)')
+    .setInputFiles(resolve(import.meta.dirname, 'fixtures/mydlo1.svg'));
+  await expect(page.getByTestId('qr-box')).toBeVisible();
+  await page.getByRole('button', { name: 'Uložit šablonu (v1)' }).click();
+  await expect(
+    page.getByText('Záznam se mezitím změnil nebo už existuje – nic se nezapsalo.'),
+  ).toBeVisible();
+  const answer = page.getByText(/already exists/);
+  await expect(answer).toBeHidden();
+  const details = page.locator('details').filter({ hasText: 'Odpověď serveru' });
+  await details.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(answer).toBeVisible();
+});
+
 /** The designer preview value captured before saving (same settings → same preview URL). */
 async function designerQrValue(page: Page): Promise<string | null> {
   return page.evaluate(() => {
