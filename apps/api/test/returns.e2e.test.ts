@@ -27,7 +27,14 @@ import {
   shipCrates,
   type ShippedOrder,
 } from './support/return-fixtures.js';
-import { createTestApp, hasDatabase, type TestApp, withPrivileged } from './support/test-app.js';
+import { payloadHash } from '../src/database/operation-requests.service.js';
+import {
+  createTestApp,
+  hasDatabase,
+  SUPERUSER_EMAIL,
+  type TestApp,
+  withPrivileged,
+} from './support/test-app.js';
 
 type Factory = Awaited<ReturnType<typeof crateFactory>>;
 type Db = { $executeRaw: TestApp['prisma']['$executeRaw'] };
@@ -194,6 +201,64 @@ describe.skipIf(!hasDatabase)('return intake R1.1 (doc 047 §6.3)', () => {
       reason: 'test',
     });
     refused(add, 409, 'BOTTLE_AT_HOTEL');
+  });
+
+  it('an R1 crate scan answered before the upgrade (no `freed`): its replay after the upgrade returns that stored answer unchanged, writes nothing and leaves operation_requests as it was; a new scan still frees', async () => {
+    const { crates } = await delivered(2);
+    const [k, l] = crates as [MadeCrate, MadeCrate];
+    const receipt = await api.open(hotel);
+    const row = await t.prisma.returnReceipt.findUniqueOrThrow({ where: { code: receipt.code } });
+    const actor = await t.prisma.user.findUniqueOrThrow({ where: { email: SUPERUSER_EMAIL } });
+    // What R1 committed for RETURN_CRATE_SCAN before the upgrade (doc 047): the same payload hash
+    // the API computes, and its answer — the same fields without `freed` (results are written once).
+    const rid = randomUUID();
+    const legacy = {
+      outcome: 'CRATE_RETURNED',
+      lineId: randomUUID(),
+      crateCode: k.crateCode,
+      orderCode: 'ORD-R1',
+    };
+    const hash = payloadHash('RETURN_CRATE_SCAN', {
+      actorId: actor.id,
+      siteId: row.siteId,
+      receiptId: row.id,
+      token: k.crateUrl.split('/').pop()!,
+    });
+    await withPrivileged(
+      (db) =>
+        db.$executeRaw`INSERT INTO "operation_requests" ("request_id", "kind", "payload_sha256", "result")
+          VALUES (${rid}::uuid, 'RETURN_CRATE_SCAN', ${hash}, ${JSON.stringify(legacy)}::jsonb)`,
+    );
+    const stored = async () =>
+      withPrivileged((db) =>
+        db.operationRequest.findUniqueOrThrow({
+          where: { requestId: rid },
+          select: { kind: true, payloadSha256: true, result: true, createdAt: true },
+        }),
+      );
+    const before = await stored();
+    const writes = async () => ({
+      lines: await t.prisma.returnReceiptLine.count(),
+      released: await t.prisma.crateAssignment.count({ where: { releasedAt: { not: null } } }),
+      crateEvents: await t.prisma.crateEvent.count(),
+      bottleEvents: await t.prisma.bottleEvent.count(),
+      requests: await t.prisma.operationRequest.count(),
+      cycle: (await cycleOf(k.crateCode)).status,
+    });
+    const counts = await writes();
+    // The same request id after the upgrade: R1's stored answer, exactly (the client shows it
+    // neutrally — "už zapsaná … stav v seznamu" — never "uvolněna … undefined lahví").
+    const replay = await api.scanCrate(receipt.code, k.crateUrl, rid);
+    expect(replay.status, JSON.stringify(replay.body)).toBe(200);
+    expect(replay.body).toEqual(legacy);
+    expect(replay.body).not.toHaveProperty('freed');
+    expect(await writes()).toEqual(counts);
+    expect(counts.cycle).toBe('DELIVERED');
+    expect(await stored()).toEqual(before);
+    // A new scan answers with `freed` and really frees its crate.
+    const other = await scanned(receipt.code, l.crateUrl);
+    expect(other).toMatchObject({ outcome: 'CRATE_RETURNED', freed: 2 });
+    expect((await cycleOf(l.crateCode)).status).toBe('CLOSED');
   });
 
   it('regression: 10 shipped, 8 returned — some before the crate, one defective; 2 stay at the hotel; the crate needs no count', async () => {

@@ -62,7 +62,7 @@ export const fillingCs = {
       'Lahev je podle evidence u hotelu (její bedna se vrátila bez ní) – nejdřív ji přijměte v Příjmu vratek. Nic se nezapsalo.',
     BOTTLE_NOT_LABELED: 'Lahev ještě nemá nalepenou etiketu.',
     NOT_PLACEABLE_YET:
-      'Lahev je po mytí – do bedny ji zatím vložit nelze (přijde s dalším plněním), nic se nezapsalo.',
+      'Lahev po mytí vkládá do bedny jen lepicí pracoviště skenem jako novou lahev – „Doplnit lahev“ ji nepřidá. Nic se nezapsalo.',
     BOTTLE_NOT_PLACEABLE:
       'Lahev je vrácená, vyřazená nebo skartovaná – do bedny nepatří, nic se nezapsalo.',
     BOTTLE_NOT_BOUND:

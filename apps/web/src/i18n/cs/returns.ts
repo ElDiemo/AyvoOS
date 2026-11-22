@@ -134,11 +134,13 @@ export const returnsCs = {
     crate: (code: string, order: string, freed: number) =>
       `Bedna ${code} přijata a uvolněna (objednávka ${order}) · ukončena vazba ${freed} lahví`,
     crateAgain: (code: string) => `Bedna ${code} už je v tomto příjmu`,
+    crateRecorded: (code: string, order: string) =>
+      `Bedna ${code} (objednávka ${order}) už je v tomto příjmu zapsaná – nic nového se nezapsalo. Její stav je v seznamu níže: čeká-li na „Vyprázdněno“, potvrďte ho tam.`,
   },
   afterWash: {
     title: 'Po mytí',
     subtitle:
-      'Druhý sken vrácené lahve – jen po fyzickém umytí a kontrole. Lahev se stejným QR je pak připravená k plnění; nic se nespotřebuje a do bedny zatím nejde.',
+      'Druhý sken vrácené lahve – jen po fyzickém umytí a kontrole. Lahev se stejným QR je pak připravená k plnění; nic se nespotřebuje. Do bedny ji vloží lepicí pracoviště stejným skenem jako novou lahev.',
     scan: 'Naskenujte umytou a zkontrolovanou lahev',
     scanPlaceholder: 'QR lahve',
     submit: 'Po mytí – připravit k plnění',

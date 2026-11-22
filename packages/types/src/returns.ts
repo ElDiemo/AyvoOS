@@ -192,8 +192,12 @@ export const returnCrateScanResultSchema = z.object({
   lineId: z.string(),
   crateCode: z.string(),
   orderCode: z.string(),
-  /** Members whose binding to the crate ended with its scan (none is confirmed returned). */
-  freed: z.number().int(),
+  /**
+   * Members whose binding to the crate ended with its scan (none is confirmed returned). Absent
+   * only in a result stored by R1 before the upgrade (a replayed request id): that crate was not
+   * freed by its scan and its line may still wait for Vyprázdněno — the receipt detail says how.
+   */
+  freed: z.number().int().optional(),
 });
 export type ReturnCrateScanResult = z.infer<typeof returnCrateScanResultSchema>;
 

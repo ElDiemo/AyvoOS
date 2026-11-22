@@ -267,6 +267,40 @@ for (const width of [390, 1440] as const) {
   });
 }
 
+test('an R1 crate answer replayed after the upgrade (no `freed`): a neutral confirmation and the next step, never "uvolněna … undefined"; freed 0 still says freed', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/production/cycle/returns');
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
+  const code = page.url().split('/').pop()!;
+  // The API returns the stored R1 answer of a replayed request id unchanged (returns.e2e).
+  let answer: object = {
+    outcome: 'CRATE_RETURNED',
+    lineId: '00000000-0000-4000-8000-000000000001',
+    crateCode: 'AYV-C-R1',
+    orderCode: 'ORD-R1',
+  };
+  await page.route(`**/api/admin/returns/receipts/${code}/crates`, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(answer) }),
+  );
+  const message = page.getByTestId('return-message');
+  await scanCrateIn(page, crates[0]!.url);
+  await expect(message).toContainText(
+    'Bedna AYV-C-R1 (objednávka ORD-R1) už je v tomto příjmu zapsaná – nic nového se nezapsalo.',
+  );
+  await expect(message).toContainText('čeká-li na „Vyprázdněno“, potvrďte ho tam');
+  await expect(message).not.toContainText('undefined');
+  await expect(message).not.toContainText('uvolněna');
+  await page.screenshot({ path: `${SHOTS}/intake-r1-replay-390.png`, fullPage: true });
+  // A new answer always carries `freed` — also 0 — and says the crate was freed.
+  answer = { ...answer, crateCode: 'AYV-C-NEW', freed: 0 };
+  await scanCrateIn(page, crates[0]!.url);
+  await expect(message).toContainText('Bedna AYV-C-NEW přijata a uvolněna');
+  await expect(message).toContainText('ukončena vazba 0 lahví');
+});
+
 test('a confirmed write whose refresh fails is never sent again: "Obnovit" only reads', async ({
   page,
 }) => {
