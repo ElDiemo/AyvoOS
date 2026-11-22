@@ -202,7 +202,7 @@ export async function registerCrate(t: TestApp, crateTypeCode: string): Promise<
 export const setContext = (
   t: TestApp,
   sessionId: string,
-  body: { productCode: string; labelTemplateVersionId: string; sourceLotId: string },
+  body: { productCode: string; labelTemplateVersionId: string; sourceLotId: string | null },
 ) =>
   http(t)
     .post(`/api/admin/station-sessions/${sessionId}/labeling-context`)

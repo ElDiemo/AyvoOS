@@ -346,7 +346,7 @@ export class StationSessionsService {
       productId: string;
       recipeVersionId: string;
       labelTemplateVersionId: string;
-      sourceLotId: string;
+      sourceLotId: string | null;
       keepCrate: boolean;
     },
   ): Promise<void> {

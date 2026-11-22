@@ -153,7 +153,7 @@ export class CrateCyclesService {
       operationId: string;
       occurredAt: Date;
       /** LABELING (scan) by default; supervised repack or replacement otherwise. */
-      source?: 'LABELING' | 'REPACKED' | 'REPLACEMENT';
+      source?: 'LABELING' | 'REPACKED' | 'REPLACEMENT' | 'REUSE';
       /** The bottle is already filled (repack of a finished bottle). */
       filled?: boolean;
       reason?: string;
