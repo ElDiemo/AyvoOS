@@ -44,9 +44,38 @@
       fetchpriority="high"
     />
     <script src="/assets/site.js" defer></script>
+    <script src="/assets/consent.js" defer></script>
   </head>
   <body>
     <a class="ayvo-skip" href="#content">Zum Inhalt springen</a>
+    <section class="ayvo-consent" aria-labelledby="ayvo-consent-title" data-consent-banner hidden>
+      <h2 id="ayvo-consent-title" class="ayvo-consent-title">Webanalyse</h2>
+      <p class="ayvo-consent-text">
+        Mit Ihrer Einwilligung messen wir die Nutzung dieser Website mit Google Analytics 4
+        (Anbieter: Google) – ohne Werbung. Ohne Ihre Einwilligung wird nichts an Google gesendet.
+      </p>
+      <details class="ayvo-consent-details">
+        <summary>Details</summary>
+        <p class="ayvo-consent-text">
+          Google erhält dann Adresse und Titel der Seite, die vorherige Seite, Browser, Gerät und
+          Sprache, Ihre IP-Adresse und eine zufällige Kennung in den _ga-Cookies. Ihre Wahl
+          speichern wir in diesem Browser für 6 Monate; Sie können sie in der Fußzeile ändern.
+        </p>
+      </details>
+      <p
+        class="ayvo-consent-status"
+        data-consent-status
+        data-text-granted="Aktuelle Wahl: Analyse erlaubt."
+        data-text-denied="Aktuelle Wahl: Analyse abgelehnt."
+        hidden
+      ></p>
+      <div class="ayvo-consent-actions">
+        <button type="button" class="ayvo-consent-btn" data-consent="granted">
+          Analyse erlauben
+        </button>
+        <button type="button" class="ayvo-consent-btn" data-consent="denied">Ablehnen</button>
+      </div>
+    </section>
     <header class="ayvo-header">
       <div class="ayvo-wrap ayvo-header-row">
         <a class="ayvo-brand" href="/de/">
@@ -342,6 +371,9 @@
           Betrieben von <strong>REvolaris, s.r.o.</strong>, IČO: 23261781 · Prag, Tschechische
           Republik
         </div>
+        <button type="button" class="ayvo-consent-open" data-consent-open hidden>
+          Analyse-Einstellungen
+        </button>
       </div>
     </footer>
   </body>

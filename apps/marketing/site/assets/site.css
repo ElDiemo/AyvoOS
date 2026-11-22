@@ -742,3 +742,115 @@ main section[id] {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* =========================
+   Analytics consent (ADR 0040 amendment): a calm, non-modal panel at the bottom with two equal
+   choices (neither preselected); the page keeps room for it, so it never hides the end of a page.
+========================= */
+.ayvo-consent {
+  position: fixed;
+  z-index: 50;
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 18px 20px;
+  border: 1px solid #d9d0c2;
+  border-radius: 12px;
+  background: #f6f2ec;
+  color: #1d1a16;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+.ayvo-consent[hidden] {
+  display: none;
+}
+html.ayvo-consent-shown body {
+  padding-bottom: calc(var(--ayvo-consent-h, 0px) + 32px);
+}
+.ayvo-consent-title {
+  margin: 0 0 6px 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+.ayvo-consent-text,
+.ayvo-consent-status {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.ayvo-consent-status {
+  margin-top: 6px;
+  font-weight: 600;
+}
+.ayvo-consent-details {
+  margin-top: 4px;
+  font-size: 14px;
+}
+.ayvo-consent-details summary {
+  min-height: 32px;
+  padding: 6px 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.ayvo-consent-details .ayvo-consent-text {
+  margin-top: 2px;
+}
+.ayvo-consent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+/* The two choices look and weigh the same. */
+.ayvo-consent-btn {
+  flex: 1 1 120px;
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1.5px solid #1d1a16;
+  border-radius: 999px;
+  background: #fff;
+  color: #1d1a16;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ayvo-consent-btn:hover {
+  background: #efe7da;
+}
+.ayvo-consent-btn:focus-visible,
+.ayvo-consent-open:focus-visible {
+  outline: 3px solid #b8955a;
+  outline-offset: 2px;
+}
+.ayvo-consent-open {
+  margin-top: 10px;
+  padding: 10px 0;
+  min-height: 40px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.ayvo-consent-open[hidden] {
+  display: none;
+}
+@media (max-width: 420px) {
+  .ayvo-consent {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    padding: 14px 14px 12px;
+  }
+  .ayvo-consent-title {
+    font-size: 15px;
+  }
+  .ayvo-consent-text,
+  .ayvo-consent-details {
+    font-size: 13.5px;
+  }
+}

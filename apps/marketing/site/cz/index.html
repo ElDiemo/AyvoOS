@@ -44,9 +44,38 @@
       fetchpriority="high"
     />
     <script src="/assets/site.js" defer></script>
+    <script src="/assets/consent.js" defer></script>
   </head>
   <body>
     <a class="ayvo-skip" href="#content">Přeskočit na obsah</a>
+    <section class="ayvo-consent" aria-labelledby="ayvo-consent-title" data-consent-banner hidden>
+      <h2 id="ayvo-consent-title" class="ayvo-consent-title">Analytika návštěvnosti</h2>
+      <p class="ayvo-consent-text">
+        Se souhlasem měříme návštěvnost nástrojem Google Analytics 4 (poskytovatel Google), abychom
+        věděli, jak se web používá – bez reklamy. Bez souhlasu Googlu nic neposíláme.
+      </p>
+      <details class="ayvo-consent-details">
+        <summary>Podrobnosti</summary>
+        <p class="ayvo-consent-text">
+          Google pak dostane adresu a název stránky, předchozí stránku, prohlížeč, zařízení a jazyk,
+          vaši IP adresu a náhodný identifikátor uložený v cookies _ga. Volbu si v tomto prohlížeči
+          pamatujeme 6 měsíců; změníte ji v patičce.
+        </p>
+      </details>
+      <p
+        class="ayvo-consent-status"
+        data-consent-status
+        data-text-granted="Aktuální volba: analytika povolena."
+        data-text-denied="Aktuální volba: analytika odmítnuta."
+        hidden
+      ></p>
+      <div class="ayvo-consent-actions">
+        <button type="button" class="ayvo-consent-btn" data-consent="granted">
+          Povolit analytiku
+        </button>
+        <button type="button" class="ayvo-consent-btn" data-consent="denied">Odmítnout</button>
+      </div>
+    </section>
     <header class="ayvo-header">
       <div class="ayvo-wrap ayvo-header-row">
         <a class="ayvo-brand" href="/cz/">
@@ -336,6 +365,9 @@
           Provozováno společností <strong>REvolaris, s.r.o.</strong>, IČO: 23261781 · Praha, Česká
           republika
         </div>
+        <button type="button" class="ayvo-consent-open" data-consent-open hidden>
+          Nastavení analytiky
+        </button>
       </div>
     </footer>
   </body>

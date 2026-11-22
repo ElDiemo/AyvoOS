@@ -356,8 +356,9 @@ Tailwind 4 · Vitest · Playwright.
   standard library). Installed and its timers enabled only on AyvoOS-PROD by the owner.
 - `apps/marketing` — the public marketing site ayvo.co (ADR 0040, proposed): static EN/CZ/DE HTML
   in Git, its own Caddy image (no DB/Redis/API/secrets, read-only, unprivileged). No CMS: content
-  changes are HTML edits through a PR; no inline styles/scripts (strict CSP), no tracking or
-  external fonts — `pnpm --filter @ayvo/marketing test` enforces it. Edge: PROD qr-edge and the
+  changes are HTML edits through a PR; no inline styles/scripts (strict CSP), no external fonts,
+  no tracking except the opt-in GA4 on the public hostnames only (ADR 0040 amendment 2026-11-22:
+  basic consent mode, nothing to Google before "Allow") — `pnpm --filter @ayvo/marketing test` enforces it. Edge: PROD qr-edge and the
   internal Caddy only get mounted site files (`deploy/prod/sites/`, `acme.d/`) via
   `compose.marketing.yml` (MARKETING_DOMAIN); DEV preview `https://<DEV_DOMAIN>:8443` (tailnet).
   Deployed on its own: DEV builds and tests the image (pinned base) and saves it as an archive;
