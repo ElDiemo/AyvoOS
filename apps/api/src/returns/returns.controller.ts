@@ -21,7 +21,6 @@ import {
   type ReturnHotelOption,
   type ReturnIssueResult,
   type ReturnIssueSummary,
-  type ReturnLineResult,
   type ReturnPumpCountRequest,
   type ReturnReceiptDetail,
   type ReturnReceiptList,
@@ -43,8 +42,9 @@ const CODE = new ZodValidationPipe(returnReceiptCodeSchema);
 const ISSUE = new ZodValidationPipe(returnIssueCodeSchema);
 
 /**
- * Sklad → Příjem vratek (doc 047 §4): receipts of the active site only — another site's receipt,
- * line or issue is not found, also before a replay.
+ * Výroba → Oběh lahví → Příjem vratek (doc 047 §4, R1.1 §6.3): receipts of the active site only —
+ * another site's receipt, line or issue is not found, also before a replay. A crate scan frees the
+ * crate; a bottle scan needs no crate (the receipt's BOTTLES line).
  */
 @Controller(`${ADMIN_PREFIX}/returns`)
 export class ReturnsController {
@@ -103,43 +103,30 @@ export class ReturnsController {
   }
 
   @RequirePermission('returns:receive')
-  @Post('receipts/:code/containers')
-  @HttpCode(200)
-  addContainer(
-    @Param('code', CODE) code: string,
-    @Body(new ZodValidationPipe(returnRequestSchema)) body: ReturnRequest,
-    @CurrentPrincipal() principal: Principal,
-    @OperationalSite() site: SiteContext,
-  ): Promise<ReturnLineResult> {
-    return this.returns.addContainer(principal, site, code, body);
-  }
-
-  @RequirePermission('returns:receive')
-  @Post('receipts/:code/lines/:lineId/bottles')
+  @Post('receipts/:code/bottles')
   @HttpCode(200)
   scanBottle(
     @Param('code', CODE) code: string,
-    @Param('lineId') lineId: string,
     @Body(new ZodValidationPipe(returnBottleScanRequestSchema)) body: ReturnBottleScanRequest,
     @CurrentPrincipal() principal: Principal,
     @OperationalSite() site: SiteContext,
   ): Promise<ReturnBottleScanResult> {
-    return this.returns.scanBottle(principal, site, code, lineId, body);
+    return this.returns.scanBottle(principal, site, code, body);
   }
 
   @RequirePermission('returns:receive')
-  @Post('receipts/:code/lines/:lineId/unreadable')
+  @Post('receipts/:code/unreadable')
   @HttpCode(200)
   unreadable(
     @Param('code', CODE) code: string,
-    @Param('lineId') lineId: string,
     @Body(new ZodValidationPipe(returnRequestSchema)) body: ReturnRequest,
     @CurrentPrincipal() principal: Principal,
     @OperationalSite() site: SiteContext,
   ): Promise<ReturnIssueResult> {
-    return this.returns.unreadable(principal, site, code, lineId, body);
+    return this.returns.unreadable(principal, site, code, body);
   }
 
+  /** Vyprázdněno of an R1 line only (an open receipt from before R1.1, doc 047 §6.3 6). */
   @RequirePermission('returns:receive')
   @Post('receipts/:code/lines/:lineId/empty')
   @HttpCode(200)

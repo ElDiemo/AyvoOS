@@ -37,12 +37,12 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     return r.body as ReturnReceiptDetail;
   };
-  const container = async (code: string) =>
+  /** R1.1: the receipt's one BOTTLES line (made by its first bottle scan or unreadable piece). */
+  const bottlesLine = async (code: string) =>
     (
-      (await as(admin).post(`/api/admin/returns/receipts/${code}/containers`).expect(200)).body as {
-        lineId: string;
-      }
-    ).lineId;
+      (await as(admin).get(`/api/admin/returns/receipts/${code}`).expect(200))
+        .body as ReturnReceiptDetail
+    ).lineDetails.find((l) => l.kind === 'BOTTLES')!.id;
 
   beforeAll(async () => {
     su = await createTestApp(RETURN_ENV);
@@ -135,27 +135,24 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
     // At the initial site: a receipt with a line and an issue, and a scan under a known requestId.
     await activeSite(INITIAL_SITE_ID);
     const here = await open();
-    const hereLine = await container(here.code);
     const issue = (
-      (
-        await as(admin).post(
-          `/api/admin/returns/receipts/${here.code}/lines/${hereLine}/unreadable`,
-        )
-      ).body as { issue: { code: string } }
+      (await as(admin).post(`/api/admin/returns/receipts/${here.code}/unreadable`)).body as {
+        issue: { code: string };
+      }
     ).issue.code;
+    const hereLine = await bottlesLine(here.code);
     const rid = randomUUID();
     const scanBody = { requestId: rid, scannedValue: crate.bottleUrls[0]!, outcome: 'GOOD' };
     const first = await as(admin).post(
-      `/api/admin/returns/receipts/${here.code}/lines/${hereLine}/bottles`,
+      `/api/admin/returns/receipts/${here.code}/bottles`,
       scanBody,
     );
     expect(first.status, JSON.stringify(first.body)).toBe(200);
-    // The same requestId with another line: a conflict, nothing written.
-    const otherLine = await container(here.code);
-    const conflict = await as(admin).post(
-      `/api/admin/returns/receipts/${here.code}/lines/${otherLine}/bottles`,
-      scanBody,
-    );
+    // The same requestId with another outcome: a conflict, nothing written.
+    const conflict = await as(admin).post(`/api/admin/returns/receipts/${here.code}/bottles`, {
+      ...scanBody,
+      outcome: 'DEFECTIVE',
+    });
     expect([conflict.status, conflict.body.code]).toEqual([409, 'IDEMPOTENCY_CONFLICT']);
     // A hotel of another site is not offered.
     const remoteHotel = (
@@ -170,13 +167,13 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
     await activeSite(other.id);
     expect((await as(admin).get(`/api/admin/returns/receipts/${here.code}`)).status).toBe(404);
     const replay = await as(admin).post(
-      `/api/admin/returns/receipts/${here.code}/lines/${hereLine}/bottles`,
+      `/api/admin/returns/receipts/${here.code}/bottles`,
       scanBody,
     );
     expect([replay.status, replay.body.code]).toEqual([404, 'RETURN_RECEIPT_NOT_FOUND']);
     expect(replay.body.details).toBeUndefined();
     for (const [path, body] of [
-      [`/api/admin/returns/receipts/${here.code}/lines/${hereLine}/unreadable`, {}],
+      [`/api/admin/returns/receipts/${here.code}/unreadable`, {}],
       [`/api/admin/returns/receipts/${here.code}/lines/${hereLine}/empty`, { physicalCount: 0 }],
       [`/api/admin/returns/receipts/${here.code}/close`, {}],
       [
@@ -217,24 +214,24 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
         .completedAt,
     ).toBeNull();
     // Its bottle: an OTHER_SITE piece without any link to it; the bottle is unchanged.
-    const box = await container(there.code);
-    const foreign = await as(admin).post(
-      `/api/admin/returns/receipts/${there.code}/lines/${box}/bottles`,
-      { scannedValue: crate.bottleUrls[1]!, outcome: 'GOOD' },
-    );
+    const foreign = await as(admin).post(`/api/admin/returns/receipts/${there.code}/bottles`, {
+      scannedValue: crate.bottleUrls[1]!,
+      outcome: 'GOOD',
+    });
     expect(foreign.status, JSON.stringify(foreign.body)).toBe(200);
     expect(foreign.body).toMatchObject({
       outcome: 'ISSUE_RECORDED',
       code: 'BOTTLE_OF_ANOTHER_SITE',
       bottleCode: null,
     });
-    const again = await as(admin).post(
-      `/api/admin/returns/receipts/${there.code}/lines/${box}/bottles`,
-      { scannedValue: crate.bottleUrls[1]!, outcome: 'GOOD' },
-    );
+    const again = await as(admin).post(`/api/admin/returns/receipts/${there.code}/bottles`, {
+      scannedValue: crate.bottleUrls[1]!,
+      outcome: 'GOOD',
+    });
     expect(again.body).toMatchObject({ repeated: true, issue: foreign.body.issue });
     const detail = (await as(admin).get(`/api/admin/returns/receipts/${there.code}`).expect(200))
       .body as ReturnReceiptDetail;
+    const box = await bottlesLine(there.code);
     const piece = detail.lineDetails.find((l) => l.id === box)!;
     expect(piece.recordedCount).toBe(1);
     expect(piece.issues.map((i) => [i.kind, i.bottleCode, i.details])).toEqual([
@@ -251,7 +248,6 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
     ).toBe(0);
     // Two operators scan the same foreign piece on the same line at once (different request
     // ids): both held on the receipt, then released together — one piece, one issue.
-    const box2 = await container(there.code);
     const receiptRow = await ra.prisma.returnReceipt.findUniqueOrThrow({
       where: { code: there.code },
     });
@@ -260,7 +256,7 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
         await tx.$executeRaw`SELECT 1 FROM "return_receipts" WHERE "id" = ${receiptRow.id}::uuid FOR UPDATE`;
         const scans = [0, 1, 2].map(() =>
           as(admin)
-            .post(`/api/admin/returns/receipts/${there.code}/lines/${box2}/bottles`, {
+            .post(`/api/admin/returns/receipts/${there.code}/bottles`, {
               scannedValue: crate.bottleUrls[0]!,
               outcome: 'GOOD',
             })
@@ -274,8 +270,8 @@ describe.skipIf(!hasDatabase)('return intake access and site isolation (real sig
     expect(raced.map((r) => r.status)).toEqual([200, 200, 200]);
     expect(new Set(raced.map((r) => r.body.issue.code)).size).toBe(1);
     expect(
-      await ra.prisma.returnReceiptIssue.count({ where: { lineId: box2, kind: 'OTHER_SITE' } }),
-    ).toBe(1);
+      await ra.prisma.returnReceiptIssue.count({ where: { lineId: box, kind: 'OTHER_SITE' } }),
+    ).toBe(2); // the earlier foreign piece and this one
     // OTHER_SITE is closed only as written off.
     const notAyvo = await as(admin).post(`/api/admin/returns/issues/${row.code}/close-out`, {
       resolution: 'NOT_AYVO',

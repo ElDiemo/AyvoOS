@@ -63,9 +63,9 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     await deliver(t, await shipCrates(t, hotel, factory.kit.productCode, crates));
     const receipt = await api.open();
     for (const [i, crate] of crates.entries()) {
-      const line = (await api.scanCrate(receipt.code, crate.crateUrl)).body.lineId as string;
+      await api.scanCrate(receipt.code, crate.crateUrl).expect(200);
       for (const [j, outcome] of outcomes[i]!.entries()) {
-        await api.scanBottle(receipt.code, line, crate.bottleUrls[j]!, outcome).expect(200);
+        await api.scanBottle(receipt.code, crate.bottleUrls[j]!, outcome).expect(200);
       }
     }
     return crates;
@@ -208,8 +208,7 @@ describe.skipIf(!hasDatabase)('R2 "Po mytí" (doc 048 §2)', () => {
     ).toBe(1);
     // A later intake scan of the washed bottle is not a second return.
     const receipt = await api.open();
-    const box = (await api.container(receipt.code)).body.lineId as string;
-    const again = await api.scanBottle(receipt.code, box, b!.url);
+    const again = await api.scanBottle(receipt.code, b!.url);
     refused(again, 409, 'ALREADY_RECEIVED_ELSEWHERE');
     expect(await t.prisma.bottleEvent.count({ where: { bottleId: b!.id, type: 'SORTED' } })).toBe(
       1,
