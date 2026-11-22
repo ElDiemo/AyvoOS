@@ -93,38 +93,167 @@ for (const width of WIDTHS) {
   }
 }
 
-test('the hero: the product image beside (desktop) or above (phone) the copy, one CTA to the pilot', async ({
+test('the hero: one scene from edge to edge, the bottles on the counter, the offer and CTA first on phones', async ({
   page,
 }) => {
-  for (const width of [1440, 390]) {
+  for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await open(page, '/');
     const visual = page.locator('#top img.ayvo-hero-visual');
     await expect(visual).toBeVisible();
-    // The exact product area of the approved visual, never rescaled in the file.
-    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([648, 792]);
+    // The two real bottles as one transparent layer, never rescaled in the file.
+    expect(await visual.evaluate((i) => [i.naturalWidth, i.naturalHeight])).toEqual([478, 612]);
     const hero = await page.locator('#top').boundingBox();
+    const stage = await page.locator('#top .ayvo-hero-stage').boundingBox();
     const img = await visual.boundingBox();
     const h1 = await page.locator('#top h1').boundingBox();
     const cta = await page.locator('#top a[href="#pilot"]').boundingBox();
+    // The background layer reaches both edges of the hero, and the hero the whole viewport width,
+    // right under the header.
+    expect(Math.abs(stage.x - hero.x)).toBeLessThan(1);
+    expect(Math.abs(stage.width - hero.width)).toBeLessThan(1);
+    const viewport = await page.evaluate(() => document.documentElement.clientWidth);
+    expect(Math.abs(hero.x)).toBeLessThan(1);
+    expect(Math.abs(hero.width - viewport)).toBeLessThan(1);
+    const header = await page.locator('header.ayvo-header').boundingBox();
+    expect(Math.abs(hero.y - (header.y + header.height))).toBeLessThan(1);
+    // The bottles stand on the counter, just in front of its back edge (84 % of the desktop scene,
+    // 69.5 % of the phone scene).
+    const base = (img.y + img.height - stage.y) / stage.height;
+    const [low, high] = width > 860 ? [0.89, 0.93] : [0.73, 0.79];
+    expect(base).toBeGreaterThan(low);
+    expect(base).toBeLessThan(high);
     if (width === 1440) {
-      // Desktop: the image on the right edge of the hero, the copy starting left of it.
-      expect(Math.abs(img.x + img.width - (hero.x + hero.width))).toBeLessThan(1);
-      expect(h1.x).toBeLessThan(img.x);
+      expect(Math.abs(stage.height - hero.height)).toBeLessThan(1);
+      // The h1's real text (its line boxes) ends left of the bottles.
+      const h1Text = await page.locator('#top h1').evaluate((el) =>
+        Math.max(
+          ...[...el.querySelectorAll('.ayvo-h1-part')].flatMap((part) => {
+            const range = document.createRange();
+            range.selectNodeContents(part);
+            return [...range.getClientRects()].map((r) => r.right);
+          }),
+        ),
+      );
+      expect(img.x).toBeGreaterThan(h1Text);
     } else {
-      // Phone: the image above the copy, the CTA still in the first screen.
-      expect(img.y + img.height).toBeLessThanOrEqual(h1.y);
+      // Phones: the offer and the CTA first (in the first screen), then the scene with the bottles.
       expect(cta.y + cta.height).toBeLessThanOrEqual(844);
+      expect(stage.y).toBeGreaterThanOrEqual(cta.y + cta.height);
+      expect(img.y).toBeLessThan(844);
     }
   }
-  const photo = await page.request.get('/assets/img/ayvo-hero.webp');
-  expect(photo.status()).toBe(200);
-  expect(photo.headers()['content-type']).toBe('image/webp');
+  for (const file of [
+    'ayvo-hero-products.webp',
+    'ayvo-hero-scene.webp',
+    'ayvo-hero-scene-mobile.webp',
+  ]) {
+    const res = await page.request.get(`/assets/img/${file}`);
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toBe('image/webp');
+  }
   await page.locator('#top a[href="#pilot"]').click();
   await expect(page).toHaveURL(/#pilot$/);
   await expect(page.locator('#pilot h2')).toBeInViewport();
   const mail = page.locator('#pilot a[href^="mailto:"]');
   await expect(mail).toHaveAttribute('href', /^mailto:hello@ayvo\.co\?subject=/);
+});
+
+test('a compact desktop hero (about 600 px at 1440 px, at most 650 px wide): both bottles whole, never distorted', async ({
+  page,
+}) => {
+  for (const width of [861, 1024, 1440, 1920, 2560]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open(page, '/cz/');
+    const hero = await page.locator('#top').boundingBox();
+    const stage = await page.locator('#top .ayvo-hero-stage').boundingBox();
+    const img = await page.locator('#top img.ayvo-hero-visual').boundingBox();
+    if (width === 1440) {
+      expect(hero.height).toBeGreaterThanOrEqual(560);
+      expect(hero.height).toBeLessThanOrEqual(620);
+    }
+    // Wide screens: the hero stops growing; the sharp scene is centred and the rest continues it.
+    expect(hero.height).toBeLessThanOrEqual(650.5);
+    if (width >= 1920) {
+      expect(hero.height).toBeGreaterThanOrEqual(649.5);
+      expect(Math.abs(stage.x + stage.width / 2 - width / 2)).toBeLessThan(1);
+    }
+    // The scene keeps its proportion, and the pumps and the bases stay inside the hero.
+    expect(Math.abs(stage.width / stage.height - 1446 / 600)).toBeLessThan(0.01);
+    expect(Math.abs(img.width / img.height - 478 / 612)).toBeLessThan(0.01);
+    expect(Math.abs(stage.height - hero.height)).toBeLessThan(1);
+    expect(img.y).toBeGreaterThanOrEqual(hero.y);
+    expect(img.y + img.height).toBeLessThanOrEqual(hero.y + hero.height);
+    expect(img.x).toBeGreaterThanOrEqual(hero.x);
+    expect(img.x + img.width).toBeLessThanOrEqual(hero.x + hero.width);
+  }
+});
+
+test('narrow desktops (861 / 900 / 1024 / 1280 px): the copy never reaches the bottle layer', async ({
+  page,
+}) => {
+  for (const width of [861, 900, 1024, 1280]) {
+    for (const p of PAGES) {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page, p.path);
+      const { text, product } = await page.evaluate(() => {
+        // The real extents of the text (its line boxes), not the blocks around it.
+        const right = (el) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return Math.max(...[...range.getClientRects()].map((r) => r.right));
+        };
+        const copy = [
+          ...document.querySelectorAll(
+            '#top h1 .ayvo-h1-part, #top .ayvo-hero-lead, #top .ayvo-hero-slogan',
+          ),
+        ];
+        const cta = document.querySelector('#top a[href="#pilot"]').getBoundingClientRect().right;
+        return {
+          text: Math.max(cta, ...copy.map(right)),
+          product: document.querySelector('#top img.ayvo-hero-visual').getBoundingClientRect().left,
+        };
+      });
+      expect(text, `${p.path} at ${width}px`).toBeLessThan(product);
+    }
+  }
+});
+
+test('the header: low (46-50 px), one line from 320 px, a larger logo that links home, 40 px language targets', async ({
+  page,
+}) => {
+  for (const width of [320, 390, 861, 1440]) {
+    for (const p of [...PAGES, { path: '/no-such-page', lang: 'en' }]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(p.path);
+      const header = await page.locator('header.ayvo-header').boundingBox();
+      expect(header.height, `${p.path} at ${width}px`).toBeGreaterThanOrEqual(46);
+      expect(header.height, `${p.path} at ${width}px`).toBeLessThanOrEqual(50);
+      const brand = page.locator('header a.ayvo-brand');
+      await expect(brand).toHaveAttribute('href', p.path === '/no-such-page' ? '/' : p.path);
+      const logo = await brand.boundingBox();
+      // The wordmark about 13 % larger than the 16-20 px of #218 (18-22.5 px), in the same header.
+      const mark = await page.locator('header .ayvo-wordmark').boundingBox();
+      expect(mark.height, `${p.path} at ${width}px`).toBeGreaterThanOrEqual(
+        width >= 1440 ? 21.5 : 18,
+      );
+      expect(mark.height, `${p.path} at ${width}px`).toBeLessThanOrEqual(22.5);
+      // One line: everything inside the header's height, side by side.
+      expect(logo.y).toBeGreaterThanOrEqual(header.y);
+      expect(logo.y + logo.height).toBeLessThanOrEqual(header.y + header.height);
+      for (const lang of await page.locator('header a.ayvo-lang').all()) {
+        const box = await lang.boundingBox();
+        expect(box.width).toBeGreaterThanOrEqual(40);
+        expect(box.height).toBeGreaterThanOrEqual(40);
+        expect(box.y + box.height).toBeLessThanOrEqual(header.y + header.height);
+        expect(box.x).toBeGreaterThan(logo.x + logo.width);
+      }
+    }
+  }
+  await page.goto('/cz/');
+  const current = page.locator('header a.ayvo-lang[aria-current="page"]');
+  await expect(current).toHaveText('CZ');
+  expect(await current.evaluate((a) => getComputedStyle(a).fontWeight)).toBe('700');
 });
 
 test('switching the language keeps the section being read', async ({ page }) => {
