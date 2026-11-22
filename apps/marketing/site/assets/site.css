@@ -169,8 +169,9 @@ main section[id] {
   text-decoration: none;
   flex-shrink: 0;
 }
+/* About 13 % larger than in #218 (owner), in the same 46-50 px header. */
 .ayvo-header .ayvo-wordmark {
-  height: clamp(16px, 0.3vw + 15px, 20px);
+  height: clamp(18px, 0.34vw + 17px, 22.5px);
 }
 
 /* =========================
@@ -449,12 +450,13 @@ main section[id] {
   inset: 0;
   background: url('/assets/img/ayvo-hero-scene.webp') 50% 100% / cover no-repeat;
 }
-/* Over the scene's bottles: x 858-1244, y 47-544 of 1446 x 600. */
+/* Over the scene's bottles (5.5 % smaller than in #218, standing on the same counter line):
+   the layer's box x 862-1234, y 72-548 of 1446 x 600. */
 .ayvo-hero-products {
   position: absolute;
-  right: 13.66%;
-  bottom: 8.62%;
-  height: 84.35%;
+  right: 14.64%;
+  bottom: 8.63%;
+  height: 79.32%;
   aspect-ratio: 478 / 612;
   opacity: 0;
 }
@@ -715,7 +717,7 @@ main section[id] {
   .ayvo-hero-products {
     right: 50%;
     bottom: 24%;
-    height: 62%;
+    height: 58.6%;
     opacity: 1;
     transform: translateX(50%);
   }

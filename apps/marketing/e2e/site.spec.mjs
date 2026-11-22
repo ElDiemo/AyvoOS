@@ -219,7 +219,7 @@ test('narrow desktops (861 / 900 / 1024 / 1280 px): the copy never reaches the b
   }
 });
 
-test('the header: low (46-50 px), one line from 320 px, the logo links home, 40 px language targets', async ({
+test('the header: low (46-50 px), one line from 320 px, a larger logo that links home, 40 px language targets', async ({
   page,
 }) => {
   for (const width of [320, 390, 861, 1440]) {
@@ -232,6 +232,12 @@ test('the header: low (46-50 px), one line from 320 px, the logo links home, 40 
       const brand = page.locator('header a.ayvo-brand');
       await expect(brand).toHaveAttribute('href', p.path === '/no-such-page' ? '/' : p.path);
       const logo = await brand.boundingBox();
+      // The wordmark about 13 % larger than the 16-20 px of #218 (18-22.5 px), in the same header.
+      const mark = await page.locator('header .ayvo-wordmark').boundingBox();
+      expect(mark.height, `${p.path} at ${width}px`).toBeGreaterThanOrEqual(
+        width >= 1440 ? 21.5 : 18,
+      );
+      expect(mark.height, `${p.path} at ${width}px`).toBeLessThanOrEqual(22.5);
       // One line: everything inside the header's height, side by side.
       expect(logo.y).toBeGreaterThanOrEqual(header.y);
       expect(logo.y + logo.height).toBeLessThanOrEqual(header.y + header.height);
