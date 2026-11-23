@@ -224,7 +224,13 @@ export const returnsCs = {
       'Etiketa této lahve už není schválená – lahev je vyčleněná (odvolaná etiketa). Nic se nezapsalo.',
     NO_PRODUCT_BINDING: 'Lahev nemá vazbu na produkt – nic se nezapsalo.',
   } as Record<string, string>,
-  uncertain: 'Spojení selhalo – výsledek není jistý. „Zkusit znovu“ pošle stejný požadavek.',
+  /**
+   * No answer or a 5xx. The request id lives only in this open page (useStableRequests), and a
+   * counted action is keyed by the count shown: so only the same action on the same page, before
+   * the count changed, is the same request.
+   */
+  uncertain:
+    'Spojení selhalo – výsledek není jistý. Stránku neobnovujte a zopakujte na ní stejnou akci – odešle se tentýž požadavek a nezapíše se dvakrát. Pokud se mezitím změnil počet v přehledu, zápis už proběhl a znovu ho neposílejte.',
   retry: 'Zkusit znovu',
   unconfirmed: {
     title: 'Výsledek nepotvrzený',

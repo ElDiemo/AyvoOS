@@ -19,6 +19,7 @@ import { scanFeedback } from '@/lib/scan-feedback';
 import { useScanFocusReturn } from '@/lib/scan-focus';
 import { FillingWorkspace } from './filling-workspace';
 import { LabelingWorkspace } from './labeling-workspace';
+import { workstationErrorText } from './workstation-errors';
 
 const t = workstationsCs.station;
 const HEARTBEAT_MS = 60_000;
@@ -30,15 +31,7 @@ type Notice = { tone: 'ok' | 'error' | 'info'; text: string; retry?: () => void 
 /** No definite answer: a network error or a 5xx (the server may have committed). */
 const uncertain = (error: unknown) => !(error instanceof ClientApiError) || error.status >= 500;
 
-function errorText(error: unknown): string {
-  if (error instanceof ClientApiError) {
-    if (error.code && workstationsCs.errors[error.code]) return workstationsCs.errors[error.code]!;
-    if (error.status === 403) return workstationsCs.errors.FORBIDDEN!;
-    if (error.status === 400 || error.status === 422) return workstationsCs.invalid;
-    if (error.status < 500) return workstationsCs.failed;
-  }
-  return workstationsCs.network;
-}
+const errorText = workstationErrorText;
 
 /**
  * Výroba → Pracoviště (doc 026): scan the station QR once; the station, its mode/category and the
