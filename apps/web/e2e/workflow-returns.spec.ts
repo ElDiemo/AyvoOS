@@ -318,7 +318,7 @@ test('an uncertain answer of a plain button (Otevřít příjem) promises no "Zk
   // (Next's route announcer is an empty alert of its own.)
   const alert = page.getByRole('alert').filter({ hasText: /\S/ });
   await expect(alert).toHaveText(
-    'Spojení selhalo – výsledek není jistý. Stránku neobnovujte a zopakujte na ní stejnou akci – odešle se tentýž požadavek a nezapíše se dvakrát. Pokud se mezitím změnil počet v přehledu, zápis už proběhl a znovu ho neposílejte.',
+    'Spojení selhalo – výsledek není jistý. Stránku neobnovujte a zopakujte na ní stejnou akci – odešle se tentýž požadavek a nezapíše se dvakrát. Změnil-li se mezitím počet v přehledu, výsledek zůstává nejistý: akci už neopakujte, mohla by se zapsat podruhé.',
   );
   await expect(alert).not.toContainText('Zkusit znovu');
   await expect(page.getByRole('button', { name: 'Zkusit znovu' })).toHaveCount(0);
@@ -351,13 +351,17 @@ test('a counted action (Nečitelná lahev +1) whose answer was lost: the same bu
   await add.click();
   const message = page.getByTestId('return-message');
   await expect(message).toContainText('Stránku neobnovujte a zopakujte na ní stejnou akci');
+  await expect(message).toContainText(
+    'Změnil-li se mezitím počet v přehledu, výsledek zůstává nejistý: akci už neopakujte',
+  );
   await expect(page.getByTestId('receipt-counts')).toContainText('nečitelné 0');
   await add.click();
   await expect(message).toContainText('Nečitelná lahev');
   await expect(page.getByTestId('receipt-counts')).toContainText('nečitelné 1');
   expect(ids).toHaveLength(2);
   expect(ids[1]).toBe(ids[0]);
-  // After a reload the count shows the write — the cue the text gives for not sending it again.
+  // A reload gives a new request id; the count alone never proves whose write it was, so the
+  // text tells the user to stop repeating once the count changed.
   await page.reload();
   await expect(page.getByTestId('receipt-counts')).toContainText('nečitelné 1');
 });

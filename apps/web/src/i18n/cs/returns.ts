@@ -230,7 +230,7 @@ export const returnsCs = {
    * the count changed, is the same request.
    */
   uncertain:
-    'Spojení selhalo – výsledek není jistý. Stránku neobnovujte a zopakujte na ní stejnou akci – odešle se tentýž požadavek a nezapíše se dvakrát. Pokud se mezitím změnil počet v přehledu, zápis už proběhl a znovu ho neposílejte.',
+    'Spojení selhalo – výsledek není jistý. Stránku neobnovujte a zopakujte na ní stejnou akci – odešle se tentýž požadavek a nezapíše se dvakrát. Změnil-li se mezitím počet v přehledu, výsledek zůstává nejistý: akci už neopakujte, mohla by se zapsat podruhé.',
   retry: 'Zkusit znovu',
   unconfirmed: {
     title: 'Výsledek nepotvrzený',
