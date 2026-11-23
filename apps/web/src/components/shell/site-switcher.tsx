@@ -2,7 +2,7 @@
 
 import type { CurrentUser } from '@ayvo/types';
 import { cn } from '@ayvo/ui';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { identityCs } from '@/i18n/cs/identity';
 import { apiSend } from '@/lib/client-api';
 import { confirmLeave } from '@/lib/leave-guard';
@@ -10,6 +10,18 @@ import { clearForSiteChange } from '@/lib/site-storage';
 import { z } from 'zod';
 
 const t = identityCs.shell;
+
+const noSubscription = () => () => {};
+/**
+ * False in the server's HTML and during hydration, true once React handles events: a choice made
+ * before that would only change the native control — no request, the old site still active.
+ */
+const useHydrated = () =>
+  useSyncExternalStore(
+    noSubscription,
+    () => true,
+    () => false,
+  );
 
 /**
  * Chooses the site this session works at (doc 022). Always visible in the shell. The server
@@ -33,6 +45,7 @@ export async function selectSite(siteId: string, next?: string): Promise<boolean
 
 export function SiteSwitcher({ user, className }: { user: CurrentUser; className?: string }) {
   const [busy, setBusy] = useState(false);
+  const hydrated = useHydrated();
   const active = user.sites.find((s) => s.id === user.activeSiteId) ?? null;
   if (user.sites.length === 0) return null;
   if (user.sites.length === 1) {
@@ -52,7 +65,7 @@ export function SiteSwitcher({ user, className }: { user: CurrentUser; className
       <select
         data-testid="site-switcher"
         aria-label={t.switchSite}
-        disabled={busy}
+        disabled={busy || !hydrated}
         value={active?.id ?? ''}
         onChange={async (e) => {
           if (!e.target.value) return;

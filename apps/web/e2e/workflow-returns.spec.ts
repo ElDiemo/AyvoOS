@@ -931,12 +931,24 @@ test('"Po mytí": the end of the session stops the series and keeps the unsent s
   await expect(page.getByRole('heading', { name: 'Po mytí', exact: true })).toBeVisible();
   await expect(page.getByTestId('after-wash-scans-unresolved')).toHaveCount(0);
   // Back at the site of the series through the site switcher: both scans restored, stopped.
-  // (the switch reloads the page; checked only once the new page has loaded)
-  await Promise.all([
-    page.waitForEvent('load'),
-    page.getByTestId('site-switcher').selectOption(INITIAL_SITE_ID),
-  ]);
-  await expect(page.getByTestId('site-switcher')).toHaveValue(INITIAL_SITE_ID);
+  // The switcher works only once hydrated (disabled before): a choice before that changed only the
+  // native control — no request, the old site still active. The switch is proven by its POST and
+  // the session's active site, then the reloaded page (a DOM value or a load event alone is not).
+  const switcher = page.getByTestId('site-switcher');
+  await expect(switcher).toBeEnabled();
+  const switched = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/auth/active-site'),
+  );
+  const reloaded = page.waitForEvent('framenavigated', (f) => f === page.mainFrame());
+  await switcher.selectOption(INITIAL_SITE_ID);
+  const switchAnswer = await switched;
+  expect(switchAnswer.status()).toBe(200);
+  await reloaded;
+  await page.waitForLoadState('load');
+  const me = (await (await page.request.get('/api/auth/me')).json()) as { activeSiteId: string };
+  expect(me.activeSiteId).toBe(INITIAL_SITE_ID);
+  await expect(switcher).toBeEnabled();
+  await expect(switcher).toHaveValue(INITIAL_SITE_ID);
   const unresolved = page.getByTestId('after-wash-scans-unresolved');
   await expect(unresolved).toContainText('Výsledek posledního skenu není jistý');
   await expect(page.getByTestId('after-wash-scans-waiting')).toHaveText('Čeká na odeslání: 1');
