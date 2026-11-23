@@ -301,6 +301,71 @@ test('an R1 crate answer replayed after the upgrade (no `freed`): a neutral conf
   await expect(message).toContainText('ukončena vazba 0 lahví');
 });
 
+test('an uncertain answer of a plain button (Otevřít příjem) promises no "Zkusit znovu" it does not have; the same button again is the same request', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/production/cycle/returns');
+  const ids: string[] = [];
+  await page.route('**/api/admin/returns/receipts', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    ids.push((route.request().postDataJSON() as { requestId: string }).requestId);
+    // The first answer is lost (as a gateway error); the second reaches the API.
+    if (ids.length === 1) return route.fulfill({ status: 502, body: 'Bad gateway' });
+    return route.continue();
+  });
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  // (Next's route announcer is an empty alert of its own.)
+  const alert = page.getByRole('alert').filter({ hasText: /\S/ });
+  await expect(alert).toHaveText(
+    'Spojení selhalo – výsledek není jistý. Stránku neobnovujte a zopakujte na ní stejnou akci – odešle se tentýž požadavek a nezapíše se dvakrát. Změnil-li se mezitím počet v přehledu, výsledek zůstává nejistý: akci už neopakujte, mohla by se zapsat podruhé.',
+  );
+  await expect(alert).not.toContainText('Zkusit znovu');
+  await expect(page.getByRole('button', { name: 'Zkusit znovu' })).toHaveCount(0);
+  await page.screenshot({ path: `${SHOTS}/intake-open-uncertain-390.png`, fullPage: true });
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
+  expect(ids).toHaveLength(2);
+  expect(ids[1]).toBe(ids[0]);
+});
+
+test('a counted action (Nečitelná lahev +1) whose answer was lost: the same button on the same page is the same request, counted once', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/production/cycle/returns');
+  await page.getByRole('button', { name: 'Otevřít příjem' }).click();
+  await expect(page).toHaveURL(/\/production\/cycle\/returns\/RR-\d{6}$/);
+  const code = page.url().split('/').pop()!;
+  const ids: string[] = [];
+  await page.route(`**/api/admin/returns/receipts/${code}/unreadable`, async (route) => {
+    ids.push((route.request().postDataJSON() as { requestId: string }).requestId);
+    // The first one reaches the server and is written; only its answer is lost.
+    const answer = await route.fetch();
+    if (ids.length === 1) return route.fulfill({ status: 502, body: 'Bad gateway' });
+    return route.fulfill({ response: answer });
+  });
+  const add = page
+    .getByTestId('return-bottle-scan')
+    .getByRole('button', { name: 'Nečitelná lahev +1' });
+  await add.click();
+  const message = page.getByTestId('return-message');
+  await expect(message).toContainText('Stránku neobnovujte a zopakujte na ní stejnou akci');
+  await expect(message).toContainText(
+    'Změnil-li se mezitím počet v přehledu, výsledek zůstává nejistý: akci už neopakujte',
+  );
+  await expect(page.getByTestId('receipt-counts')).toContainText('nečitelné 0');
+  await add.click();
+  await expect(message).toContainText('Nečitelná lahev');
+  await expect(page.getByTestId('receipt-counts')).toContainText('nečitelné 1');
+  expect(ids).toHaveLength(2);
+  expect(ids[1]).toBe(ids[0]);
+  // A reload gives a new request id; the count alone never proves whose write it was, so the
+  // text tells the user to stop repeating once the count changed.
+  await page.reload();
+  await expect(page.getByTestId('receipt-counts')).toContainText('nečitelné 1');
+});
+
 test('a confirmed write whose refresh fails is never sent again: "Obnovit" only reads', async ({
   page,
 }) => {

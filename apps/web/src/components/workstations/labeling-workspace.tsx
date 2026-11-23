@@ -14,6 +14,7 @@ import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
 import { useScanFocusReturn } from '@/lib/scan-focus';
 import { ScanQueueStatus, useScanQueue, type QueueItem } from './use-scan-queue';
+import { stationErrorText } from './workstation-errors';
 
 const t = labelingCs;
 type Notice = { tone: 'ok' | 'warn' | 'error'; text: string; retry?: () => void } | null;
@@ -21,15 +22,12 @@ type Notice = { tone: 'ok' | 'warn' | 'error'; text: string; retry?: () => void 
 const uncertain = (error: unknown) => !(error instanceof ClientApiError) || error.status >= 500;
 
 function errorText(error: unknown): string {
-  if (error instanceof ClientApiError) {
-    const crate = (error.details as { crate?: unknown } | null)?.crate;
-    if (error.code === 'IN_ANOTHER_CRATE' && typeof crate === 'string')
-      return t.inAnotherCrate(crate);
-    if (error.code && t.errors[error.code]) return t.errors[error.code]!;
-    if (error.status === 403) return t.errors.FORBIDDEN!;
-    if (error.status < 500) return t.failed;
-  }
-  return t.network;
+  return stationErrorText(error, t, (e) => {
+    const crate = (e.details as { crate?: unknown } | null)?.crate;
+    return e.code === 'IN_ANOTHER_CRATE' && typeof crate === 'string'
+      ? t.inAnotherCrate(crate)
+      : undefined;
+  });
 }
 
 /**

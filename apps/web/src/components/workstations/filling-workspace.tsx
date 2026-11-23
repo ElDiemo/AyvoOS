@@ -14,20 +14,19 @@ import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
 import { scanFeedback } from '@/lib/scan-feedback';
 import { useScanFocusReturn } from '@/lib/scan-focus';
 import { ScanQueueStatus, useScanQueue, type QueueItem } from './use-scan-queue';
+import { stationErrorText } from './workstation-errors';
 
 const t = fillingCs;
 type Notice = { tone: 'ok' | 'warn' | 'error'; text: string } | null;
 
 const uncertain = (error: unknown) => !(error instanceof ClientApiError) || error.status >= 500;
 
-function errorText(error: unknown): string {
-  if (error instanceof ClientApiError) {
-    if (error.code && t.errors[error.code]) return t.errors[error.code]!;
-    if (error.status === 403) return t.errors.FORBIDDEN!;
-    if (error.status < 500) return labelingCs.failed;
-  }
-  return labelingCs.network;
-}
+const errorText = (error: unknown) =>
+  stationErrorText(error, {
+    errors: t.errors,
+    failed: labelingCs.failed,
+    network: labelingCs.network,
+  });
 
 /**
  * The filling station's work (doc 025 A4): load the SAME crate that was assembled at labelling,

@@ -224,7 +224,13 @@ export const returnsCs = {
       'Etiketa této lahve už není schválená – lahev je vyčleněná (odvolaná etiketa). Nic se nezapsalo.',
     NO_PRODUCT_BINDING: 'Lahev nemá vazbu na produkt – nic se nezapsalo.',
   } as Record<string, string>,
-  uncertain: 'Spojení selhalo – výsledek není jistý. „Zkusit znovu“ pošle stejný požadavek.',
+  /**
+   * No answer or a 5xx. The request id lives only in this open page (useStableRequests), and a
+   * counted action is keyed by the count shown: so only the same action on the same page, before
+   * the count changed, is the same request.
+   */
+  uncertain:
+    'Spojení selhalo – výsledek není jistý. Stránku neobnovujte a zopakujte na ní stejnou akci – odešle se tentýž požadavek a nezapíše se dvakrát. Změnil-li se mezitím počet v přehledu, výsledek zůstává nejistý: akci už neopakujte, mohla by se zapsat podruhé.',
   retry: 'Zkusit znovu',
   unconfirmed: {
     title: 'Výsledek nepotvrzený',
@@ -236,4 +242,12 @@ export const returnsCs = {
   refreshFailed:
     'Zápis je uložený, ale přehled se nepodařilo načíst. Obnovte ho – nic se znovu neodešle.',
   refresh: 'Obnovit',
+  /** A definite refusal without its own text: never the server's raw (English / Zod) message. */
+  refused: {
+    forbidden: 'Na tuto akci nemáte oprávnění – nic se nezapsalo.',
+    invalid:
+      'Údaje nejsou platné – nic se nezapsalo. Zkontrolujte naskenovaný kód nebo vyplněná pole.',
+    notFound: 'Záznam nebyl nalezen – mohl být mezitím změněn. Načtěte stránku znovu.',
+    other: 'Akce se nezdařila – nic se nezapsalo.',
+  },
 };

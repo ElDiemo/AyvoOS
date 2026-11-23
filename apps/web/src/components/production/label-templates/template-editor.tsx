@@ -15,8 +15,9 @@ import { clampBox, defaultBox, roundMm, type LabelSize, type QrBox } from '@/lib
 import { ArtworkUploadField } from './artwork-upload-field';
 import { LabelDesigner } from './label-designer';
 import { clampLabelSize, LabelSizeFields, proportionsMatch } from './label-size-fields';
-import { buttonClass, Card, ErrorNote, inputClass } from '@/components/ui';
+import { buttonClass, Card, inputClass } from '@/components/ui';
 import { productionCs } from '@/i18n/cs/production';
+import { productionError, ProductionErrorNote, type ProductionError } from '../production-errors';
 
 const t = productionCs.editor;
 
@@ -50,7 +51,7 @@ export function TemplateEditor({
     latestQr ? { xMm: latestQr.xMm, yMm: latestQr.yMm, sizeMm: latestQr.widthMm } : null,
   );
   const [busy, setBusy] = useState<'save' | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ProductionError | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
   /** A new size keeps the QR box on the label (and creates a default box the first time). */
@@ -118,11 +119,7 @@ export function TemplateEditor({
       }
       router.refresh();
     } catch (e) {
-      setError(
-        productionCs.common.failed(
-          e instanceof Error ? e.message : productionCs.common.unexpectedError,
-        ),
-      );
+      setError(productionError(e));
       setBusy(null);
     }
   }
@@ -197,7 +194,7 @@ export function TemplateEditor({
         </>
       )}
 
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {error && <ProductionErrorNote error={error} />}
       {info && (
         <p className="rounded-md border border-stone-200 bg-stone-100 px-3 py-2 text-sm text-stone-700 wrap-anywhere">
           {info}

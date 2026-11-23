@@ -53,6 +53,12 @@ export const productionCs = {
     networkError:
       'Spojení se serverem selhalo. Výsledek není jistý – zkuste to znovu, opakování je bezpečné.',
     unexpectedError: 'Akci se nepodařilo dokončit. Zkuste to znovu nebo kontaktujte vedoucího.',
+    forbidden: 'Na tuto akci nemáte oprávnění.',
+    notFound: 'Záznam nebyl nalezen – mohl být mezitím změněn. Načtěte stránku znovu.',
+    conflict:
+      'Záznam se mezitím změnil nebo už existuje – nic se nezapsalo. Načtěte stránku znovu.',
+    invalidData: 'Údaje nejsou platné – nic se nezapsalo. Zkontrolujte vyplněná pole nebo soubor.',
+    serverAnswer: 'Odpověď serveru',
     failed: (reason: string) => `Akce se nezdařila: ${reason}`,
     back: 'Zpět',
     devLabels: 'DEV etikety – ne pro skutečné lahve',
@@ -172,23 +178,20 @@ export const productionCs = {
     generating: 'Generuji…',
     download: (size: string) => `Stáhnout PDF${size ? ` (${size})` : ''}`,
     creating: 'Vytvářím…',
-    details: (p: {
-      created: string;
-      completed: string | null;
-      attempts: number;
-      level: string;
-      template: string;
-    }) =>
+    details: (p: { created: string; completed: string | null; template: string }) =>
       [
         `Vytvořeno ${p.created}`,
         p.completed ? `dokončeno ${p.completed}` : null,
-        p.attempts > 1 ? `${p.attempts} pokusů` : null,
-        `oprava chyb QR ${p.level}`,
         `jedna etiketa na stránku ve velikosti ${p.template}`,
         'tiskněte ve 100 %, bez změny měřítka',
       ]
         .filter(Boolean)
         .join(' · '),
+    failed:
+      'Generování PDF selhalo. „Generovat znovu“ vytvoří PDF se stejnými etiketami – nové lahve nevznikají.',
+    attempts: 'Pokusy o generování',
+    qrLevel: 'Oprava chyb QR',
+    failureReason: 'Důvod selhání',
   },
   create: {
     title: 'Připravit QR etikety lahví',
@@ -225,9 +228,8 @@ export const productionCs = {
     submit: (n: number) => `Vytvořit ${n} ${plural(n, 'QR identitu', 'QR identity', 'QR identit')}`,
     creating: 'Vytvářím…',
     back2: 'Zpět',
-    uncertain: (reason: string) =>
-      `${reason}. Lahve možná byly, možná nebyly vytvořeny. Opakované stisknutí tlačítka je bezpečné: toto potvrzení nikdy nevytvoří lahve dvakrát.`,
-    requestFailed: 'Požadavek se nezdařil',
+    uncertain:
+      'Spojení se serverem selhalo. Lahve možná byly, možná nebyly vytvořeny. Opakované stisknutí tlačítka je bezpečné: toto potvrzení nikdy nevytvoří lahve dvakrát.',
     success: (n: number) => `${bottlesWord(n)} – úspěšně vytvořeno`,
     replayed: 'Toto vytvoření už bylo dokončeno dříve – žádné další lahve nebyly vytvořeny.',
     created: 'Vytvořeno lahví',

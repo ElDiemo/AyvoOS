@@ -3,22 +3,15 @@
 import { labelPrintJobSchema, type LabelPrintJob } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { apiGet, apiSend, ClientApiError } from '@/lib/client-api';
+import { apiGet, apiSend } from '@/lib/client-api';
 import { formatBytes } from '@/lib/format';
 import { PrintJobStatus } from '@/components/status';
-import { buttonClass, ErrorNote } from '@/components/ui';
+import { buttonClass, DetailFact, Details, ErrorNote } from '@/components/ui';
 import { formatDateTimeCs } from '@/i18n/cs/format';
-import { productionCs, qrLabelErrorsCs } from '@/i18n/cs/production';
+import { productionCs } from '@/i18n/cs/production';
+import { productionError, ProductionErrorNote, type ProductionError } from './production-errors';
 
 const t = productionCs.printJob;
-const fail = (e: unknown) =>
-  productionCs.common.failed(
-    e instanceof ClientApiError && e.code && qrLabelErrorsCs[e.code]
-      ? qrLabelErrorsCs[e.code]!
-      : e instanceof Error
-        ? e.message
-        : productionCs.common.unexpectedError,
-  );
 
 /**
  * One print job with its actions: generate (PENDING), retry (FAILED), download (COMPLETED).
@@ -28,7 +21,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
   const router = useRouter();
   const [job, setJob] = useState(initial);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ProductionError | null>(null);
 
   async function generate() {
     setBusy(true);
@@ -40,7 +33,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
       );
       router.refresh();
     } catch (e) {
-      setError(fail(e));
+      setError(productionError(e));
       // The server may still be generating (or may have finished): show its real state.
       setJob(
         await apiGet(`admin/label-print-jobs/${job.code}`, labelPrintJobSchema).catch(() => job),
@@ -104,13 +97,21 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
         {t.details({
           created: formatDateTimeCs(job.createdAt),
           completed: job.completedAt ? formatDateTimeCs(job.completedAt) : null,
-          attempts: job.attempts,
-          level: job.qrErrorCorrection,
           template: job.labelTemplate.label,
         })}
       </p>
-      {job.status === 'FAILED' && job.failureReason && <ErrorNote>{job.failureReason}</ErrorNote>}
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {job.status === 'FAILED' && <ErrorNote>{t.failed}</ErrorNote>}
+      <Details testId={`print-job-${job.code}-details`}>
+        <dl>
+          <DetailFact label={t.attempts} value={String(job.attempts)} />
+          <DetailFact label={t.qrLevel} value={job.qrErrorCorrection} />
+          <DetailFact
+            label={t.failureReason}
+            value={job.status === 'FAILED' ? job.failureReason : null}
+          />
+        </dl>
+      </Details>
+      {error && <ProductionErrorNote error={error} />}
     </div>
   );
 }
@@ -119,7 +120,7 @@ export function PrintJobActions({ initial }: { initial: LabelPrintJob }) {
 export function NewPrintJobButton({ batchCode, label }: { batchCode: string; label: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ProductionError | null>(null);
   return (
     <div className="flex flex-col items-end gap-2">
       <button
@@ -137,7 +138,7 @@ export function NewPrintJobButton({ batchCode, label }: { batchCode: string; lab
             );
             router.refresh();
           } catch (e) {
-            setError(fail(e));
+            setError(productionError(e));
           } finally {
             setBusy(false);
           }
@@ -145,7 +146,7 @@ export function NewPrintJobButton({ batchCode, label }: { batchCode: string; lab
       >
         {busy ? t.creating : label}
       </button>
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {error && <ProductionErrorNote error={error} />}
     </div>
   );
 }

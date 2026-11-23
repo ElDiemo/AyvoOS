@@ -4,8 +4,9 @@ import { labelTemplateDetailSchema } from '@ayvo/types';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { apiSend } from '@/lib/client-api';
-import { buttonClass, ErrorNote } from '@/components/ui';
+import { buttonClass } from '@/components/ui';
 import { productionCs } from '@/i18n/cs/production';
+import { productionError, ProductionErrorNote, type ProductionError } from '../production-errors';
 
 const t = productionCs.templates;
 
@@ -22,7 +23,7 @@ export function TemplateArchiveButton({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ProductionError | null>(null);
   return (
     <div className="flex flex-col items-end gap-2">
       <button
@@ -41,11 +42,7 @@ export function TemplateArchiveButton({
             );
             router.refresh();
           } catch (e) {
-            setError(
-              productionCs.common.failed(
-                e instanceof Error ? e.message : productionCs.common.unexpectedError,
-              ),
-            );
+            setError(productionError(e));
           } finally {
             setBusy(false);
           }
@@ -53,7 +50,7 @@ export function TemplateArchiveButton({
       >
         {busy ? '…' : archived ? t.restore : t.archive}
       </button>
-      {error && <ErrorNote>{error}</ErrorNote>}
+      {error && <ProductionErrorNote error={error} />}
     </div>
   );
 }

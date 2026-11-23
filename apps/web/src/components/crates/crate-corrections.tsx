@@ -5,22 +5,21 @@ import { useRouter } from 'next/navigation';
 import { useId, useState } from 'react';
 import { ConfirmDialog, ReasonField, reasonError, useAttempt } from '@/components/catalog/form-kit';
 import { buttonClass, Card, inputClass } from '@/components/ui';
+import { stationErrorText } from '@/components/workstations/workstation-errors';
 import { crateCorrectionsCs } from '@/i18n/cs/filling';
 import { labelingCs } from '@/i18n/cs/labeling';
-import { apiSend, ClientApiError } from '@/lib/client-api';
+import { apiSend } from '@/lib/client-api';
 
 const t = crateCorrectionsCs;
 type Action = 'remove-bottle' | 'add-bottle' | 'reopen' | 'abort-cycle';
 
-function errorText(error: unknown): string {
-  if (error instanceof ClientApiError) {
-    if (error.code && t.errors[error.code]) return t.errors[error.code]!;
-    if (error.status === 404) return t.errors.NOT_FOUND!;
-    if (error.status === 403) return t.errors.FORBIDDEN!;
-    if (error.status < 500) return labelingCs.failed;
-  }
-  return labelingCs.network;
-}
+const errorText = (error: unknown) =>
+  stationErrorText(error, {
+    errors: t.errors,
+    notFound: t.errors.NOT_FOUND,
+    failed: labelingCs.failed,
+    network: labelingCs.network,
+  });
 
 /**
  * Supervised corrections of one crate (doc 025 §4.2; `production:cycle_correct`): Vyjmout and
