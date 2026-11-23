@@ -75,7 +75,7 @@ export const labelingCs = {
     DESIGN_NOT_APPROVED: 'Design etikety není (už) schválený pro tento produkt.',
     IN_ANOTHER_CRATE: 'Lahev už je v jiné bedně – nic se nepřesunulo.',
     NOT_PLACEABLE_YET:
-      'Lahev je po mytí – do bedny ji zatím vložit nelze (přijde s dalším plněním). Odložte ji stranou.',
+      'Lahev po mytí vkládá do bedny jen lepicí pracoviště skenem jako novou lahev – jinak ji přidat nelze. Nic se nezapsalo.',
     NOT_WASHED:
       'Lahev je vrácená, ale ještě nebyla potvrzena „Po mytí“. Nejdřív ji umyjte a naskenujte v Po mytí.',
     BINDING_MISMATCH: 'Lahev má jiný produkt nebo design etikety než bedna. Odložte ji stranou.',

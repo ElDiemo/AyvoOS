@@ -20,14 +20,14 @@ import { OperationRequestsService } from '../database/operation-requests.service
 import type { Prisma } from '../generated/prisma/client.js';
 
 /**
- * A bottle "Po mytí" (READY_FOR_REUSE, doc 048 §2) goes into a crate only with its refilling (R3):
- * in R2 the station, the corrections and the database refuse it.
+ * A bottle "Po mytí" (READY_FOR_REUSE, doc 048 §2) goes into a crate only by the labelling
+ * station's scan as REUSE (R3-b): the corrections and any other source are refused.
  */
 export const notPlaceableYet = (bottle: string) =>
   domainErrorWithDetails(
     409,
     'NOT_PLACEABLE_YET',
-    'A bottle ready for reuse goes into a crate only with its refilling (not yet available)',
+    'A bottle ready for reuse goes into a crate only by the labelling station (as REUSE)',
     { bottle },
   );
 
@@ -179,6 +179,15 @@ export class CycleCorrectionsService {
             'IN_ANOTHER_CRATE',
             `This bottle is in crate ${elsewhere.cycle.crate.code}`,
             { crate: elsewhere.cycle.crate.code },
+          );
+        }
+        // R1.1: freed with its returned crate, not scanned back itself — still at the hotel.
+        if (await this.cycles.stillAtHotel(tx, bottle.id)) {
+          throw domainErrorWithDetails(
+            409,
+            'BOTTLE_AT_HOTEL',
+            'This bottle is still at the hotel by the records: receive it in Příjem vratek first',
+            { bottle: bottle.code },
           );
         }
         const filled = status === 'FILLED';
