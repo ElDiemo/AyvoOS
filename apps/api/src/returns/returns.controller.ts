@@ -9,6 +9,7 @@ import {
   returnIssueCodeSchema,
   returnPumpCountRequestSchema,
   returnReceiptCodeSchema,
+  returnReceiptDetailQuerySchema,
   returnRequestSchema,
   returnScanRequestSchema,
   type CloseOutReturnIssueRequest,
@@ -23,12 +24,13 @@ import {
   type ReturnIssueSummary,
   type ReturnPumpCountRequest,
   type ReturnReceiptDetail,
+  type ReturnReceiptDetailQuery,
   type ReturnReceiptList,
   type ReturnRequest,
   type ReturnScanRequest,
   type ReturnsOverview,
 } from '@ayvo/types';
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import { ADMIN_PREFIX } from '../common/routes.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../identity/access.decorators.js';
@@ -85,9 +87,10 @@ export class ReturnsController {
   @Get('receipts/:code')
   detail(
     @Param('code', CODE) code: string,
+    @Query(new ZodValidationPipe(returnReceiptDetailQuerySchema)) query: ReturnReceiptDetailQuery,
     @OperationalSite() site: SiteContext,
   ): Promise<ReturnReceiptDetail> {
-    return this.returns.detail(site, code);
+    return this.returns.detail(site, code, query.bottles);
   }
 
   @RequirePermission('returns:receive')

@@ -13,7 +13,10 @@ export default async function ReturnReceiptPage({ params }: { params: Promise<{ 
   const { code } = await params;
   if (!returnReceiptCodeSchema.safeParse(code).success) notFound();
   const me = await requirePermission('returns:receive');
-  const receipt = await apiGet(`admin/returns/receipts/${code}`, returnReceiptDetailSchema);
+  const receipt = await apiGet(
+    `admin/returns/receipts/${code}?bottles=recent`,
+    returnReceiptDetailSchema,
+  );
   return (
     <>
       <CycleHeader

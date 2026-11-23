@@ -95,6 +95,8 @@ export const returnsCs = {
     submitBottle: 'Zapsat lahev',
     unreadable: 'Nečitelná lahev +1',
     recorded: (n: number) => `Zaznamenáno kusů: ${n}`,
+    recentBottles: (shown: number, total: number) => `Posledních ${shown} z ${total} lahví`,
+    allBottles: (total: number) => `Zobrazit všechny lahve (${total})`,
     physical: 'Fyzicky vyjmuto z tohoto kontejneru (ks)',
     empty: 'Vyprázdněno',
     emptied: (count: number) => `Vyprázdněno · fyzicky ${count} ks`,

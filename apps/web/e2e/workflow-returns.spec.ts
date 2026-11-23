@@ -317,14 +317,18 @@ test('a confirmed write whose refresh fails is never sent again: "Obnovit" only 
   });
   // The next GET of the detail fails (after the POST really committed).
   let failGets = 0;
-  await page.route(`**/api/admin/returns/receipts/${code}`, async (route) => {
-    if (route.request().method() === 'GET' && failGets > 0) {
-      failGets -= 1;
-      await route.fulfill({ status: 503, body: '{"statusCode":503}' });
-    } else {
-      await route.continue();
-    }
-  });
+  // The detail is read as `?bottles=recent` (a large receipt): match its path, any query.
+  await page.route(
+    (url) => url.pathname === `/api/admin/returns/receipts/${code}`,
+    async (route) => {
+      if (route.request().method() === 'GET' && failGets > 0) {
+        failGets -= 1;
+        await route.fulfill({ status: 503, body: '{"statusCode":503}' });
+      } else {
+        await route.continue();
+      }
+    },
+  );
   const unreadable = page
     .getByTestId('return-bottle-scan')
     .getByRole('button', { name: 'Nečitelná lahev +1' });
