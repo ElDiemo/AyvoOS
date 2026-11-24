@@ -53,6 +53,8 @@ const RUNNING = '0d9d05644d9b';
 const id = (c: string) => `sha256:${c.repeat(64)}`;
 const RUNNING_IDS = { api: id('a'), web: id('b') };
 const TARGET_API = id('c');
+/** Container IDs (Docker's own, 64 hex): the paused ones and one recreated later. */
+const CTR = { api: '1'.repeat(64), web: '2'.repeat(64), recreated: '3'.repeat(64) };
 const NONE = '0|0|0|0|0|0|0|';
 const AFTER = '21|29|13|4|0|0|0|2026-11-23 15:02:11.123+00';
 
@@ -76,9 +78,11 @@ type State = {
   unhealthy?: boolean;
   /** compose start brings up another image (it must be the same containers). */
   startsOther?: boolean;
+  /** compose start recreates api from the same image (a new container, not the paused one). */
+  startRecreates?: boolean;
   failConfig?: boolean;
   /** The rollback's own start fails: before it replaced anything, or after replacing only api. */
-  startFails?: 'before' | 'api';
+  startFails?: 'before' | 'api' | 'api-same-image';
 };
 
 const STUBS = [
@@ -131,8 +135,10 @@ function run(state: State, call: string) {
         .map(([k, v]) => `${k} ${v}\n`)
         .join(''),
     );
-  for (const [k, v] of Object.entries(state.containers ?? RUNNING_IDS))
+  for (const [k, v] of Object.entries(state.containers ?? RUNNING_IDS)) {
     writeFileSync(join(dir, 'ctr', k), v);
+    writeFileSync(join(dir, 'ctr', `${k}.cid`), CTR[k as 'api' | 'web']);
+  }
   writeFileSync(join(dir, 'schema'), state.schema ?? `6|6|0`);
   writeFileSync(join(dir, 'detector'), state.detector ?? NONE);
 
@@ -140,7 +146,7 @@ function run(state: State, call: string) {
     'set -Eeuo pipefail; exec 2>&1', // one stream: the order of the steps is the evidence
     `D=${dir}; PROD_DIR=${prod}; REPO_ROOT=$D/repo; IMAGE_PREFIX=ayvo-prod; PROJECT=ayvo-prod; STEP=`,
     `PREVIOUS=${RUNNING}; ROLLBACK=${ROLLBACK}; RELEASE=${'f'.repeat(40)}; AYVO_RELEASE=; MODE=rollback; PORTAL_FAILED=; GUARD_PAUSED=; IMAGES_ACTION=reuse`,
-    'declare -A GUARD_IDS=(); BACKUP_FILE=; MIGRATED=false; PORTAL_ARCHIVE_COPY=',
+    'declare -A GUARD_IDS=() GUARD_CTRS=(); BACKUP_FILE=; MIGRATED=false; PORTAL_ARCHIVE_COPY=',
     constant('FIRST_WRITE_MIGRATIONS'),
     constant('FIRST_WRITE_DETECTOR'),
     constant('FIRST_WRITE_DETECTOR_SHA256'),
@@ -152,14 +158,15 @@ function run(state: State, call: string) {
     ...STUBS.map((s) => `${s}() { echo "STEP ${s} $AYVO_RELEASE"; }`),
     // docker inspect --format '{{.Image}}[ {{.State.Running}}]' ayvo-prod-<svc>-1: a container's
     // image ID (also while stopped, as Docker answers) and whether it runs.
-    'docker() { local last=${!#} s; s=${last#ayvo-prod-}; s=${s%-1}; [[ -f $D/ctr/$s ]] || return 1; printf "%s" "$(<"$D/ctr/$s")"; if [[ $* == *State.Running* ]]; then [[ -f $D/ctr/$s.stopped ]] && echo " false" || echo " true"; else echo; fi; }',
+    'docker() { local last=${!#} s; s=${last#ayvo-prod-}; s=${s%-1}; [[ -f $D/ctr/$s ]] || return 1; [[ $* != *.Id}}* ]] || printf "%s " "$(<"$D/ctr/$s.cid")"; printf "%s" "$(<"$D/ctr/$s")"; if [[ $* == *State.Running* ]]; then [[ -f $D/ctr/$s.stopped ]] && echo " false" || echo " true"; else echo; fi; }',
     // The rollback's start: recreates api, then web, onto the target's images (or fails midway).
     'start_services() {',
     '  echo "STEP start_services $AYVO_RELEASE"',
     `  [[ "${state.startFails ?? ''}" != before ]] || die "api/web did not start"`,
-    `  echo ${TARGET_API} >"$D/ctr/api"; rm -f "$D/ctr/api.stopped"`,
+    `  echo ${state.startFails === 'api-same-image' ? RUNNING_IDS.api : TARGET_API} >"$D/ctr/api"; echo ${CTR.recreated} >"$D/ctr/api.cid"; rm -f "$D/ctr/api.stopped"`,
+    `  [[ "${state.startFails ?? ''}" != api-same-image ]] || die "web did not become healthy"`,
     `  [[ "${state.startFails ?? ''}" != api ]] || die "web did not become healthy"`,
-    `  echo ${id('d')} >"$D/ctr/web"; rm -f "$D/ctr/web.stopped"`,
+    `  echo ${id('d')} >"$D/ctr/web"; echo ${'4'.repeat(64)} >"$D/ctr/web.cid"; rm -f "$D/ctr/web.stopped"`,
     '}',
     'compose() {',
     '  echo "COMPOSE[$AYVO_RELEASE] $*" >&2',
@@ -167,7 +174,7 @@ function run(state: State, call: string) {
     `    config) [[ "${state.failConfig ? 'yes' : ''}" != yes ]] ;;`,
     // stop/start the very containers (no recreation): marked stopped, started again.
     `    stop) [[ "${state.failStop ? 'yes' : ''}" != yes ]] || return 1; touch "$D/ctr/api.stopped" "$D/ctr/web.stopped" ;;`,
-    `    start) [[ "${state.failStart ? 'yes' : ''}" != yes ]] || return 1; rm -f "$D"/ctr/*.stopped; ${state.startsOther ? `echo ${id('f')} >"$D/ctr/api"` : ':'} ;;`,
+    `    start) [[ "${state.failStart ? 'yes' : ''}" != yes ]] || return 1; rm -f "$D"/ctr/*.stopped; ${state.startsOther ? `echo ${id('f')} >"$D/ctr/api"` : ':'}; ${state.startRecreates ? `echo ${CTR.recreated} >"$D/ctr/api.cid"` : ':'} ;;`,
     '    exec) local sql; sql="$(cat)"',
     // Read only: everything runs inside BEGIN READ ONLY … ROLLBACK, errors stop psql.
     `      [[ $sql == "BEGIN READ ONLY;"$'\\n'*$'\\n'"ROLLBACK;" && $* == *ON_ERROR_STOP=1* ]] || { echo "NOT READ ONLY" >&2; return 1; }`,
@@ -374,7 +381,15 @@ describe('deploy-prod --rollback: the first-write guard of the bottle-cycle chai
     for (const [state, msg] of [
       [{ failStart: true }, 'and api/web of 0d9d05644d9b did not start again'],
       [{ unhealthy: true }, 'and api of 0d9d05644d9b did not become healthy again'],
-      [{ startsOther: true }, `and api runs ${id('f')}, not the paused ${RUNNING_IDS.api}`],
+      [
+        { startsOther: true },
+        `and api is container ${CTR.api} (${id('f')}), not the paused ${CTR.api.slice(0, 12)} (${RUNNING_IDS.api})`,
+      ],
+      // Recreated from the same image: another container, so not the paused one.
+      [
+        { startRecreates: true },
+        `and api is container ${CTR.recreated} (${RUNNING_IDS.api}), not the paused ${CTR.api.slice(0, 12)}`,
+      ],
     ] as const) {
       const r = run({ ...state, detector: AFTER }, rollback);
       expect(r.status, r.out).toBe(1);
@@ -407,10 +422,10 @@ describe('deploy-prod --rollback: the first-write guard of the bottle-cycle chai
     ]) {
       expect(r.status).not.toBe(0);
       expect(r.out).toContain(
-        `api: the paused container of ${RUNNING} (${RUNNING_IDS.api}, running: false)`,
+        `api: the paused container ${CTR.api.slice(0, 12)} of ${RUNNING} (${RUNNING_IDS.api}, running: false)`,
       );
       expect(r.out).toContain(
-        `web: the paused container of ${RUNNING} (${RUNNING_IDS.web}, running: false)`,
+        `web: the paused container ${CTR.web.slice(0, 12)} of ${RUNNING} (${RUNNING_IDS.web}, running: false)`,
       );
       expect(r.out).toContain('Both are the paused containers, stopped: nothing was rolled back');
       expect(r.out).toContain('docker start ayvo-prod-api-1 ayvo-prod-web-1');
@@ -422,10 +437,10 @@ describe('deploy-prod --rollback: the first-write guard of the bottle-cycle chai
     const r = run({ startFails: 'api' }, rollback);
     expect(r.status).toBe(1);
     expect(r.out).toContain(
-      `api: ${TARGET_API} (running: true), not the paused ${RUNNING_IDS.api}`,
+      `api: container ${CTR.recreated.slice(0, 12)} (${TARGET_API}, running: true), not the paused ${CTR.api.slice(0, 12)} (${RUNNING_IDS.api})`,
     );
     expect(r.out).toContain(
-      `web: the paused container of ${RUNNING} (${RUNNING_IDS.web}, running: false)`,
+      `web: the paused container ${CTR.web.slice(0, 12)} of ${RUNNING} (${RUNNING_IDS.web}, running: false)`,
     );
     expect(r.out).toContain('do NOT start anything by hand');
     expect(r.out).toContain(
@@ -436,10 +451,33 @@ describe('deploy-prod --rollback: the first-write guard of the bottle-cycle chai
     // A container that is gone or unreadable is just as unclear.
     const gone = run({}, `rollback_first_write_guard; rm "$D/ctr/web"; exit 1`);
     expect(gone.out).toContain(
-      `web: no container (running: unknown), not the paused ${RUNNING_IDS.web}`,
+      `web: (no container, running: unknown), not the paused ${CTR.web.slice(0, 12)} (${RUNNING_IDS.web})`,
     );
     expect(gone.out).toContain('do NOT start anything by hand');
     expect(gone.out).not.toContain('docker start ayvo-prod-');
+  });
+
+  it('a new api container from the same image beside the original web is not the paused one: no manual start', () => {
+    // Compose recreated api from the very image ID it ran, then the start failed: same image, new
+    // container. Judged by the container ID, it is replaced — never "start the same ones".
+    const r = run({ startFails: 'api-same-image' }, rollback);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain(
+      `api: container ${CTR.recreated.slice(0, 12)} (${RUNNING_IDS.api}, running: true), not the paused ${CTR.api.slice(0, 12)} (${RUNNING_IDS.api})`,
+    );
+    expect(r.out).toContain(
+      `web: the paused container ${CTR.web.slice(0, 12)} of ${RUNNING} (${RUNNING_IDS.web}, running: false)`,
+    );
+    expect(r.out).toContain('Not both are the paused containers');
+    expect(r.out).toContain('do NOT start anything by hand');
+    expect(r.out).not.toContain('Both are the paused containers');
+    expect(r.out).not.toContain('docker start ayvo-prod-');
+  });
+
+  it('the container IDs are taken before the pause and a missing one stops before any change', () => {
+    const r = run({}, `echo not-a-container-id >"$D/ctr/web.cid"; ${rollback}`);
+    expectStoppedBeforeAnyChange(r);
+    expect(r.out).toContain('web has no container ID');
   });
 
   it('--check reports the state read only, never pauses and never fails on it', () => {

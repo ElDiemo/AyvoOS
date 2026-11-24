@@ -163,7 +163,8 @@ RB_PREMIUM_ACCOUNTS=""
 FINANCE_INVOICE_MAIL=""
 FINANCE_MAIL_TEST_RECIPIENTS=""
 GUARD_PAUSED="" # rollback_first_write_guard: "" | reading | allowed (api/web of $PREVIOUS stopped)
-declare -A GUARD_IDS=() # the image IDs of the api/web containers the guard paused
+declare -A GUARD_IDS=()  # the image IDs of the api/web containers the guard paused (approved images)
+declare -A GUARD_CTRS=() # their container IDs: the same container, never one recreated from that image
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m ok\033[0m %s\n' "$*"; }
@@ -1195,7 +1196,7 @@ first_write_detector() {
 #   all finished, target without it     → the detector, api/web paused while it is read.
 # The running release is checked before it is paused (the deploy lock is held); every doubt stops.
 rollback_first_write_guard() {
-  local AYVO_RELEASE=$PREVIOUS name missing=0 schema detector service running recorded out
+  local AYVO_RELEASE=$PREVIOUS name missing=0 schema detector service container running recorded out
   STEP="first-write guard: may $ROLLBACK run on this database (doc 070 §5)"
   log "$STEP"
   [[ -n $PREVIOUS ]] || die "production is not running: there is nothing to roll back from"
@@ -1227,11 +1228,13 @@ rollback_first_write_guard() {
   [[ -f $PROD_DIR/state/images/$PREVIOUS ]] ||
     die "no image IDs are recorded for the running $PREVIOUS (state/images): stop before any change"
   for service in api web; do
-    running="$(docker inspect --format '{{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)"
+    read -r container running <<<"$(docker inspect --format '{{.Id}} {{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)" || true
     recorded="$(awk -v s="$service" '$1 == s { print $2 }' "$PROD_DIR/state/images/$PREVIOUS")"
-    [[ -n $running && $running == "$recorded" ]] ||
+    [[ -n ${running:-} && $running == "$recorded" ]] ||
       die "$service runs ${running:-nothing}, not the recorded ${recorded:-nothing} of $PREVIOUS: stop before any change"
+    [[ $container =~ ^[0-9a-f]{64}$ ]] || die "$service has no container ID: stop before any change"
     GUARD_IDS[$service]=$running
+    GUARD_CTRS[$service]=$container
   done
   compose config --quiet || die "the Compose configuration of the running $PREVIOUS does not validate: stop before any change"
 
@@ -1251,19 +1254,20 @@ rollback_first_write_guard() {
   ok "no first write ($out): $ROLLBACK may run; api/web stay stopped until it starts"
 }
 
-# A stop of the guard after the pause: the very containers just stopped start again (the same image
-# IDs, nothing recreated, no state recorded, the portal and Finance untouched), then it stops.
+# A stop of the guard after the pause: the very containers just stopped start again (the same
+# container and image IDs, nothing recreated, no state recorded, the portal and Finance untouched),
+# then it stops.
 resume_after_guard() {
-  local reason=$1 service running
+  local reason=$1 service container running
   STEP="first-write guard: start the paused api and web of $PREVIOUS again"
   log "$STEP"
   compose start api web || die "$reason; and api/web of $PREVIOUS did not start again"
   wait_healthy api || die "$reason; and api of $PREVIOUS did not become healthy again"
   wait_healthy web || die "$reason; and web of $PREVIOUS did not become healthy again"
   for service in api web; do
-    running="$(docker inspect --format '{{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)"
-    [[ $running == "${GUARD_IDS[$service]}" ]] ||
-      die "$reason; and $service runs ${running:-nothing}, not the paused ${GUARD_IDS[$service]}"
+    read -r container running <<<"$(docker inspect --format '{{.Id}} {{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)" || true
+    [[ ${container:-} == "${GUARD_CTRS[$service]}" && ${running:-} == "${GUARD_IDS[$service]}" ]] ||
+      die "$reason; and $service is container ${container:-none} (${running:-no image}), not the paused ${GUARD_CTRS[$service]:0:12} (${GUARD_IDS[$service]})"
   done
   GUARD_PAUSED=""
   die "$reason. $PREVIOUS runs again unchanged (same containers); nothing was rolled back"
@@ -1274,18 +1278,18 @@ resume_after_guard() {
 # documented restore their start; anything else (replaced by the rollback's start, missing, unclear)
 # is named, never answered with a blind start.
 guard_exit_note() {
-  local service now running same=0 stopped=0
+  local service container image running same=0 stopped=0
   echo "The first-write guard had paused api and web of $PREVIOUS ($GUARD_PAUSED). Now:"
   for service in api web; do
-    now="$(docker inspect --format '{{.Image}} {{.State.Running}}' "$PROJECT-$service-1" 2>/dev/null || true)"
-    running=${now#* }
-    now=${now%% *}
-    if [[ -n $now && $now == "${GUARD_IDS[$service]:-}" ]]; then
+    container="" image="" running=""
+    read -r container image running <<<"$(docker inspect --format '{{.Id}} {{.Image}} {{.State.Running}}' "$PROJECT-$service-1" 2>/dev/null || true)" || true
+    # The same container only by its own ID: one Compose recreated from the same image is not it.
+    if [[ -n $container && $container == "${GUARD_CTRS[$service]:-}" ]]; then
       same=$((same + 1))
       [[ $running == false ]] && stopped=$((stopped + 1))
-      echo "  $service: the paused container of $PREVIOUS ($now, running: $running)"
+      echo "  $service: the paused container ${container:0:12} of $PREVIOUS ($image, running: $running)"
     else
-      echo "  $service: ${now:-no container} (running: ${running:-unknown}), not the paused ${GUARD_IDS[$service]:-unknown}"
+      echo "  $service: ${container:+container ${container:0:12} }(${image:-no container}, running: ${running:-unknown}), not the paused ${GUARD_CTRS[$service]:0:12} (${GUARD_IDS[$service]:-unknown})"
     fi
   done
   if ((same == 2 && stopped == 2)); then
