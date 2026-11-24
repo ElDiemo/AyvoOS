@@ -96,6 +96,71 @@ function Valid({ terms }: { terms: CommissionTerms }) {
   );
 }
 
+type Tab = 'settings' | 'portfolio' | 'closing' | 'statement' | 'mine';
+
+/**
+ * One main view per role (the admin's monthly overview, a salesperson's own commission) and the
+ * rest as secondary links: rate settings, the portfolio, one's own commission and terms.
+ */
+function CommissionsNav({
+  tab,
+  main,
+  manage,
+  closing,
+}: {
+  tab: Tab;
+  main: Tab;
+  manage: boolean;
+  closing: boolean;
+}) {
+  const href = (k: Tab) => (k === main ? '/sales/commissions' : `/sales/commissions?tab=${k}`);
+  const all: Tab[] = [
+    ...(closing ? (['closing'] as const) : []),
+    'statement',
+    ...(manage ? (['settings'] as const) : []),
+    'portfolio',
+    'mine',
+  ];
+  const secondary = all.filter((k) => k !== main);
+  const testId = (k: Tab) => (k === 'closing' || k === 'statement' ? `tab-${k}` : undefined);
+  return (
+    <nav
+      aria-label={t.title}
+      className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2"
+      data-testid="commissions-nav"
+    >
+      <Link
+        href={href(main)}
+        aria-current={tab === main ? 'page' : undefined}
+        className={cn(
+          'rounded-md px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none',
+          tab === main
+            ? 'bg-stone-900 text-white'
+            : 'border border-stone-300 bg-white text-stone-700 hover:bg-stone-50',
+        )}
+        data-testid={testId(main)}
+      >
+        {t.tabs[main]}
+      </Link>
+      <span className="text-xs text-stone-500">{t.tabs.more}</span>
+      {secondary.map((k) => (
+        <Link
+          key={k}
+          href={href(k)}
+          aria-current={tab === k ? 'page' : undefined}
+          className={cn(
+            'text-sm underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none',
+            tab === k ? 'font-semibold text-stone-900 underline' : 'text-stone-600',
+          )}
+          data-testid={testId(k)}
+        >
+          {t.tabs[k]}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
 /**
  * Obchod → Provize (doc 068 §2, PR 1a/1b). Portfolio: the hotels of a month (own for a
  * salesperson, everyone for `sales:manage`). Terms: a salesperson reads their own; the admin
@@ -114,21 +179,23 @@ export default async function SalesCommissionsPage({
   // PR 2e: the monthly closing (finance:commissions_manage, ADMIN) and the own statement.
   const closing = hasPermission(me, 'finance:commissions_manage');
   if (q.tab === 'closing' && !closing) redirect('/forbidden');
+  if (q.tab === 'settings' && !manage) redirect('/forbidden');
+  // The default view: the admin's monthly overview, a salesperson's own commission. The rate
+  // settings have their own explicit route (?tab=settings); an older `?salesperson=` link of the
+  // settings (no tab) still opens them for the admin.
+  const fallback = closing ? 'closing' : manage ? 'settings' : 'statement';
   const tab =
-    q.tab === 'portfolio' || q.tab === 'closing' || q.tab === 'statement'
+    q.tab === 'portfolio' ||
+    q.tab === 'closing' ||
+    q.tab === 'statement' ||
+    q.tab === 'mine' ||
+    q.tab === 'settings'
       ? q.tab
-      : manage && q.tab !== 'mine'
+      : manage && q.salesperson
         ? 'settings'
-        : 'mine';
+        : fallback;
   // The last closed month by default (a month closes on the 1st of the next one, O12).
   const closedMonth = isMonth(q.month) ? q.month : previousMonth(pragueMonth());
-  const tabClass = (on: boolean) =>
-    cn(
-      'rounded-md px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none',
-      on
-        ? 'bg-stone-900 text-white'
-        : 'border border-stone-300 bg-white text-stone-700 hover:bg-stone-50',
-    );
 
   let body: React.ReactNode;
   if (tab === 'closing') {
@@ -183,7 +250,7 @@ export default async function SalesCommissionsPage({
               {people.map((p) => (
                 <li key={p.salesperson.id}>
                   <Link
-                    href={`/sales/commissions?salesperson=${p.salesperson.id}`}
+                    href={`/sales/commissions?tab=settings&salesperson=${p.salesperson.id}`}
                     aria-current={p.salesperson.id === selectedId ? 'page' : undefined}
                     className={cn(
                       'block rounded-md px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none',
@@ -223,49 +290,12 @@ export default async function SalesCommissionsPage({
   return (
     <>
       <SalesHeader active="commissions" title={t.title} subtitle={t.subtitle} />
-      <nav aria-label={t.title} className="mb-4 flex flex-wrap gap-2">
-        {manage && (
-          <Link
-            href="/sales/commissions"
-            aria-current={tab === 'settings' ? 'page' : undefined}
-            className={tabClass(tab === 'settings')}
-          >
-            {t.tabs.settings}
-          </Link>
-        )}
-        <Link
-          href="/sales/commissions?tab=portfolio"
-          aria-current={tab === 'portfolio' ? 'page' : undefined}
-          className={tabClass(tab === 'portfolio')}
-        >
-          {t.tabs.portfolio}
-        </Link>
-        {closing && (
-          <Link
-            href="/sales/commissions?tab=closing"
-            aria-current={tab === 'closing' ? 'page' : undefined}
-            className={tabClass(tab === 'closing')}
-            data-testid="tab-closing"
-          >
-            {t.tabs.closing}
-          </Link>
-        )}
-        <Link
-          href="/sales/commissions?tab=statement"
-          aria-current={tab === 'statement' ? 'page' : undefined}
-          className={tabClass(tab === 'statement')}
-          data-testid="tab-statement"
-        >
-          {t.tabs.statement}
-        </Link>
-        <Link
-          href="/sales/commissions?tab=mine"
-          aria-current={tab === 'mine' ? 'page' : undefined}
-          className={tabClass(tab === 'mine')}
-        >
-          {t.tabs.mine}
-        </Link>
-      </nav>
+      <CommissionsNav
+        tab={tab}
+        main={closing ? 'closing' : manage ? 'settings' : 'statement'}
+        manage={manage}
+        closing={closing}
+      />
       {body}
     </>
   );
