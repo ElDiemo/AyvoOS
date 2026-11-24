@@ -48,6 +48,12 @@ test('the administrator records terms by keyboard; the history keeps every versi
     .getByRole('link', { name: 'Provize' })
     .click();
   await expect(page.getByRole('heading', { level: 1, name: 'Provize' })).toBeVisible();
+  // The admin's default view is the monthly overview; the rate settings have their own route,
+  // and an older `?salesperson=` link of the settings still opens them.
+  await expect(page.getByTestId('closing-filter')).toBeVisible();
+  await page.getByTestId('commissions-nav').getByRole('link', { name: 'Nastavení sazeb' }).click();
+  await expect(page).toHaveURL(/tab=settings/);
+  await expect(page.getByTestId('terms-people')).toBeVisible();
   await page.goto(`/sales/commissions?salesperson=${aId}`);
   await expect(page.getByTestId('terms-selected')).toContainText('Chybí podmínky provize');
 
@@ -93,20 +99,27 @@ test('a salesperson reads only their own terms; without terms the missing state'
   browser,
 }) => {
   const page = await signIn(browser, A.email);
+  // The default view of a salesperson is "Moje provize"; the terms keep their own route.
   await page.goto('/sales/commissions');
+  await expect(page.getByTestId('mine-statement')).toBeVisible();
+  await page.getByTestId('mine-terms-link').click();
+  await expect(page).toHaveURL(/tab=mine/);
   await expect(page.getByTestId('terms-mine')).toContainText('10,00 % po 36 měsíců');
   await expect(page.getByTestId('terms-form')).toHaveCount(0);
   await expect(page.getByTestId('terms-people')).toHaveCount(0);
   // The settings of others are not reachable even by URL.
   await page.goto(`/sales/commissions?salesperson=${aId}`);
   await expect(page.getByTestId('terms-form')).toHaveCount(0);
+  await page.goto(`/sales/commissions?tab=settings&salesperson=${aId}`);
+  await expect(page).toHaveURL(/\/forbidden/);
+  await page.goto('/sales/commissions?tab=mine');
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow(page);
   await shot(page, 'sales-commissions-mine-390');
   await page.context().close();
 
   const c = await signIn(browser, C.email);
-  await c.goto('/sales/commissions');
+  await c.goto('/sales/commissions?tab=mine');
   await expect(c.getByTestId('terms-mine')).toContainText('Chybí podmínky provize');
   await c.context().close();
 });

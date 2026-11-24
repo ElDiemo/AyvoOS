@@ -4,11 +4,12 @@ export const commissionsCs = {
   subtitle:
     'Podmínky, portfolio a měsíční podklady obchodníků. Částky počítají Finance; výplaty systém zatím neeviduje.',
   tabs: {
-    settings: 'Nastavení',
+    settings: 'Nastavení sazeb',
     mine: 'Moje podmínky',
-    portfolio: 'Portfolio',
-    closing: 'Uzávěrka',
-    statement: 'Můj podklad',
+    portfolio: 'Portfolio hotelů',
+    closing: 'Měsíční provize',
+    statement: 'Moje provize',
+    more: 'Další:',
   },
   mine: {
     heading: 'Moje podmínky provize',
@@ -164,6 +165,52 @@ export const commissionsCs = {
    * monthly preview from Finance, its deviations, the approval bound to the preview and the
    * salesperson's invoice. Nothing is paid and nothing goes to accounting.
    */
+  /**
+   * The admin's monthly overview (finance:commissions_manage): one row per salesperson and
+   * currency with its current state; the detail holds the hotel rows, deviations and the invoice.
+   */
+  overview: {
+    steps: ['Zkontrolujte', 'Schvalte', 'Zaevidujte fakturu'],
+    stepsLabel: 'Postup uzávěrky',
+    modeLabel: (mode: string) => `Režim: ${mode}`,
+    liveBadge: 'LIVE – ostré faktury',
+    listHeading: (month: string) => `Obchodníci · podklady ${month}`,
+    state: {
+      BLOCKED: 'K dořešení',
+      AWAITING_APPROVAL: 'Čeká na schválení',
+      TO_INVOICE: 'K fakturaci',
+      INVOICE_RECEIVED: 'Faktura přijata',
+      NOTHING_TO_INVOICE: 'Nic k fakturaci',
+    },
+    amount: {
+      BLOCKED: 'Náhled k fakturaci',
+      AWAITING_APPROVAL: 'Po schválení k fakturaci',
+      TO_INVOICE: 'K fakturaci (bez DPH)',
+      INVOICE_RECEIVED: 'Fakturováno (bez DPH)',
+      NOTHING_TO_INVOICE: 'Převádí se do dalšího měsíce',
+    },
+    next: {
+      AWAITING_APPROVAL: 'Zkontrolujte detail a schvalte podklad.',
+      TO_INVOICE: 'Až obchodník pošle fakturu, zaevidujte ji.',
+      INVOICE_RECEIVED: { before: 'Výplata naplánovaná na', after: '(jen plán, nic se neplatí).' },
+      NOTHING_TO_INVOICE: 'Nic se nefakturuje; saldo se převádí.',
+    },
+    nonCzk: (currency: string) =>
+      `Podklad v měně ${currency}: schválit lze jen CZK. Měny se nesčítají.`,
+    conflict:
+      'Pro schváleného obchodníka Finance vrací i nový náhled stejného měsíce. Nic neschvalujte a ověřte podklady.',
+    detail: 'Detail',
+    amountPending: 'Částka se spočítá po vyřešení',
+    openMonth: (month: string) => `Otevřít podklady ${month}`,
+    recordInvoice: 'Zaevidovat fakturu',
+    previewUnavailable:
+      'Neschválené podklady teď nelze načíst: Finance nebo jádro neodpovídá. Seznam ukazuje jen schválené podklady; neznamená to, že není nic ke schválení.',
+    approvedUnavailable:
+      'Schválené podklady teď nelze načíst: Finance neodpovídá. Seznam ukazuje jen neschválené náhledy; neznamená to, že nic schválené není.',
+    unresolvedSummary: (n: number) => `Nezařazené řádky (${n}) – nikomu nepatří a nic neblokují`,
+    settingsLink: 'Nastavení sazeb',
+    ownLink: 'Moje provize',
+  },
   closing: {
     heading: 'Měsíční uzávěrka provizí',
     intro:
@@ -291,12 +338,26 @@ export const commissionsCs = {
   },
   /** PR 2e: Obchod → Provize → Můj podklad (sales:work): own state, one amount, dates. */
   statement: {
-    heading: (month: string) => `Můj podklad ${month}`,
+    heading: (month: string) => `Moje provize · podklad ${month}`,
+    instruction: {
+      PROCESSING: (month: string) =>
+        `Zatím nic nefakturujte. Podklad za ${month} ještě není schválený; částka se ukáže po schválení.`,
+      TO_INVOICE: (amount: string) => `Vystavte fakturu na ${amount} bez DPH.`,
+      NOTHING_TO_INVOICE: 'Nic nefakturujte.',
+      INVOICE_RECEIVED: 'Faktura je přijatá. Nic dalšího nedělejte.',
+    },
+    invoiced: 'Fakturovaná částka (bez DPH)',
+    payoutPlan: 'Plánovaná výplata (plán, ne platba)',
+    portfolioHeading: 'Moje hotely dnes',
+    portfolioNow: (n: number, month: string) =>
+      `Aktuálně máte přiřazeno ${n} ${n === 1 ? 'hotel' : n >= 2 && n <= 4 ? 'hotely' : 'hotelů'} (portfolio ${month}).`,
+    portfolioNote: (month: string) =>
+      `Je to dnešní stav přiřazení, ne počet hotelů v podkladu za ${month}.`,
+    portfolioLink: 'Seznam hotelů',
+    termsLink: 'Moje podmínky',
     month: 'Měsíc',
     show: 'Zobrazit',
     testBadge: 'TEST – syntetická data, nic se nevyplácí',
-    hotels: 'Hotely přiřazené v měsíci',
-    hotelsNote: 'Počet z portfolia (přiřazení), ne z faktur.',
     hotelsUnavailable: 'Počet hotelů teď nelze načíst.',
     state: {
       PROCESSING: 'Zpracovává se',
