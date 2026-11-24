@@ -129,6 +129,9 @@ migration only widens what an R1 line accepts, and the previous images never wri
   enum, `P2023`), and its guard would refuse a `CRATE_RETURNED` release it did not write. Never
   delete or rewrite R1.1 rows to make an old image work.
 - The release note records the time of the first R1.1 write.
+- On PROD, `deploy-prod.sh --rollback` enforces this itself. It pauses api/web, reads
+  `scripts/sql/bottle-cycle-first-write-detector.sql` (read only) and refuses the return unless every
+  value is 0. Its rules are in doc 036 §7.
 
 Verified on throwaway worktrees of `main` `09e82e7` (the release before R3 and R1.1), with all
 five migrations of R3-a, R3-b and R1.1 applied (evidence harness outside the repository, listed

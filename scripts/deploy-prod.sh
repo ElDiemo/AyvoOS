@@ -10,7 +10,9 @@
 #                                                         builds and migrates nothing)
 #   scripts/deploy-prod.sh --release <commit>             export, build, back up, migrate, start, verify
 #   scripts/deploy-prod.sh --rollback <release>           start the images of an earlier release again
-#                                                         (no build, no migration; doc 036 §7)
+#                                                         (no build, no migration; doc 036 §7); over
+#                                                         the bottle-cycle chain only before its first
+#                                                         write (api/web paused while it is read)
 #   scripts/deploy-prod.sh --bootstrap-admin --email <e-mail> --name "<name>"
 #                                                         the one-time first administrator (doc 021 §8)
 #   scripts/deploy-prod.sh --activate-bootstrap --email <e-mail> [--resend]
@@ -114,6 +116,16 @@ readonly KEYS_S3="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 # Region, bucket and owner may be in the file too; compose.yml's fixed values take precedence.
 readonly ALLOW_S3="$KEYS_S3 AWS_REGION S3_BUCKET S3_EXPECTED_BUCKET_OWNER"
 
+# The bottle-cycle chain (R3-a, R3-b, R1.1; doc 058, doc 070 §5): a release older than these
+# migrations runs on their schema only until the first write of the chain. Whether a rollback must
+# check that comes from the migration history (rollback_first_write_guard), never from a file.
+readonly FIRST_WRITE_MIGRATIONS="20261119090000_bottle_fill_circulations 20261119090100_reuse_placement_enum_values 20261119090200_reuse_placement_filling 20261119090300_returns_r1_1_enum_values 20261119090400_returns_r1_1 20261119090500_returns_r1_issue_freed_crate"
+# The read-only detector exactly as reviewed and run on DEV (#207 f3109820, 2026-11-23): any other
+# content is a stop. Its header still names the DEV base of that trial; the queries are the point.
+readonly FIRST_WRITE_DETECTOR=scripts/sql/bottle-cycle-first-write-detector.sql
+readonly FIRST_WRITE_DETECTOR_SHA256=c246e06698a969b621dc9102490e903a62c8b8b398484b554773adaff5d9d601
+readonly FIRST_WRITE_NONE='0|0|0|0|0|0|0|'
+
 MODE=deploy
 RELEASE=""
 ROLLBACK=""
@@ -150,6 +162,9 @@ FINANCE_ENABLED=false
 RB_PREMIUM_ACCOUNTS=""
 FINANCE_INVOICE_MAIL=""
 FINANCE_MAIL_TEST_RECIPIENTS=""
+GUARD_PAUSED="" # rollback_first_write_guard: "" | reading | allowed (api/web of $PREVIOUS stopped)
+declare -A GUARD_IDS=()  # the image IDs of the api/web containers the guard paused (approved images)
+declare -A GUARD_CTRS=() # their container IDs: the same container, never one recreated from that image
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m ok\033[0m %s\n' "$*"; }
@@ -158,7 +173,7 @@ die() {
   printf '\033[1;31mFAILED\033[0m at "%s": %s\n' "$STEP" "$*" >&2
   exit 1
 }
-usage() { sed -n '2,63p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,65p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 on_exit() {
   local code=$?
@@ -174,6 +189,7 @@ on_exit() {
       echo "with the new schema (doc 036 §7); otherwise restore deliberately (doc 035 §4) — never"
       echo "automatically."
     fi
+    [[ -z $GUARD_PAUSED ]] || guard_exit_note
     if [[ $MODE == finance || $MODE == finance-rollback ]]; then
       echo "Only the Finance unit was touched; the OS (api, web) keeps running $PREVIOUS."
       [[ -n ${FINANCE_PREVIOUS:-} ]] && echo "Previous Finance: scripts/deploy-prod.sh --finance-rollback $FINANCE_PREVIOUS"
@@ -1137,6 +1153,182 @@ preflight_rollback_images() {
   ok "images of $ROLLBACK are tagged as recorded"
 }
 
+# Read-only SQL in the postgres container as its own (privileged) user, as the backup reads it: the
+# SQL on stdin runs inside BEGIN READ ONLY … ROLLBACK and any error ends psql with a failure.
+read_only_sql() {
+  { echo 'BEGIN READ ONLY;' && cat && echo 'ROLLBACK;'; } |
+    compose exec -T postgres sh -c 'psql -X -q -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+}
+
+# How far the bottle-cycle chain is applied, from the migration history: "old" = none of its
+# migrations was ever started, "applied" = all finished (none only rolled back), "partial (…)" =
+# anything between (a failed or interrupted migrate). Fails when the history cannot be read.
+first_write_schema() {
+  local names out all
+  # shellcheck disable=SC2086 # the migrations are a list of names
+  names="$(printf "'%s'," $FIRST_WRITE_MIGRATIONS)"
+  all="$(wc -w <<<"$FIRST_WRITE_MIGRATIONS")"
+  out="$(read_only_sql <<<"SELECT count(DISTINCT migration_name) FILTER (WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL) || '|' || count(DISTINCT migration_name) || '|' || count(*) FILTER (WHERE finished_at IS NULL AND rolled_back_at IS NULL) FROM _prisma_migrations WHERE migration_name IN (${names%,});")" ||
+    return 1
+  [[ $out =~ ^[0-9]+\|[0-9]+\|[0-9]+$ ]] || return 1
+  case $out in
+    '0|0|0') echo old ;;
+    "$all|$all|0") echo applied ;;
+    *) echo "partial (finished|started|unfinished: $out of $all)" ;;
+  esac
+}
+
+# The reviewed detector of this checkout (the script's own commit); fails unless it is exactly it.
+first_write_detector() {
+  local file=$REPO_ROOT/$FIRST_WRITE_DETECTOR sum
+  [[ -f $file ]] || return 1
+  sum="$(sha256sum <"$file")" || return 1
+  [[ ${sum%% *} == "$FIRST_WRITE_DETECTOR_SHA256" ]] || return 1
+  printf '%s\n' "$file"
+}
+
+# --rollback over the bottle-cycle chain (doc 070 §5): after its first write the older code cannot
+# read the data (a BOTTLES receipt answers 500) — fix forward only, there is no override. Decided
+# by the migration history first, for every target, never by a file being there:
+#   unreadable or partly applied        → stop before any change (whatever the target);
+#   never started                       → only a target without the chain (it was made for it);
+#   all finished, target with the chain → it reads that data (no detector);
+#   all finished, target without it     → the detector, api/web paused while it is read.
+# The running release is checked before it is paused (the deploy lock is held); every doubt stops.
+rollback_first_write_guard() {
+  local AYVO_RELEASE=$PREVIOUS name missing=0 schema detector service container running recorded out
+  STEP="first-write guard: may $ROLLBACK run on this database (doc 070 §5)"
+  log "$STEP"
+  [[ -n $PREVIOUS ]] || die "production is not running: there is nothing to roll back from"
+  for name in $FIRST_WRITE_MIGRATIONS; do
+    [[ -f $(release_dir "$ROLLBACK")/apps/api/prisma/migrations/$name/migration.sql ]] || missing=$((missing + 1))
+  done
+  schema="$(first_write_schema)" ||
+    die "the migration history (_prisma_migrations) is not readable: stop before any change"
+  case $schema in
+    old)
+      ((missing > 0)) ||
+        die "the bottle-cycle migrations never ran here, but $ROLLBACK was made for them: no verified state; stop before any change"
+      ok "the bottle-cycle migrations never ran here: no first-write limit (as before the chain)"
+      return 0
+      ;;
+    applied)
+      if ((missing == 0)); then
+        ok "the bottle-cycle chain is applied and $ROLLBACK has its migrations (reads their data): no first-write limit"
+        return 0
+      fi
+      ;;
+    *) die "the bottle-cycle chain is $schema: no verified state for $ROLLBACK; stop before any change, the owner decides (doc 036 §7)" ;;
+  esac
+  detector="$(first_write_detector)" ||
+    die "$FIRST_WRITE_DETECTOR is missing or not the reviewed one (sha256 $FIRST_WRITE_DETECTOR_SHA256): stop before any change"
+  # What a stop starts again: the release recorded as current, running exactly its recorded IDs.
+  [[ $(cut -c1-12 "$PROD_DIR/state/current-release" 2>/dev/null) == "$PREVIOUS" ]] ||
+    die "state/current-release is not the running $PREVIOUS: stop before any change"
+  [[ -f $PROD_DIR/state/images/$PREVIOUS ]] ||
+    die "no image IDs are recorded for the running $PREVIOUS (state/images): stop before any change"
+  for service in api web; do
+    read -r container running <<<"$(docker inspect --format '{{.Id}} {{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)" || true
+    recorded="$(awk -v s="$service" '$1 == s { print $2 }' "$PROD_DIR/state/images/$PREVIOUS")"
+    [[ -n ${running:-} && $running == "$recorded" ]] ||
+      die "$service runs ${running:-nothing}, not the recorded ${recorded:-nothing} of $PREVIOUS: stop before any change"
+    [[ $container =~ ^[0-9a-f]{64}$ ]] || die "$service has no container ID: stop before any change"
+    GUARD_IDS[$service]=$running
+    GUARD_CTRS[$service]=$container
+  done
+  compose config --quiet || die "the Compose configuration of the running $PREVIOUS does not validate: stop before any change"
+
+  STEP="first-write guard: pause api and web of $PREVIOUS while the data is read"
+  log "$STEP"
+  GUARD_PAUSED=reading
+  # From here a signal (a lost session, Ctrl-C) must end as a failure, so on_exit reports the pause.
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  compose stop api web || resume_after_guard "api/web of $PREVIOUS did not stop"
+  STEP="first-write guard: read the data (read only, $FIRST_WRITE_DETECTOR)"
+  out="$(read_only_sql <"$detector")" || resume_after_guard "the detector failed (SQL error or no database)"
+  [[ $out == "$FIRST_WRITE_NONE" ]] ||
+    resume_after_guard "first write of the bottle-cycle chain found (${out:-no answer}): rollback to $ROLLBACK refused — fix forward (doc 070 §5)"
+  GUARD_PAUSED=allowed
+  ok "no first write ($out): $ROLLBACK may run; api/web stay stopped until it starts"
+}
+
+# A stop of the guard after the pause: the very containers just stopped start again (the same
+# container and image IDs, nothing recreated, no state recorded, the portal and Finance untouched),
+# then it stops.
+resume_after_guard() {
+  local reason=$1 service container running
+  STEP="first-write guard: start the paused api and web of $PREVIOUS again"
+  log "$STEP"
+  compose start api web || die "$reason; and api/web of $PREVIOUS did not start again"
+  wait_healthy api || die "$reason; and api of $PREVIOUS did not become healthy again"
+  wait_healthy web || die "$reason; and web of $PREVIOUS did not become healthy again"
+  for service in api web; do
+    read -r container running <<<"$(docker inspect --format '{{.Id}} {{.Image}}' "$PROJECT-$service-1" 2>/dev/null || true)" || true
+    [[ ${container:-} == "${GUARD_CTRS[$service]}" && ${running:-} == "${GUARD_IDS[$service]}" ]] ||
+      die "$reason; and $service is container ${container:-none} (${running:-no image}), not the paused ${GUARD_CTRS[$service]:0:12} (${GUARD_IDS[$service]})"
+  done
+  GUARD_PAUSED=""
+  die "$reason. $PREVIOUS runs again unchanged (same containers); nothing was rolled back"
+}
+
+# on_exit while the guard's pause lasts (from the stop until the rollback's start is verified): what
+# each container is now. Only when both are still the very containers paused, stopped, is the
+# documented restore their start; anything else (replaced by the rollback's start, missing, unclear)
+# is named, never answered with a blind start.
+guard_exit_note() {
+  local service container image running same=0 stopped=0
+  echo "The first-write guard had paused api and web of $PREVIOUS ($GUARD_PAUSED). Now:"
+  for service in api web; do
+    container="" image="" running=""
+    read -r container image running <<<"$(docker inspect --format '{{.Id}} {{.Image}} {{.State.Running}}' "$PROJECT-$service-1" 2>/dev/null || true)" || true
+    # The same container only by its own ID: one Compose recreated from the same image is not it.
+    if [[ -n $container && $container == "${GUARD_CTRS[$service]:-}" ]]; then
+      same=$((same + 1))
+      [[ $running == false ]] && stopped=$((stopped + 1))
+      echo "  $service: the paused container ${container:0:12} of $PREVIOUS ($image, running: $running)"
+    else
+      echo "  $service: ${container:+container ${container:0:12} }(${image:-no container}, running: ${running:-unknown}), not the paused ${GUARD_CTRS[$service]:0:12} (${GUARD_IDS[$service]:-unknown})"
+    fi
+  done
+  if ((same == 2 && stopped == 2)); then
+    echo "Both are the paused containers, stopped: nothing was rolled back. Start the same ones again:"
+    echo "  docker start $PROJECT-api-1 $PROJECT-web-1"
+  elif ((same == 2)); then
+    echo "Both are the paused containers of $PREVIOUS; start any that is not running: docker start $PROJECT-api-1 $PROJECT-web-1"
+  else
+    echo "Not both are the paused containers (the start of $ROLLBACK replaced at least one, or the state is unclear):"
+    echo "do NOT start anything by hand. Inspect them (docker ps -a --filter name=$PROJECT-), then either finish the"
+    echo "rollback (scripts/deploy-prod.sh --rollback $ROLLBACK) or return to the recorded images of $PREVIOUS"
+    echo "(scripts/deploy-prod.sh --rollback $PREVIOUS)."
+  fi
+}
+
+# --check: the guard's state now, read only and nothing paused (writes go on: a hint, never a stop).
+first_write_report() {
+  local schema detector out
+  if ! schema="$(first_write_schema 2>/dev/null)"; then
+    warn "first-write guard: the migration history is not readable now (no running database?)"
+    return 0
+  fi
+  if [[ $schema != applied ]]; then
+    ok "first-write guard: the bottle-cycle chain is $schema here"
+    return 0
+  fi
+  if ! detector="$(first_write_detector)"; then
+    warn "first-write guard: $FIRST_WRITE_DETECTOR is missing or not the reviewed one"
+    return 0
+  fi
+  if ! out="$(read_only_sql <"$detector" 2>/dev/null)"; then
+    warn "first-write guard: the detector failed"
+  elif [[ $out == "$FIRST_WRITE_NONE" ]]; then
+    ok "first-write guard: no first write yet ($out): a rollback to a release before the chain is still allowed"
+  else
+    warn "first-write guard: first write found ($out): a rollback to a release before the chain is refused"
+  fi
+}
+
 build_images() {
   [[ -n ${IMAGES_ACTION:-} ]] || die "preflight_images did not run"
   if [[ $IMAGES_ACTION == reuse ]]; then
@@ -1747,6 +1939,7 @@ case $MODE in
     preflight_images
     validate_compose
     backup_status
+    first_write_report
     ok "ready to deploy $RELEASE (running now: ${PREVIOUS:-nothing}; images: $IMAGES_ACTION)"
     ;;
   deploy)
@@ -1788,8 +1981,10 @@ case $MODE in
     RELEASE=$(<"$(release_dir "$ROLLBACK")/.ayvo-release")
     AYVO_RELEASE=$ROLLBACK
     validate_compose
+    rollback_first_write_guard
     hold_unverified_portal
     start_services
+    GUARD_PAUSED="" # the rollback's api/web run, verified: the pause is over
     verify
     record_release
     ok "production runs $RELEASE again"

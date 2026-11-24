@@ -63,6 +63,9 @@ const STUBS = [
   'backup_before_migration',
   'migrate',
   'remove_old_images',
+  // The first-write guard and its --check report: deploy-prod-first-write-guard.test.ts.
+  'rollback_first_write_guard',
+  'first_write_report',
 ];
 
 function run(state: State, call: string) {
