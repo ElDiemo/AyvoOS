@@ -222,12 +222,16 @@ e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism
 - **The first-write guard of the bottle-cycle chain** (doc 070 §5; R3-a, R3-b, R1.1 =
   migrations `20261119090000` … `090500`). After the chain's first write, a release before it answers
   500 on every receipt with a `BOTTLES` line. So `--rollback` decides from the database, after the
-  image and Compose checks and before the portal hold or any start, under the deploy lock:
-  - **The target has the chain's migrations in its export:** no limit, because it reads that data.
-  - **None of the six migrations ever started** (`_prisma_migrations`): no limit, as before the chain.
+  image and Compose checks and before the portal hold or any start, under the deploy lock. The
+  migration history (`_prisma_migrations`) is read first, for every target:
   - **Partly applied** (some finished, one unfinished or only rolled back), or the history is not
-    readable: **stop before any change**. The owner decides.
-  - **All six finished:** the guard needs the checkout's
+    readable: **stop before any change**, whatever the target. The owner decides.
+  - **None of the six migrations ever started:** no limit for a target without the chain (as before
+    it). A target whose export has the chain's migrations was made for a schema this database does
+    not have: stop before any change.
+  - **All six finished and the target's export has them:** no limit, because it reads that data
+    (no detector, no pause).
+  - **All six finished and the target is older than the chain:** the guard needs the checkout's
     `scripts/sql/bottle-cycle-first-write-detector.sql`, exactly sha256 `c246e066…f5d9d601`. A
     missing or changed file stops before any change. Then:
     1. `state/current-release` must name the running release, and api/web must run its recorded
@@ -241,10 +245,17 @@ e-mail, verified in WorkOS> --name "<name>"` — the existing one-time mechanism
        recreation, the same image IDs checked), and nothing is rolled back or recorded. The portal and
        Finance are not touched. Then: fix forward, or a deliberate restore (doc 035 §4).
   - There is no override.
-  - **The interruption it causes:** api/web are down from the stop until the rollback has started,
-    or on a STOP until they are healthy again. The portal and Finance answer 503 for that time.
-  - **If the run is interrupted while they are stopped** (a signal, a lost session): the exit message
-    says so. Start the same containers by hand: `docker start ayvo-prod-api-1 ayvo-prod-web-1`.
+  - **The interruption it causes:** api/web are down from the stop until the rollback's start is
+    verified, or on a STOP until they are healthy again. The portal and Finance answer 503 for that
+    time.
+  - **If the run fails or is interrupted during that pause** (a failed start, a signal, a lost
+    session — a signal ends the run as a failure from the pause on), the exit message names each
+    container's image and whether it runs:
+    - **both still the paused containers, stopped:** nothing was rolled back. Start the same ones:
+      `docker start ayvo-prod-api-1 ayvo-prod-web-1`.
+    - **otherwise** (the rollback's start replaced one, one is missing, the state is unclear): start
+      nothing by hand. Inspect the containers, then either finish the rollback (`--rollback <target>`
+      again) or return to the recorded images of the running release (`--rollback <running>`).
   - `--check --release` prints the same state read only, without pausing anything, and never fails
     on it.
 

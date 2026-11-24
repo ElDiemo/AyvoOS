@@ -52,6 +52,7 @@ const ROLLBACK = '32e3d4783af0';
 const RUNNING = '0d9d05644d9b';
 const id = (c: string) => `sha256:${c.repeat(64)}`;
 const RUNNING_IDS = { api: id('a'), web: id('b') };
+const TARGET_API = id('c');
 const NONE = '0|0|0|0|0|0|0|';
 const AFTER = '21|29|13|4|0|0|0|2026-11-23 15:02:11.123+00';
 
@@ -76,13 +77,14 @@ type State = {
   /** compose start brings up another image (it must be the same containers). */
   startsOther?: boolean;
   failConfig?: boolean;
+  /** The rollback's own start fails: before it replaced anything, or after replacing only api. */
+  startFails?: 'before' | 'api';
 };
 
 const STUBS = [
   'preflight_rollback_images',
   'validate_compose',
   'hold_unverified_portal',
-  'start_services',
   'verify',
   'record_release',
   'os_ahead_note',
@@ -138,6 +140,7 @@ function run(state: State, call: string) {
     'set -Eeuo pipefail; exec 2>&1', // one stream: the order of the steps is the evidence
     `D=${dir}; PROD_DIR=${prod}; REPO_ROOT=$D/repo; IMAGE_PREFIX=ayvo-prod; PROJECT=ayvo-prod; STEP=`,
     `PREVIOUS=${RUNNING}; ROLLBACK=${ROLLBACK}; RELEASE=${'f'.repeat(40)}; AYVO_RELEASE=; MODE=rollback; PORTAL_FAILED=; GUARD_PAUSED=; IMAGES_ACTION=reuse`,
+    'declare -A GUARD_IDS=(); BACKUP_FILE=; MIGRATED=false; PORTAL_ARCHIVE_COPY=',
     constant('FIRST_WRITE_MIGRATIONS'),
     constant('FIRST_WRITE_DETECTOR'),
     constant('FIRST_WRITE_DETECTOR_SHA256'),
@@ -147,8 +150,17 @@ function run(state: State, call: string) {
     `wait_healthy() { [[ "${state.unhealthy ? 'yes' : ''}" != yes ]]; }`,
     'release_dir() { printf "%s/releases/%s" "$PROD_DIR" "${1:0:12}"; }',
     ...STUBS.map((s) => `${s}() { echo "STEP ${s} $AYVO_RELEASE"; }`),
-    // docker inspect --format '{{.Image}}' ayvo-prod-<svc>-1: the container's image ID.
-    'docker() { local last=${!#} s; s=${last#ayvo-prod-}; s=${s%-1}; [[ -f $D/ctr/$s && ! -f $D/ctr/$s.stopped ]] || return 1; cat "$D/ctr/$s"; echo; }',
+    // docker inspect --format '{{.Image}}[ {{.State.Running}}]' ayvo-prod-<svc>-1: a container's
+    // image ID (also while stopped, as Docker answers) and whether it runs.
+    'docker() { local last=${!#} s; s=${last#ayvo-prod-}; s=${s%-1}; [[ -f $D/ctr/$s ]] || return 1; printf "%s" "$(<"$D/ctr/$s")"; if [[ $* == *State.Running* ]]; then [[ -f $D/ctr/$s.stopped ]] && echo " false" || echo " true"; else echo; fi; }',
+    // The rollback's start: recreates api, then web, onto the target's images (or fails midway).
+    'start_services() {',
+    '  echo "STEP start_services $AYVO_RELEASE"',
+    `  [[ "${state.startFails ?? ''}" != before ]] || die "api/web did not start"`,
+    `  echo ${TARGET_API} >"$D/ctr/api"; rm -f "$D/ctr/api.stopped"`,
+    `  [[ "${state.startFails ?? ''}" != api ]] || die "web did not become healthy"`,
+    `  echo ${id('d')} >"$D/ctr/web"; rm -f "$D/ctr/web.stopped"`,
+    '}',
     'compose() {',
     '  echo "COMPOSE[$AYVO_RELEASE] $*" >&2',
     '  case $1 in',
@@ -164,13 +176,15 @@ function run(state: State, call: string) {
     '      [[ $a != fail ]] || { echo "ERROR:  column does not exist" >&2; return 3; }; printf "%s\\n" "$a" ;;',
     '  esac',
     '}',
-    'trap \'echo "CTRS $(cat $D/ctr/api 2>/dev/null) $(cat $D/ctr/web 2>/dev/null) stopped=$(ls $D/ctr | grep -c stopped)"; echo "CURRENT $(cat $PROD_DIR/state/current-release 2>/dev/null)"\' EXIT',
+    'trap \'on_exit; echo "CTRS $(cat $D/ctr/api 2>/dev/null) $(cat $D/ctr/web 2>/dev/null) stopped=$(ls $D/ctr | grep -c stopped)"; echo "CURRENT $(cat $PROD_DIR/state/current-release 2>/dev/null)"\' EXIT',
     fn('read_only_sql'),
     fn('first_write_schema'),
     fn('first_write_detector'),
     fn('rollback_first_write_guard'),
     fn('resume_after_guard'),
     fn('first_write_report'),
+    fn('guard_exit_note'),
+    fn('on_exit'),
     call,
   ].join('\n');
   const path = join(dir, 'run.sh');
@@ -287,34 +301,47 @@ describe('deploy-prod --rollback: the first-write guard of the bottle-cycle chai
     }
   });
 
-  it('a target that has the chain reads its data: no limit (e.g. back from a later release to 0d9d056)', () => {
-    const r = run({ targetHasChain: true, detector: AFTER, detectorFile: 'missing' }, rollback);
-    expect(r.status, r.out).toBe(0);
-    expect(r.out).toContain('has the bottle-cycle migrations and reads their data');
-    expect(r.out).not.toContain('SQL ');
-    expect(r.out).not.toContain(' stop api web');
+  it('a target with the chain: the history is read first; only a fully applied chain skips the detector', () => {
+    // Fully applied: it reads that data — no detector, no pause (e.g. back from a later release).
+    const applied = run(
+      { targetHasChain: true, detector: AFTER, detectorFile: 'missing' },
+      rollback,
+    );
+    expect(applied.status, applied.out).toBe(0);
+    expect(applied.out).toContain('SQL history');
+    expect(applied.out).toContain(
+      'the bottle-cycle chain is applied and 32e3d4783af0 has its migrations',
+    );
+    expect(applied.out).not.toContain('SQL detector');
+    expect(applied.out).not.toContain(' stop api web');
+    // Never applied here: that target was made for a schema this database does not have.
+    const old = run({ targetHasChain: true, schema: '0|0|0' }, rollback);
+    expectStoppedBeforeAnyChange(old);
+    expect(old.out).toContain('never ran here, but 32e3d4783af0 was made for them');
   });
 
-  it('a partly applied chain or an unreadable history: STOP before any change', () => {
-    for (const schema of [
-      '3|3|0',
-      '5|6|1',
-      '6|6|1',
-      '0|1|1',
-      '0|1|0',
-      '6|5|0',
-      'fail',
-      '',
-      'x|y|z',
-    ]) {
-      const r = run({ schema }, rollback);
-      expectStoppedBeforeAnyChange(r);
-      expect(r.out).toMatch(
-        schema === 'fail' || !/^\d+\|\d+\|\d+$/.test(schema)
-          ? /not readable/
-          : /chain is partial \(finished\|started\|unfinished: .* of 6\): no verified state for 32e3d4783af0/,
-      );
-    }
+  it('a partly applied chain or an unreadable history: STOP before any change, for either target', () => {
+    for (const targetHasChain of [false, true])
+      for (const schema of [
+        '3|3|0',
+        '5|6|1',
+        '6|6|1',
+        '0|1|1',
+        '0|1|0',
+        '6|5|0',
+        'fail',
+        '',
+        'x|y|z',
+      ]) {
+        const r = run({ schema, targetHasChain }, rollback);
+        expectStoppedBeforeAnyChange(r);
+        expect(r.out).toContain('SQL history');
+        expect(r.out).toMatch(
+          schema === 'fail' || !/^\d+\|\d+\|\d+$/.test(schema)
+            ? /not readable/
+            : /chain is partial \(finished\|started\|unfinished: .* of 6\): no verified state for 32e3d4783af0/,
+        );
+      }
   });
 
   it('the running release is checked before the pause: state, recorded IDs, containers, Compose', () => {
@@ -359,19 +386,60 @@ describe('deploy-prod --rollback: the first-write guard of the bottle-cycle chai
     }
   });
 
-  it('an interruption while paused names the stopped api/web and how to start the same ones (on_exit)', () => {
-    const exit = fn('on_exit');
-    expect(exit).toContain('[[ -n $GUARD_PAUSED ]]');
-    expect(exit).toContain('docker start $PROJECT-api-1 $PROJECT-web-1');
-    // The pause lasts until the rollback's own start; a stop clears it only after the restore.
+  it('the pause lasts until the rollback start is verified; an allowed read keeps api/web stopped', () => {
     const rb = branch('rollback');
-    expect(rb.indexOf('GUARD_PAUSED=""')).toBeGreaterThan(rb.indexOf('hold_unverified_portal'));
-    expect(rb.indexOf('GUARD_PAUSED=""')).toBeLessThan(rb.indexOf('start_services'));
-    // A failed restore leaves them stopped (named by on_exit); an allowed read keeps the pause.
-    expect(run({ failStart: true, detector: AFTER }, rollback).out).toContain('stopped=2');
+    expect(rb.indexOf('GUARD_PAUSED=""')).toBeGreaterThan(rb.indexOf('start_services'));
+    expect(rb.indexOf('GUARD_PAUSED=""')).toBeLessThan(rb.indexOf('verify'));
+    expect(fn('on_exit')).toContain('[[ -z $GUARD_PAUSED ]] || guard_exit_note');
     const allowed = run({}, 'rollback_first_write_guard; echo "PAUSED=$GUARD_PAUSED"');
     expect(allowed.out).toContain('PAUSED=allowed');
     expect(allowed.out).toContain('stopped=2');
+    const done = run({}, rollback);
+    expect(done.status, done.out).toBe(0);
+    expect(done.out).not.toContain('first-write guard had paused');
+  });
+
+  it('interrupted with both paused containers stopped: on_exit names the documented start of the same ones', () => {
+    for (const r of [
+      run({ startFails: 'before' }, rollback), // the rollback start failed before replacing any
+      run({ failStart: true, detector: AFTER }, rollback), // a STOP whose restore failed
+      run({}, 'rollback_first_write_guard; kill -TERM $$'), // a signal during the pause
+    ]) {
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain(
+        `api: the paused container of ${RUNNING} (${RUNNING_IDS.api}, running: false)`,
+      );
+      expect(r.out).toContain(
+        `web: the paused container of ${RUNNING} (${RUNNING_IDS.web}, running: false)`,
+      );
+      expect(r.out).toContain('Both are the paused containers, stopped: nothing was rolled back');
+      expect(r.out).toContain('docker start ayvo-prod-api-1 ayvo-prod-web-1');
+      expect(r.out).toContain('stopped=2');
+    }
+  });
+
+  it('interrupted after the rollback start replaced one container: named per container, no blind start', () => {
+    const r = run({ startFails: 'api' }, rollback);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain(
+      `api: ${TARGET_API} (running: true), not the paused ${RUNNING_IDS.api}`,
+    );
+    expect(r.out).toContain(
+      `web: the paused container of ${RUNNING} (${RUNNING_IDS.web}, running: false)`,
+    );
+    expect(r.out).toContain('do NOT start anything by hand');
+    expect(r.out).toContain(
+      '--rollback 32e3d4783af0) or return to the recorded images of 0d9d05644d9b',
+    );
+    expect(r.out).not.toContain('docker start ayvo-prod-api-1');
+    expect(r.out).not.toContain('STEP record_release');
+    // A container that is gone or unreadable is just as unclear.
+    const gone = run({}, `rollback_first_write_guard; rm "$D/ctr/web"; exit 1`);
+    expect(gone.out).toContain(
+      `web: no container (running: unknown), not the paused ${RUNNING_IDS.web}`,
+    );
+    expect(gone.out).toContain('do NOT start anything by hand');
+    expect(gone.out).not.toContain('docker start ayvo-prod-');
   });
 
   it('--check reports the state read only, never pauses and never fails on it', () => {
